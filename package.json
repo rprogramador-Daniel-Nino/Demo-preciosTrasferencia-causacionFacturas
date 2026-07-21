@@ -1,0 +1,18 @@
+{
+  "name": "sistema-pt",
+  "version": "1.0.0",
+  "description": "Generador de Informes Locales de Precios de Transferencia — servidor local con proxy seguro a la API de Claude",
+  "main": "server.js",
+  "scripts": {
+    "build": "node scripts/sync-index.js",
+    "prestart": "npm run build",
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

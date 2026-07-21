@@ -1,0 +1,12 @@
+{
+  "name": "functions",
+  "description": "Proxy seguro hacia la API de Anthropic para Sistema PT",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-functions": "^5.1.1"
+  },
+  "private": true
+}
