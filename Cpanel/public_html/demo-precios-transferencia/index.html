@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema de Causación Contable DSS 6.5 — Automático</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:rgba(51,65,85,.5)}::-webkit-scrollbar-thumb{background:rgba(148,163,184,.5);border-radius:4px}
+@keyframes slideIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
+.glass{background:rgba(15,23,42,.85);backdrop-filter:blur(10px);border:1px solid rgba(148,163,184,.12)}
+.animate-in{animation:slideIn .25s ease-out}
+.ai-badge{background:linear-gradient(135deg,#3b82f6,#8b5cf6);padding:.2rem .7rem;border-radius:2rem;font-size:.68rem;font-weight:700}
+.step-dot{width:2rem;height:2rem;border-radius:9999px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem}
+.step-active{background:#3b82f6;color:#fff;box-shadow:0 0 12px rgba(59,130,246,.6)}
+.step-done{background:#10b981;color:#fff}.step-todo{background:#334155;color:#94a3b8}
+.insight{background:rgba(34,197,94,.08);border-left:3px solid #22c55e;padding:.5rem .7rem;border-radius:.4rem;font-size:.75rem}
+.warn{background:rgba(245,158,11,.08);border-left:3px solid #f59e0b;padding:.5rem .7rem;border-radius:.4rem;font-size:.75rem}
+.danger{background:rgba(239,68,68,.08);border-left:3px solid #ef4444;padding:.5rem .7rem;border-radius:.4rem;font-size:.75rem}
+.hist-item{background:rgba(59,130,246,.08);padding:.35rem .5rem;margin-bottom:.3rem;border-left:2px solid #3b82f6;border-radius:.25rem;font-size:.68rem}
+.conf-high{background:rgba(16,185,129,.15);color:#6ee7b7}.conf-med{background:rgba(245,158,11,.15);color:#fcd34d}.conf-low{background:rgba(239,68,68,.15);color:#fca5a5}
+.conf-badge{padding:.1rem .45rem;border-radius:.7rem;font-size:.65rem;font-weight:700}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:1000;padding:1rem}
+.dropzone{border:2px dashed rgba(59,130,246,.45);border-radius:.6rem;padding:1.6rem;text-align:center;cursor:pointer;transition:.2s}
+.dropzone:hover,.dropzone.drag{border-color:#3b82f6;background:rgba(59,130,246,.08)}
+.bar{height:6px;background:#1e293b;border-radius:3px;overflow:hidden}.bar>div{height:100%;transition:width .4s}
+input,select,textarea{outline:none}
+</style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white min-h-screen p-4">
+<div class="max-w-7xl mx-auto">
+
+<div class="glass rounded-xl p-4 mb-4 flex flex-wrap justify-between items-center gap-3">
+  <div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <h1 class="text-xl font-bold text-blue-400">🧮 Causación DSS 6.5</h1>
+      <span class="ai-badge">⚡ AUTOMÁTICO</span>
+    </div>
+    <p class="text-slate-400 text-[11px] mt-1">Multiempresa · Liquidación de impuestos · ReteICA territorial · Catálogos y aprendizaje automáticos</p>
+  </div>
+  <div class="flex items-center gap-2 text-xs">
+    <select id="selEmpresa" onchange="cambiarEmpresa(this.value)" class="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs max-w-[240px]"></select>
+    <button onclick="abrirAlta()" class="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs">+ Empresa</button>
+    <button onclick="abrirCatalogos()" class="px-2.5 py-1.5 bg-purple-700 hover:bg-purple-600 rounded text-xs" title="Catálogos">📚 <span id="badgePend" class="bg-red-500 rounded-full px-1.5 hidden">0</span></button>
+    <button onclick="abrirRespaldo()" class="px-2.5 py-1.5 bg-amber-700 hover:bg-amber-600 rounded text-xs" title="Respaldo y sincronización">💾</button>
+    <button onclick="abrirConfig()" class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Configuración">⚙️</button>
+  </div>
+</div>
+
+<div id="sinEmpresa" class="glass rounded-xl p-8 text-center">
+  <div class="text-5xl mb-3">🏢</div>
+  <h2 class="text-lg font-bold mb-2">Aún no hay empresas registradas</h2>
+  <p class="text-slate-400 text-sm mb-5">Adjunta el <b>RUT en PDF</b> y el sistema creará la empresa automáticamente:<br>extrae NIT, razón social, responsabilidades tributarias y municipio.</p>
+  <button onclick="abrirAlta()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium">📄 Crear empresa desde el RUT</button>
+</div>
+
+<div id="appPrincipal" class="hidden">
+<div class="glass rounded-xl p-4 mb-4">
+  <div class="flex items-center justify-between gap-2 flex-wrap">
+    <div class="flex items-center gap-2 flex-1 min-w-[130px]"><div class="step-dot step-active" id="dot1">1</div>
+      <div><div class="text-xs font-bold">Cargar movimiento</div><div class="text-[10px] text-slate-500">CSV de SIIGO</div></div></div>
+    <div class="h-px flex-1 bg-slate-700 hidden md:block"></div>
+    <div class="flex items-center gap-2 flex-1 min-w-[130px]"><div class="step-dot step-todo" id="dot2">2</div>
+      <div><div class="text-xs font-bold">Revisar y liquidar</div><div class="text-[10px] text-slate-500">DSS + impuestos</div></div></div>
+    <div class="h-px flex-1 bg-slate-700 hidden md:block"></div>
+    <div class="flex items-center gap-2 flex-1 min-w-[130px]"><div class="step-dot step-todo" id="dot3">3</div>
+      <div><div class="text-xs font-bold">Aprobar y exportar</div><div class="text-[10px] text-slate-500">CSV Helisa</div></div></div>
+  </div>
+  <div id="wizardHint" class="insight mt-3"></div>
+  <div id="autoBar" class="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
+    <span class="text-slate-400">Automatización:</span>
+    <label class="flex gap-1 items-center cursor-pointer"><input type="checkbox" id="aGuardar" checked onchange="guardarAuto()"> Guardado continuo</label>
+    <label class="flex gap-1 items-center cursor-pointer"><input type="checkbox" id="aAprobar" checked onchange="guardarAuto()"> Aprobar los ✅ Auto</label>
+    <label class="flex gap-1 items-center cursor-pointer"><input type="checkbox" id="aExportar" checked onchange="guardarAuto()"> Exportar al terminar</label>
+    <label class="flex gap-1 items-center cursor-pointer"><input type="checkbox" id="aLimpiar" checked onchange="guardarAuto()"> Limpiar sesión</label>
+    <label class="flex gap-1 items-center cursor-pointer"><input type="checkbox" id="aRespaldo" checked onchange="guardarAuto()"> Respaldo semanal</label>
+    <span id="autoMsg" class="ml-auto text-emerald-300"></span>
+  </div>
+</div>
+
+<div id="panelMetricas" class="hidden grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-4">
+  <div class="glass rounded-lg p-3 text-center"><div class="text-[9px] text-slate-400">COMPROBANTES</div><div id="mComp" class="text-lg font-bold text-blue-300">0</div></div>
+  <div class="glass rounded-lg p-3 text-center"><div class="text-[9px] text-slate-400">LÍNEAS</div><div id="mLines" class="text-lg font-bold text-cyan-300">0</div></div>
+  <div class="glass rounded-lg p-3 text-center"><div class="text-[9px] text-slate-400">CONFIANZA DSS</div><div id="mConf" class="text-lg font-bold text-emerald-300">0%</div></div>
+  <div class="glass rounded-lg p-3 text-center"><div class="text-[9px] text-slate-400">AUTO-ACEPTAR</div><div id="mAuto" class="text-lg font-bold text-green-300">0</div></div>
+  <div class="glass rounded-lg p-3 text-center"><div class="text-[9px] text-slate-400">VALIDACIONES</div><div id="mVal" class="text-lg font-bold text-purple-300">0</div></div>
+  <div class="glass rounded-lg p-3 text-center"><div class="text-[9px] text-slate-400">RETENCIONES</div><div id="mRet" class="text-lg font-bold text-yellow-300">$0</div></div>
+  <div class="glass rounded-lg p-3 text-center" title="% de comprobantes sin ninguna advertencia (calculado, no fijo)"><div class="text-[9px] text-slate-400">PRECISIÓN DSS</div><div id="mPrec" class="text-lg font-bold text-teal-300">—</div></div>
+</div>
+
+<div id="paso1" class="glass rounded-xl p-5 mb-4">
+  <h2 class="font-semibold mb-3 text-sm">📥 Paso 1 · Cargar movimiento contable</h2>
+  <div class="flex gap-2 mb-3 text-xs">
+    <button id="modoFact" onclick="setModo('fact')" class="px-3 py-1.5 rounded bg-blue-600">🧾 Facturas de proveedores</button>
+    <button id="modoCaja" onclick="setModo('caja')" class="px-3 py-1.5 rounded bg-slate-700">🧺 Caja menor / Reembolso TC</button>
+  </div>
+  <div id="cajaCfg" class="hidden mb-3 grid md:grid-cols-3 gap-2 text-xs">
+    <div><label class="text-slate-400">Documento del lote</label>
+      <input id="loteDoc" placeholder="LG-0001" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded"></div>
+    <div><label class="text-slate-400">Cuenta contrapartida (crédito único)</label>
+      <input id="loteCta" placeholder="11051001 Caja menor / 2380xx TC" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded font-mono"></div>
+    <div><label class="text-slate-400">Responsable / tarjeta</label>
+      <input id="loteResp" placeholder="Nombre o NIT del responsable" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded"></div>
+  </div>
+  <textarea id="csvInput" rows="6" class="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg font-mono text-xs" placeholder="DOCUMENTO,TERCERO,NIT,FECHA,CENTRO,DESCRIPCION,BASE,MUNICIPIO"></textarea>
+  <div class="flex gap-2 mt-3 flex-wrap">
+    <button onclick="cargarEjemplo()" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-xs">📋 Datos ejemplo</button>
+    <button id="btnAnalizar" onclick="MODO==='caja'?analizarLote():analizarConIA()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium flex-1">🧠 Analizar con DSS →</button>
+  </div>
+</div>
+
+<div id="paso2" class="hidden mb-4 space-y-3">
+  <div id="graficos" class="grid md:grid-cols-2 gap-3"></div>
+  <div id="alertasIA"></div>
+  <div id="pager" class="grid md:grid-cols-2 gap-3"></div>
+  <div id="listaFacturas" class="grid md:grid-cols-2 gap-3"></div>
+</div>
+
+<div id="paso3" class="hidden glass rounded-xl p-5 mb-4">
+  <h2 class="font-semibold mb-3 text-sm">📤 Paso 3 · Aprobación y export Helisa</h2>
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-center">
+    <div class="bg-slate-900/60 rounded p-3"><div class="text-[10px] text-slate-400">Aprobadas</div><div id="statAprob" class="text-xl font-bold text-green-300">0</div></div>
+    <div class="bg-slate-900/60 rounded p-3"><div class="text-[10px] text-slate-400">Pendientes</div><div id="statPend" class="text-xl font-bold text-yellow-300">0</div></div>
+    <div class="bg-slate-900/60 rounded p-3"><div class="text-[10px] text-slate-400">Retenciones</div><div id="statRet" class="text-xl font-bold text-purple-300">$0</div></div>
+    <div class="bg-slate-900/60 rounded p-3"><div class="text-[10px] text-slate-400">Balance</div><div id="statBal" class="text-xl font-bold text-emerald-300">$0 ✅</div></div>
+  </div>
+  <button onclick="exportarHelisa()" class="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded text-sm font-medium">💾 Descargar CSV Helisa v7.x</button>
+  <div id="auditLog" class="mt-4 max-h-48 overflow-y-auto space-y-1 text-[11px] text-slate-400"></div>
+</div>
+</div>
+</div>
+
+<!-- ══ MODAL ALTA POR RUT ══ -->
+<div id="altaModal" class="hidden modal">
+<div class="glass rounded-xl max-w-3xl w-full max-h-[92vh] overflow-y-auto animate-in">
+  <div class="p-5 border-b border-slate-700 flex justify-between items-center">
+    <div><h2 class="text-lg font-bold">🏢 Crear empresa desde el RUT</h2>
+      <p class="text-[11px] text-slate-400">Adjunta el PDF del RUT · el sistema extrae y precarga todo</p></div>
+    <button onclick="cerrarAlta()" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="p-5 space-y-4">
+    <div id="dropRUT" class="dropzone" onclick="document.getElementById('fileRUT').click()">
+      <div class="text-3xl mb-1">📄</div>
+      <div class="text-sm font-medium">Arrastra el RUT (PDF) o haz clic</div>
+      <div class="text-[11px] text-slate-500 mt-1">Se leen: NIT, razón social, dirección, municipio y responsabilidades (casillas 53/54)</div>
+      <input type="file" id="fileRUT" accept=".pdf,.jpg,.png" class="hidden" onchange="procesarRUT(this.files[0])">
+    </div>
+    <div id="rutEstado"></div>
+
+    <div id="formEmpresa" class="hidden space-y-4">
+      <div class="grid md:grid-cols-2 gap-3 text-xs">
+        <div><label class="text-slate-400">Razón social *</label><input id="eRazon" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded"></div>
+        <div><label class="text-slate-400">NIT *</label><input id="eNit" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" placeholder="900123456-7"></div>
+        <div><label class="text-slate-400">Municipio sede *</label><input id="eSede" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded"></div>
+        <div><label class="text-slate-400">Dirección</label><input id="eDir" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded"></div>
+      </div>
+      <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
+        <h3 class="text-[11px] font-bold text-blue-300 mb-2">📋 Responsabilidades tributarias (RUT casilla 53)</h3>
+        <div class="grid md:grid-cols-2 gap-2 text-[11px]">
+          <label class="flex gap-2 items-center"><input type="checkbox" id="rIVA"> Responsable de IVA (48)</label>
+          <label class="flex gap-2 items-center"><input type="checkbox" id="rAgRet"> Agente de retención en la fuente (09)</label>
+          <label class="flex gap-2 items-center"><input type="checkbox" id="rAutoRenta"> Autorretenedor de renta (15)</label>
+          <label class="flex gap-2 items-center"><input type="checkbox" id="rGranC"> Gran contribuyente (13)</label>
+          <label class="flex gap-2 items-center"><input type="checkbox" id="rSimple"> Régimen Simple (47)</label>
+          <label class="flex gap-2 items-center"><input type="checkbox" id="rFactura"> Facturador electrónico</label>
+        </div>
+        <div id="respAviso" class="mt-2"></div>
+      </div>
+      <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
+        <h3 class="text-[11px] font-bold text-cyan-300 mb-2">🏭 Contabilidad por centros de costo</h3>
+        <label class="flex gap-2 items-center text-[11px] cursor-pointer">
+          <input type="checkbox" id="eUsaCentros" checked onchange="avisoCentros()"> Esta empresa maneja centros de costo
+        </label>
+        <div class="mt-2" id="ccOpciones">
+          <label class="text-slate-400 text-[10px]">Cuentas EXENTAS de centro (prefijos separados por coma)</label>
+          <input id="eCcExentas" placeholder="Ej: 5305, 5310, 53" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-[11px] font-mono">
+          <div class="text-[10px] text-slate-500 mt-1">Las cuentas de balance nunca requieren centro. Aquí puedes eximir además cuentas de gasto o costo que en tu operación no lo llevan.</div>
+        </div>
+        <div id="ccAviso"></div>
+      </div>
+      <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="text-[11px] font-bold text-emerald-300">🗺️ Municipios donde es agente retenedor de ICA</h3>
+          <button onclick="addMuni()" class="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-[10px]">+ Municipio</button>
+        </div>
+        <p class="text-[10px] text-slate-500 mb-2">Solo aquí se practicará ReteICA. El RUT no lo trae: viene del RIT municipal.<br>
+<b class="text-blue-300">No hay municipios precargados</b> — Colombia tiene 1.100+ y cada acuerdo es distinto. Registra solo donde estés inscrito; el resto el sistema los detecta y pregunta.</p>
+        <div id="listaMunis" class="space-y-2"></div>
+      </div>
+      <button onclick="guardarEmpresa()" class="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium">✅ Crear empresa y empezar</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ══ MODAL CONFIG ══ -->
+<div id="configModal" class="hidden modal">
+<div class="glass rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto animate-in">
+  <div class="p-5 border-b border-slate-700 flex justify-between items-center">
+    <h2 class="text-lg font-bold">⚙️ Configuración de la empresa</h2>
+    <button onclick="document.getElementById('configModal').classList.add('hidden')" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div id="configBody" class="p-5 space-y-3 text-xs"></div>
+</div></div>
+
+<!-- ══ MODAL RESPALDO / SYNC ══ -->
+<div id="bkModal" class="hidden modal">
+<div class="glass rounded-xl max-w-xl w-full max-h-[90vh] overflow-y-auto animate-in">
+  <div class="p-5 border-b border-slate-700 flex justify-between items-center">
+    <h2 class="text-lg font-bold">💾 Respaldo y sincronización</h2>
+    <button onclick="document.getElementById('bkModal').classList.add('hidden')" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="p-5 space-y-4 text-xs">
+    <div id="bkEstado"></div>
+    <div class="bg-slate-900/50 rounded p-3 space-y-2">
+      <b class="text-amber-300">Respaldo local (funciona hoy, sin servidor)</b>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="exportarRespaldo()" class="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 rounded font-medium">⬇️ Descargar respaldo</button>
+        <button onclick="document.getElementById('fileBk').click()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium">⬆️ Restaurar respaldo</button>
+        <input type="file" id="fileBk" accept=".json" class="hidden" onchange="importarRespaldo(this.files[0])">
+      </div>
+      <div class="text-slate-500">Incluye empresas, catálogos, maestro ICA y municipios. Guárdalo fuera del equipo.</div>
+    </div>
+    <div class="bg-slate-900/50 rounded p-3 space-y-2">
+      <b class="text-blue-300">Sincronización en equipo (Firestore)</b>
+      <div id="syncEstado" class="text-slate-400"></div>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="syncSubir()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded">☁️ Subir mis datos</button>
+        <button onclick="syncBajar()" class="px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded">🔄 Traer y fusionar</button>
+      </div>
+      <div class="text-slate-500">Varios contadores comparten catálogos y aprendizaje. Requiere configurar <code>FB_CONFIG</code>.</div>
+    </div>
+  </div>
+</div></div>
+
+<!-- ══ MODAL CATÁLOGOS ══ -->
+<div id="catModal" class="hidden modal">
+<div class="glass rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto animate-in">
+  <div class="p-5 border-b border-slate-700 flex justify-between items-center">
+    <div><h2 class="text-lg font-bold">📚 Catálogos de la empresa</h2>
+      <p class="text-[11px] text-slate-400">Se aprenden solos. Los <b class="text-yellow-300">pendientes</b> aún no existen en Helisa.</p></div>
+    <button onclick="document.getElementById('catModal').classList.add('hidden')" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="p-5 space-y-4 text-xs">
+    <div class="flex gap-2 flex-wrap">
+      <button onclick="exportarCatalogos()" class="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 rounded font-medium">📊 Excel para cargar a Helisa</button>
+      <button onclick="marcarTodoCreado()" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded">✓ Marcar todo como creado en Helisa</button>
+    </div>
+    <div id="catBody" class="space-y-4"></div>
+  </div>
+</div></div>
+
+<!-- ══ MODAL CREAR ENTIDAD ══ -->
+<div id="nuevoModal" class="hidden modal">
+<div class="glass rounded-xl max-w-md w-full animate-in">
+  <div class="p-5 border-b border-slate-700"><h2 class="text-base font-bold" id="nuevoTitulo">Crear</h2></div>
+  <div class="p-5 space-y-3 text-xs" id="nuevoBody"></div>
+  <div class="p-4 border-t border-slate-700 flex gap-2 justify-end text-xs">
+    <button onclick="document.getElementById('nuevoModal').classList.add('hidden')" class="px-3 py-2 bg-slate-700 rounded">Cancelar</button>
+    <button onclick="confirmarNuevo()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium">✅ Crear</button>
+  </div>
+</div></div>
+
+<!-- ══ MODAL EDITOR ══ -->
+<div id="editorModal" class="hidden modal">
+<div class="glass rounded-xl max-w-6xl w-full max-h-[92vh] overflow-hidden flex flex-col animate-in">
+  <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+    <div><h2 class="text-lg font-bold" id="edTitulo">Liquidar</h2><p class="text-[10px] text-slate-400" id="edSub"></p></div>
+    <button onclick="cerrarEditor()" class="text-slate-400 hover:text-white text-xl">✕</button>
+  </div>
+  <div class="flex-1 overflow-y-auto p-4 grid lg:grid-cols-[1fr_250px] gap-4">
+    <div class="space-y-4">
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-blue-700/30">
+        <h3 class="text-[11px] font-bold text-blue-300 mb-3">🧮 LIQUIDADOR DE IMPUESTOS</h3>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+          <div><label class="text-slate-400">Base gravable</label><input type="number" id="liqBase" min="0" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" oninput="liquidar()"></div>
+          <div><label class="text-slate-400">IVA</label><select id="liqIVA" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" onchange="liquidar()">
+            <option value="19">19% General</option><option value="5">5% Reducido</option><option value="0">0% Excluido</option></select></div>
+          <div><label class="text-slate-400">RteFte</label><select id="liqRteFte" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" onchange="liquidar()">
+            <option value="2.5|23654001">Compras 2.5%</option><option value="3.5|23654002">Compras 3.5%</option>
+            <option value="4|23652502">Servicios 4% PJ</option><option value="6|23652510">Servicios 6% PN</option>
+            <option value="11|23651501">Honorarios 11% PJ</option><option value="10|23651502">Honorarios 10% PN</option>
+            <option value="3.5|23653001">Arriendo 3.5%</option><option value="1|23652501">Transporte 1%</option>
+            <option value="0|0">No aplica</option></select></div>
+          <div><label class="text-slate-400">ReteICA</label><select id="liqICA" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" onchange="liquidar()"></select></div>
+          <div><label class="text-slate-400">Base ICA distinta</label><input type="number" id="liqBaseICA" placeholder="= base" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" oninput="liquidar()"></div>
+          <div><label class="text-slate-400">RteIVA</label><select id="liqRteIVA" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded" onchange="liquidar()">
+            <option value="0">No aplica</option><option value="15">15% del IVA</option></select></div>
+        </div>
+        <datalist id="dlCentros"></datalist>
+        <div id="terrExplain"></div>
+        <button onclick="aplicarLiquidacion()" class="mt-3 w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-medium">⚡ Generar asiento</button>
+      </div>
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-700">
+        <h3 class="text-[11px] font-bold text-slate-300 mb-2">📊 Asiento contable</h3>
+        <table class="w-full text-[11px]"><thead><tr class="border-b border-slate-700 text-slate-500">
+          <th class="text-left py-1">Cuenta</th><th class="text-left">Descripción</th><th class="text-left" id="thCentro">Centro</th><th class="text-right">Débito</th><th class="text-right">Crédito</th><th></th></tr></thead>
+          <tbody id="asientoBody"></tbody></table>
+        <div class="flex justify-between items-center mt-3 pt-2 border-t border-slate-700 text-xs">
+          <button onclick="agregarLinea()" class="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-[10px]">+ Línea</button>
+          <div class="flex gap-4 font-mono"><span>D: <b id="totD" class="text-blue-300">$0</b></span>
+            <span>C: <b id="totC" class="text-purple-300">$0</b></span><span id="balBox" class="text-emerald-400 font-bold">$0 ✅</span></div>
+        </div>
+      </div>
+      <div id="edReco" class="space-y-2"></div>
+    </div>
+    <div class="bg-slate-900/40 rounded-lg p-3 border border-slate-700 flex flex-col">
+      <h3 class="text-[11px] font-bold text-blue-300 mb-2">📜 Historial</h3>
+      <div id="histBox" class="flex-1 overflow-y-auto"><div class="text-slate-500 text-[10px] text-center py-3">Sin cambios</div></div>
+      <button onclick="deshacer()" class="mt-2 w-full px-2 py-1.5 bg-orange-600/25 hover:bg-orange-600/50 text-orange-300 rounded text-[10px]">↩️ Deshacer (Ctrl+Z)</button>
+    </div>
+  </div>
+  <div class="p-4 border-t border-slate-700 flex gap-2 justify-end text-xs">
+    <span class="text-slate-500 mr-auto self-center">Ctrl+S · Ctrl+Z · Esc</span>
+    <button onclick="cerrarEditor()" class="px-4 py-2 bg-slate-700 rounded">Cancelar</button>
+    <button onclick="guardarAsiento()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded font-medium">💾 Guardar</button>
+  </div>
+</div></div>
+<script>
+// ═══════════════ MULTIEMPRESA ═══════════════
+const LS='dss_v54_empresas', LSA='dss_v54_activa';
+let EMPRESAS=JSON.parse(localStorage.getItem(LS)||'{}'), NITA=localStorage.getItem(LSA)||null;
+const E=()=>EMPRESAS[NITA]||null;
+const fmt=n=>'$'+Math.round(n).toLocaleString('es-CO');
+const nitL=n=>(n||'').split('-')[0].replace(/\D/g,'');
+const PROXY=''; // ej: https://ica-proxy-xxx.run.app
+
+// ═══════════════ CAPA DE AUTOMATIZACIÓN ═══════════════
+const AUTO_KEY='dss_v65_auto', SES_KEY='dss_v65_sesion';
+let AUTO=JSON.parse(localStorage.getItem(AUTO_KEY)||'null')||{guardar:true,aprobar:true,exportar:true,limpiar:true,respaldo:true};
+let _autoTimer=null, _exportando=false;
+function guardarAuto(){
+  ['guardar','aprobar','exportar','limpiar','respaldo'].forEach(k=>{
+    const el=document.getElementById('a'+k[0].toUpperCase()+k.slice(1));
+    if(el)AUTO[k]=el.checked;
+  });
+  localStorage.setItem(AUTO_KEY,JSON.stringify(AUTO));
+}
+function pintarAuto(){
+  ['guardar','aprobar','exportar','limpiar','respaldo'].forEach(k=>{
+    const el=document.getElementById('a'+k[0].toUpperCase()+k.slice(1));
+    if(el)el.checked=AUTO[k]!==false;
+  });
+}
+function aviso(m){
+  const el=document.getElementById('autoMsg');
+  if(el){el.textContent=m; clearTimeout(_autoTimer); _autoTimer=setTimeout(()=>{el.textContent=''},6000)}
+  log(m);
+}
+// ── Guardado continuo de la sesión de trabajo ──
+function guardarSesion(){
+  if(AUTO.guardar===false||!E())return;
+  try{
+    localStorage.setItem(SES_KEY,JSON.stringify({nit:NITA,modo:MODO,pag:PAG,
+      facturas:facturas.map(f=>({...f,_terr:undefined})),ts:new Date().toISOString()}));
+  }catch(e){ if(String(e).includes('quota')) aviso('⚠️ Almacenamiento lleno: descarga un respaldo'); }
+}
+function restaurarSesion(){
+  try{
+    const s=JSON.parse(localStorage.getItem(SES_KEY)||'null');
+    if(!s||!s.facturas||!s.facturas.length)return false;
+    if(s.nit!==NITA)return false;
+    facturas=s.facturas; MODO=s.modo||'fact'; PAG=s.pag||0;
+    facturas.forEach(f=>{ if(!f.esLote) f._terr=motorICA(f.municipio,f.nit,f.tercero) });
+    setModo(MODO);
+    const pend=facturas.filter(f=>f.estado!=='APROBADO').length;
+    metricas();graficos();renderFacturas();setPaso(2);
+    document.getElementById('panelMetricas').classList.remove('hidden');
+    document.getElementById('paso2').classList.remove('hidden');
+    aviso(`↩️ Sesión restaurada: ${facturas.length} comprobantes (${pend} pendientes) del ${(s.ts||'').split('T')[0]}`);
+    return true;
+  }catch(e){return false}
+}
+function limpiarSesion(){ localStorage.removeItem(SES_KEY) }
+// ── Aprobación automática: SOLO los clasificados AUTO por el DSS ──
+function autoAprobar(){
+  if(AUTO.aprobar===false)return 0;
+  const cand=facturas.filter(f=>f.estado!=='APROBADO'&&f.clase==='AUTO'&&f.asiento.length&&f.val===0);
+  cand.forEach(f=>{f.estado='APROBADO'});
+  if(cand.length){renderFacturas();metricas();stats();aviso(`⚡ ${cand.length} comprobante(s) ✅ Auto aprobados automáticamente`)}
+  return cand.length;
+}
+// ── Cierre automático: exportar + limpiar cuando todo está aprobado ──
+function autoCierre(){
+  if(_exportando||!facturas.length)return;
+  const pend=facturas.filter(f=>f.estado!=='APROBADO').length;
+  if(pend)return;
+  setPaso(3);
+  document.getElementById('paso3').classList.remove('hidden');
+  if(AUTO.exportar===false){aviso('✅ Todo aprobado — exporta cuando quieras');return}
+  _exportando=true;
+  try{
+    const p=pendientes();
+    if(p.length){ exportarCatalogos(); aviso(`📊 Excel de catálogos generado (${p.length} códigos para Helisa)`); }
+    exportarHelisa();
+    aviso(`📤 Exportado automáticamente: ${facturas.length} comprobantes`);
+    if(AUTO.limpiar!==false){
+      const n=facturas.length;
+      facturas=[]; PAG=0; limpiarSesion();
+      document.getElementById('csvInput').value='';
+      document.getElementById('listaFacturas').innerHTML='';
+      document.getElementById('pager').innerHTML='';
+      document.getElementById('alertasIA').innerHTML='';
+      document.getElementById('graficos').innerHTML='';
+      document.getElementById('paso2').classList.add('hidden');
+      document.getElementById('panelMetricas').classList.add('hidden');
+      setPaso(1);
+      aviso(`🧹 Sesión cerrada (${n} comprobantes) — listo para el siguiente lote`);
+    }
+  }catch(e){ aviso('⚠️ Export automático falló: '+e.message) }
+  _exportando=false;
+}
+// ── Respaldo automático semanal ──
+function autoRespaldo(){
+  if(AUTO.respaldo===false||!Object.keys(EMPRESAS).length)return;
+  const u=localStorage.getItem(BK_KEY);
+  const dias=u?Math.floor((Date.now()-new Date(u))/864e5):999;
+  if(dias>=7){ try{ exportarRespaldo(); aviso('💾 Respaldo semanal descargado automáticamente') }catch(e){} }
+}
+// ═══ MODO DE INGESTA ═══
+let MODO='fact';
+function setModo(m){MODO=m;
+  document.getElementById('modoFact').className='px-3 py-1.5 rounded '+(m==='fact'?'bg-blue-600':'bg-slate-700');
+  document.getElementById('modoCaja').className='px-3 py-1.5 rounded '+(m==='caja'?'bg-blue-600':'bg-slate-700');
+  document.getElementById('cajaCfg').classList.toggle('hidden',m!=='caja');
+  document.getElementById('csvInput').placeholder = m==='caja'
+    ? 'RECIBO,FECHA,COMERCIO,DESCRIPCION,VALOR,CENTRO(opcional)  ← un recibo por línea; un solo lote por carga'
+    : 'DOCUMENTO,TERCERO,NIT,FECHA,CENTRO,DESCRIPCION,BASE,MUNICIPIO';
+}
+// ═══ CLASIFICADOR COMERCIO→CUENTA (cajas menores) · aprende por moda, gate de confianza ═══
+function clasif(){const e=E();if(!e)return{};if(!e.clasif)e.clasif={};return e.clasif}
+function comKey(n){return String(n||'').toUpperCase().replace(/\s*\(\d+-?\d?\)\s*$/,'').replace(/\s+/g,' ').trim()}
+function clasificarComercio(nombre){
+  const k=comKey(nombre), o=clasif()[k];
+  if(!o||!o.obs.length)return{estado:'PREGUNTAR',cuenta:'',confianza:0,
+    razon:`Comercio nuevo: asigna la cuenta y el sistema la aprenderá.`};
+  const c={};o.obs.forEach(x=>c[x]=(c[x]||0)+1);
+  const[cta,vec]=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];
+  const conf=Math.round(vec/o.obs.length*100);
+  if(o.obs.length>=2&&conf>=70)return{estado:'CONFIRMADO',cuenta:cta,confianza:conf,
+    razon:`${o.obs.length} recibos previos de este comercio → ${cta} (${conf}%).`};
+  return{estado:'PROPUESTO',cuenta:cta,confianza:conf,
+    razon:`Historial débil (${conf}%, ${o.obs.length} recibo${o.obs.length>1?'s':''}) → propone ${cta}; verifica.`};
+}
+function aprenderComercio(nombre,cta){
+  if(!nombre||!cta)return;
+  const k=comKey(nombre);if(!clasif()[k])clasif()[k]={obs:[]};
+  clasif()[k].obs.push(String(cta).trim());
+  if(clasif()[k].obs.length>12)clasif()[k].obs.shift();
+  guardar();
+}
+// ═══ INGESTA DE LOTE: múltiples recibos → UN asiento consolidado ═══
+function analizarLote(){
+  if(!E()){alert('Crea una empresa primero');return}
+  const t=document.getElementById('csvInput').value.trim();
+  const doc=(document.getElementById('loteDoc').value||'LG-'+Date.now()%10000).trim();
+  const ctaCr=(document.getElementById('loteCta').value||'').trim().split(' ')[0];
+  const resp=(document.getElementById('loteResp').value||'CAJA MENOR').trim();
+  if(!t){alert('Pega los recibos del lote');return}
+  if(!ctaCr){alert('Indica la cuenta contrapartida (dónde se acredita el total): caja menor 1105xx o tarjeta por pagar.');return}
+  const PR=parseCSV(t,6);
+  if(PR.avisos.length)alert('⚠️ '+PR.avisos.length+' recibo(s) descartados por formato:\n'+PR.avisos.slice(0,4).join('\n'));
+  const recibos=PR.filas.map((p,i)=>({i,rec:p[0]||('R'+(i+1)),fecha:p[1],com:p[2],desc:p[3],
+    valor:Math.round(parseFloat(p[4])||0),bruto:parseFloat(p[4])||0,centro:usaCentros()?(p[5]||''):''}));
+  const menores=recibos.filter(r=>r.bruto>0&&r.valor===0).length;
+  const recs=recibos.filter(r=>r.valor>0);
+  if(!recs.length){alert('No hay recibos con valor válido.');return}
+  // clasificar cada recibo (SIN retenciones: práctica estándar de caja menor)
+  let conf=0,prop=0,preg=0;
+  const asiento=recs.map(r=>{
+    const C=clasificarComercio(r.com); r._cl=C;
+    if(C.estado==='CONFIRMADO')conf++;else if(C.estado==='PROPUESTO')prop++;else preg++;
+    if(usaCentros()&&r.centro)registrar('centros',r.centro,r.centro);
+    return{cta:C.cuenta||'',d:r.valor,c:0,centro:r.centro,_com:r.com,_rec:r.rec,_est:C.estado};
+  });
+  const total=recs.reduce((a,r)=>a+r.valor,0);
+  asiento.push({cta:ctaCr,d:0,c:total,centro:'',_com:'',_rec:'CONTRAPARTIDA',_est:'CONFIRMADO'});
+  const f={id:0,doc,tercero:resp,nit:'',fecha:recs[0].fecha||new Date().toISOString().split('T')[0],
+    centro:'',desc:`Lote ${recs.length} recibos`,base:total,municipio:'',estado:'PENDIENTE',
+    asiento,esLote:true,_terr:{estado:'CONFIRMADO',cuenta:'x'},z:0,
+    val:preg+prop, conf:Math.max(0.30,Math.min(1, 1 - preg*0.05 - prop*0.02))};
+  f.clase=f.conf>=0.90?'AUTO':f.conf>=0.75?'RAPIDA':f.conf>=0.60?'DETALLADA':'MANUAL';
+  facturas=[f];
+  document.getElementById('alertasIA').innerHTML=`<div class="glass rounded-xl p-4">
+    <h3 class="text-[11px] font-bold text-blue-300 mb-2">🧺 Lote ${doc} · ${recs.length} recibos · ${fmt(total)}</h3>
+    ${menores?`<div class="warn">ℹ️ ${menores} línea(s) de valor inferior a $1 (ajustes al peso) no se incluyeron como recibo.</div>`:''}
+    <div class="insight">🟢 ${conf} clasificados por historial · 🟡 ${prop} propuestos · 🔴 ${preg} requieren cuenta</div>
+    ${preg?`<div class="warn">Asigna la cuenta a los recibos 🔴 en el editor: el sistema aprenderá cada comercio y no volverá a preguntar.</div>`:''}
+    <div class="insight">Crédito único: ${fmt(total)} → ${ctaCr}. Sin retenciones (recibos de caja menor).</div></div>`;
+  metricas();graficos();renderFacturas();setPaso(2);
+  document.getElementById('panelMetricas').classList.remove('hidden');
+  document.getElementById('paso2').classList.remove('hidden');
+  document.getElementById('paso2').scrollIntoView({behavior:'smooth'});
+  guardarSesion();
+}
+// ═══ CENTROS DE COSTO: alcance configurable por empresa ═══
+function usaCentros(){ const e=E(); return !e || e.usaCentros!==false }
+function requiereCentro(cta){
+  if(!usaCentros()) return false;
+  if(!/^[56]/.test(cta||'')) return false;              // solo gasto y costo
+  const ex=(E()&&E().ccExentas)||[];
+  return !ex.some(p=>p && String(cta).startsWith(p));   // cuentas eximidas por la empresa
+}
+
+// ═══ B3 · PARSER CSV ROBUSTO (soporta comillas y comas dentro de campos) ═══
+function parseCSVLinea(l){
+  const out=[]; let cur='', q=false;
+  for(let i=0;i<l.length;i++){
+    const ch=l[i];
+    if(q){
+      if(ch==='"'){ if(l[i+1]==='"'){cur+='"';i++} else q=false }
+      else cur+=ch;
+    } else {
+      if(ch==='"') q=true;
+      else if(ch===','){ out.push(cur); cur='' }
+      else cur+=ch;
+    }
+  }
+  out.push(cur);
+  return out.map(x=>x.trim());
+}
+function parseCSV(txt,esperadas){
+  const lineas=txt.replace(/\r/g,'').split('\n').filter(l=>l.trim());
+  const filas=[], avisos=[];
+  lineas.forEach((l,i)=>{
+    const c=parseCSVLinea(l);
+    if(c.length>esperadas){
+      avisos.push(`Línea ${i+1}: ${c.length} columnas (esperadas ${esperadas}). Probable coma sin comillas en «${c[1]||c[0]}». Se descarta para no corromper datos.`);
+      return;
+    }
+    while(c.length<esperadas)c.push('');
+    filas.push(c);
+  });
+  return {filas,avisos};
+}
+
+// ═══ CATÁLOGOS VIVOS (por empresa, auto-aprendidos) ═══
+function cat(tipo){const e=E();if(!e)return{};if(!e.cat)e.cat={centros:{},terceros:{}};if(!e.cat[tipo])e.cat[tipo]={};return e.cat[tipo]}
+function registrar(tipo,codigo,nombre){
+  if(!codigo)return null;
+  const c=cat(tipo), k=String(codigo).trim();
+  if(!c[k]){c[k]={nombre:nombre||k,creadoHelisa:false,visto:new Date().toISOString(),usos:0};guardar();return{nuevo:true,ent:c[k]}}
+  c[k].usos++;if(nombre&&!c[k].nombre)c[k].nombre=nombre;guardar();return{nuevo:false,ent:c[k]}
+}
+function pendientes(){const e=E();if(!e||!e.cat)return[];
+  return ['centros','terceros'].flatMap(t=>Object.entries(e.cat[t]||{}).filter(([k,v])=>!v.creadoHelisa).map(([k,v])=>({tipo:t,cod:k,...v})))}
+function similar(tipo,txt){
+  const ks=Object.keys(cat(tipo));const t=String(txt).toUpperCase();
+  const sc=k=>{const a=k.toUpperCase();let m=0;for(let i=0;i<Math.min(a.length,t.length);i++)if(a[i]===t[i])m++;
+    return m/Math.max(a.length,t.length)};
+  return ks.map(k=>({k,s:sc(k)})).filter(x=>x.s>0.75).sort((a,b)=>b.s-a.s).slice(0,3);
+}
+function badgePend(){const n=pendientes().length;const b=document.getElementById('badgePend');
+  if(b){b.textContent=n;b.classList.toggle('hidden',n===0)}}
+const PUC={'61350101':'Costo mercancía vendida','51100501':'Honorarios','51350101':'Servicios',
+'14350101':'Inventario','24080101':'IVA descontable','23654001':'RteFte Compras 2.5%','23654002':'RteFte Compras 3.5%',
+'23652502':'RteFte Serv 4% PJ','23652510':'RteFte Serv 6% PN','23651501':'RteFte Honorarios 11% PJ',
+'23651502':'RteFte Honorarios 10% PN','23653001':'RteFte Arriendo 3.5%','23652501':'RteFte Transporte 1%',
+'23670101':'RteIVA 15%','23359501':'CxP Costos y gastos','23356001':'Gastos de viaje',
+'52959520':'Gastos no deducibles','52956001':'Casino y restaurante','52953501':'Combustibles y lubricantes',
+'52551501':'Pasajes aéreos','51952501':'Aseo y cafetería','52959501':'Otros gastos','24081001':'IVA descontable 19%'};
+const TAR_ICA=[4,5,6,7,8,9,10];
+
+function guardar(){localStorage.setItem(LS,JSON.stringify(EMPRESAS));localStorage.setItem(LSA,NITA||'')}
+function renderSelector(){
+  const s=document.getElementById('selEmpresa'), ks=Object.keys(EMPRESAS);
+  s.innerHTML=ks.map(k=>`<option value="${k}" ${k===NITA?'selected':''}>${EMPRESAS[k].razon.substring(0,32)} · ${k}</option>`).join('')||'<option>Sin empresas</option>';
+  document.getElementById('sinEmpresa').classList.toggle('hidden',ks.length>0);
+  document.getElementById('appPrincipal').classList.toggle('hidden',ks.length===0);
+  if(E())setPaso(1);
+}
+function cambiarEmpresa(n){guardarSesion();NITA=n;guardar();facturas=[];limpiarSesion();document.getElementById('paso2').classList.add('hidden');
+  document.getElementById('paso3').classList.add('hidden');document.getElementById('panelMetricas').classList.add('hidden');
+  renderSelector();badgePend();pintarAuto();
+if(E()){ restaurarSesion(); autoRespaldo(); } else { avisoRespaldo(); }
+window.addEventListener&&window.addEventListener('beforeunload',guardarSesion);log(`🏢 Empresa activa: ${E().razon}`)}
+
+// ═══════════════ ALTA POR RUT ═══════════════
+let munisTmp=[];
+function abrirAlta(){munisTmp=[];document.getElementById('altaModal').classList.remove('hidden');
+  document.getElementById('formEmpresa').classList.add('hidden');document.getElementById('rutEstado').innerHTML='';
+  document.getElementById('fileRUT').value='';renderMunis()}
+function cerrarAlta(){document.getElementById('altaModal').classList.add('hidden')}
+const dz=()=>document.getElementById('dropRUT');
+['dragover','dragleave','drop'].forEach(ev=>document.addEventListener('DOMContentLoaded',()=>{
+  dz().addEventListener(ev,e=>{e.preventDefault();dz().classList.toggle('drag',ev==='dragover');
+    if(ev==='drop'&&e.dataTransfer.files[0])procesarRUT(e.dataTransfer.files[0])})}));
+
+async function procesarRUT(file){
+  if(!file)return;
+  const est=document.getElementById('rutEstado');
+  est.innerHTML=`<div class="warn">⏳ Leyendo <b>${file.name}</b>...</div>`;
+  let datos=null;
+  if(PROXY){
+    try{
+      const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(file)});
+      const rr=await fetch(PROXY+'/extraer-rut',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({archivo_base64:b64,tipo:file.type})});
+      datos=await rr.json();
+    }catch(e){console.warn(e)}
+  }
+  if(datos&&datos.nit){
+    est.innerHTML=`<div class="insight">✅ RUT leído por IA · confianza ${datos.confianza||90}%. <b>Verifica los campos</b> antes de crear.</div>`;
+    llenarForm(datos);
+  }else{
+    est.innerHTML=`<div class="warn">📄 Archivo recibido. La lectura automática requiere el proxy de Claude configurado (constante <code>PROXY</code>).<br>
+      <b>Completa los datos manualmente</b> — el formulario ya está abierto abajo.</div>`;
+    llenarForm({});
+  }
+  document.getElementById('formEmpresa').classList.remove('hidden');
+}
+function llenarForm(d){
+  const g=(id,v)=>document.getElementById(id).value=v||'';
+  g('eRazon',d.razon_social);g('eNit',d.nit);g('eSede',(d.municipio||'').toUpperCase());g('eDir',d.direccion);
+  const R=d.responsabilidades||[];
+  const has=c=>R.some(x=>String(x).includes(c));
+  document.getElementById('rIVA').checked=has('48');
+  document.getElementById('rAgRet').checked=has('09');
+  document.getElementById('rAutoRenta').checked=has('15');
+  document.getElementById('rGranC').checked=has('13');
+  document.getElementById('rSimple').checked=has('47');
+  if(d.municipio&&!munisTmp.length){
+    // Se propone el municipio del RUT; las tarifas y cuentas se toman del RIT/acuerdo municipal
+    munisTmp=[{nombre:(d.municipio||'').toUpperCase(),tarifas:[],ctas:{},def:0}];
+    renderMunis()}
+  avisoResp();
+  ['rIVA','rAgRet','rAutoRenta','rGranC','rSimple'].forEach(i=>document.getElementById(i).onchange=avisoResp);
+}
+function avisoResp(){
+  const a=[];
+  if(!document.getElementById('rAgRet').checked)a.push('⚠️ Sin "agente de retención (09)": el sistema NO practicará RteFte.');
+  if(!document.getElementById('rIVA').checked)a.push('⚠️ Sin "responsable de IVA (48)": el IVA no será descontable.');
+  if(document.getElementById('rAutoRenta').checked)a.push('ℹ️ Autorretenedor de renta: sus clientes no le retienen; se causa autorretención sobre ingresos.');
+  if(document.getElementById('rSimple').checked)a.push('ℹ️ Régimen Simple: aplica RteIVA 15% en compras a este régimen.');
+  document.getElementById('respAviso').innerHTML=a.map(x=>`<div class="warn mt-1">${x}</div>`).join('');
+}
+function avisoCentros(){
+  const on=document.getElementById('eUsaCentros').checked;
+  document.getElementById('ccOpciones').style.display=on?'':'none';
+  document.getElementById('ccAviso').innerHTML=on?'':
+    '<div class="insight mt-2">✅ El sistema no pedirá centro de costo en ninguna factura, no penalizará su ausencia y ocultará la columna en el editor.</div>';
+}
+function addMuni(nom){const i=munisTmp.length;munisTmp.push({nombre:(nom||'').toUpperCase(),tarifas:[],ctas:{},def:0});renderMunis()}
+function ctaSugerida(idxMuni,tar){
+  // Sugerencia editable: 2368 + consecutivo de municipio + tarifa. Ajústala a tu PUC.
+  return '2368'+String(10+idxMuni)+String(tar).padStart(2,'0');
+}
+function renderMunis(){
+  document.getElementById('listaMunis').innerHTML=munisTmp.map((m,i)=>`
+   <div class="bg-slate-800/60 rounded p-2 space-y-2 text-[11px]">
+    <div class="flex flex-wrap gap-2 items-center">
+      <input value="${m.nombre}" placeholder="MUNICIPIO" onchange="munisTmp[${i}].nombre=this.value.toUpperCase();renderMunis()" class="px-2 py-1 bg-slate-900 border border-slate-600 rounded w-36">
+      <span class="text-slate-500">tarifas /1000:</span>
+      ${TAR_ICA.map(t=>`<label class="flex gap-1 items-center"><input type="checkbox" ${m.tarifas.includes(t)?'checked':''} onchange="togTar(${i},${t},this.checked)">${t}</label>`).join('')}
+      <span class="text-slate-500 ml-2">default:</span>
+      <select onchange="munisTmp[${i}].def=+this.value" class="px-1 py-1 bg-slate-900 border border-slate-600 rounded">
+        ${m.tarifas.map(t=>`<option value="${t}" ${m.def===t?'selected':''}>${t}</option>`).join('')}</select>
+      <button onclick="munisTmp.splice(${i},1);renderMunis()" class="text-red-400 ml-auto">✕</button>
+    </div>
+    <div class="flex flex-wrap gap-2 items-center pl-1 border-l-2 border-blue-700/40">
+      <span class="text-[10px] text-blue-300 font-bold">Cuenta contable por tarifa:</span>
+      ${m.tarifas.map(t=>`<span class="flex items-center gap-1"><span class="text-slate-500">${t}/1000</span>
+        <input value="${(m.ctas&&m.ctas[t])||ctaSugerida(i,t)}" onchange="setCta(${i},${t},this.value)" class="w-24 px-1 py-0.5 bg-slate-900 border border-slate-600 rounded font-mono text-[10px]"></span>`).join('')}
+    </div>
+   </div>`).join('')||'<div class="text-[10px] text-slate-500">Sin municipios: no se practicará ReteICA en ninguna factura.</div>';
+}
+function setCta(i,t,v){ if(!munisTmp[i].ctas)munisTmp[i].ctas={}; munisTmp[i].ctas[t]=v.trim(); }
+function togTar(i,t,c){const m=munisTmp[i];
+  m.tarifas=c?[...m.tarifas,t].sort((a,b)=>a-b):m.tarifas.filter(x=>x!==t);
+  if(!m.ctas)m.ctas={};
+  if(c&&!m.ctas[t])m.ctas[t]=ctaSugerida(i,t);
+  if(!c)delete m.ctas[t];
+  if(!m.tarifas.includes(m.def))m.def=m.tarifas[0]||0;
+  renderMunis()}
+
+function guardarEmpresa(){
+  const razon=document.getElementById('eRazon').value.trim(), nit=document.getElementById('eNit').value.trim();
+  if(!razon||!nit){alert('Razón social y NIT son obligatorios');return}
+  const k=nitL(nit);
+  EMPRESAS[k]={razon,nit,sede:document.getElementById('eSede').value.trim().toUpperCase(),
+    direccion:document.getElementById('eDir').value.trim(),
+    resp:{iva:document.getElementById('rIVA').checked,agRet:document.getElementById('rAgRet').checked,
+      autoRenta:document.getElementById('rAutoRenta').checked,granC:document.getElementById('rGranC').checked,
+      simple:document.getElementById('rSimple').checked},
+    usaCentros:document.getElementById('eUsaCentros').checked,
+    ccExentas:(document.getElementById('eCcExentas').value||'').split(',').map(x=>x.trim()).filter(Boolean),
+    municipios:munisTmp.filter(m=>m.nombre),
+    maestro:EMPRESAS[k]?.maestro||{}, creada:new Date().toISOString()};
+  NITA=k;guardar();cerrarAlta();renderSelector();
+  log(`🏢 Empresa creada: ${razon} (${nit}) · ${munisTmp.length} municipio(s) ICA`);
+  alert(`✅ ${razon} creada.\n\nAgente ReteICA en: ${munisTmp.map(m=>m.nombre).join(', ')||'ninguno'}\n\nYa puedes cargar el movimiento contable.`);
+}
+function abrirConfig(){
+  if(!E())return;const e=E();
+  document.getElementById('configBody').innerHTML=`
+   <div class="bg-slate-900/50 rounded p-3"><div class="font-bold text-blue-300 mb-1">${e.razon}</div>
+     <div class="text-slate-400">NIT ${e.nit} · Sede ${e.sede||'—'}</div></div>
+   <div class="bg-slate-900/50 rounded p-3"><div class="font-bold text-blue-300 mb-1">Responsabilidades</div>
+     ${Object.entries(e.resp).map(([k,v])=>`<div>${v?'✅':'⬜'} ${{iva:'Responsable IVA',agRet:'Agente retención',autoRenta:'Autorretenedor renta',granC:'Gran contribuyente',simple:'Régimen Simple'}[k]}</div>`).join('')}</div>
+   <div class="bg-slate-900/50 rounded p-3"><div class="font-bold text-cyan-300 mb-1">Centros de costo</div>
+     <div>${e.usaCentros===false?'⬜ No los maneja — el sistema no los pide ni penaliza':'✅ Activos'}</div>
+     ${e.usaCentros!==false&&(e.ccExentas||[]).length?`<div class="text-slate-400">Cuentas exentas: ${e.ccExentas.join(', ')}</div>`:''}</div>
+   <div class="bg-slate-900/50 rounded p-3"><div class="font-bold text-emerald-300 mb-1">Municipios ICA</div>
+     ${e.municipios.map(m=>`<div>🗺️ ${m.nombre} · tarifas ${m.tarifas.join(', ')}/1000 · default ${m.def}</div>`).join('')||'<div class="text-slate-500">Ninguno</div>'}</div>
+   <div class="bg-slate-900/50 rounded p-3"><div class="font-bold text-purple-300 mb-1">Maestro aprendido</div>
+     <div class="text-slate-400">${Object.keys(e.maestro||{}).length} terceros con historial de tarifa ICA</div>
+     ${Object.entries(e.maestro||{}).slice(0,8).map(([k,v])=>`<div class="text-[10px]">${k} → ${v.obs.join(',')}</div>`).join('')}</div>
+   <button onclick="if(confirm('¿Eliminar esta empresa y todo su aprendizaje?')){delete EMPRESAS['${NITA}'];NITA=Object.keys(EMPRESAS)[0]||null;guardar();location.reload()}" class="w-full px-3 py-2 bg-red-900/40 hover:bg-red-900/70 text-red-300 rounded">🗑️ Eliminar empresa</button>`;
+  document.getElementById('configModal').classList.remove('hidden');
+}
+</script>
+<script>
+// ═══════════════ MOTOR TERRITORIAL + APRENDIZAJE (por empresa) ═══════════════
+const UMBRAL=70, MINM=2;
+function muniAgente(n){return (E()?.municipios||[]).find(m=>m.nombre===(n||'').toUpperCase().trim())}
+function ctaICA(muni,t){
+  const M=muniAgente(muni);
+  if(!M||!t)return '0';
+  return (M.ctas&&M.ctas[t]) || '2368??'; // '2368??' señala configuración faltante
+}
+function consultarMaestro(muni,nit){
+  const e=E();if(!e)return null;const k=`${(muni||'').toUpperCase()}|${nitL(nit)}`;const x=e.maestro[k];
+  if(!x||!x.obs.length)return null;
+  const c={};x.obs.forEach(t=>c[t]=(c[t]||0)+1);
+  const[tar,vec]=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];
+  return{tarifa:+tar,confianza:Math.round(vec/x.obs.length*100),muestras:x.obs.length};
+}
+function aprenderICA(muni,nit,tarifa,nombre){
+  const e=E();
+  if(!muniAgente(muni))return{obs:[],n:nombre,omitido:true}; // D9: sin ruido de municipios sin retención
+  const k=`${(muni||'').toUpperCase()}|${nitL(nit)}`;
+  if(!e.maestro[k])e.maestro[k]={obs:[],n:nombre||''};
+  e.maestro[k].obs.push(tarifa);if(e.maestro[k].obs.length>12)e.maestro[k].obs.shift();
+  guardar();return e.maestro[k];
+}
+function motorICA(muni,nit,nombre){
+  const e=E(), M=muniAgente(muni), mu=(muni||'—').toUpperCase();
+  if(!M)return{aplica:false,tarifa:0,cuenta:'0',estado:'CONFIRMADO',confianza:100,noRegistrado:true,
+    razon:`🚫 NO retener en ${mu}: no está registrado como municipio donde eres agente. Registrados: ${(e.municipios.map(m=>m.nombre).join(', ')||'ninguno')}. Si estás inscrito en el RIT de ${mu}, agrégalo en ⚙️ y se recalculará.`};
+  const m=consultarMaestro(muni,nit);
+  if(m&&m.muestras>=MINM&&m.confianza>=UMBRAL){
+    if(m.tarifa===0)return{aplica:false,tarifa:0,cuenta:'0',estado:'CONFIRMADO',confianza:m.confianza,
+      razon:`🚫 NO retener: ${m.muestras} facturas previas indican autorretenedor/exento en ${muni} (${m.confianza}%).`};
+    if(!M.tarifas.includes(m.tarifa))
+      return{aplica:true,tarifa:M.def,cuenta:ctaICA(muni,M.def),estado:'PROPUESTO',confianza:0,
+        razon:`⚠️ El histórico tiene ${m.tarifa}/1000, pero el acuerdo de ${muni} ya no la contempla (${M.tarifas.join(', ')}/1000). Propongo ${M.def}/1000 — confirma.`};
+    return{aplica:true,tarifa:m.tarifa,cuenta:ctaICA(muni,m.tarifa),estado:'CONFIRMADO',confianza:m.confianza,
+      razon:`✅ ReteICA ${m.tarifa}/1000 → cuenta ${ctaICA(muni,m.tarifa)} APRENDIDO: ${m.muestras} facturas previas en ${muni}, confianza ${m.confianza}%.`};
+  }
+  if(m){
+    if(m.tarifa>0 && !M.tarifas.includes(m.tarifa))
+      return{aplica:true,tarifa:M.def,cuenta:ctaICA(muni,M.def),estado:'PROPUESTO',confianza:0,
+        razon:`⚠️ El histórico registra ${m.tarifa}/1000, pero el acuerdo de ${mu} no la contempla (${M.tarifas.join(', ')}/1000). Propongo ${M.def}/1000 — confirma.`};
+    return{aplica:m.tarifa>0,tarifa:m.tarifa,cuenta:ctaICA(muni,m.tarifa),estado:'PROPUESTO',confianza:m.confianza,
+      razon:`⚠️ Propuesta ${m.tarifa}/1000 con confianza ${m.confianza}% (${m.muestras} muestra${m.muestras>1?'s':''}). Confirma antes de aprobar.`};
+  }
+  return{aplica:true,tarifa:M.def,cuenta:ctaICA(muni,M.def),estado:'PREGUNTAR',confianza:0,
+    razon:`❓ Tercero NUEVO en ${muni}. Eres agente allí; propongo ${M.def}/1000 → ${ctaICA(muni,M.def)}. Confirma y lo aprenderé.`};
+}
+// D5: el selector se llena SOLO con las tarifas del municipio de esta factura
+function pintarICA(muni){
+  const M=muniAgente(muni);
+  const sel=document.getElementById('liqICA');
+  if(!M){ sel.innerHTML='<option value="0|0">No aplica (no eres agente aquí)</option>'; return }
+  sel.innerHTML='<option value="0|0">No aplica</option>'+
+    M.tarifas.map(t=>`<option value="${t}|${ctaICA(muni,t)}">${t}/1000 → ${ctaICA(muni,t)}</option>`).join('');
+}
+
+// ═══════════════ MOTOR DSS (RESTAURADO de v1.1) ═══════════════
+// Umbrales originales: >=0.90 auto · >=0.75 revisar · >=0.60 detallado · <0.60 manual
+function scoreDSS(f){
+  let c=1.0, v=0;
+  if(usaCentros() && !f.centro){c-=0.15;v++}
+  if(!f.nit||f.nit.length<6){c-=0.20;v++}
+  if(Math.abs(f.z||0)>2){c-=0.18;v++}
+  if(!f.municipio){c-=0.12;v++}
+  const T=f._terr;
+  if(T){ if(T.estado==='PREGUNTAR')c-=0.22; else if(T.estado==='PROPUESTO')c-=0.10; v+= T.estado!=='CONFIRMADO'?1:0 }
+  if(f.base<=0){c-=0.30;v++}
+  if(T && T.cuenta==='2368??'){c-=0.35;v++}   // cuenta ICA del municipio sin configurar
+  if(usaCentros() && f.centroNuevo){c-=0.12;v++}   // centro nuevo: baja de AUTO a revisión, no bloquea
+  if(f.terceroNuevo){c-=0.08;v++}
+  if(T && T.noRegistrado && f.municipio){c-=0.05}  // aviso leve, no bloquea
+  c=Math.max(0.30,Math.min(1,c));
+  return {conf:c, val:v, clase: c>=0.90?'AUTO':c>=0.75?'RAPIDA':c>=0.60?'DETALLADA':'MANUAL'};
+}
+const BADGE={AUTO:['conf-high','✅ Auto-aceptar'],RAPIDA:['conf-med','⚠️ Revisión rápida'],
+             DETALLADA:['conf-med','🔍 Revisión detallada'],MANUAL:['conf-low','❌ Manual']};
+
+// ═══════════════ ESTADO ═══════════════
+let facturas=[],edIdx=-1,hist=[];
+function setPaso(n){
+  for(let i=1;i<=3;i++){const d=document.getElementById('dot'+i);
+    d.className='step-dot '+(i<n?'step-done':i===n?'step-active':'step-todo');d.textContent=i<n?'✓':i}
+  const e=E();
+  document.getElementById('wizardHint').innerHTML={
+    1:`👋 <b>${e?.razon||''}</b> · agente ReteICA en <b>${(e?.municipios||[]).map(m=>m.nombre).join(', ')||'ningún municipio'}</b>. Pega el movimiento y presiona <b>Analizar con DSS</b>.`,
+    2:'🧠 <b>Paso 2:</b> el DSS clasificó cada comprobante por confianza. Empieza por los <b>❌ Manual</b> y <b>🔍 Detallada</b>; los <b>✅ Auto</b> puedes aprobarlos directo.',
+    3:'🎉 <b>Paso 3:</b> descarga el CSV para Helisa. Cada aprobación quedó registrada en la auditoría.'}[n];
+}
+function cargarEjemplo(){
+  const e=E(); const s1=(e&&e.municipios[0]&&e.municipios[0].nombre)||e&&e.sede||'MUNICIPIO';
+  const cc=n=>usaCentros()?n:'';
+  document.getElementById('csvInput').value=
+`FC-0001,PROVEEDOR EJEMPLO UNO SAS,900000001-1,${new Date().toISOString().split('T')[0]},${cc('CC01')},Compra de insumos,1000000,${s1}
+FC-0002,PROVEEDOR EJEMPLO DOS SAS,900000002-2,${new Date().toISOString().split('T')[0]},${cc('CC01')},Servicio de mantenimiento,500000,${s1}
+FC-0003,PERSONA NATURAL EJEMPLO,10000000-3,${new Date().toISOString().split('T')[0]},${cc('CC02')},Honorarios de asesoría,2000000,${s1}`;
+}
+function analizarConIA(){
+  if(!E()){alert('Crea una empresa primero');return}
+  const t=document.getElementById('csvInput').value.trim();
+  if(!t){alert('Pega los datos o usa el ejemplo');return}
+  const PR=parseCSV(t,8);
+  if(PR.avisos.length){
+    alert('⚠️ '+PR.avisos.length+' línea(s) con formato inválido fueron DESCARTADAS para evitar datos corruptos:\n\n'
+      +PR.avisos.slice(0,5).join('\n')+(PR.avisos.length>5?'\n…':'')
+      +'\n\nSolución: encierra entre comillas los campos que contengan comas.');
+  }
+  facturas=PR.filas.map((p,i)=>({id:i,doc:p[0],tercero:p[1],nit:p[2],fecha:p[3],
+      centro:p[4],desc:p[5],base:parseFloat(p[6])||0,
+      municipio:(p[7]||E().sede||'').trim().toUpperCase(),estado:'PENDIENTE',asiento:[]}));
+  if(!facturas.length){alert('No quedaron filas válidas para procesar.');return}
+  const m=facturas.map(f=>f.base),med=m.reduce((a,b)=>a+b,0)/m.length,
+    dv=Math.sqrt(m.reduce((a,x)=>a+(x-med)**2,0)/m.length)||1;
+  let al='';
+  facturas.forEach(f=>{
+    f.z=(f.base-med)/dv;
+    f._terr=motorICA(f.municipio,f.nit,f.tercero);
+    if(usaCentros() && f.centro){const rc=registrar('centros',f.centro,f.centro);f.centroNuevo=rc&&rc.nuevo}
+    if(f.nit){const rt=registrar('terceros',nitL(f.nit),f.tercero);f.terceroNuevo=rt&&rt.nuevo}
+    if(f.centroNuevo)al+=`<div class="warn">🏭 <b>${f.doc}</b>: centro de costo NUEVO <b>${f.centro}</b> — se creará y quedará pendiente de cargar a Helisa.</div>`;
+    if(f.terceroNuevo)al+=`<div class="warn">👤 <b>${f.doc}</b>: tercero NUEVO <b>${f.tercero}</b> (${f.nit}) — pendiente en Helisa.</div>`;
+    const d=scoreDSS(f);f.conf=d.conf;f.val=d.val;f.clase=d.clase;
+    if(Math.abs(f.z)>1.5)al+=`<div class="warn">⚠️ <b>${f.doc}</b>: ${fmt(f.base)} atípico (Z=${f.z.toFixed(1)}) vs media ${fmt(med)}.</div>`;
+    if(/honorario|consultor/i.test(f.desc))al+=`<div class="insight">💡 <b>${f.doc}</b>: honorarios → RteFte 11% PJ / 10% PN según NIT.</div>`;
+    const ic={CONFIRMADO:'🟢',PROPUESTO:'🟡',PREGUNTAR:'🔴'}[f._terr.estado];
+    const cl={CONFIRMADO:'insight',PROPUESTO:'warn',PREGUNTAR:'danger'}[f._terr.estado];
+    al+=`<div class="${cl}">${ic} <b>${f.doc}</b> [${f.municipio||'—'}] <b>${f._terr.estado}</b>: ${f._terr.razon}</div>`;
+    if(f._terr.cuenta==='2368??')al+=`<div class="danger">🛠️ <b>${f.doc}</b>: falta la cuenta contable de ${f._terr.tarifa}/1000 en ${f.municipio}. Configúrala en ⚙️ antes de exportar.</div>`;
+  });
+  document.getElementById('alertasIA').innerHTML=`<div class="glass rounded-xl p-4"><h3 class="text-[11px] font-bold text-blue-300 mb-2">🧠 Análisis DSS (${facturas.length} comprobantes)</h3><div class="space-y-1.5">${al}</div></div>`;
+  metricas();graficos();renderFacturas();setPaso(2);
+  document.getElementById('panelMetricas').classList.remove('hidden');
+  document.getElementById('paso2').classList.remove('hidden');
+  document.getElementById('paso2').scrollIntoView({behavior:'smooth'});
+  autoAprobar(); guardarSesion(); autoCierre();
+}
+function metricas(){
+  const n=facturas.length,li=facturas.reduce((a,f)=>a+Math.max(2,f.asiento.length),0);
+  const cf=facturas.reduce((a,f)=>a+f.conf,0)/n*100;
+  document.getElementById('mComp').textContent=n;
+  document.getElementById('mLines').textContent=li;
+  document.getElementById('mConf').textContent=cf.toFixed(1)+'%';
+  document.getElementById('mAuto').textContent=facturas.filter(f=>f.clase==='AUTO').length;
+  document.getElementById('mVal').textContent=facturas.reduce((a,f)=>a+f.val,0);
+  document.getElementById('mRet').textContent=fmt(facturas.reduce((a,f)=>a+f.asiento.filter(l=>l.cta.startsWith('236')).reduce((s,l)=>s+l.c,0),0));
+  const limpios=facturas.filter(f=>f.val===0).length;
+  document.getElementById('mPrec').textContent=n?((limpios/n*100).toFixed(1)+'%'):'—';
+}
+function graficos(){
+  const g=['AUTO','RAPIDA','DETALLADA','MANUAL'].map(k=>({k,n:facturas.filter(f=>f.clase===k).length}));
+  const max=Math.max(...g.map(x=>x.n),1);
+  const cc={};facturas.forEach(f=>{const c=f.centro||'(sin centro)';cc[c]=(cc[c]||0)+f.base});
+  const mx=Math.max(...Object.values(cc),1);
+  const col={AUTO:'#10b981',RAPIDA:'#f59e0b',DETALLADA:'#3b82f6',MANUAL:'#ef4444'};
+  document.getElementById('graficos').innerHTML=`
+   <div class="glass rounded-xl p-4"><h3 class="text-[11px] font-bold text-blue-300 mb-3">📈 Distribución de confianza DSS</h3>
+    ${g.map(x=>`<div class="mb-2"><div class="flex justify-between text-[10px] mb-1"><span>${BADGE[x.k][1]}</span><span class="font-bold">${x.n}</span></div>
+      <div class="bar"><div style="width:${x.n/max*100}%;background:${col[x.k]}"></div></div></div>`).join('')}</div>
+   <div class="glass rounded-xl p-4"><h3 class="text-[11px] font-bold text-emerald-300 mb-3">🎯 Análisis por centro de costo</h3>
+    ${Object.entries(cc).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([c,v])=>`<div class="mb-2">
+      <div class="flex justify-between text-[10px] mb-1"><span>${c}</span><span class="font-bold">${fmt(v)}</span></div>
+      <div class="bar"><div style="width:${v/mx*100}%;background:#10b981"></div></div></div>`).join('')}</div>`;
+}
+let PAG=0; const XPAG=50;
+function renderFacturas(){
+  const tot=Math.ceil(facturas.length/XPAG)||1;
+  if(PAG>=tot)PAG=tot-1;
+  const slice=facturas.slice(PAG*XPAG,(PAG+1)*XPAG);
+  document.getElementById('listaFacturas').innerHTML=slice.map(f=>{
+    const[bc,bt]=BADGE[f.clase];
+    return `<div class="glass rounded-lg p-4">
+     <div class="flex justify-between items-start mb-1">
+      <div><div class="font-bold text-sm">${f.doc}</div><div class="text-[10px] text-slate-400">${f.tercero} · ${f.nit}</div></div>
+      <div class="text-right"><span class="conf-badge ${bc}">${(f.conf*100).toFixed(0)}%</span>
+        <div class="text-[9px] text-slate-400 mt-1">${bt}</div></div></div>
+     <div class="text-[10px] text-slate-500">${f.desc} · ${fmt(f.base)} · [${f.municipio||'—'}] · ${f.val} validación(es)</div>
+     ${f.asiento.length?`<div class="text-[10px] text-emerald-400 mt-1">✓ ${f.asiento.length} líneas · Ret. ${fmt(f.asiento.filter(l=>l.cta.startsWith('236')).reduce((a,l)=>a+l.c,0))}</div>`:''}
+     <div class="flex gap-2 mt-2">
+      <button onclick="abrirEditor(${f.id})" class="flex-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-[11px]">🧮 Liquidar</button>
+      <button onclick="aprobar(${f.id})" class="flex-1 px-2 py-1.5 bg-emerald-600 hover:bg-emerald-700 rounded text-[11px]" ${!f.asiento.length?'disabled style="opacity:.4"':''}>✅ Aprobar</button></div>
+     <div class="text-[9px] mt-1 ${f.estado==='APROBADO'?'text-green-400':'text-slate-500'}">${f.estado}</div></div>`}).join('');
+  const pg=document.getElementById('pager');
+  if(pg)pg.innerHTML = facturas.length<=XPAG ? '' : `
+    <div class="glass rounded-lg p-3 flex items-center justify-center gap-2 text-xs md:col-span-2">
+      <button onclick="irPag(0)" class="px-2 py-1 bg-slate-700 rounded" ${PAG===0?'disabled style=opacity:.4':''}>«</button>
+      <button onclick="irPag(${PAG-1})" class="px-2 py-1 bg-slate-700 rounded" ${PAG===0?'disabled style=opacity:.4':''}>‹</button>
+      <span class="px-2">Página <b>${PAG+1}</b> de ${tot} · ${facturas.length.toLocaleString('es-CO')} comprobantes</span>
+      <button onclick="irPag(${PAG+1})" class="px-2 py-1 bg-slate-700 rounded" ${PAG>=tot-1?'disabled style=opacity:.4':''}>›</button>
+      <button onclick="irPag(${tot-1})" class="px-2 py-1 bg-slate-700 rounded" ${PAG>=tot-1?'disabled style=opacity:.4':''}>»</button>
+      <button onclick="aprobarPagina()" class="ml-3 px-2 py-1 bg-emerald-700 hover:bg-emerald-600 rounded">✅ Aprobar los AUTO de esta página</button>
+    </div>`;
+}
+function irPag(n){PAG=Math.max(0,n);renderFacturas();document.getElementById('listaFacturas').scrollIntoView({behavior:'smooth'})}
+function aprobarPagina(){
+  const slice=facturas.slice(PAG*XPAG,(PAG+1)*XPAG).filter(f=>f.clase==='AUTO'&&f.asiento.length);
+  if(!slice.length){alert('No hay comprobantes AUTO con asiento liquidado en esta página.');return}
+  if(!confirm(`¿Aprobar ${slice.length} comprobante(s) clasificados AUTO-ACEPTAR?`))return;
+  slice.forEach(f=>{f.estado='APROBADO'});
+  log(`✅ ${slice.length} comprobantes AUTO aprobados en bloque`);
+  renderFacturas();metricas();stats();guardarSesion();autoCierre();
+}
+</script>
+<script>
+// ═══════════════ EDITOR + LIQUIDACIÓN + HISTORIAL ═══════════════
+function abrirEditor(id){
+  edIdx=id;hist=[];const f=facturas[id];
+  document.getElementById('edTitulo').textContent='Liquidar '+f.doc;
+  document.getElementById('edSub').textContent=`${f.tercero} · ${f.fecha} · ${f.desc} · [${f.municipio||'—'}]`;
+  document.getElementById('liqBase').value=f.base;document.getElementById('liqBaseICA').value='';
+  const esPN=f.nit&&!f.nit.startsWith('8')&&!f.nit.startsWith('9');
+  const rf=document.getElementById('liqRteFte');
+  if(!E().resp.agRet)rf.value='0|0';
+  else if(/honorario|consultor/i.test(f.desc))rf.value=esPN?'10|23651502':'11|23651501';
+  else if(/arriendo/i.test(f.desc))rf.value='3.5|23653001';
+  else if(/servicio|purificac/i.test(f.desc))rf.value='4|23652502';
+  else rf.value='2.5|23654001';
+  document.getElementById('liqIVA').value=!E().resp.iva?'0':/café|cafe/i.test(f.desc)?'5':/arriendo/i.test(f.desc)?'0':'19';
+  const T=f._terr||motorICA(f.municipio,f.nit,f.tercero);
+  pintarICA(f.municipio);pintarCentros();
+  const th=document.getElementById('thCentro'); if(th)th.style.display=usaCentros()?'':'none';
+  document.getElementById('liqICA').value=T.aplica?`${T.tarifa}|${T.cuenta}`:'0|0';
+  const cl={CONFIRMADO:'insight',PROPUESTO:'warn',PREGUNTAR:'danger'}[T.estado];
+  const ic={CONFIRMADO:'🟢',PROPUESTO:'🟡',PREGUNTAR:'🔴'}[T.estado];
+  document.getElementById('terrExplain').innerHTML=`<div class="${cl}" style="margin-top:.5rem">${ic} <b>${T.estado}</b> · ${T.razon}</div>`+
+    (T.estado!=='CONFIRMADO'?`<label class="flex items-center gap-2 mt-2 text-[11px] text-yellow-200 cursor-pointer">
+      <input type="checkbox" id="confirmaICA"> Confirmo la tarifa ICA (el sistema la aprenderá)</label>`:'');
+  liquidar();renderAsiento(f.asiento);
+  document.getElementById('editorModal').classList.remove('hidden');
+  document.addEventListener('keydown',atajos);
+}
+function calcLiq(){
+  const base=+document.getElementById('liqBase').value||0;
+  const ivaP=+document.getElementById('liqIVA').value;
+  const[rfP,rfC]=document.getElementById('liqRteFte').value.split('|');
+  const[icaX,icaC]=document.getElementById('liqICA').value.split('|');
+  const bICA=+document.getElementById('liqBaseICA').value||base;
+  const rivaP=+document.getElementById('liqRteIVA').value;
+  const iva=Math.round(base*ivaP/100),rf=Math.round(base*parseFloat(rfP)/100),
+    ica=Math.round(bICA*parseFloat(icaX)/1000),riva=Math.round(iva*rivaP/100);
+  return{base,iva,rf,rfC,ica,icaC,riva,cxp:base+iva-rf-ica-riva};
+}
+function liquidar(){
+  const L=calcLiq(),f=facturas[edIdx];if(!f)return;
+  document.getElementById('edReco').innerHTML=
+   `<div class="insight">🧮 ${fmt(L.base)} + IVA ${fmt(L.iva)} − RteFte ${fmt(L.rf)} − ICA ${fmt(L.ica)}${L.riva?' − RteIVA '+fmt(L.riva):''} = <b>Neto ${fmt(L.cxp)}</b></div>`
+   +(L.rf===0&&E().resp.agRet?`<div class="warn">⚠️ Sin RteFte. Confirma que el tercero sea autorretenedor o exento.</div>`:'')
+   +(L.cxp<0?`<div class="danger">🚫 <b>CxP negativa (${fmt(L.cxp)})</b>: las retenciones superan la base + IVA. Revisa la "base ICA distinta" — probablemente excede la base real de la factura.</div>`:'');
+}
+function aplicarLiquidacion(){
+  const L=calcLiq(),f=facturas[edIdx];
+  if(L.cxp<0){alert('🚫 No se puede generar el asiento: la cuenta por pagar quedaría NEGATIVA ('+fmt(L.cxp)+').\n\nLas retenciones superan la base + IVA. Revisa la base ICA distinta.');return}
+  if(L.base<0){alert('🚫 La base gravable no puede ser negativa.');return}
+  const cta=/honorario/i.test(f.desc)?'51100501':/servicio/i.test(f.desc)?'51350101':/arriendo/i.test(f.desc)?'51350101':'61350101';
+  pushHist('Liquidación automática');
+  const cc=f.centro||'';
+  f.asiento=[{cta,d:L.base,c:0,centro:cc},...(L.iva?[{cta:'24080101',d:L.iva,c:0,centro:''}]:[]),
+    ...(L.rf?[{cta:L.rfC,d:0,c:L.rf,centro:''}]:[]),...(L.ica?[{cta:L.icaC,d:0,c:L.ica,centro:''}]:[]),
+    ...(L.riva?[{cta:'23670101',d:0,c:L.riva,centro:''}]:[]),{cta:'23359501',d:0,c:L.cxp,centro:''}];
+  renderAsiento(f.asiento);
+}
+function renderAsiento(as){
+  document.getElementById('asientoBody').innerHTML=as.map((l,i)=>`
+   <tr class="border-b border-slate-800">
+    <td class="py-1"><input value="${l.cta}" onchange="editLinea(${i},'cta',this.value)" class="w-20 bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-[10px]"></td>
+    <td class="text-slate-400 text-[10px]">${l._com?`<b class="text-cyan-300">${String(l._com).substring(0,18)}</b> ${l._est==='PREGUNTAR'?'🔴':l._est==='PROPUESTO'?'🟡':''}<br>`:''}${PUC[l.cta]||'—'}</td>
+    ${usaCentros()?`<td><input list="dlCentros" value="${l.centro||''}"
+        placeholder="${requiereCentro(l.cta)?'requerido':'—'}" onchange="setCentro(${i},this.value)"
+        class="w-28 bg-slate-800 border ${requiereCentro(l.cta)&&!l.centro?'border-amber-600':'border-slate-700'} rounded px-1 py-0.5 text-[10px]"></td>`:''}
+    <td><input type="number" value="${l.d}" onchange="editLinea(${i},'d',+this.value||0)" class="w-24 bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-right text-[10px]"></td>
+    <td><input type="number" value="${l.c}" onchange="editLinea(${i},'c',+this.value||0)" class="w-24 bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-right text-[10px]"></td>
+    <td><button onclick="delLinea(${i})" class="text-red-400 text-[10px]">✕</button></td></tr>`).join('');
+  recalc();
+}
+function editLinea(i,k,v){pushHist(`Editó línea ${i+1} (${k})`);facturas[edIdx].asiento[i][k]=v;renderAsiento(facturas[edIdx].asiento)}
+function delLinea(i){pushHist(`Eliminó línea ${i+1}`);facturas[edIdx].asiento.splice(i,1);renderAsiento(facturas[edIdx].asiento)}
+function agregarLinea(){pushHist('Agregó línea');facturas[edIdx].asiento.push({cta:'',d:0,c:0,centro:''});renderAsiento(facturas[edIdx].asiento)}
+function pintarCentros(){
+  document.getElementById('dlCentros').innerHTML=Object.entries(cat('centros'))
+    .sort((a,b)=>b[1].usos-a[1].usos)
+    .map(([k,v])=>`<option value="${k}">${v.nombre}${v.creadoHelisa?'':' · PENDIENTE'}</option>`).join('');
+}
+function setCentro(i,v){
+  const val=(v||'').trim();
+  const aplicar=cod=>{ pushHist(`Centro línea ${i+1}`); facturas[edIdx].asiento[i].centro=cod;
+                        renderAsiento(facturas[edIdx].asiento); pintarCentros(); badgePend(); };
+  if(val && !cat('centros')[val]){ abrirNuevo('centros',val,similar('centros',val),aplicar); return }
+  aplicar(val);
+}
+let nuevoPend=null;
+function abrirNuevo(tipo,cod,sug,cb){
+  nuevoPend={tipo,cod,cb};
+  document.getElementById('nuevoTitulo').textContent=tipo==='centros'?'🏭 Centro de costo nuevo':'👤 Tercero nuevo';
+  document.getElementById('nuevoBody').innerHTML=`
+    <div class="warn">El código <b>${cod}</b> no existe en el catálogo de esta empresa.</div>
+    ${sug.length?`<div class="danger">⚠️ ¿Quisiste decir alguno de estos? (clic para usarlo)<br>
+      ${sug.map(x=>`<button onclick="usarSug('${x.k.replace(/'/g,"\\'")}')" class="mt-1 mr-1 px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded font-mono">${x.k}</button>`).join('')}</div>`:''}
+    <div><label class="text-slate-400">Código</label><input id="nvCod" value="${cod}" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded font-mono"></div>
+    <div><label class="text-slate-400">Nombre / descripción</label><input id="nvNom" placeholder="Ej: IMP 061-26" class="w-full mt-1 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded"></div>
+    <div class="insight">Quedará <b>PENDIENTE</b> hasta que lo cargues a Helisa con el Excel de catálogos.</div>`;
+  document.getElementById('nuevoModal').classList.remove('hidden');
+}
+// FIX: se usa el código elegido, no el que se digitó por error
+function usarSug(k){
+  const p=nuevoPend; if(!p)return;
+  document.getElementById('nuevoModal').classList.add('hidden');
+  registrar(p.tipo,k,(cat(p.tipo)[k]&&cat(p.tipo)[k].nombre)||k);
+  log(`✏️ Corregido: "${p.cod}" → "${k}" (código existente del catálogo)`);
+  nuevoPend=null; p.cb && p.cb(k);
+}
+function confirmarNuevo(){
+  if(!nuevoPend)return;
+  const cod=document.getElementById('nvCod').value.trim();
+  const nom=document.getElementById('nvNom').value.trim()||cod;
+  if(!cod){alert('El código es obligatorio');return}
+  const p=nuevoPend;
+  registrar(p.tipo,cod,nom);
+  document.getElementById('nuevoModal').classList.add('hidden');
+  log(`📚 ${p.tipo==='centros'?'Centro':'Tercero'} creado: ${cod} — ${nom} (pendiente en Helisa)`);
+  nuevoPend=null; p.cb && p.cb(cod);   // FIX: propaga el código FINAL
+}
+
+function recalc(){
+  const as=facturas[edIdx]?.asiento||[];
+  const d=as.reduce((a,l)=>a+l.d,0),c=as.reduce((a,l)=>a+l.c,0),b=Math.abs(d-c);
+  document.getElementById('totD').textContent=fmt(d);document.getElementById('totC').textContent=fmt(c);
+  const bx=document.getElementById('balBox');bx.textContent=b<1?fmt(0)+' ✅':fmt(b)+' ❌';
+  bx.className=b<1?'text-emerald-400 font-bold':'text-red-400 font-bold';
+}
+function pushHist(m){hist.push({m,snap:JSON.parse(JSON.stringify(facturas[edIdx].asiento)),t:new Date().toLocaleTimeString('es-CO')});renderHist()}
+function renderHist(){document.getElementById('histBox').innerHTML=hist.length?
+  hist.slice().reverse().map(h=>`<div class="hist-item">${h.m}<div class="text-slate-500">${h.t}</div></div>`).join('')
+  :'<div class="text-slate-500 text-[10px] text-center py-3">Sin cambios</div>'}
+function deshacer(){if(!hist.length){alert('Nada que deshacer');return}
+  const h=hist.pop();facturas[edIdx].asiento=h.snap;renderAsiento(facturas[edIdx].asiento);renderHist()}
+function guardarAsiento(){
+  const f=facturas[edIdx],T=f._terr||{estado:'CONFIRMADO'};
+  const chk=document.getElementById('confirmaICA');
+  if(T.estado!=='CONFIRMADO'&&chk&&!chk.checked){
+    alert('❗ Confirma la tarifa de ReteICA antes de guardar.\n\nEl tercero es nuevo o su historial no es concluyente.');return}
+  const d=f.asiento.reduce((a,l)=>a+l.d,0),c=f.asiento.reduce((a,l)=>a+l.c,0);
+  if(Math.abs(d-c)>1){alert('❌ Desbalanceado: D '+fmt(d)+' ≠ C '+fmt(c));return}
+  const sinCC=f.asiento.filter(l=>l.d>0 && requiereCentro(l.cta) && !l.centro);
+  if(sinCC.length && !confirm(`⚠️ ${sinCC.length} línea(s) de gasto/costo sin centro de costo.\nSe perderá la analítica de esas líneas.\n\n¿Guardar así?`))return;
+  f.estado='LIQUIDADO';
+  if(f.esLote){
+    const sinCta=f.asiento.filter(l=>l.d>0&&!l.cta);
+    if(sinCta.length){alert('❗ '+sinCta.length+' recibo(s) sin cuenta asignada ('+sinCta.slice(0,3).map(l=>l._rec).join(', ')+'…). Asígnalas para poder contabilizar.');return}
+    f.asiento.forEach(l=>{if(l.d>0&&l._com)aprenderComercio(l._com,l.cta)});
+  }
+  const lIca=f.asiento.find(l=>l.cta.startsWith('2368'));
+  const tar=lIca?+document.getElementById('liqICA').value.split('|')[0]:0;
+  const ent=aprenderICA(f.municipio,f.nit,tar,f.tercero);
+  f._terr=motorICA(f.municipio,f.nit,f.tercero);
+  const s=scoreDSS(f);f.conf=s.conf;f.val=s.val;f.clase=s.clase;
+  cerrarEditor();renderFacturas();metricas();graficos();
+  guardarSesion(); autoAprobar(); autoCierre();
+  log(`💾 ${f.doc} · 🧠 aprendido: ${f.tercero.substring(0,20)} @ ${f.municipio} → ${tar}/1000 (${ent.obs.length} muestras)`);
+}
+function cerrarEditor(){document.getElementById('editorModal').classList.add('hidden');document.removeEventListener('keydown',atajos)}
+function atajos(e){
+  if(e.ctrlKey&&e.key==='s'){e.preventDefault();guardarAsiento()}
+  else if(e.ctrlKey&&e.key==='z'){e.preventDefault();deshacer()}
+  else if(e.key==='Escape')cerrarEditor();
+}
+function aprobar(id){
+  facturas[id].estado='APROBADO';renderFacturas();metricas();
+  log(`✅ ${facturas[id].doc} aprobada`);
+  stats(); guardarSesion(); autoCierre();
+}
+function stats(){
+  const ap=facturas.filter(f=>f.estado==='APROBADO');
+  document.getElementById('statAprob').textContent=ap.length;
+  document.getElementById('statPend').textContent=facturas.length-ap.length;
+  const r=ap.reduce((a,f)=>a+f.asiento.filter(l=>l.cta.startsWith('236')).reduce((s,l)=>s+l.c,0),0);
+  document.getElementById('statRet').textContent=fmt(r);
+  const b=ap.reduce((a,f)=>a+f.asiento.reduce((s,l)=>s+l.d-l.c,0),0);
+  document.getElementById('statBal').textContent=fmt(Math.abs(b))+(Math.abs(b)<1?' ✅':' ❌');
+}
+function exportarHelisa(){
+  const ap=facturas.filter(f=>f.estado==='APROBADO');
+  if(!ap.length){alert('No hay facturas aprobadas');return}
+  const e=E();
+  const pend=pendientes();
+  if(pend.length && !confirm(`⚠️ Hay ${pend.length} código(s) sin crear en Helisa (centros/terceros).\nSi importas ahora, Helisa rechazará esas líneas.\n\n¿Exportar de todos modos?`))return;
+  const sc=x=>String(x==null?'':x).replace(/;/g,',');   // ';' es el separador: se sustituye en los datos
+  let csv='EMPRESA;NIT_EMPRESA;TIPO;NUMERO;FECHA;NIT;CUENTA;DESCRIPCION;CENTRO;MUNICIPIO;DEBITO;CREDITO\n';
+  ap.forEach(f=>f.asiento.forEach(l=>{
+    csv+=`${sc(e.razon)};${e.nit};FC;${sc(f.doc.replace(/\s+/g,''))};${f.fecha};${f.nit};${l.cta};${sc((PUC[l.cta]||f.desc).substring(0,40))};${sc(l.centro||'')};${sc(f.municipio||'')};${l.d};${l.c}\n`}));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download=`HELISA_${nitL(e.nit)}_${new Date().toISOString().split('T')[0]}.csv`;a.click();
+  log(`📤 CSV Helisa: ${ap.length} comprobantes, ${ap.reduce((a,f)=>a+f.asiento.length,0)} líneas`);
+}
+function abrirCatalogos(){
+  if(!E())return;const e=E();const c=e.cat||{centros:{},terceros:{}};
+  const tabla=(tipo,titulo)=>{
+    const rows=Object.entries(c[tipo]||{});
+    if(!rows.length)return `<div class="bg-slate-900/50 rounded p-3"><b class="text-blue-300">${titulo}</b><div class="text-slate-500 mt-1">Vacío</div></div>`;
+    return `<div class="bg-slate-900/50 rounded p-3"><b class="text-blue-300">${titulo} (${rows.length})</b>
+      <div class="max-h-52 overflow-y-auto mt-2"><table class="w-full text-[10px]">
+      <tr class="text-slate-500"><th class="text-left">Código</th><th class="text-left">Nombre</th><th>Usos</th><th>Helisa</th></tr>
+      ${rows.sort((a,b)=>(a[1].creadoHelisa?1:0)-(b[1].creadoHelisa?1:0)).map(([k,v])=>`<tr class="border-t border-slate-800">
+        <td class="font-mono">${k}</td><td>${v.nombre}</td><td class="text-center">${v.usos}</td>
+        <td class="text-center">${v.creadoHelisa?'✅':'<span class="text-yellow-400">PENDIENTE</span>'}</td></tr>`).join('')}
+      </table></div></div>`};
+  document.getElementById('catBody').innerHTML=(usaCentros()?tabla('centros','🏭 Centros de costo'):
+      '<div class="bg-slate-900/50 rounded p-3 text-slate-500">🏭 Esta empresa no maneja centros de costo.</div>')+tabla('terceros','👤 Terceros')
+    +`<div class="insight">📊 El Excel trae una hoja por catálogo con solo los <b>PENDIENTES</b>, en el formato de importación de Helisa.</div>`;
+  document.getElementById('catModal').classList.remove('hidden');
+}
+function exportarCatalogos(){
+  const e=E(),c=e.cat||{};const wb=XLSX.utils.book_new();let n=0;
+  (usaCentros()?[['centros','CENTROS_COSTO',['CODIGO','NOMBRE','ESTADO']],['terceros','TERCEROS',['NIT','NOMBRE','ESTADO']]]
+              :[['terceros','TERCEROS',['NIT','NOMBRE','ESTADO']]]).forEach(([t,hoja,hdr])=>{
+    const rows=Object.entries(c[t]||{}).filter(([k,v])=>!v.creadoHelisa).map(([k,v])=>({[hdr[0]]:k,[hdr[1]]:v.nombre,[hdr[2]]:'ACTIVO'}));
+    n+=rows.length;
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.length?rows:[Object.fromEntries(hdr.map(h=>[h,'']))]),hoja);
+  });
+  if(!n){alert('No hay códigos pendientes de crear en Helisa.');return}
+  XLSX.writeFile(wb,`CATALOGOS_HELISA_${nitL(e.nit)}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  log(`📊 Excel de catálogos generado: ${n} código(s) para cargar a Helisa`);
+}
+function marcarTodoCreado(){
+  if(!confirm('¿Confirmas que ya cargaste el Excel en Helisa?'))return;
+  const c=E().cat||{};['centros','terceros'].forEach(t=>Object.values(c[t]||{}).forEach(v=>v.creadoHelisa=true));
+  guardar();abrirCatalogos();badgePend();log('✅ Catálogos marcados como creados en Helisa');
+}
+// ═══ B4 · RESPALDO LOCAL ═══
+const BK_KEY='dss_v6_ultimo_bk';
+function abrirRespaldo(){
+  const ult=localStorage.getItem(BK_KEY);
+  const dias=ult?Math.floor((Date.now()-new Date(ult))/864e5):null;
+  const peso=Math.round((JSON.stringify(EMPRESAS).length)/1024);
+  document.getElementById('bkEstado').innerHTML=
+    (ult===null?`<div class="danger">⚠️ <b>Nunca has descargado un respaldo.</b> Si limpias la caché del navegador perderás empresas, catálogos y todo el aprendizaje.</div>`
+     :dias>=7?`<div class="warn">⚠️ Último respaldo hace <b>${dias} día(s)</b>. Descarga uno nuevo.</div>`
+     :`<div class="insight">✅ Último respaldo hace ${dias} día(s).</div>`)
+    +`<div class="text-slate-400 mt-2">${Object.keys(EMPRESAS).length} empresa(s) · ${peso} KB usados de ~5.120 KB disponibles.</div>`;
+  document.getElementById('syncEstado').innerHTML = FB_LISTO
+    ? '☁️ Firestore conectado — la sincronización está activa.'
+    : '⚪ Sin configurar. Edita <code>FB_CONFIG</code> con las credenciales de tu proyecto Firebase para habilitarla.';
+  document.getElementById('bkModal').classList.remove('hidden');
+}
+function exportarRespaldo(){
+  const bk={version:'6.0',fecha:new Date().toISOString(),empresas:EMPRESAS,activa:NITA};
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(bk,null,1)],{type:'application/json'}));
+  a.download=`RESPALDO_DSS_${new Date().toISOString().split('T')[0]}.json`;a.click();
+  localStorage.setItem(BK_KEY,new Date().toISOString());
+  log('💾 Respaldo descargado');abrirRespaldo();
+}
+async function importarRespaldo(file){
+  if(!file)return;
+  try{
+    const bk=JSON.parse(await file.text());
+    if(!bk.empresas)throw new Error('Archivo sin empresas');
+    const n=Object.keys(bk.empresas).length;
+    if(!confirm(`El respaldo contiene ${n} empresa(s) del ${(bk.fecha||'').split('T')[0]}.\n\nSe FUSIONARÁ con lo que ya tienes (no se borra nada).\n¿Continuar?`))return;
+    Object.entries(bk.empresas).forEach(([k,v])=>{ EMPRESAS[k]=fusionarEmpresa(EMPRESAS[k],v) });
+    NITA=NITA||bk.activa||Object.keys(EMPRESAS)[0];
+    guardar();renderSelector();badgePend();
+    alert(`✅ Respaldo restaurado: ${n} empresa(s) fusionada(s).`);
+    log(`💾 Respaldo restaurado (${n} empresas)`);
+  }catch(e){alert('❌ No se pudo leer el respaldo: '+e.message)}
+}
+function fusionarEmpresa(a,b){
+  if(!a)return b; if(!b)return a;
+  const r=JSON.parse(JSON.stringify(a));
+  r.municipios=b.municipios&&b.municipios.length>(a.municipios||[]).length?b.municipios:a.municipios;
+  r.cat=r.cat||{centros:{},terceros:{}};
+  ['centros','terceros'].forEach(t=>{
+    r.cat[t]=r.cat[t]||{};
+    Object.entries((b.cat&&b.cat[t])||{}).forEach(([k,v])=>{
+      if(!r.cat[t][k])r.cat[t][k]=v;
+      else{ r.cat[t][k].usos=(r.cat[t][k].usos||0)+(v.usos||0);
+            r.cat[t][k].creadoHelisa=r.cat[t][k].creadoHelisa||v.creadoHelisa }
+    });
+  });
+  r.maestro=r.maestro||{};
+  Object.entries(b.maestro||{}).forEach(([k,v])=>{
+    if(!r.maestro[k])r.maestro[k]=v;
+    else{ r.maestro[k].obs=[...r.maestro[k].obs,...v.obs].slice(-12) }
+  });
+  return r;
+}
+// ═══ B1 · SINCRONIZACIÓN EN EQUIPO (Firestore) ═══
+const FB_CONFIG={apiKey:'',authDomain:'',projectId:'',storageBucket:'',messagingSenderId:'',appId:''};
+let FB_LISTO=false, DB=null;
+try{
+  if(FB_CONFIG.projectId && window.firebase){
+    firebase.initializeApp(FB_CONFIG); DB=firebase.firestore(); FB_LISTO=true;
+  }
+}catch(e){console.warn('Firestore no inicializado',e)}
+async function syncSubir(){
+  if(!FB_LISTO){alert('Configura FB_CONFIG con las credenciales de tu proyecto Firebase.');return}
+  if(!E()){alert('Selecciona una empresa');return}
+  try{
+    await DB.collection('dss_empresas').doc(NITA).set({...E(),_actualizado:new Date().toISOString()},{merge:true});
+    log('☁️ Datos subidos a Firestore');alert('✅ Subido correctamente.');
+  }catch(e){alert('❌ Error al subir: '+e.message)}
+}
+async function syncBajar(){
+  if(!FB_LISTO){alert('Configura FB_CONFIG con las credenciales de tu proyecto Firebase.');return}
+  try{
+    const snap=await DB.collection('dss_empresas').get();
+    let n=0;
+    snap.forEach(d=>{ EMPRESAS[d.id]=fusionarEmpresa(EMPRESAS[d.id],d.data()); n++ });
+    NITA=NITA||Object.keys(EMPRESAS)[0]; guardar(); renderSelector(); badgePend();
+    log(`🔄 ${n} empresa(s) fusionada(s) desde Firestore`);
+    alert(`✅ ${n} empresa(s) sincronizada(s) y fusionada(s).`);
+  }catch(e){alert('❌ Error al sincronizar: '+e.message)}
+}
+function avisoRespaldo(){
+  const ult=localStorage.getItem(BK_KEY);
+  const dias=ult?Math.floor((Date.now()-new Date(ult))/864e5):999;
+  if(dias>=7 && Object.keys(EMPRESAS).length)
+    log('⚠️ Sin respaldo reciente — usa 💾 para descargar uno');
+}
+function log(m){const d=document.getElementById('auditLog');
+  if(d)d.innerHTML=`<div>🕐 ${new Date().toLocaleTimeString('es-CO')} · ${m}</div>`+d.innerHTML}
+renderSelector();
+</script>
+</body></html>

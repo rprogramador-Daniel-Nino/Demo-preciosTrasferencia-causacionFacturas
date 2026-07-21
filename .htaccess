@@ -1,0 +1,25 @@
+# .htaccess — Configuración para cPanel Apache
+RewriteEngine On
+
+# Redirigir peticiones de API a sus respectivos scripts PHP
+RewriteRule ^api/claude/?$ api/claude.php [L,QSA]
+RewriteRule ^api/extraer-rut/?$ api/extraer-rut.php [L,QSA]
+RewriteRule ^extraer-rut/?$ api/extraer-rut.php [L,QSA]
+RewriteRule ^api/usage/?$ api/usage.php [L,QSA]
+
+# Proteger archivos de configuración y logs sensibles
+<Files "config.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "usage_data.json">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files ".env">
+    Order Allow,Deny
+    Deny from all
+</Files>
+

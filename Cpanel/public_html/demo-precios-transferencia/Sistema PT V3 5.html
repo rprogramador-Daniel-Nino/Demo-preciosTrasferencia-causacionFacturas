@@ -568,11 +568,11 @@ function readFileText(file,cb){ if(!file)return; const nm=(file.name||'').toLowe
   if(nm.endsWith('.pdf')){ readPDF(file,cb); }
   else { try{const r=new FileReader();r.onload=()=>cb(String(r.result||''));r.readAsText(file);}catch(e){docMsg('No se pudo leer el archivo. Pega el texto y usa «Procesar».');} } }
 async function readPDF(file,cb){ try{
-    if(!window.pdfjsLib){ await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'); if(window.pdfjsLib&&window.pdfjsLib.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
+    if(!window.pdfjsLib){ await loadScript('vendor/pdfjs/pdf.min.js'); if(window.pdfjsLib&&window.pdfjsLib.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc='vendor/pdfjs/pdf.worker.min.js'; }
     const buf=await file.arrayBuffer(); const pdf=await window.pdfjsLib.getDocument({data:buf}).promise; let txt='';
     for(let i=1;i<=pdf.numPages;i++){ const pg=await pdf.getPage(i); const c=await pg.getTextContent(); txt+=c.items.map(it=>it.str).join(' ')+'\n'; }
     cb(txt);
-  }catch(e){ docMsg('No se pudo leer el PDF automáticamente aquí. Pega el texto del RUT/Cámara en el cuadro y usa «Procesar».'); } }
+  }catch(e){ console.error('Error leyendo PDF:',e); docMsg('No se pudo leer el PDF automáticamente aquí ('+(e&&e.message||e)+'). Pega el texto del RUT/Cámara en el cuadro y usa «Procesar».'); } }
 function parseRUT(txt){ const t=String(txt||'').replace(/\s+/g,' '); const o={}; let m; const NITP='([0-9]{1,3}(?:\\.[0-9]{3}){1,3}|[0-9]{9,10})';
   if(m=t.match(new RegExp('n[uú]mero de identificaci[oó]n tributaria\\s*\\(?nit\\)?[^0-9]{0,12}'+NITP,'i'))) o.nit=_digits(m[1]);
   else if(m=t.match(new RegExp('\\bNIT\\b[^0-9]{0,8}'+NITP,'i'))) o.nit=_digits(m[1]);
@@ -2073,7 +2073,7 @@ function _inyectarCamposV32(){
 
 /* ── runAudit ampliado: Decreto 1496/2024 + secciones nuevas ── */
 const _runAuditV3=runAudit;
-function runAudit(){
+runAudit=function(){
   const F=_runAuditV3()||[];
   const pais=($('pais').value||'').trim();
   if(pais&&checkJurisdiccionD1496(pais))
@@ -2083,11 +2083,11 @@ function runAudit(){
   const ci=$('compinternos'); if(ci&&!ci.value.trim())
     F.push(['amber','Sin pronunciamiento sobre comparables internos, de consideración prioritaria (num. 5).']);
   return F;
-}
+};
 
 /* ── renderReport envuelto: agrega las constancias nuevas al informe ── */
 const _renderV3=renderReport;
-function renderReport(){
+renderReport=function(){
   _renderV3();
   const doc=$('doc'); if(!doc)return;
   const bf=($('basefecha')&&$('basefecha').value)||'', ci=($('compinternos')&&$('compinternos').value)||'',
@@ -2099,7 +2099,7 @@ function renderReport(){
   const pais=($('pais').value||'').trim();
   extra+='<p><b>Verificación Decreto 1496 de 2024:</b> la jurisdicción del vinculado («'+escH(pais)+'») '+(checkJurisdiccionD1496(pais)?'<b>FIGURA</b> en el listado; aplica el régimen del Art. 260-7 E.T. y documentación reforzada':'no figura en el listado de jurisdicciones no cooperantes o de baja o nula imposición')+'.</p>';
   doc.insertAdjacentHTML('beforeend',extra);
-}
+};
 
 /* ── Orquestador ── */
 function orqLog(m,t){try{docMsg(m);}catch(e){} console.log('[orq]',m);}
@@ -2160,26 +2160,737 @@ async function interpretarAdjuntos(){IA_ALERTAS=[];const ent=$('ent').value,nit=
   if(j.entidad&&ent&&!similar(j.entidad,ent))IA_ALERTAS.push('El documento pertenece a «'+j.entidad+'», distinto del informante.');
   docMsg('Interpretación IA: '+(IA_ALERTAS.length?IA_ALERTAS.length+' alerta(s) — ver Auditoría.':'sin alertas.'));return j;}
  catch(e){docMsg('Intérprete requiere entorno con API: '+e.message);return null;}}
-var _runAuditV32=runAudit;function runAudit(){return _mergeAlertasIA(_runAuditV32()||[]);}
+var _runAuditV32=runAudit;runAudit=function(){return _mergeAlertasIA(_runAuditV32()||[]);};
 
 /* Memoria central: índice para cientos de estudios */
 function _idxKey(){return 'pt_indice_central';}
 function indexarEstudio(id,meta){try{const raw=localStorage.getItem(_idxKey());const ix=raw?JSON.parse(raw):{};ix[id]=Object.assign(ix[id]||{},meta,{updated:Date.now()});localStorage.setItem(_idxKey(),JSON.stringify(ix));try{stSet(_idxKey(),JSON.stringify(ix));}catch(e){}return Object.keys(ix).length;}catch(e){return 0;}}
 function listarEstudios(q){try{const ix=JSON.parse(localStorage.getItem(_idxKey())||'{}');let arr=Object.keys(ix).map(k=>Object.assign({id:k},ix[k]));if(q){const s=q.toLowerCase();arr=arr.filter(e=>((e.ent||'')+(e.nit||'')+(e.anio||'')).toLowerCase().indexOf(s)>-1);}return arr.sort((a,b)=>b.updated-a.updated);}catch(e){return [];}}
-var _saveV32=saveActive;function saveActive(){const r=_saveV32();try{const id=(typeof ACTIVE!=='undefined'&&ACTIVE)||slug($('ent').value)+'-'+$('anio').value;indexarEstudio(id,{ent:$('ent').value,nit:$('nit').value,anio:$('anio').value,pli:$('pli').value});}catch(e){}return r;}
+var _saveV32=saveActive;saveActive=function(){const r=_saveV32();try{const id=(typeof ACTIVE!=='undefined'&&ACTIVE)||slug($('ent').value)+'-'+$('anio').value;indexarEstudio(id,{ent:$('ent').value,nit:$('nit').value,anio:$('anio').value,pli:$('pli').value});}catch(e){}return r;};
 
 /* Constancias V3.3 al informe */
-var _renderV32=renderReport;function renderReport(){_renderV32();const doc=$('doc');if(!doc)return;
+var _renderV32=renderReport;renderReport=function(){_renderV32();const doc=$('doc');if(!doc)return;
  const pj=($('plijust')&&$('plijust').value)||'';
  let x='<h3 class="rep">Selección del indicador — constancia V3.3</h3><p>Indicador aplicado: <b>'+escH($('pli').value)+'</b>. '+(pj?('Recomendación del asesor IA (decisión adoptada por el usuario): '+escH(pj)):'Selección directa del usuario, sin intervención del asesor IA.')+'</p>';
  if(IA_ALERTAS.length)x+='<p style="color:#A5352A"><b>Alertas del intérprete IA pendientes:</b> '+IA_ALERTAS.map(escH).join(' · ')+'</p>';
  x+='<p style="font-size:11px;color:#666">Base doctrinal del sistema: '+DOCTRINA_DB.map(d=>d.id).join(', ')+'.</p>';
- doc.insertAdjacentHTML('beforeend',x);}
+ doc.insertAdjacentHTML('beforeend',x);};
 function _inyectarV33(){if(document.getElementById('plijust'))return;const a=document.getElementById('rangorazon');if(!a)return;
  a.closest('label').insertAdjacentHTML('afterend','<label class="f"><span class="l">Justificación del indicador (asesor IA o manual)</span><textarea class="i" id="plijust" rows="2" onchange="saveActive()"></textarea></label><button class="btn" type="button" onclick="sugerirIndicador()">🤖 Sugerir indicador (IA+web+doctrina)</button> <button class="btn" type="button" onclick="interpretarAdjuntos()">🔎 Interpretar adjuntos (IA)</button>');}
 try{_inyectarV33();}catch(e){}
 document.addEventListener('DOMContentLoaded',()=>{try{_inyectarV33();}catch(e){}});
 
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO: OPERACIONES AUTOMÁTICAS - V3.3 OPTIMIZADO
+// ═══════════════════════════════════════════════════════════════════════════
+// Carga automática de operaciones, detección de topes y extracción de patrimonio
+// SIN REGRESIONES - Solo funcionalidad agregada
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * AUTO-CARGAR OPERACIONES DESDE EXCEL
+ */
+async function autoCargarOperaciones(rutBuscado, mostrarDetalle = true) {
+  if(!rutBuscado || rutBuscado.length < 5) {
+    alert('⚠️ Por favor, ingresa un RUT válido');
+    return false;
+  }
+  
+  try {
+    const archivo = ADJ?.operaciones?.[0];
+    if(!archivo) {
+      alert('⚠️ Adjunta el archivo: "Información Operaciones PT 2025-2.xlsx"');
+      return false;
+    }
+    
+    const arrayBuffer = await archivo.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    
+    const hojasPrioritarias = [
+      'Op. Vinculados Economicos',
+      'Op. Paraisos Fiscales',
+      'Op. Prestamos Vinculados Econom',
+      'Op. Prestamos Paraisos Fiscales'
+    ];
+    
+    let operacionesEncontradas = [];
+    let totalMonto = 0;
+    let tiposEncontrados = new Set();
+    let paisesEncontrados = new Set();
+    
+    for(const nombreHoja of hojasPrioritarias) {
+      const sheet = workbook.Sheets[nombreHoja];
+      if(!sheet) continue;
+      
+      const datos = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      if(!datos || datos.length < 12) continue;
+      
+      const encabezados = datos[9] || [];
+      const colNombre = encabezados.findIndex(h => String(h).toLowerCase().includes('vinculado'));
+      const colRUT = encabezados.findIndex(h => String(h).toLowerCase().includes('identificación'));
+      const colPais = encabezados.findIndex(h => String(h).toLowerCase().includes('país'));
+      const colTipo = encabezados.findIndex(h => String(h).toLowerCase().includes('tipo de operación'));
+      const colMonto = encabezados.findIndex(h => String(h).toLowerCase().includes('monto operación'));
+      
+      if(colRUT === -1) continue;
+      
+      const rutLimpio = String(rutBuscado).replace(/[^0-9]/g, '');
+      
+      for(let i = 11; i < Math.min(datos.length, 500); i++) {
+        const fila = datos[i];
+        if(!fila || fila.length === 0) continue;
+        
+        const rutEnFila = String(fila[colRUT] || '').replace(/[^0-9]/g, '');
+        if(rutEnFila === rutLimpio) {
+          const monto = parseFloat(String(fila[colMonto] || 0).replace(/[^0-9.-]/g, '')) || 0;
+          const tipo = String(fila[colTipo] || 'NO ESPECIFICADO').trim();
+          const pais = String(fila[colPais] || 'N/A').trim();
+          const nombre = String(fila[colNombre] || 'Vinculado').trim();
+          
+          const uvt = num($('uvt')?.value || 44737);
+          const tope = 45000 * uvt;
+          const cumpletope = monto >= tope;
+          
+          operacionesEncontradas.push({
+            nombre, rut: fila[colRUT], pais, tipo, monto, cumpletope, fila: i + 1
+          });
+          
+          totalMonto += monto;
+          tiposEncontrados.add(tipo);
+          paisesEncontrados.add(pais);
+        }
+      }
+    }
+    
+    if(operacionesEncontradas.length === 0) {
+      alert('❌ No se encontraron operaciones con RUT: ' + rutBuscado);
+      return false;
+    }
+    
+    const datosAutoOps = {
+      rut: rutBuscado,
+      operaciones: operacionesEncontradas,
+      totalMonto: totalMonto,
+      tipos: Array.from(tiposEncontrados),
+      paises: Array.from(paisesEncontrados),
+      fecha: new Date().toISOString()
+    };
+    
+    stSet('autoOps', JSON.stringify(datosAutoOps));
+    
+    if(mostrarDetalle) {
+      mostrarResumenOperaciones(operacionesEncontradas, totalMonto);
+    }
+    
+    const primerMonto = operacionesEncontradas[0]?.monto || 0;
+    if($('monto') && !$('monto').value) {
+      $('monto').value = totalMonto > 0 ? totalMonto : primerMonto;
+    }
+    
+    return true;
+    
+  } catch(error) {
+    console.error('Error:', error);
+    alert('❌ Error: ' + error.message);
+    return false;
+  }
+}
+
+/**
+ * MOSTRAR RESUMEN DE OPERACIONES
+ */
+function mostrarResumenOperaciones(operaciones, totalMonto) {
+  if(!operaciones || operaciones.length === 0) return;
+  
+  const uvt = num($('uvt')?.value || 44737);
+  const tope = 45000 * uvt;
+  const cumpletope = totalMonto >= tope;
+  
+  const porTipo = {};
+  operaciones.forEach(op => {
+    if(!porTipo[op.tipo]) porTipo[op.tipo] = { monto: 0, count: 0 };
+    porTipo[op.tipo].monto += op.monto;
+    porTipo[op.tipo].count += 1;
+  });
+  
+  let html = `<div class="ops-resumen" style="background:linear-gradient(135deg,#e8f5e9 0%,#c8e6c9 100%);border:2px solid #4caf50;border-radius:8px;padding:20px;margin:15px 0;box-shadow:0 3px 8px rgba(76,175,80,0.2);">
+    <h3 style="margin:0 0 15px;color:#2e7d32;font-size:1.1em;">✓ Operaciones Cargadas</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:15px;">
+      <div style="background:white;padding:10px;border-radius:4px;border-left:3px solid #4caf50;">
+        <div style="font-size:1.3em;font-weight:bold;color:#2e7d32;">${operaciones.length}</div>
+        <div style="font-size:0.85em;color:#558b2f;">operaciones</div>
+      </div>
+      <div style="background:white;padding:10px;border-radius:4px;border-left:3px solid #1976d2;">
+        <div style="font-size:1.3em;font-weight:bold;color:#1565c0;">COP ${fmt(totalMonto)}</div>
+        <div style="font-size:0.85em;color:#0d47a1;">monto total</div>
+      </div>
+      <div style="background:white;padding:10px;border-radius:4px;border-left:3px solid ${cumpletope?'#4caf50':'#ff9800'};">
+        <div style="font-size:1.3em;font-weight:bold;color:${cumpletope?'#2e7d32':'#e65100'};">${cumpletope?'✓ CUMPLE':'⚠️ NO CUMPLE'}</div>
+        <div style="font-size:0.85em;color:${cumpletope?'#558b2f':'#bf360c'};">tope: ${fmt(tope)}</div>
+      </div>
+    </div>`;
+  
+  html += '<details style="margin-top:10px;cursor:pointer;"><summary style="background:#a5d6a7;color:#1b5e20;padding:10px 12px;border-radius:4px;font-weight:bold;">📋 Desglose por tipo</summary><div style="margin-top:10px;padding:10px;background:#f1f8e9;border-radius:4px;"><ul style="margin:5px 0;padding-left:20px;list-style:none;">';
+  
+  for(const tipo in porTipo) {
+    const { monto, count } = porTipo[tipo];
+    const cumple = monto >= tope;
+    html += `<li style="margin:5px 0;padding-left:10px;border-left:2px solid ${cumple?'#4caf50':'#ffb74d'};"><strong>${cumple?'✓':'○'} ${escH(tipo)}:</strong> ${count} op. × COP ${fmt(monto)}</li>`;
+  }
+  
+  html += '</ul></div></details></div>';
+  
+  const nitField = $('nit');
+  if(nitField) {
+    document.querySelector('.ops-resumen')?.remove();
+    nitField.parentElement.insertAdjacentHTML('afterend', html);
+  }
+}
+
+/**
+ * EXTRAER PATRIMONIO DE ARCHIVOS ADJUNTOS
+ */
+async function extraerPatrimonioAutomatico(tipoAdjunto = 'params') {
+  try {
+    const archivos = ADJ?.[tipoAdjunto] || [];
+    if(archivos.length === 0) {
+      alert('⚠️ Adjunta estados financieros para extraer patrimonio');
+      return false;
+    }
+    
+    for(const archivo of archivos) {
+      const nombreLower = archivo.name.toLowerCase();
+      if(nombreLower.includes('.xlsx') || nombreLower.includes('.xls')) {
+        const arrayBuffer = await archivo.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        
+        for(const sheetName of workbook.SheetNames) {
+          const sheet = workbook.Sheets[sheetName];
+          const csv = XLSX.utils.sheet_to_csv(sheet);
+          const patron = /patrimonio[^0-9]*([0-9\s,\.]+)/gi;
+          const matches = csv.match(patron);
+          
+          if(matches && matches.length > 0) {
+            const textoMatch = matches[0];
+            let montoFinal = parseFloat(textoMatch.replace(/[^\d]/g, ''));
+            
+            if(montoFinal > 1000000000) {
+              $('patrimonio').value = montoFinal;
+              const confirmDiv = document.createElement('div');
+              confirmDiv.innerHTML = `<div style="background:#c8e6c9;border:2px solid #4caf50;border-radius:4px;padding:12px;margin:10px 0;color:#2e7d32;"><strong>✓ Patrimonio extraído:</strong> COP ${fmt(montoFinal)}<br><small style="color:#558b2f;">Fuente: ${archivo.name}</small></div>`;
+              $('patrimonio').parentElement.insertAdjacentElement('afterend', confirmDiv);
+              if(typeof calcUmbrales === 'function') calcUmbrales();
+              return true;
+            }
+          }
+        }
+      }
+    }
+    
+    alert('⚠️ No se encontró patrimonio. Ingresa manualmente el valor.');
+    return false;
+  } catch(error) {
+    console.error('Error:', error);
+    alert('❌ Error: ' + error.message);
+    return false;
+  }
+}
+
+/**
+ * AGREGAR TOOLTIPS INFORMATIVOS
+ */
+function agregarTooltipsParametros() {
+  const campos = [
+    { id: 'patrimonio', titulo: 'Patrimonio Bruto', texto: 'PATRIMONIO BRUTO a 31-dic (COP)\n\n✓ Suma de activos totales menos pasivos\n✓ Fuente: Estado de Situación Financiera\n✓ Rango documentable: ≥ $35 mil millones\n✓ Sistema lo extrae automáticamente si adjuntas EE.FF.' },
+    { id: 'ingbrutos', titulo: 'Ingresos Brutos', texto: 'INGRESOS BRUTOS (Operaciones Controladas)\n\n✓ Suma de TODAS las operaciones con vinculados\n✓ Rango documentable: ≥ $25 mil millones\n✓ Se extrae automáticamente del archivo Excel' },
+    { id: 'monto', titulo: 'Monto de Operación', texto: 'MONTO DE OPERACIÓN (COP)\n\n✓ Suma de operaciones específicas con vinculado\n✓ TOPE DOCUMENTABLE: ≥ 45,000 UVT (~$2B)\n✓ Operaciones menores: INFORMATIVAS' },
+    { id: 'uvt', titulo: 'UVT Anual', texto: 'UVT (Unidad de Valor Tributario)\n\n✓ Parámetro de indexación fiscal colombiano\n✓ 2025: $44.737 COP\n✓ CRITERIO: 45,000 UVT = tope documentable' }
+  ];
+  
+  campos.forEach(campo => {
+    const elem = $(campo.id);
+    if(elem) {
+      const label = elem.closest('label');
+      if(label) {
+        const span = label.querySelector('.l');
+        if(span && !span.querySelector('button.info-tooltip')) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'info-tooltip';
+          btn.innerHTML = 'ℹ️';
+          btn.style.cssText = 'background:none;border:none;color:#2196f3;font-size:1.1em;cursor:help;margin-left:5px;font-weight:bold;';
+          btn.onclick = (e) => { e.preventDefault(); alert(campo.texto); };
+          span.appendChild(btn);
+        }
+      }
+    }
+  });
+}
+
+/**
+ * CREAR BOTONES DE CARGA AUTOMÁTICA
+ */
+function crearBotonesAutomaticos() {
+  const nitField = $('nit');
+  if(nitField && !document.getElementById('btns-auto-operaciones')) {
+    const botonesDiv = document.createElement('div');
+    botonesDiv.id = 'btns-auto-operaciones';
+    botonesDiv.style.cssText = 'margin-top:15px;display:flex;gap:10px;flex-wrap:wrap;';
+    botonesDiv.innerHTML = `
+      <button class="btn" type="button" 
+              onclick="autoCargarOperaciones($('nit').value)"
+              style="background:linear-gradient(135deg,#4caf50 0%,#2e7d32 100%);color:white;padding:10px 15px;border-radius:4px;border:none;cursor:pointer;font-weight:bold;">
+        🔄 Cargar Operaciones desde Excel
+      </button>
+      <button class="btn" type="button" 
+              onclick="extraerPatrimonioAutomatico('params')"
+              style="background:linear-gradient(135deg,#2196f3 0%,#1565c0 100%);color:white;padding:10px 15px;border-radius:4px;border:none;cursor:pointer;font-weight:bold;">
+        📊 Extraer Patrimonio de Adjuntos
+      </button>`;
+    nitField.parentElement.insertAdjacentElement('afterend', botonesDiv);
+  }
+}
+
+/**
+ * INICIALIZAR MÓDULO
+ */
+function inicializarOperacionesAutomaticas() {
+  try {
+    agregarTooltipsParametros();
+    crearBotonesAutomaticos();
+    console.log('✓ Módulo de operaciones automáticas activado');
+  } catch(error) {
+    console.error('Error inicializando:', error);
+  }
+}
+
+if(document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', inicializarOperacionesAutomaticas);
+} else {
+  inicializarOperacionesAutomaticas();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO: AUTO-GUARDADO, AUTO-EXPORTACIÓN Y AUTO-LIMPIEZA
+// Sistema PT V3.3 - Versión Completamente Automática
+// ═══════════════════════════════════════════════════════════════════════════
+
+let autoSaveConfig = {
+  enabled: true,
+  saveInterval: 30000,      // Auto-guardar cada 30 segundos
+  exportInterval: 60000,    // Auto-exportar cada 60 segundos
+  cleanInterval: 86400000,  // Auto-limpiar cada 24 horas
+  keepOldStudies: 10,       // Guardar máximo 10 estudios
+  lastSave: 0,
+  lastExport: 0,
+  lastClean: 0
+};
+
+let autoSaveTimers = {
+  save: null,
+  export: null,
+  clean: null
+};
+
+/**
+ * AUTO-GUARDAR EN MEMORIA (localStorage)
+ */
+function autoGuardarEnMemoria() {
+  try {
+    if(!$('nit')?.value) return;
+    
+    const formData = typeof readForm === 'function' ? readForm() : null;
+    if(!formData || !formData.nit) return;
+    
+    const ent = (formData.ent || $('ent')?.value || 'Estudio').trim();
+    const yr = (formData.anio || $('histyear')?.value || '').trim();
+    const key = `pt:study:${typeof slug === 'function' ? slug(ent) : ent.toLowerCase().replace(/\s+/g, '_')}:${yr}`;
+    
+    if(typeof stSet === 'function') {
+      stSet(key, JSON.stringify(formData));
+      console.log(`⏱️ Auto-guardado: ${ent} · ${yr}`);
+      autoSaveConfig.lastSave = Date.now();
+    }
+  } catch(error) {
+    console.error('Error en auto-guardado:', error);
+  }
+}
+
+/**
+ * AUTO-EXPORTAR A JSON
+ */
+async function autoExportarJSON() {
+  try {
+    if(!$('nit')?.value) return;
+    
+    const formData = typeof readForm === 'function' ? readForm() : null;
+    if(!formData || !formData.nit) return;
+    
+    const ent = (formData.ent || 'Estudio').trim().replace(/[^a-z0-9]/gi, '_');
+    const yr = (formData.anio || '').trim();
+    const filename = `${ent}_${yr}.json`;
+    
+    const dataStr = JSON.stringify(formData, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 100);
+    
+    console.log(`📥 Auto-exportado: ${filename}`);
+    autoSaveConfig.lastExport = Date.now();
+    
+  } catch(error) {
+    console.error('Error en auto-exportación:', error);
+  }
+}
+
+/**
+ * AUTO-LIMPIAR DATOS VIEJOS
+ */
+async function autoLimpiarDatosViejos() {
+  try {
+    let allKeys = [];
+    
+    if(typeof stList === 'function') {
+      allKeys = await stList('pt:study:');
+    } else if(typeof localStorage !== 'undefined') {
+      allKeys = Object.keys(localStorage).filter(k => k.startsWith('pt:study:'));
+    }
+    
+    if(allKeys.length <= autoSaveConfig.keepOldStudies) {
+      console.log(`✅ Almacenamiento limpio (${allKeys.length} estudios)`);
+      return;
+    }
+    
+    const studies = [];
+    for(const key of allKeys) {
+      let data = null;
+      
+      if(typeof stGet === 'function') {
+        data = await stGet(key);
+      } else if(typeof localStorage !== 'undefined') {
+        data = localStorage.getItem(key);
+      }
+      
+      if(data) {
+        try {
+          const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+          studies.push({
+            key,
+            lastModified: parsed.lastModified || Date.now(),
+            size: JSON.stringify(data).length
+          });
+        } catch(e) {}
+      }
+    }
+    
+    studies.sort((a, b) => b.lastModified - a.lastModified);
+    
+    const toDelete = studies.slice(autoSaveConfig.keepOldStudies);
+    for(const study of toDelete) {
+      if(typeof stDel === 'function') {
+        await stDel(study.key);
+      } else if(typeof localStorage !== 'undefined') {
+        localStorage.removeItem(study.key);
+      }
+    }
+    
+    console.log(`🧹 Auto-limpieza: se eliminaron ${toDelete.length} estudios antiguos`);
+    autoSaveConfig.lastClean = Date.now();
+    
+  } catch(error) {
+    console.error('Error en auto-limpieza:', error);
+  }
+}
+
+/**
+ * INICIALIZAR AUTO-GUARDADO
+ */
+function inicializarAutoGuardado() {
+  if(!autoSaveConfig.enabled) return;
+  
+  // Auto-guardar cada 30 segundos
+  autoSaveTimers.save = setInterval(() => {
+    autoGuardarEnMemoria();
+  }, autoSaveConfig.saveInterval);
+
+  // Auto-exportar a archivo desactivado: forzaba una descarga de .json cada 60s
+  // (y en cada cambio de pestaña), inundando la carpeta de Descargas. El respaldo
+  // a localStorage de arriba ya cubre la persistencia; para respaldo en archivo
+  // está el botón manual "Exportar portafolio".
+
+  // Auto-limpiar cada 24 horas
+  autoSaveTimers.clean = setInterval(() => {
+    autoLimpiarDatosViejos();
+  }, autoSaveConfig.cleanInterval);
+
+  // Auto-guardar cuando cambia de pestaña
+  document.addEventListener('visibilitychange', () => {
+    if(document.hidden) {
+      autoGuardarEnMemoria();
+    }
+  });
+  
+  // Auto-guardar cuando hace cambios
+  document.addEventListener('change', (e) => {
+    if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
+      autoGuardarEnMemoria();
+    }
+  }, true);
+  
+  console.log('%c✅ Auto-guardado ACTIVADO', 'color: #4caf50; font-weight: bold;');
+  console.log(`  ⏱️ Auto-guardar (localStorage): cada ${autoSaveConfig.saveInterval/1000}s`);
+  console.log('  📥 Auto-exportar a archivo: desactivado (usa el botón "Exportar portafolio" para respaldo manual)');
+  console.log(`  🧹 Auto-limpiar: cada ${(autoSaveConfig.cleanInterval/3600000).toFixed(0)}h`);
+}
+
+/**
+ * CONFIGURAR AUTO-GUARDADO
+ */
+function configurarAutoGuardado(config) {
+  Object.assign(autoSaveConfig, config);
+  
+  if(autoSaveTimers.save) clearInterval(autoSaveTimers.save);
+  if(autoSaveTimers.export) clearInterval(autoSaveTimers.export);
+  if(autoSaveTimers.clean) clearInterval(autoSaveTimers.clean);
+  
+  if(autoSaveConfig.enabled) {
+    inicializarAutoGuardado();
+  }
+  
+  console.log('⚙️ Auto-guardado reconfigurado:', autoSaveConfig);
+}
+
+/**
+ * DESACTIVAR AUTO-GUARDADO
+ */
+function desactivarAutoGuardado() {
+  autoSaveConfig.enabled = false;
+  if(autoSaveTimers.save) clearInterval(autoSaveTimers.save);
+  if(autoSaveTimers.export) clearInterval(autoSaveTimers.export);
+  if(autoSaveTimers.clean) clearInterval(autoSaveTimers.clean);
+  console.log('%c❌ Auto-guardado desactivado', 'color: #d32f2f; font-weight: bold;');
+}
+
+// Inicializar auto-guardado cuando el DOM esté listo
+if(document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(inicializarAutoGuardado, 500);
+  });
+} else {
+  setTimeout(inicializarAutoGuardado, 500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO V3.5 — PERSISTENCIA IndexedDB + BASE AÑO ANTERIOR + DRAFTS
+// ADITIVO: no modifica ninguna función previa. Reutiliza readForm/stSet/ADJ.
+// ═══════════════════════════════════════════════════════════════════════════
+var PT35 = (function(){
+  var db=null, DBNAME='PT35', STORE='estudios', listo=null;
+  function ready(){ if(db) return Promise.resolve(db); if(!listo) listo=abrir(); return listo; }
+
+  function abrir(){ return new Promise(function(res,rej){
+    var r=indexedDB.open(DBNAME,1);
+    r.onupgradeneeded=function(e){ var d=e.target.result;
+      if(!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE,{keyPath:'id'}); };
+    r.onsuccess=function(){ db=r.result; res(db); };
+    r.onerror=function(){ rej(r.error); };
+  });}
+
+  function tx(mode){ return db.transaction([STORE],mode).objectStore(STORE); }
+  function put(o){ return new Promise(function(res,rej){ var q=tx('readwrite').put(o);
+    q.onsuccess=function(){res(o)}; q.onerror=function(){rej(q.error)}; });}
+  function all(){ return new Promise(function(res,rej){ var q=tx('readonly').getAll();
+    q.onsuccess=function(){res(q.result||[])}; q.onerror=function(){rej(q.error)}; });}
+  function del(id){ return new Promise(function(res){ var q=tx('readwrite').delete(id);
+    q.onsuccess=function(){res()}; q.onerror=function(){res()}; });}
+
+  function idDe(tipo){
+    var e=(document.getElementById('ent')&&document.getElementById('ent').value||'estudio')
+          .toLowerCase().replace(/[^a-z0-9]+/g,'_');
+    var y=(document.getElementById('histyear')&&document.getElementById('histyear').value)||
+          (document.getElementById('anio')&&document.getElementById('anio').value)||'sa';
+    return tipo+'__'+e+'__'+y;
+  }
+
+  var PESOS={eeff:25,operaciones:35,comparables:25,analisis:15};
+  function progreso(d){ var t=0; for(var k in PESOS){ if(d&&d[k]) t+=PESOS[k]; } return t; }
+
+  // ---- snapshot del formulario COMPLETO, usando la función nativa del sistema ----
+  function snapshot(){
+    var form = (typeof readForm==='function') ? readForm() : {};
+    return {
+      eeff:        (form.patrimonio||form.ingbrutos) ? {patrimonio:form.patrimonio, ingbrutos:form.ingbrutos} : null,
+      operaciones: (typeof stGet==='function' && stGet('autoOps')) ? stGet('autoOps') : (form.monto?[{monto:form.monto}]:null),
+      comparables: (form.comparables && form.comparables.length) ? form.comparables : null,
+      analisis:    form.conclusion || null,
+      form:        form
+    };
+  }
+
+  function guardar(tipo){
+    return ready().then(function(){
+    var d=snapshot();
+    var reg={ id:idDe(tipo||'actual'), tipo:tipo||'actual',
+              ent:(document.getElementById('ent')||{}).value||'',
+              anio:(document.getElementById('histyear')||{}).value||'',
+              datos:d, progreso:progreso(d), ts:new Date().toISOString() };
+    return put(reg); });
+  }
+
+  // ---- restaurar SIN pisar el formulario si ya tiene datos ----
+  function restaurar(){
+    return ready().then(all).then(function(regs){
+      if(!regs.length){ log('Sin trabajo previo guardado.'); return null; }
+      var act=regs.filter(function(r){return r.tipo!=='anterior';})
+                  .sort(function(a,b){return new Date(b.ts)-new Date(a.ts);})[0];
+      if(act && act.datos && act.datos.form && typeof fillForm==='function'){
+        try{ fillForm(act.datos.form); }catch(e){}
+      } else if(act && act.datos && act.datos.form){
+        // relleno genérico campo a campo si no existe fillForm
+        Object.keys(act.datos.form).forEach(function(k){
+          var el=document.getElementById(k);
+          if(el && (el.value===''||el.value==null)) el.value=act.datos.form[k];
+        });
+      }
+      if(act) log('♻️ Sesión restaurada: '+(act.ent||'estudio')+' — '+act.progreso+'%');
+      return act;
+    });
+  }
+
+  function base(){
+    return ready().then(all).then(function(r){ return r.filter(function(x){return x.tipo==='anterior';})[0]||null; }); }
+
+  function cargarAnterior(file){
+    return new Promise(function(res,rej){
+      var fr=new FileReader();
+      fr.onload=function(){
+        try{
+          var reg;
+          if(/\.json$/i.test(file.name)){
+            var j=JSON.parse(fr.result);
+            reg={ id:'anterior__'+((j.ent||'x').toLowerCase().replace(/[^a-z0-9]+/g,'_'))+'__'+(j.anio||''),
+                  tipo:'anterior', ent:j.ent||'', anio:j.anio||'',
+                  datos:{ eeff:{patrimonio:j.patrimonio,ingbrutos:j.ingbrutos},
+                          operaciones:j.operaciones||null, comparables:j.comparables||null,
+                          analisis:j.conclusion||null, form:j },
+                  progreso:100, ts:new Date().toISOString() };
+          } else {
+            var wb=XLSX.read(new Uint8Array(fr.result),{type:'array'}), hojas={};
+            wb.SheetNames.forEach(function(n){ hojas[n]=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1}); });
+            var ops=[]; var h=hojas['Op. Vinculados Economicos']||hojas[wb.SheetNames[0]]||[];
+            for(var i=11;i<h.length;i++){ var f=h[i]||[]; if(f[1]) ops.push({vinculado:f[1],nit:f[2],pais:f[3],tipo_operacion:f[5]}); }
+            reg={ id:'anterior__'+file.name.toLowerCase().replace(/[^a-z0-9]+/g,'_'), tipo:'anterior',
+                  ent:file.name, anio:'', datos:{operaciones:ops, comparables:null, eeff:null, analisis:null},
+                  progreso:100, ts:new Date().toISOString() };
+          }
+          put(reg).then(function(){ log('📁 Base año anterior cargada: '+(reg.ent||file.name)+
+              (reg.datos.operaciones?(' — '+reg.datos.operaciones.length+' operaciones'):'')); res(reg); });
+        }catch(e){ rej(e); }
+      };
+      fr.onerror=function(){rej(fr.error)};
+      if(/\.json$/i.test(file.name)) fr.readAsText(file); else fr.readAsArrayBuffer(file);
+    });
+  }
+
+  // sugerir comparables del año anterior (no los impone)
+  function sugerirComparables(){
+    return base().then(function(b){
+      if(!b||!b.datos.comparables||!b.datos.comparables.length){ log('No hay comparables en la base anterior.'); return null; }
+      log('💡 '+b.datos.comparables.length+' comparables del año anterior disponibles como sugerencia.');
+      return b.datos.comparables;
+    });
+  }
+
+  // borrador progresivo con lo que haya cargado
+  function borrador(){
+    var d=snapshot(), p=progreso(d), sec=[];
+    if(d.eeff)        sec.push('I. ANÁLISIS FINANCIERO\nPatrimonio: '+(d.eeff.patrimonio||'—')+'\nIngresos brutos: '+(d.eeff.ingbrutos||'—'));
+    if(d.operaciones) sec.push('II. OPERACIONES CON VINCULADOS\nRegistros: '+(d.operaciones.length||0));
+    if(d.comparables) sec.push('III. ANÁLISIS DE COMPARABLES\nEmpresas: '+(d.comparables.length||0));
+    if(d.analisis)    sec.push('IV. CONCLUSIÓN\n'+d.analisis);
+    if(!sec.length)   sec.push('(Sin información cargada todavía — borrador vacío)');
+    return { progreso:p,
+      texto:'BORRADOR INFORME PT — '+((document.getElementById('ent')||{}).value||'')+'\n'+
+            'Estado: '+p+'% completado — '+(p<100?'EN CONSTRUCCIÓN':'COMPLETO')+'\n'+
+            'Generado: '+new Date().toLocaleString('es-CO')+'\n\n'+sec.join('\n\n') };
+  }
+
+  function descargarBorrador(){
+    var b=borrador();
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([b.texto],{type:'text/plain;charset=utf-8'}));
+    a.download='Borrador_PT_'+b.progreso+'pct.txt'; a.click();
+    log('📥 Borrador descargado ('+b.progreso+'%)');
+  }
+
+  function log(m){ try{ console.log('[PT3.5] '+m); }catch(e){} }
+
+  function init(){
+    ready().then(function(){
+      log('IndexedDB listo.');
+      return restaurar();
+    }).then(function(){
+      setInterval(function(){ guardar('actual'); }, 30000);
+      document.addEventListener('visibilitychange', function(){ if(document.hidden) guardar('actual'); });
+      window.addEventListener('beforeunload', function(){ try{ guardar('actual'); }catch(e){} });
+      log('Autoguardado IndexedDB activo (30s + al salir).');
+    }).catch(function(e){ log('Error init: '+e); });
+  }
+
+  return { init:init, guardar:guardar, restaurar:restaurar, base:base,
+           cargarAnterior:cargarAnterior, sugerirComparables:sugerirComparables,
+           borrador:borrador, descargarBorrador:descargarBorrador,
+           listar:all, borrar:del, progreso:progreso };
+})();
+
+// UI mínima inyectada junto al campo de entidad (no reemplaza nada)
+function _pt35UI(){
+  var anchor=document.getElementById('ent')||document.getElementById('nit');
+  if(!anchor||document.getElementById('pt35box')) return;
+  var box=document.createElement('div'); box.id='pt35box';
+  box.style.cssText='margin:12px 0;padding:12px;border:2px solid #667eea;border-radius:8px;background:#f0f4ff';
+  box.innerHTML=
+    '<div style="font-weight:700;color:#667eea;margin-bottom:8px">📁 Base año anterior y borradores</div>'+
+    '<input type="file" id="pt35file" accept=".json,.xlsx,.xls" style="margin-bottom:8px">'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button type="button" id="pt35b1">📥 Cargar informe año anterior</button>'+
+    '<button type="button" id="pt35b2">💡 Sugerir comparables del año anterior</button>'+
+    '<button type="button" id="pt35b3">📄 Descargar borrador actual</button>'+
+    '<button type="button" id="pt35b4">💾 Guardar ahora</button></div>'+
+    '<div id="pt35msg" style="margin-top:8px;font-size:.9em;color:#333"></div>';
+  anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  var msg=function(t){ document.getElementById('pt35msg').textContent=t; };
+  document.getElementById('pt35b1').onclick=function(){
+    var f=document.getElementById('pt35file').files[0];
+    if(!f){ msg('Seleccione primero un archivo .json o .xlsx'); return; }
+    PT35.cargarAnterior(f).then(function(r){ msg('✅ Base cargada: '+(r.ent||f.name)+
+      (r.datos.operaciones?(' — '+r.datos.operaciones.length+' operaciones'):'')); })
+      .catch(function(e){ msg('❌ '+e); });
+  };
+  document.getElementById('pt35b2').onclick=function(){
+    PT35.sugerirComparables().then(function(c){ msg(c?('💡 '+c.length+' comparables sugeridos del año anterior'):'Sin comparables en la base anterior'); });
+  };
+  document.getElementById('pt35b3').onclick=function(){ PT35.descargarBorrador(); msg('📥 Borrador descargado'); };
+  document.getElementById('pt35b4').onclick=function(){ PT35.guardar('actual').then(function(){ msg('💾 Guardado en IndexedDB'); }); };
+}
+
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded', function(){ PT35.init(); setTimeout(_pt35UI,800); });
+}else{ PT35.init(); setTimeout(_pt35UI,800); }
 </script>
 </body>
 </html>
