@@ -21,6 +21,10 @@
         "function": "claude"
       },
       {
+        "source": "/api/extraer-rut",
+        "function": "extraerRut"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

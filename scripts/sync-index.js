@@ -7,8 +7,14 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const publicDir = path.join(root, 'public');
 
-fs.copyFileSync(path.join(root, 'index.html'), path.join(publicDir, 'index.html'));
-console.log('index.html sincronizado a public/index.html');
+const srcIndex = path.join(root, 'index.html');
+const destIndex = path.join(publicDir, 'index.html');
+if (fs.existsSync(srcIndex)) {
+  fs.copyFileSync(srcIndex, destIndex);
+  console.log('index.html sincronizado a public/index.html');
+} else {
+  console.log('public/index.html ya es la fuente principal.');
+}
 
 const vendorSrc = path.join(root, 'vendor');
 const vendorDest = path.join(publicDir, 'vendor');
