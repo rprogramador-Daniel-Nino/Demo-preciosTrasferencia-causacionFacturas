@@ -153,10 +153,7 @@ label.f .l{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:
   <div class="r1">
     <div class="brand"><b>Generador de Informes Locales · Precios de Transferencia</b><span>producción · multi-estudio · MO/MB · doctrina DIAN + OCDE</span></div>
     <div class="actions">
-      <button type="button" class="btn ghost" id="toggleHelpBtn" onclick="toggleHelpGuides()" style="border-color:rgba(255,255,255,0.3)">💡 Modo Experto (Guías)</button>
-      <button class="btn solid" onclick="calc()">Calcular ▸</button>
-      <button class="btn amber" onclick="window.print()">Imprimir / PDF</button>
-      <button class="btn violet" onclick="exportPortfolio()">Exportar portafolio</button>
+
       <label class="btn ghost" style="margin:0">Importar<input type="file" accept=".json" style="display:none" onchange="importPortfolio(this.files[0])"></label>
     </div>
   </div>
@@ -206,6 +203,7 @@ label.f .l{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:
         <label class="f" style="display:none"><span class="l">Actividad económica (CIIU)</span><input class="i" id="ciiu" oninput="calcD()"></label>
         <label class="f" style="display:none"><span class="l">Representante legal</span><input class="i" id="replegal" oninput="calcD()"></label>
       </div>
+
       <label class="f" style="display:none"><span class="l">Objeto social (Cámara de Comercio)</span><textarea class="i" id="objeto" rows="2" oninput="calcD()"></textarea></label>
       <label class="f" style="display:none"><span class="l">Fecha de constitución</span><input class="i" id="constitucion" oninput="calcD()"></label>
     </div></div>
@@ -322,7 +320,6 @@ label.f .l{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:
       <div id="adjLista" style="margin-top:8px"></div>
       <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn ghost" onclick="adjHeredar()">↩ Heredar adjuntos del año anterior</button>
-        <button class="btn ghost" onclick="adjLimpiar()">Limpiar adjuntos</button>
         <label style="font-size:11.5px;display:flex;align-items:center;gap:5px"><input type="checkbox" id="adj_exigir" checked onchange="saveActive()"> Exigir adjuntos antes de generar</label>
       </div>
     </div>
@@ -362,7 +359,7 @@ label.f .l{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:
   <button class="btn solid" onclick="motorEjecutar()">Ejecutar selección</button>
   <button class="btn ghost" onclick="motorMas(3)">+ Solicitar 3 más</button>
   <button class="btn ghost" onclick="motorEscenarios()">⚖ Comparar escenarios</button>
-  <button class="btn ghost" onclick="motorLimpiar()">Quitar filtro del motor</button>
+
   <span id="mo_info" style="font-size:12px;color:var(--muted);align-self:center"></span>
  </div>
  <div id="mo_esc" style="display:none;margin-top:12px">
@@ -1644,7 +1641,6 @@ function __initV31(){
 document.addEventListener('DOMContentLoaded',__initV31);
 function toggleHelp(){ const b=document.getElementById('helpbody'); if(b) b.style.display = (b.style.display==='none'?'block':'none'); }
 
-
 /* ══════════════ ADJUNTOS (reproducción fiel) + INFORME ECONÓMICO EXTENDIDO ══════════════ */
 const ADJ_LBL={logoempresa:'Logo del contribuyente',logofirma:'Logo de la firma que prepara el estudio',sector:'Gráficos del sector (con fuente)',eeff:'Estados financieros firmados de la parte examinada',eeffcomp:'Estados financieros de las comparables',organigrama:'Organigrama del grupo multinacional',productos:'Gráficos e información de productos',otros:'Otros soportes documentales'};
 function adjCargar(files,tipo){
@@ -2048,7 +2044,6 @@ document.addEventListener('DOMContentLoaded',()=>{try{
  $('mo_perd').addEventListener('change',function(){$('mo_justw').style.display=this.value==='preferir'?'block':'none';});
  motorRefreshUI();regaliaRefreshUI();}catch(e){}});
 
-
 /* ════════════════════════════════════════════════════════════════════════
    PARCHE V3.2 — CORRECCIONES VERIFICADAS · 19-jul-2026
    Aditivo sobre V3 original. Cada corrección cita su fundamento verificado.
@@ -2246,7 +2241,6 @@ try{const _p=$('pais'); if(_p)_p.addEventListener('blur',autoPaisCod);}catch(e){
 try{_inyectarCamposV32();}catch(e){}
 document.addEventListener('DOMContentLoaded',()=>{try{_inyectarCamposV32();}catch(e){}});
 
-
 /* ══════ PARCHE V3.3 · asesor IA + doctrina + intérprete + memoria central ══════ */
 /* Base doctrinal estructurada (verificada en sesión 18/19-jul-2026) */
 var DOCTRINA_DB=[
@@ -2305,15 +2299,12 @@ function _inyectarV33(){if(document.getElementById('plijust'))return;const a=doc
 try{_inyectarV33();}catch(e){}
 document.addEventListener('DOMContentLoaded',()=>{try{_inyectarV33();}catch(e){}});
 
-
-
 // ═══════════════════════════════════════════════════════════════════════════
 // MÓDULO: OPERACIONES AUTOMÁTICAS - V3.3 OPTIMIZADO
 // ═══════════════════════════════════════════════════════════════════════════
 // Carga automática de operaciones, detección de topes y extracción de patrimonio
 // SIN REGRESIONES - Solo funcionalidad agregada
 // ═══════════════════════════════════════════════════════════════════════════
-
 
 // ── PT3.5 FIX: resolución real de archivos Excel ──────────────────────────
 function _pt35DataURLtoBuffer(dataURL){
@@ -2627,7 +2618,6 @@ if(document.readyState === 'loading') {
 } else {
   inicializarOperacionesAutomaticas();
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MÓDULO: AUTO-GUARDADO, AUTO-EXPORTACIÓN Y AUTO-LIMPIEZA
