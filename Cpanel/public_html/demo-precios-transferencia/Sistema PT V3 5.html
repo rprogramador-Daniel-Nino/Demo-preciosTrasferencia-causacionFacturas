@@ -543,7 +543,7 @@ async function askClaude(target){
   const prompt='Eres especialista en precios de transferencia en Colombia (arts. 260-1 a 260-11 E.T., Decreto 2120 de 2017, BEPS Acción 13). Con base en estos datos del estudio:\n'+buildClaudeContext()+'\n\nInstrucción: '+inst+'\nSección objetivo: '+(target||'estudio económico y sectorial')+'\nDevuelve únicamente el texto en español, en prosa, listo para insertarse en el informe.';
   try{
     const res=await fetch('/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-5',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
     if(!res.ok){ const errBody=await res.text(); throw new Error('HTTP '+res.status+': '+errBody); }
     const data=await res.json();
     const txt=(data.content||[]).filter(x=>x.type==='text').map(x=>x.text).join('\n').trim();
@@ -2096,7 +2096,7 @@ function code1125_metodo(){const el=$('metodo1125');return el&&el.value?el.value
 
 /* ── A6 · cliente API con búsqueda web real; parseo correcto (block.content) ── */
 async function claudeAsk(prompt,opt){opt=opt||{};
-  const body={model:'claude-sonnet-5',max_tokens:opt.maxTokens||4000,
+  const body={model:'claude-haiku-4-5',max_tokens:opt.maxTokens||4000,
     messages:[{role:'user',content:prompt}]};
   if(opt.useWeb!==false) body.tools=[{type:'web_search_20250305',name:'web_search'}];
   const res=await fetch('/api/claude',{method:'POST',
@@ -2248,7 +2248,7 @@ function _mergeAlertasIA(F){IA_ALERTAS.forEach(a=>F.push(['red','[IA] '+a]));ret
 async function interpretarAdjuntos(){IA_ALERTAS=[];const ent=$('ent').value,nit=$('nit').value;const blocks=[];
  try{Object.keys(ADJ||{}).forEach(k=>(ADJ[k]||[]).slice(0,3).forEach(it=>{const src=it.src||it.data||'';const m=src.match(/^data:(image\/\w+|application\/pdf);base64,(.+)$/);if(m&&blocks.length<6)blocks.push(m[1].indexOf('pdf')>-1?{type:'document',source:{type:'base64',media_type:'application/pdf',data:m[2]}}:{type:'image',source:{type:'base64',media_type:m[1],data:m[2]}});}));}catch(e){}
  if(!blocks.length){docMsg('Sin adjuntos legibles para interpretar.');return [];}
- const body={model:'claude-sonnet-5',max_tokens:2000,messages:[{role:'user',content:blocks.concat([{type:'text',text:'Extrae de estos documentos: razón social, NIT, cifras clave (ingresos, utilidad operacional, firmas presentes sí/no). Informante declarado: «'+ent+'» NIT '+nit+'. Devuelve SOLO JSON {"entidad":"","nit":"","cifras":{},"firmas":true|false,"alertas":["texto si algo NO corresponde al informante o hay inconsistencias"]}'}])}]};
+ const body={model:'claude-haiku-4-5',max_tokens:2000,messages:[{role:'user',content:blocks.concat([{type:'text',text:'Extrae de estos documentos: razón social, NIT, cifras clave (ingresos, utilidad operacional, firmas presentes sí/no). Informante declarado: «'+ent+'» NIT '+nit+'. Devuelve SOLO JSON {"entidad":"","nit":"","cifras":{},"firmas":true|false,"alertas":["texto si algo NO corresponde al informante o hay inconsistencias"]}'}])}]};
  try{const res=await fetch('/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!res.ok){const errBody=await res.text();throw new Error('HTTP '+res.status+': '+errBody);}const d=await res.json();if(d.error)throw new Error(d.error.message);
   const t=(d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');const j=JSON.parse(t.replace(/```json|```/g,'').trim());
   (j.alertas||[]).forEach(a=>IA_ALERTAS.push(a));
