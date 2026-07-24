@@ -1753,7 +1753,7 @@
     const blank = () => ({
       name: 'Estudio nuevo', ent: '', nit: '', vinc: '', pais: '', oper: '', cod: '', monto: '', anio: '', base: '', pli: 'MO', cmode: 'all',
       prime: '', uvt: '', umbral: '45000', egreso: '', unidad: 'miles', qmethod: 'inc', useadj: true, t: { s: null, c: null, op: null, ar: null, inv: null, ap: null },
-      e_mundo: '', e_col: '', e_sec: '', sicexp: '', vincid: '', vincdoc: '42', paiscod: '', tipovinc: '1', natur: 'Egreso', costoren: '', comps: [['', 'Int', null, null, null, null, null, null, ''], ['', 'Int', null, null, null, null, null, null, ''], ['', 'Int', null, null, null, null, null, null, '']]
+      e_mundo: '', e_col: '', e_sec: '', sicexp: '', vincid: '', vincdoc: '42', paiscod: '', tipovinc: '1', natur: 'Egreso', costoren: '', actividad_json: '', comps: [['', 'Int', null, null, null, null, null, null, ''], ['', 'Int', null, null, null, null, null, null, ''], ['', 'Int', null, null, null, null, null, null, '']]
     });
 
     /* ================= STATE ================= */
@@ -2150,13 +2150,15 @@
     /* ================= FORM <-> STUDY ================= */
     function readForm() {
       return {
-        name: studies[active] ? studies[active].name : 'Estudio', ent: $('ent').value, nit: $('nit').value, ciiu: $('ciiu').value, replegal: $('replegal').value, objeto: $('objeto').value, constitucion: $('constitucion').value, vinc: $('vinc').value, pais: $('pais').value, oper: $('oper').value, cod: $('cod').value, monto: $('monto').value, anio: $('anio').value, base: $('base').value, pli: $('pli').value, t: { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value), ar: num($('t_ar').value), inv: num($('t_inv').value), ap: num($('t_ap').value) }, comps: [...$('cbody').children].map(tr => { const v = [...tr.querySelectorAll('input,select')].map(i => i.value); return [v[0], v[1], num(v[2]), num(v[3]), num(v[4]), num(v[5]), num(v[6]), num(v[7]), v[8] || '']; })
+        name: studies[active] ? studies[active].name : 'Estudio', ent: $('ent').value, nit: $('nit').value, ciiu: $('ciiu').value, replegal: $('replegal').value, objeto: $('objeto').value, constitucion: $('constitucion').value, vinc: $('vinc').value, pais: $('pais').value, oper: $('oper').value, cod: $('cod').value, monto: $('monto').value, anio: $('anio').value, base: $('base').value, pli: $('pli').value, actividad_json: $('actividad_json') ? $('actividad_json').value : '', t: { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value), ar: num($('t_ar').value), inv: num($('t_inv').value), ap: num($('t_ap').value) }, comps: [...$('cbody').children].map(tr => { const v = [...tr.querySelectorAll('input,select')].map(i => i.value); return [v[0], v[1], num(v[2]), num(v[3]), num(v[4]), num(v[5]), num(v[6]), num(v[7]), v[8] || '']; })
       };
     }
     function writeForm(s) {
       ['ent', 'nit', 'ciiu', 'replegal', 'objeto', 'constitucion', 'vinc', 'pais', 'oper', 'cod', 'monto', 'anio', 'base', 'pli'].forEach(k => $(k).value = s[k] || '');
       const t = s.t || {}; ['s', 'c', 'op', 'ar', 'inv', 'ap'].forEach(k => $('t_' + k).value = t[k] ?? '');
       $('cbody').innerHTML = ''; const frag = document.createDocumentFragment(); (s.comps || []).forEach(c => frag.appendChild(compRow(c))); $('cbody').appendChild(frag);
+      if ($('actividad_json')) { $('actividad_json').value = s.actividad_json || ''; }
+      if (typeof renderActividadEspecifica === 'function') renderActividadEspecifica();
     }
     function saveActive() { if (studies[active]) studies[active] = readForm(); }
 
