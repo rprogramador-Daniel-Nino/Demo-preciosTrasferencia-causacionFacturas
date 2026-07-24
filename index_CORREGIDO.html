@@ -1875,6 +1875,101 @@
     }
     function buildFromScratch() { const ent = ($('histent').value || $('ent').value || '').trim(); const yr = ($('histyear').value || '').trim(); saveActive(); const b = blank(); b.ent = ent; b.anio = yr; b.name = (ent || 'Estudio') + ' ' + yr; studies.push(b); active = studies.length - 1; writeForm(studies[active]); refreshSel(); calc(); histMsg('Estudio ' + (yr || '') + ' iniciado desde cero' + (ent ? (' para ' + ent) : '') + '.'); }
 
+    /* ================= ACTIVIDAD ESPECÍFICA (servicio independiente, Gemini) =================
+       Se guarda en el estudio activo (actividad_json), NO en MOTOR: MOTOR se reinicia por
+       completo en cada motorEjecutar() y perdería el dato. */
+    function getActividadEspecifica() {
+      try { const el = $('actividad_json'); const v = el ? el.value : ''; return v ? JSON.parse(v) : null; } catch (e) { return null; }
+    }
+    function setActividadEspecifica(obj) {
+      if (!$('actividad_json')) return;
+      $('actividad_json').value = obj ? JSON.stringify(obj) : '';
+      renderActividadEspecifica();
+      saveActive();
+    }
+    function renderActividadEspecifica() {
+      const obj = getActividadEspecifica();
+      const panel = $('activity_spec_card'), msg = $('actmsg');
+      if (!obj) { if (panel) panel.style.display = 'none'; return; }
+      if (panel) panel.style.display = 'block';
+      if ($('act_resumen')) $('act_resumen').value = obj.resumen || '';
+      if ($('act_perfil')) $('act_perfil').value = obj.perfil || '';
+      if ($('act_justificacion')) $('act_justificacion').textContent = obj.justificacion ? ('Justificación de la IA: ' + obj.justificacion) : '';
+      renderActChips('keywords', obj.keywords || []);
+      renderActChips('sic', obj.sic || []);
+      if (msg) msg.textContent = 'Extraído' + (obj.fuente ? (' de «' + obj.fuente + '»') : '') + (obj.fecha ? (' el ' + new Date(obj.fecha).toLocaleString('es-CO')) : '') + '. Edite lo que considere antes de buscar comparables.';
+    }
+    function renderActChips(campo, lista) {
+      const cont = $(campo === 'sic' ? 'act_sic_chips' : 'act_keywords_chips'); if (!cont) return;
+      cont.innerHTML = (lista || []).map((v, i) => '<span class="actchip' + (campo === 'sic' ? ' sic' : '') + '">' + escH(v) + '<button type="button" onclick="actividadQuitarChip(\'' + campo + '\',' + i + ')" aria-label="Quitar ' + escH(v) + '">×</button></span>').join('');
+    }
+    function actividadAgregarChip(campo, valor) {
+      valor = (valor || '').trim(); if (!valor) return;
+      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
+      const arr = obj[campo] || [];
+      if (!arr.some(x => x.toLowerCase() === valor.toLowerCase())) arr.push(valor);
+      obj[campo] = arr;
+      setActividadEspecifica(obj);
+      sicexpDesdeActividad();
+    }
+    function actividadQuitarChip(campo, idx) {
+      const obj = getActividadEspecifica(); if (!obj) return;
+      (obj[campo] || []).splice(idx, 1);
+      setActividadEspecifica(obj);
+      sicexpDesdeActividad();
+    }
+    function actividadEditada() {
+      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
+      if ($('act_resumen')) obj.resumen = $('act_resumen').value;
+      if ($('act_perfil')) obj.perfil = $('act_perfil').value;
+      if ($('actividad_json')) $('actividad_json').value = JSON.stringify(obj);
+      saveActive(); calc();
+    }
+    function sicexpDesdeActividad() {
+      const obj = getActividadEspecifica(); if (!obj || !$('sicexp')) return;
+      const partes = [].concat(obj.sic || [], obj.keywords || []);
+      if (partes.length) { $('sicexp').value = partes.join(', '); calcD(); }
+    }
+
+    async function extractPriorActivityWithGemini() {
+      const msg = $('actmsg'), btn = $('btnExtraerActividad');
+      if (!window.PT_ANTERIOR || !PT_ANTERIOR.texto) {
+        if (msg) msg.textContent = '⚠ No hay estudio del año anterior cargado en memoria. Cárguelo primero en la tarjeta «Documentación comprobatoria del año anterior».';
+        return;
+      }
+      if (btn) btn.disabled = true;
+      if (msg) msg.textContent = '⏳ Extrayendo actividad específica con Gemini…';
+      const texto = PT_ANTERIOR.texto.slice(0, 24000);
+      const prompt = 'Eres especialista en precios de transferencia en Colombia. Del siguiente texto de un estudio de precios de transferencia del año anterior, extrae EXCLUSIVAMENTE la actividad económica real de la Compañía (no la redacción jurídica genérica del objeto social ni el código CIIU), su perfil funcional y de riesgos (FAR), y palabras clave y códigos SIC útiles para buscar comparables en bases de datos como Capital IQ, Orbis o SuperSociedades.\n\n' +
+        'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
+        '{"actividad_especifica_corta":"","perfil_funcional_far":"","productos_servicios_clave":[],"keywords_busqueda_comparables":[],"codigos_sic_sugeridos":[],"justificacion_perfil":""}\n\n' +
+        'Texto del estudio del año anterior:\n' + texto;
+      try {
+        const res = await fetch('/api/gemini', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await res.json();
+        const cand = data && data.candidates && data.candidates[0];
+        const raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('') : '';
+        if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
+        const limpio = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+        const j = JSON.parse(limpio);
+        setActividadEspecifica({
+          resumen: j.actividad_especifica_corta || '', perfil: j.perfil_funcional_far || '',
+          productos: j.productos_servicios_clave || [], keywords: j.keywords_busqueda_comparables || [],
+          sic: j.codigos_sic_sugeridos || [], justificacion: j.justificacion_perfil || '',
+          fuente: PT_ANTERIOR.fuente || 'estudio del año anterior', fecha: new Date().toISOString()
+        });
+        sicexpDesdeActividad();
+        if (msg) msg.textContent = '✓ Actividad específica extraída y aplicada. Revise y edite los campos antes de buscar comparables.';
+      } catch (e) {
+        if (msg) msg.textContent = '⚠ No se pudo extraer con Gemini: ' + e.message + '. Puede diligenciar los campos manualmente.';
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
     /* ================= SUSTENTACIÓN DEL MÉTODO ================= */
     function methodJust(kind) {
       if (kind === 'MO') return 'Se adopta el <b>Margen Operacional (MO = Utilidad operativa / Ventas)</b> como indicador de rentabilidad por ser el más apropiado para una parte examinada distribuidora: refleja la rentabilidad de la función de comercialización y es robusto frente a las diferencias de clasificación contable entre costo de ventas y gastos operativos que suelen existir entre las comparables. Se descarta el Margen Bruto porque esas diferencias de clasificación afectarían su comparabilidad a nivel bruto.';
@@ -9555,11 +9650,9 @@ Estrategia para "mezcla de los tres":
         } else {
           var res = await fetch('/api/claude', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5
-        ', max_tokens: 8000, messages: [{ role: 'user', content: prompt }] })
-      });
-            if(!res.ok) throw new Error('HTTP ' + res.status);
+            body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 8000, messages: [{ role: 'user', content: prompt }] })
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
           data = await res.json();
         }
         if (data.error) throw new Error(data.error.message || 'error de la API');
