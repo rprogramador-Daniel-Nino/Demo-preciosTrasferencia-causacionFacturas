@@ -1978,7 +1978,18 @@
     }
 
     /* ================= PUNTO DE API CLAUDE ================= */
-    function buildClaudeContext() { const g = k => $(k).value || ''; return ['Entidad: ' + g('ent'), 'Año gravable: ' + g('anio'), 'Vinculado: ' + g('vinc') + ' (' + g('pais') + ')', 'Operación: ' + g('oper') + ' por COP ' + g('monto'), 'Indicador (PLI): ' + $('pli').value, 'CIIU: ' + g('ciiu'), 'Objeto social: ' + g('objeto')].join('\n'); }
+    function buildClaudeContext() {
+      const g = k => $(k).value || '';
+      const partes = ['Entidad: ' + g('ent'), 'Año gravable: ' + g('anio'), 'Vinculado: ' + g('vinc') + ' (' + g('pais') + ')', 'Operación: ' + g('oper') + ' por COP ' + g('monto'), 'Indicador (PLI): ' + $('pli').value, 'CIIU: ' + g('ciiu'), 'Objeto social: ' + g('objeto')];
+      const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+      if (act) {
+        if (act.resumen) partes.push('Actividad comercial específica (extraída del estudio del año anterior; prevalece sobre el objeto social genérico): ' + act.resumen);
+        if (act.perfil) partes.push('Perfil funcional (FAR): ' + act.perfil);
+        if (act.keywords && act.keywords.length) partes.push('Palabras clave de búsqueda de comparables: ' + act.keywords.join(', '));
+        if (act.sic && act.sic.length) partes.push('Códigos SIC objetivo: ' + act.sic.join(', '));
+      }
+      return partes.join('\n');
+    }
     async function askClaude(target) {
       const st = $('claudestatus'); const inst = $('regen').value || 'Redacta de forma exhaustiva y en prosa, en español, la sección solicitada del Informe Local de Precios de Transferencia, conforme al Decreto 2120 de 2017.';
       if (st) st.textContent = 'Consultando a Claude…';
@@ -6043,9 +6054,16 @@ Estrategia para "mezcla de los tres":
           var el = $(id); if (el && el.value) partes.push(el.value);
         });
         if (window.PT_ANTERIOR && PT_ANTERIOR.descripcionNegocio) partes.push(PT_ANTERIOR.descripcionNegocio);
+        var act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+        if (act) {
+          if (act.resumen) partes.push(act.resumen);
+          if (act.perfil) partes.push(act.perfil);
+          if (act.productos && act.productos.length) partes.push(act.productos.join(' '));
+        }
         var sics = [];
         var sx = ($('sicexp') && $('sicexp').value) || '';
         (sx.match(/\b\d{4}\b/g) || []).forEach(function (s) { sics.push(s); });
+        if (act && act.sic && act.sic.length) act.sic.forEach(function (s) { if (/^\d{4}$/.test(s) && sics.indexOf(s) < 0) sics.push(s); });
         return { texto: partes.join(' \n '), tokens: tokens(partes.join(' ')), sics: sics };
       }
 
