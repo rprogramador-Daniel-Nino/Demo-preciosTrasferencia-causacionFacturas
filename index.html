@@ -1253,40 +1253,73 @@
 
       <div class="card full">
         <div class="hd">
-          <h3>Actividad específica y perfil funcional (extraída con IA del estudio del año anterior)</h3><span
-            class="eyebrow">firma de actividad · para comparables</span>
+          <h3>🧠 Perfil de actividad de la empresa (paso clave antes de buscar comparables)</h3>
+          <span class="card-status-badge pending" id="badge_actividad">🔴 Pendiente</span>
+          <span class="eyebrow" style="margin-left:auto">IA · firma de actividad</span>
         </div>
         <div class="bd">
-          <div class="tip">Este dato reemplaza el objeto social genérico de Cámara de Comercio como criterio de
-            búsqueda de comparables. Se extrae del <b>estudio del año anterior</b> ya cargado como fuente histórica
-            (tarjeta de arriba) y alimenta directamente las palabras clave de comparables y el contexto que recibe
-            Claude para justificarlos.</div>
-          <button class="mini" onclick="extractPriorActivityWithGemini()" id="btnExtraerActividad">🤖 Extraer
-            actividad específica con Gemini (desde año anterior)</button>
-          <div class="hint" id="actmsg">Aún no se ha extraído la actividad específica. Cargue primero el estudio del
-            año anterior arriba y luego pulse el botón.</div>
+          <div class="tip" style="border-left-color:#6B5BD1;background:#F5F3FF">
+            <b>¿Para qué sirve esto?</b> El sistema necesita saber exactamente en qué trabaja su empresa
+            (no el objeto social genérico, sino la actividad real: qué vende, a quién, cómo) para buscar
+            empresas comparables que hagan lo mismo. Gemini lee el estudio del año anterior y extrae esa
+            información automáticamente. <b>Sin este paso, las comparables pueden ser irrelevantes.</b>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+            <button id="btnExtraerActividad"
+              onclick="extractPriorActivityWithGemini()"
+              style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
+                     background:#C0473B;color:#fff;border:none;cursor:pointer;
+                     display:inline-flex;align-items:center;gap:7px;transition:background .2s">
+              🤖 Analizar empresa con IA
+            </button>
+            <div id="actmsg_wrap" style="display:flex;align-items:center;gap:8px">
+              <span id="actmsg_icon" style="font-size:18px">🔴</span>
+              <span id="actmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
+                Pendiente — cargue primero el estudio del año anterior (tarjeta de arriba) y luego pulse «Analizar empresa con IA»
+              </span>
+            </div>
+          </div>
+
+          <div style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px" id="act_steps_hint">
+            <b>Pasos:</b>
+            <span style="margin:0 6px">①</span> Cargue el informe del año anterior (tarjeta anterior)
+            <span style="margin:0 6px">→</span>
+            <span style="margin:0 6px">②</span> Pulse <b>«Analizar empresa con IA»</b>
+            <span style="margin:0 6px">→</span>
+            <span style="margin:0 6px">③</span> Revise y ajuste los campos generados
+            <span style="margin:0 6px">→</span>
+            <span style="margin:0 6px">④</span> Use las palabras clave para buscar comparables
+          </div>
+
           <input type="hidden" id="actividad_json" value="">
-          <div id="activity_spec_card" style="display:none;margin-top:10px">
+          <div id="activity_spec_card" style="display:none;margin-top:12px">
+            <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
+              ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los cambios se guardan automáticamente y se usan en la búsqueda de comparables.
+            </div>
             <div class="row2">
-              <label class="f"><span class="l">Actividad específica detectada (resumen corto)</span>
-                <textarea class="i" id="act_resumen" rows="2" oninput="actividadEditada()"></textarea>
+              <label class="f"><span class="l">¿Qué hace la empresa? (actividad específica real)</span>
+                <textarea class="i" id="act_resumen" rows="3" oninput="actividadEditada()"
+                  placeholder="Ej: Distribución mayorista de fungicidas e insecticidas importados del vinculado en EE.UU., bajo modelo de compra-reventa con riesgo de inventario completo, para el sector agrícola colombiano."></textarea>
               </label>
-              <label class="f"><span class="l">Perfil funcional (FAR) detectado</span>
-                <textarea class="i" id="act_perfil" rows="2" oninput="actividadEditada()"></textarea>
+              <label class="f"><span class="l">Perfil funcional (funciones / activos / riesgos asumidos)</span>
+                <textarea class="i" id="act_perfil" rows="3" oninput="actividadEditada()"
+                  placeholder="Ej: Funciones: compra, almacenamiento, distribución. Activos: bodega, flota. Riesgos: inventario, crédito, tipo de cambio."></textarea>
               </label>
             </div>
-            <label class="f"><span class="l">Palabras clave para buscar comparables (clic en × para quitar; escriba
-                y presione Enter para agregar)</span>
-              <div class="actchips" id="act_keywords_chips"></div>
-              <input class="i" id="act_keyword_new" placeholder="agregar palabra clave…"
-                onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
-            </label>
-            <label class="f"><span class="l">Códigos SIC sugeridos (editable)</span>
-              <div class="actchips" id="act_sic_chips"></div>
-              <input class="i" id="act_sic_new" placeholder="agregar código SIC…"
-                onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('sic', this.value); this.value='';}">
-            </label>
-            <div class="hint" id="act_justificacion"></div>
+            <div class="row2">
+              <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (en inglés — pulse Enter para agregar)</span>
+                <div class="actchips" id="act_keywords_chips"></div>
+                <input class="i" id="act_keyword_new" placeholder="ej: agrochemical distributor…"
+                  onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
+              </label>
+              <label class="f"><span class="l">Códigos SIC sugeridos (pulse Enter para agregar)</span>
+                <div class="actchips" id="act_sic_chips"></div>
+                <input class="i" id="act_sic_new" placeholder="ej: 5169…"
+                  onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('sic', this.value); this.value='';}">
+              </label>
+            </div>
+            <div class="hint" id="act_justificacion" style="background:#F8FAFC;border:1px solid var(--hair);border-radius:8px;padding:8px 12px;margin-top:4px"></div>
           </div>
         </div>
       </div>
@@ -2064,18 +2097,45 @@
     }
 
     async function extractPriorActivityWithGemini() {
+      /* helpers para cambiar el estado visual del botón/mensaje de actividad */
+      function _actEstado(estado, texto) {
+        const btn = $('btnExtraerActividad'), msg = $('actmsg'), icon = $('actmsg_icon');
+        const badge = $('badge_actividad'), hint = $('act_steps_hint');
+        const estados = {
+          pendiente: { bg: '#C0473B', label: '🤖 Analizar empresa con IA', icono: '🔴', color: '#7a241c', badge: '🔴 Pendiente', badgeClass: 'pending' },
+          procesando: { bg: '#B67A0E', label: '⏳ Analizando…', icono: '⏳', color: '#6b5010', badge: '⏳ Procesando', badgeClass: 'partial' },
+          listo:      { bg: '#2E8B6B', label: '✅ Volver a analizar', icono: '✅', color: '#14532d', badge: '✅ Listo', badgeClass: 'ok' },
+          error:      { bg: '#C0473B', label: '⚠ Reintentar análisis', icono: '⚠️', color: '#7a241c', badge: '⚠ Error', badgeClass: 'pending' }
+        };
+        const e = estados[estado] || estados.pendiente;
+        if (btn) { btn.style.background = e.bg; btn.textContent = e.label; btn.disabled = (estado === 'procesando'); }
+        if (icon) icon.textContent = e.icono;
+        if (msg) { msg.textContent = texto || ''; msg.style.color = e.color; msg.style.fontWeight = (estado === 'listo') ? '500' : '600'; }
+        if (badge) { badge.textContent = e.badge; badge.className = 'card-status-badge ' + e.badgeClass; }
+        if (hint) hint.style.display = (estado === 'listo') ? 'none' : '';
+      }
+
       const msg = $('actmsg'), btn = $('btnExtraerActividad');
       if (!window.PT_ANTERIOR || !PT_ANTERIOR.texto) {
-        if (msg) msg.textContent = '⚠ No hay estudio del año anterior cargado en memoria. Cárguelo primero en la tarjeta «Documentación comprobatoria del año anterior».';
+        _actEstado('pendiente', '⚠ No hay estudio del año anterior cargado. Cárguelo primero en la tarjeta de arriba y luego pulse «Analizar empresa con IA».');
         return;
       }
-      if (btn) btn.disabled = true;
-      if (msg) msg.textContent = '⏳ Extrayendo actividad específica con Gemini…';
-      const texto = PT_ANTERIOR.texto.slice(0, 24000);
-      const prompt = 'Eres especialista en precios de transferencia en Colombia. Del siguiente texto de un estudio de precios de transferencia del año anterior, extrae EXCLUSIVAMENTE la actividad económica real de la Compañía (no la redacción jurídica genérica del objeto social ni el código CIIU), su perfil funcional y de riesgos (FAR), y palabras clave y códigos SIC útiles para buscar comparables en bases de datos como Capital IQ, Orbis o SuperSociedades.\n\n' +
-        'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
+      _actEstado('procesando', 'Analizando el estudio con Gemini, esto puede tardar unos segundos…');
+      const texto = PT_ANTERIOR.texto.slice(0, 28000);
+      const prompt =
+        'Eres un experto en precios de transferencia y búsqueda de comparables en bases de datos como Capital IQ, Orbis y SuperSociedades.\n\n' +
+        'Tu única tarea: leer el texto del estudio de precios de transferencia del año anterior que aparece al final, e identificar CON MÁXIMO DETALLE OPERATIVO cuál es la actividad económica REAL Y ESPECIALIZADA que ejerce la Compañía examinada.\n\n' +
+        'REGLAS CRÍTICAS — léelas antes de responder:\n' +
+        '1. NO uses el objeto social del Certificado de Cámara de Comercio (ese es genérico y jurídico). Busca en el texto del estudio cuál fue la operación real analizada, qué productos o servicios específicos vende o presta, a qué clientes, en qué segmento de mercado, bajo qué modelo de negocio (compra-reventa, agencia, manufactura, servicios, etc.).\n' +
+        '2. "actividad_especifica_corta": máximo 2 oraciones. Debe decir exactamente QUÉ hace la empresa, con QUÉ productos/servicios, para QUIÉN, y bajo QUÉ modelo (ej: "Distribución mayorista de fungicidas e insecticidas técnicos para el sector cafetero y arrocero en Colombia, importados del vinculado en Estados Unidos, bajo modelo de compra-reventa con riesgo de inventario completo"). NUNCA escribas algo tan genérico como "distribución de productos" o "prestación de servicios".\n' +
+        '3. "perfil_funcional_far": describe con precisión qué FUNCIONES ejerce (compra, almacenamiento, distribución, manufactura, servicio posventa…), qué ACTIVOS controla (bodegas, equipos, licencias, marca…) y qué RIESGOS asume (inventario, crédito, tipo de cambio, obsolescencia…).\n' +
+        '4. "productos_servicios_clave": lista los productos o servicios concretos mencionados en el estudio (ej: ["fungicidas sistémicos", "herbicidas de contacto", "insecticidas piretroides"]). Si son servicios, el tipo exacto de servicio.\n' +
+        '5. "keywords_busqueda_comparables": términos en INGLÉS para buscar en Capital IQ / Orbis. Deben ser específicos, no genéricos. Ej: ["agrochemical distributor", "crop protection wholesale", "pesticide distribution Latin America"]. Incluye el sector y la función.\n' +
+        '6. "codigos_sic_sugeridos": al menos 2 códigos SIC de 4 dígitos que correspondan exactamente al negocio. Si es distribución de agroquímicos: 5169. Si es manufactura de plásticos: 3089. Busca el más específico.\n' +
+        '7. "justificacion_perfil": explica en 2-3 oraciones por qué estos keywords y SIC son los correctos para encontrar empresas comparables independientes con el mismo perfil de riesgos y funciones.\n\n' +
+        'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, sin texto antes ni después:\n' +
         '{"actividad_especifica_corta":"","perfil_funcional_far":"","productos_servicios_clave":[],"keywords_busqueda_comparables":[],"codigos_sic_sugeridos":[],"justificacion_perfil":""}\n\n' +
-        'Texto del estudio del año anterior:\n' + texto;
+        '--- TEXTO DEL ESTUDIO DEL AÑO ANTERIOR ---\n' + texto;
       try {
         const res = await fetch('/api/gemini', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2094,13 +2154,13 @@
           fuente: PT_ANTERIOR.fuente || 'estudio del año anterior', fecha: new Date().toISOString()
         });
         sicexpDesdeActividad();
-        if (msg) msg.textContent = '✓ Actividad específica extraída y aplicada. Revise y edite los campos antes de buscar comparables.';
+        _actEstado('listo', '✓ Actividad detectada y aplicada. Revise los campos y ajuste si es necesario antes de buscar comparables.');
       } catch (e) {
-        if (msg) msg.textContent = '⚠ No se pudo extraer con Gemini: ' + e.message + '. Puede diligenciar los campos manualmente.';
-      } finally {
-        if (btn) btn.disabled = false;
+        _actEstado('error', '⚠ No se pudo analizar con Gemini: ' + e.message + '. Puede completar los campos manualmente.');
       }
     }
+
+
 
     /* ================= SUSTENTACIÓN DEL MÉTODO ================= */
     function methodJust(kind) {
@@ -3811,7 +3871,7 @@ ${textoTotal}`;
      */
     async function extraerPatrimonioAutomatico(tipoAdjunto = 'params') {
       try {
-        const _res = await _pt35ResolverExcel();
+        const _res = (typeof ptResolverExcel === 'function') ? await ptResolverExcel('eeff') : await _pt35ResolverExcel();
         if (!_res) {
           alert('⚠️ No se encontró ningún .xlsx.\n\nAdjunte los estados financieros en "EEFF firmados de la compañía", o selecciónelos en el recuadro "Base año anterior y borradores".');
           return false;
@@ -5905,12 +5965,13 @@ Estrategia para "mezcla de los tres":
       function _numEEFF(v) {
         if (typeof v === 'number') return isFinite(v) ? v : null;
         var s = T(v); if (!s) return null;
-        var neg = /^\(.*\)$/.test(s);
-        s = s.replace(/[()]/g, '');
-        if (/,\d{1,2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else s = s.replace(/,/g, '');
-        var n = parseFloat(s.replace(/[^0-9.\-]/g, ''));
-        if (!isFinite(n) || n === 0) return null;
-        return neg ? -n : n;
+        // «num()» ya distingue miles-con-punto de decimales-con-coma (y viceversa);
+        // parseFloat directo truncaba "2.761.202.249" en 2.761 al toparse con el
+        // segundo punto. Solo hace falta quitar el símbolo de moneda antes.
+        s = s.replace(/\$/g, '');
+        var n = (typeof num === 'function') ? num(s) : parseFloat(s.replace(/[^0-9.,\-]/g, ''));
+        if (n === null || !isFinite(n) || n === 0) return null;
+        return n;
       }
 
       /* Busca en filas de Excel: la etiqueta y el PRIMER importe a su derecha
@@ -6031,7 +6092,15 @@ Estrategia para "mezcla de los tres":
         for (var i = 1; i <= pdf.numPages; i++) {
           var pg = await pdf.getPage(i);
           var tc = await pg.getTextContent();
-          t += tc.items.map(function (x) { return x.str; }).join(' ') + '\n';
+          // Unir todos los ítems de la página con un solo espacio (versión anterior)
+          // convierte cada PÁGINA en una única "línea" para buscarEnTexto(), que
+          // busca el primer número DESPUÉS de la etiqueta en la misma línea: con una
+          // página entera como línea, ese "primer número" termina siendo cualquier
+          // cifra que aparezca antes en el flujo del contenido (p. ej. el año del
+          // encabezado "A DIC 2025"), no la cifra de la fila correcta. Se reconstruye
+          // por fila visual (misma función que usa readPDF) para que cada línea sea
+          // realmente una fila del estado financiero.
+          t += (typeof pdfExtraerTextoPosicional === 'function' ? pdfExtraerTextoPosicional(tc.items) : tc.items.map(function (x) { return x.str; }).join(' ')) + '\n';
         }
         return t;
       };
