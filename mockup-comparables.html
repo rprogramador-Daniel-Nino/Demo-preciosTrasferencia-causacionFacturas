@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup — Reorganización de la tarjeta "Comparables"</title>
+  <style>
+    :root {
+      --ink: #0E1726;
+      --paper: #EEF1F5;
+      --white: #fff;
+      --text: #1A2332;
+      --muted: #5B6675;
+      --hair: #D8DEE6;
+      --teal: #0FA3A1;
+      --teal-d: #0B7C7A;
+      --amber: #E0A32E;
+      --red: #C0473B;
+      --green: #2E8B6B;
+      --violet: #6B5BD1;
+      --shadow: 0 1px 2px rgba(14, 23, 38, .06), 0 6px 22px rgba(14, 23, 38, .07);
+    }
+
+    * { box-sizing: border-box }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      padding: 24px;
+    }
+
+    .wrap { max-width: 820px; margin: 0 auto }
+
+    .explica {
+      background: #FFF8E1;
+      border: 1px dashed #C79A1E;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 12.5px;
+      color: #5B4600;
+      margin-bottom: 18px;
+    }
+
+    .explica b { color: #3b2a05 }
+
+    .card {
+      background: var(--white);
+      border: 1px solid var(--hair);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      margin-bottom: 22px;
+    }
+
+    .hd {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--hair);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #FAFBFC;
+    }
+
+    .hd h3 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -.01em }
+
+    .card-status-badge {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .card-status-badge.ok { background: #E8F8F5; color: #117864; border: 1px solid #A3E4D7 }
+    .card-status-badge.partial { background: #FEF9E7; color: #B7950B; border: 1px solid #F9E79F }
+
+    .eyebrow { margin-left: auto; font-size: 11px; color: var(--muted) }
+
+    .bd { padding: 15px 16px }
+
+    .tip {
+      padding: 8px 12px;
+      background: #F0F7FD;
+      border: 1px solid #BEE3F8;
+      border-left: 4px solid #3182CE;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-bottom: 12px;
+      color: #1A365D;
+    }
+
+    .alert-red {
+      background: #FDECEA; border: 1px solid #E7A79E; border-left: 4px solid #A5352A;
+      color: #7a241c; border-radius: 8px; padding: 9px 13px; font-size: 12px; margin-bottom: 8px;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+
+    .alert-amber {
+      background: #FCF6EC; border: 1px solid #EBD9B4; border-left: 4px solid #B67A0E;
+      color: #6b5010; border-radius: 8px; padding: 9px 13px; font-size: 12px; margin-bottom: 8px;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+
+    .alert-green {
+      background: #EFF7F2; border: 1px solid #B7DDC8; border-left: 4px solid #1F6D4F;
+      color: #1a5c40; border-radius: 8px; padding: 9px 13px; font-size: 12px;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+
+    .alert-red .a, .alert-amber .a, .alert-green .a {
+      font-weight: 600; font-size: 11px; padding: 5px 9px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+      color: #fff;
+    }
+    .alert-red .a { background: #A5352A }
+    .alert-amber .a { background: #B67A0E }
+    .alert-green .a { background: #1F6D4F }
+
+    /* zona de secciÃ³n */
+    .zona-title {
+      display: flex; align-items: center; gap: 8px; margin: 18px 0 10px;
+      font-size: 13px; font-weight: 700; color: var(--ink);
+    }
+    .zona-title .n { color: var(--muted); font-weight: 500; font-size: 11.5px }
+
+    details.config {
+      border: 1.5px solid var(--hair); border-radius: 10px; background: var(--white); margin-top: 4px;
+    }
+    details.config > summary {
+      list-style: none; cursor: pointer; padding: 12px 14px; font-weight: 700; font-size: 13px;
+      display: flex; align-items: center; gap: 8px; user-select: none;
+    }
+    details.config > summary::-webkit-details-marker { display: none }
+    details.config > summary .arrow { transition: transform .15s ease; color: var(--muted) }
+    details.config[open] > summary .arrow { transform: rotate(90deg) }
+    details.config > summary .hint-inline { font-weight: 500; font-size: 11px; color: var(--muted); margin-left: auto }
+    details.config .inner { padding: 4px 14px 14px }
+
+    details.subhelp { margin-top: 10px }
+    details.subhelp > summary {
+      cursor: pointer; font-weight: 700; font-size: 12px; color: #34495E; padding: 6px 0;
+    }
+
+    label.f { display: block; margin-bottom: 10px }
+    label.f .l { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600 }
+    .i {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 8px;
+      background: #fff; color: var(--text); font-family: inherit; font-size: 13px;
+    }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 9px }
+    .row4 { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 8px }
+
+    .btn {
+      padding: 8px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;
+      display: inline-flex; align-items: center; border: none; cursor: pointer;
+    }
+    .btn.solid { background: var(--teal); color: #04211f }
+    .btn.ghost { background: #EEF3F5; color: var(--text); border: 1px solid var(--hair) }
+
+    .factor-box {
+      margin: 8px 0; padding: 8px 10px; background: #fff; border: 1px solid #D5DBDB; border-radius: 6px; font-size: 11.5px;
+    }
+    .factor-box b.tit { display: block; font-size: 12px; color: #34495E; margin-bottom: 3px }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+
+    <div class="explica">
+      <b>📌 Qué es este archivo.</b> Es un mockup aislado (no toca <code>index_CORREGIDO.html</code>) para que veas
+      cómo quedaría la tarjeta <b>"Comparables"</b> con el ajuste antes de aplicarlo. Las cajas punteadas amarillas
+      como esta explican el criterio de diseño; en el archivo real no existirían.
+    </div>
+
+    <div class="card">
+      <div class="hd">
+        <h3>Comparables</h3>
+        <span class="card-status-badge partial">🟡 En progreso</span>
+        <span class="eyebrow">12 cargadas · incluidas 9</span>
+      </div>
+      <div class="bd">
+        <div class="tip">Las comparables son las empresas contra las que se mide el rango de mercado. Impórtalas
+          desde el Excel de Capital IQ, o usa el «Motor de selección automática» para que el sistema elija las
+          mejores por ti.</div>
+
+        <!-- ================= ZONA 1: PENDIENTES ================= -->
+        <div class="zona-title">🔴 Pendientes <span class="n">— esto bloquea generar el informe</span></div>
+
+        <div class="explica" style="margin-bottom:10px">
+          <b>📌 Por qué esta zona va primero.</b> Son los 2-3 banners que hoy aparecen dispersos entre los 11 paneles
+          (guardas, atípicos, EEFF de comparables, industria ajena...). Aquí se agrupan arriba, con verbo de acción,
+          para que el usuario sepa exactamente qué le falta sin tener que leer todo el bloque.
+        </div>
+
+        <div class="alert-red">
+          <span>⚠ <b>EEFF de 3 comparables sin cargar.</b> El rango no puede calcularse hasta tenerlos.</span>
+          <span class="a">Cargar EEFF →</span>
+        </div>
+        <div class="alert-amber">
+          <span>⚠ <b>2 comparables con SIC/actividad sin validar</b> contra la de la compañía examinada.</span>
+          <span class="a">Revisar →</span>
+        </div>
+        <div class="alert-green" style="margin-bottom:14px">
+          <span>✓ <b>9 comparables dentro del rango de mercado (P25–P75).</b> Sin ajuste requerido.</span>
+        </div>
+
+        <!-- ================= ZONA 2: CONFIGURACIÓN (colapsada) ================= -->
+        <div class="zona-title">⚙️ Configuración del motor <span class="n">— opcional, ya tiene valores por defecto</span></div>
+
+        <div class="explica" style="margin-bottom:10px">
+          <b>📌 Por qué va colapsada.</b> Motor de selección, Criterios de comparabilidad (Art. 260-4) y Depuración
+          funcional ya traen un valor por defecto razonable (los mismos que hoy están con <code>display:none</code>,
+          solo que ahora SÍ se pueden ver y editar). El usuario que no necesita tocar nada no ve un muro de 11 paneles;
+          el que sí quiere ajustar, despliega esto una sola vez.
+        </div>
+
+        <details class="config">
+          <summary><span class="arrow">▶</span> Ver / ajustar criterios y motor de selección
+            <span class="hint-inline">4 criterios con valor por defecto aplicado</span></summary>
+          <div class="inner">
+
+            <b style="font-size:13px">⚙ Motor de selección automática (TOP-N)</b>
+            <div class="row4" style="margin:10px 0">
+              <label class="f"><span class="l">N objetivo</span>
+                <input class="i" type="number" value="12" min="4" max="12"></label>
+              <label class="f"><span class="l">Pérdidas operativas</span>
+                <select class="i">
+                  <option>Excluir (conservador DIAN)</option>
+                  <option>Incluir (OCDE: no es causal por sí sola)</option>
+                  <option>Preferir (exige justificación)</option>
+                </select></label>
+              <label class="f"><span class="l">Prioridad geográfica</span>
+                <select class="i"><option>Global</option><option>América Latina</option></select></label>
+              <label class="f"><span class="l">Rigor funcional</span>
+                <select class="i"><option>Estándar (servicios+mixtos)</option></select></label>
+            </div>
+            <button class="btn solid">Ejecutar selección</button>
+            <button class="btn ghost" style="margin-left:8px">⚖ Comparar escenarios</button>
+
+            <details class="subhelp">
+              <summary>⚖️ Criterios de comparabilidad (Art. 260-4 E.T.) — ver y ajustar</summary>
+              <div style="font-size:11px;color:#34495E;margin:6px 0">Se guardan con el estudio y se aplican a todos;
+                quedan documentados en el informe.</div>
+
+              <div class="factor-box">
+                <b class="tit">1 · Mercado geográfico</b>
+                <div><b>Qué es.</b> El lugar donde la compañía opera; cambia poder adquisitivo, costo laboral y
+                  competencia.</div>
+                <div style="margin-top:3px"><b>Qué hace cada opción.</b> <i>Mismo país</i> rechaza toda compañía no
+                  colombiana. <i>Región</i> admite Latinoamérica. <i>Global</i> exige justificación escrita.</div>
+              </div>
+              <div class="factor-box">
+                <b class="tit">3 · Compañías con pérdida operacional</b>
+                <div><b>Qué exige la norma.</b> OCDE no obliga a excluirlas automáticamente; exige analizar si la
+                  pérdida obedece a algo extraordinario.</div>
+              </div>
+              <div class="explica" style="margin-top:8px">
+                <b>📌 Nota.</b> Este texto de ayuda ya existe hoy en el archivo real — es muy bueno — solo estaba en el
+                puesto 9 de 11 paneles. Aquí simplemente queda accesible en 1 clic dentro de "Configuración".
+              </div>
+            </details>
+          </div>
+        </details>
+
+      </div>
+    </div>
+
+    <div class="explica">
+      <b>📌 Sobre el reordenamiento general de tarjetas</b> (Operación → Parámetros → EEFF → Comparables): no lo
+      incluí en este mockup porque es un cambio de orden entre tarjetas ya existentes, no de estructura visual nueva
+      — se ve exactamente igual, solo en otra secuencia. Si quieres, hago un segundo mockup mostrando el orden de
+      tarjetas de arriba a abajo.
+    </div>
+
+  </div>
+</body>
+
+</html>

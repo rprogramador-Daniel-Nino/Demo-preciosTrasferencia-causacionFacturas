@@ -1,0 +1,16 @@
+Asunto: Ampliar el límite de estudios conservados (keepOldStudies)
+Archivo: index.html
+Motivo: la auto-limpieza borra los estudios más antiguos y solo conserva 10.
+        El usuario necesita mantener muchos estudios sin que se eliminen.
+
+--- a/index.html
++++ b/index.html
+@@ -3864,7 +3864,7 @@
+       saveInterval: 30000,      // Auto-guardar cada 30 segundos
+       exportInterval: 60000,    // Auto-exportar cada 60 segundos
+       cleanInterval: 86400000,  // Auto-limpiar cada 24 horas
+-      keepOldStudies: 10,       // Guardar máximo 10 estudios
++      keepOldStudies: 500,      // Guardar máximo 500 estudios (antes 10). Para no borrar nunca, usar Infinity.
+       lastSave: 0,
+       lastExport: 0,
+       lastClean: 0

@@ -1,0 +1,7 @@
+{
+  "contents": [{
+    "parts": [{
+      "text": "Eres especialista en precios de transferencia en Colombia. Del siguiente texto de un estudio de precios de transferencia del año anterior, extrae EXCLUSIVAMENTE la actividad economica real de la Compania (no la redaccion juridica generica del objeto social ni el codigo CIIU), su perfil funcional y de riesgos (FAR), y palabras clave y codigos SIC utiles para buscar comparables en bases de datos como Capital IQ.\n\nResponde UNICAMENTE con un objeto JSON valido, sin marcas markdown, con esta forma exacta:\n{\"actividad_especifica_corta\":\"\",\"perfil_funcional_far\":\"\",\"productos_servicios_clave\":[],\"keywords_busqueda_comparables\":[],\"codigos_sic_sugeridos\":[],\"justificacion_perfil\":\"\"}\n\nTexto del estudio del ano anterior:\nLa empresa DISTRIBUIDORA ANDINA S.A.S., NIT 900.111.222-3, distribuye productos agroindustriales importados de su vinculado ANDINA CHEMICALS INC. (Estados Unidos). Funciones: compra en bloque, almacenamiento, distribucion y reventa a clientes finales en Colombia. Riesgos: inventario, credito, tipo de cambio parcial. Activos: bodega, flota de distribucion. La operacion bajo analisis es la compra de productos para reventa por COP 2.500.000 miles en el año 2024."
+    }]
+  }]
+}
