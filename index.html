@@ -1452,33 +1452,74 @@
 
       <div class="card">
         <div class="hd">
-          <h3>Parte examinada — EEFF</h3><span class="card-status-badge pending" id="badge_card_5">⚪
-            Pendiente</span><span class="eyebrow" id="temo" style="margin-left:auto">PLI —</span>
+          <h3>🧾 Estados financieros de la parte examinada</h3>
+          <span class="card-status-badge pending" id="badge_card_5">🔴 Pendiente</span>
+          <span class="eyebrow" id="temo" style="margin-left:auto">PLI —</span>
         </div>
         <div class="bd">
-          <div class="tip">Aquí van las cifras de la parte examinada (ventas, costo, utilidad, cuentas por cobrar/pagar,
-            inventarios). Puedes teclearlas, o subir los EEFF firmados y dejar que el sistema las lea por ti (botón
-            «Leer EEFF adjuntos» más abajo).</div>
-          <div class="pi-btns"><label class="mini" style="cursor:pointer">📎 Adjuntar EEFF<input type="file"
+          <div class="tip" style="border-left-color:#6B5BD1;background:#F5F3FF">
+            <b>¿Para qué sirve esto?</b> Adjunte los estados financieros firmados de la Compañía (Excel, PDF o
+            imagen). El sistema los lee automáticamente — ventas, costo, utilidad operativa, cuentas por
+            cobrar/pagar, inventarios y patrimonio — y con «Leer EEFF con IA» además verifica que las cifras cuadren
+            entre sí (utilidad bruta, utilidad operacional, ecuación patrimonial) antes de incorporarlas.
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+            <label class="btn solid" style="margin:0;cursor:pointer">📎 Adjuntar EEFF<input type="file"
                 accept=".xlsx,.xls,.csv,.pdf,image/*" style="display:none"
-                onchange="cargarEEFF(this.files[0])"></label><span id="evid-eeff"
-              style="font-size:10.5px;color:#1F6D4F"></span></div>
+                onchange="cargarEEFF(this.files[0])"></label>
+            <span id="evid-eeff" style="font-size:10.5px;color:#1F6D4F"></span>
+            <button id="btnLeerEEFFIA" type="button" onclick="ptLeerEEFFconIA()"
+              style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
+                     background:#C0473B;color:#fff;border:none;cursor:pointer;
+                     display:inline-flex;align-items:center;gap:7px;transition:background .2s">
+              🤖 Leer EEFF con IA (extrae y verifica)
+            </button>
+          </div>
+
+          <div id="eeffmsg_wrap" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <span id="eeffmsg_icon" style="font-size:18px">🔴</span>
+            <span id="eeffmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
+              Pendiente — adjunte los EEFF y pulse «Leer EEFF con IA (extrae y verifica)».
+            </span>
+          </div>
+
+          <div id="eeff_steps_hint"
+            style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px">
+            <b>Pasos:</b>
+            <span style="margin:0 6px">①</span> Adjunte los EEFF firmados (Excel, PDF o imagen)
+            <span style="margin:0 6px">→</span>
+            <span style="margin:0 6px">②</span> Pulse <b>«Leer EEFF con IA»</b>
+            <span style="margin:0 6px">→</span>
+            <span style="margin:0 6px">③</span> Revise la tabla de verificación que aparece abajo
+            <span style="margin:0 6px">→</span>
+            <span style="margin:0 6px">④</span> Pulse «Incorporar al estudio» (o corrija manualmente si algo no cuadra)
+          </div>
+
+          <div id="eeff_ok_banner"
+            style="display:none;background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
+            ✅ <b>EEFF leídos y verificados.</b> Las identidades contables cuadran. Revise la tabla y pulse «Incorporar
+            al estudio» si aún no lo ha hecho.
+          </div>
+
           <div class="row3">
             <label class="f"><span class="l">Ventas netas</span><input class="i mono" id="t_s"
-                required aria-required="true" oninput="calcD()"></label>
+                placeholder="Ej: 5.271.105.507" required aria-required="true" oninput="calcD()"></label>
             <label class="f"><span class="l">Costo de ventas</span><input class="i mono" id="t_c"
-                required aria-required="true" oninput="calcD()"></label>
+                placeholder="Ej: 2.761.202.249" required aria-required="true" oninput="calcD()"></label>
             <label class="f"><span class="l">Utilidad operativa</span><input class="i mono"
-                id="t_op" required aria-required="true" oninput="calcD()"></label>
+                id="t_op" placeholder="Ej: 294.255.770" required aria-required="true" oninput="calcD()"></label>
           </div>
           <div class="row3">
             <label class="f"><span class="l">Cuentas x cobrar</span><input class="i mono" id="t_ar"
-                oninput="calcD()"></label>
+                placeholder="Ej: 578.289.605" oninput="calcD()"></label>
             <label class="f"><span class="l">Inventarios</span><input class="i mono" id="t_inv"
-                oninput="calcD()"></label>
+                placeholder="Ej: 0 (si no aplica)" oninput="calcD()"></label>
             <label class="f"><span class="l">Cuentas x pagar</span><input class="i mono" id="t_ap"
-                oninput="calcD()"></label>
+                placeholder="Ej: 27.255.376" oninput="calcD()"></label>
           </div>
+
+          <div id="ptEeffIA" style="margin-top:8px"></div>
 
           <div
             style="border:1.5px dashed var(--hair);border-radius:10px;padding:12px;margin:10px 0;background:var(--white)">
@@ -1496,9 +1537,7 @@
               <label class="f" style="display:none"><span class="l">Gráficos del sector (requieren fuente)</span><input
                   class="i" type="file" accept="image/*,application/pdf" multiple
                   onchange="adjCargar(this.files,'sector')"></label>
-              <div style="grid-column:1/-1;margin:2px 0 6px"><button type="button" class="mini"
-                  style="background:#2874A6;color:#fff" onclick="extraerEEFF()">📥 Leer EEFF adjuntos → ventas, costo,
-                  utilidad, patrimonio (sin teclear)</button></div><label class="f"><span class="l">EEFF firmados de la
+              <label class="f"><span class="l">EEFF firmados de la
                   Compañía</span><input class="i" type="file" accept="image/*,application/pdf,.xlsx,.xls,.csv" multiple
                   onchange="adjCargar(this.files,'eeff',function(){try{extraerEEFF();}catch(e){}})"></label>
               <label class="f" style="display:none"><span class="l">EEFF de las comparables</span><input class="i"
@@ -3652,7 +3691,7 @@ ${textoTotal}`;
     function _idxKey() { return 'pt_indice_central'; }
     function indexarEstudio(id, meta) { try { const raw = localStorage.getItem(_idxKey()); const ix = raw ? JSON.parse(raw) : {}; ix[id] = Object.assign(ix[id] || {}, meta, { updated: Date.now() }); localStorage.setItem(_idxKey(), JSON.stringify(ix)); try { stSet(_idxKey(), JSON.stringify(ix)); } catch (e) { } return Object.keys(ix).length; } catch (e) { return 0; } }
     function listarEstudios(q) { try { const ix = JSON.parse(localStorage.getItem(_idxKey()) || '{}'); let arr = Object.keys(ix).map(k => Object.assign({ id: k }, ix[k])); if (q) { const s = q.toLowerCase(); arr = arr.filter(e => ((e.ent || '') + (e.nit || '') + (e.anio || '')).toLowerCase().indexOf(s) > -1); } return arr.sort((a, b) => b.updated - a.updated); } catch (e) { return []; } }
-    var _saveV32 = saveActive; function saveActive() { const r = _saveV32(); try { const id = (typeof ACTIVE !== 'undefined' && ACTIVE) || slug($('ent').value) + '-' + $('anio').value; indexarEstudio(id, { ent: $('ent').value, nit: $('nit').value, anio: $('anio').value, pli: $('pli').value }); } catch (e) { } return r; }
+    var _saveV32 = saveActive; saveActive = function () { const r = _saveV32(); try { const id = (typeof ACTIVE !== 'undefined' && ACTIVE) || slug($('ent').value) + '-' + $('anio').value; indexarEstudio(id, { ent: $('ent').value, nit: $('nit').value, anio: $('anio').value, pli: $('pli').value }); } catch (e) { } return r; };
 
     /* Constancias V3.3 al informe */
     var _renderV32 = renderReportV3; function renderReport() {
@@ -9109,24 +9148,62 @@ Estrategia para "mezcla de los tres":
       };
 
       /* ───────────────────────────────────────────────────────────────────────
-         6. INTERFAZ — junto al botón de lectura por reglas
+         6. INTERFAZ — botón y contenedor de resultados ya están en el HTML
+         (id="btnLeerEEFFIA" / id="ptEeffIA"); aquí solo se conecta el estado
+         visual (icono, banner, pasos) según el resultado de la lectura.
          ─────────────────────────────────────────────────────────────────────── */
-      function _ui() {
-        if (document.getElementById('ptEeffIA')) return;
-        var btn = [].slice.call(document.querySelectorAll('button')).filter(function (b) { return /Leer EEFF adjuntos/.test(b.textContent); })[0];
-        if (!btn || !btn.parentNode) return;
-        var b = document.createElement('button');
-        b.type = 'button'; b.className = 'mini';
-        b.style.cssText = 'background:#6C3483;color:#fff;margin-left:6px';
-        b.textContent = '🤖 Leer EEFF con IA y verificar';
-        b.onclick = function () { ptLeerEEFFconIA(); };
-        btn.parentNode.insertBefore(b, btn.nextSibling);
-        var d = document.createElement('div');
-        d.id = 'ptEeffIA'; d.style.cssText = 'margin-top:8px';
-        btn.parentNode.appendChild(d);
+      function _eeffEstado(estado, texto) {
+        var msg = document.getElementById('eeffmsg'), icon = document.getElementById('eeffmsg_icon');
+        var btn = document.getElementById('btnLeerEEFFIA'), banner = document.getElementById('eeff_ok_banner');
+        var hint = document.getElementById('eeff_steps_hint'), badge = document.getElementById('badge_card_5');
+        var estados = {
+          pendiente: { bg: '#C0473B', icono: '🔴', color: '#7a241c', badge: '🔴 Pendiente' },
+          procesando: { bg: '#B67A0E', icono: '⏳', color: '#6b5010', badge: '⏳ Procesando' },
+          listo: { bg: '#2E8B6B', icono: '✅', color: '#14532d', badge: '✅ Listo' },
+          atencion: { bg: '#B67A0E', icono: '⚠️', color: '#6b5010', badge: '⚠ Revisar' },
+          error: { bg: '#C0473B', icono: '⚠️', color: '#7a241c', badge: '⚠ Error' }
+        };
+        var e = estados[estado] || estados.pendiente;
+        if (btn) { btn.style.background = e.bg; btn.disabled = (estado === 'procesando'); }
+        if (icon) icon.textContent = e.icono;
+        if (msg) { msg.textContent = texto || ''; msg.style.color = e.color; }
+        if (badge) badge.textContent = e.badge;
+        if (banner) banner.style.display = (estado === 'listo') ? '' : 'none';
+        if (hint) hint.style.display = (estado === 'listo') ? 'none' : '';
       }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 1800); });
-      else setTimeout(_ui, 1800);
+      window._eeffEstado = _eeffEstado;
+
+      var _leerIAPrev = window.ptLeerEEFFconIA;
+      window.ptLeerEEFFconIA = async function () {
+        _eeffEstado('procesando', 'Leyendo y verificando los estados financieros con IA…');
+        var r = await _leerIAPrev.apply(this, arguments);
+        if (r && r.hallazgos) {
+          var errores = r.hallazgos.filter(function (h) { return h.estado === 'error'; });
+          if (errores.length) _eeffEstado('atencion', '⚠ Se detectaron ' + errores.length + ' inconsistencia(s). Revise la tabla abajo antes de incorporar las cifras.');
+          else _eeffEstado('listo', '✓ Lectura verificada: revise la tabla abajo y pulse «Incorporar al estudio».');
+        } else {
+          _eeffEstado('error', '⚠ No se pudo completar la lectura con IA. Revise el mensaje abajo o adjunte los EEFF en otro formato.');
+        }
+        return r;
+      };
+
+      var _aplicarPrev = window.ptAplicarEEFFIA;
+      window.ptAplicarEEFFIA = function () {
+        var r = _aplicarPrev.apply(this, arguments);
+        _eeffEstado('listo', '✓ Cifras incorporadas al estudio. Verifíquelas contra el documento firmado.');
+        return r;
+      };
+
+      /* Lectura automática por reglas (silenciosa, al adjuntar el EEFF): si logró
+         algo, invita a verificar con IA en vez de dejar el estado en "pendiente". */
+      var _extraerPrev = window.extraerEEFF;
+      if (typeof _extraerPrev === 'function') {
+        window.extraerEEFF = async function () {
+          var r = await _extraerPrev.apply(this, arguments);
+          if (r) _eeffEstado('atencion', 'Cifras detectadas automáticamente. Pulse «Leer EEFF con IA» para verificarlas antes de continuar.');
+          return r;
+        };
+      }
 
     })();
 
