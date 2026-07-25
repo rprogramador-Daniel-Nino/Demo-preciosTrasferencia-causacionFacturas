@@ -2675,6 +2675,7 @@
     function toggleHelp() { const b = document.getElementById('helpbody'); if (b) b.style.display = (b.style.display === 'none' ? 'block' : 'none'); }
 
     /* ══════════════ ADJUNTOS (reproducción fiel) + INFORME ECONÓMICO EXTENDIDO ══════════════ */
+    let ADJ = { logoempresa: [], logofirma: [], eeff: [], eeffcomp: [], organigrama: [], productos: [], sector: [], otros: [] };
     const ADJ_LBL = { logoempresa: 'Logo del contribuyente', logofirma: 'Logo de la firma que prepara el estudio', sector: 'Gráficos del sector (con fuente)', eeff: 'Estados financieros firmados de la parte examinada', eeffcomp: 'Estados financieros de las comparables', organigrama: 'Organigrama del grupo multinacional', productos: 'Gráficos e información de productos', otros: 'Otros soportes documentales' };
     function adjCargar(files, tipo, onDone) {
       if (!files || !files.length) return;
