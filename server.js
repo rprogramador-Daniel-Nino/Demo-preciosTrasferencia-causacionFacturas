@@ -9,9 +9,14 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.ANTHROPIC_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
 
 if (!API_KEY) {
   console.error('\n⚠️  Falta ANTHROPIC_API_KEY en el archivo .env — el proxy no va a funcionar.\n');
+}
+if (!GEMINI_API_KEY) {
+  console.error('\n⚠️  Falta GEMINI_API_KEY en el archivo .env — la lectura de archivos con Gemini no va a funcionar.\n');
 }
 
 app.use(express.json({ limit: '2mb' }));
@@ -44,24 +49,49 @@ app.post('/api/claude', async (req, res) => {
   }
 });
 
-// Proxy para extracción de RUT con visión/documentos de Claude
+// Proxy hacia la API de Gemini. El frontend llama a /api/gemini para lectura/OCR
+// de documentos (más económico que Claude para esta tarea), nunca directo a
+// generativelanguage.googleapis.com — así la key queda oculta.
+app.post('/api/gemini', async (req, res) => {
+  if (!GEMINI_API_KEY) {
+    return res.status(500).json({ error: 'Servidor sin GEMINI_API_KEY configurada.' });
+  }
+  try {
+    const { model, ...body } = req.body || {};
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model || GEMINI_MODEL_DEFAULT}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': GEMINI_API_KEY,
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    const data = await upstream.json();
+    res.status(upstream.status).json(data);
+  } catch (err) {
+    console.error('Error llamando a Gemini:', err);
+    res.status(502).json({ error: 'No se pudo contactar a la API de Gemini.', detail: err.message });
+  }
+});
+
+// Proxy para extracción de RUT con visión/documentos, vía Gemini (lectura de
+// archivos: más económico que Claude para esta tarea).
 const handlerExtraerRut = async (req, res) => {
-  if (!API_KEY) {
-    return res.status(500).json({ error: 'Servidor sin ANTHROPIC_API_KEY configurada.' });
+  if (!GEMINI_API_KEY) {
+    return res.status(500).json({ error: 'Servidor sin GEMINI_API_KEY configurada.' });
   }
   try {
     const { archivo_base64, tipo } = req.body;
     if (!archivo_base64) {
       return res.status(400).json({ error: 'Falta archivo_base64.' });
     }
-    const isPdf = (tipo || '').includes('pdf');
-    const contentBlock = isPdf ? {
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: archivo_base64 }
-    } : {
-      type: 'image',
-      source: { type: 'base64', media_type: (tipo || '').includes('png') ? 'image/png' : 'image/jpeg', data: archivo_base64 }
-    };
+    const mimeType = (tipo || '').includes('pdf')
+      ? 'application/pdf'
+      : ((tipo || '').includes('png') ? 'image/png' : 'image/jpeg');
 
     const promptText = "Extrae la información de este RUT colombiano (DIAN) en formato JSON estricto con las siguientes llaves:\n"
       + "- nit: string con dígito de verificación (ej: '900123456-7')\n"
@@ -72,35 +102,54 @@ const handlerExtraerRut = async (req, res) => {
       + "- confianza: número de 0 a 100\n\n"
       + "Responde ÚNICAMENTE con el objeto JSON válido sin marcas markdown.";
 
-    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: [contentBlock, { type: 'text', text: promptText }] }]
-      }),
-    });
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_DEFAULT}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: mimeType, data: archivo_base64 } },
+              { text: promptText }
+            ]
+          }]
+        }),
+      }
+    );
 
     const data = await upstream.json();
-    if (upstream.ok && data.content && data.content[0] && data.content[0].text) {
-      const cleanJsonStr = data.content[0].text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const cand = data && data.candidates && data.candidates[0];
+    const texto = cand && cand.content && cand.content.parts
+      ? cand.content.parts.map(p => p.text || '').join('')
+      : '';
+    if (upstream.ok && texto) {
+      const cleanJsonStr = texto.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
       const parsed = JSON.parse(cleanJsonStr);
       return res.json(parsed);
     }
     res.status(upstream.status).json({ error: 'No se pudo extraer el RUT', raw: data });
   } catch (err) {
     console.error('Error extrayendo RUT:', err);
-    res.status(502).json({ error: 'Error procesando RUT con Claude API', detail: err.message });
+    res.status(502).json({ error: 'Error procesando RUT con Gemini API', detail: err.message });
   }
 };
 
 app.post('/api/extraer-rut', handlerExtraerRut);
 app.post('/extraer-rut', handlerExtraerRut);
+
+// Estado del servidor local, para el panel de diagnóstico ("Probar conector").
+// Nunca devuelve la clave real, solo si está configurada.
+app.get('/api/estado', (req, res) => {
+  res.json({
+    ok: true,
+    clave: API_KEY ? 'configurada' : 'no configurada',
+    claveGemini: GEMINI_API_KEY ? 'configurada' : 'no configurada',
+  });
+});
 
 
 app.listen(PORT, '0.0.0.0', () => {

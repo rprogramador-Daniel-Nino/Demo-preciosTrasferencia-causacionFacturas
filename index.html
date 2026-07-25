@@ -2446,7 +2446,7 @@
     let SUPER = [];
     async function loadXLSX() { if (!window.XLSX) { await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'); } return window.XLSX; }
     async function readExcelRows(file) { const XLSX = await loadXLSX(); const buf = await file.arrayBuffer(); const wb = XLSX.read(buf, { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }); }
-    const SYN = { nit: ['nit', 'id'], name: ['razón', 'nombre'], s: ['ingresos'], c: ['costo'], op: ['utilidad'], ar: ['cxc'], inv: ['inv'], ap: ['cxp'], sic: ['sic'], country: ['país'], control: ['control'] };
+    const SYN = { nit: ['nit', 'id'], name: ['razón', 'nombre', 'company name'], s: ['ingresos', 'total revenue', 'revenue'], c: ['costo', 'cost of goods sold', 'cogs'], op: ['utilidad', 'operating income', 'ebit'], ar: ['cxc', 'accounts receivable'], inv: ['inv'], ap: ['cxp', 'accounts payable'], sic: ['sic'], country: ['país', 'country'], control: ['control'] };
     function findCol(headers, keys) { for (let i = 0; i < headers.length; i++) { const h = String(headers[i] || '').toLowerCase().trim(); if (keys.some(k => h.includes(k))) return i; } return -1; }
     /* Detecta la fila de encabezados entre las primeras filas de un Excel/CSV
        importado: algunos exportes (p. ej. Capital IQ) traen filas de título
@@ -2466,9 +2466,9 @@
       return mejorFila;
     }
     function smartMapRows(rows) {
-      const hi = 0, headers = (rows[0] || []).map(x => String(x));
+      const hi = findHeaderRow(rows), headers = (rows[hi] || []).map(x => String(x));
       const col = {}; Object.keys(SYN).forEach(k => col[k] = findCol(headers, SYN[k]));
-      return rows.slice(1).map(r => ({ nit: _digits(col.nit >= 0 ? r[col.nit] : ''), name: r[col.name] || '', s: num(r[col.s]), c: num(r[col.c]), op: num(r[col.op]), ar: num(r[col.ar]), inv: num(r[col.inv]), ap: num(r[col.ap]), sic: r[col.sic] || '', controlStatus: 'independiente' }));
+      return rows.slice(hi + 1).map(r => ({ nit: _digits(col.nit >= 0 ? r[col.nit] : ''), name: r[col.name] || '', s: num(r[col.s]), c: num(r[col.c]), op: num(r[col.op]), ar: num(r[col.ar]), inv: num(r[col.inv]), ap: num(r[col.ap]), sic: r[col.sic] || '', controlStatus: 'independiente' }));
     }
     function ingestSuperFile(file) {
       readExcelRows(file).then(rows => { SUPER = smartMapRows(rows); renderSuper(); });

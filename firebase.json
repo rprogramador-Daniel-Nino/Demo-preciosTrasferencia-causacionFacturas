@@ -25,6 +25,10 @@
         "function": "extraerRut"
       },
       {
+        "source": "/api/gemini",
+        "function": "gemini"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
