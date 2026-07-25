@@ -3226,17 +3226,34 @@ ${textoTotal}`;
       _moCache = { sig, rows: out }; return out;
     }
     function moCfg() { return { n: Math.max(4, Math.min(12, num($('mo_n').value) || 12)), perd: $('mo_perd').value, geo: $('mo_geo').value, act: $('mo_act').value, just: $('mo_just').value.trim() }; }
-    function moScore(o, cfg, medPool, sTP) {
+    /* Coincidencia del candidato con la actividad específica extraída del estudio
+       del año anterior (setActividadEspecifica): palabras clave y SIC contra la
+       descripción/SIC del candidato. Sin actividad específica cargada, fK=1 (no
+       cambia el puntaje respecto de como se calculaba antes). */
+    function moActMatch(o, act) {
+      if (!act) return 1;
+      const base = ((DESCS[o.name] || '') + ' ' + (o.sic || '')).toLowerCase();
+      let hits = 0;
+      ([].concat(act.keywords || [], act.productos || [])).forEach(k => { if (k && base.indexOf(String(k).toLowerCase()) >= 0) hits++; });
+      (act.sic || []).forEach(c => {
+        if (!c) return;
+        if ((o.sic || '').indexOf(c) >= 0) hits += 2;
+        else if ((o.sic || '').indexOf(String(c).slice(0, 3)) >= 0) hits += 1;
+      });
+      return Math.max(0.15, Math.min(1, hits / 4));
+    }
+    function moScore(o, cfg, medPool, sTP, act) {
       if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
       if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
       const fA = o.perfil === 'SERVICIO' ? 1 : (o.perfil === 'MIXTO' ? 0.6 : 0.35);
+      const fK = moActMatch(o, act); const kTag = (act && fK >= 0.5) ? 'coincide con la actividad específica' : '';
       let fG = 1, gTag = ''; if (cfg.geo !== 'ninguna') { const r = moRegion(o.pais); fG = r === cfg.geo ? 1 : (r === 'OTRA' ? 0.5 : 0.65); if (r === cfg.geo) gTag = 'región prioritaria (' + (o.pais || '') + ')'; }
       let fT = 0.5, tTag = ''; if (sTP && o.s) { const d = Math.abs(Math.log10(o.s / sTP)); fT = 1 / (1 + d); if (d < 1) tTag = 'tamaño próximo'; }
       let fR; if (o.perdida) { fR = cfg.perd === 'preferir' ? 1 : 0.4; } else { fR = cfg.perd === 'preferir' ? 0.4 : Math.max(0, 1 - Math.min(1, Math.abs((o.pli ?? 0) - medPool) / 0.5)); }
-      const sc = 0.40 * fA + 0.15 * fG + 0.20 * fT + 0.15 * fR + 0.10 * 1;
-      const raz = ['perfil ' + o.perfil.toLowerCase(), gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : '')].filter(x => x).join(', ');
+      const sc = 0.35 * fA + 0.15 * fK + 0.15 * fG + 0.20 * fT + 0.15 * fR;
+      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : '')].filter(x => x).join(', ');
       return { sc, raz };
     }
     function motorEjecutar(silencioso) {
@@ -3247,7 +3264,10 @@ ${textoTotal}`;
       const plis = rows.map(r => r.pli).filter(x => x !== null).sort((a, b) => a - b);
       const medPool = plis.length ? quart(plis, 0.5, 'inc') : 0.1;
       const sTP = num($('t_s').value) || 0;
-      const ev = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP) }));
+      if (!sTP && !silencioso) moToast('⚠ «Ventas netas» de la parte examinada está vacío: el factor de tamaño queda neutral para todas las candidatas (puntajes más parejos entre sí). Complételo en «Estados financieros (EEFF)» para una selección más precisa.', 'amber');
+      const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+      if (!act && !silencioso) moToast('ℹ No hay actividad específica extraída del estudio anterior: la selección se basa solo en perfil funcional, tamaño y rentabilidad. Use «🤖 Analizar empresa con IA» (tarjeta de Perfil de actividad) para afinarla con palabras clave y SIC.', 'amber');
+      const ev = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP, act) }));
       const eleg = ev.filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
       const top = eleg.slice(0, cfg.n), reserva = eleg.slice(cfg.n);
       MOTOR = { activo: true, sel: {}, motivo: {}, score: {}, cfg, just: cfg.just, escenario: MOTOR.escenario || '' };
@@ -3298,7 +3318,8 @@ ${textoTotal}`;
     function moSimula(cfg) {
       const rows = moRows(); const plis = rows.map(r => r.pli).filter(x => x !== null).sort((a, b) => a - b);
       const medPool = plis.length ? quart(plis, 0.5, 'inc') : 0.1; const sTP = num($('t_s').value) || 0;
-      const eleg = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP) })).filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
+      const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+      const eleg = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP, act) })).filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
       const top = eleg.slice(0, cfg.n).map(x => x.o.pli).filter(x => x !== null).sort((a, b) => a - b);
       if (top.length < 4) return { cfg, pocos: eleg.length };
       return { cfg, n: top.length, eleg: eleg.length, p25: quart(top, 0.25, $('qmethod').value), med: quart(top, 0.5, $('qmethod').value), p75: quart(top, 0.75, $('qmethod').value), perd: eleg.slice(0, cfg.n).filter(x => x.o.perdida).length };
