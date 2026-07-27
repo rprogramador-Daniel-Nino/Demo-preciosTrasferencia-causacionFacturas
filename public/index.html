@@ -10556,6 +10556,7 @@ Estrategia para "mezcla de los tres":
         });
         return ajenas;
       }
+      window.ptVerificarCifras = verificarCifras;
 
       /* ───────────────────────────────────────────────────────────────────────
          6. PROCESO
@@ -11151,24 +11152,83 @@ Estrategia para "mezcla de los tres":
       }
       window.ptAplicarSeccionesInyectadas = ptAplicarSeccionesInyectadas;
 
-      window.ptUsarSeccionAnterior = function (secId) {
+      window.ptUsarSeccionAnterior = async function (secId, btnEl) {
         var item = ESQUELETO.find(function (e) { return e.id === secId; });
         var nom = item ? item.nom : secId;
 
-        var html = ptExtraerTextoSeccionAnterior(secId);
-        if (!html) {
+        var btnTextoOriginal = btnEl ? btnEl.textContent : null;
+        if (btnEl) { btnEl.disabled = true; btnEl.textContent = '⏳ Mejorando…'; }
+        var restaurarBoton = function () {
+          if (btnEl) { btnEl.disabled = false; btnEl.textContent = btnTextoOriginal; }
+        };
+
+        var textoBase = ptExtraerTextoPlanoSeccionAnterior(secId);
+        if (!textoBase) {
+          restaurarBoton();
           moToast('No se pudo extraer el texto de «' + nom + '» del informe anterior.', 'red');
           return false;
         }
 
-        window.PT_SECCIONES_INYECTADAS = window.PT_SECCIONES_INYECTADAS || {};
-        window.PT_SECCIONES_INYECTADAS[secId] = html;
+        try {
+          var contextoActual = ptContextoCompleto().slice(0, 20000);
+          var prompt =
+            'Eres especialista en precios de transferencia en Colombia. Tu tarea es ACTUALIZAR y MEJORAR\n' +
+            'el texto de la sección «' + nom + '» del informe de precios de transferencia, tomando como BASE el\n' +
+            'texto de esa misma sección en el informe del año gravable anterior, y adaptándolo al informe\n' +
+            'del año gravable actual con los datos del estudio en curso.\n\n' +
+            'REGLAS INQUEBRANTABLES:\n' +
+            '1. Parte del texto anterior como base de redacción, estilo y estructura, pero AJUSTA cifras,\n' +
+            '   años, nombres y hechos a los datos del CONTEXTO ACTUAL cuando ese contexto traiga el dato\n' +
+            '   correspondiente.\n' +
+            '2. No inventes cifras, hechos ni nombres que no consten ni en el texto anterior ni en el\n' +
+            '   contexto actual. Si falta un dato para completar la actualización, escribe exactamente:\n' +
+            '   "[dato pendiente de confirmar con el contribuyente]" en su lugar.\n' +
+            '3. Conserva una extensión y nivel de detalle equivalentes a los del texto anterior (aprox.\n' +
+            '   ' + textoBase.trim().length + ' caracteres) y el mismo tono técnico de un informe tributario.\n' +
+            '4. Redacta en español, en tercera persona, en prosa, sin viñetas.\n\n' +
+            'TEXTO DE LA SECCIÓN «' + nom + '» EN EL INFORME DEL AÑO ANTERIOR (base a mejorar):\n' +
+            '---\n' + textoBase + '\n---\n\n' +
+            'CONTEXTO DEL ESTUDIO DEL AÑO GRAVABLE ACTUAL:\n' +
+            '---\n' + contextoActual + '\n---\n\n' +
+            'Devuelve ÚNICAMENTE un JSON válido, sin marcas markdown, sin texto antes ni después:\n' +
+            '{"texto":"..."}';
 
-        try { ptAplicarSeccionesInyectadas(); } catch (e) { }
-        try { ptCompararExtension(); } catch (e) { }
-        try { ptPintarEstructura(); } catch (e) { }
-        moToast('Sección «' + nom + '» completada con el texto del informe anterior.', 'green');
-        return true;
+          var res = await fetch('/api/gemini', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          var data = await res.json();
+          var cand = data && data.candidates && data.candidates[0];
+          var raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(function (p) { return p.text || ''; }).join('') : '';
+          if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
+
+          var j = extraerJSONDeRespuestaIA(raw);
+          var textoMejorado = j && j.texto ? String(j.texto).trim() : '';
+          if (textoMejorado.length < 20) throw new Error('Gemini no devolvió un texto mejorado válido para «' + nom + '».');
+
+          if (typeof window.ptVerificarCifras === 'function') {
+            var ajenas = window.ptVerificarCifras(textoMejorado, textoBase + '\n' + contextoActual);
+            if (ajenas.length) {
+              moToast('El texto mejorado de «' + nom + '» contiene cifras que no constan en el texto anterior ni en el estudio actual: ' + ajenas.join(', '), 'amber');
+            }
+          }
+
+          var html = ptTextoPlanoAHtmlSeccion(textoMejorado);
+          if (!html) throw new Error('No se pudo dar formato al texto mejorado de «' + nom + '».');
+
+          window.PT_SECCIONES_INYECTADAS = window.PT_SECCIONES_INYECTADAS || {};
+          window.PT_SECCIONES_INYECTADAS[secId] = html;
+
+          try { ptAplicarSeccionesInyectadas(); } catch (e) { }
+          try { ptCompararExtension(); } catch (e) { }
+          try { ptPintarEstructura(); } catch (e) { }
+          moToast('Sección «' + nom + '» mejorada con IA a partir del informe anterior.', 'green');
+          return true;
+        } catch (e) {
+          restaurarBoton();
+          moToast('No se pudo mejorar «' + nom + '» con IA: ' + e.message, 'red');
+          return false;
+        }
       };
 
       window.ptCompletarTodasAusentesAnterior = function () {
