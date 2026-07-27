@@ -1965,6 +1965,33 @@
     const $ = id => document.getElementById(id);
     const num = v => { if (v === null || v === undefined || v === '') return null; if (typeof v === 'number') return isNaN(v) ? null : v; let s = String(v).trim(); let neg = false; const m = s.match(/^\((.*)\)$/); if (m) { neg = true; s = m[1]; } s = s.replace(/\s/g, ''); const _mil = ps => ps.length >= 2 && ps.slice(1).every(g => /^\d{3}$/.test(g)) && /^-?[1-9]\d{0,2}$/.test(ps[0]); const ld = s.lastIndexOf('.'), lc = s.lastIndexOf(','); if (ld > -1 && lc > -1) { s = lc > ld ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, ''); } else if (lc > -1) { const p = s.split(','); s = _mil(p) ? s.replace(/,/g, '') : s.replace(',', '.'); } else if (ld > -1) { const p = s.split('.'); if (_mil(p)) s = s.replace(/\./g, ''); } const n = parseFloat(s); return isNaN(n) ? null : (neg ? -n : n); };
     const escH = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    /* Extrae del texto de una respuesta de IA el primer objeto JSON completo y
+       válido, ignorando cualquier texto sobrante antes o después (markdown,
+       comentarios, notas del modelo). Un simple `.replace(fences).trim()` +
+       JSON.parse falla en cuanto el modelo agrega una sola palabra después del
+       JSON («Unexpected non-whitespace character after JSON»), que es un modo
+       de falla frecuente en respuestas largas. Escanea llaves balanceadas
+       respetando cadenas de texto, en vez de asumir que el JSON termina donde
+       termina la respuesta. */
+    function extraerJSONDeRespuestaIA(texto) {
+      const s = String(texto || '');
+      const inicio = s.indexOf('{');
+      if (inicio < 0) throw new Error('La respuesta no contiene un objeto JSON.');
+      let profundidad = 0, enCadena = false, escapado = false;
+      for (let i = inicio; i < s.length; i++) {
+        const c = s[i];
+        if (enCadena) {
+          if (escapado) escapado = false;
+          else if (c === '\\') escapado = true;
+          else if (c === '"') enCadena = false;
+          continue;
+        }
+        if (c === '"') { enCadena = true; continue; }
+        if (c === '{') profundidad++;
+        else if (c === '}') { profundidad--; if (profundidad === 0) return JSON.parse(s.slice(inicio, i + 1)); }
+      }
+      throw new Error('El JSON de la respuesta de la IA quedó incompleto (llaves sin cerrar).');
+    }
     /* a prueba de fallos: los errores no tumban la interfaz, se informan */
     window.onerror = function (msg, src, line) { try { const el = $('docmsg'); if (el) el.textContent = '⚠ Error interno controlado (' + String(msg).slice(0, 120) + '). La interfaz sigue operativa; revisa el último dato ingresado.'; } catch (e) { } return true; };
     /* rapidez: los inputs usan calcD (debounce 220 ms); el motor y las exportaciones llaman calc() directo */
@@ -2186,8 +2213,7 @@
         const cand = data && data.candidates && data.candidates[0];
         const raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('') : '';
         if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
-        const limpio = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-        const j = JSON.parse(limpio);
+        const j = extraerJSONDeRespuestaIA(raw);
         setActividadEspecifica({
           resumen: j.actividad_especifica_corta || '', perfil: j.perfil_funcional_far || '',
           productos: j.productos_servicios_clave || [], keywords: j.keywords_busqueda_comparables || [],
@@ -5186,8 +5212,7 @@ ${textoPrompt}`;
                 if (res.ok) {
                   var data = await res.json();
                   var txt = (data.content || []).filter(function (x) { return x.type === 'text'; }).map(function (x) { return x.text; }).join('').trim();
-                  var cleanJson = txt.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-                  var parsed = JSON.parse(cleanJson);
+                  var parsed = extraerJSONDeRespuestaIA(txt);
                   if (parsed.entidad && $('ent') && !$('ent').value) $('ent').value = parsed.entidad;
                   if (parsed.nit && $('nit') && !$('nit').value) $('nit').value = parsed.nit;
                   if (parsed.vinculado && $('vinc') && !$('vinc').value) $('vinc').value = parsed.vinculado;
@@ -8042,13 +8067,28 @@ Estrategia para "mezcla de los tres":
         var F = window.PT_FAR, host = document.getElementById('ptFarPerfil');
         if (!host) return;
         if (!F.rol) { host.innerHTML = ''; return; }
-        host.innerHTML = '<div style="font-size:11.5px;background:#FEF9E7;border:1px solid #B7950B;border-radius:6px;padding:8px 10px">' +
-          '<b>Perfil funcional de la parte examinada</b> (fuente: ' + escH(F.origen) + ')<br>' +
-          '<b>Rol:</b> ' + escH(ROLES[F.rol] || F.rol) + '<br>' +
-          '<b>Funciones clave:</b> ' + escH((F.funcionesClave || []).join(', ') || '—') + '<br>' +
-          '<b>Funciones que asume el vinculado:</b> ' + escH((F.funcionesNoAsumidas || []).join(', ') || '—') + '<br>' +
-          '<b>Intangibles:</b> ' + escH((F.activosNoPropios || []).length ? 'no es titular — ' + F.activosNoPropios.join(', ') : 'ver documentación') + '<br>' +
-          '<b>Origen del ingreso:</b> ' + escH((F.ingresoConcepto || '—')) +
+        host.innerHTML = '<div style="background:#FEFCF5;border:1px solid #E6D7A8;border-radius:8px;padding:12px;margin-top:10px">' +
+          '<div style="font-size:12px;font-weight:700;color:#5C4800;margin-bottom:8px;display:flex;align-items:center;justify-space-between;flex-wrap:wrap;gap:4px">' +
+          '<span>📋 Perfil Funcional Caracterizado de la Parte Examinada</span>' +
+          '<span style="font-size:10.5px;color:#8C731E;font-weight:normal">Fuente: ' + escH(F.origen) + '</span>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;font-size:11.5px">' +
+          '<div style="background:#FFF;padding:8px 10px;border-radius:6px;border:1px solid #EFE6C7">' +
+          '<b style="color:#7D6608">Rol económico:</b><br><span style="color:#2C3E50;font-weight:600">' + escH(ROLES[F.rol] || F.rol) + '</span>' +
+          '</div>' +
+          '<div style="background:#FFF;padding:8px 10px;border-radius:6px;border:1px solid #EFE6C7">' +
+          '<b style="color:#7D6608">Funciones clave:</b><br><span style="color:#2C3E50">' + escH((F.funcionesClave || []).join(', ') || '—') + '</span>' +
+          '</div>' +
+          '<div style="background:#FFF;padding:8px 10px;border-radius:6px;border:1px solid #EFE6C7">' +
+          '<b style="color:#7D6608">Funciones asumidas por matriz:</b><br><span style="color:#2C3E50">' + escH((F.funcionesNoAsumidas || []).join(', ') || '—') + '</span>' +
+          '</div>' +
+          '<div style="background:#FFF;padding:8px 10px;border-radius:6px;border:1px solid #EFE6C7">' +
+          '<b style="color:#7D6608">Intangibles / Patentes:</b><br><span style="color:#2C3E50">' + escH((F.activosNoPropios || []).length ? 'No es titular — ' + F.activosNoPropios.join(', ') : 'Ver documentación') + '</span>' +
+          '</div>' +
+          '<div style="background:#FFF;padding:8px 10px;border-radius:6px;border:1px solid #EFE6C7;grid-column:1/-1">' +
+          '<b style="color:#7D6608">Origen del ingreso:</b> <span style="color:#2C3E50">' + escH((F.ingresoConcepto || '—')) + '</span>' +
+          '</div>' +
+          '</div>' +
           '</div>';
       }
       window.ptPintarFAR = ptPintarFAR;
@@ -8057,33 +8097,62 @@ Estrategia para "mezcla de los tres":
         var C = window.PT_CRIBA, host = document.getElementById('ptFarPanel');
         if (!host || !C) return;
         var top = C.aceptadas.slice(0, 25);
-        var h = '<div style="font-size:11.5px;margin-top:8px">' +
-          '<b>Embudo de depuración</b> — universo ' + C.universo + ' · aceptadas ' + C.aceptadas.length +
-          ' · rechazadas ' + C.rechazadas + ' · del estudio anterior conservadas ' + C.previasMantenidas + '</div>' +
-          '<table style="width:100%;font-size:11px;margin-top:4px"><thead><tr><th style="text-align:left">Motivo de rechazo</th><th style="text-align:right">N°</th></tr></thead><tbody>' +
+        var h = '<div style="background:#FFF;border:1px solid #E1E8ED;border-radius:8px;padding:12px;margin-top:12px">' +
+          '<div style="font-size:12.5px;font-weight:700;color:#2C3E50;margin-bottom:10px">📊 Embudo de Depuración del Mercado</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px">' +
+          '<div style="background:#F8F9FA;border:1px solid #E9ECEF;padding:8px;border-radius:6px;text-align:center">' +
+          '<div style="font-size:10px;color:#6C757D;text-transform:uppercase;font-weight:700">Universo Total</div>' +
+          '<div style="font-size:18px;font-weight:800;color:#2C3E50">' + C.universo + '</div>' +
+          '</div>' +
+          '<div style="background:#EAF7EE;border:1px solid #C3E6CB;padding:8px;border-radius:6px;text-align:center">' +
+          '<div style="font-size:10px;color:#1E8449;text-transform:uppercase;font-weight:700">Aceptadas</div>' +
+          '<div style="font-size:18px;font-weight:800;color:#1E8449">' + C.aceptadas.length + '</div>' +
+          '</div>' +
+          '<div style="background:#FDEDEC;border:1px solid #F5C6CB;padding:8px;border-radius:6px;text-align:center">' +
+          '<div style="font-size:10px;color:#C0392B;text-transform:uppercase;font-weight:700">Rechazadas</div>' +
+          '<div style="font-size:18px;font-weight:800;color:#C0392B">' + C.rechazadas + '</div>' +
+          '</div>' +
+          '<div style="background:#FEF9E7;border:1px solid #FFEEBA;padding:8px;border-radius:6px;text-align:center">' +
+          '<div style="font-size:10px;color:#B7950B;text-transform:uppercase;font-weight:700">Estudio Anterior</div>' +
+          '<div style="font-size:18px;font-weight:800;color:#B7950B">' + C.previasMantenidas + '</div>' +
+          '</div>' +
+          '</div>';
+
+        h += '<div style="font-size:11.5px;font-weight:700;color:#34495E;margin-bottom:6px">Motivos de Descarte (Criterios de Exclusión):</div>' +
+          '<table style="width:100%;font-size:11px;border-collapse:collapse;background:#FAFAFA;border:1px solid #EEE;border-radius:6px;overflow:hidden">' +
+          '<thead><tr style="background:#F1F3F5;color:#495057"><th style="text-align:left;padding:6px 8px">Criterio de Exclusión</th><th style="text-align:right;padding:6px 8px">Empresas</th></tr></thead><tbody>' +
           Object.keys(C.motivosRechazo).sort(function (a, b) { return C.motivosRechazo[b] - C.motivosRechazo[a]; })
-            .map(function (k) { return '<tr><td>' + escH(k) + '</td><td style="text-align:right">' + C.motivosRechazo[k] + '</td></tr>'; }).join('') +
+            .map(function (k) { return '<tr style="border-bottom:1px solid #F1F1F1"><td style="padding:5px 8px">' + escH(k) + '</td><td style="text-align:right;padding:5px 8px;font-weight:700;color:#C0392B">' + C.motivosRechazo[k] + '</td></tr>'; }).join('') +
           '</tbody></table>';
 
         if (C.previasEnRiesgo.length) {
-          h += '<div style="margin-top:6px;padding:6px 8px;background:#FDEDEC;border:1px solid #C0392B;border-radius:6px;font-size:11px">' +
-            '<b>Comparables del año anterior que no superan los filtros del período corriente:</b><ul style="margin:4px 0 0 16px">' +
-            C.previasEnRiesgo.map(function (f) { return '<li>' + escH(f.name) + ' — ' + escH(f.motivo.slice(0, 200)) + '</li>'; }).join('') + '</ul></div>';
+          h += '<div style="margin-top:10px;padding:10px;background:#FDEDEC;border:1px solid #F5C6CB;border-radius:6px;font-size:11px">' +
+            '<b style="color:#721C24">⚠️ Atención: Comparables del año anterior que no superan los filtros corrientes:</b>' +
+            '<ul style="margin:6px 0 0 16px;padding:0;color:#721C24">' +
+            C.previasEnRiesgo.map(function (f) { return '<li style="margin-bottom:3px"><b>' + escH(f.name) + '</b> — ' + escH(f.motivo.slice(0, 200)) + '</li>'; }).join('') + '</ul></div>';
         }
 
-        h += '<table style="width:100%;font-size:11px;margin-top:8px"><thead><tr><th style="text-align:left">Excel Company ID</th><th style="text-align:left">Compañía</th>' +
-          '<th style="text-align:left">Rol funcional</th><th style="text-align:left">Grado</th><th style="text-align:left">Verificación web</th></tr></thead><tbody>' +
+        h += '<div style="font-size:11.5px;font-weight:700;color:#34495E;margin:12px 0 6px">Mejores Candidatas Preseleccionadas (Top ' + top.length + '):</div>' +
+          '<div style="max-height:300px;overflow-y:auto;border:1px solid #E1E8ED;border-radius:6px">' +
+          '<table style="width:100%;font-size:11px;border-collapse:collapse;text-align:left">' +
+          '<thead style="position:sticky;top:0;background:#F8F9FA;color:#495057;border-bottom:1px solid #DEE2E6">' +
+          '<tr><th style="padding:6px 8px">Company ID</th><th style="padding:6px 8px">Compañía</th><th style="padding:6px 8px">Rol Funcional</th><th style="padding:6px 8px">Grado</th><th style="padding:6px 8px">Verificación Web</th></tr>' +
+          '</thead><tbody>' +
           top.map(function (f) {
             var v = f.verificacion;
-            var vt = !v ? '<span style="color:#7D6608">sin verificar</span>'
-              : (v.estado === 'aceptar' ? '<span style="color:#1E8449">✓ confirmada</span>'
-                : v.estado === 'rechazar' ? '<span style="color:#C0392B">✗ no coincide</span>'
-                  : v.estado === 'pendiente' ? '<a href="' + (v.enlace || '#') + '" target="_blank">verificar manualmente</a>'
-                    : '<span style="color:#B7950B">requiere revisión</span>');
-            return '<tr' + (f.previa ? ' style="background:#EAF7EE"' : '') + '><td><code>' + escH(f.id || '—') + '</code></td>' +
-              '<td>' + escH(f.name) + (f.previa ? ' <b title="Comparable del estudio anterior">★</b>' : '') + '</td>' +
-              '<td>' + escH(f.rolTexto.slice(0, 46)) + '</td><td>' + f.grado + '</td><td>' + vt + '</td></tr>';
-          }).join('') + '</tbody></table>';
+            var vt = !v ? '<span style="color:#7D6608;background:#FFF3CD;padding:2px 6px;border-radius:4px;font-size:10px">Sin verificar</span>'
+              : (v.estado === 'aceptar' ? '<span style="color:#155724;background:#D4EDDA;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700">✓ Confirmada</span>'
+                : v.estado === 'rechazar' ? '<span style="color:#721C24;background:#F8D7DA;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700">✗ No coincide</span>'
+                  : v.estado === 'pendiente' ? '<a href="' + (v.enlace || '#') + '" target="_blank" style="color:#0056B3;font-weight:600">Verificar manual</a>'
+                    : '<span style="color:#856404;background:#FFF3CD;padding:2px 6px;border-radius:4px;font-size:10px">Revisar</span>');
+            return '<tr' + (f.previa ? ' style="background:#EAF7EE"' : ' style="border-bottom:1px solid #F1F1F1"') + '>' +
+              '<td style="padding:5px 8px"><code>' + escH(f.id || '—') + '</code></td>' +
+              '<td style="padding:5px 8px;font-weight:600">' + escH(f.name) + (f.previa ? ' <span title="Comparable del estudio anterior" style="color:#28A745">★</span>' : '') + '</td>' +
+              '<td style="padding:5px 8px">' + escH(f.rolTexto.slice(0, 46)) + '</td>' +
+              '<td style="padding:5px 8px">' + f.grado + '</td>' +
+              '<td style="padding:5px 8px">' + vt + '</td>' +
+              '</tr>';
+          }).join('') + '</tbody></table></div></div>';
 
         var box = document.getElementById('ptFarResultado');
         if (box) box.innerHTML = h;
@@ -8163,16 +8232,61 @@ Estrategia para "mezcla de los tres":
         if (!ancla || !ancla.parentNode) return;
         var d = document.createElement('div');
         d.id = 'ptFarPanel';
-        d.style.cssText = 'margin:10px 0;padding:12px;border:2px solid #B7950B;background:#FEFCF3;border-radius:8px';
-        d.innerHTML = '<b>🔬 Depuración funcional de comparables (funciones, activos y riesgos)</b>' +
-          '<div style="font-size:11px;color:#7D6608;margin:4px 0 8px">Descarta las compañías cuya actividad no corresponde en sentido estricto a la de la parte examinada, conserva las aceptadas el año anterior y verifica la actividad real en fuentes públicas. Art. 260-4 E.T. · Decreto 1625/2016 art. 1.2.2.2.1.5 num. 4 · Directrices OCDE Cap. I D.1.2 y Cap. III.</div>' +
+        d.style.cssText = 'margin:14px 0;padding:16px;border:1px solid #D4B106;background:#FFFCF5;border-radius:12px;box-shadow:0 4px 14px rgba(183,149,11,0.08)';
+        d.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;border-bottom:1px solid #F0E6C5;padding-bottom:10px;margin-bottom:10px">' +
+          '<div>' +
+          '<h4 style="margin:0;font-size:15px;color:#5C4800;display:flex;align-items:center;gap:6px"><span>🔬</span> <b>Depuración Funcional de Comparables (FAR)</b></h4>' +
+          '<p style="margin:3px 0 0;font-size:12px;color:#7A6519">Filtra y selecciona las empresas del mercado independientes que sean equivalentes en funciones, activos y riesgos a tu empresa.</p>' +
+          '</div>' +
+          '<span style="font-size:11px;background:#F5ECC6;color:#5C4800;padding:4px 10px;border-radius:20px;font-weight:600">Estándar DIAN / OCDE</span>' +
+          '</div>' +
+          '<details style="margin-bottom:10px;font-size:11px;color:#6B5814;background:#FCF7E6;padding:6px 10px;border-radius:6px;border:1px solid #EEE2BA">' +
+          '<summary style="cursor:pointer;font-weight:600">⚖️ Ver fundamento legal y normativo</summary>' +
+          '<div style="margin-top:6px;line-height:1.4">Art. 260-4 E.T. · Decreto 1625/2016 art. 1.2.2.2.1.5 num. 4 · Directrices OCDE Cap. I D.1.2 y Cap. III.<br>Descarta las compañías cuya actividad no corresponde a la examinada, conserva las aceptadas el año anterior y justifica individualmente cada rechazo en el Anexo D.</div>' +
+          '</details>' +
           '<div id="ptFarPerfil"></div>' +
-          '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-          '<button type="button" onclick="ptDerivarFAR()" style="padding:7px 11px;background:#B7950B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">1 · Derivar perfil del año anterior</button>' +
-          '<button type="button" onclick="ptCribarUniverso()" style="padding:7px 11px;background:#B9770E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">2 · Depurar universo</button>' +
-          '<button type="button" onclick="ptVerificarEnWeb(12)" style="padding:7px 11px;background:#1F618D;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">3 · Verificar en internet</button>' +
-          '<label style="font-size:11px">Conjunto final: <input id="ptFarN" type="number" value="10" min="4" max="30" style="width:56px"></label>' +
-          '<button type="button" onclick="ptAplicarCriba()" style="padding:7px 11px;background:#1E8449;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">4 · Aplicar conjunto final</button>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:14px">' +
+          
+          '<div style="background:#FFF;border:1px solid #E3D5A4;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between">' +
+          '<div>' +
+          '<div style="font-size:10px;font-weight:700;color:#B7950B;text-transform:uppercase;margin-bottom:2px">Paso 1 · Identificación</div>' +
+          '<div style="font-size:12px;font-weight:700;color:#2C3E50">Perfil del Año Anterior</div>' +
+          '<div style="font-size:11px;color:#7F8C8D;margin:4px 0 8px">Lee los antecedentes y extrae el perfil FAR de tu empresa.</div>' +
+          '</div>' +
+          '<button type="button" onclick="ptDerivarFAR()" style="width:100%;padding:8px;background:#B7950B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:11.5px">1 · Derivar perfil FAR</button>' +
+          '</div>' +
+
+          '<div style="background:#FFF;border:1px solid #E3D5A4;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between">' +
+          '<div>' +
+          '<div style="font-size:10px;font-weight:700;color:#B9770E;text-transform:uppercase;margin-bottom:2px">Paso 2 · Filtrado</div>' +
+          '<div style="font-size:12px;font-weight:700;color:#2C3E50">Depurar Universo</div>' +
+          '<div style="font-size:11px;color:#7F8C8D;margin:4px 0 8px">Filtra por actividad, independencia y datos completos.</div>' +
+          '</div>' +
+          '<button type="button" onclick="ptCribarUniverso()" style="width:100%;padding:8px;background:#B9770E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:11.5px">2 · Depurar mercado</button>' +
+          '</div>' +
+
+          '<div style="background:#FFF;border:1px solid #AED6F1;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between">' +
+          '<div>' +
+          '<div style="font-size:10px;font-weight:700;color:#1F618D;text-transform:uppercase;margin-bottom:2px">Paso 3 · Verificación</div>' +
+          '<div style="font-size:12px;font-weight:700;color:#2C3E50">Validación Web con IA</div>' +
+          '<div style="font-size:11px;color:#7F8C8D;margin:4px 0 8px">Investiga en páginas web la actividad real de candidatas.</div>' +
+          '</div>' +
+          '<button type="button" onclick="ptVerificarEnWeb(12)" style="width:100%;padding:8px;background:#1F618D;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:11.5px">3 · Verificar en internet</button>' +
+          '</div>' +
+
+          '<div style="background:#FFF;border:1px solid #A9DFBF;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between">' +
+          '<div>' +
+          '<div style="font-size:10px;font-weight:700;color:#1E8449;text-transform:uppercase;margin-bottom:2px">Paso 4 · Selección</div>' +
+          '<div style="font-size:12px;font-weight:700;color:#2C3E50">Aplicar Muestra Final</div>' +
+          '<div style="font-size:11px;color:#7F8C8D;margin:4px 0 6px">Carga las N mejores en la tabla para la mediana.</div>' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
+          '<span style="font-size:11px;color:#555">Cantidad:</span>' +
+          '<input id="ptFarN" type="number" value="10" min="4" max="30" style="width:50px;padding:3px;font-size:11px;border:1px solid #CCC;border-radius:4px;text-align:center">' +
+          '</div>' +
+          '</div>' +
+          '<button type="button" onclick="ptAplicarCriba()" style="width:100%;padding:8px;background:#1E8449;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:11.5px">4 · Aplicar muestra final</button>' +
+          '</div>' +
+
           '</div><div id="ptFarResultado"></div>';
         ancla.parentNode.insertBefore(d, ancla);
       }
@@ -9195,7 +9309,7 @@ Estrategia para "mezcla de los tres":
         }
         if (data.error) throw new Error(data.error.message || 'error de la API');
         var txt = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
-        return JSON.parse(txt.replace(/```json|```/g, '').trim());
+        return extraerJSONDeRespuestaIA(txt);
       }
 
       /* ───────────────────────────────────────────────────────────────────────
@@ -10312,7 +10426,7 @@ Estrategia para "mezcla de los tres":
         }
         if (data.error) throw new Error(data.error.message || 'error de la API');
         var txt = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
-        return JSON.parse(txt.replace(/```json|```/g, '').trim());
+        return extraerJSONDeRespuestaIA(txt);
       }
 
       /* Control: ninguna cifra del texto puede ser ajena al contexto */
@@ -12239,17 +12353,112 @@ Estrategia para "mezcla de los tres":
       /* ───────────────────────────────────────────────────────────────────────
          4. LA GUARDA ENVUELVE LA GENERACIÓN Y LA EXPORTACIÓN
          ─────────────────────────────────────────────────────────────────────── */
-      function pintarBloqueo(G) {
-        var doc = $('doc'); if (!doc) return;
-        doc.innerHTML = '<div style="border:3px solid #C0392B;background:#FDEDEC;border-radius:8px;padding:16px">' +
-          '<div style="font-weight:800;color:#7B241C;font-size:15px">El informe no se generó: hay condiciones sin cumplir</div>' +
-          '<ol style="margin:10px 0 0 18px;font-size:13px;line-height:1.6">' +
-          G.fallas.map(function (f) { return '<li>' + escH(f.msg) + '</li>'; }).join('') + '</ol>' +
-          (G.fallas.some(function (f) { return f.id === 'universo_en_tabla' || f.id === 'industria'; })
-            ? '<button type="button" onclick="if(ptCorregirTablaAutomaticamente()){calc();}" style="margin-top:10px;padding:8px 14px;background:#1E8449;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700">Corregir automáticamente (depurar → conformar → aplicar)</button>'
+      function ptCerrarModalBloqueo() {
+        var m = document.getElementById('ptModalBloqueoOverlay');
+        if (m && m.parentNode) m.parentNode.removeChild(m);
+      }
+
+      function ptGenerarExplicacionFallaHtml(f) {
+        var html = '';
+        if (f.id === 'industria') {
+          var ind = (ptIndustriaExaminada() || {}).nombre || 'tu actividad';
+          var empresasList = (f.ajenas || []).slice(0, 4).map(function (x) { return '<b>' + escH(x.name) + '</b>'; }).join(', ');
+          if ((f.ajenas || []).length > 4) empresasList += ' y otras mas';
+
+          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
+            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:8px;display:flex;align-items:center;gap:6px">' +
+            '<span>🏢</span> <span>Se incluyeron empresas de actividades muy distintas a la tuya</span>' +
+            '</div>' +
+            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
+            '<p style="margin:0 0 8px"><b>¿Qué significa esto en plastilina?</b><br>' +
+            'Imagina que vendes empanadas y para probar si tus precios son justos te comparas con un taller de mecánica de carros. ¡No tiene sentido! Eso pasó aquí: en tu tabla hay empresas (' + empresasList + ') que prestan servicios de TI o consultoría general, mientras que tu empresa se dedica exclusivamente a <b>' + escH(ind) + '</b>.</p>' +
+            '<p style="margin:0 0 8px"><b>¿Por qué no se puede dejar así?</b><br>' +
+            'La DIAN y las normas tributarias internacionales (OCDE) rechazan estudios donde se comparen negocios distintos, porque sus márgenes de ganancia son completamente diferentes. Si enviamos esto así, la DIAN anula el estudio inmediatamente.</p>' +
+            '<p style="margin:0;color:#1E8449;font-weight:700">' +
+            '💡 <b>¿Cómo lo resuelves?</b> Haz clic abajo en el botón verde. El sistema eliminará esas empresas equivocadas, buscará las idóneas de tu misma industria y corregirá todo por ti en 1 segundo.' +
+            '</p>' +
+            '</div>' +
+            '</div>';
+        } else if (f.id === 'universo_en_tabla') {
+          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
+            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:8px;display:flex;align-items:center;gap:6px">' +
+            '<span>📊</span> <span>La tabla tiene demasiadas empresas cargadas sin filtrar</span>' +
+            '</div>' +
+            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
+            '<p style="margin:0 0 8px"><b>¿Qué significa esto en plastilina?</b><br>' +
+            'Cargaste el directorio telefónico entero del mercado en lugar de seleccionar solo a tus competidores reales. En la tabla hay más de 50 empresas metidas.</p>' +
+            '<p style="margin:0 0 8px"><b>¿Por qué no se puede dejar así?</b><br>' +
+            'Un estudio legal exige seleccionar un grupo pequeño de 5 a 15 empresas reales. Si imprimimos el informe con el universo completo sin filtrar, saldrían cientos de páginas inservibles.</p>' +
+            '<p style="margin:0;color:#1E8449;font-weight:700">' +
+            '💡 <b>¿Cómo lo resuelves?</b> Presiona el botón verde abajo. El sistema aplicará los filtros inteligentes, descartará el exceso y dejará las 10 mejores empresas.' +
+            '</p>' +
+            '</div>' +
+            '</div>';
+        } else if (f.id && f.id.indexOf('anio_en_') === 0) {
+          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
+            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:8px;display:flex;align-items:center;gap:6px">' +
+            '<span>🔢</span> <span>Pusiste un año en una casilla donde va una cantidad de dinero</span>' +
+            '</div>' +
+            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
+            '<p style="margin:0 0 8px"><b>¿Qué significa esto en plastilina?</b><br>' +
+            'En una de las casillas de saldo (como cartera o inventarios) escribiste el año "2025" en vez del monto real en dinero. Esto hace que las fórmulas financieras den resultados equivocados.</p>' +
+            '<p style="margin:0;color:#1E8449;font-weight:700">💡 <b>¿Cómo lo resuelves?</b> Busca esa casilla en el formulario y cambia "2025" por el valor en dinero verdadero.</p>' +
+            '</div>' +
+            '</div>';
+        } else {
+          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
+            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:6px">⚠️ Requisito Pendiente</div>' +
+            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' + escH(f.msg) + '</div>' +
+            '</div>';
+        }
+        return html;
+      }
+
+      function ptMostrarModalBloqueo(G) {
+        ptCerrarModalBloqueo();
+        var overlay = document.createElement('div');
+        overlay.id = 'ptModalBloqueoOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.65);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;backdrop-filter:blur(2px)';
+
+        var canAutoFix = G.fallas.some(function (f) { return f.id === 'universo_en_tabla' || f.id === 'industria'; });
+
+        var cuerpoExplicaciones = G.fallas.map(function (f) { return ptGenerarExplicacionFallaHtml(f); }).join('');
+
+        overlay.innerHTML = '<div style="background:#FFFFFF;width:100%;max-width:620px;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.35);border:2px solid #C0392B;overflow:hidden;font-family:system-ui,-apple-system,sans-serif">' +
+          '<div style="background:#C0392B;color:#FFFFFF;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #922B21">' +
+          '<div style="font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px"><span>🚨</span> <span>No pudimos generar tu informe: Te explicamos qué pasó</span></div>' +
+          '<button type="button" onclick="ptCerrarModalBloqueo()" style="background:none;border:none;color:#FFF;font-size:22px;cursor:pointer;line-height:1;padding:0;margin:0">&times;</button>' +
+          '</div>' +
+          '<div style="padding:18px 20px;max-height:70vh;overflow-y:auto">' +
+          '<p style="margin:0 0 14px;font-size:13px;color:#4A5568">Aquí tienes el detalle en palabras muy sencillas de por qué se detuvo la generación y qué debes hacer:</p>' +
+          cuerpoExplicaciones +
+          (G.avisos && G.avisos.length ? '<div style="margin-top:10px;padding:10px;background:#FEF9E7;border:1px solid #F5ECC6;border-radius:6px;font-size:12px;color:#7D6608"><b>Notas adicionales:</b><br>' + G.avisos.map(escH).join('<br>') + '</div>' : '') +
+          '</div>' +
+          '<div style="background:#F8F9FA;padding:14px 18px;display:flex;gap:10px;justify-content:space-between;align-items:center;border-top:1px solid #E9ECEF;flex-wrap:wrap">' +
+          '<button type="button" onclick="ptCerrarModalBloqueo()" style="padding:9px 16px;background:#718096;color:#FFFFFF;border:none;border-radius:6px;cursor:pointer;font-size:12.5px;font-weight:600">Cerrar y revisar</button>' +
+          (canAutoFix
+            ? '<button type="button" onclick="ptCerrarModalBloqueo();if(ptCorregirTablaAutomaticamente()){calc();}" style="padding:10px 18px;background:#1E8449;color:#FFFFFF;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;box-shadow:0 3px 8px rgba(30,132,73,0.35)">🛠️ Solucionar todo automáticamente en 1 clic</button>'
             : '') +
-          (G.avisos.length ? '<div style="margin-top:8px;font-size:12px;color:#7D6608">' + G.avisos.map(escH).join('<br>') + '</div>' : '') +
+          '</div>' +
           '</div>';
+
+        document.body.appendChild(overlay);
+      }
+
+      function pintarBloqueo(G) {
+        var doc = $('doc');
+        if (doc) {
+          doc.innerHTML = '<div style="border:3px solid #C0392B;background:#FDEDEC;border-radius:8px;padding:16px">' +
+            '<div style="font-weight:800;color:#7B241C;font-size:15px">El informe no se generó: hay condiciones sin cumplir</div>' +
+            '<ol style="margin:10px 0 0 18px;font-size:13px;line-height:1.6">' +
+            G.fallas.map(function (f) { return '<li>' + escH(f.msg) + '</li>'; }).join('') + '</ol>' +
+            (G.fallas.some(function (f) { return f.id === 'universo_en_tabla' || f.id === 'industria'; })
+              ? '<button type="button" onclick="if(ptCorregirTablaAutomaticamente()){calc();}" style="margin-top:10px;padding:8px 14px;background:#1E8449;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700">Corregir automáticamente (depurar → conformar → aplicar)</button>'
+              : '') +
+            (G.avisos.length ? '<div style="margin-top:8px;font-size:12px;color:#7D6608">' + G.avisos.map(escH).join('<br>') + '</div>' : '') +
+            '</div>';
+        }
+        try { ptMostrarModalBloqueo(G); } catch (e) { }
       }
 
       /* la fecha de actualización de la base (dato obligatorio del num. 4) se
