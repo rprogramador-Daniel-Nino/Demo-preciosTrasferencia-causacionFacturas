@@ -1632,7 +1632,7 @@
             style="border:1.5px solid var(--hair);border-radius:10px;padding:14px;margin:12px 0;background:var(--white)">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
               <b style="font-size:13px">⚙ Motor de selección automática (TOP-N)</b>
-              <span style="font-size:11px;color:var(--muted)">Puntúa: actividad 40 · tamaño 20 · geografía 15 ·
+              <span id="mo_pesos_label" style="font-size:11px;color:var(--muted)">Puntúa: actividad 40 · tamaño 20 · geografía 15 ·
                 rentabilidad 15 · datos 10</span>
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
@@ -3228,38 +3228,181 @@ ${textoTotal}`;
     function moCfg() { return { n: Math.max(4, Math.min(12, num($('mo_n').value) || 12)), perd: $('mo_perd').value, geo: $('mo_geo').value, act: $('mo_act').value, just: $('mo_just').value.trim() }; }
     /* Coincidencia del candidato con la actividad específica extraída del estudio
        del año anterior (setActividadEspecifica): palabras clave y SIC contra la
-       descripción/SIC del candidato. Sin actividad específica cargada, fK=1 (no
-       cambia el puntaje respecto de como se calculaba antes). */
+       descripción/SIC del candidato.
+       Devuelve un objeto {factor, hits, posibles, hayAct}.
+       Sin actividad específica cargada → hayAct=false, pesos originales.
+       CON actividad cargada:
+         - hits=0 → moScore EXCLUYE al candidato (no coincide con la especialidad)
+         - hits>0 → fK se pondera al 40% del puntaje total (filtro por nicho). */
     function moActMatch(o, act) {
-      if (!act) return 1;
+      if (!act) return { factor: 1, hits: 0, posibles: 0, hayAct: false };
       const base = ((DESCS[o.name] || '') + ' ' + (o.sic || '')).toLowerCase();
       let hits = 0;
-      ([].concat(act.keywords || [], act.productos || [])).forEach(k => { if (k && base.indexOf(String(k).toLowerCase()) >= 0) hits++; });
-      (act.sic || []).forEach(c => {
-        if (!c) return;
-        if ((o.sic || '').indexOf(c) >= 0) hits += 2;
+      const kws = [].concat(act.keywords || [], act.productos || []).filter(Boolean);
+      kws.forEach(k => { if (base.indexOf(String(k).toLowerCase()) >= 0) hits++; });
+      const sics = (act.sic || []).filter(Boolean);
+      sics.forEach(c => {
+        if ((o.sic || '').indexOf(String(c)) >= 0) hits += 2;
         else if ((o.sic || '').indexOf(String(c).slice(0, 3)) >= 0) hits += 1;
       });
-      return Math.max(0.15, Math.min(1, hits / 4));
+      const posibles = kws.length + sics.length;
+      return { factor: Math.max(0.15, Math.min(1, hits / 4)), hits: hits, posibles: posibles, hayAct: true };
     }
     function moScore(o, cfg, medPool, sTP, act) {
       if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
       if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
+      /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
+      const actM = moActMatch(o, act);
+      /* Exclusión dura: si hay actividad cargada con palabras clave/SIC y la
+         candidata no coincide en NADA, se descarta — no es del nicho. */
+      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0) {
+        const resumen = (act.resumen || '').slice(0, 90);
+        return { out: 'Sin coincidencia con la actividad específica: la descripción y SIC del candidato no contienen ninguna de las ' + actM.posibles + ' palabras clave ni códigos SIC del perfil (' + resumen + (resumen.length >= 90 ? '…' : '') + ')' };
+      }
       const fA = o.perfil === 'SERVICIO' ? 1 : (o.perfil === 'MIXTO' ? 0.6 : 0.35);
-      const fK = moActMatch(o, act); const kTag = (act && fK >= 0.5) ? 'coincide con la actividad específica' : '';
+      const fK = actM.factor;
+      const kTag = (actM.hayAct && fK >= 0.5) ? 'coincide con la actividad específica (' + actM.hits + ' coincidencias)' : (actM.hayAct ? 'coincidencia parcial (' + actM.hits + ')' : '');
       let fG = 1, gTag = ''; if (cfg.geo !== 'ninguna') { const r = moRegion(o.pais); fG = r === cfg.geo ? 1 : (r === 'OTRA' ? 0.5 : 0.65); if (r === cfg.geo) gTag = 'región prioritaria (' + (o.pais || '') + ')'; }
       let fT = 0.5, tTag = ''; if (sTP && o.s) { const d = Math.abs(Math.log10(o.s / sTP)); fT = 1 / (1 + d); if (d < 1) tTag = 'tamaño próximo'; }
       let fR; if (o.perdida) { fR = cfg.perd === 'preferir' ? 1 : 0.4; } else { fR = cfg.perd === 'preferir' ? 0.4 : Math.max(0, 1 - Math.min(1, Math.abs((o.pli ?? 0) - medPool) / 0.5)); }
-      const sc = 0.35 * fA + 0.15 * fK + 0.15 * fG + 0.20 * fT + 0.15 * fR;
+      /* Pesos dinámicos: cuando hay actividad específica cargada, el nicho
+         pesa 40% (filtro fuerte) y el perfil genérico baja a 20%.
+         Sin actividad, se conservan los pesos originales. */
+      const wA = actM.hayAct ? 0.20 : 0.35;
+      const wK = actM.hayAct ? 0.40 : 0.15;
+      const wG = actM.hayAct ? 0.10 : 0.15;
+      const wT = actM.hayAct ? 0.15 : 0.20;
+      const wR = actM.hayAct ? 0.15 : 0.15;
+      const sc = wA * fA + wK * fK + wG * fG + wT * fT + wR * fR;
       const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : '')].filter(x => x).join(', ');
       return { sc, raz };
     }
+    function moMostrarModalSinCandidatas(motivo) {
+      const old = $('mo_empty_modal');
+      if (old) old.remove();
+      const fuenteEstudio = (window.PT_ANTERIOR && window.PT_ANTERIOR.fuente)
+        ? '«' + escH(window.PT_ANTERIOR.fuente) + '»'
+        : 'cargado en la tarjeta de Identificación / Estudio base';
+
+      const modal = document.createElement('div');
+      modal.id = 'mo_empty_modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);';
+      modal.innerHTML = `
+        <div style="background:#fff;border-radius:12px;padding:24px;max-width:500px;width:92%;box-shadow:0 12px 30px rgba(0,0,0,0.25);font-family:sans-serif;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <span style="font-size:26px">⚠️</span>
+            <h3 style="margin:0;font-size:16px;color:#C0473B">No se encontró ninguna empresa candidata elegible</h3>
+          </div>
+          <p style="font-size:13px;line-height:1.5;color:#475569;margin-bottom:14px">
+            ${escH(motivo || 'Ninguna de las empresas en la tabla de comparables actual pasó los criterios de selección o la coincidencia con la especialidad del estudio.')}
+          </p>
+          <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:12px;margin-bottom:18px">
+            <b style="font-size:13px;color:#166534">🤖 ¿Desea cargar las empresas comparables del estudio anterior?</b>
+            <p style="font-size:12px;color:#15803D;margin:6px 0 0 0">
+              Gemini analizará el documento ${fuenteEstudio}, extraerá la muestra de empresas comparables con sus cifras financieras y las cargará directamente en la tabla.
+            </p>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px">
+            <button type="button" class="btn ghost" style="font-size:12px;padding:8px 14px" onclick="document.getElementById('mo_empty_modal').remove()">Cancelar</button>
+            <button type="button" class="btn solid" style="background:#2E8B6B;color:#fff;font-size:12px;padding:8px 16px;font-weight:700" onclick="document.getElementById('mo_empty_modal').remove(); ptExtraerComparablesEstudioAnteriorWithGemini()">🤖 Sí, extraer del estudio anterior</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    async function ptExtraerComparablesEstudioAnteriorWithGemini() {
+      if (!window.PT_ANTERIOR || !window.PT_ANTERIOR.texto) {
+        moToast('⚠ No hay un estudio del año anterior cargado. Por favor cárguelo primero en "Estudio base" (tarjeta superior).', 'amber');
+        return;
+      }
+
+      moToast('🤖 Gemini está analizando el estudio del año anterior para extraer la muestra de comparables…', 'amber');
+
+      const PROMPT = `Eres un experto analista de precios de transferencia en Colombia (Decreto 2120 y OCDE).
+Analiza el siguiente texto de un estudio de precios de transferencia del año anterior y extrae la lista COMPLETA de empresas comparables aceptadas en el análisis de comparabilidad final (la muestra final de comparables seleccionadas).
+
+Para cada empresa comparable aceptada, extrae los siguientes campos:
+- "name": Nombre o Razón Social exacta de la empresa comparable.
+- "amb": "Nac" si es colombiana, o "Int" si es internacional.
+- "s": Ventas netas / Revenue (número en la unidad del informe, o 0 si no figura).
+- "c": Costo de ventas / Cost of Goods Sold (número, o 0 si no figura).
+- "op": Utilidad operacional / Operating Profit (número).
+- "ar": Cuentas por cobrar / Accounts Receivable (número o 0).
+- "inv": Inventarios / Inventory (número o 0).
+- "ap": Cuentas por pagar / Accounts Payable (número o 0).
+- "sic": Código SIC (4 dígitos) o código CIIU si está disponible.
+- "desc": Descripción breve de la actividad funcional / perfil de la empresa comparable.
+
+Devuelve ÚNICAMENTE un JSON Array estricto con los objetos extraídos, sin formato markdown ni texto adicional.
+Ejemplo de formato:
+[
+  { "name": "Company A Inc", "amb": "Int", "s": 12000000, "c": 7000000, "op": 1500000, "ar": 0, "inv": 0, "ap": 0, "sic": "7371", "desc": "Desarrollo de software y videojuegos por encargo." }
+]
+
+Texto del estudio anterior:
+${window.PT_ANTERIOR.texto.slice(0, 45000)}`;
+
+      try {
+        const res = await fetch('/api/gemini', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: PROMPT }] }]
+          })
+        });
+        if (!res.ok) throw new Error('Error HTTP ' + res.status);
+        const data = await res.json();
+        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) throw new Error('Gemini no devolvió un JSON válido');
+        const extraidas = JSON.parse(jsonMatch[0]);
+
+        if (!Array.isArray(extraidas) || !extraidas.length) {
+          moToast('Gemini no encontró comparables en el texto del estudio anterior.', 'amber');
+          return;
+        }
+
+        let n = 0;
+        extraidas.forEach(x => {
+          if (!x.name) return;
+          if (x.desc) DESCS[x.name] = x.desc;
+          $('cbody').appendChild(compRow([
+            x.name,
+            x.amb || 'Int',
+            x.s || 0,
+            x.c || 0,
+            x.op || 0,
+            x.ar || 0,
+            x.inv || 0,
+            x.ap || 0,
+            x.sic || ''
+          ]));
+          n++;
+        });
+
+        saveActive();
+        calc();
+        moToast('✓ ' + n + ' comparables extraídas del estudio anterior e integradas a la tabla.', 'green');
+
+        /* Re-ejecutar el motor inmediatamente sobre las comparables recién cargadas */
+        setTimeout(() => { motorEjecutar(false); }, 400);
+      } catch (e) {
+        moToast('Error al extraer comparables con Gemini: ' + e.message, 'red');
+        console.error('ptExtraerComparablesEstudioAnteriorWithGemini error:', e);
+      }
+    }
+
     function motorEjecutar(silencioso) {
       const cfg = moCfg(); const rows = moRows();
       if (rows.length > 150 && !silencioso) moToast('Puntuando ' + rows.length + ' candidatas…', 'amber');
-      if (!rows.length) { moToast('No hay comparables con datos en la tabla', 'red'); return; }
+      if (!rows.length) {
+        moToast('No hay comparables con datos en la tabla', 'red');
+        if (!silencioso) moMostrarModalSinCandidatas('No hay empresas comparables ingresadas en la tabla actual.');
+        return;
+      }
       if (cfg.perd === 'preferir' && cfg.just.length < 120) { $('mo_justw').style.display = 'block'; moToast('Preferir pérdidas sesga el rango: justifique con ≥120 caracteres (irá al informe)', 'red'); return; }
       const plis = rows.map(r => r.pli).filter(x => x !== null).sort((a, b) => a - b);
       const medPool = plis.length ? quart(plis, 0.5, 'inc') : 0.1;
@@ -3267,15 +3410,33 @@ ${textoTotal}`;
       if (!sTP && !silencioso) moToast('⚠ «Ventas netas» de la parte examinada está vacío: el factor de tamaño queda neutral para todas las candidatas (puntajes más parejos entre sí). Complételo en «Estados financieros (EEFF)» para una selección más precisa.', 'amber');
       const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
       if (!act && !silencioso) moToast('ℹ No hay actividad específica extraída del estudio anterior: la selección se basa solo en perfil funcional, tamaño y rentabilidad. Use «🤖 Analizar empresa con IA» (tarjeta de Perfil de actividad) para afinarla con palabras clave y SIC.', 'amber');
+      /* Actualizar etiqueta de pesos en la UI según si hay actividad cargada */
+      try {
+        var pesosEl = $('mo_pesos_label');
+        if (pesosEl) pesosEl.textContent = act
+          ? 'Puntúa: especialidad 40 · perfil 20 · tamaño 15 · rentabilidad 15 · geografía 10  ★ Filtro por nicho ACTIVO'
+          : 'Puntúa: actividad 40 · tamaño 20 · geografía 15 · rentabilidad 15 · datos 10';
+      } catch (e) { }
       const ev = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP, act) }));
       const eleg = ev.filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
+      
+      /* Validación solicitada: si no se encontró NINGUNA candidata elegible */
+      if (eleg.length === 0) {
+        if (!silencioso) {
+          moToast('⚠ Ninguna empresa candidata superó los criterios de elegibilidad y especialidad.', 'amber');
+          moMostrarModalSinCandidatas('Todas las ' + rows.length + ' empresas de la tabla fueron descartadas por no coincidir con la especialidad o por los criterios del motor.');
+        }
+        return;
+      }
+
       const top = eleg.slice(0, cfg.n), reserva = eleg.slice(cfg.n);
       MOTOR = { activo: true, sel: {}, motivo: {}, score: {}, cfg, just: cfg.just, escenario: MOTOR.escenario || '' };
       top.forEach(x => { const k = nameKey(x.o.name); MOTOR.sel[k] = true; MOTOR.score[k] = x.r.sc; MOTOR.motivo[k] = 'Seleccionada por motor (' + Math.round(x.r.sc * 100) + 'pt): ' + x.r.raz; });
       reserva.forEach(x => { const k = nameKey(x.o.name); MOTOR.sel[k] = false; MOTOR.score[k] = x.r.sc; MOTOR.motivo[k] = 'Reserva (' + Math.round(x.r.sc * 100) + 'pt): puntaje inferior al TOP. ' + x.r.raz; });
       ev.filter(x => x.r.out).forEach(x => { const k = nameKey(x.o.name); MOTOR.sel[k] = false; MOTOR.score[k] = 0; MOTOR.motivo[k] = x.r.out; });
       saveActive(); calc(); motorRefreshUI();
-      if (!silencioso) moToast('Motor: TOP ' + top.length + ' seleccionadas · ' + reserva.length + ' en reserva · ' + ev.filter(x => x.r.out).length + ' excluidas por criterio', 'green');
+      const excAct = act ? ev.filter(x => x.r.out && x.r.out.indexOf('actividad específica') >= 0).length : 0;
+      if (!silencioso) moToast('Motor: TOP ' + top.length + ' seleccionadas · ' + reserva.length + ' en reserva · ' + ev.filter(x => x.r.out).length + ' excluidas por criterio' + (excAct ? ' (de las cuales ' + excAct + ' por no coincidir con la especialidad)' : ''), 'green');
       if (top.length < cfg.n && !silencioso) moToast('Solo ' + top.length + ' elegibles: amplíe rigor funcional o cambie el tratamiento de pérdidas', 'amber');
     }
     function motorMas(n) {
@@ -9082,6 +9243,11 @@ Estrategia para "mezcla de los tres":
           '<th style="text-align:left">Concepto</th><th style="text-align:left">Rótulo leído</th><th style="text-align:left">Ubicación</th>' +
           '<th style="text-align:right">Lectura por reglas</th><th style="text-align:right">Lectura asistida</th><th></th></tr></thead><tbody>';
 
+        var inputEEFF = function (campo, tipo, valor) {
+          return '<input type="text" inputmode="decimal" class="mono" value="' + escH(valor === null || valor === undefined || valor === '' ? '' : fmt(valor)) + '" ' +
+            'style="width:110px;text-align:right;font-size:11px;padding:2px 4px;border:1px solid var(--hair);border-radius:4px" ' +
+            'onchange="ptEditarLecturaEEFF(\'' + campo + '\',\'' + tipo + '\',this.value)">';
+        };
         CAMPOS.forEach(function (c) {
           var d = j[c[0]] || {};
           var val = typeof d.valor === 'number' ? d.valor : null;
@@ -9092,10 +9258,10 @@ Estrategia para "mezcla de los tres":
               : iguales ? '<span style="color:#1E8449">coincide</span>'
                 : '<span style="color:#C0392B">difiere</span>';
           h += '<tr><td>' + escH(c[2]) + '</td><td>' + escH((d.rotulo || '—').slice(0, 40)) + '</td><td>' + escH((d.ubicacion || '—').slice(0, 26)) + '</td>' +
-            '<td style="text-align:right">' + (prev !== null && prev !== '' ? fmt(prev) : '—') + '</td>' +
-            '<td style="text-align:right"><b>' + (val !== null ? fmt(val) : '—') + '</b></td><td>' + marca + '</td></tr>';
+            '<td style="text-align:right">' + inputEEFF(c[0], 'reglas', prev) + '</td>' +
+            '<td style="text-align:right">' + inputEEFF(c[0], 'asistida', val) + '</td><td>' + marca + '</td></tr>';
         });
-        h += '</tbody></table>';
+        h += '</tbody></table><div class="hint" style="margin-top:4px">Puede corregir «Lectura por reglas» y «Lectura asistida» a mano; la verificación aritmética y la comparación de abajo se recalculan con lo que escriba.</div>';
 
         h += '<div style="margin-top:8px"><b style="font-size:11.5px">Verificación aritmética</b><ul style="margin:4px 0 0 16px;font-size:11px">' +
           R.hallazgos.map(function (x) {
@@ -9116,6 +9282,27 @@ Estrategia para "mezcla de los tres":
         host.innerHTML = h;
       }
       window.ptPintarEeffIA = ptPintarEeffIA;
+
+      /* Permite corregir a mano «Lectura por reglas» y «Lectura asistida» en la
+         tabla de verificación. «Lectura por reglas» escribe directo en el campo
+         real del formulario (es lo que queda si no se incorpora la IA); «Lectura
+         asistida» corrige el valor que se aplicaría con «Incorporar al estudio».
+         En ambos casos se recalcula la verificación aritmética. */
+      window.ptEditarLecturaEEFF = function (campo, tipo, valorStr) {
+        var R = window.PT_EEFF_IA; if (!R) return;
+        var n = num(valorStr);
+        if (tipo === 'reglas') {
+          R.previos[campo] = n;
+          var par = CAMPOS.filter(function (c) { return c[0] === campo; })[0];
+          if (par && par[1] && $(par[1])) { $(par[1]).value = (n === null ? '' : Math.round(n)); }
+          try { calc(); } catch (e) { }
+        } else {
+          R.datos[campo] = R.datos[campo] || {};
+          R.datos[campo].valor = n;
+        }
+        R.hallazgos = ptValidarEEFF(R.datos);
+        ptPintarEeffIA();
+      };
 
       window.ptAplicarEEFFIA = function (forzar) {
         var R = window.PT_EEFF_IA; if (!R) return;
