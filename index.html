@@ -11021,7 +11021,7 @@ Estrategia para "mezcla de los tres":
          ─────────────────────────────────────────────────────────────────────── */
       window.PT_SECCIONES_INYECTADAS = window.PT_SECCIONES_INYECTADAS || {};
 
-      function ptExtraerTextoSeccionAnterior(secId) {
+      function ptExtraerTextoPlanoSeccionAnterior(secId) {
         var A = window.PT_ANTERIOR, E = window.PT_ESTRUCTURA;
         var item = ESQUELETO.find(function (e) { return e.id === secId; });
         if (!item) return null;
@@ -11077,16 +11077,28 @@ Estrategia para "mezcla de los tres":
         }
 
         if (!textoExtraido || textoExtraido.trim().length < 20) return null;
+        return textoExtraido;
+      }
+      window.ptExtraerTextoPlanoSeccionAnterior = ptExtraerTextoPlanoSeccionAnterior;
 
-        var lineas = textoExtraido.split(/\n+/).map(function (l) { return l.trim(); }).filter(Boolean);
+      function ptTextoPlanoAHtmlSeccion(texto) {
+        if (!texto || !String(texto).trim()) return null;
+        var lineas = String(texto).split(/\n+/).map(function (l) { return l.trim(); }).filter(Boolean);
+        if (!lineas.length) return null;
         var html = lineas.map(function (linea) {
           if (/^[I|V|X|L]+\.\s+|^\d+\.\s+/i.test(linea) || (linea.length < 80 && /^[A-ZÁÉÍÓÚÑ\s\.\,\:\-\(\)]{5,}$/.test(linea))) {
             return '<h3 class="rep">' + escH(linea) + '</h3>';
           }
           return '<p class="norm">' + escH(linea) + '</p>';
         }).join('');
-
         return html;
+      }
+      window.ptTextoPlanoAHtmlSeccion = ptTextoPlanoAHtmlSeccion;
+
+      function ptExtraerTextoSeccionAnterior(secId) {
+        var texto = ptExtraerTextoPlanoSeccionAnterior(secId);
+        if (!texto) return null;
+        return ptTextoPlanoAHtmlSeccion(texto);
       }
       window.ptExtraerTextoSeccionAnterior = ptExtraerTextoSeccionAnterior;
 
