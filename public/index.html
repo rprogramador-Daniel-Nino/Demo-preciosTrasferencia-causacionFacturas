@@ -1581,7 +1581,8 @@
             style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
             <div style="display:flex;gap:6px;align-items:center"><label class="mini" style="cursor:pointer">📥 Importar
                 Excel (Capital IQ)<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none"
-                  onchange="importCompsFile(this.files[0])"></label><label class="mini" style="cursor:pointer">📎
+                  onchange="importCompsFile(this.files[0])"></label><button type="button" class="mini green"
+                  onclick="ptExtraerComparablesEstudioAnteriorWithGemini()" style="font-weight:600;background:#2E8B6B;color:#fff;border:none;padding:4px 10px;border-radius:5px;cursor:pointer">🤖 Cargar comparables del estudio anterior</button><label class="mini" style="cursor:pointer">📎
                 Adjuntar<input type="file" style="display:none"
                   onchange="attachEvidence('comps',this.files[0])"></label><span id="evid-comps"
                 style="font-size:10.5px;color:#1F6D4F"></span></div><button type="button" class="btn mini violet"
@@ -2636,7 +2637,7 @@
       series.sort((a, b) => a - b);
       const st = series.length ? { p25: quart(series, .25), med: quart(series, .5), p75: quart(series, .75) } : null;
       LAST = { T, tPLI, st, kind, base: T.s || 0, unitMult: 1 };
-      renderReportCore(T, tPLI, st, [], 0, false, kind, T.s || 0, 1);
+      renderReport(T, tPLI, st, [], 0, false, kind, T.s || 0, 1);
     }
     function pliOf(o, kind) { const s = o.s; if (!s) return null; if (kind === 'MO') return o.op / s; if (kind === 'MB') return (s - o.c) / s; return null; }
     function quart(s, p) { return s[Math.floor(p * (s.length - 1))]; }
@@ -3087,9 +3088,9 @@ ${textoTotal}`;
     ['ec_intang', 'H. Intangibles del grupo y su titularidad (análisis DEMPE)'],
     ['ec_mercado', 'I. Mercado, clientes y competencia'],
     ['ec_estrategia', 'J. Estrategias de negocio y perspectivas del período']];
-    function ecoExtHTML() {
+    function ecoExtHTML(secs) {
       let out = '';
-      ECO_SECS.forEach(([id, tit]) => {
+      (secs || ECO_SECS).forEach(([id, tit]) => {
         const v = ($(id) && $(id).value || '').trim();
         out += '<h3 class="rep">' + tit + '</h3><p>' + (v ? escH(v).replace(/\n/g, '</p><p>') : '[Pendiente: información a suministrar por el contribuyente. Este contenido es exigible conforme al Art. 1.2.2.3.1 y ss. del Decreto 1625 de 2016 para el Informe Local y el Informe Maestro.]') + '</p>';
         if (id === 'ec_prod') out += adjGaleriaHTML('productos', 'B.1 Gráficos e información de productos aportados por el contribuyente');
@@ -3235,8 +3236,9 @@ ${textoTotal}`;
          - hits=0 → moScore EXCLUYE al candidato (no coincide con la especialidad)
          - hits>0 → fK se pondera al 40% del puntaje total (filtro por nicho). */
     function moActMatch(o, act) {
-      if (!act) return { factor: 1, hits: 0, posibles: 0, hayAct: false };
-      const base = ((DESCS[o.name] || '') + ' ' + (o.sic || '')).toLowerCase();
+      if (!act) return { factor: 1, hits: 0, posibles: 0, hayAct: false, tieneDesc: false };
+      const descText = (DESCS[o.name] || '');
+      const base = (o.name + ' ' + descText + ' ' + (o.sic || '')).toLowerCase();
       let hits = 0;
       const kws = [].concat(act.keywords || [], act.productos || []).filter(Boolean);
       kws.forEach(k => { if (base.indexOf(String(k).toLowerCase()) >= 0) hits++; });
@@ -3246,7 +3248,7 @@ ${textoTotal}`;
         else if ((o.sic || '').indexOf(String(c).slice(0, 3)) >= 0) hits += 1;
       });
       const posibles = kws.length + sics.length;
-      return { factor: Math.max(0.15, Math.min(1, hits / 4)), hits: hits, posibles: posibles, hayAct: true };
+      return { factor: Math.max(0.15, Math.min(1, hits / 4)), hits: hits, posibles: posibles, hayAct: true, tieneDesc: !!descText.trim() };
     }
     function moScore(o, cfg, medPool, sTP, act) {
       if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
@@ -3255,11 +3257,12 @@ ${textoTotal}`;
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
       /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
       const actM = moActMatch(o, act);
-      /* Exclusión dura: si hay actividad cargada con palabras clave/SIC y la
-         candidata no coincide en NADA, se descarta — no es del nicho. */
-      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0) {
+      /* Exclusión por especialidad: solo en modo estricto si la candidata cuenta con descripción/SIC y 0 coincidencia.
+         En modo estándar/amplio, 0 coincidencias asigna un puntaje bajo en el factor de especialidad (peso del 40%)
+         para priorizar las que sí coinciden, sin descartar masivamente cuando faltan descripciones detalladas. */
+      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc) {
         const resumen = (act.resumen || '').slice(0, 90);
-        return { out: 'Sin coincidencia con la actividad específica: la descripción y SIC del candidato no contienen ninguna de las ' + actM.posibles + ' palabras clave ni códigos SIC del perfil (' + resumen + (resumen.length >= 90 ? '…' : '') + ')' };
+        return { out: 'Sin coincidencia con la actividad específica: la descripción del candidato no coincide con ninguna palabra clave del perfil (' + resumen + (resumen.length >= 90 ? '…' : '') + ')' };
       }
       const fA = o.perfil === 'SERVICIO' ? 1 : (o.perfil === 'MIXTO' ? 0.6 : 0.35);
       const fK = actM.factor;
@@ -3314,12 +3317,63 @@ ${textoTotal}`;
     }
 
     async function ptExtraerComparablesEstudioAnteriorWithGemini() {
-      if (!window.PT_ANTERIOR || !window.PT_ANTERIOR.texto) {
+      var A = window.PT_ANTERIOR;
+      if (!A) {
         moToast('⚠ No hay un estudio del año anterior cargado. Por favor cárguelo primero en "Estudio base" (tarjeta superior).', 'amber');
         return;
       }
 
+      /* 1. Si ya se dispone de comparables estructuradas en PT_ANTERIOR (ej. archivo JSON o estudio guardado) */
+      var estructuradas = A.comparables || A.comps || [];
+      if (Array.isArray(estructuradas) && estructuradas.length > 0) {
+        $('cbody').innerHTML = '';
+        var frag = document.createDocumentFragment();
+        var nEstruct = 0;
+        estructuradas.forEach(function (c) {
+          var fila = Array.isArray(c) ? c : [
+            c.name || c.nombre || '',
+            c.amb || c.ambito || 'Int',
+            c.s || c.ventas || 0,
+            c.c || c.costo || 0,
+            c.op || c.utilidad || 0,
+            c.ar || c.cuentasCobrar || 0,
+            c.inv || c.inventario || 0,
+            c.ap || c.cuentasPagar || 0,
+            c.sic || ''
+          ];
+          if (c.desc && c.name) DESCS[c.name] = c.desc;
+          frag.appendChild(compRow(fila));
+          nEstruct++;
+        });
+        $('cbody').appendChild(frag);
+        saveActive();
+        calc();
+        moToast('✓ ' + nEstruct + ' comparables cargadas directamente desde el estudio anterior.', 'green');
+        setTimeout(function () { motorEjecutar(false); }, 400);
+        return;
+      }
+
+      /* 2. Si es un informe en PDF / Texto y requerimos IA (Gemini) para extraerlas del texto */
+      if (!A.texto) {
+        moToast('⚠ El estudio anterior cargado no contiene texto extraíble. Verifique el documento.', 'amber');
+        return;
+      }
+
       moToast('🤖 Gemini está analizando el estudio del año anterior para extraer la muestra de comparables…', 'amber');
+
+      /* Para PDFs extensos (ej. 100+ páginas), buscar la sección relevante del texto
+         donde se ubica la tabla de comparables seleccionadas y sus cifras (usualmente al final o apéndices) */
+      var fullTxt = A.texto;
+      var textoPrompt = fullTxt;
+      if (fullTxt.length > 100000) {
+        var rxTablas = /muestra (final|definitiva) de comparables|comparables (seleccionadas|aceptadas|finales)|ap[eé]ndice.*cifras|anexo.*comparables|cuadro.*comparables|rango intercuartil/i;
+        var matchIdx = fullTxt.search(rxTablas);
+        if (matchIdx >= 0) {
+          textoPrompt = fullTxt.slice(Math.max(0, matchIdx - 2000), matchIdx + 80000);
+        } else {
+          textoPrompt = fullTxt.slice(0, 20000) + '\n\n[... ANEXOS Y TABLAS FINALES ...]\n\n' + fullTxt.slice(-80000);
+        }
+      }
 
       const PROMPT = `Eres un experto analista de precios de transferencia en Colombia (Decreto 2120 y OCDE).
 Analiza el siguiente texto de un estudio de precios de transferencia del año anterior y extrae la lista COMPLETA de empresas comparables aceptadas en el análisis de comparabilidad final (la muestra final de comparables seleccionadas).
@@ -3343,7 +3397,7 @@ Ejemplo de formato:
 ]
 
 Texto del estudio anterior:
-${window.PT_ANTERIOR.texto.slice(0, 45000)}`;
+${textoPrompt}`;
 
       try {
         const res = await fetch('/api/gemini', {
@@ -3356,20 +3410,32 @@ ${window.PT_ANTERIOR.texto.slice(0, 45000)}`;
         if (!res.ok) throw new Error('Error HTTP ' + res.status);
         const data = await res.json();
         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-        if (!jsonMatch) throw new Error('Gemini no devolvió un JSON válido');
-        const extraidas = JSON.parse(jsonMatch[0]);
+        
+        const cleanText = rawText.replace(/^```(?:json)?\s*/gi, '').replace(/\s*```$/g, '').trim();
+        
+        let extraidas = [];
+        const jsonMatch = cleanText.match(/\[[\s\S]*\]/) || cleanText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('Gemini no devolvió un formato JSON válido');
+        
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed)) {
+          extraidas = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          extraidas = parsed.comparables || parsed.empresas || parsed.muestra || Object.values(parsed).find(Array.isArray) || [];
+        }
 
         if (!Array.isArray(extraidas) || !extraidas.length) {
           moToast('Gemini no encontró comparables en el texto del estudio anterior.', 'amber');
           return;
         }
 
+        $('cbody').innerHTML = '';
         let n = 0;
+        const frag = document.createDocumentFragment();
         extraidas.forEach(x => {
           if (!x.name) return;
           if (x.desc) DESCS[x.name] = x.desc;
-          $('cbody').appendChild(compRow([
+          frag.appendChild(compRow([
             x.name,
             x.amb || 'Int',
             x.s || 0,
@@ -3382,6 +3448,7 @@ ${window.PT_ANTERIOR.texto.slice(0, 45000)}`;
           ]));
           n++;
         });
+        $('cbody').appendChild(frag);
 
         saveActive();
         calc();
@@ -3417,14 +3484,24 @@ ${window.PT_ANTERIOR.texto.slice(0, 45000)}`;
           ? 'Puntúa: especialidad 40 · perfil 20 · tamaño 15 · rentabilidad 15 · geografía 10  ★ Filtro por nicho ACTIVO'
           : 'Puntúa: actividad 40 · tamaño 20 · geografía 15 · rentabilidad 15 · datos 10';
       } catch (e) { }
-      const ev = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP, act) }));
-      const eleg = ev.filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
+      let ev = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP, act) }));
+      let eleg = ev.filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
       
-      /* Validación solicitada: si no se encontró NINGUNA candidata elegible */
+      /* Si por criterios de especialidad/rigor no se encuentra NINGUNA candidata elegible,
+         hacer fallback evaluando sin descarte estricto de nicho para no dejar la muestra en 0 ni bloquear */
+      if (eleg.length === 0 && act) {
+        ev = rows.map(o => ({ o, r: moScore(o, { ...cfg, act: 'amplio' }, medPool, sTP, null) }));
+        eleg = ev.filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
+        if (eleg.length > 0 && !silencioso) {
+          moToast('ℹ Selección basada en perfil funcional, tamaño y rentabilidad (no se hallaron coincidencias exactas de palabras clave).', 'amber');
+        }
+      }
+
+      /* Validación: si aún así no se encontró NINGUNA candidata elegible */
       if (eleg.length === 0) {
         if (!silencioso) {
-          moToast('⚠ Ninguna empresa candidata superó los criterios de elegibilidad y especialidad.', 'amber');
-          moMostrarModalSinCandidatas('Todas las ' + rows.length + ' empresas de la tabla fueron descartadas por no coincidir con la especialidad o por los criterios del motor.');
+          moToast('⚠ Ninguna empresa candidata superó los criterios de elegibilidad.', 'amber');
+          moMostrarModalSinCandidatas('Todas las ' + rows.length + ' empresas de la tabla fueron descartadas por los criterios del motor.');
         }
         return;
       }
@@ -10266,15 +10343,20 @@ Estrategia para "mezcla de los tres":
 
       window.ptAplicarRedaccion = function () {
         var R = window.PT_REDACCION; if (!R) return;
-        var n = 0;
+        var n = 0, faltantes = 0;
         Object.keys(R.campos).forEach(function (id) {
           var e = $(id); if (!e) return;
           if (String(e.value || '').trim()) return;          // nunca se sobrescribe lo diligenciado
-          e.value = R.campos[id].texto; n++;
+          var c = R.campos[id];
+          /* texto sin sustento real (la propia redacción avisa que falta la información):
+             no se escribe en el campo — se deja pendiente, en vez de imprimir el aviso
+             como si fuera el dato. Coincide con el criterio ya usado en ptPintarRedaccion. */
+          if (c.suficiente === false || /no contiene informaci|pendiente de completar|debe solicitarse/i.test(c.texto)) { faltantes++; return; }
+          e.value = c.texto; n++;
         });
         R.aplicado = new Date().toISOString(); R.nAplicados = n;
         try { calc(); } catch (e) { }
-        moToast(n + ' apartado(s) diligenciados automáticamente. Revíselos antes de radicar.', 'green');
+        moToast(n + ' apartado(s) diligenciados automáticamente' + (faltantes ? '; ' + faltantes + ' quedaron pendientes por falta de información (no se inventaron)' : '') + '. Revíselos antes de radicar.', 'green');
         ptPintarRedaccion();
       };
 
@@ -10392,8 +10474,8 @@ Estrategia para "mezcla de los tres":
         { id: 'general', nom: 'Información general y vinculación económica', chars: 6400, rx: /informaci[oó]n general|vinculaci[oó]n econ[oó]mica|descripci[oó]n de la compa/i },
         { id: 'funcional', nom: 'Análisis funcional (funciones, activos y riesgos)', chars: 4300, rx: /informaci[oó]n espec[ií]fica|an[aá]lisis funcional|funciones operativas|activos utilizados|riesgos vinculados/i },
         { id: 'economia', nom: 'Tendencias de la economía y del sector', chars: 31700, rx: /tendencias de la econom|panorama de la econom|an[aá]lisis del sector/i },
-        { id: 'operacion', nom: 'Análisis económico de la operación', chars: 3600, rx: /an[aá]lisis econ[oó]mico|an[aá]lisis de la operaci[oó]n/i },
-        { id: 'metodo', nom: 'Selección del método, comparables y depuración', chars: 15500, rx: /selecci[oó]n del (mejor )?m[eé]todo|compa[ñn][ií]as comparables|proceso filtro|razones de rechazo/i },
+        { id: 'operacion', nom: 'Análisis económico de la operación', chars: 3600, rx: /an[aá]lisis econ[oó]mico|an[aá]lisis de la operaci[oó]n|an[aá]lisis integral de operaciones/i },
+        { id: 'metodo', nom: 'Selección del método, comparables y depuración', chars: 15500, rx: /selecci[oó]n del (mejor )?m[eé]todo|compa[ñn][ií]as comparables|proceso filtro|razones de rechazo|metodolog[ií]a de selecci[oó]n|conjunto de comparables/i },
         { id: 'rango', nom: 'Resultados: indicador, ajustes y rango intercuartil', chars: 4400, rx: /resultados y conclusiones|indicador de rentabilidad|rango intercuartil|ajustes a las compa/i },
         { id: 'conclusiones', nom: 'Conclusiones', chars: 4200, rx: /^vii\.|conclusiones/i },
         { id: 'anexos', nom: 'Anexos', chars: 0, rx: /anexos?/i }
@@ -10504,12 +10586,30 @@ Estrategia para "mezcla de los tres":
         if (!E) return null;
         var doc = $('doc'); if (!doc) return null;
 
-        /* se mide cada sección del informe actual entre encabezados de nivel 2 */
-        var h2 = [].slice.call(doc.querySelectorAll('h2.rep'));
-        var actuales = h2.map(function (h, i) {
-          var txt = '', n = h.nextElementSibling;
-          while (n && n.tagName !== 'H2') { txt += ' ' + (n.textContent || ''); n = n.nextElementSibling; }
-          return { titulo: h.textContent.replace(/^\d+\.\s*/, '').trim(), chars: txt.replace(/\s+/g, ' ').length };
+        /* se mide cada sección del informe actual: se recorren los hijos directos
+           de #doc en su orden real y se acumula el texto bajo el encabezado que
+           esté vigente. Antes solo se buscaba «h2.rep», pero casi todo el cuerpo
+           del informe se titula con «h3.rep» (o con un h2 sin esa clase, en el
+           caso del esqueleto mínimo) — por eso el conteo daba siempre 0. Un
+           «h3.rep» cuenta como su propia sección y, además, su texto se suma a la
+           «h2.rep» que lo contiene, para no perder la agregación por tema. */
+        var hijos = [].slice.call(doc.children);
+        var actuales = [];
+        var curH2 = null, curH3 = null;
+        hijos.forEach(function (el) {
+          var esRep = el.classList && el.classList.contains('rep');
+          if (esRep && el.tagName === 'H2') {
+            curH2 = { titulo: el.textContent.replace(/^\d+\.\s*/, '').trim(), chars: 0 };
+            actuales.push(curH2);
+            curH3 = null;
+          } else if (esRep && el.tagName === 'H3') {
+            curH3 = { titulo: el.textContent.replace(/^\d+\.\s*/, '').trim(), chars: 0 };
+            actuales.push(curH3);
+          } else {
+            var len = (el.textContent || '').replace(/\s+/g, ' ').length;
+            if (curH3) curH3.chars += len;
+            if (curH2) curH2.chars += len;
+          }
         });
 
         var filas = ESQUELETO.filter(function (e) { return e.chars; }).map(function (e) {
@@ -10554,6 +10654,39 @@ Estrategia para "mezcla de los tres":
         var s = CAMPO_A_SECCION[k];
         (CAMPOS_POR_SECCION[s] = CAMPOS_POR_SECCION[s] || []).push(k);
       });
+
+      /* ───────────────────────────────────────────────────────────────────────
+         2-bis. CONTENIDO DEL NEGOCIO Y DEL SECTOR EN EL INFORME
+         Las tarjetas «Informe económico extendido» (pasos D y E del expediente)
+         recogen la información del negocio del grupo (campos ec_) y del sector
+         (campos sc_ y e_), pero las funciones que arman ese HTML (ecoExtHTML,
+         estudioSectorHTML) nunca se insertaban en #doc: el contribuyente
+         diligenciaba los campos y ese texto no llegaba al informe. Por eso el
+         panel de extensión (y también «Verificación de puntos de ingesta»,
+         línea ~2426) mostraban siempre 0 en las secciones más grandes del
+         esqueleto. Se incorporan aquí, bajo los mismos títulos que reconoce el
+         esqueleto de referencia.
+         ─────────────────────────────────────────────────────────────────────── */
+      window.ptContenidoNegocioSectorHTML = function () {
+        var gral = ECO_SECS.filter(function (s) { return CAMPO_A_SECCION[s[0]] !== 'funcional'; });
+        var func = ECO_SECS.filter(function (s) { return CAMPO_A_SECCION[s[0]] === 'funcional'; });
+        var out = '<h2 class="rep">Información general y vinculación económica</h2>' + ecoExtHTML(gral);
+        out += '<h2 class="rep">Análisis funcional (funciones, activos y riesgos)</h2>' + ecoExtHTML(func);
+        var em = (($('e_mundo') && $('e_mundo').value) || '').trim();
+        var ec = (($('e_col') && $('e_col').value) || '').trim();
+        out += '<h2 class="rep">Tendencias de la economía y del sector</h2>' +
+          '<h3 class="rep">Panorama de la economía mundial</h3><p>' + (em ? escH(em).replace(/\n/g, '</p><p>') : '[Pendiente: panorama de la economía mundial del año gravable, con fuente y fecha de consulta.]') + '</p>' +
+          '<h3 class="rep">Panorama de la economía colombiana</h3><p>' + (ec ? escH(ec).replace(/\n/g, '</p><p>') : '[Pendiente: panorama de la economía colombiana del año gravable, con fuente y fecha de consulta.]') + '</p>' +
+          estudioSectorHTML();
+        return out;
+      };
+
+      var _renderNegSec = renderReport;
+      renderReport = function () {
+        _renderNegSec.apply(null, arguments);
+        var d = $('doc'); if (!d) return;
+        try { d.insertAdjacentHTML('beforeend', ptContenidoNegocioSectorHTML()); } catch (e) { }
+      };
 
       window.ptExtensionObjetivo = function (campo) {
         var E = window.PT_ESTRUCTURA;
