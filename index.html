@@ -1308,9 +1308,10 @@
               </label>
             </div>
             <div class="row2">
-              <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (en inglés — pulse Enter para agregar)</span>
+              <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (puedes escribir en español — se traducen automáticamente)</span>
+                <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b> Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor mayorista"</i>) y al presionar Enter el sistema las traducirá inmediatamente al inglés para Capital IQ / Orbis.</div>
                 <div class="actchips" id="act_keywords_chips"></div>
-                <input class="i" id="act_keyword_new" placeholder="ej: agrochemical distributor…"
+                <input class="i" id="act_keyword_new" placeholder="ej: desarrollo de videojuegos, distribuidor agroquímico…"
                   onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
               </label>
               <label class="f"><span class="l">Códigos SIC sugeridos (pulse Enter para agregar)</span>
@@ -2136,8 +2137,69 @@
       const cont = $(campo === 'sic' ? 'act_sic_chips' : 'act_keywords_chips'); if (!cont) return;
       cont.innerHTML = (lista || []).map((v, i) => '<span class="actchip' + (campo === 'sic' ? ' sic' : '') + '">' + escH(v) + '<button type="button" onclick="actividadQuitarChip(\'' + campo + '\',' + i + ')" aria-label="Quitar ' + escH(v) + '">×</button></span>').join('');
     }
+    function ptTraducirKeyword(texto) {
+      if (!texto) return texto;
+      var s = String(texto).trim();
+      var DIC = [
+        [/desarrollo de videojuegos|desarrollador de videojuegos|videojuegos/i, 'video game development'],
+        [/desarrollo de software|programación de software|software por encargo/i, 'contract software development'],
+        [/desarrollo por encargo|maquila de software/i, 'contract R&D software development'],
+        [/distribución de agroquímicos|agroquímicos/i, 'agrochemical distribution'],
+        [/distribución mayorista|distribuidor mayorista/i, 'wholesale distribution'],
+        [/distribución|distribuidor/i, 'distribution'],
+        [/comercialización/i, 'marketing and distribution'],
+        [/compra[- ]reventa/i, 'buy-sell wholesale distribution'],
+        [/prestador de servicios|prestación de servicios|servicios intragrupo/i, 'service provider'],
+        [/servicios técnicos|soporte técnico/i, 'technical support services'],
+        [/servicios de TI|tecnología de información/i, 'IT services'],
+        [/fabricación|manufactura|maquila/i, 'contract manufacturing'],
+        [/almacenamiento y logística|logística/i, 'logistics and warehousing'],
+        [/transporte/i, 'transportation services'],
+        [/consultoría/i, 'consulting services'],
+        [/publicidad y mercadeo|publicidad/i, 'advertising and marketing'],
+        [/farmacéutica|medicamentos/i, 'pharmaceutical distribution'],
+        [/alimentos y bebidas/i, 'food and beverage distribution'],
+        [/químicos|productos químicos/i, 'chemical distribution'],
+        [/plásticos/i, 'plastics manufacturing'],
+        [/textiles/i, 'textile manufacturing'],
+        [/asesoría financiera|finanzas/i, 'financial advisory'],
+        [/recursos humanos|personal/i, 'staffing and HR services']
+      ];
+      for (var i = 0; i < DIC.length; i++) {
+        if (DIC[i][0].test(s)) return DIC[i][1];
+      }
+      var MAPA = {
+        'desarrollo': 'development', 'desarrollador': 'developer', 'distribucion': 'distribution',
+        'distribución': 'distribution', 'distribuidor': 'distributor', 'comercializacion': 'marketing',
+        'comercialización': 'marketing', 'servicios': 'services', 'servicio': 'service',
+        'producto': 'product', 'productos': 'products', 'fabricacion': 'manufacturing',
+        'fabricación': 'manufacturing', 'manufactura': 'manufacturing', 'maquila': 'contract manufacturing',
+        'logistica': 'logistics', 'logística': 'logistics', 'consultoria': 'consulting',
+        'consultoría': 'consulting', 'asesoria': 'advisory', 'asesoría': 'advisory',
+        'publicidad': 'advertising', 'venta': 'sales', 'ventas': 'sales', 'mayorista': 'wholesale',
+        'minorista': 'retail', 'importacion': 'import', 'importación': 'import',
+        'exportacion': 'export', 'exportación': 'export', 'agricola': 'agricultural',
+        'agrícola': 'agricultural', 'alimentos': 'food', 'quimicos': 'chemicals',
+        'químicos': 'chemicals', 'farmaceutica': 'pharmaceutical', 'farmacéutica': 'pharmaceutical',
+        'medico': 'medical', 'médico': 'medical', 'equipos': 'equipment', 'maquinaria': 'machinery',
+        'repuestos': 'spare parts', 'vehiculos': 'vehicles', 'vehículos': 'vehicles',
+        'automotriz': 'automotive', 'software': 'software', 'videojuegos': 'video games',
+        'juegos': 'games', 'tecnologia': 'technology', 'tecnología': 'technology'
+      };
+      var palabras = s.toLowerCase().split(/\s+/);
+      var hayEsp = palabras.some(function (p) { return MAPA[p] !== undefined; });
+      if (hayEsp) {
+        return palabras.map(function (p) { return MAPA[p] || p; }).join(' ');
+      }
+      return s;
+    }
+    window.ptTraducirKeyword = ptTraducirKeyword;
+
     function actividadAgregarChip(campo, valor) {
       valor = (valor || '').trim(); if (!valor) return;
+      if (campo === 'keywords') {
+        valor = ptTraducirKeyword(valor);
+      }
       const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
       const arr = obj[campo] || [];
       if (!arr.some(x => x.toLowerCase() === valor.toLowerCase())) arr.push(valor);
@@ -2722,7 +2784,13 @@
       return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Informe Local PT ' + ($('ent').value || '') + ' ' + ($('anio').value || '') + '</title><style>' + EXPORT_STYLE + '</style></head><body>' + $('doc').innerHTML + '</body></html>';
     }
     function saveBlob(content, fname, mime) { try { const blob = new Blob([content], { type: mime }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) { } }, 1500); } catch (e) { moToast('No se pudo generar la descarga: ' + e.message, 'red'); } }
-    function wordWrap(title, inner) { var _numCSS = 'body{counter-reset:secpt}h2.rep{counter-increment:secpt}h2.rep::before{content:counter(secpt) ". "}p,li,td{text-align:justify}'; return '\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>' + title + '</title><style>' + EXPORT_STYLE + _numCSS + '</style></head><body>' + inner + '</body></html>'; }
+    /* Word (el conversor de HTML a .doc de Microsoft) no reconoce la forma
+       corta <meta charset="utf-8">: sin http-equiv, asume la codificacion
+       del sistema (Windows-1252 en Windows en espanol) para bytes que en
+       realidad son UTF-8, produciendo el tipico texto corrupto tipo
+       "exportacion" con caracteres extranos. La forma con http-equiv es
+       la que su parser antiguo si reconoce. */
+    function wordWrap(title, inner) { var _numCSS = 'body{counter-reset:secpt}h2.rep{counter-increment:secpt}h2.rep::before{content:counter(secpt) ". "}p,li,td{text-align:justify}'; return '\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>' + title + '</title><style>' + EXPORT_STYLE + _numCSS + '</style></head><body>' + inner + '</body></html>'; }
 
     function generateReport() { calc(); saveBlob(buildExportHTML(), 'Informe_PT_' + slug($('ent').value) + '_' + ($('anio').value || '') + '.html', 'text/html'); }
     function downloadWord() { if (!adjExigirOK()) { try { pt36Rojo('Adjuntos o informe económico incompletos: el Word se generó igualmente; complete los soportes y regenere.'); } catch (e) { } } calc(); saveBlob(wordWrap('Informe Local PT ' + ($('ent').value || ''), $('doc').innerHTML), 'Informe_PT_' + slug($('ent').value) + '_' + ($('anio').value || '') + '.doc', 'application/msword'); }
@@ -12617,7 +12685,16 @@ Estrategia para "mezcla de los tres":
               moToast('El Word sale como BORRADOR: ' + marcadores.length + ' marcador(es) «[Completar…]» enumerados en la carátula.', 'amber');
             }
           } catch (e) {
-            if (/exportación bloqueada/.test(e.message)) { moToast(e.message, 'red'); return '<!-- ' + e.message + ' -->'; }
+            if (/exportación bloqueada/.test(e.message)) {
+              moToast(e.message, 'red');
+              /* Un comentario HTML suelto, sin <html>/<head>, no declara ninguna
+                 codificación: Word lo abre asumiendo la del sistema y las tildes
+                 salen corruptas («exportaciÃ³n»). Además un comentario es
+                 invisible al renderizarse — el motivo del bloqueo debe verse. */
+              return '﻿<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">' +
+                '<title>Word no generado</title></head><body style="font-family:Calibri,Arial,sans-serif">' +
+                '<h1 style="color:#C0392B">El Word no se generó</h1><p>' + escH(e.message) + '</p></body></html>';
+            }
           }
           return _wordPrev.apply(null, arguments);
         };
