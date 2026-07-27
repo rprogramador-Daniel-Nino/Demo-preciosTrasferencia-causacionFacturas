@@ -2952,6 +2952,25 @@
       ADJ[tipo].splice(i, 1); saveActive(); adjRefreshUI();
       moToast('Adjunto eliminado: ' + (copia && copia.nombre || ''), 'amber', { txt: 'Deshacer', fn: () => { ADJ[tipo].splice(i, 0, copia); saveActive(); adjRefreshUI(); moToast('Adjunto restaurado', 'green'); } });
     }
+    function adjPendientes() {
+      const falt = [];
+      if (!(ADJ.eeff || []).length) falt.push('EEFF firmados de la Compañía');
+      if (!(ADJ.organigrama || []).length) falt.push('Organigrama del grupo');
+      if (!(ADJ.productos || []).length) falt.push('Gráficos/información de productos');
+
+      if (!(ADJ.sector || []).length) falt.push('Gráficos del sector');
+      const sinFuente = [...(ADJ.sector || []), ...(ADJ.productos || [])].filter(a => !(a.fuente || '').trim());
+      if (sinFuente.length) falt.push(sinFuente.length + ' gráfico(s) sin fuente citada');
+      const ecoVacios = ECO_SECS.filter(([id]) => !(($(id) && $(id).value || '').trim())).map(([, t]) => t);
+      return { falt, ecoVacios };
+    }
+    function adjExigirOK() {
+      const chk = $('adj_exigir'); if (chk && !chk.checked) return true;
+      const { falt, ecoVacios } = adjPendientes();
+      if (falt.length) { moToast('Faltan adjuntos obligatorios: ' + falt.join(' · ') + '. Cárguelos o desactive la exigencia.', 'red'); return false; }
+      if (ecoVacios.length > 5) { moToast('El informe económico está incompleto (' + ecoVacios.length + ' de ' + ECO_SECS.length + ' apartados vacíos). Complete al menos la mitad.', 'red'); return false; }
+      return true;
+    }
     function adjLimpiar() {
       const respaldo = JSON.parse(JSON.stringify(ADJ));
       const tot = Object.values(ADJ).reduce((a, b) => a + (b ? b.length : 0), 0);
