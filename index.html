@@ -2601,19 +2601,54 @@
     function downloadAuditNorma() { calc(); saveBlob(wordWrap('Auditoría', auditNormaTecnica()), 'Auditoria.doc', 'application/msword'); }
 
     /* ================= FORM <-> STUDY ================= */
+    /* Campos simples (texto/número/select) que deben viajar con cada estudio.
+       Se mantienen en una sola lista para que readForm()/writeForm() no se
+       queden desactualizados cada vez que se agrega un campo nuevo al
+       formulario (eso fue justo lo que dejó "Exportar portafolio" incompleto:
+       varios campos de blank() —cmode, prime, uvt, umbral, egreso, unidad,
+       qmethod, e_mundo, e_col, e_sec, sicexp, vincid, vincdoc, paiscod,
+       tipovinc, natur, costoren— nunca se leían ni se escribían aquí). */
+    const CAMPOS_ESTUDIO = ['ent', 'nit', 'ciiu', 'replegal', 'objeto', 'constitucion', 'vinc', 'pais', 'oper', 'cod', 'monto', 'anio', 'base', 'pli', 'cmode',
+      'prime', 'uvt', 'umbral', 'egreso', 'unidad', 'qmethod', 'e_mundo', 'e_col', 'e_sec', 'sicexp', 'vincid', 'vincdoc', 'paiscod', 'tipovinc', 'tipovinc_sel', 'natur', 'costoren',
+      'patrimonio', 'ingbrutos', 'ajusteconocido', 'ajustedesc',
+      'ec_vision', 'ec_prod', 'ec_ingr', 'ec_reparto', 'ec_geo', 'ec_valor', 'ec_fin', 'ec_intang', 'ec_mercado', 'ec_estrategia',
+      'sc_def', 'sc_tam', 'sc_comp', 'sc_prec', 'sc_dem', 'sc_reg', 'sc_ries', 'sc_persp', 'sc_fuentes',
+      'mo_n', 'mo_perd', 'mo_geo', 'mo_act', 'mo_just'];
     function readForm() {
-      return {
-        name: studies[active] ? studies[active].name : 'Estudio', ent: $('ent').value, nit: $('nit').value, ciiu: $('ciiu').value, replegal: $('replegal').value, objeto: $('objeto').value, constitucion: $('constitucion').value, vinc: $('vinc').value, pais: $('pais').value, oper: $('oper').value, cod: $('cod').value, monto: $('monto').value, anio: $('anio').value, base: $('base').value, pli: $('pli').value, actividad_json: $('actividad_json') ? $('actividad_json').value : '', t: { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value), ar: num($('t_ar').value), inv: num($('t_inv').value), ap: num($('t_ap').value) }, comps: [...$('cbody').children].map(tr => { const v = [...tr.querySelectorAll('input,select')].map(i => i.value); return [v[0], v[1], num(v[2]), num(v[3]), num(v[4]), num(v[5]), num(v[6]), num(v[7]), v[8] || '']; })
+      const s = {
+        name: studies[active] ? studies[active].name : 'Estudio',
+        t: { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value), ar: num($('t_ar').value), inv: num($('t_inv').value), ap: num($('t_ap').value) },
+        comps: [...$('cbody').children].map(tr => { const v = [...tr.querySelectorAll('input,select')].map(i => i.value); return [v[0], v[1], num(v[2]), num(v[3]), num(v[4]), num(v[5]), num(v[6]), num(v[7]), v[8] || '']; }),
+        actividad_json: $('actividad_json') ? $('actividad_json').value : '',
+        useadj: $('useadj') ? $('useadj').checked : true,
+        adj: (typeof ADJ !== 'undefined') ? JSON.parse(JSON.stringify(ADJ)) : null,
+        motor: (typeof MOTOR !== 'undefined') ? JSON.parse(JSON.stringify(MOTOR)) : null,
+        eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null
       };
+      CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) s[id] = el.value; });
+      return s;
     }
     function writeForm(s) {
-      ['ent', 'nit', 'ciiu', 'replegal', 'objeto', 'constitucion', 'vinc', 'pais', 'oper', 'cod', 'monto', 'anio', 'base', 'pli'].forEach(k => $(k).value = s[k] || '');
+      CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) el.value = s[id] || ''; });
+      if ($('useadj')) $('useadj').checked = (s.useadj !== undefined) ? !!s.useadj : true;
       const t = s.t || {};['s', 'c', 'op', 'ar', 'inv', 'ap'].forEach(k => $('t_' + k).value = t[k] ?? '');
       $('cbody').innerHTML = ''; const frag = document.createDocumentFragment(); (s.comps || []).forEach(c => frag.appendChild(compRow(c))); $('cbody').appendChild(frag);
       if ($('actividad_json')) { $('actividad_json').value = s.actividad_json || ''; }
       if (typeof renderActividadEspecifica === 'function') renderActividadEspecifica();
+      if (typeof ADJ !== 'undefined') {
+        window.ADJ = s.adj ? JSON.parse(JSON.stringify(s.adj)) : { logoempresa: [], logofirma: [], eeff: [], eeffcomp: [], organigrama: [], productos: [], sector: [], otros: [] };
+        try { if (typeof adjRefreshUI === 'function') adjRefreshUI(); } catch (e) { }
+      }
+      if (typeof MOTOR !== 'undefined') {
+        window.MOTOR = s.motor ? JSON.parse(JSON.stringify(s.motor)) : { activo: false, sel: {}, motivo: {}, score: {}, cfg: null, just: '', escenario: '' };
+        try { if (typeof motorRefreshUI === 'function') motorRefreshUI(); } catch (e) { }
+      }
+      window.PT_EEFF_IA = s.eeffIA ? JSON.parse(JSON.stringify(s.eeffIA)) : null;
+      const hostIA = document.getElementById('ptEeffIA'); if (hostIA && !s.eeffIA) hostIA.innerHTML = '';
+      try { if (typeof ptPintarEeffIA === 'function') ptPintarEeffIA(); } catch (e) { }
     }
     function saveActive() { if (studies[active]) studies[active] = readForm(); }
+    function exportPortfolio() { saveActive(); const blob = new Blob([JSON.stringify(studies, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'portafolio_PT_' + new Date().toISOString().slice(0, 10) + '.json'; a.click(); URL.revokeObjectURL(a.href); }
 
     function compRow(c) {
       const tr = document.createElement('tr');
