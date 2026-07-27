@@ -12295,6 +12295,32 @@ Estrategia para "mezcla de los tres":
       };
 
       /* corrección automática: depurar → conformar → aplicar */
+      /* Reduce físicamente #cbody al conjunto que ya seleccionó el motor
+         (motorEjecutar), que no depende de tener cargado un estudio del año
+         anterior. Sirve de respaldo cuando la depuración basada en el perfil
+         funcional del año anterior no puede ejecutarse (ptCribarUniverso la
+         necesita: si no hay PT_ANTERIOR, se detiene en silencio y deja la
+         tabla intacta, aunque el resto de la cadena siga "funcionando"). */
+      function motorAplicarSeleccion() {
+        if (!window.MOTOR || !MOTOR.activo) { moToast('El motor de selección no tiene un resultado activo.', 'red'); return false; }
+        var seleccionadas = Object.keys(MOTOR.sel).filter(function (k) { return MOTOR.sel[k] === true; });
+        if (!seleccionadas.length) { moToast('El motor no dejó ninguna comparable seleccionada.', 'red'); return false; }
+        var filas = [].slice.call($('cbody').children).map(function (tr) {
+          var v = [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; });
+          return { key: nameKey(v[0]), vals: v };
+        });
+        var conservar = filas.filter(function (f) { return seleccionadas.indexOf(f.key) >= 0; });
+        if (!conservar.length) { moToast('Ninguna fila de la tabla coincide con la selección del motor.', 'red'); return false; }
+        var cuerpo = $('cbody'); cuerpo.innerHTML = '';
+        var frag = document.createDocumentFragment();
+        conservar.forEach(function (f) { frag.appendChild(compRow(f.vals)); });
+        cuerpo.appendChild(frag);
+        try { calc(); } catch (e) { }
+        moToast('Tabla reducida a las ' + conservar.length + ' comparable(s) que seleccionó el motor.', 'green');
+        return true;
+      }
+      window.motorAplicarSeleccion = motorAplicarSeleccion;
+
       window.ptCorregirTablaAutomaticamente = function () {
         if (!(window.CIQ_UNIVERSO && CIQ_UNIVERSO.length)) {
           moToast('No hay universo cargado en memoria: cargue el archivo de la fuente y ejecute la depuración.', 'red');
@@ -12306,7 +12332,21 @@ Estrategia para "mezcla de los tres":
           ptAplicarSeleccion();
           try { ptFiltrarAtipicos(); } catch (e) { }
           try { calc(); } catch (e) { }
-          moToast('Tabla corregida: universo depurado, conjunto conformado y aplicado.', 'green');
+          var filasTrasFAR = [].slice.call($('cbody').children).filter(function (tr) {
+            var i = tr.querySelector('input'); return i && String(i.value || '').trim();
+          }).length;
+          if (filasTrasFAR > LIMITE_TABLA) {
+            /* la vía que compara con el perfil funcional del año anterior no pudo
+               depurar (típicamente porque no hay estudio del año anterior cargado):
+               se usa el motor de selección, que no depende de esa documentación. */
+            moToast('No se pudo depurar con el perfil del año anterior (¿está cargado el estudio anterior?): se usa el motor de selección automática como respaldo…', 'amber');
+            try { motorEjecutar(true); } catch (e) { }
+            if (!motorAplicarSeleccion()) {
+              moToast('La corrección automática no logró reducir la tabla. Cargue el estudio del año anterior, o seleccione manualmente con el «Motor de selección automática» y aplique su resultado.', 'red');
+              return false;
+            }
+          }
+          moToast('Tabla corregida: ' + $('cbody').children.length + ' comparable(s) en el conjunto final.', 'green');
           return true;
         } catch (e) { moToast('La corrección automática falló: ' + e.message, 'red'); return false; }
       };
@@ -12372,10 +12412,15 @@ Estrategia para "mezcla de los tres":
       /* ───────────────────────────────────────────────────────────────────────
          4. LA GUARDA ENVUELVE LA GENERACIÓN Y LA EXPORTACIÓN
          ─────────────────────────────────────────────────────────────────────── */
-      function ptCerrarModalBloqueo() {
+      /* window.X (no "function X(){}" a secas): el botón del modal y su «×» las
+         llaman desde onclick="..." inline, que resuelve nombres en el ámbito
+         global — una función declarada solo dentro de este cierre nunca sería
+         visible ahí y el clic fallaría con ReferenceError silenciado por
+         window.onerror (igual que adjExigirOK/exportPortfolio/ADJ/MOTOR antes). */
+      window.ptCerrarModalBloqueo = function () {
         var m = document.getElementById('ptModalBloqueoOverlay');
         if (m && m.parentNode) m.parentNode.removeChild(m);
-      }
+      };
 
       function ptGenerarExplicacionFallaHtml(f) {
         var html = '';
@@ -12433,7 +12478,7 @@ Estrategia para "mezcla de los tres":
         return html;
       }
 
-      function ptMostrarModalBloqueo(G) {
+      window.ptMostrarModalBloqueo = function (G) {
         ptCerrarModalBloqueo();
         var overlay = document.createElement('div');
         overlay.id = 'ptModalBloqueoOverlay';
@@ -12497,6 +12542,7 @@ Estrategia para "mezcla de los tres":
         var G;
         try { G = ptGuardaInforme(); } catch (e) { G = { ok: true, fallas: [], avisos: [] }; }
         if (!G.ok) { pintarBloqueo(G); try { moToast('Informe bloqueado: ' + G.fallas.length + ' condición(es) sin cumplir.', 'red'); } catch (e) { } return; }
+        try { ptCerrarModalBloqueo(); } catch (e) { }
         _renderGuard.apply(null, arguments);
 
         /* requisitos de exportación pendientes: banda al inicio, sin bloquear la vista */
