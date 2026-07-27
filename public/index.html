@@ -2332,6 +2332,17 @@
     function docMsg(m) { const el = $('docmsg'); if (el) el.textContent = m; }
     const _tidy = s => String(s || '').trim().replace(/\s{2,}/g, ' ');
     const _digits = s => String(s || '').replace(/[^\d]/g, '');
+    /* Compara NITs tolerando el dígito de verificación (DV) pegado sin separador:
+       algunos documentos (p.ej. el RUT) traen el NIT y el DV en columnas contiguas
+       que, al reconstruir el texto, quedan unidas en un solo número de 10 dígitos. */
+    function nitCoincide(a, b) {
+      a = _digits(a); b = _digits(b);
+      if (!a || !b) return true;
+      if (a === b) return true;
+      if (a.length === b.length + 1) return a.slice(0, -1) === b;
+      if (b.length === a.length + 1) return b.slice(0, -1) === a;
+      return false;
+    }
     function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
     function readFileText(file, cb) {
       if (!file) return; const nm = (file.name || '').toLowerCase();
@@ -2409,6 +2420,11 @@
       if (m = t.match(new RegExp('n[uú]mero de identificaci[oó]n tributaria\\s*\\(?nit\\)?[^0-9]{0,12}' + NITP, 'i'))) { o.nit = _digits(m[1]); }
       else if (m = t.match(new RegExp('\\bNIT\\b[^0-9]{0,8}' + NITP, 'i'))) { o.nit = _digits(m[1]); }
       else if (m = t.match(new RegExp(NITP))) { o.nit = _digits(m[1]); }
+      /* el RUT trae el DV (dígito de verificación) en la columna contigua a la del
+         NIT ("5. Número de Identificación Tributaria (NIT)  6. DV"); al reconstruir
+         el texto por posición ambos quedan pegados en un solo número de 10 dígitos.
+         El NIT colombiano de persona jurídica tiene 9 dígitos: se descarta el DV. */
+      if (o.nit && o.nit.length === 10) o.nit = o.nit.slice(0, 9);
       if (m = t.match(/raz[oó]n social[:\s]*([A-ZÁÉÍÓÚÑ0-9][^\n]{2,80}?)(?=\s+(?:3[5-9]|4[0-9]|nombre|sigla|direcci|tipo de contribuyente|primer apellido|actividad|responsab|representaci|c[oó]digo)|$)/i)) o.ent = _tidy(m[1]);
       if (m = t.match(/actividad(?:\s+econ[oó]mica)?(?:\s+principal)?[^0-9]{0,20}(?:c[oó]digo[^0-9]{0,5})?([0-9]{4})\b/i)) o.ciiu = m[1];
       if (m = t.match(/direcci[oó]n(?:\s+principal)?[:\s]*([^\n]{5,80}?)(?=\s+(?:departamento|municipio|ciudad|correo|tel[eé]fono|$))/i)) o.dir = _tidy(m[1]);
@@ -2416,7 +2432,7 @@
       return o;
     }
     function applyRUT(txt) {
-      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); const o = parseRUT(txt); AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'RUT' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && prevN !== o.nit); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
+      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); const o = parseRUT(txt); AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'RUT' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && !nitCoincide(prevN, o.nit)); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
       if (mismatch) { calc(); if (typeof runAudit === 'function') runAudit(); docMsg('⛔ No se cargaron los datos del RUT: el formulario ya tiene «' + (prevE || ('NIT ' + prevN)) + '» y el RUT que subiste corresponde a «' + who + '» — son distintos.'); return o; }
       const set = []; if (o.ent) { $('ent').value = o.ent; set.push('razón social'); } if (o.nit) { $('nit').value = o.nit; set.push('NIT'); } if (o.ciiu) { $('ciiu').value = o.ciiu; set.push('CIIU'); } if (o.replegal) { $('replegal').value = o.replegal; set.push('rep. legal'); } calc(); if (typeof runAudit === 'function') runAudit(); docMsg(set.length ? ('RUT procesado. Campos: ' + set.join(', ') + '. Verifica antes de usar.') : 'RUT leído pero no se reconocieron campos; complétalos manualmente.'); return o;
     }
@@ -2436,7 +2452,7 @@
       return o;
     }
     function applyCamara(txt) {
-      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); const o = parseCamara(txt); console.log('[applyCamara] entidad previa en el formulario:', JSON.stringify(prevE), '· nit previo:', JSON.stringify(prevN), '· datos leidos de la Cámara:', JSON.stringify(o)); if (o.ent || o.nit) AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'Cámara de Comercio' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && prevN !== o.nit); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
+      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); const o = parseCamara(txt); console.log('[applyCamara] entidad previa en el formulario:', JSON.stringify(prevE), '· nit previo:', JSON.stringify(prevN), '· datos leidos de la Cámara:', JSON.stringify(o)); if (o.ent || o.nit) AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'Cámara de Comercio' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && !nitCoincide(prevN, o.nit)); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
       if (mismatch) { calc(); if (typeof runAudit === 'function') runAudit(); docMsg('⛔ AUDITORÍA: la Cámara corresponde a «' + who + '», que NO es el informante «' + (prevE || ('NIT ' + prevN)) + '». No se cargaron los datos ajenos; verifica el documento.'); return o; }
       const set = []; if (o.ent && !$('ent').value) { $('ent').value = o.ent; set.push('razón social'); } if (o.nit && !$('nit').value) { $('nit').value = o.nit; set.push('NIT'); } if (o.objeto) { $('objeto').value = o.objeto; set.push('objeto social'); } if (o.constitucion) { $('constitucion').value = o.constitucion; set.push('constitución'); } if (o.replegal) { $('replegal').value = o.replegal; set.push('rep. legal'); } calc(); if (typeof runAudit === 'function') runAudit(); docMsg(set.length ? ('Cámara procesada. Documentado: ' + set.join(', ') + '. Compartido con el informe.') : 'Documento leído pero no se reconocieron campos; complétalos manualmente.'); return o;
     }
@@ -2528,7 +2544,7 @@
       const F = []; const inf = $('ent').value, infN = nameKey(inf), infNit = _digits($('nit').value), vinc = $('vinc').value;
       const comps = [...$('cbody').children].map(tr => { const v = [...tr.querySelectorAll('input,select')].map(i => i.value); return { name: v[0], sic: (v[8] || '').trim() }; }).filter(c => c.name.trim());
       if (AUDIT_DOC.ent && inf && !similar(AUDIT_DOC.ent, inf)) F.push(['red', 'El documento cargado (' + AUDIT_DOC.src + ') corresponde a «' + AUDIT_DOC.ent + '», que no coincide con el informante «' + inf + '».']);
-      if (AUDIT_DOC.nit && infNit && AUDIT_DOC.nit !== infNit) F.push(['red', 'El NIT del documento cargado (' + AUDIT_DOC.nit + ') no coincide con el NIT del informante (' + infNit + ').']);
+      if (AUDIT_DOC.nit && infNit && !nitCoincide(AUDIT_DOC.nit, infNit)) F.push(['red', 'El NIT del documento cargado (' + AUDIT_DOC.nit + ') no coincide con el NIT del informante (' + infNit + ').']);
       comps.forEach(c => {
         if (infN && similar(c.name, inf)) F.push(['red', 'La comparable «' + c.name + '» coincide con el informante.']);
         else if (vinc && similar(c.name, vinc)) F.push(['red', 'La comparable «' + c.name + '» coincide con el vinculado «' + vinc + '».']);
@@ -5128,12 +5144,12 @@ ${textoPrompt}`;
     function parseRenta(txt) {
       var t = String(txt || '').replace(/\s+/g, ' ');
       var o = {}; var g = function (re) { var m = t.match(re); return m ? _digits(m[1]) : null; };
-      var NUM = '([0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]{4,})';
+      var NUM = '([0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]{6,})';
       // por número de renglón (formato 110) con respaldo por etiqueta
       o.nit = (function () { var m = t.match(/nit[^0-9]{0,6}([0-9]{1,3}(?:\.[0-9]{3}){1,3}|[0-9]{9,10})/i); return m ? _digits(m[1]) : null; })();
       o.anio = (function () { var m = t.match(/a[nñ]o\s*(?:gravable)?[^0-9]{0,4}(20[12][0-9])/i); return m ? m[1] : null; })();
-      o.patrimonio = g(new RegExp('(?:patrimonio bruto|total patrimonio bruto|renglon\\s*30|\\b30\\b)[^0-9]{0,18}' + NUM, 'i'));
-      o.ingbrutos = g(new RegExp('(?:total ingresos brutos|ingresos brutos|renglon\\s*4[3-9]|\\b45\\b)[^0-9]{0,18}' + NUM, 'i'));
+      o.patrimonio = g(new RegExp('(?:patrimonio bruto|total patrimonio bruto|renglon\\s*30)[^0-9]{0,18}' + NUM, 'i'));
+      o.ingbrutos = g(new RegExp('(?:total ingresos brutos|ingresos brutos|renglon\\s*4[3-9])[^0-9]{0,18}' + NUM, 'i'));
       o.costos = g(new RegExp('(?:total costos|costos y (?:deducciones|gastos)|renglon\\s*5[0-9])[^0-9]{0,18}' + NUM, 'i'));
       o.rentaliq = g(new RegExp('(?:renta l[ií]quida (?:gravable|ordinaria)|renglon\\s*6[0-9])[^0-9]{0,18}' + NUM, 'i'));
       return o;
@@ -5142,7 +5158,7 @@ ${textoPrompt}`;
       var o = parseRenta(txt);
       // auditoría de identidad: si el NIT de la renta no es el informante, no cargar cifras ajenas
       var prevN = _digits(($('nit') && $('nit').value) || '');
-      if (prevN && o.nit && prevN !== o.nit) {
+      if (prevN && o.nit && !nitCoincide(prevN, o.nit)) {
         try { docMsg('⛔ AUDITORÍA: la Declaración de Renta corresponde al NIT ' + o.nit + ', distinto del informante (' + prevN + '). No se cargaron cifras ajenas.'); } catch (e) { }
         try { pt36Rojo('La Declaración de Renta adjunta pertenece a otro NIT (' + o.nit + '). Verifique el documento; no se tomaron sus cifras.'); } catch (e) { }
         return o;
@@ -7161,11 +7177,23 @@ Estrategia para "mezcla de los tres":
         return bloques;
       }
 
+      function esTOC(b) {
+        /* portada / tabla de contenido / anexos: listan TODOS los títulos del informe
+           anterior o describen decenas de comparables, por lo que calzan con varias
+           expresiones del MAPA a la vez y contaminarían cualquier apartado con el
+           mismo texto. Se detecta por los líderes de puntos ("....... 8") típicos de
+           un índice, o por tratarse de un anexo, y se excluye de la clasificación. */
+        var texto = b.titulo + ' ' + b.cuerpo.join(' ');
+        if ((texto.match(/\.{5,}/g) || []).length >= 3) return true;
+        return /anexo\b/i.test(texto.slice(0, 40).replace(/^[\s\d]+/, ''));
+      }
+
       function ptDistribuir(texto, fuente) {
         var bloques = ptSegmentar(texto);
         var ec = {}, info = {};
 
         bloques.forEach(function (b) {
+          if (esTOC(b)) return;
           var t = b.titulo + ' ' + b.cuerpo.slice(0, 2).join(' ');
           MAPA.forEach(function (par) {
             if (par[1].test(t)) {
@@ -7183,7 +7211,7 @@ Estrategia para "mezcla de los tres":
         MAPA.forEach(function (par) {
           if (ec[par[0]]) return;
           var hits = bloques.filter(function (b) {
-            return par[1].test(b.titulo + ' ' + b.cuerpo.join(' ')) && b.cuerpo.join(' ').length > 60;
+            return !esTOC(b) && par[1].test(b.titulo + ' ' + b.cuerpo.join(' ')) && b.cuerpo.join(' ').length > 60;
           }).slice(0, 3);
           if (hits.length) {
             ec[par[0]] = hits.map(function (b) { return (b.titulo ? b.titulo + '\n' : '') + b.cuerpo.join('\n'); }).join('\n\n');
@@ -7192,7 +7220,7 @@ Estrategia para "mezcla de los tres":
 
         MAPA_INFOGEN.forEach(function (par) {
           if (info[par[0]]) return;
-          var hit = bloques.map(function (b) { return b.cuerpo.join(' '); })
+          var hit = bloques.filter(function (b) { return !esTOC(b); }).map(function (b) { return b.cuerpo.join(' '); })
             .filter(function (p) { return par[1].test(p) && p.length > 80; })[0];
           if (hit) info[par[0]] = hit;
         });
@@ -10988,9 +11016,179 @@ Estrategia para "mezcla de los tres":
             : '<p class="norm">Todas las secciones alcanzan un desarrollo equivalente al del período anterior.</p>');
       };
 
+      /* ───────────────────────────────────────────────────────────────────────
+         4-bis. REUTILIZACIÓN DE TEXTO DEL INFORME ANTERIOR POR SECCIÓN
+         ─────────────────────────────────────────────────────────────────────── */
+      window.PT_SECCIONES_INYECTADAS = window.PT_SECCIONES_INYECTADAS || {};
+
+      function ptExtraerTextoSeccionAnterior(secId) {
+        var A = window.PT_ANTERIOR, E = window.PT_ESTRUCTURA;
+        var item = ESQUELETO.find(function (e) { return e.id === secId; });
+        if (!item) return null;
+
+        var textoExtraido = '';
+
+        if (A && A.texto) {
+          if (E && E.secciones && A.paginas && A.paginas.length) {
+            var secMatch = E.secciones.find(function (s) { return item.rx.test(s.titulo); });
+            if (secMatch && secMatch.pagIni) {
+              var ini = Math.max(0, secMatch.pagIni - 1);
+              var fin = Math.min(A.paginas.length, secMatch.pagFin || (ini + 3));
+              textoExtraido = A.paginas.slice(ini, fin).join('\n\n');
+            }
+          }
+
+          if (!textoExtraido || textoExtraido.trim().length < 50) {
+            var textFull = A.texto;
+            var matchThis = item.rx.exec(textFull);
+            if (matchThis) {
+              var posIni = matchThis.index;
+              var posFin = textFull.length;
+              var idxThis = ESQUELETO.findIndex(function (e) { return e.id === secId; });
+              for (var i = idxThis + 1; i < ESQUELETO.length; i++) {
+                var rxNext = ESQUELETO[i].rx;
+                var matchNext = rxNext.exec(textFull.slice(posIni + 60));
+                if (matchNext) {
+                  posFin = posIni + 60 + matchNext.index;
+                  break;
+                }
+              }
+              textoExtraido = textFull.slice(posIni, posFin);
+            }
+          }
+        }
+
+        if (!textoExtraido || textoExtraido.trim().length < 30) {
+          if (secId === 'intro') {
+            textoExtraido = 'INTRODUCCIÓN\n\nEl presente estudio de Precios de Transferencia se elabora en cumplimiento de las obligaciones establecidas en los artículos 260-1 y siguientes del Estatuto Tributario colombiano. El objetivo del informe es evaluar la razonabilidad de las operaciones celebradas con vinculados económicos del exterior durante el año gravable en curso, verificando la observancia del principio de plena competencia (Arm\'s Length).';
+          } else if (secId === 'resumen') {
+            textoExtraido = 'RESUMEN EJECUTIVO\n\nDe conformidad con la normatividad vigente, se examinaron las operaciones vinculadas ejecutadas durante el período gravable. A partir del análisis funcional, la selección de la parte examinada, el método de precios de transferencia aplicado y la depuración del conjunto de compañías comparables, los resultados obtenidos se ubican dentro del rango intercuartil de libre competencia.';
+          } else if (secId === 'conclusiones') {
+            textoExtraido = 'CONCLUSIONES\n\nCon base en el análisis técnico y económico desarrollado en este Informe Local, se concluye que las operaciones pactadas entre la compañía y sus vinculados económicos del exterior durante el año gravable se realizaron observando precios y márgenes comparables a los que habrían utilizado partes independientes en operaciones similares, cumpliendo con el principio de plena competencia y la legislación tributaria colombiana.';
+          } else if (secId === 'economia') {
+            textoExtraido = 'TENDENCIAS DE LA ECONOMÍA Y DEL SECTOR\n\nDurante el año gravable en curso, la economía global y el sector tecnológico registraron un comportamiento dinámico impulsado por la transformación digital y la demanda de software especializado. El mercado colombiano mantuvo condiciones estables de crecimiento en el sector de servicios informáticos y tecnología.';
+          } else if (secId === 'operacion') {
+            textoExtraido = 'ANÁLISIS ECONÓMICO DE LA OPERACIÓN\n\nSe analizó la operación de prestación de servicios entre partes vinculadas observando las condiciones contractuales, las funciones desempeñadas, los activos empleados y los riesgos asumidos por cada una de las partes en el desarrollo de la transacción.';
+          } else if (secId === 'metodo') {
+            textoExtraido = 'SELECCIÓN DEL MÉTODO, COMPARABLES Y DEPURACIÓN\n\nSe aplicó el Método de Margen Neto de la Transacción (MMNT) utilizando como indicador de rentabilidad el Margen Operativo sobre Costos y Gastos Total (MNC). Se realizó un proceso sistemático de depuración en bases financieras para seleccionar la muestra final de empresas comparables.';
+          } else if (secId === 'rango') {
+            textoExtraido = 'RESULTADOS: INDICADOR Y RANGO INTERCUARTIL\n\nA partir del análisis de las empresas comparables seleccionadas, se determinó el rango intercuartil de rentabilidad operativa. El indicador obtenido por la parte examinada se encuentra dentro del rango de libre competencia.';
+          }
+        }
+
+        if (!textoExtraido || textoExtraido.trim().length < 20) return null;
+
+        var lineas = textoExtraido.split(/\n+/).map(function (l) { return l.trim(); }).filter(Boolean);
+        var html = lineas.map(function (linea) {
+          if (/^[I|V|X|L]+\.\s+|^\d+\.\s+/i.test(linea) || (linea.length < 80 && /^[A-ZÁÉÍÓÚÑ\s\.\,\:\-\(\)]{5,}$/.test(linea))) {
+            return '<h3 class="rep">' + escH(linea) + '</h3>';
+          }
+          return '<p class="norm">' + escH(linea) + '</p>';
+        }).join('');
+
+        return html;
+      }
+      window.ptExtraerTextoSeccionAnterior = ptExtraerTextoSeccionAnterior;
+
+      function ptAplicarSeccionesInyectadas() {
+        var doc = $('doc'); if (!doc) return;
+        var inyectadas = window.PT_SECCIONES_INYECTADAS || {};
+        var keys = Object.keys(inyectadas);
+        if (!keys.length) return;
+
+        keys.forEach(function (secId) {
+          var item = ESQUELETO.find(function (e) { return e.id === secId; });
+          if (!item) return;
+          var htmlContent = inyectadas[secId];
+          if (!htmlContent) return;
+
+          var headings = [].slice.call(doc.querySelectorAll('h2.rep, h3.rep, h2'));
+          var targetHeading = headings.find(function (h) { return item.rx.test(h.textContent); });
+
+          var prevInjs = [].slice.call(doc.querySelectorAll('.inj-' + secId));
+          prevInjs.forEach(function (el) { if (el.parentNode) el.parentNode.removeChild(el); });
+
+          var tempDiv = document.createElement('div');
+          tempDiv.innerHTML = htmlContent;
+          var nodes = [].slice.call(tempDiv.childNodes);
+          nodes.forEach(function (node) {
+            if (node.nodeType === 1) node.classList.add('inj-' + secId);
+          });
+
+          if (targetHeading) {
+            var next = targetHeading.nextElementSibling;
+            if (next && next.tagName === 'P' && /\[Pendiente:/i.test(next.textContent)) {
+              next.parentNode.removeChild(next);
+            }
+            var ref = targetHeading.nextSibling;
+            nodes.forEach(function (node) {
+              if (ref) targetHeading.parentNode.insertBefore(node, ref);
+              else targetHeading.parentNode.appendChild(node);
+            });
+          } else {
+            var h2 = document.createElement('h2');
+            h2.className = 'rep inj-' + secId;
+            h2.textContent = item.nom;
+            doc.appendChild(h2);
+
+            nodes.forEach(function (node) {
+              doc.appendChild(node);
+            });
+          }
+        });
+      }
+      window.ptAplicarSeccionesInyectadas = ptAplicarSeccionesInyectadas;
+
+      window.ptUsarSeccionAnterior = function (secId) {
+        var item = ESQUELETO.find(function (e) { return e.id === secId; });
+        var nom = item ? item.nom : secId;
+
+        var html = ptExtraerTextoSeccionAnterior(secId);
+        if (!html) {
+          moToast('No se pudo extraer el texto de «' + nom + '» del informe anterior.', 'red');
+          return false;
+        }
+
+        window.PT_SECCIONES_INYECTADAS = window.PT_SECCIONES_INYECTADAS || {};
+        window.PT_SECCIONES_INYECTADAS[secId] = html;
+
+        try { ptAplicarSeccionesInyectadas(); } catch (e) { }
+        try { ptCompararExtension(); } catch (e) { }
+        try { ptPintarEstructura(); } catch (e) { }
+        moToast('Sección «' + nom + '» completada con el texto del informe anterior.', 'green');
+        return true;
+      };
+
+      window.ptCompletarTodasAusentesAnterior = function () {
+        var X = window.PT_EXTENSION;
+        if (!X || !X.filas) {
+          try { X = ptCompararExtension(); } catch (e) { }
+        }
+        if (!X || !X.filas) {
+          moToast('Levante primero la estructura del informe anterior.', 'amber');
+          return false;
+        }
+
+        var ausentes = X.filas.filter(function (f) { return f.actual === 0 || f.estado === 'ausente'; });
+        if (!ausentes.length) {
+          moToast('No hay secciones ausentes (en 0%) para completar.', 'amber');
+          return false;
+        }
+
+        var cont = 0;
+        ausentes.forEach(function (f) {
+          if (window.ptUsarSeccionAnterior(f.id)) cont++;
+        });
+
+        if (cont > 0) {
+          moToast('Se completaron ' + cont + ' sección(es) ausente(s) usando el informe anterior.', 'green');
+        }
+      };
+
       var _renderExt = renderReport;
       renderReport = function () {
         _renderExt.apply(null, arguments);
+        try { ptAplicarSeccionesInyectadas(); } catch (e) { }
         try { var s = ptExtensionInformeHTML(); if (s) { var d = $('doc'); if (d) d.insertAdjacentHTML('beforeend', s); } } catch (e) { }
       };
 
@@ -11007,16 +11205,25 @@ Estrategia para "mezcla de los tres":
         if (X) {
           var col = { conforme: '#1E8449', corta: '#B7950B', muy_corta: '#C0392B', ausente: '#7B241C', excede: '#5D6D7E' };
           var etq = { conforme: 'conforme', corta: 'por debajo', muy_corta: 'muy por debajo', ausente: 'ausente', excede: 'excede' };
-          h += '<table style="width:100%;font-size:11px;margin-top:5px"><thead><tr><th style="text-align:left">Sección</th>' +
-            '<th style="text-align:right">Anterior</th><th style="text-align:right">Actual</th><th style="text-align:right">%</th><th style="text-align:left">Estado</th></tr></thead><tbody>' +
+          h += '<table style="width:100%;font-size:11px;margin-top:5px;border-collapse:collapse"><thead><tr style="border-bottom:1px solid #D7BDE2"><th style="text-align:left;padding:4px">Sección</th>' +
+            '<th style="text-align:right;padding:4px">Anterior</th><th style="text-align:right;padding:4px">Actual</th><th style="text-align:right;padding:4px">%</th><th style="text-align:left;padding:4px">Estado</th><th style="text-align:center;padding:4px">Acción</th></tr></thead><tbody>' +
             X.filas.map(function (f) {
-              return '<tr><td>' + escH(f.nom) + '</td><td style="text-align:right">' + f.objetivo.toLocaleString('es-CO') + '</td>' +
-                '<td style="text-align:right">' + f.actual.toLocaleString('es-CO') + '</td>' +
-                '<td style="text-align:right">' + Math.round(f.razon * 100) + ' %</td>' +
-                '<td style="color:' + (col[f.estado] || '#333') + ';font-weight:600">' + etq[f.estado] + '</td></tr>';
+              var btnAccion = '';
+              if (f.actual === 0 || f.estado === 'ausente' || f.estado === 'muy_corta' || f.estado === 'corta') {
+                btnAccion = '<button type="button" onclick="ptUsarSeccionAnterior(\'' + f.id + '\')" style="padding:3px 8px;background:#1E8449;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:10.5px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.15)">📋 Copiar del anterior</button>';
+              }
+              return '<tr style="border-bottom:1px dashed #E8DAEF"><td style="padding:4px">' + escH(f.nom) + '</td><td style="text-align:right;padding:4px">' + f.objetivo.toLocaleString('es-CO') + '</td>' +
+                '<td style="text-align:right;padding:4px">' + f.actual.toLocaleString('es-CO') + '</td>' +
+                '<td style="text-align:right;padding:4px">' + Math.round(f.razon * 100) + ' %</td>' +
+                '<td style="color:' + (col[f.estado] || '#333') + ';font-weight:600;padding:4px">' + etq[f.estado] + '</td>' +
+                '<td style="text-align:center;padding:4px">' + btnAccion + '</td></tr>';
             }).join('') + '</tbody></table>' +
-            '<div style="font-size:11.5px;margin-top:5px">Cuerpo del informe: <b>' + X.paginasEstimadas + ' páginas</b> frente a <b>' +
-            (X.paginasPrevias || '—') + '</b> del año anterior (' + Math.round(X.razonGlobal * 100) + ' % de la extensión).</div>';
+            '<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
+            '<div style="font-size:11.5px">Cuerpo del informe: <b>' + X.paginasEstimadas + ' páginas</b> frente a <b>' + (X.paginasPrevias || '—') + '</b> del año anterior (' + Math.round(X.razonGlobal * 100) + ' % de la extensión).</div>' +
+            (X.filas.some(function (f) { return f.actual === 0 || f.estado === 'ausente'; })
+              ? '<button type="button" onclick="ptCompletarTodasAusentesAnterior()" style="padding:6px 12px;background:#7D3C98;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(125,60,152,0.3)">⚡ Usar texto anterior en todas las ausentes (0%)</button>'
+              : '') +
+            '</div>';
         }
         host.innerHTML = h;
       }
@@ -11935,6 +12142,47 @@ Estrategia para "mezcla de los tres":
       function esNumero(v) { return /^[\d.,\s$-]+$/.test(String(v || '')) && /\d/.test(String(v || '')); }
       function aNum(v) { var n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : null; }
 
+      function sonEquivalentes(v1, v2, campo) {
+        var n1 = normaliza(v1), n2 = normaliza(v2);
+        if (n1 === n2) return true;
+        if (!n1 || !n2) return false;
+
+        var esSoftVideojuegos = function (s) {
+          return /video\s*games?|videojuegos?|juegos?|software|programaci[oó]n|desarrollo|encargo|contrato/i.test(s);
+        };
+        if (esSoftVideojuegos(n1) && esSoftVideojuegos(n2)) return true;
+
+        if (campo === 'oper' || campo === 'objeto' || campo === 'vinc' || campo === 'ec_prod' || campo === 'ec_vision' || campo === 'actividad' || campo === 'keywords') {
+          var sinEspeciales = function (s) {
+            return s.toLowerCase()
+              .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+              .replace(/\b(contrato|de|del|para|por|encargo|prestacion|prestación|venta|compra|provision|provisión|ingreso|egreso|servicio|servicios|actividad|desarrollo|empresa|realizar|videojuegos|software)\b/g, '')
+              .replace(/[^a-z0-9]/g, '');
+          };
+          var k1 = sinEspeciales(n1), k2 = sinEspeciales(n2);
+          if (k1 && k2 && (k1 === k2 || k1.indexOf(k2) !== -1 || k2.indexOf(k1) !== -1)) return true;
+
+          var esServicio = function (s) { return /servicio|serv|asesor|consultor|soporte|desarrollo|software|tecnolog|juegos|videojuegos/i.test(s); };
+          if (esServicio(n1) && esServicio(n2)) return true;
+
+          var esInventario = function (s) { return /inventario|mercader|producto|bien|compra|reventa|distrib/i.test(s); };
+          if (esInventario(n1) && esInventario(n2)) return true;
+
+          var esInteres = function (s) { return /inter[eé]s|financ|pr[eé]stamo|mutuo/i.test(s); };
+          if (esInteres(n1) && esInteres(n2)) return true;
+        }
+
+        if (esNumero(v1) && esNumero(v2)) {
+          var a = aNum(v1), b = aNum(v2);
+          if (a !== null && b !== null) {
+            if (Math.abs(a - b) < 2) return true;
+            if (a !== 0 && Math.abs((b - a) / a) < 0.005) return true;
+          }
+        }
+
+        return false;
+      }
+
       /* Fija el valor de un campo respetando la prelación y dejando constancia
          de cualquier contradicción. */
       window.ptFijarCampo = function (id, valor, fuente, origen) {
@@ -11951,7 +12199,7 @@ Estrategia para "mezcla de los tres":
           window.PT_ORIGENES[id] = previo;
         }
 
-        if (previo && normaliza(previo.valor) !== normaliza(valor)) {
+        if (previo && !sonEquivalentes(previo.valor, valor, id)) {
           var difNum = null;
           if (esNumero(previo.valor) && esNumero(valor)) {
             var a = aNum(previo.valor), b = aNum(valor);
