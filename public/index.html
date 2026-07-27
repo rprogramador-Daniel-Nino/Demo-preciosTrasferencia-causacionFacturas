@@ -11282,7 +11282,7 @@ Estrategia para "mezcla de los tres":
             X.filas.map(function (f) {
               var btnAccion = '';
               if (f.actual === 0 || f.estado === 'ausente' || f.estado === 'muy_corta' || f.estado === 'corta') {
-                btnAccion = '<button type="button" onclick="ptUsarSeccionAnterior(\'' + f.id + '\')" style="padding:3px 8px;background:#1E8449;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:10.5px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.15)">📋 Copiar del anterior</button>';
+                btnAccion = '<button type="button" onclick="ptUsarSeccionAnterior(\'' + f.id + '\', this)" style="padding:3px 8px;background:#1E8449;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:10.5px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.15)">🤖 Mejorar con IA (base: anterior)</button>';
               }
               return '<tr style="border-bottom:1px dashed #E8DAEF"><td style="padding:4px">' + escH(f.nom) + '</td><td style="text-align:right;padding:4px">' + f.objetivo.toLocaleString('es-CO') + '</td>' +
                 '<td style="text-align:right;padding:4px">' + f.actual.toLocaleString('es-CO') + '</td>' +
