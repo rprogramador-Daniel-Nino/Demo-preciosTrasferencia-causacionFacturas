@@ -1706,11 +1706,20 @@
             ⚠ Para un análisis del sector específico (no genérico), cargue primero el <b>RUT</b> o la <b>Cámara de
               Comercio</b> arriba: se necesita al menos la razón social, el CIIU o el objeto social.
           </div>
-          <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-            <button class="btn solid" style="margin:0" onclick="autoEconomia()">⚙ Generar estudio económico
-              automático</button>
-            <button class="btn violet" style="margin:0" onclick="askClaude('estudio económico y sectorial')">✍ Redactar
+          <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px">Plantilla del sistema (sin
+            IA):</div>
+          <div id="ecoBotonesPlantilla" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+            <button type="button" class="btn solid" onclick="autoEconomia()">⚙ Generar / regenerar con la plantilla del
+              año</button>
+          </div>
+          <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px">Con inteligencia artificial:
+          </div>
+          <div id="ecoBotonesIA" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+            <button type="button" class="btn violet" onclick="askClaude('estudio económico y sectorial')">✍ Redactar
               con Claude (por web)</button>
+            <button type="button" class="btn amber"
+              onclick="ptRedactarInforme().then(function(){var el=document.getElementById('ptRedaccion');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})">🤖
+              Completar apartados pendientes con IA (usa «Otros documentos»)</button>
           </div>
           <label class="f"><span class="l">Panorama económico mundial</span><textarea class="i"
               id="e_mundo" rows="3" oninput="calcD()"></textarea></label>
@@ -1769,6 +1778,33 @@
               class="i" id="ec_estrategia" rows="2" oninput="calcD()"></textarea></label>
         </div>
       </div>
+
+      <div class="card full">
+        <div class="hd">
+          <h3>10. Auditoría y ensamblaje del informe</h3><span class="eyebrow">calidad y redacción — no es el motor de comparables</span>
+        </div>
+        <div class="bd">
+          <div style="margin:10px 0;padding:12px;border:2px solid #7D3C98;background:#F5EEF8;border-radius:8px">
+            <b>📐 Estructura y extensión del informe anterior</b>
+            <div style="font-size:11px;color:#5B2C6F;margin:4px 0 8px">El informe del año gravable debe conservar las mismas secciones, el mismo orden y una extensión comparable a la del período anterior. El sistema levanta ese esqueleto, mide el informe en curso y señala qué secciones quedaron cortas.</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button type="button" onclick="ptEstructuraAnterior()" style="padding:7px 11px;background:#7D3C98;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Levantar estructura del año anterior</button>
+              <button type="button" onclick="ptCompararExtension()" style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Comparar con el informe actual</button>
+            </div>
+            <div id="ptEstructura"></div>
+          </div>
+          <div style="margin:10px 0;padding:12px;border:2px solid #145A32;background:#EAFAF1;border-radius:8px">
+            <b>✍️ Redacción proactiva del informe</b>
+            <div style="font-size:11px;color:#145A32;margin:4px 0 8px">El sistema reúne la documentación del año anterior, el informe maestro, los soportes cargados, el análisis funcional, las operaciones, los estados financieros y el conjunto de comparables, y redacta con eso los apartados que estén vacíos, sustentando norma, doctrina y jurisprudencia. No inventa datos: lo que no conste se relaciona como información por solicitar.</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button type="button" onclick="ptRedactarInforme()" style="padding:7px 11px;background:#145A32;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Redactar apartados pendientes</button>
+              <button type="button" onclick="(function(){var P=ptPendientes();moToast('Pendientes: '+P.total+' (identidad '+P.identidad.length+', económico '+P.economico.length+', sector '+P.sector.length+', marcadores '+P.marcadores.length+')','amber');})()" style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer">Ver qué falta</button>
+            </div>
+            <div id="ptRedaccion"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="card" style="display:none" data-oculta="1 full">
         <div class="hd">
           <h3>Universo de búsqueda / Matriz de rechazo (Anexo C)</h3><span class="eyebrow web">se embebe completo en el
@@ -7619,23 +7655,13 @@ se guía la descarga manual
       function _ui() {
         try { ptEcoAvisoActualizar(); } catch (e) { }
         if (document.getElementById('ptEconBtn')) return;
-        var ancla = document.getElementById('e_mundo');
-        if (!ancla || !ancla.parentNode) return;
-        var cont = document.createElement('div');
-        cont.style.cssText = 'margin:6px 0';
+        var grupo = document.getElementById('ecoBotonesIA');
+        if (!grupo) return;
         var b = document.createElement('button');
-        b.type = 'button'; b.id = 'ptEconBtn';
+        b.type = 'button'; b.id = 'ptEconBtn'; b.className = 'btn solid';
         b.textContent = '🌐 Estructura del informe anterior con valores ' + ((($('anio') && $('anio').value) || '2025'));
-        b.style.cssText = 'padding:8px 12px;background:#117A65;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;margin-right:6px';
         b.onclick = function () { ptEconomiaDesdeAnterior(); };
-        var b2 = document.createElement('button');
-        b2.type = 'button';
-        b2.textContent = '↻ Regenerar con la plantilla del año gravable';
-        b2.style.cssText = 'padding:8px 12px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600';
-        b2.onclick = function () { ptEconomiaAuto(true); };
-        cont.appendChild(b); cont.appendChild(b2);
-        var caja = ancla.closest ? (ancla.closest('label') || ancla.parentNode) : ancla.parentNode;
-        caja.parentNode.insertBefore(cont, caja);
+        grupo.insertBefore(b, grupo.firstChild);
       }
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 1400); });
       else setTimeout(_ui, 1400);
@@ -10673,24 +10699,6 @@ se guía la descarga manual
       /* ───────────────────────────────────────────────────────────────────────
          8. INTERFAZ — y ejecución proactiva al generar el informe
          ─────────────────────────────────────────────────────────────────────── */
-      function _ui() {
-        if (document.getElementById('ptRedaccion')) return;
-        var ancla = document.getElementById('ptAtipPanel') || document.getElementById('ptSelPanel') || document.getElementById('ptFarPanel');
-        if (!ancla || !ancla.parentNode) return;
-        var d = document.createElement('div');
-        d.style.cssText = 'margin:10px 0;padding:12px;border:2px solid #145A32;background:#EAFAF1;border-radius:8px';
-        d.innerHTML = '<b>✍️ Redacción proactiva del informe</b>' +
-          '<div style="font-size:11px;color:#145A32;margin:4px 0 8px">El sistema reúne la documentación del año anterior, el informe maestro, los soportes cargados, el análisis funcional, las operaciones, los estados financieros y el conjunto de comparables, y redacta con eso los apartados que estén vacíos, sustentando norma, doctrina y jurisprudencia. No inventa datos: lo que no conste se relaciona como información por solicitar.</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-          '<button type="button" onclick="ptRedactarInforme()" style="padding:7px 11px;background:#145A32;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Redactar apartados pendientes</button>' +
-          '<button type="button" onclick="(function(){var P=ptPendientes();moToast(\'Pendientes: \'+P.total+\' (identidad \'+P.identidad.length+\', económico \'+P.economico.length+\', sector \'+P.sector.length+\', marcadores \'+P.marcadores.length+\')\',\'amber\');})()" ' +
-          'style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer">Ver qué falta</button>' +
-          '</div><div id="ptRedaccion"></div>';
-        ancla.parentNode.insertBefore(d, ancla.nextSibling);
-      }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 2000); });
-      else setTimeout(_ui, 2000);
-
     })();
 
 
@@ -11337,23 +11345,6 @@ se guía la descarga manual
         host.innerHTML = h;
       }
       window.ptPintarEstructura = ptPintarEstructura;
-
-      function _ui() {
-        if (document.getElementById('ptEstructura')) return;
-        var ancla = document.getElementById('ptAtipPanel') || document.getElementById('ptSelPanel') || document.getElementById('ptFarPanel');
-        if (!ancla || !ancla.parentNode) return;
-        var d = document.createElement('div');
-        d.style.cssText = 'margin:10px 0;padding:12px;border:2px solid #7D3C98;background:#F5EEF8;border-radius:8px';
-        d.innerHTML = '<b>📐 Estructura y extensión del informe anterior</b>' +
-          '<div style="font-size:11px;color:#5B2C6F;margin:4px 0 8px">El informe del año gravable debe conservar las mismas secciones, el mismo orden y una extensión comparable a la del período anterior. El sistema levanta ese esqueleto, mide el informe en curso y señala qué secciones quedaron cortas.</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-          '<button type="button" onclick="ptEstructuraAnterior()" style="padding:7px 11px;background:#7D3C98;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Levantar estructura del año anterior</button>' +
-          '<button type="button" onclick="ptCompararExtension()" style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Comparar con el informe actual</button>' +
-          '</div><div id="ptEstructura"></div>';
-        ancla.parentNode.insertBefore(d, ancla.nextSibling);
-      }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 2100); });
-      else setTimeout(_ui, 2100);
 
     })();
 
