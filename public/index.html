@@ -11061,6 +11061,8 @@ Estrategia para "mezcla de los tres":
       }
       window.ptTextoPlanoAHtmlSeccion = ptTextoPlanoAHtmlSeccion;
 
+      /* copia literal del texto anterior, sin pasar por IA — se conserva sin llamadores
+         activos como utilidad de depuración/manual; el flujo en vivo usa ptUsarSeccionAnterior */
       function ptExtraerTextoSeccionAnterior(secId) {
         var texto = ptExtraerTextoPlanoSeccionAnterior(secId);
         if (!texto) return null;
@@ -11117,9 +11119,17 @@ Estrategia para "mezcla de los tres":
       }
       window.ptAplicarSeccionesInyectadas = ptAplicarSeccionesInyectadas;
 
+      var _ptMejoraEnCurso = false;
+
       window.ptUsarSeccionAnterior = async function (secId, btnEl) {
         var item = ESQUELETO.find(function (e) { return e.id === secId; });
         var nom = item ? item.nom : secId;
+
+        if (_ptMejoraEnCurso) {
+          moToast('Ya hay una mejora con IA en curso; espere a que termine.', 'amber');
+          return false;
+        }
+        _ptMejoraEnCurso = true;
 
         var btnTextoOriginal = btnEl ? btnEl.textContent : null;
         if (btnEl) { btnEl.disabled = true; btnEl.textContent = '⏳ Mejorando…'; }
@@ -11127,14 +11137,10 @@ Estrategia para "mezcla de los tres":
           if (btnEl) { btnEl.disabled = false; btnEl.textContent = btnTextoOriginal; }
         };
 
-        var textoBase = ptExtraerTextoPlanoSeccionAnterior(secId);
-        if (!textoBase) {
-          restaurarBoton();
-          moToast('No se pudo extraer el texto de «' + nom + '» del informe anterior.', 'red');
-          return false;
-        }
-
         try {
+          var textoBase = ptExtraerTextoPlanoSeccionAnterior(secId);
+          if (!textoBase) throw new Error('No se pudo extraer el texto de «' + nom + '» del informe anterior.');
+
           var contextoActual = ptContextoCompleto().slice(0, 20000);
           var prompt =
             'Eres especialista en precios de transferencia en Colombia. Tu tarea es ACTUALIZAR y MEJORAR\n' +
@@ -11171,8 +11177,43 @@ Estrategia para "mezcla de los tres":
           var textoMejorado = j && j.texto ? String(j.texto).trim() : '';
           if (textoMejorado.length < 20) throw new Error('Gemini no devolvió un texto mejorado válido para «' + nom + '».');
 
-          if (typeof window.ptVerificarCifras === 'function') {
-            var ajenas = window.ptVerificarCifras(textoMejorado, textoBase + '\n' + contextoActual);
+          var ajenas = typeof window.ptVerificarCifras === 'function'
+            ? window.ptVerificarCifras(textoMejorado, textoBase + '\n' + contextoActual)
+            : [];
+
+          /* si hay cifras que no constan en ninguna fuente, se le pide a Gemini que se
+             autocorrija una sola vez antes de conformarse con solo advertir */
+          if (ajenas.length) {
+            try {
+              var promptCorreccion =
+                'El texto que redactaste antes contiene cifras que no constan ni en el texto anterior ni en\n' +
+                'el contexto del estudio actual: ' + ajenas.join(', ') + '.\n' +
+                'Corrígelo: reemplaza exactamente esas cifras por la expresión\n' +
+                '"[dato pendiente de confirmar con el contribuyente]", sin inventar ninguna cifra nueva.\n' +
+                'No cambies el resto del texto salvo lo estrictamente necesario para esa corrección.\n\n' +
+                'TEXTO A CORREGIR:\n---\n' + textoMejorado + '\n---\n\n' +
+                'Devuelve ÚNICAMENTE un JSON válido, sin marcas markdown, sin texto antes ni después:\n' +
+                '{"texto":"..."}';
+
+              var resCorr = await fetch('/api/gemini', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: promptCorreccion }] }] })
+              });
+              var dataCorr = await resCorr.json();
+              var candCorr = dataCorr && dataCorr.candidates && dataCorr.candidates[0];
+              var rawCorr = candCorr && candCorr.content && candCorr.content.parts ? candCorr.content.parts.map(function (p) { return p.text || ''; }).join('') : '';
+              if (resCorr.ok && rawCorr) {
+                var jCorr = extraerJSONDeRespuestaIA(rawCorr);
+                var textoCorregido = jCorr && jCorr.texto ? String(jCorr.texto).trim() : '';
+                if (textoCorregido.length >= 20) {
+                  textoMejorado = textoCorregido;
+                  ajenas = typeof window.ptVerificarCifras === 'function'
+                    ? window.ptVerificarCifras(textoMejorado, textoBase + '\n' + contextoActual)
+                    : [];
+                }
+              }
+            } catch (eCorr) { /* si falla el reintento de autocorrección, se sigue con el texto original y su advertencia */ }
+
             if (ajenas.length) {
               moToast('El texto mejorado de «' + nom + '» contiene cifras que no constan en el texto anterior ni en el estudio actual: ' + ajenas.join(', '), 'amber');
             }
@@ -11193,10 +11234,17 @@ Estrategia para "mezcla de los tres":
           restaurarBoton();
           moToast('No se pudo mejorar «' + nom + '» con IA: ' + e.message, 'red');
           return false;
+        } finally {
+          _ptMejoraEnCurso = false;
         }
       };
 
       window.ptCompletarTodasAusentesAnterior = async function () {
+        if (_ptMejoraEnCurso) {
+          moToast('Ya hay una mejora con IA en curso; espere a que termine.', 'amber');
+          return 0;
+        }
+
         var X = window.PT_EXTENSION;
         if (!X || !X.filas) {
           try { X = ptCompararExtension(); } catch (e) { }
