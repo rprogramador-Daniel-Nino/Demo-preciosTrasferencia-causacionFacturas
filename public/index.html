@@ -1130,65 +1130,7 @@
   <div class="wrap">
     <div class="grid">
 
-      <div class="card full">
-        <div class="hd">
-          <h3>Cómo usar el sistema — guía rápida</h3><span class="eyebrow web" onclick="toggleHelp()"
-            style="cursor:pointer">mostrar / ocultar</span>
-        </div>
-        <div class="bd" id="helpbody">
-          <p class="hint" style="font-size:12.5px;line-height:1.6">Este sistema genera la documentación comprobatoria de
-            Precios de Transferencia (Informe Local), la Declaración Informativa (Formulario 120) y el Formato 1125, con
-            auditoría de norma y técnica. Trabaja por <b>empresa</b> y <b>año</b>; guarda cada estudio en memoria para
-            reutilizarlo el año siguiente. Flujo recomendado:</p>
-          <div class="steps">
-            <div class="step">
-              <div class="step-n">1</div>
-              <div class="step-b"><b>Nuevo estudio.</b> Arriba, usa «Estudio nuevo» y escribe la empresa y el año.</div>
-            </div>
-            <div class="step">
-              <div class="step-n">2</div>
-              <div class="step-b"><b>Identidad.</b> Carga el <b>RUT</b> (PDF o texto):
-                autocompleta razón social, NIT, CIIU y representación. Si el documento es de otra
-                empresa, el sistema lo bloquea y avisa.</div>
-            </div>
-            <div class="step">
-              <div class="step-n">3</div>
-              <div class="step-b"><b>Operación.</b> Registra el vinculado, país, código DIAN, monto, y los datos del
-                Formato 1125 (NIT del vinculado, naturaleza, etc.).</div>
-            </div>
-            <div class="step">
-              <div class="step-n">4</div>
-              <div class="step-b"><b>Estados financieros.</b> Ingresa las cifras de la parte examinada y <b>pega los
-                  EEFF y notas</b> del contribuyente en el cuadro de copia fiel (se reproducen en el Anexo A).</div>
-            </div>
-            <div class="step">
-              <div class="step-n">5</div>
-              <div class="step-b"><b>Comparables.</b> Importa el Excel de <b>Capital IQ</b> (lee cualquier estructura).
-                Si faltan nacionales, usa el punto <b>SuperSociedades</b>: carga la base, selecciona por NIT y el
-                sistema <b>excluye las controladas</b> (Art. 260-1). Carga también el <b>universo</b> para el Anexo C.
-              </div>
-            </div>
-            <div class="step">
-              <div class="step-n">6</div>
-              <div class="step-b"><b>Estudio económico.</b> Pulsa «Generar estudio económico automático» (fuentes
-                reales: FMI, DANE, Banco de la República, ANALDEX, ANDI).</div>
-            </div>
-            <div class="step">
-              <div class="step-n">7</div>
-              <div class="step-b"><b>Verifica y audita.</b> Usa «Verificar puntos de ingesta», «Ejecutar auditoría» y
-                «Auditoría norma + técnica».</div>
-            </div>
-            <div class="step">
-              <div class="step-n">8</div>
-              <div class="step-b"><b>Genera.</b> Descarga el Informe Local (Word/HTML), el Resumen ejecutivo, la
-                Declaración 120 y el Formato 1125 (CSV/XML para el prevalidador DIAN).</div>
-            </div>
-          </div>
-          <p class="hint" style="font-size:12px"><b>Importante:</b> es una herramienta de trabajo; toda cifra y
-            documento debe ser validado por un profesional de precios de transferencia. El XML definitivo del 1125 lo
-            firma el prevalidador de la DIAN. No constituye asesoría tributaria.</p>
-        </div>
-      </div>
+
 
       <div class="card full">
         <div class="hd">
@@ -1196,33 +1138,41 @@
             autocompletado</span>
         </div>
         <div class="bd">
-          <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <div class="actions" style="margin-bottom:10px">
             <label class="btn solid" style="margin:0;cursor:pointer">📎 RUT<input type="file" accept=".pdf,.txt"
                 style="display:none" onchange="readFileText(this.files[0],applyRUT)"></label>
             <span class="webbtn" onclick="webDoc('RUT DIAN')">🔎 Verificar RUT (DIAN)</span>
-            <label class="btn" style="margin:0;cursor:pointer;background:#6C3483;color:#fff">📎 Declaración de
-              Renta<input type="file" accept=".pdf,.txt" style="display:none"
-                onchange="readFileText(this.files[0],applyRenta)"></label>
-
+            <label class="btn violet" style="margin:0;cursor:pointer">📎 Declaración de Renta<input type="file"
+                accept=".pdf,.txt" style="display:none" onchange="readFileText(this.files[0],applyRenta)"></label>
           </div>
           <div class="hint" id="docmsg" style="margin-bottom:8px">Carga el RUT: el sistema
             autocompleta razón social, NIT, CIIU y representación. Si el PDF no es legible,
             pega su texto abajo y procesa.</div>
-          <label class="f" style="display:none"><span class="l">Pegar texto del documento (alternativa al
-              PDF)</span><textarea class="i" id="docpaste" rows="2"
-              placeholder="Pega aquí el texto del RUT…"></textarea></label>
 
-          <div class="row2">
-            <label class="f" style="display:none"><span class="l">Actividad económica (CIIU)</span><input class="i"
-                id="ciiu" oninput="calcD()"></label>
-            <label class="f" style="display:none"><span class="l">Representante legal</span><input class="i"
-                id="replegal" oninput="calcD()"></label>
+          <details style="margin-bottom:14px">
+            <summary style="cursor:pointer;font-size:12px;font-weight:600">¿No se pudo leer el PDF? Pega el texto
+              aquí</summary>
+            <label class="f" style="margin-top:8px;margin-bottom:8px"><span class="l">Texto del documento</span>
+              <textarea class="i" id="docpaste" rows="2" placeholder="Pega aquí el texto del RUT…"></textarea></label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="mini" onclick="applyRUT($('docpaste').value)">Procesar como RUT</button>
+              <button type="button" class="mini" onclick="applyRenta($('docpaste').value)">Procesar como Declaración
+                de Renta</button>
+            </div>
+          </details>
+
+          <div class="hint" style="margin-bottom:8px"><b>Datos extraídos</b> — verifica y corrige si es necesario:
           </div>
-
-          <label class="f" style="display:none"><span class="l">Objeto social</span><textarea class="i" id="objeto"
-              rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">Fecha de constitución</span><input class="i"
-              id="constitucion" oninput="calcD()"></label>
+          <div class="row2">
+            <label class="f"><span class="l">Actividad económica (CIIU)</span><input class="i" id="ciiu"
+                oninput="calcD()"></label>
+            <label class="f"><span class="l">Representante legal</span><input class="i" id="replegal"
+                oninput="calcD()"></label>
+          </div>
+          <label class="f"><span class="l">Objeto social</span><textarea class="i" id="objeto" rows="2"
+              oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Fecha de constitución</span><input class="i" id="constitucion"
+              oninput="calcD()"></label>
         </div>
       </div>
 
@@ -1239,9 +1189,13 @@
               </select></label>
             <label class="f" style="display:none"><span class="l">Año a elaborar</span><input class="i mono"
                 id="histyear" placeholder="2025"></label>
-            <label class="f"><span class="l">Estudio base</span><span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button type="button" class="mini"
+            <label class="f"><span class="l">Estudio base</span><span
+                style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button type="button" class="mini"
                   onclick="loadPriorYear()">↤ Traer año anterior</button><button type="button" class="mini"
-                  onclick="buildFromScratch()">＋ Desde cero</button><label class="btn violet mini" style="margin:0;cursor:pointer">📎 Cargar informe del año anterior (.pdf, .docx, .json, .txt)<input type="file" accept=".pdf,.docx,.doc,.json,.txt" style="display:none" onchange="cargarInformeAnterior(this.files[0])"></label></span></label>
+                  onclick="buildFromScratch()">＋ Desde cero</button><label class="btn violet mini"
+                  style="margin:0;cursor:pointer">📎 Cargar informe del año anterior (.pdf, .docx, .json, .txt)<input
+                    type="file" accept=".pdf,.docx,.doc,.json,.txt" style="display:none"
+                    onchange="cargarInformeAnterior(this.files[0])"></label></span></label>
 
           </div>
           <label class="f"><span class="l">Estudios guardados (clic para cargar)</span><select class="i" id="histlist"
@@ -1266,9 +1220,7 @@
           </div>
 
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-            <button id="btnExtraerActividad"
-              onclick="extractPriorActivityWithGemini()"
-              style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
+            <button id="btnExtraerActividad" onclick="extractPriorActivityWithGemini()" style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
                      background:#C0473B;color:#fff;border:none;cursor:pointer;
                      display:inline-flex;align-items:center;gap:7px;transition:background .2s">
               🤖 Analizar empresa con IA
@@ -1276,12 +1228,15 @@
             <div id="actmsg_wrap" style="display:flex;align-items:center;gap:8px">
               <span id="actmsg_icon" style="font-size:18px">🔴</span>
               <span id="actmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
-                Pendiente — cargue primero el estudio del año anterior (tarjeta de arriba) y luego pulse «Analizar empresa con IA»
+                Pendiente — cargue primero el estudio del año anterior (tarjeta de arriba) y luego pulse «Analizar
+                empresa con IA»
               </span>
             </div>
           </div>
 
-          <div style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px" id="act_steps_hint">
+          <div
+            style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px"
+            id="act_steps_hint">
             <b>Pasos:</b>
             <span style="margin:0 6px">①</span> Cargue el informe del año anterior (tarjeta anterior)
             <span style="margin:0 6px">→</span>
@@ -1294,8 +1249,10 @@
 
           <input type="hidden" id="actividad_json" value="">
           <div id="activity_spec_card" style="display:none;margin-top:12px">
-            <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
-              ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los cambios se guardan automáticamente y se usan en la búsqueda de comparables.
+            <div
+              style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
+              ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los cambios
+              se guardan automáticamente y se usan en la búsqueda de comparables.
             </div>
             <div class="row2">
               <label class="f"><span class="l">¿Qué hace la empresa? (actividad específica real)</span>
@@ -1308,10 +1265,14 @@
               </label>
             </div>
             <div class="row2">
-              <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (puedes escribir en español — se traducen automáticamente)</span>
-                <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b> Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor mayorista"</i>) y al presionar Enter el sistema las traducirá inmediatamente al inglés para Capital IQ / Orbis.</div>
+              <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (puedes
+                  escribir en español — se traducen automáticamente)</span>
+                <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b>
+                  Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor mayorista"</i>)
+                  y al presionar Enter el sistema las traducirá inmediatamente al inglés para Capital IQ / Orbis.</div>
                 <div class="actchips" id="act_keywords_chips"></div>
-                <input class="i" id="act_keyword_new" placeholder="ej: desarrollo de videojuegos, distribuidor agroquímico…"
+                <input class="i" id="act_keyword_new"
+                  placeholder="ej: desarrollo de videojuegos, distribuidor agroquímico…"
                   onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
               </label>
               <label class="f"><span class="l">Códigos SIC sugeridos (pulse Enter para agregar)</span>
@@ -1320,12 +1281,14 @@
                   onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('sic', this.value); this.value='';}">
               </label>
             </div>
-            <div class="hint" id="act_justificacion" style="background:#F8FAFC;border:1px solid var(--hair);border-radius:8px;padding:8px 12px;margin-top:4px"></div>
+            <div class="hint" id="act_justificacion"
+              style="background:#F8FAFC;border:1px solid var(--hair);border-radius:8px;padding:8px 12px;margin-top:4px">
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="card">
+      <div class="card full">
         <div class="hd">
           <h3>Operación analizada (requiere el Excel de operaciones)</h3><span class="card-status-badge pending"
             id="badge_card_2">⚪ Pendiente</span><span class="eyebrow" style="margin-left:auto">ingesta</span>
@@ -1345,17 +1308,16 @@
           <div class="row2">
             <label class="f"><span class="l">Vinculado</span><input class="i" id="vinc" required
                 aria-required="true"></label>
-            <label class="f"><span class="l">País vinculado</span><input class="i" id="pais"
-                required aria-required="true"></label>
+            <label class="f"><span class="l">País vinculado</span><input class="i" id="pais" required
+                aria-required="true"></label>
           </div>
-          <label class="f"><span class="l">Operación analizada</span><input class="i"
-              id="oper"></label>
+          <label class="f"><span class="l">Operación analizada</span><input class="i" id="oper"></label>
           <div class="row3">
             <label class="f"><span class="l">Cód. DIAN</span><input class="i" id="cod"></label>
-            <label class="f"><span class="l">Monto operación (COP)</span><input class="i mono"
-                id="monto" required aria-required="true"></label>
-            <label class="f"><span class="l">Año gravable</span><input class="i mono" id="anio"
-                required aria-required="true"></label>
+            <label class="f"><span class="l">Monto operación (COP)</span><input class="i mono" id="monto" required
+                aria-required="true"></label>
+            <label class="f"><span class="l">Año gravable</span><input class="i mono" id="anio" required
+                aria-required="true"></label>
           </div>
           <div class="pi-btns" style="margin:2px 0 0"><span class="hint" style="display:inline">Datos para el Formato
               1125 (Hoja 2 · Formulario 120):</span></div>
@@ -1387,7 +1349,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card full">
         <div class="hd">
           <h3>Parámetros e indicador</h3><span class="eyebrow">flexible · versionado</span>
         </div>
@@ -1419,10 +1381,10 @@
                 id="uvt"></label>
             <label class="f" style="display:none"><span class="l">Umbral operación (UVT)</span><input class="i mono"
                 id="umbral" oninput="calcUmbrales()"></label>
-            <label class="f"><span class="l">Patrimonio bruto a 31-dic (COP)</span><input
-                class="i mono" id="patrimonio" oninput="calcUmbrales()"></label>
-            <label class="f"><span class="l">Ingresos brutos del período (COP)</span><input
-                class="i mono" id="ingbrutos" oninput="calcUmbrales()"></label>
+            <label class="f"><span class="l">Patrimonio bruto a 31-dic (COP)</span><input class="i mono" id="patrimonio"
+                oninput="calcUmbrales()"></label>
+            <label class="f"><span class="l">Ingresos brutos del período (COP)</span><input class="i mono"
+                id="ingbrutos" oninput="calcUmbrales()"></label>
           </div>
           <div class="row3">
             <label class="f" style="display:none"><span class="l">Egreso controlado (tope, COP)</span><input
@@ -1451,7 +1413,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card full">
         <div class="hd">
           <h3>🧾 Estados financieros (EEFF)</h3>
           <span class="card-status-badge pending" id="badge_card_5">🔴 Pendiente</span>
@@ -1467,11 +1429,9 @@
 
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
             <label class="btn solid" style="margin:0;cursor:pointer">📎 Adjuntar EEFF<input type="file"
-                accept=".xlsx,.xls,.csv,.pdf,image/*" style="display:none"
-                onchange="cargarEEFF(this.files[0])"></label>
+                accept=".xlsx,.xls,.csv,.pdf,image/*" style="display:none" onchange="cargarEEFF(this.files[0])"></label>
             <span id="evid-eeff" style="font-size:10.5px;color:#1F6D4F"></span>
-            <button id="btnLeerEEFFIA" type="button" onclick="ptLeerEEFFconIA()"
-              style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
+            <button id="btnLeerEEFFIA" type="button" onclick="ptLeerEEFFconIA()" style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
                      background:#C0473B;color:#fff;border:none;cursor:pointer;
                      display:inline-flex;align-items:center;gap:7px;transition:background .2s">
               🤖 Leer EEFF con IA (extrae y verifica)
@@ -1508,8 +1468,8 @@
                 placeholder="Ej: 5.271.105.507" required aria-required="true" oninput="calcD()"></label>
             <label class="f"><span class="l">Costo de ventas</span><input class="i mono" id="t_c"
                 placeholder="Ej: 2.761.202.249" required aria-required="true" oninput="calcD()"></label>
-            <label class="f"><span class="l">Utilidad operativa</span><input class="i mono"
-                id="t_op" placeholder="Ej: 294.255.770" required aria-required="true" oninput="calcD()"></label>
+            <label class="f"><span class="l">Utilidad operativa</span><input class="i mono" id="t_op"
+                placeholder="Ej: 294.255.770" required aria-required="true" oninput="calcD()"></label>
           </div>
           <div class="row3">
             <label class="f"><span class="l">Cuentas x cobrar</span><input class="i mono" id="t_ar"
@@ -1569,7 +1529,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card full">
         <div class="hd">
           <h3>Comparables</h3><span class="card-status-badge pending" id="badge_card_7">⚪ Pendiente</span><span
             class="eyebrow" id="ccount" style="margin-left:auto">0 · incluidas 0</span>
@@ -1583,7 +1543,9 @@
             <div style="display:flex;gap:6px;align-items:center"><label class="mini" style="cursor:pointer">📥 Importar
                 Excel (Capital IQ)<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none"
                   onchange="importCompsFile(this.files[0])"></label><button type="button" class="mini green"
-                  onclick="ptExtraerComparablesEstudioAnteriorWithGemini()" style="font-weight:600;background:#2E8B6B;color:#fff;border:none;padding:4px 10px;border-radius:5px;cursor:pointer">🤖 Cargar comparables del estudio anterior</button><label class="mini" style="cursor:pointer">📎
+                onclick="ptExtraerComparablesEstudioAnteriorWithGemini()"
+                style="font-weight:600;background:#2E8B6B;color:#fff;border:none;padding:4px 10px;border-radius:5px;cursor:pointer">🤖
+                Cargar comparables del estudio anterior</button><label class="mini" style="cursor:pointer">📎
                 Adjuntar<input type="file" style="display:none"
                   onchange="attachEvidence('comps',this.files[0])"></label><span id="evid-comps"
                 style="font-size:10.5px;color:#1F6D4F"></span></div><button type="button" class="btn mini violet"
@@ -1629,64 +1591,67 @@
               <span class="hint-inline">valores por defecto ya aplicados · ábrelo solo si necesitas ajustar algo</span>
             </summary>
             <div class="inner" id="ptZonaConfigInner">
-          <!-- ══════ MOTOR DE SELECCIÓN (integrado) ══════ -->
-          <div
-            style="border:1.5px solid var(--hair);border-radius:10px;padding:14px;margin:12px 0;background:var(--white)">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-              <b style="font-size:13px">⚙ Motor de selección automática (TOP-N)</b>
-              <span id="mo_pesos_label" style="font-size:11px;color:var(--muted)">Puntúa: actividad 40 · tamaño 20 · geografía 15 ·
-                rentabilidad 15 · datos 10</span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
-              <label class="f"><span class="l">N objetivo</span><input class="i" id="mo_n"
-                  type="number" value="12" min="4" max="12"
-                  title="Tope 12: por encima la muestra pierde homogeneidad funcional"></label>
-              <label class="f"><span class="l">Pérdidas operativas</span><select class="i"
-                  id="mo_perd">
-                  <option value="excluir">Excluir (conservador DIAN)</option>
-                  <option value="incluir">Incluir (OCDE: no es causal por sí sola)</option>
-                  <option value="preferir">Preferir (exige justificación)</option>
-                </select></label>
-              <label class="f"><span class="l">Prioridad geográfica</span><select class="i"
-                  id="mo_geo">
-                  <option value="ninguna">Global</option>
-                  <option value="LATAM">América Latina</option>
-                  <option value="ASIA">Asia-Pacífico</option>
-                  <option value="EUROPA">Europa</option>
-                  <option value="NORTEAM">Norteamérica</option>
-                </select></label>
-              <label class="f"><span class="l">Rigor funcional</span><select class="i" id="mo_act">
-                  <option value="estandar">Estándar (servicios+mixtos)</option>
-                  <option value="estricto">Estricto (solo servicios)</option>
-                  <option value="amplio">Amplio (incluye indefinidos)</option>
-                </select></label>
-            </div>
-            <label class="f" id="mo_justw" style="display:none;margin-top:6px"><span class="l">Justificación de preferir
-                pérdidas (≥120 car., va al informe)</span><textarea class="i" id="mo_just" rows="2"></textarea></label>
-            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn solid" onclick="motorEjecutar()">Ejecutar selección</button>
-              <button class="btn ghost" onclick="motorMas(3)">+ Solicitar 3 más</button>
-              <button class="btn ghost" onclick="motorEscenarios()">⚖ Comparar escenarios</button>
+              <!-- ══════ MOTOR DE SELECCIÓN (integrado) ══════ -->
+              <div
+                style="border:1.5px solid var(--hair);border-radius:10px;padding:14px;margin:12px 0;background:var(--white)">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+                  <b style="font-size:13px">⚙ Motor de selección automática (TOP-N)</b>
+                  <span id="mo_pesos_label" style="font-size:11px;color:var(--muted)">Puntúa: actividad 40 · tamaño 20 ·
+                    geografía 15 ·
+                    rentabilidad 15 · datos 10</span>
+                </div>
+                <div
+                  style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
+                  <label class="f"><span class="l">N objetivo</span><input class="i" id="mo_n" type="number" value="12"
+                      min="4" max="12" title="Tope 12: por encima la muestra pierde homogeneidad funcional"></label>
+                  <label class="f"><span class="l">Pérdidas operativas</span><select class="i" id="mo_perd">
+                      <option value="excluir">Excluir (conservador DIAN)</option>
+                      <option value="incluir">Incluir (OCDE: no es causal por sí sola)</option>
+                      <option value="preferir">Preferir (exige justificación)</option>
+                    </select></label>
+                  <label class="f"><span class="l">Prioridad geográfica</span><select class="i" id="mo_geo">
+                      <option value="ninguna">Global</option>
+                      <option value="LATAM">América Latina</option>
+                      <option value="ASIA">Asia-Pacífico</option>
+                      <option value="EUROPA">Europa</option>
+                      <option value="NORTEAM">Norteamérica</option>
+                    </select></label>
+                  <label class="f"><span class="l">Rigor funcional</span><select class="i" id="mo_act">
+                      <option value="estandar">Estándar (servicios+mixtos)</option>
+                      <option value="estricto">Estricto (solo servicios)</option>
+                      <option value="amplio">Amplio (incluye indefinidos)</option>
+                    </select></label>
+                </div>
+                <label class="f" id="mo_justw" style="display:none;margin-top:6px"><span class="l">Justificación de
+                    preferir
+                    pérdidas (≥120 car., va al informe)</span><textarea class="i" id="mo_just"
+                    rows="2"></textarea></label>
+                <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn solid" onclick="motorEjecutar()">Ejecutar selección</button>
+                  <button class="btn ghost" onclick="motorMas(3)">+ Solicitar 3 más</button>
+                  <button class="btn ghost" onclick="motorEscenarios()">⚖ Comparar escenarios</button>
 
-              <span id="mo_info" style="font-size:12px;color:var(--muted);align-self:center"></span>
-            </div>
-            <div id="mo_resultados"></div>
-            <div id="mo_esc" style="display:none;margin-top:12px">
-              <div style="font-size:11px;color:var(--muted);margin-bottom:6px">▲ = parte examinada · franja = P25–P75 ·
-                línea = mediana. Elegir un escenario lo aplica, ejecuta el motor y documenta la elección en el informe.
+                  <span id="mo_info" style="font-size:12px;color:var(--muted);align-self:center"></span>
+                </div>
+                <div id="mo_resultados"></div>
+                <div id="mo_esc" style="display:none;margin-top:12px">
+                  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">▲ = parte examinada · franja =
+                    P25–P75 ·
+                    línea = mediana. Elegir un escenario lo aplica, ejecuta el motor y documenta la elección en el
+                    informe.
+                  </div>
+                  <div id="mo_esc_cards"
+                    style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px"></div>
+                  <label class="f" id="mo_esc_justw" style="display:none;margin-top:8px"><span class="l">¿Por qué este
+                      escenario? (≥80 car., va a la metodología)</span><textarea class="i" id="mo_esc_just"
+                      rows="2"></textarea>
+                    <button class="btn" style="margin-top:6px" onclick="motorConfirmarEsc()">Confirmar y
+                      aplicar</button></label>
+                </div>
               </div>
-              <div id="mo_esc_cards"
-                style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px"></div>
-              <label class="f" id="mo_esc_justw" style="display:none;margin-top:8px"><span class="l">¿Por qué este
-                  escenario? (≥80 car., va a la metodología)</span><textarea class="i" id="mo_esc_just"
-                  rows="2"></textarea>
-                <button class="btn" style="margin-top:6px" onclick="motorConfirmarEsc()">Confirmar y
-                  aplicar</button></label>
-            </div>
-          </div>
 
-          <!-- Módulo de regalías retirado del alcance actual (oculto; funciones inertes por compatibilidad) -->
-          <div id="compalert" style="margin-top:10px"></div>
+              <!-- Módulo de regalías retirado del alcance actual (oculto; funciones inertes por compatibilidad) -->
+              <div id="compalert" style="margin-top:10px"></div>
             </div>
           </details>
         </div>
@@ -2234,8 +2199,8 @@
         const estados = {
           pendiente: { bg: '#C0473B', label: '🤖 Analizar empresa con IA', icono: '🔴', color: '#7a241c', badge: '🔴 Pendiente', badgeClass: 'pending' },
           procesando: { bg: '#B67A0E', label: '⏳ Analizando…', icono: '⏳', color: '#6b5010', badge: '⏳ Procesando', badgeClass: 'partial' },
-          listo:      { bg: '#2E8B6B', label: '✅ Volver a analizar', icono: '✅', color: '#14532d', badge: '✅ Listo', badgeClass: 'ok' },
-          error:      { bg: '#C0473B', label: '⚠ Reintentar análisis', icono: '⚠️', color: '#7a241c', badge: '⚠ Error', badgeClass: 'pending' }
+          listo: { bg: '#2E8B6B', label: '✅ Volver a analizar', icono: '✅', color: '#14532d', badge: '✅ Listo', badgeClass: 'ok' },
+          error: { bg: '#C0473B', label: '⚠ Reintentar análisis', icono: '⚠️', color: '#7a241c', badge: '⚠ Error', badgeClass: 'pending' }
         };
         const e = estados[estado] || estados.pendiente;
         if (btn) { btn.style.background = e.bg; btn.textContent = e.label; btn.disabled = (estado === 'procesando'); }
@@ -3574,13 +3539,13 @@ ${textoPrompt}`;
         if (!res.ok) throw new Error('Error HTTP ' + res.status);
         const data = await res.json();
         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        
+
         const cleanText = rawText.replace(/^```(?:json)?\s*/gi, '').replace(/\s*```$/g, '').trim();
-        
+
         let extraidas = [];
         const jsonMatch = cleanText.match(/\[[\s\S]*\]/) || cleanText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) throw new Error('Gemini no devolvió un formato JSON válido');
-        
+
         const parsed = JSON.parse(jsonMatch[0]);
         if (Array.isArray(parsed)) {
           extraidas = parsed;
@@ -3650,7 +3615,7 @@ ${textoPrompt}`;
       } catch (e) { }
       let ev = rows.map(o => ({ o, r: moScore(o, cfg, medPool, sTP, act) }));
       let eleg = ev.filter(x => !x.r.out).sort((a, b) => b.r.sc - a.r.sc);
-      
+
       /* Si por criterios de especialidad/rigor no se encuentra NINGUNA candidata elegible,
          hacer fallback evaluando sin descarte estricto de nicho para no dejar la muestra en 0 ni bloquear */
       if (eleg.length === 0 && act) {
@@ -5779,7 +5744,7 @@ Estrategia para "mezcla de los tres":
 1) PDF nativo (con capa de texto)  → extrae texto directo (rápido, sin OCR)
 2) PDF escaneado (sin texto)       → rasteriza a canvas y aplica OCR real
 3) Origen remoto                   → no accesible desde el navegador;
-                              se guía la descarga manual
+                        se guía la descarga manual
 ============================================================================ */
     window.ORQ_OCR = {
       worker: null,
@@ -8361,7 +8326,7 @@ Estrategia para "mezcla de los tres":
           '</details>' +
           '<div id="ptFarPerfil"></div>' +
           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:14px">' +
-          
+
           '<div style="background:#FFF;border:1px solid #E3D5A4;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between">' +
           '<div>' +
           '<div style="font-size:10px;font-weight:700;color:#B7950B;text-transform:uppercase;margin-bottom:2px">Paso 1 · Identificación</div>' +
@@ -12829,7 +12794,7 @@ Estrategia para "mezcla de los tres":
             '<span>🏢</span> <span>Se incluyeron empresas de actividades muy distintas a la tuya</span>' +
             '</div>' +
             '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
-            '<p style="margin:0 0 8px"><b>¿Qué significa esto en plastilina?</b><br>' +
+            '<p style="margin:0 0 8px"><b>¿Qué significa esto ?</b><br>' +
             'Imagina que vendes empanadas y para probar si tus precios son justos te comparas con un taller de mecánica de carros. ¡No tiene sentido! Eso pasó aquí: en tu tabla hay empresas (' + empresasList + ') que prestan servicios de TI o consultoría general, mientras que tu empresa se dedica exclusivamente a <b>' + escH(ind) + '</b>.</p>' +
             '<p style="margin:0 0 8px"><b>¿Por qué no se puede dejar así?</b><br>' +
             'La DIAN y las normas tributarias internacionales (OCDE) rechazan estudios donde se comparen negocios distintos, porque sus márgenes de ganancia son completamente diferentes. Si enviamos esto así, la DIAN anula el estudio inmediatamente.</p>' +
@@ -12844,7 +12809,7 @@ Estrategia para "mezcla de los tres":
             '<span>📊</span> <span>La tabla tiene demasiadas empresas cargadas sin filtrar</span>' +
             '</div>' +
             '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
-            '<p style="margin:0 0 8px"><b>¿Qué significa esto en plastilina?</b><br>' +
+            '<p style="margin:0 0 8px"><b>¿Qué significa esto ?</b><br>' +
             'Cargaste el directorio telefónico entero del mercado en lugar de seleccionar solo a tus competidores reales. En la tabla hay más de 50 empresas metidas.</p>' +
             '<p style="margin:0 0 8px"><b>¿Por qué no se puede dejar así?</b><br>' +
             'Un estudio legal exige seleccionar un grupo pequeño de 5 a 15 empresas reales. Si imprimimos el informe con el universo completo sin filtrar, saldrían cientos de páginas inservibles.</p>' +
@@ -12859,7 +12824,7 @@ Estrategia para "mezcla de los tres":
             '<span>🔢</span> <span>Pusiste un año en una casilla donde va una cantidad de dinero</span>' +
             '</div>' +
             '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
-            '<p style="margin:0 0 8px"><b>¿Qué significa esto en plastilina?</b><br>' +
+            '<p style="margin:0 0 8px"><b>¿Qué significa esto ?</b><br>' +
             'En una de las casillas de saldo (como cartera o inventarios) escribiste el año "2025" en vez del monto real en dinero. Esto hace que las fórmulas financieras den resultados equivocados.</p>' +
             '<p style="margin:0;color:#1E8449;font-weight:700">💡 <b>¿Cómo lo resuelves?</b> Busca esa casilla en el formulario y cambia "2025" por el valor en dinero verdadero.</p>' +
             '</div>' +
