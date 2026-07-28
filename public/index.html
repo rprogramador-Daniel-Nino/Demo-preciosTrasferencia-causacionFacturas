@@ -1731,7 +1731,7 @@
             <button type="button" class="btn violet" onclick="askClaude('estudio económico y sectorial')">✍ Redactar
               con Claude (por web)</button>
             <button type="button" class="btn amber" id="ptCompletarEcoBtn"
-              onclick="ptRedactarInforme().then(function(){var el=document.getElementById('ptRedaccion');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})">🤖
+              onclick="ptRedactarInformeIntegral().then(function(){var el=document.getElementById('ptIntegral');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})">🤖
               Completar apartados pendientes con IA (usa «Otros documentos» + búsqueda web)</button>
           </div>
           <label class="f"><span class="l">Panorama económico mundial</span><textarea class="i" id="e_mundo" rows="3"
@@ -10575,19 +10575,16 @@ se guía la descarga manual
           '2. Si un apartado no puede sustentarse con el contexto, escribe exactamente: "[La documentación aportada no contiene información sobre este punto; debe solicitarse al contribuyente.]"\n' +
           '3. No cites cifras que no aparezcan en el contexto.\n' +
           '4. Redacta en prosa, en español, en tercera persona, con el tono técnico de un informe tributario. Sin viñetas ni títulos.\n' +
-          '5. Cuando el apartado lo admita, sustenta con la norma, la doctrina o la jurisprudencia que se listan abajo, citándolas con precisión.\n' +
-          '6. SOLO para los apartados del estudio económico y sectorial (panorama económico mundial/colombiano, análisis del sector, S.1 a S.8, fuentes del estudio sectorial, y A a J del informe económico extendido): si el contexto no trae suficiente información, PUEDES buscar en internet datos reales y actuales (DANE, Banco de la República, FMI, gremios, prensa económica seria) para sustentarlos, y citar en "fuente" la fuente y la fecha exactas encontradas. Para el resto de apartados (identidad, vinculación, método, comparables) NO busques en internet: usa exclusivamente el contexto, conforme a la regla 1.\n\n' +
+          '5. Cuando el apartado lo admita, sustenta con la norma, la doctrina o la jurisprudencia que se listan abajo, citándolas con precisión.\n\n' +
           'MARCO NORMATIVO DISPONIBLE PARA CITAR:\n' + normas + '\n\n' +
           'CONTEXTO DEL ESTUDIO:\n' + contexto.slice(0, 45000) + '\n\n' +
           'APARTADOS A REDACTAR:\n' + lista + '\n\n' +
           'Devuelve SOLO un JSON: {"campos":{"id_del_campo":{"texto":"...","fuente":"de dónde salió la información","normas":["..."],"suficiente":true|false}}}';
 
-        /* pasa por el conector único del bloque 12; con búsqueda web habilitada
-           (el modelo decide usarla solo para los apartados económicos/sectoriales,
-           conforme a la regla 6 del prompt) */
+        /* pasa por el conector único del bloque 12 */
         var data;
         if (typeof ptFetchClaude === 'function') {
-          data = await ptFetchClaude({ max_tokens: 8000, messages: [{ role: 'user', content: prompt }] }, { buscar: true });
+          data = await ptFetchClaude({ max_tokens: 8000, messages: [{ role: 'user', content: prompt }] });
         } else {
           var res = await fetch('/api/claude', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -10635,15 +10632,10 @@ se guía la descarga manual
         try {
           var j = await redaccionIA(pendientes, contexto);
           resultado.via = 'asistida';
-          /* económico/sector puede traer cifras reales de una búsqueda web (regla 6
-             del prompt) que nunca estarán en el contexto cargado — no se marcan
-             como "ajenas" solo por eso; el resto de apartados sigue exigiendo que
-             toda cifra conste en el contexto */
-          var idsEcoSector = CAMPOS_ECO.concat(CAMPOS_SECTOR).map(function (c) { return c[0]; });
           Object.keys(j.campos || {}).forEach(function (id) {
             var c = j.campos[id];
             if (!c || !c.texto) return;
-            var ajenas = idsEcoSector.indexOf(id) >= 0 ? [] : verificarCifras(c.texto, contexto);
+            var ajenas = verificarCifras(c.texto, contexto);
             resultado.campos[id] = {
               texto: c.texto, fuente: c.fuente || '', normas: c.normas || [],
               suficiente: c.suficiente !== false, cifrasAjenas: ajenas
