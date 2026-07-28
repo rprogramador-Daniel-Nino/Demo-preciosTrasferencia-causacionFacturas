@@ -1149,17 +1149,7 @@
             autocompleta razón social, NIT, CIIU y representación. Si el PDF no es legible,
             pega su texto abajo y procesa.</div>
 
-          <details style="margin-bottom:14px">
-            <summary style="cursor:pointer;font-size:12px;font-weight:600">¿No se pudo leer el PDF? Pega el texto
-              aquí</summary>
-            <label class="f" style="margin-top:8px;margin-bottom:8px"><span class="l">Texto del documento</span>
-              <textarea class="i" id="docpaste" rows="2" placeholder="Pega aquí el texto del RUT…"></textarea></label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button type="button" class="mini" onclick="applyRUT($('docpaste').value)">Procesar como RUT</button>
-              <button type="button" class="mini" onclick="applyRenta($('docpaste').value)">Procesar como Declaración
-                de Renta</button>
-            </div>
-          </details>
+
 
           <div class="hint" style="margin-bottom:8px"><b>Datos extraídos</b> — verifica y corrige si es necesario:
           </div>
@@ -1182,111 +1172,114 @@
             elige el año</span>
         </div>
         <div class="bd">
-          <div class="row4">
-            <label class="f" style="display:none"><span class="l">Entidad en memoria</span><select class="i"
-                id="histent" onchange="onHistEnt()">
-                <option value="">— nueva entidad —</option>
-              </select></label>
-            <label class="f" style="display:none"><span class="l">Año a elaborar</span><input class="i mono"
-                id="histyear" placeholder="2025"></label>
-            <label class="f"><span class="l">Estudio base</span><span
-                style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button type="button" class="mini"
-                  onclick="loadPriorYear()">↤ Traer año anterior</button><button type="button" class="mini"
-                  onclick="buildFromScratch()">＋ Desde cero</button><label class="btn violet mini"
-                  style="margin:0;cursor:pointer">📎 Cargar informe del año anterior (.pdf, .docx, .json, .txt)<input
-                    type="file" accept=".pdf,.docx,.doc,.json,.txt" style="display:none"
-                    onchange="cargarInformeAnterior(this.files[0])"></label></span></label>
+          <select class="i" id="histent" onchange="onHistEnt()" style="display:none">
+            <option value="">— nueva entidad —</option>
+          </select>
+          <input class="i mono" id="histyear" placeholder="2025" style="display:none">
 
+          <div style="margin-bottom:12px">
+            <label class="l" style="font-weight:600;font-size:12px;color:#475569;margin-bottom:6px;display:block">Estudio base e informe del año anterior</label>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+              <label class="btn violet" style="margin:0;cursor:pointer">📎 Cargar informe del año anterior (.pdf, .docx, .json, .txt)<input
+                  type="file" accept=".pdf,.docx,.doc,.json,.txt" style="display:none"
+                  onchange="cargarInformeAnterior(this.files[0])"></label>
+              <button type="button" class="btn" style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:7px 14px;border-radius:8px;font-weight:600;cursor:pointer"
+                onclick="loadPriorYear()">↤ Traer año anterior</button>
+              <button type="button" class="btn" style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:7px 14px;border-radius:8px;cursor:pointer"
+                onclick="buildFromScratch()">＋ Desde cero</button>
+            </div>
           </div>
-          <label class="f"><span class="l">Estudios guardados (clic para cargar)</span><select class="i" id="histlist"
-              onchange="loadFromMemory(this.value)" size="4" style="height:auto"></select></label>
-          <div class="hint" id="histmsg">El sistema toma como fuente histórica únicamente la documentación comprobatoria
+
+          <label class="f" style="margin-bottom:8px"><span class="l">Estudios guardados (clic para cargar)</span><select class="i" id="histlist"
+              onchange="loadFromMemory(this.value)" size="2" style="height:auto;max-height:80px"></select></label>
+          <div class="hint" id="histmsg" style="margin-bottom:14px">El sistema toma como fuente histórica únicamente la documentación comprobatoria
             del año anterior.</div>
+
+          <!-- Sub-panel embebido: Perfil de Actividad de la Empresa -->
+          <div style="border:1px solid #E2E8F0;border-radius:12px;background:#FAFAFE;padding:16px;margin-top:10px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+              <h4 style="margin:0;font-size:14px;font-weight:700;color:#1E293B;display:flex;align-items:center;gap:6px">
+                🧠 Perfil de actividad de la empresa <span style="font-size:11.5px;font-weight:normal;color:#64748B">(paso clave antes de buscar comparables)</span>
+              </h4>
+              <span class="card-status-badge pending" id="badge_actividad">🔴 Pendiente</span>
+              <span class="eyebrow" style="margin-left:auto">IA · firma de actividad</span>
+            </div>
+
+            <div class="tip" style="border-left-color:#6B5BD1;background:#F5F3FF;margin-bottom:12px">
+              <b>¿Para qué sirve esto?</b> El sistema necesita saber exactamente en qué trabaja su empresa
+              (no el objeto social genérico, sino la actividad real: qué vende, a quién, cómo) para buscar
+              empresas comparables que hagan lo mismo. Gemini lee el estudio del año anterior y extrae esa
+              información automáticamente. <b>Sin este paso, las comparables pueden ser irrelevantes.</b>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+              <button id="btnExtraerActividad" onclick="extractPriorActivityWithGemini()" style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
+                   background:#C0473B;color:#fff;border:none;cursor:pointer;
+                   display:inline-flex;align-items:center;gap:7px;transition:background .2s">
+                🤖 Analizar empresa con IA
+              </button>
+              <div id="actmsg_wrap" style="display:flex;align-items:center;gap:8px">
+                <span id="actmsg_icon" style="font-size:18px">🔴</span>
+                <span id="actmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
+                  Pendiente — cargue primero el estudio del año anterior (arriba) y luego pulse «Analizar empresa con IA»
+                </span>
+              </div>
+            </div>
+
+            <div style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px"
+              id="act_steps_hint">
+              <b>Pasos:</b>
+              <span style="margin:0 6px">①</span> Cargue el informe del año anterior (arriba)
+              <span style="margin:0 6px">→</span>
+              <span style="margin:0 6px">②</span> Pulse <b>«Analizar empresa con IA»</b>
+              <span style="margin:0 6px">→</span>
+              <span style="margin:0 6px">③</span> Revise y ajuste los campos generados
+              <span style="margin:0 6px">→</span>
+              <span style="margin:0 6px">④</span> Use las palabras clave para buscar comparables
+            </div>
+
+            <input type="hidden" id="actividad_json" value="">
+            <div id="activity_spec_card" style="display:none;margin-top:12px">
+              <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
+                ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los
+                cambios se guardan automáticamente y se usan en la búsqueda de comparables.
+              </div>
+              <div class="row2">
+                <label class="f"><span class="l">¿Qué hace la empresa? (actividad específica real)</span>
+                  <textarea class="i" id="act_resumen" rows="3" oninput="actividadEditada()"
+                    placeholder="Ej: Distribución mayorista de fungicidas e insecticidas importados del vinculado en EE.UU., bajo modelo de compra-reventa con riesgo de inventario completo, para el sector agrícola colombiano."></textarea>
+                </label>
+                <label class="f"><span class="l">Perfil funcional (funciones / activos / riesgos asumidos)</span>
+                  <textarea class="i" id="act_perfil" rows="3" oninput="actividadEditada()"
+                    placeholder="Ej: Funciones: compra, almacenamiento, distribución. Activos: bodega, flota. Riesgos: inventario, crédito, tipo de cambio."></textarea>
+                </label>
+              </div>
+              <div class="row2">
+                <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (puedes
+                    escribir en español — se traducen automáticamente)</span>
+                  <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b>
+                    Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor
+                      mayorista"</i>) y al presionar Enter el sistema las traducirá inmediatamente al inglés para Capital IQ / Orbis.
+                  </div>
+                  <div class="actchips" id="act_keywords_chips"></div>
+                  <input class="i" id="act_keyword_new"
+                    placeholder="ej: desarrollo de videojuegos, distribuidor agroquímico…"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
+                </label>
+                <label class="f"><span class="l">Códigos SIC sugeridos (pulse Enter para agregar)</span>
+                  <div class="actchips" id="act_sic_chips"></div>
+                  <input class="i" id="act_sic_new" placeholder="ej: 5169…"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('sic', this.value); this.value='';}">
+                </label>
+              </div>
+              <div class="hint" id="act_justificacion"
+                style="background:#F8FAFC;border:1px solid var(--hair);border-radius:8px;padding:8px 12px;margin-top:4px">
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="card full">
-        <div class="hd">
-          <h3>🧠 Perfil de actividad de la empresa (paso clave antes de buscar comparables)</h3>
-          <span class="card-status-badge pending" id="badge_actividad">🔴 Pendiente</span>
-          <span class="eyebrow" style="margin-left:auto">IA · firma de actividad</span>
-        </div>
-        <div class="bd">
-          <div class="tip" style="border-left-color:#6B5BD1;background:#F5F3FF">
-            <b>¿Para qué sirve esto?</b> El sistema necesita saber exactamente en qué trabaja su empresa
-            (no el objeto social genérico, sino la actividad real: qué vende, a quién, cómo) para buscar
-            empresas comparables que hagan lo mismo. Gemini lee el estudio del año anterior y extrae esa
-            información automáticamente. <b>Sin este paso, las comparables pueden ser irrelevantes.</b>
-          </div>
-
-          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-            <button id="btnExtraerActividad" onclick="extractPriorActivityWithGemini()" style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
-                     background:#C0473B;color:#fff;border:none;cursor:pointer;
-                     display:inline-flex;align-items:center;gap:7px;transition:background .2s">
-              🤖 Analizar empresa con IA
-            </button>
-            <div id="actmsg_wrap" style="display:flex;align-items:center;gap:8px">
-              <span id="actmsg_icon" style="font-size:18px">🔴</span>
-              <span id="actmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
-                Pendiente — cargue primero el estudio del año anterior (tarjeta de arriba) y luego pulse «Analizar
-                empresa con IA»
-              </span>
-            </div>
-          </div>
-
-          <div
-            style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px"
-            id="act_steps_hint">
-            <b>Pasos:</b>
-            <span style="margin:0 6px">①</span> Cargue el informe del año anterior (tarjeta anterior)
-            <span style="margin:0 6px">→</span>
-            <span style="margin:0 6px">②</span> Pulse <b>«Analizar empresa con IA»</b>
-            <span style="margin:0 6px">→</span>
-            <span style="margin:0 6px">③</span> Revise y ajuste los campos generados
-            <span style="margin:0 6px">→</span>
-            <span style="margin:0 6px">④</span> Use las palabras clave para buscar comparables
-          </div>
-
-          <input type="hidden" id="actividad_json" value="">
-          <div id="activity_spec_card" style="display:none;margin-top:12px">
-            <div
-              style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
-              ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los cambios
-              se guardan automáticamente y se usan en la búsqueda de comparables.
-            </div>
-            <div class="row2">
-              <label class="f"><span class="l">¿Qué hace la empresa? (actividad específica real)</span>
-                <textarea class="i" id="act_resumen" rows="3" oninput="actividadEditada()"
-                  placeholder="Ej: Distribución mayorista de fungicidas e insecticidas importados del vinculado en EE.UU., bajo modelo de compra-reventa con riesgo de inventario completo, para el sector agrícola colombiano."></textarea>
-              </label>
-              <label class="f"><span class="l">Perfil funcional (funciones / activos / riesgos asumidos)</span>
-                <textarea class="i" id="act_perfil" rows="3" oninput="actividadEditada()"
-                  placeholder="Ej: Funciones: compra, almacenamiento, distribución. Activos: bodega, flota. Riesgos: inventario, crédito, tipo de cambio."></textarea>
-              </label>
-            </div>
-            <div class="row2">
-              <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (puedes
-                  escribir en español — se traducen automáticamente)</span>
-                <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b>
-                  Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor mayorista"</i>)
-                  y al presionar Enter el sistema las traducirá inmediatamente al inglés para Capital IQ / Orbis.</div>
-                <div class="actchips" id="act_keywords_chips"></div>
-                <input class="i" id="act_keyword_new"
-                  placeholder="ej: desarrollo de videojuegos, distribuidor agroquímico…"
-                  onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
-              </label>
-              <label class="f"><span class="l">Códigos SIC sugeridos (pulse Enter para agregar)</span>
-                <div class="actchips" id="act_sic_chips"></div>
-                <input class="i" id="act_sic_new" placeholder="ej: 5169…"
-                  onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('sic', this.value); this.value='';}">
-              </label>
-            </div>
-            <div class="hint" id="act_justificacion"
-              style="background:#F8FAFC;border:1px solid var(--hair);border-radius:8px;padding:8px 12px;margin-top:4px">
-            </div>
-          </div>
-        </div>
-      </div>
 
       <div class="card full">
         <div class="hd">
@@ -5744,7 +5737,7 @@ Estrategia para "mezcla de los tres":
 1) PDF nativo (con capa de texto)  → extrae texto directo (rápido, sin OCR)
 2) PDF escaneado (sin texto)       → rasteriza a canvas y aplica OCR real
 3) Origen remoto                   → no accesible desde el navegador;
-                        se guía la descarga manual
+se guía la descarga manual
 ============================================================================ */
     window.ORQ_OCR = {
       worker: null,
