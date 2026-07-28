@@ -1694,6 +1694,79 @@
               multiple accept=".pdf,.txt,.xlsx,.xls,.csv,.json,image/*,.doc,.docx" style="display:none"
               onchange="adjCargar(this.files,'otros')"></label>
           <span id="otros-count" style="font-size:11px;color:#1F6D4F;margin-left:8px"></span>
+
+          <div style="border-top:1px solid var(--hair);margin:14px 0 10px;padding-top:10px"><b style="font-size:13px">📊
+              9. Análisis económico y sectorial</b>
+            <div style="font-size:11px;color:var(--muted)">Genera los tres panoramas con la extensión y las fuentes del
+              informe 2024: FMI (World Economic Outlook), DANE, Banco de la República, ANALDEX y ANDI. Los documentos
+              adjuntados arriba en «Otros documentos» también se usan como fuente al redactar con IA.</div>
+          </div>
+          <div id="ecoAvisoPrevio" class="hint"
+            style="display:none;background:#FEF9E7;border:1px solid #F7DC6F;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:11.5px;color:#7D6608">
+            ⚠ Para un análisis del sector específico (no genérico), cargue primero el <b>RUT</b> o la <b>Cámara de
+              Comercio</b> arriba: se necesita al menos la razón social, el CIIU o el objeto social.
+          </div>
+          <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+            <button class="btn solid" style="margin:0" onclick="autoEconomia()">⚙ Generar estudio económico
+              automático</button>
+            <button class="btn violet" style="margin:0" onclick="askClaude('estudio económico y sectorial')">✍ Redactar
+              con Claude (por web)</button>
+          </div>
+          <label class="f"><span class="l">Panorama económico mundial</span><textarea class="i"
+              id="e_mundo" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Panorama económico colombiano</span><textarea class="i"
+              id="e_col" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Análisis del sector</span><textarea class="i" id="e_sec"
+              rows="3" oninput="calcD()"></textarea></label>
+          <div style="border-top:1px solid var(--hair);margin:10px 0 6px;padding-top:8px"><b
+              style="font-size:12.5px">Informe económico extendido — contenidos del Informe Maestro</b>
+            <div style="font-size:11px;color:var(--muted)">Cada campo diligenciado se convierte en una subsección propia
+              del informe. Lo que quede vacío se marca como pendiente de información del cliente.</div>
+          </div>
+          <div style="border-top:1px solid var(--hair);margin:10px 0 6px;padding-top:8px"><b
+              style="font-size:12.5px">Estudio del sector (S.1 a S.8) — cada apartado exige fuente</b>
+            <div style="font-size:11px;color:var(--muted)">Constituye el estudio económico sectorial del informe. Los
+              gráficos cargados se distribuyen entre estos apartados.</div>
+          </div>
+          <label class="f"><span class="l">S.1 Definición y alcance del sector (CIIU, cadena de
+              valor)</span><textarea class="i" id="sc_def" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.2 Tamaño del mercado y evolución</span><textarea
+              class="i" id="sc_tam" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.3 Estructura competitiva y
+              participantes</span><textarea class="i" id="sc_comp" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.4 Dinámica de precios y márgenes del
+              sector</span><textarea class="i" id="sc_prec" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.5 Demanda, clientes y canales</span><textarea
+              class="i" id="sc_dem" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.6 Marco regulatorio y tributario del
+              sector</span><textarea class="i" id="sc_reg" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.7 Riesgos del sector y su incidencia en la
+              operación</span><textarea class="i" id="sc_ries" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.8 Perspectivas y su efecto sobre la parte
+              examinada</span><textarea class="i" id="sc_persp" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Fuentes consultadas del estudio sectorial
+              (obligatorio)</span><textarea class="i" id="sc_fuentes" rows="2" oninput="calcD()"
+              placeholder="Ej.: DANE, Banco de la República, FMI WEO, Newzoo, Fedesoft, gremios. Indique fecha de consulta."></textarea></label>
+          <label class="f"><span class="l">A. Visión general del negocio del grupo</span><textarea
+              class="i" id="ec_vision" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">B. Productos y líneas de negocio (detalle por
+              producto)</span><textarea class="i" id="ec_prod" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">C. Fuentes de ingreso y modelo de
+              monetización</span><textarea class="i" id="ec_ingr" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">D. Reparto global de ingresos, costos y
+              gastos</span><textarea class="i" id="ec_reparto" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">E. Localización geográfica de las
+              entidades</span><textarea class="i" id="ec_geo" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">F. Factores generadores de utilidad del
+              grupo</span><textarea class="i" id="ec_valor" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">G. Estructura de financiación del grupo</span><textarea
+              class="i" id="ec_fin" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">H. Intangibles del grupo y titularidad
+              (DEMPE)</span><textarea class="i" id="ec_intang" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">I. Mercado, clientes y competencia</span><textarea
+              class="i" id="ec_mercado" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">J. Estrategias de negocio y perspectivas</span><textarea
+              class="i" id="ec_estrategia" rows="2" oninput="calcD()"></textarea></label>
         </div>
       </div>
       <div class="card" style="display:none" data-oculta="1 full">
@@ -1709,77 +1782,6 @@
               (Excel/CSV/JSON)<input type="file" accept=".xlsx,.xls,.csv,.txt,.json" style="display:none"
                 onchange="ingestMatrixFile(this.files[0])"></label></div>
           <div id="matrixbox" style="margin-top:6px"></div>
-        </div>
-      </div>
-
-      <div class="card" style="display:none" data-oculta="1 full">
-        <div class="hd">
-          <h3>Estudio económico y sectorial</h3><span class="eyebrow web">automático · fuentes confiables</span>
-        </div>
-        <div class="bd">
-          <div class="tip">Genera los tres panoramas con la extensión y las fuentes del informe 2024: FMI (World
-            Economic Outlook), DANE, Banco de la República, ANALDEX y ANDI.</div>
-          <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-            <button class="btn solid" style="margin:0" onclick="autoEconomia()">⚙ Generar estudio económico
-              automático</button>
-            <button class="btn violet" style="margin:0" onclick="askClaude('estudio económico y sectorial')">✍ Redactar
-              con Claude (por web)</button>
-          </div>
-          <label class="f" style="display:none"><span class="l">Panorama económico mundial</span><textarea class="i"
-              id="e_mundo" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">Panorama económico colombiano</span><textarea class="i"
-              id="e_col" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">Análisis del sector</span><textarea class="i" id="e_sec"
-              rows="3" oninput="calcD()"></textarea></label>
-          <div style="border-top:1px solid var(--hair);margin:10px 0 6px;padding-top:8px"><b
-              style="font-size:12.5px">Informe económico extendido — contenidos del Informe Maestro</b>
-            <div style="font-size:11px;color:var(--muted)">Cada campo diligenciado se convierte en una subsección propia
-              del informe. Lo que quede vacío se marca como pendiente de información del cliente.</div>
-          </div>
-          <div style="border-top:1px solid var(--hair);margin:10px 0 6px;padding-top:8px"><b
-              style="font-size:12.5px">Estudio del sector (S.1 a S.8) — cada apartado exige fuente</b>
-            <div style="font-size:11px;color:var(--muted)">Constituye el estudio económico sectorial del informe. Los
-              gráficos cargados se distribuyen entre estos apartados.</div>
-          </div>
-          <label class="f" style="display:none"><span class="l">S.1 Definición y alcance del sector (CIIU, cadena de
-              valor)</span><textarea class="i" id="sc_def" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.2 Tamaño del mercado y evolución</span><textarea
-              class="i" id="sc_tam" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.3 Estructura competitiva y
-              participantes</span><textarea class="i" id="sc_comp" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.4 Dinámica de precios y márgenes del
-              sector</span><textarea class="i" id="sc_prec" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.5 Demanda, clientes y canales</span><textarea
-              class="i" id="sc_dem" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.6 Marco regulatorio y tributario del
-              sector</span><textarea class="i" id="sc_reg" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.7 Riesgos del sector y su incidencia en la
-              operación</span><textarea class="i" id="sc_ries" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">S.8 Perspectivas y su efecto sobre la parte
-              examinada</span><textarea class="i" id="sc_persp" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">Fuentes consultadas del estudio sectorial
-              (obligatorio)</span><textarea class="i" id="sc_fuentes" rows="2" oninput="calcD()"
-              placeholder="Ej.: DANE, Banco de la República, FMI WEO, Newzoo, Fedesoft, gremios. Indique fecha de consulta."></textarea></label>
-          <label class="f" style="display:none"><span class="l">A. Visión general del negocio del grupo</span><textarea
-              class="i" id="ec_vision" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">B. Productos y líneas de negocio (detalle por
-              producto)</span><textarea class="i" id="ec_prod" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">C. Fuentes de ingreso y modelo de
-              monetización</span><textarea class="i" id="ec_ingr" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">D. Reparto global de ingresos, costos y
-              gastos</span><textarea class="i" id="ec_reparto" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">E. Localización geográfica de las
-              entidades</span><textarea class="i" id="ec_geo" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">F. Factores generadores de utilidad del
-              grupo</span><textarea class="i" id="ec_valor" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">G. Estructura de financiación del grupo</span><textarea
-              class="i" id="ec_fin" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">H. Intangibles del grupo y titularidad
-              (DEMPE)</span><textarea class="i" id="ec_intang" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">I. Mercado, clientes y competencia</span><textarea
-              class="i" id="ec_mercado" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f" style="display:none"><span class="l">J. Estrategias de negocio y perspectivas</span><textarea
-              class="i" id="ec_estrategia" rows="2" oninput="calcD()"></textarea></label>
         </div>
       </div>
 
@@ -7593,10 +7595,29 @@ se guía la descarga manual
          gravable. Para respetar lo ya redactado existe ptEconomiaAuto(false). */
       window.autoEconomia = function () { return ptEconomiaAuto(true); };
 
+      /* aviso: sin razón social, CIIU u objeto social, el análisis del sector
+         (ptSectorAuto) queda genérico — se avisa mientras falten los tres */
+      function ptEcoAvisoActualizar() {
+        var el = document.getElementById('ecoAvisoPrevio');
+        if (!el) return;
+        var g = function (id) { var e = $(id); return e ? String(e.value || '').trim() : ''; };
+        var falta = !(g('ent') || g('ciiu') || g('objeto'));
+        el.style.display = falta ? '' : 'none';
+      }
+      window.ptEcoAvisoActualizar = ptEcoAvisoActualizar;
+      if (typeof calc === 'function') {
+        var _calcEcoAviso = calc;
+        calc = function () {
+          _calcEcoAviso.apply(null, arguments);
+          try { ptEcoAvisoActualizar(); } catch (e) { }
+        };
+      }
+
       /* ───────────────────────────────────────────────────────────────────────
          4. BOTÓN: heredar estructura del informe anterior
          ─────────────────────────────────────────────────────────────────────── */
       function _ui() {
+        try { ptEcoAvisoActualizar(); } catch (e) { }
         if (document.getElementById('ptEconBtn')) return;
         var ancla = document.getElementById('e_mundo');
         if (!ancla || !ancla.parentNode) return;
@@ -10174,6 +10195,9 @@ se guía la descarga manual
       window.PT_REDACCION = null;
 
       var CAMPOS_ECO = [
+        ['e_mundo', 'Panorama económico mundial'],
+        ['e_col', 'Panorama económico colombiano'],
+        ['e_sec', 'Análisis del sector'],
         ['ec_vision', 'Visión general del negocio del grupo multinacional'],
         ['ec_prod', 'Productos y líneas de negocio'],
         ['ec_ingr', 'Fuentes de ingreso y modelo de monetización'],
@@ -13747,6 +13771,158 @@ se guía la descarga manual
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(aplicar, 1500); });
       else setTimeout(aplicar, 1500);
       setTimeout(aplicar, 2600);
+
+    })();
+
+    (function () {
+      'use strict';
+
+      function annexA_EEFF() {
+        var L = window.LAST || {}; var T = L.T || {};
+        var g = function (k) { return ($(k) && $(k).value) || '—'; };
+        var anio = g('anio');
+        var uLab = ({ miles: 'miles de COP', pesos: 'COP', millones: 'millones de COP' })[g('unidad')] || 'COP';
+        var gross = (T.s != null && T.c != null) ? T.s - T.c : null;
+        var moV = (T.s && T.op != null) ? T.op / T.s : null, mbV = (T.s && T.c != null) ? (T.s - T.c) / T.s : null;
+        var eeffTxt = ($('eefftexto') && $('eefftexto').value.trim()) ? $('eefftexto').value.trim() : '';
+        var verbatim = eeffTxt ? '<p class="norm"><b>Estados financieros y notas de revelación — copia fiel provista por el contribuyente</b> (reproducción textual, para fidelidad de la información):</p>' +
+          '<pre style="white-space:pre-wrap;font-size:11px;line-height:1.45;background:#FAFBFC;border:1px solid #E2E7EC;border-radius:8px;padding:12px 14px">' + escH(eeffTxt) + '</pre>' : '';
+        var resumen = (T.s != null) ? (
+          '<p class="norm">' + (eeffTxt ? 'Resumen de las cifras empleadas en el análisis:' : 'Cifras de la Compañía a 31 de diciembre de ' + anio + '.') + '</p>' +
+          '<table class="rep"><thead><tr><th>Estado de resultados (' + uLab + ')</th><th>Valor</th></tr></thead><tbody>' +
+          '<tr><td>Ventas netas</td><td class="n">' + fmt(T.s) + '</td></tr>' +
+          '<tr><td>Costo de ventas</td><td class="n">' + (T.c != null ? '(' + fmt(T.c) + ')' : '—') + '</td></tr>' +
+          '<tr><td>Utilidad bruta</td><td class="n">' + fmt(gross) + '</td></tr>' +
+          '<tr><td>Utilidad operativa</td><td class="n">' + fmt(T.op) + '</td></tr>' +
+          '<tr><td>Margen bruto</td><td class="n">' + pctf(mbV) + '</td></tr>' +
+          '<tr><td>Margen operacional (MO)</td><td class="n">' + pctf(moV) + '</td></tr></tbody></table>' +
+          '<table class="rep"><thead><tr><th>Cuentas de capital de trabajo (' + uLab + ')</th><th>Valor</th></tr></thead><tbody>' +
+          '<tr><td>Cuentas por cobrar comerciales</td><td class="n">' + fmt(T.ar) + '</td></tr>' +
+          '<tr><td>Inventarios</td><td class="n">' + fmt(T.inv) + '</td></tr>' +
+          '<tr><td>Cuentas por pagar</td><td class="n">' + fmt(T.ap) + '</td></tr></tbody></table>'
+        ) : (eeffTxt ? '' : '<p>Ingresa o adjunta los estados financieros de la parte examinada (ventas, costo, utilidad operativa y capital de trabajo) para incorporarlos.</p>');
+        return '<h2 class="rep">Anexo A — Estados financieros de la parte examinada</h2>' +
+          '<p class="norm">Se incorporan los estados financieros y notas de revelación del contribuyente en copia fiel, sin alteración de su contenido ni de las firmas del representante legal, contador público y revisor fiscal que los suscriben.</p>' +
+          verbatim + resumen +
+          adjGaleriaHTML('eeff', 'A.1 Estados financieros firmados — reproducción fiel') +
+          adjGaleriaHTML('otros', 'A.2 Otros soportes documentales aportados');
+      }
+
+      function annexBfin() {
+        var kind = $('pli').value;
+        var rows = [].slice.call($('cbody').children).map(function (tr) {
+          var v = [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; });
+          return { name: v[0], amb: v[1], s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]) };
+        }).filter(function (c) { return c.name.trim(); });
+        if (!rows.length) return '<p class="norm">No hay comparables cargadas.</p>';
+        var sel = rows.filter(function (c) { return !MOTOR.activo || MOTOR.sel[nameKey(c.name)] !== false; });
+        var fil = sel.map(function (c, i) {
+          var g2 = (c.s !== null && c.c !== null && c.op !== null) ? (c.s - c.c - c.op) : null;
+          var pli = pliOf({ s: c.s, c: c.c, op: c.op }, kind);
+          return '<tr><td>C.' + (i + 1) + '</td><td>' + escH(c.name) + '</td><td class="n">' + fmt(c.s) + '</td><td class="n">' + fmt(c.c) + '</td><td class="n">' + fmt(g2) + '</td><td class="n">' + fmt(c.op) + '</td><td class="n">' + ((c.s && c.c !== null) ? pctf((c.s - c.c) / c.s) : '—') + '</td><td class="n">' + (pli !== null ? pctf(pli) : '—') + '</td></tr>';
+        }).join('');
+        var det = sel.map(function (c, i) {
+          var pli = pliOf({ s: c.s, c: c.c, op: c.op }, kind);
+          return '<h3 class="rep">C.' + (i + 1) + ' ' + escH(c.name) + '</h3><table class="r"><thead><tr><th>Cuenta</th><th>Valor</th></tr></thead><tbody>' +
+            '<tr><td>Ingresos operacionales</td><td class="n">' + fmt(c.s) + '</td></tr>' +
+            '<tr><td>Costo de ventas</td><td class="n">' + (c.c !== null ? '(' + fmt(c.c) + ')' : '—') + '</td></tr>' +
+            '<tr><td>Utilidad bruta</td><td class="n">' + fmt((c.s !== null && c.c !== null) ? c.s - c.c : null) + '</td></tr>' +
+            '<tr><td>Gastos operacionales</td><td class="n">' + fmt((c.s !== null && c.c !== null && c.op !== null) ? (c.s - c.c - c.op) : null) + '</td></tr>' +
+            '<tr><td>Utilidad operativa</td><td class="n">' + fmt(c.op) + '</td></tr>' +
+            '<tr><td>Cuentas por cobrar / Inventarios / Cuentas por pagar</td><td class="n">' + fmt(c.ar) + ' / ' + fmt(c.inv) + ' / ' + fmt(c.ap) + '</td></tr>' +
+            '<tr><td>Indicador de rentabilidad (' + escH(PLIN[kind] || kind) + ')</td><td class="n">' + (pli !== null ? pctf(pli) : '—') + '</td></tr></tbody></table>';
+        }).join('');
+        return '<p class="norm">Se presenta la información financiera de las compañías comparables aceptadas, con indicación del indicador de rentabilidad calculado para cada una. Las cifras se expresan en la moneda y unidad reportadas por la fuente.</p>' +
+          '<h3 class="rep">C.0 Cuadro consolidado de información financiera</h3>' +
+          '<table class="rep"><thead><tr><th>Ref.</th><th>Compañía</th><th>Ingresos</th><th>Costo de ventas</th><th>Gastos oper.</th><th>Utilidad oper.</th><th>Margen bruto</th><th>' + escH(PLIN[kind] || kind) + '</th></tr></thead><tbody>' + fil + '</tbody></table>' +
+          det + adjGaleriaHTML('eeffcomp', 'C.' + (sel.length + 1) + ' Estados financieros de las comparables — reproducción de la fuente');
+      }
+
+      function annexRechazoD() {
+        if (!MATRIX.length) return '<p class="norm">La matriz del universo de búsqueda no ha sido cargada. Ejecute la depuración funcional del universo para embeberla íntegra (estado y motivo por compañía).</p>';
+        var acc = MATRIX.filter(function (m) { return /acept/i.test(m.status || ''); }).length, rej = MATRIX.length - acc;
+        var body = MATRIX.map(function (m, i) {
+          return '<tr><td>' + (i + 1) + '</td><td>' + escH(m.name || '—') + '</td><td>' + escH(String(m.sic || '').slice(0, 22)) + '</td><td>' + escH(m.country || '—') + '</td><td>' + (/acept/i.test(m.status || '') ? '<b style="color:#1F6D4F">Aceptada</b>' : '<b style="color:#A5352A">Rechazada</b>') + '</td><td>' + escH(m.motivo || (/acept/i.test(m.status || '') ? 'Cumple criterios' : '—')) + '</td></tr>';
+        }).join('');
+        return '<h2 class="rep">Anexo D — Matriz de aceptación y rechazo del universo de búsqueda</h2>' +
+          '<p class="norm">Universo de búsqueda: <b>' + MATRIX.length + '</b> compañías · Aceptadas: <b>' + acc + '</b> · Rechazadas: <b>' + rej + '</b>. Se detalla el estado y el motivo de descarte compañía por compañía (Num. 4, Art. 1.2.2.2.1.5 del Decreto 1625 de 2016).</p>' +
+          '<table class="r"><thead><tr><th>#</th><th>Compañía</th><th>SIC</th><th>País</th><th>Estado</th><th>Motivo</th></tr></thead><tbody>' + body + '</tbody></table>';
+      }
+
+      function annexMetodologiaE() {
+        var kind = $('pli').value;
+        return '<h2 class="rep">Anexo E — Metodología de los ajustes económicos</h2>' +
+          '<p>El análisis aplica el <b>Método de Márgenes Transaccionales de Utilidad de Operación (TU)</b> (Art. 260-3 E.T.), seleccionado por analizarse una parte con funciones rutinarias, sin intangibles no rutinarios ni información fiable de precios comparables que permita métodos transaccionales tradicionales.</p>' +
+          '<h3 class="rep">E.1 Indicador de rentabilidad (PLI)</h3><p>Se emplea el <b>' + escH(PLIN[kind] || kind) + '</b> como indicador de rentabilidad, por reflejar adecuadamente la retribución de las funciones de la parte examinada y resultar menos sensible a diferencias de estructura de costos.</p>' +
+          '<h3 class="rep">E.2 Ajuste por capital de trabajo</h3><p>Se ajustan las diferencias en cuentas por cobrar, inventarios y cuentas por pagar entre la parte examinada y cada comparable, usando una tasa financiera (Prime Rate), lo que neutraliza el efecto de los distintos niveles de financiación operativa y mejora la comparabilidad (Directrices OCDE, Cap. III).</p>' +
+          '<h3 class="rep">E.3 Rango de plena competencia (intercuartil)</h3><p>Con los indicadores ajustados de las comparables se construye el rango intercuartil (percentil 25, mediana y percentil 75). Si el indicador de la parte examinada se ubica dentro del rango, la operación cumple el principio de plena competencia; si queda por fuera, se ajusta a la mediana (Art. 260-3, parágrafo), sin que el ajuste, tratándose de un egreso, pueda exceder el monto del costo o deducción declarado (Concepto DIAN 1212 de 2024).</p>';
+      }
+
+      function annexLegislacionF() {
+        return '<h2 class="rep">Anexo F — Legislación colombiana en materia de precios de transferencia</h2>' +
+          '<p>Marco legal del régimen de precios de transferencia en Colombia (Estatuto Tributario, Decreto 1625 de 2016 y Decreto 2120 de 2017), en concordancia con las Directrices de la OCDE como criterio auxiliar de interpretación.</p>' +
+          '<h3 class="rep">F.1 Art. 260-1 — Criterios de vinculación</h3><p>Define cuándo existe vinculación económica: subordinadas, sucursales, agencias, establecimientos permanentes, vinculación por capital, por administración o control, operaciones entre vinculados a través de terceros, y vinculación por participación conjunta, entre otros. Las comparables deben ser <b>independientes</b> (no vinculadas), razón por la cual se excluyen entidades controladas/subordinadas.</p>' +
+          '<h3 class="rep">F.2 Art. 260-2 — Operaciones con vinculados</h3><p>Los contribuyentes que celebren operaciones con vinculados del exterior, en zonas francas o con residentes en jurisdicciones no cooperantes, deben determinar sus ingresos, costos y deducciones considerando el <b>principio de plena competencia</b> (precios y márgenes que habrían pactado partes independientes).</p>' +
+          '<h3 class="rep">F.3 Art. 260-3 — Métodos</h3><p>Establece los métodos: Precio Comparable no Controlado (PC), Precio de Reventa (PR), Costo Adicionado (CA), Márgenes Transaccionales de Utilidad de Operación (TU) y Partición de Utilidades (PU). Regula el rango de plena competencia y el ajuste a la mediana cuando el indicador queda por fuera del rango intercuartil.</p>' +
+          '<h3 class="rep">F.4 Art. 260-4 — Criterios de comparabilidad</h3><p>Enumera los cinco factores de comparabilidad: características de las operaciones, análisis funcional (funciones, activos y riesgos), términos contractuales, circunstancias económicas y estrategias de negocio.</p>' +
+          '<h3 class="rep">F.5 Art. 260-5 — Documentación comprobatoria</h3><p>Obliga a preparar y conservar el Informe Local y el Informe Maestro que demuestren la correcta aplicación del régimen.</p>' +
+          '<h3 class="rep">F.6 Art. 260-7 — Jurisdicciones no cooperantes</h3><p>Regula el tratamiento de operaciones con jurisdicciones de baja o nula imposición y regímenes preferenciales.</p>' +
+          '<h3 class="rep">F.7 Art. 260-9 — Declaración informativa</h3><p>Obliga a presentar la Declaración Informativa de Precios de Transferencia (Formulario 120 y su Hoja 2 — Formato 1125) cuando se superan los topes de patrimonio o ingresos y el monto de operaciones supera 45.000 UVT.</p>' +
+          '<h3 class="rep">F.8 Art. 260-11 — Régimen sancionatorio</h3><p>Establece las sanciones por extemporaneidad, inconsistencias, omisión y corrección de la documentación comprobatoria y de la declaración informativa (porcentajes sobre el valor de las operaciones, con topes en UVT).</p>' +
+          '<h3 class="rep">F.9 Decreto 2120 de 2017 y rango intercuartil</h3><p>Incorpora el estándar BEPS Acción 13 (Informe Local, Maestro y País por País) y precisa el cálculo del rango intercuartil y el ajuste a la mediana.</p>';
+      }
+
+      var _renderFinalIdx = renderReport;
+      renderReport = function () {
+        _renderFinalIdx.apply(null, arguments);
+        try {
+          var d = $('doc'); if (!d) return;
+          var g = function (k) { return ($(k) && $(k).value) || '—'; };
+          var anio = g('anio');
+
+          if (!document.getElementById('s_intro')) {
+            var intro = '<h2 id="s_intro">Introducción</h2>' +
+              '<p>El presente Informe Local de Precios de Transferencia de ' + g('ent') + ' corresponde al año gravable ' + anio + ' y constituye la documentación comprobatoria exigida por los artículos 260-1 a 260-11 del Estatuto Tributario, el Decreto 1625 de 2016 (modificado por el Decreto 2120 de 2017) y las Resoluciones de la DIAN, conforme al estándar BEPS Acción 13. Su objetivo es demostrar que las operaciones con el vinculado del exterior se pactaron conforme al principio de plena competencia. El informe se presenta en idioma español.</p>';
+            var h1 = d.querySelector('h1');
+            if (h1) h1.insertAdjacentHTML('afterend', intro); else d.insertAdjacentHTML('afterbegin', intro);
+          }
+
+          if (!document.getElementById('s_anx')) {
+            var anexos = '<h2 class="rep" id="s_anx">Anexos</h2>' +
+              annexA_EEFF() +
+              (typeof motorMetodologiaHTML === 'function' ? motorMetodologiaHTML() : '') +
+              (typeof regaliaHTML === 'function' ? regaliaHTML() : '') +
+              '<h2 class="rep">Anexo B — Descripción funcional de las comparables aceptadas</h2>' +
+              (typeof window.annexB === 'function' ? window.annexB() : '<p class="norm">No hay comparables cargadas.</p>') +
+              '<h2 class="rep">Anexo C — Información financiera de las comparables</h2>' + annexBfin() +
+              annexRechazoD() + annexMetodologiaE() + annexLegislacionF() +
+              (typeof marcoJurisHTML === 'function' ? marcoJurisHTML() : '');
+            d.insertAdjacentHTML('beforeend', anexos);
+          }
+
+          /* Tabla de contenido (índice) — esto es lo que se reportó perdido.
+             Se reconstruye a partir de TODOS los h2 ya presentes en el informe
+             (título, introducción, las secciones que arman los demás parches
+             de renderReport y los anexos anteriores), asignando ancla a cada
+             uno; así el índice no se desactualiza si el informe crece. */
+          var previo = document.getElementById('s_toc_wrap');
+          if (previo) previo.remove();
+          var h2s = [].slice.call(d.querySelectorAll('h2'));
+          var toc = [];
+          h2s.forEach(function (h, i) {
+            if (!h.id) h.id = 's_toc' + i;
+            toc.push('<li><a href="#' + h.id + '">' + escH(h.textContent.trim()) + '</a><span class="lead"></span></li>');
+          });
+          if (toc.length) {
+            var tocHTML = '<div id="s_toc_wrap"><h2 class="rep">Tabla de contenido</h2><ol class="toc">' + toc.join('') + '</ol></div>';
+            var introH2 = document.getElementById('s_intro');
+            var h1b = d.querySelector('h1');
+            if (introH2) introH2.insertAdjacentHTML('beforebegin', tocHTML);
+            else if (h1b) h1b.insertAdjacentHTML('afterend', tocHTML);
+            else d.insertAdjacentHTML('afterbegin', tocHTML);
+          }
+        } catch (e) { }
+      };
 
     })();
 
