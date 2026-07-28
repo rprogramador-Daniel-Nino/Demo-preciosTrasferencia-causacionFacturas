@@ -1134,20 +1134,22 @@
 
       <div class="card full">
         <div class="hd">
-          <h3>Documentos de la compañía (se leen automáticamente)</h3><span class="eyebrow web">ancla ·
+          <h3>Documentos de la compañía</h3><span class="eyebrow web">ancla ·
             autocompletado</span>
         </div>
         <div class="bd">
           <div class="actions" style="margin-bottom:10px">
-            <label class="btn solid" style="margin:0;cursor:pointer">📎 RUT<input type="file" accept=".pdf,.txt"
-                style="display:none" onchange="readFileText(this.files[0],applyRUT)"></label>
+            <label class="btn solid" style="margin:0;cursor:pointer">📎 RUT (IA)<input type="file"
+                accept=".pdf,image/*" style="display:none" onchange="procesarRUTConOCR(this.files[0])"></label>
             <span class="webbtn" onclick="webDoc('RUT DIAN')">🔎 Verificar RUT (DIAN)</span>
+            <label class="btn solid" style="margin:0;cursor:pointer">📎 Cámara de Comercio (IA)<input type="file"
+                accept=".pdf,image/*" style="display:none" onchange="procesarCamaraConOCR(this.files[0])"></label>
             <label class="btn violet" style="margin:0;cursor:pointer">📎 Declaración de Renta<input type="file"
                 accept=".pdf,.txt" style="display:none" onchange="readFileText(this.files[0],applyRenta)"></label>
           </div>
-          <div class="hint" id="docmsg" style="margin-bottom:8px">Carga el RUT: el sistema
-            autocompleta razón social, NIT, CIIU y representación. Si el PDF no es legible,
-            pega su texto abajo y procesa.</div>
+          <div class="hint" id="docmsg" style="margin-bottom:8px">Carga el RUT y la Cámara de Comercio: un modelo de
+            IA (OCR con visión) lee el documento directamente y completa razón social, NIT, CIIU, representante legal,
+            objeto social y fecha de constitución.</div>
 
 
 
@@ -1356,70 +1358,6 @@
 
       <div class="card full">
         <div class="hd">
-          <h3>Parámetros e indicador</h3><span class="eyebrow">flexible · versionado</span>
-        </div>
-        <div class="bd">
-          <div class="tip">Elige el indicador financiero (PLI) con el que se va a comparar la operación, y los datos
-            base (UVT, patrimonio, ingresos) para que el sistema calcule los topes de la norma automáticamente.</div>
-          <div class="pi-btns"><label class="mini" style="cursor:pointer">📎 Adjuntar<input type="file"
-                style="display:none" onchange="attachEvidence('params',this.files[0])"></label><span id="evid-params"
-              style="font-size:10.5px;color:#1F6D4F"></span></div>
-          <div class="row2">
-            <label class="f"><span class="l">Indicador (PLI)</span><select class="i" id="pli" onchange="calc()">
-                <option value="MO">MO — Margen Operacional (Uo/Ventas)</option>
-                <option value="MB">MB — Margen Bruto (Ub/Ventas)</option>
-                <option value="Berry">Berry (Ub / Gastos operativos)</option>
-              </select></label>
-            <label class="f" style="display:none"><span class="l">Comparables a incluir</span><select class="i"
-                id="cmode" onchange="calc()">
-                <option value="all">Internacionales + locales</option>
-                <option value="intl">Solo internacionales</option>
-                <option value="nac">Solo locales (SuperSociedades)</option>
-              </select></label>
-          </div>
-          <div class="row4">
-            <label class="f" style="display:none"><span class="l">Base de datos</span><input class="i"
-                id="base"></label>
-            <label class="f" style="display:none"><span class="l">Prime Rate (%)</span><input class="i mono" id="prime"
-                oninput="calcD()"></label>
-            <label class="f" style="display:none"><span class="l">Valor UVT</span><input class="i mono"
-                id="uvt"></label>
-            <label class="f" style="display:none"><span class="l">Umbral operación (UVT)</span><input class="i mono"
-                id="umbral" oninput="calcUmbrales()"></label>
-            <label class="f"><span class="l">Patrimonio bruto a 31-dic (COP)</span><input class="i mono" id="patrimonio"
-                oninput="calcUmbrales()"></label>
-            <label class="f"><span class="l">Ingresos brutos del período (COP)</span><input class="i mono"
-                id="ingbrutos" oninput="calcUmbrales()"></label>
-          </div>
-          <div class="row3">
-            <label class="f" style="display:none"><span class="l">Egreso controlado (tope, COP)</span><input
-                class="i mono" id="egreso" oninput="calcD()"></label>
-            <label class="f"><span class="l">Ajuste que afecta el PyG (en la unidad de los EEFF)</span><input
-                class="i mono" id="ajusteconocido" oninput="calcD()"
-                placeholder="Ej.: valor del estudio del año anterior"></label>
-            <label class="f" style="grid-column:1/-1"><span class="l">Descripción del ajuste (manual, va al
-                informe)</span><input class="i" id="ajustedesc"
-                placeholder="p. ej. Ajuste de precios de transferencia para ubicar el margen en la mediana"></label>
-            <label class="f"><span class="l">Unidad de los EEFF</span><select class="i" id="unidad" onchange="calc()">
-                <option value="miles">Miles de COP</option>
-                <option value="pesos">Pesos (COP)</option>
-                <option value="millones">Millones de COP</option>
-              </select></label>
-            <label class="f" style="display:none"><span class="l">Método del rango</span><select class="i" id="qmethod"
-                onchange="calc()">
-                <option value="inc">Percentil inclusivo (Excel · usado en los informes)</option>
-                <option value="dian">Exclusivo tipo DIAN (n+1)</option>
-              </select></label>
-          </div>
-          <label class="toggle"><input type="checkbox" id="useadj" checked onchange="calc()"> Ajustar comparables por
-            capital de trabajo (OCDE)</label>
-          <div class="hint">El egreso controlado (tope) va en COP plenos. El ajuste se convierte a COP según la unidad
-            de los EEFF y se topa a ese egreso (doctrina DIAN 2024); el sistema avisa si lo excede.</div>
-        </div>
-      </div>
-
-      <div class="card full">
-        <div class="hd">
           <h3>🧾 Estados financieros (EEFF)</h3>
           <span class="card-status-badge pending" id="badge_card_5">🔴 Pendiente</span>
           <span class="eyebrow" id="temo" style="margin-left:auto">PLI —</span>
@@ -1533,6 +1471,72 @@
               oninput="calcD()"></textarea></label>
         </div>
       </div>
+
+      <div class="card full">
+        <div class="hd">
+          <h3>Parámetros e indicador</h3><span class="eyebrow">flexible · versionado</span>
+        </div>
+        <div class="bd">
+          <div class="tip">Elige el indicador financiero (PLI) con el que se va a comparar la operación, y los datos
+            base (UVT, patrimonio, ingresos) para que el sistema calcule los topes de la norma automáticamente.</div>
+          <div class="pi-btns"><label class="mini" style="cursor:pointer">📎 Adjuntar<input type="file"
+                style="display:none" onchange="attachEvidence('params',this.files[0])"></label><span id="evid-params"
+              style="font-size:10.5px;color:#1F6D4F"></span></div>
+          <div class="row2">
+            <label class="f"><span class="l">Indicador (PLI)</span><select class="i" id="pli" onchange="calc()">
+                <option value="MO">MO — Margen Operacional (Uo/Ventas)</option>
+                <option value="MB">MB — Margen Bruto (Ub/Ventas)</option>
+                <option value="Berry">Berry (Ub / Gastos operativos)</option>
+              </select></label>
+            <label class="f" style="display:none"><span class="l">Comparables a incluir</span><select class="i"
+                id="cmode" onchange="calc()">
+                <option value="all">Internacionales + locales</option>
+                <option value="intl">Solo internacionales</option>
+                <option value="nac">Solo locales (SuperSociedades)</option>
+              </select></label>
+          </div>
+          <div class="row4">
+            <label class="f" style="display:none"><span class="l">Base de datos</span><input class="i"
+                id="base"></label>
+            <label class="f" style="display:none"><span class="l">Prime Rate (%)</span><input class="i mono" id="prime"
+                oninput="calcD()"></label>
+            <label class="f" style="display:none"><span class="l">Valor UVT</span><input class="i mono"
+                id="uvt"></label>
+            <label class="f" style="display:none"><span class="l">Umbral operación (UVT)</span><input class="i mono"
+                id="umbral" oninput="calcUmbrales()"></label>
+            <label class="f"><span class="l">Patrimonio bruto a 31-dic (COP)</span><input class="i mono" id="patrimonio"
+                oninput="calcUmbrales()"></label>
+            <label class="f"><span class="l">Ingresos brutos del período (COP)</span><input class="i mono"
+                id="ingbrutos" oninput="calcUmbrales()"></label>
+          </div>
+          <div class="row3">
+            <label class="f" style="display:none"><span class="l">Egreso controlado (tope, COP)</span><input
+                class="i mono" id="egreso" oninput="calcD()"></label>
+            <label class="f"><span class="l">Ajuste que afecta el PyG (en la unidad de los EEFF)</span><input
+                class="i mono" id="ajusteconocido" oninput="calcD()"
+                placeholder="Ej.: valor del estudio del año anterior"></label>
+            <label class="f" style="grid-column:1/-1"><span class="l">Descripción del ajuste (manual, va al
+                informe)</span><input class="i" id="ajustedesc"
+                placeholder="p. ej. Ajuste de precios de transferencia para ubicar el margen en la mediana"></label>
+            <label class="f"><span class="l">Unidad de los EEFF</span><select class="i" id="unidad" onchange="calc()">
+                <option value="miles">Miles de COP</option>
+                <option value="pesos">Pesos (COP)</option>
+                <option value="millones">Millones de COP</option>
+              </select></label>
+            <label class="f" style="display:none"><span class="l">Método del rango</span><select class="i" id="qmethod"
+                onchange="calc()">
+                <option value="inc">Percentil inclusivo (Excel · usado en los informes)</option>
+                <option value="dian">Exclusivo tipo DIAN (n+1)</option>
+              </select></label>
+          </div>
+          <label class="toggle"><input type="checkbox" id="useadj" checked onchange="calc()"> Ajustar comparables por
+            capital de trabajo (OCDE)</label>
+          <div class="hint">El egreso controlado (tope) va en COP plenos. El ajuste se convierte a COP según la unidad
+            de los EEFF y se topa a ese egreso (doctrina DIAN 2024); el sistema avisa si lo excede.</div>
+        </div>
+      </div>
+
+
 
       <div class="card full">
         <div class="hd">
@@ -1718,13 +1722,7 @@
             ⚠ Para un análisis del sector específico (no genérico), cargue primero el <b>RUT</b> o la <b>Cámara de
               Comercio</b> arriba: se necesita al menos la razón social, el CIIU o el objeto social.
           </div>
-          <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px">Plantilla del sistema (sin
-            IA):</div>
-          <div id="ecoBotonesPlantilla"
-            style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-            <button type="button" class="btn solid" onclick="autoEconomia()">⚙ Generar / regenerar con la plantilla del
-              año</button>
-          </div>
+
           <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px">Con inteligencia artificial:
           </div>
           <div id="ecoBotonesIA" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"></div>
@@ -2449,10 +2447,42 @@
       if (m = t.match(/representaci[oó]n legal[:\s]*([A-ZÁÉÍÓÚÑ][^\n]{3,60})/i)) o.replegal = _tidy(m[1]);
       return o;
     }
-    function applyRUT(txt) {
-      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); const o = parseRUT(txt); AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'RUT' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && !nitCoincide(prevN, o.nit)); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
+    function _aplicarDatosRUT(o) {
+      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'RUT' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && !nitCoincide(prevN, o.nit)); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
       if (mismatch) { calc(); if (typeof runAudit === 'function') runAudit(); docMsg('⛔ No se cargaron los datos del RUT: el formulario ya tiene «' + (prevE || ('NIT ' + prevN)) + '» y el RUT que subiste corresponde a «' + who + '» — son distintos.'); return o; }
       const set = []; if (o.ent) { $('ent').value = o.ent; set.push('razón social'); } if (o.nit) { $('nit').value = o.nit; set.push('NIT'); } if (o.ciiu) { $('ciiu').value = o.ciiu; set.push('CIIU'); } if (o.replegal) { $('replegal').value = o.replegal; set.push('rep. legal'); } calc(); if (typeof runAudit === 'function') runAudit(); docMsg(set.length ? ('RUT procesado. Campos: ' + set.join(', ') + '. Verifica antes de usar.') : 'RUT leído pero no se reconocieron campos; complétalos manualmente.'); return o;
+    }
+    /* respaldo manual (texto pegado a mano): sigue usando regex, porque no hay
+       archivo que mandar a OCR */
+    function applyRUT(txt) { return _aplicarDatosRUT(parseRUT(txt)); }
+
+    /* extracción real: envía el archivo tal cual a Gemini Vision (OCR) — máxima
+       precisión, sin depender de la capa de texto del PDF ni de regex */
+    async function procesarRUTConOCR(file) {
+      if (!file) return;
+      docMsg('🤖 Analizando el RUT con IA (OCR)… puede tardar unos segundos.');
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result || '').split(',')[1] || '');
+          r.onerror = () => reject(new Error('no se pudo leer el archivo'));
+          r.readAsDataURL(file);
+        });
+        const res = await fetch('/api/extraer-rut', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archivo_base64: base64, tipo: file.type || 'application/pdf' })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error((data && (data.error.message || data.error)) || ('HTTP ' + res.status));
+        let nit = _digits(data.nit || ''); if (nit.length === 10) nit = nit.slice(0, 9);
+        _aplicarDatosRUT({
+          ent: _tidy(data.razon_social || ''), nit,
+          ciiu: _tidy(data.ciiu || ''), dir: _tidy(data.direccion || ''),
+          replegal: _tidy(data.representante_legal || '')
+        });
+      } catch (e) {
+        docMsg('⚠ No se pudo analizar el RUT con IA (' + e.message + '). Intenta de nuevo o verifica que el archivo sea legible.');
+      }
     }
 
     function parseCamara(txt) {
@@ -2469,10 +2499,42 @@
       console.log('[parseCamara] resultado final:', JSON.stringify(o));
       return o;
     }
-    function applyCamara(txt) {
-      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); const o = parseCamara(txt); console.log('[applyCamara] entidad previa en el formulario:', JSON.stringify(prevE), '· nit previo:', JSON.stringify(prevN), '· datos leidos de la Cámara:', JSON.stringify(o)); if (o.ent || o.nit) AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'Cámara de Comercio' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && !nitCoincide(prevN, o.nit)); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
+    function _aplicarDatosCamara(o) {
+      const prevE = $('ent').value.trim(), prevN = _digits($('nit').value); if (o.ent || o.nit) AUDIT_DOC = { ent: o.ent || '', nit: o.nit || '', src: 'Cámara de Comercio' }; const mismatch = (prevE && o.ent && !similar(prevE, o.ent)) || (prevN && o.nit && !nitCoincide(prevN, o.nit)); const who = o.ent || ('NIT ' + o.nit) || 'otra empresa';
       if (mismatch) { calc(); if (typeof runAudit === 'function') runAudit(); docMsg('⛔ AUDITORÍA: la Cámara corresponde a «' + who + '», que NO es el informante «' + (prevE || ('NIT ' + prevN)) + '». No se cargaron los datos ajenos; verifica el documento.'); return o; }
       const set = []; if (o.ent && !$('ent').value) { $('ent').value = o.ent; set.push('razón social'); } if (o.nit && !$('nit').value) { $('nit').value = o.nit; set.push('NIT'); } if (o.objeto) { $('objeto').value = o.objeto; set.push('objeto social'); } if (o.constitucion) { $('constitucion').value = o.constitucion; set.push('constitución'); } if (o.replegal) { $('replegal').value = o.replegal; set.push('rep. legal'); } calc(); if (typeof runAudit === 'function') runAudit(); docMsg(set.length ? ('Cámara procesada. Documentado: ' + set.join(', ') + '. Compartido con el informe.') : 'Documento leído pero no se reconocieron campos; complétalos manualmente.'); return o;
+    }
+    /* respaldo manual (texto pegado a mano): sigue usando regex */
+    function applyCamara(txt) { return _aplicarDatosCamara(parseCamara(txt)); }
+
+    /* extracción real: envía el archivo tal cual a Gemini Vision (OCR) */
+    async function procesarCamaraConOCR(file) {
+      if (!file) return;
+      docMsg('🤖 Analizando la Cámara de Comercio con IA (OCR)… puede tardar unos segundos.');
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result || '').split(',')[1] || '');
+          r.onerror = () => reject(new Error('no se pudo leer el archivo'));
+          r.readAsDataURL(file);
+        });
+        const res = await fetch('/api/extraer-camara', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archivo_base64: base64, tipo: file.type || 'application/pdf' })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error((data && (data.error.message || data.error)) || ('HTTP ' + res.status));
+        let nit = _digits(data.nit || ''); if (nit.length === 10) nit = nit.slice(0, 9);
+        _aplicarDatosCamara({
+          ent: _tidy(data.razon_social || ''), nit,
+          matricula: _tidy(data.matricula || ''),
+          constitucion: _tidy(data.fecha_constitucion || ''),
+          objeto: _tidy(data.objeto_social || ''),
+          replegal: _tidy(data.representante_legal || '')
+        });
+      } catch (e) {
+        docMsg('⚠ No se pudo analizar la Cámara de Comercio con IA (' + e.message + '). Intenta de nuevo o verifica que el archivo sea legible.');
+      }
     }
 
     /* ================= ESTUDIO ECONÓMICO AUTOMÁTICO (fuentes confiables) ================= */
@@ -5503,15 +5565,6 @@ ${textoPrompt}`;
     }, true);
 
     function _pt310UI() {
-      /* botón "Cargar informe PT del año anterior" en la card de memoria histórica */
-      var anchor = $('histyear');
-      if (anchor && !document.getElementById('pt310prev')) {
-        var wrap = document.createElement('label'); wrap.className = 'f'; wrap.id = 'pt310prevwrap';
-        wrap.style.cssText = 'grid-column:1/-1;margin-top:6px';
-        wrap.innerHTML = '<span class="l">Informe PT del año anterior (.pdf / .docx / .json) — base de comparables</span>' +
-          '<input class="i" type="file" id="pt310prev" accept=".pdf,.docx,.doc,.json" onchange="cargarInformeAnterior(this.files[0])">';
-        anchor.parentNode.parentNode.insertBefore(wrap, anchor.parentNode.nextSibling);
-      }
       /* botón "Generar definitivo" junto a los de exportación */
       var expBtn = [].slice.call(document.querySelectorAll('button')).filter(function (b) { return /Generar Word/.test(b.textContent); })[0];
       if (expBtn && !document.getElementById('pt310def')) {
@@ -11656,7 +11709,7 @@ se guía la descarga manual
         if (!ancla || !ancla.parentNode) return;
         var d = document.createElement('div');
         d.id = 'ptConectorPanel';
-        d.style.cssText = 'margin:10px 0;padding:12px;border:2px solid #17202A;background:#FBFCFC;border-radius:8px';
+        d.style.cssText = 'display:none;margin:10px 0;padding:12px;border:2px solid #17202A;background:#FBFCFC;border-radius:8px';
         d.innerHTML = '<b>🔌 Conector de inteligencia artificial y búsqueda</b>' +
           '<div style="font-size:11px;color:#566573;margin:4px 0 8px">De él dependen la lectura asistida de estados financieros, la verificación de comparables en fuentes públicas y la redacción del informe con norma, doctrina y jurisprudencia. Sin conector el sistema sigue operando con reglas, con menor alcance.</div>' +
           '<div id="ptConectorCfg"></div><div id="ptConectorEstado" style="margin-top:6px"></div>';
@@ -11756,15 +11809,39 @@ se guía la descarga manual
       }
 
       function tramoPrevio(id) {
-        /* el apartado equivalente del informe anterior sirve de referencia de forma */
+        /* el apartado equivalente del informe anterior sirve de referencia de forma.
+           Los subapartados S.1-S.8 (sc_*) no existían como tales el año anterior:
+           todos caían dentro de "análisis del sector", así que se les da ese mismo
+           tramo (más amplio) en vez de dejarlos sin ninguna referencia. */
         try {
           var A = window.PT_ANTERIOR; if (!A || !A.texto) return '';
-          var e = $(id);
-          var etiqueta = { e_mundo: /econom[ií]a mundial/i, e_col: /econom[ií]a colombiana/i, e_sec: /an[aá]lisis del sector/i }[id];
+          var mapa = { e_mundo: /econom[ií]a mundial/i, e_col: /econom[ií]a colombiana/i, e_sec: /an[aá]lisis del sector/i };
+          var esSubSector = id.indexOf('sc_') === 0;
+          var etiqueta = mapa[id] || (esSubSector ? mapa.e_sec : null);
           if (!etiqueta) return '';
           var i = A.texto.search(etiqueta);
-          return i < 0 ? '' : A.texto.slice(i, i + 2500).replace(/\s+/g, ' ');
+          if (i < 0) return '';
+          return A.texto.slice(i, i + (esSubSector ? 4000 : 2500)).replace(/\s+/g, ' ');
         } catch (e) { return ''; }
+      }
+
+      /* Extrae el JSON de la respuesta aunque el modelo haya añadido narración,
+         preguntas o pasos intermedios antes o después del objeto final: nunca se
+         debe volcar ese texto de proceso al informe. */
+      function extraerJSON(texto) {
+        var t = String(texto || '').replace(/```json|```/g, '').trim();
+        try { return JSON.parse(t); } catch (e) { }
+        for (var i = t.lastIndexOf('{'); i >= 0; i = t.lastIndexOf('{', i - 1)) {
+          var profundidad = 0, fin = -1;
+          for (var k = i; k < t.length; k++) {
+            if (t[k] === '{') profundidad++;
+            else if (t[k] === '}') { profundidad--; if (profundidad === 0) { fin = k; break; } }
+          }
+          if (fin > i) {
+            try { return JSON.parse(t.slice(i, fin + 1)); } catch (e) { }
+          }
+        }
+        return null;
       }
 
       async function redactarSeccion(s, ctx, normas) {
@@ -11772,6 +11849,8 @@ se guía la descarga manual
         var anio = ($('anio') && $('anio').value) || '';
         var ent = ($('ent') && $('ent').value) || 'la parte examinada';
         var previo = tramoPrevio(s.id);
+
+        var esSubSector = s.id.indexOf('sc_') === 0;
 
         var prompt = 'Eres especialista en precios de transferencia en Colombia y redactas el Informe Local del año gravable ' + anio + ' de ' + ent + '.\n\n' +
           'APARTADO A REDACTAR: ' + s.tit + '\n' +
@@ -11783,17 +11862,21 @@ se guía la descarga manual
             : '2. No uses información externa: este apartado se redacta con el contexto.\n') +
           '3. Sustenta con la norma, la doctrina y la jurisprudencia pertinentes, citándolas con precisión.\n' +
           '4. Prosa continua en español, tercera persona, tono técnico. Sin viñetas ni títulos.\n' +
-          '5. Si el contexto no alcanza para el apartado, escríbelo expresamente en vez de rellenar.\n\n' +
+          '5. Si el contexto no alcanza para el apartado, escríbelo expresamente en vez de rellenar.\n' +
+          '6. Este proceso es automático y no hay ninguna persona disponible para responder preguntas ni para confirmar nada. NUNCA pidas aclaraciones, NUNCA narres tus pasos de búsqueda o tu razonamiento: la única salida admisible es el JSON final. Si algo es ambiguo (por ejemplo, si este apartado no tiene un equivalente exacto en el informe anterior), resuélvelo con tu mejor juicio profesional y, si lo consideras relevante, dilo brevemente dentro del campo "faltante" — nunca fuera del JSON.\n\n' +
           'MARCO NORMATIVO DISPONIBLE:\n' + normas + '\n\n' +
-          (previo ? 'FORMA DEL APARTADO EQUIVALENTE EN EL INFORME ANTERIOR (úsala como referencia de estructura, NO copies sus cifras, que son de otro año):\n' + previo + '\n\n' : '') +
+          (previo ? 'FORMA DEL APARTADO EQUIVALENTE EN EL INFORME ANTERIOR (úsala como referencia de estructura y tono, NO copies sus cifras, que son de otro año' +
+            (esSubSector ? '; el informe anterior no subdividía el análisis del sector en apartados como este, de modo que el fragmento corresponde a la sección completa de la que se desprende — redacta igualmente, con normalidad, el apartado específico solicitado' : '') +
+            '):\n' + previo + '\n\n' : '') +
           'CONTEXTO DEL ESTUDIO:\n' + ctx.slice(0, 30000) + '\n\n' +
-          'Devuelve SOLO JSON: {"texto":"...","fuentes":["url o referencia"],"normas":["citas usadas"],"suficiente":true|false,"faltante":"qué información haría falta"}';
+          'Devuelve SOLO JSON, sin ningún texto antes ni después: {"texto":"...","fuentes":["url o referencia"],"normas":["citas usadas"],"suficiente":true|false,"faltante":"qué información haría falta"}';
 
         var data = await ptFetchClaude({ messages: [{ role: 'user', content: prompt }], max_tokens: Math.min(8000, Math.round(meta / 2) + 2000) }, { buscar: s.buscar });
         var rf = ptTextoYFuentes(data);
-        var j;
-        try { j = JSON.parse(String(rf.texto).replace(/```json|```/g, '').trim()); }
-        catch (e) { j = { texto: rf.texto, fuentes: [], normas: [], suficiente: true }; }
+        var j = extraerJSON(rf.texto);
+        if (!j) {
+          j = { texto: '', fuentes: [], normas: [], suficiente: false, faltante: 'la respuesta del modelo no contenía un JSON válido; no se aplicó ningún texto a este apartado' };
+        }
         j.fuentesWeb = rf.fuentes;
         j.buscoEnWeb = rf.busco;
         return j;

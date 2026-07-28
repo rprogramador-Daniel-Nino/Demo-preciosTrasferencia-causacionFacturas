@@ -25,6 +25,10 @@
         "function": "extraerRut"
       },
       {
+        "source": "/api/extraer-camara",
+        "function": "extraerCamara"
+      },
+      {
         "source": "/api/gemini",
         "function": "gemini"
       },
