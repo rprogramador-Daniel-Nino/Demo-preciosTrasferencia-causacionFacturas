@@ -1178,28 +1178,36 @@
           <input class="i mono" id="histyear" placeholder="2025" style="display:none">
 
           <div style="margin-bottom:12px">
-            <label class="l" style="font-weight:600;font-size:12px;color:#475569;margin-bottom:6px;display:block">Estudio base e informe del año anterior</label>
+            <label class="l"
+              style="font-weight:600;font-size:12px;color:#475569;margin-bottom:6px;display:block">Estudio base e
+              informe del año anterior</label>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-              <label class="btn violet" style="margin:0;cursor:pointer">📎 Cargar informe del año anterior (.pdf, .docx, .json, .txt)<input
-                  type="file" accept=".pdf,.docx,.doc,.json,.txt" style="display:none"
+              <label class="btn violet" style="margin:0;cursor:pointer">📎 Cargar informe del año anterior (.pdf, .docx,
+                .json, .txt)<input type="file" accept=".pdf,.docx,.doc,.json,.txt" style="display:none"
                   onchange="cargarInformeAnterior(this.files[0])"></label>
-              <button type="button" class="btn" style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:7px 14px;border-radius:8px;font-weight:600;cursor:pointer"
+              <button type="button" class="btn"
+                style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:7px 14px;border-radius:8px;font-weight:600;cursor:pointer"
                 onclick="loadPriorYear()">↤ Traer año anterior</button>
-              <button type="button" class="btn" style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:7px 14px;border-radius:8px;cursor:pointer"
+              <button type="button" class="btn"
+                style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:7px 14px;border-radius:8px;cursor:pointer"
                 onclick="buildFromScratch()">＋ Desde cero</button>
             </div>
           </div>
 
-          <label class="f" style="margin-bottom:8px"><span class="l">Estudios guardados (clic para cargar)</span><select class="i" id="histlist"
-              onchange="loadFromMemory(this.value)" size="2" style="height:auto;max-height:80px"></select></label>
-          <div class="hint" id="histmsg" style="margin-bottom:14px">El sistema toma como fuente histórica únicamente la documentación comprobatoria
+          <label class="f" style="margin-bottom:8px"><span class="l">Estudios guardados (clic para cargar)</span><select
+              class="i" id="histlist" onchange="loadFromMemory(this.value)" size="2"
+              style="height:auto;max-height:80px"></select></label>
+          <div class="hint" id="histmsg" style="margin-bottom:14px">El sistema toma como fuente histórica únicamente la
+            documentación comprobatoria
             del año anterior.</div>
 
           <!-- Sub-panel embebido: Perfil de Actividad de la Empresa -->
           <div style="border:1px solid #E2E8F0;border-radius:12px;background:#FAFAFE;padding:16px;margin-top:10px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
               <h4 style="margin:0;font-size:14px;font-weight:700;color:#1E293B;display:flex;align-items:center;gap:6px">
-                🧠 Perfil de actividad de la empresa <span style="font-size:11.5px;font-weight:normal;color:#64748B">(paso clave antes de buscar comparables)</span>
+                🧠 Perfil de actividad de la empresa <span
+                  style="font-size:11.5px;font-weight:normal;color:#64748B">(paso clave antes de buscar
+                  comparables)</span>
               </h4>
               <span class="card-status-badge pending" id="badge_actividad">🔴 Pendiente</span>
               <span class="eyebrow" style="margin-left:auto">IA · firma de actividad</span>
@@ -1221,12 +1229,14 @@
               <div id="actmsg_wrap" style="display:flex;align-items:center;gap:8px">
                 <span id="actmsg_icon" style="font-size:18px">🔴</span>
                 <span id="actmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
-                  Pendiente — cargue primero el estudio del año anterior (arriba) y luego pulse «Analizar empresa con IA»
+                  Pendiente — cargue primero el estudio del año anterior (arriba) y luego pulse «Analizar empresa con
+                  IA»
                 </span>
               </div>
             </div>
 
-            <div style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px"
+            <div
+              style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px"
               id="act_steps_hint">
               <b>Pasos:</b>
               <span style="margin:0 6px">①</span> Cargue el informe del año anterior (arriba)
@@ -1240,7 +1250,8 @@
 
             <input type="hidden" id="actividad_json" value="">
             <div id="activity_spec_card" style="display:none;margin-top:12px">
-              <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
+              <div
+                style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
                 ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los
                 cambios se guardan automáticamente y se usan en la búsqueda de comparables.
               </div>
@@ -1259,7 +1270,8 @@
                     escribir en español — se traducen automáticamente)</span>
                   <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b>
                     Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor
-                      mayorista"</i>) y al presionar Enter el sistema las traducirá inmediatamente al inglés para Capital IQ / Orbis.
+                      mayorista"</i>) y al presionar Enter el sistema las traducirá inmediatamente al inglés para
+                    Capital IQ / Orbis.
                   </div>
                   <div class="actchips" id="act_keywords_chips"></div>
                   <input class="i" id="act_keyword_new"
@@ -1535,14 +1547,14 @@
             style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
             <div style="display:flex;gap:6px;align-items:center"><label class="mini" style="cursor:pointer">📥 Importar
                 Excel (Capital IQ)<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none"
-                  onchange="importCompsFile(this.files[0])"></label><button type="button" class="mini green"
-                onclick="ptExtraerComparablesEstudioAnteriorWithGemini()"
-                style="font-weight:600;background:#2E8B6B;color:#fff;border:none;padding:4px 10px;border-radius:5px;cursor:pointer">🤖
-                Cargar comparables del estudio anterior</button><label class="mini" style="cursor:pointer">📎
+                  onchange="importCompsFile(this.files[0])"></label>
+
+              <label class="mini" style="cursor:pointer">📎
                 Adjuntar<input type="file" style="display:none"
                   onchange="attachEvidence('comps',this.files[0])"></label><span id="evid-comps"
-                style="font-size:10.5px;color:#1F6D4F"></span></div><button type="button" class="btn mini violet"
-              id="toggleCompsBtn" onclick="toggleCompsTable()" style="margin-left:auto;font-weight:600">👁️ Ocultar /
+                style="font-size:10.5px;color:#1F6D4F"></span>
+            </div><button type="button" class="btn mini violet" id="toggleCompsBtn" onclick="toggleCompsTable()"
+              style="margin-left:auto;font-weight:600">👁️ Ocultar /
               Mostrar tabla</button>
           </div>
           <div id="compsSummaryBadge"
@@ -1708,7 +1720,8 @@
           </div>
           <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px">Plantilla del sistema (sin
             IA):</div>
-          <div id="ecoBotonesPlantilla" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <div id="ecoBotonesPlantilla"
+            style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
             <button type="button" class="btn solid" onclick="autoEconomia()">⚙ Generar / regenerar con la plantilla del
               año</button>
           </div>
@@ -1719,14 +1732,14 @@
               con Claude (por web)</button>
             <button type="button" class="btn amber" id="ptCompletarEcoBtn"
               onclick="ptRedactarInforme().then(function(){var el=document.getElementById('ptRedaccion');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})">🤖
-              Completar apartados pendientes con IA (usa «Otros documentos»)</button>
+              Completar apartados pendientes con IA (usa «Otros documentos» + búsqueda web)</button>
           </div>
-          <label class="f"><span class="l">Panorama económico mundial</span><textarea class="i"
-              id="e_mundo" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">Panorama económico colombiano</span><textarea class="i"
-              id="e_col" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">Análisis del sector</span><textarea class="i" id="e_sec"
-              rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Panorama económico mundial</span><textarea class="i" id="e_mundo" rows="3"
+              oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Panorama económico colombiano</span><textarea class="i" id="e_col" rows="3"
+              oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">Análisis del sector</span><textarea class="i" id="e_sec" rows="3"
+              oninput="calcD()"></textarea></label>
           <div style="border-top:1px solid var(--hair);margin:10px 0 6px;padding-top:8px"><b
               style="font-size:12.5px">Informe económico extendido — contenidos del Informe Maestro</b>
             <div style="font-size:11px;color:var(--muted)">Cada campo diligenciado se convierte en una subsección propia
@@ -1739,14 +1752,14 @@
           </div>
           <label class="f"><span class="l">S.1 Definición y alcance del sector (CIIU, cadena de
               valor)</span><textarea class="i" id="sc_def" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">S.2 Tamaño del mercado y evolución</span><textarea
-              class="i" id="sc_tam" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.2 Tamaño del mercado y evolución</span><textarea class="i" id="sc_tam"
+              rows="2" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">S.3 Estructura competitiva y
               participantes</span><textarea class="i" id="sc_comp" rows="2" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">S.4 Dinámica de precios y márgenes del
               sector</span><textarea class="i" id="sc_prec" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">S.5 Demanda, clientes y canales</span><textarea
-              class="i" id="sc_dem" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">S.5 Demanda, clientes y canales</span><textarea class="i" id="sc_dem"
+              rows="2" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">S.6 Marco regulatorio y tributario del
               sector</span><textarea class="i" id="sc_reg" rows="2" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">S.7 Riesgos del sector y su incidencia en la
@@ -1756,8 +1769,8 @@
           <label class="f"><span class="l">Fuentes consultadas del estudio sectorial
               (obligatorio)</span><textarea class="i" id="sc_fuentes" rows="2" oninput="calcD()"
               placeholder="Ej.: DANE, Banco de la República, FMI WEO, Newzoo, Fedesoft, gremios. Indique fecha de consulta."></textarea></label>
-          <label class="f"><span class="l">A. Visión general del negocio del grupo</span><textarea
-              class="i" id="ec_vision" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">A. Visión general del negocio del grupo</span><textarea class="i"
+              id="ec_vision" rows="3" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">B. Productos y líneas de negocio (detalle por
               producto)</span><textarea class="i" id="ec_prod" rows="3" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">C. Fuentes de ingreso y modelo de
@@ -1768,14 +1781,14 @@
               entidades</span><textarea class="i" id="ec_geo" rows="2" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">F. Factores generadores de utilidad del
               grupo</span><textarea class="i" id="ec_valor" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">G. Estructura de financiación del grupo</span><textarea
-              class="i" id="ec_fin" rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">G. Estructura de financiación del grupo</span><textarea class="i" id="ec_fin"
+              rows="3" oninput="calcD()"></textarea></label>
           <label class="f"><span class="l">H. Intangibles del grupo y titularidad
               (DEMPE)</span><textarea class="i" id="ec_intang" rows="2" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">I. Mercado, clientes y competencia</span><textarea
-              class="i" id="ec_mercado" rows="3" oninput="calcD()"></textarea></label>
-          <label class="f"><span class="l">J. Estrategias de negocio y perspectivas</span><textarea
-              class="i" id="ec_estrategia" rows="2" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">I. Mercado, clientes y competencia</span><textarea class="i" id="ec_mercado"
+              rows="3" oninput="calcD()"></textarea></label>
+          <label class="f"><span class="l">J. Estrategias de negocio y perspectivas</span><textarea class="i"
+              id="ec_estrategia" rows="2" oninput="calcD()"></textarea></label>
         </div>
       </div>
 
@@ -1786,19 +1799,34 @@
         <div class="bd">
           <div style="margin:10px 0;padding:12px;border:2px solid #7D3C98;background:#F5EEF8;border-radius:8px">
             <b>📐 Estructura y extensión del informe anterior</b>
-            <div style="font-size:11px;color:#5B2C6F;margin:4px 0 8px">El informe del año gravable debe conservar las mismas secciones, el mismo orden y una extensión comparable a la del período anterior. El sistema levanta ese esqueleto, mide el informe en curso y señala qué secciones quedaron cortas.</div>
+            <div style="font-size:11px;color:#5B2C6F;margin:4px 0 8px">El informe del año gravable debe conservar las
+              mismas secciones, el mismo orden y una extensión comparable a la del período anterior. El sistema levanta
+              ese esqueleto, mide el informe en curso y señala qué secciones quedaron cortas.</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button type="button" onclick="ptEstructuraAnterior()" style="padding:7px 11px;background:#7D3C98;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Levantar estructura del año anterior</button>
-              <button type="button" onclick="ptCompararExtension()" style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Comparar con el informe actual</button>
+              <button type="button" onclick="ptEstructuraAnterior()"
+                style="padding:7px 11px;background:#7D3C98;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Levantar
+                estructura del año anterior</button>
+              <button type="button" onclick="ptCompararExtension()"
+                style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Comparar
+                con el informe actual</button>
             </div>
             <div id="ptEstructura"></div>
           </div>
           <div style="margin:10px 0;padding:12px;border:2px solid #145A32;background:#EAFAF1;border-radius:8px">
             <b>✍️ Redacción proactiva del informe</b>
-            <div style="font-size:11px;color:#145A32;margin:4px 0 8px">El sistema reúne la documentación del año anterior, el informe maestro, los soportes cargados, el análisis funcional, las operaciones, los estados financieros y el conjunto de comparables, y redacta con eso los apartados que estén vacíos, sustentando norma, doctrina y jurisprudencia. No inventa datos: lo que no conste se relaciona como información por solicitar.</div>
+            <div style="font-size:11px;color:#145A32;margin:4px 0 8px">El sistema reúne la documentación del año
+              anterior, el informe maestro, los soportes cargados, el análisis funcional, las operaciones, los estados
+              financieros y el conjunto de comparables, y redacta con eso los apartados que estén vacíos, sustentando
+              norma, doctrina y jurisprudencia. No inventa datos: lo que no conste se relaciona como información por
+              solicitar.</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <button type="button" onclick="ptRedactarInforme()" style="padding:7px 11px;background:#145A32;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Redactar apartados pendientes</button>
-              <button type="button" onclick="(function(){var P=ptPendientes();moToast('Pendientes: '+P.total+' (identidad '+P.identidad.length+', económico '+P.economico.length+', sector '+P.sector.length+', marcadores '+P.marcadores.length+')','amber');})()" style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer">Ver qué falta</button>
+              <button type="button" onclick="ptRedactarInforme()"
+                style="padding:7px 11px;background:#145A32;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Redactar
+                apartados pendientes</button>
+              <button type="button"
+                onclick="(function(){var P=ptPendientes();moToast('Pendientes: '+P.total+' (identidad '+P.identidad.length+', económico '+P.economico.length+', sector '+P.sector.length+', marcadores '+P.marcadores.length+')','amber');})()"
+                style="padding:7px 11px;background:#5D6D7E;color:#fff;border:none;border-radius:6px;cursor:pointer">Ver
+                qué falta</button>
             </div>
             <div id="ptRedaccion"></div>
           </div>
@@ -2760,14 +2788,25 @@
     }
 
     function calc() {
-      const kind = $('pli').value, T = { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value) };
-      const tPLI = pliOf(T, kind); $('temo').textContent = PLIN[kind] + ' ' + (tPLI === null ? '—' : pctf(tPLI));
+      const kind = $('pli').value, cmode = ($('cmode') && $('cmode').value) || 'all', useAdj = $('useadj') ? $('useadj').checked : false;
+      const r = (num($('prime').value) || 0) / 100;
+      const T = { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value), ar: num($('t_ar').value), inv: num($('t_inv').value), ap: num($('t_ap').value) };
+      const tPLI = pliOf(T, kind), tR = ratios(T);
+      $('temo').textContent = PLIN[kind] + ' ' + (tPLI === null ? '—' : pctf(tPLI));
       const series = [];
       [...$('cbody').children].forEach(tr => {
         const v = [...tr.querySelectorAll('input,select')].map(i => i.value);
-        const c = { s: num(v[2]), c: num(v[3]), op: num(v[4]) };
-        let pli = pliOf(c, kind); if (pli !== null) series.push(pli);
-        tr.querySelector('.mo').textContent = pli === null ? '—' : pctf(pli);
+        const name = v[0], amb = v[1];
+        const c = { s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]) };
+        let inc = cmode === 'all' ? true : (cmode === 'intl' ? amb === 'Int' : amb === 'Nac');
+        if (inc && MOTOR.activo) { const mk = nameKey(name); if (MOTOR.sel[mk] === false) inc = false; }
+        let pli = pliOf(c, kind), adj = 0; const cR = ratios(c);
+        if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) adj = r * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
+        const apli = pli === null ? null : pli + adj;
+        const moCell = tr.querySelector('.mo');
+        moCell.textContent = apli === null ? '—' : pctf(apli);
+        moCell.style.opacity = inc ? 1 : .35;
+        if (inc && apli !== null) series.push(apli);
       });
       series.sort((a, b) => a - b);
       const st = series.length ? { p25: quart(series, .25), med: quart(series, .5), p75: quart(series, .75) } : null;
@@ -2775,6 +2814,7 @@
       renderReport(T, tPLI, st, [], 0, false, kind, T.s || 0, 1);
     }
     function pliOf(o, kind) { const s = o.s; if (!s) return null; if (kind === 'MO') return o.op / s; if (kind === 'MB') return (s - o.c) / s; return null; }
+    function ratios(o) { if (o.s && o.ar !== null && o.inv !== null) return { arS: o.ar / o.s, invS: o.inv / o.s, apC: (o.c && o.ap !== null) ? o.ap / o.c : null }; return null; }
     function quart(s, p) { return s[Math.floor(p * (s.length - 1))]; }
 
     function renderReportCore(T, tPLI, st, detail, r, useAdj, kind, base, unitMult) {
@@ -10535,16 +10575,19 @@ se guía la descarga manual
           '2. Si un apartado no puede sustentarse con el contexto, escribe exactamente: "[La documentación aportada no contiene información sobre este punto; debe solicitarse al contribuyente.]"\n' +
           '3. No cites cifras que no aparezcan en el contexto.\n' +
           '4. Redacta en prosa, en español, en tercera persona, con el tono técnico de un informe tributario. Sin viñetas ni títulos.\n' +
-          '5. Cuando el apartado lo admita, sustenta con la norma, la doctrina o la jurisprudencia que se listan abajo, citándolas con precisión.\n\n' +
+          '5. Cuando el apartado lo admita, sustenta con la norma, la doctrina o la jurisprudencia que se listan abajo, citándolas con precisión.\n' +
+          '6. SOLO para los apartados del estudio económico y sectorial (panorama económico mundial/colombiano, análisis del sector, S.1 a S.8, fuentes del estudio sectorial, y A a J del informe económico extendido): si el contexto no trae suficiente información, PUEDES buscar en internet datos reales y actuales (DANE, Banco de la República, FMI, gremios, prensa económica seria) para sustentarlos, y citar en "fuente" la fuente y la fecha exactas encontradas. Para el resto de apartados (identidad, vinculación, método, comparables) NO busques en internet: usa exclusivamente el contexto, conforme a la regla 1.\n\n' +
           'MARCO NORMATIVO DISPONIBLE PARA CITAR:\n' + normas + '\n\n' +
           'CONTEXTO DEL ESTUDIO:\n' + contexto.slice(0, 45000) + '\n\n' +
           'APARTADOS A REDACTAR:\n' + lista + '\n\n' +
           'Devuelve SOLO un JSON: {"campos":{"id_del_campo":{"texto":"...","fuente":"de dónde salió la información","normas":["..."],"suficiente":true|false}}}';
 
-        /* pasa por el conector único del bloque 12 */
+        /* pasa por el conector único del bloque 12; con búsqueda web habilitada
+           (el modelo decide usarla solo para los apartados económicos/sectoriales,
+           conforme a la regla 6 del prompt) */
         var data;
         if (typeof ptFetchClaude === 'function') {
-          data = await ptFetchClaude({ max_tokens: 8000, messages: [{ role: 'user', content: prompt }] });
+          data = await ptFetchClaude({ max_tokens: 8000, messages: [{ role: 'user', content: prompt }] }, { buscar: true });
         } else {
           var res = await fetch('/api/claude', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -10592,10 +10635,15 @@ se guía la descarga manual
         try {
           var j = await redaccionIA(pendientes, contexto);
           resultado.via = 'asistida';
+          /* económico/sector puede traer cifras reales de una búsqueda web (regla 6
+             del prompt) que nunca estarán en el contexto cargado — no se marcan
+             como "ajenas" solo por eso; el resto de apartados sigue exigiendo que
+             toda cifra conste en el contexto */
+          var idsEcoSector = CAMPOS_ECO.concat(CAMPOS_SECTOR).map(function (c) { return c[0]; });
           Object.keys(j.campos || {}).forEach(function (id) {
             var c = j.campos[id];
             if (!c || !c.texto) return;
-            var ajenas = verificarCifras(c.texto, contexto);
+            var ajenas = idsEcoSector.indexOf(id) >= 0 ? [] : verificarCifras(c.texto, contexto);
             resultado.campos[id] = {
               texto: c.texto, fuente: c.fuente || '', normas: c.normas || [],
               suficiente: c.suficiente !== false, cifrasAjenas: ajenas
@@ -11101,6 +11149,30 @@ se guía la descarga manual
       }
       window.ptExtraerTextoSeccionAnterior = ptExtraerTextoSeccionAnterior;
 
+      /* dónde insertar una sección cuando el informe todavía no tiene su
+         encabezado: justo antes del encabezado de la primera sección
+         POSTERIOR (según el orden del ESQUELETO) que sí esté presente; para
+         la introducción, justo después del <h1>. Si ninguna sección
+         posterior está presente todavía, se deja null y se añade al final
+         como último recurso — nunca se antepone al orden ya construido. */
+      function ptPosicionParaSeccion(doc, secId) {
+        var idx = ESQUELETO.findIndex(function (e) { return e.id === secId; });
+        if (idx < 0) return null;
+
+        if (secId === 'intro') {
+          var h1 = doc.querySelector('h1');
+          if (h1) return { padre: doc, ref: h1.nextSibling };
+        }
+
+        var headings = [].slice.call(doc.querySelectorAll('h2.rep, h3.rep, h2'));
+        for (var i = idx + 1; i < ESQUELETO.length; i++) {
+          var sig = ESQUELETO[i];
+          var match = headings.find(function (h) { return sig.rx.test(h.textContent); });
+          if (match) return { padre: match.parentNode, ref: match };
+        }
+        return null;
+      }
+
       function ptAplicarSeccionesInyectadas() {
         var doc = $('doc'); if (!doc) return;
         var inyectadas = window.PT_SECCIONES_INYECTADAS || {};
@@ -11113,11 +11185,16 @@ se guía la descarga manual
           var htmlContent = inyectadas[secId];
           if (!htmlContent) return;
 
-          var headings = [].slice.call(doc.querySelectorAll('h2.rep, h3.rep, h2'));
-          var targetHeading = headings.find(function (h) { return item.rx.test(h.textContent); });
-
+          /* se retira primero cualquier inyección previa de esta misma
+             sección — incluido su propio encabezado de emergencia, si lo
+             tenía — para no buscar luego un «targetHeading» que esté a
+             punto de eliminarse (eso dejaba el nodo sin padre y abortaba
+             a mitad el forEach de todas las secciones pendientes). */
           var prevInjs = [].slice.call(doc.querySelectorAll('.inj-' + secId));
           prevInjs.forEach(function (el) { if (el.parentNode) el.parentNode.removeChild(el); });
+
+          var headings = [].slice.call(doc.querySelectorAll('h2.rep, h3.rep, h2'));
+          var targetHeading = headings.find(function (h) { return item.rx.test(h.textContent); });
 
           var tempDiv = document.createElement('div');
           tempDiv.innerHTML = htmlContent;
@@ -11140,10 +11217,12 @@ se guía la descarga manual
             var h2 = document.createElement('h2');
             h2.className = 'rep inj-' + secId;
             h2.textContent = item.nom;
-            doc.appendChild(h2);
 
-            nodes.forEach(function (node) {
-              doc.appendChild(node);
+            var porInsertar = [h2].concat(nodes);
+            var pos = ptPosicionParaSeccion(doc, secId);
+            porInsertar.forEach(function (node) {
+              if (pos) pos.padre.insertBefore(node, pos.ref);
+              else doc.appendChild(node);
             });
           }
         });
