@@ -1717,7 +1717,7 @@
           <div id="ecoBotonesIA" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
             <button type="button" class="btn violet" onclick="askClaude('estudio económico y sectorial')">✍ Redactar
               con Claude (por web)</button>
-            <button type="button" class="btn amber"
+            <button type="button" class="btn amber" id="ptCompletarEcoBtn"
               onclick="ptRedactarInforme().then(function(){var el=document.getElementById('ptRedaccion');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});})">🤖
               Completar apartados pendientes con IA (usa «Otros documentos»)</button>
           </div>
@@ -1781,7 +1781,7 @@
 
       <div class="card full">
         <div class="hd">
-          <h3>10. Auditoría y ensamblaje del informe</h3><span class="eyebrow">calidad y redacción — no es el motor de comparables</span>
+          <h3>10. Auditoría y ensamblaje del informe</h3>
         </div>
         <div class="bd">
           <div style="margin:10px 0;padding:12px;border:2px solid #7D3C98;background:#F5EEF8;border-radius:8px">
@@ -7585,6 +7585,8 @@ se guía la descarga manual
         return { texto: out, cifras: cifras };
       }
 
+      /* sin botón en la interfaz (se retiró para no saturar de botones el panel);
+         se conserva por si se necesita invocar manualmente desde la consola */
       window.ptEconomiaDesdeAnterior = function () {
         var anio = (($('anio') && $('anio').value) || '2025').trim();
         var anioAnt = String(parseInt(anio, 10) - 1);
@@ -7635,10 +7637,26 @@ se guía la descarga manual
          (ptSectorAuto) queda genérico — se avisa mientras falten los tres */
       function ptEcoAvisoActualizar() {
         var el = document.getElementById('ecoAvisoPrevio');
-        if (!el) return;
-        var g = function (id) { var e = $(id); return e ? String(e.value || '').trim() : ''; };
-        var falta = !(g('ent') || g('ciiu') || g('objeto'));
-        el.style.display = falta ? '' : 'none';
+        if (el) {
+          var g = function (id) { var e = $(id); return e ? String(e.value || '').trim() : ''; };
+          var falta = !(g('ent') || g('ciiu') || g('objeto'));
+          el.style.display = falta ? '' : 'none';
+        }
+
+        /* el botón «Completar con IA» solo tiene sentido si queda algo por
+           redactar en económico/sector; si ya está todo diligenciado se
+           deshabilita y se pinta en gris para que se note de un vistazo */
+        var btn = document.getElementById('ptCompletarEcoBtn');
+        if (btn && typeof ptPendientes === 'function') {
+          var P = ptPendientes();
+          var hayPendientes = (P.economico.length + P.sector.length) > 0;
+          btn.disabled = !hayPendientes;
+          btn.style.cursor = hayPendientes ? 'pointer' : 'not-allowed';
+          btn.style.opacity = hayPendientes ? '1' : '.6';
+          btn.style.background = hayPendientes ? '' : '#9CA3AF';
+          btn.style.color = hayPendientes ? '' : '#fff';
+          btn.title = hayPendientes ? '' : 'No hay apartados económicos/sectoriales pendientes por completar.';
+        }
       }
       window.ptEcoAvisoActualizar = ptEcoAvisoActualizar;
       if (typeof calc === 'function') {
@@ -7649,22 +7667,10 @@ se guía la descarga manual
         };
       }
 
-      /* ───────────────────────────────────────────────────────────────────────
-         4. BOTÓN: heredar estructura del informe anterior
-         ─────────────────────────────────────────────────────────────────────── */
-      function _ui() {
-        try { ptEcoAvisoActualizar(); } catch (e) { }
-        if (document.getElementById('ptEconBtn')) return;
-        var grupo = document.getElementById('ecoBotonesIA');
-        if (!grupo) return;
-        var b = document.createElement('button');
-        b.type = 'button'; b.id = 'ptEconBtn'; b.className = 'btn solid';
-        b.textContent = '🌐 Estructura del informe anterior con valores ' + ((($('anio') && $('anio').value) || '2025'));
-        b.onclick = function () { ptEconomiaDesdeAnterior(); };
-        grupo.insertBefore(b, grupo.firstChild);
-      }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 1400); });
-      else setTimeout(_ui, 1400);
+      /* aviso inicial: se corre una vez cargado el DOM (calc() lo mantiene
+         actualizado después de esto) */
+      if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', function () { setTimeout(function () { try { ptEcoAvisoActualizar(); } catch (e) { } }, 1400); }); }
+      else { setTimeout(function () { try { ptEcoAvisoActualizar(); } catch (e) { } }, 1400); }
 
       /* ───────────────────────────────────────────────────────────────────────
          5. AUTOCOMPROBACIÓN EN CONSOLA
