@@ -13106,41 +13106,34 @@ se guía la descarga manual
 
       /* la aplicación del conjunto pasa por la doble prueba: las ajenas a la
          industria salen de la tabla con constancia, salvo las locales */
-      if (typeof window.ptAplicarSeleccion === 'function') {
-        var _aplicarPrev = window.ptAplicarSeleccion;
-        window.ptAplicarSeleccion = function () {
-          var r = _aplicarPrev.apply(null, arguments);
-          try {
-            var I = ptVerificarIndustriaTabla();
-            var totalTabla = $('cbody').children.length;
-            /* salvaguardas: si la verificación declara ajena a la totalidad, el
-               problema es de la detección de industria, no del conjunto; y la
-               remoción nunca deja el conjunto por debajo del mínimo legalmente
-               defendible */
-            var minimo = (window.PT_CRITERIOS && PT_CRITERIOS.minConjunto) || 8;
-            if (I.ajenas.length && I.ajenas.length >= totalTabla) {
-              moToast('La verificación de industria marcó como ajenas a TODAS las compañías: eso indica un problema de detección de la industria de la parte examinada, no del conjunto. No se removió ninguna; verifique el objeto social.', 'red');
-            } else if (I.ajenas.length && (totalTabla - I.ajenas.length) < minimo) {
-              moToast(I.ajenas.length + ' compañía(s) no superan la doble prueba de industria, pero removerlas dejaría el conjunto por debajo del mínimo de ' + minimo + '. Se conservan CON CONSTANCIA; revise manualmente.', 'amber');
-              window.PT_INDUSTRIA_OBSERVADAS = I.ajenas;
-            } else if (I.ajenas.length) {
-              var quitadas = [];
-              [].slice.call($('cbody').children).forEach(function (tr) {
-                var nom = (tr.querySelector('input') || {}).value || '';
-                var aj = I.ajenas.find(function (x) { return x.name === nom; });
-                if (aj) { quitadas.push(aj); tr.remove(); }
-              });
-              window.PT_INDUSTRIA_EXCLUIDAS = (window.PT_INDUSTRIA_EXCLUIDAS || []).concat(quitadas);
-              if (quitadas.length) {
-                moToast(quitadas.length + ' compañía(s) excluidas del conjunto por no pertenecer a la industria de la parte examinada: ' + quitadas.map(function (x) { return x.name.split('(')[0].trim(); }).join(', '), 'amber');
-                try { calc(); } catch (e) { }
-              }
-              ptVerificarIndustriaTabla();
-            }
-          } catch (e) { }
-          return r;
-        };
-      }
+      window.ptVerificarIndustriaTabla_yAplicar = function () {
+        var I = ptVerificarIndustriaTabla();
+        var totalTabla = $('cbody').children.length;
+        var minimo = (window.PT_CRITERIOS && PT_CRITERIOS.minConjunto) || 8;
+        if (I.ajenas.length && I.ajenas.length >= totalTabla) {
+          moToast('La verificación de industria marcó como ajenas a TODAS las compañías: eso indica un problema de detección de la actividad de la parte examinada, no del conjunto. No se removió ninguna; verifique la actividad específica.', 'red');
+          return;
+        }
+        if (I.ajenas.length && (totalTabla - I.ajenas.length) < minimo) {
+          moToast(I.ajenas.length + ' compañía(s) no superan la doble prueba de industria, pero removerlas dejaría el conjunto por debajo del mínimo de ' + minimo + '. Se conservan CON CONSTANCIA; revise manualmente.', 'amber');
+          window.PT_INDUSTRIA_OBSERVADAS = I.ajenas;
+          return;
+        }
+        if (I.ajenas.length) {
+          var quitadas = [];
+          [].slice.call($('cbody').children).forEach(function (tr) {
+            var nom = (tr.querySelector('input') || {}).value || '';
+            var aj = I.ajenas.find(function (x) { return x.name === nom; });
+            if (aj) { quitadas.push(aj); tr.remove(); }
+          });
+          window.PT_INDUSTRIA_EXCLUIDAS = (window.PT_INDUSTRIA_EXCLUIDAS || []).concat(quitadas);
+          if (quitadas.length) {
+            moToast(quitadas.length + ' compañía(s) excluidas del conjunto por no pertenecer a la actividad específica de la parte examinada: ' + quitadas.map(function (x) { return x.name.split('(')[0].trim(); }).join(', '), 'amber');
+            try { calc(); } catch (e) { }
+          }
+          ptVerificarIndustriaTabla();
+        }
+      };
 
       /* ───────────────────────────────────────────────────────────────────────
          2. GUARDA DE GENERACIÓN — condiciones sin las cuales el informe no sale
@@ -13231,30 +13224,18 @@ se guía la descarga manual
       window.motorAplicarSeleccion = motorAplicarSeleccion;
 
       window.ptCorregirTablaAutomaticamente = function () {
-        if (!(window.CIQ_UNIVERSO && CIQ_UNIVERSO.length)) {
-          moToast('No hay universo cargado en memoria: cargue el archivo de la fuente y ejecute la depuración.', 'red');
+        if (!$('cbody').children.length) {
+          moToast('No hay comparables cargadas: importe el Excel del universo de búsqueda (Capital IQ) primero.', 'red');
           return false;
         }
         try {
-          ptCribarUniverso();
-          ptSeleccionarConjunto();
-          ptAplicarSeleccion();
-          try { ptFiltrarAtipicos(); } catch (e) { }
-          try { calc(); } catch (e) { }
-          var filasTrasFAR = [].slice.call($('cbody').children).filter(function (tr) {
-            var i = tr.querySelector('input'); return i && String(i.value || '').trim();
-          }).length;
-          if (filasTrasFAR > LIMITE_TABLA) {
-            /* la vía que compara con el perfil funcional del año anterior no pudo
-               depurar (típicamente porque no hay estudio del año anterior cargado):
-               se usa el motor de selección, que no depende de esa documentación. */
-            moToast('No se pudo depurar con el perfil del año anterior (¿está cargado el estudio anterior?): se usa el motor de selección automática como respaldo…', 'amber');
-            try { motorEjecutar(true); } catch (e) { }
-            if (!motorAplicarSeleccion()) {
-              moToast('La corrección automática no logró reducir la tabla. Cargue el estudio del año anterior, o seleccione manualmente con el «Motor de selección automática» y aplique su resultado.', 'red');
-              return false;
-            }
+          motorEjecutar(false);
+          if (!motorAplicarSeleccion()) {
+            moToast('El motor no dejó ninguna comparable seleccionada. Ajuste los criterios del «Motor de selección automática» e intente de nuevo.', 'red');
+            return false;
           }
+          try { ptVerificarIndustriaTabla_yAplicar(); } catch (e) { }
+          try { ptFiltrarAtipicos(); } catch (e) { }
           moToast('Tabla corregida: ' + $('cbody').children.length + ' comparable(s) en el conjunto final.', 'green');
           return true;
         } catch (e) { moToast('La corrección automática falló: ' + e.message, 'red'); return false; }
