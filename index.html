@@ -8654,8 +8654,8 @@ se guía la descarga manual
          7. SECCIÓN DEL INFORME
          ─────────────────────────────────────────────────────────────────────── */
       window.ptFARInformeHTML = function () {
-        var C = window.PT_CRIBA; if (!C) return '';
-        var F = C.perfil;
+        if (!window.MOTOR || !MOTOR.activo) return '';
+        var act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
         var x = '<h2 class="rep">Depuración funcional del universo de búsqueda</h2>' +
           '<p class="norm">La selección de comparables parte del análisis funcional de la parte examinada y no de la mera coincidencia de códigos de actividad. ' +
           'Conforme al Art. 260-4 del Estatuto Tributario y a las Directrices de la OCDE (Cap. I, secc. D.1.2, y Cap. III), la comparabilidad se determina por las funciones desempeñadas, ' +
@@ -8665,42 +8665,20 @@ se guía la descarga manual
           '<tr><td>Art. 260-4 E.T.</td><td>Se descartan las compañías cuyas funciones, activos y riesgos difieren sustancialmente de los de la parte examinada, por existir diferencias que afectan materialmente el indicador de rentabilidad.</td></tr>' +
           '<tr><td>Art. 260-1 E.T.</td><td>Se descartan las compañías que no son independientes: aquellas en las que un solo accionista concentra más del 50 % de la propiedad se consideran vinculadas por control.</td></tr>' +
           '<tr><td>Decreto 1625 de 2016, Art. 1.2.2.2.1.5 num. 4</td><td>Cada compañía del universo de búsqueda queda con su motivo individual y expreso de aceptación o rechazo (Anexo D).</td></tr>' +
-          '<tr><td>Directrices OCDE 2022, Cap. I secc. D.1.2</td><td>El análisis funcional es el eje de la comparabilidad: se identifica el rol económico de la parte examinada y se exige equivalencia funcional en las comparables.</td></tr>' +
+          '<tr><td>Directrices OCDE 2022, Cap. I secc. D.1.2</td><td>El análisis funcional es el eje de la comparabilidad: se identifica la actividad específica de la parte examinada y se exige equivalencia funcional en las comparables.</td></tr>' +
           '<tr><td>Directrices OCDE 2022, Cap. III</td><td>Al cribado cuantitativo (actividad, tamaño, disponibilidad de datos) se añade un cribado cualitativo sobre la información pública de cada candidata.</td></tr>' +
           '<tr><td>C.E. Secc. 4ª, exp. 20821 de 2018</td><td>La comparabilidad exige ausencia de diferencias materiales o su neutralización mediante ajustes razonables; las diferencias funcionales no ajustables motivan el rechazo.</td></tr>' +
-          '<tr><td>C.E. Secc. 4ª, rad. 27433 de 2024</td><td>La carga probatoria del análisis de comparabilidad recae en el contribuyente: por ello se documenta la verificación de cada comparable en fuentes públicas.</td></tr>' +
+          '<tr><td>C.E. Secc. 4ª, rad. 27433 de 2024</td><td>La carga probatoria del análisis de comparabilidad recae en el contribuyente: por ello se documenta el motivo individual de cada comparable.</td></tr>' +
           '</tbody></table>' +
-          '<h3 class="rep">A. Perfil funcional de la parte examinada</h3>' +
+          '<h3 class="rep">A. Perfil de la actividad específica de la parte examinada</h3>' +
           '<table class="rep"><tbody>' +
-          '<tr><td><b>Rol económico</b></td><td>' + escH(ROLES[F.rol] || F.rol) + '</td></tr>' +
-          '<tr><td><b>Funciones clave desempeñadas</b></td><td>' + escH((F.funcionesClave || []).join('; ') || '—') + '</td></tr>' +
-          '<tr><td><b>Funciones asumidas por el vinculado</b></td><td>' + escH((F.funcionesNoAsumidas || []).join('; ') || '—') + '</td></tr>' +
-          '<tr><td><b>Intangibles</b></td><td>' + escH((F.activosNoPropios || []).length ? 'La parte examinada no es titular de intangibles no rutinarios: ' + F.activosNoPropios.join('; ') : 'Ver análisis funcional') + '</td></tr>' +
-          '<tr><td><b>Riesgos no asumidos</b></td><td>' + escH((F.riesgosNoAsumidos || []).join('; ') || '—') + '</td></tr>' +
-          '<tr><td><b>Origen y concepto del ingreso</b></td><td>' + escH(F.ingresoConcepto || '—') + '</td></tr>' +
-          '<tr><td><b>Fuente del perfil</b></td><td>' + escH(F.origen || '—') + '</td></tr>' +
-          '</tbody></table>' +
-          '<h3 class="rep">B. Resultado de la depuración</h3>' +
-          '<p class="norm">Del universo de <b>' + C.universo + '</b> compañías se aceptaron <b>' + C.aceptadas.length + '</b> y se rechazaron <b>' + C.rechazadas + '</b>. ' +
-          'De las comparables aceptadas en el estudio del año gravable anterior, <b>' + C.previasMantenidas + '</b> se mantienen tras verificar su permanencia en el universo, su independencia y la disponibilidad de información financiera del período corriente.</p>' +
-          '<table class="rep"><thead><tr><th>Motivo de rechazo</th><th>Compañías</th></tr></thead><tbody>' +
-          Object.keys(C.motivosRechazo).sort(function (a, b) { return C.motivosRechazo[b] - C.motivosRechazo[a]; })
-            .map(function (k) { return '<tr><td>' + escH(k) + '</td><td>' + C.motivosRechazo[k] + '</td></tr>'; }).join('') +
+          '<tr><td><b>Actividad específica</b></td><td>' + escH((act && act.resumen) || 'No extraída — use «Analizar empresa con IA»') + '</td></tr>' +
+          '<tr><td><b>Perfil funcional</b></td><td>' + escH((act && act.perfil) || '—') + '</td></tr>' +
+          '<tr><td><b>Productos/servicios clave</b></td><td>' + escH((act && act.productos || []).join('; ') || '—') + '</td></tr>' +
+          '<tr><td><b>Palabras clave de búsqueda</b></td><td>' + escH((act && act.keywords || []).join('; ') || '—') + '</td></tr>' +
+          '<tr><td><b>SIC objetivo</b></td><td>' + escH((act && act.sic || []).join('; ') || '—') + '</td></tr>' +
+          '<tr><td><b>Fuente del perfil</b></td><td>' + escH((act && act.fuente) || '—') + '</td></tr>' +
           '</tbody></table>';
-
-        var ver = C.aceptadas.filter(function (f) { return f.verificacion; });
-        if (ver.length) {
-          x += '<h3 class="rep">C. Verificación de la actividad en fuentes públicas</h3>' +
-            '<p class="norm">Cada comparable finalista fue contrastada contra información pública de la propia compañía para confirmar que desarrolla efectivamente las mismas funciones que la parte examinada. ' +
-            'La carga probatoria del análisis de comparabilidad corresponde al contribuyente (C.E. Secc. 4ª, rad. 27433 de 2024).</p>' +
-            '<table class="rep"><thead><tr><th>Excel Company ID</th><th>Compañía</th><th>Resultado</th><th>Fundamento</th></tr></thead><tbody>' +
-            ver.map(function (f) {
-              var v = f.verificacion;
-              return '<tr><td>' + escH(f.id || '—') + '</td><td>' + escH(f.name) + '</td><td>' +
-                (v.estado === 'aceptar' ? 'Actividad confirmada' : v.estado === 'rechazar' ? 'No coincide' : v.estado === 'pendiente' ? 'Verificación manual pendiente' : 'Requiere revisión') +
-                '</td><td>' + escH((v.motivo || '').slice(0, 300)) + (v.fuentes && v.fuentes.length ? ' <i>Fuente: ' + escH(v.fuentes.join(' · ')) + '</i>' : '') + '</td></tr>';
-            }).join('') + '</tbody></table>';
-        }
         return x;
       };
 
@@ -8708,7 +8686,7 @@ se guía la descarga manual
       renderReport = function () {
         _renderFAR.apply(null, arguments);
         try {
-          if (window.PT_CRIBA) {
+          if (window.MOTOR && MOTOR.activo) {
             var doc = $('doc'); if (doc) doc.insertAdjacentHTML('beforeend', ptFARInformeHTML());
           }
         } catch (e) { console.warn('[PARCHE] sección FAR:', e); }
