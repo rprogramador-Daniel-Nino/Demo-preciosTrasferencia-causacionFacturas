@@ -13834,112 +13834,6 @@ se guía la descarga manual
       'use strict';
 
       /* ───────────────────────────────────────────────────────────────────────
-         QUEJA 6 · Perfil del negocio tomado del informe anterior para orientar la
-         selección de comparables nuevas. Se extraen las palabras y giros que
-         describen los productos y servicios de la parte examinada, y se puntúa a
-         cada candidata por afinidad con ese perfil.
-         ─────────────────────────────────────────────────────────────────────── */
-      window.PT_PERFIL_NEGOCIO = null;
-
-      /* términos base del dominio de videojuegos, siempre disponibles para medir
-         afinidad aunque no se haya cargado el informe anterior */
-      var BASE_JUEGOS = {
-        'video ?game': 5, 'videojuego': 5, 'mobile game': 4, 'online game': 4, 'web game': 4,
-        'game develop': 5, 'game studio': 4, 'develops? .{0,30}games?': 4, 'operates? .{0,30}games?': 4,
-        'publish.{0,30}games?': 4, 'gaming': 3, 'juego': 3, 'interactive entertainment': 4,
-        'game titles?': 3, 'game': 2, 'develop': 1, 'software': 1, 'mobile': 1, 'app': 1, 'entertainment': 2
-      };
-
-      function construirPerfilNegocio() {
-        var fuentes = [];
-        try {
-          var ids = ['objeto', 'ec_vision', 'ec_prod', 'ec_ingr'];
-          ids.forEach(function (id) { var e = $(id); if (e && e.value) fuentes.push(e.value); });
-          if (window.PT_ANTERIOR && PT_ANTERIOR.texto) {
-            /* tramos del informe anterior sobre productos, servicios y negocio */
-            var t = PT_ANTERIOR.texto;
-            [/productos y (servicios|l[ií]neas)[^]{0,900}/i, /se dedica[^.]{0,400}\./i, /desarrollo (y|de)[^.]{0,300}\./i,
-              /juegos? (para|m[oó]viles|lanzados)[^.]{0,400}\./i, /modelo de (negocio|monetizaci)[^.]{0,400}\./i]
-              .forEach(function (rx) { var m = t.match(rx); if (m) fuentes.push(m[0]); });
-          }
-        } catch (e) { }
-        var texto = fuentes.join(' ').toLowerCase();
-
-        /* términos del dominio de videojuegos, ponderados */
-        var TERMINOS = {
-          'video ?game': 5, 'videojuego': 5, 'mobile game': 4, 'online game': 4, 'game develop': 5,
-          'game studio': 4, 'gaming': 3, 'juego': 3, 'game': 2, 'interactive entertainment': 4,
-          'game publish': 4, 'develop': 1, 'software': 1, 'mobile': 1, 'app': 1, 'entertainment': 2,
-          'animaci[oó]n': 2, 'programaci[oó]n': 2, 'dise[ñn]o': 1
-        };
-        var perfil = { terminos: {}, texto: texto, positivos: [] };
-        Object.keys(TERMINOS).forEach(function (k) {
-          if (new RegExp(k, 'i').test(texto)) { perfil.terminos[k] = TERMINOS[k]; perfil.positivos.push(k); }
-        });
-        /* los términos base del dominio (en inglés) se incorporan siempre, porque
-           las descripciones de la fuente vienen en inglés aunque el objeto social
-           esté en español */
-        Object.keys(BASE_JUEGOS).forEach(function (k) {
-          if (perfil.terminos[k] === undefined) perfil.terminos[k] = BASE_JUEGOS[k];
-        });
-        window.PT_PERFIL_NEGOCIO = perfil;
-        return perfil;
-      }
-      window.ptConstruirPerfilNegocio = construirPerfilNegocio;
-
-      /* afinidad de una descripción con el perfil del negocio (0..N) */
-      window.ptAfinidadNegocio = function (desc) {
-        var P = window.PT_PERFIL_NEGOCIO;
-        /* si el perfil no se construyó o quedó sin términos, se usa el conjunto
-           base del dominio de videojuegos para que la afinidad siempre discrimine */
-        if (!P || !Object.keys(P.terminos || {}).length) {
-          P = { terminos: BASE_JUEGOS };
-        }
-        desc = String(desc || '').toLowerCase();
-        if (!desc) return 0;
-        var s = 0;
-        Object.keys(P.terminos).forEach(function (k) { if (new RegExp(k, 'i').test(desc)) s += P.terminos[k]; });
-        return s;
-      };
-
-      /* la conformación del conjunto ordena las candidatas nuevas por afinidad de
-         negocio antes de aplicar el orden por tamaño */
-      if (typeof window.ptSeleccionarConjunto === 'function') {
-        var _selPrev = window.ptSeleccionarConjunto;
-        window.ptSeleccionarConjunto = function (cfg) {
-          construirPerfilNegocio();
-          var r = _selPrev.apply(null, arguments);
-          try {
-            if (r && r.conjunto) {
-              r.conjunto.forEach(function (f) {
-                var meta = (window.COMP_META && COMP_META[f.name]) || {};
-                f.afinidadNegocio = ptAfinidadNegocio(f.desc || meta.desc);
-              });
-              /* el nivel de correspondencia es el criterio primario (no se altera el
-                 orden por nivel que exige la depuración); dentro del mismo nivel,
-                 primero las previas y luego, entre las nuevas, mayor afinidad de
-                 negocio primero */
-              r.conjunto.sort(function (a, b) {
-                if ((a.nivel || 9) !== (b.nivel || 9)) return (a.nivel || 9) - (b.nivel || 9);
-                if (!!b.previa !== !!a.previa) return (b.previa ? 1 : 0) - (a.previa ? 1 : 0);
-                return (b.afinidadNegocio || 0) - (a.afinidadNegocio || 0);
-              });
-              r.perfilNegocio = window.PT_PERFIL_NEGOCIO;
-            }
-          } catch (e) { }
-          return r;
-        };
-      }
-
-      window.ptPerfilNegocioInformeHTML = function () {
-        var P = window.PT_PERFIL_NEGOCIO;
-        if (!P || !P.positivos.length) return '';
-        return '<p class="norm">La selección de las compañías comparables nuevas —adicionales a las conservadas del estudio anterior— se orientó por la descripción del negocio de la parte examinada tomada de la documentación previa: ' +
-          'se privilegiaron las candidatas cuya actividad, según la descripción publicada por la fuente, hace referencia al desarrollo de videojuegos y actividades afines, ' +
-          'antes que compañías de perfil general de tecnología o servicios de software.</p>';
-      };
-
-      /* ───────────────────────────────────────────────────────────────────────
          QUEJA 7 · El informe declara de dónde salen las cifras del rango.
          ─────────────────────────────────────────────────────────────────────── */
       window.ptOrigenCifrasComparablesHTML = function () {
@@ -14031,14 +13925,12 @@ se guía la descarga manual
         _renderC.apply(null, arguments);
         try {
           var d = $('doc'); if (!d) return;
-          var s6 = ptPerfilNegocioInformeHTML();
           var s7 = ptOrigenCifrasComparablesHTML();
-          /* se insertan tras la sección de comparables si existe, si no al final */
+          /* se inserta tras la sección de comparables si existe, si no al final */
           var ancla = [].slice.call(d.querySelectorAll('h2')).filter(function (h) { return /comparabilidad|comparables|selecci[oó]n del m[eé]todo/i.test(h.textContent); })[0];
-          var bloque = (s6 || '') + (s7 || '');
-          if (bloque) {
-            if (ancla) ancla.insertAdjacentHTML('afterend', bloque);
-            else d.insertAdjacentHTML('beforeend', bloque);
+          if (s7) {
+            if (ancla) ancla.insertAdjacentHTML('afterend', s7);
+            else d.insertAdjacentHTML('beforeend', s7);
           }
         } catch (e) { }
       };
