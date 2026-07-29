@@ -12038,17 +12038,17 @@ se guía la descarga manual
         if (nFilas > LIMITE_TABLA) {
           fallas.push({
             id: 'universo_en_tabla',
-            msg: 'La tabla contiene ' + nFilas + ' compañías: es el universo de búsqueda, no un conjunto de comparables. Con ella el Anexo B imprimiría ' + nFilas + ' fichas y el rango carecería de soporte. Ejecute la depuración y la conformación del conjunto, o use el botón «Corregir automáticamente».'
+            msg: 'La tabla contiene ' + nFilas + ' compañías: es el universo de búsqueda, no un conjunto de comparables. Con ella el Anexo B imprimiría ' + nFilas + ' fichas y el rango carecería de soporte. Ejecute el «Motor de selección automática», o use el botón «Corregir automáticamente».'
           });
         }
 
         /* depuración no ejecutada */
         var matrixLen = 0; try { matrixLen = w_eval_matrix(); } catch (e) { }
         function w_eval_matrix() { var m = null; try { m = eval('typeof MATRIX!=="undefined" ? MATRIX : null'); } catch (e) { } return (m || []).length; }
-        if (nFilas > 0 && matrixLen === 0 && !(window.PT_CRIBA && PT_CRIBA.filas && PT_CRIBA.filas.length)) {
+        if (nFilas > 0 && matrixLen === 0) {
           /* con una tabla pequeña cargada a mano se advierte; con el universo ya
              es bloqueante por la condición anterior */
-          avisos.push('No consta la depuración del universo: el Anexo D (matriz de aceptación y rechazo) saldrá sin registros. Si las comparables se cargaron manualmente, documente su origen; de lo contrario ejecute la depuración (Decreto 1625 de 2016, art. 1.2.2.2.1.5 num. 4).');
+          avisos.push('No consta la depuración del universo: el Anexo D (matriz de aceptación y rechazo) saldrá sin registros. Si las comparables se cargaron manualmente, documente su origen; de lo contrario ejecute el «Motor de selección automática» (Decreto 1625 de 2016, art. 1.2.2.2.1.5 num. 4).');
         }
 
         /* industria específica */
