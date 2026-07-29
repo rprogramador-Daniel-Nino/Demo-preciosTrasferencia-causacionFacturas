@@ -1139,20 +1139,16 @@
         </div>
         <div class="bd">
           <div class="actions" style="margin-bottom:10px">
-            <label class="btn solid" style="margin:0;cursor:pointer">📎 RUT (IA)<input type="file"
-                accept=".pdf,image/*" style="display:none" onchange="procesarRUTConOCR(this.files[0])"></label>
-            <span class="webbtn" onclick="webDoc('RUT DIAN')">🔎 Verificar RUT (DIAN)</span>
-            <label class="btn solid" style="margin:0;cursor:pointer">📎 Cámara de Comercio (IA)<input type="file"
+            <label class="btn solid" style="margin:0;cursor:pointer">📎 RUT<input type="file" accept=".pdf,image/*"
+                style="display:none" onchange="procesarRUTConOCR(this.files[0])"></label>
+
+            <label class="btn solid" style="margin:0;cursor:pointer">📎 Cámara de Comercio<input type="file"
                 accept=".pdf,image/*" style="display:none" onchange="procesarCamaraConOCR(this.files[0])"></label>
             <label class="btn violet" style="margin:0;cursor:pointer">📎 Declaración de Renta<input type="file"
                 accept=".pdf,.txt" style="display:none" onchange="readFileText(this.files[0],applyRenta)"></label>
           </div>
-          <div class="hint" id="docmsg" style="margin-bottom:8px">Carga el RUT y la Cámara de Comercio: un modelo de
-            IA (OCR con visión) lee el documento directamente y completa razón social, NIT, CIIU, representante legal,
-            objeto social y fecha de constitución.</div>
-
-
-
+          <div class="hint" id="docmsg" style="margin-bottom:8px">Por favor Adjunta RUT y Camara de Comercio para
+            extraer la información necesaria.</div>
           <div class="hint" style="margin-bottom:8px"><b>Datos extraídos</b> — verifica y corrige si es necesario:
           </div>
           <div class="row2">
@@ -1544,9 +1540,77 @@
             class="eyebrow" id="ccount" style="margin-left:auto">0 · incluidas 0</span>
         </div>
         <div class="bd">
-          <div class="tip">Las comparables son las empresas contra las que se mide el rango de mercado. Impórtalas desde
-            el Excel de Capital IQ, o usa el «Motor de selección automática» más abajo para que el sistema elija las
-            mejores por ti.</div>
+          <div class="tip">Las comparables son las empresas contra las que se mide el rango de mercado. Defina primero
+            los filtros del motor, importe el Excel de Capital IQ y luego ejecute la selección para que el sistema
+            traiga directamente las mejores candidatas del universo importado.</div>
+
+          <!-- ══════ MOTOR DE SELECCIÓN (paso 1: filtros, antes de importar) ══════ -->
+          <div
+            style="border:1.5px solid var(--hair);border-radius:10px;padding:14px;margin:0 0 14px;background:var(--white)">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+              <b style="font-size:13px">⚙ Motor de selección automática (TOP-N)</b>
+              <span id="mo_pesos_label" style="font-size:11px;color:var(--muted)">Puntúa: actividad 40 · tamaño 20 ·
+                geografía 15 ·
+                rentabilidad 15 · datos 10</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
+              <label class="f"><span class="l">N objetivo</span><input class="i" id="mo_n" type="number" value="12"
+                  min="4" max="30" title="Tope 30: por encima la muestra pierde homogeneidad funcional"></label>
+              <label class="f"><span class="l">Pérdidas operativas</span><select class="i" id="mo_perd">
+                  <option value="excluir">Excluir (conservador DIAN)</option>
+                  <option value="incluir">Incluir (OCDE: no es causal por sí sola)</option>
+                  <option value="preferir">Preferir (exige justificación)</option>
+                </select></label>
+              <label class="f"><span class="l">Sociedades holding</span><select class="i" id="mo_holding">
+                  <option value="excluir">Excluir (sin actividad operativa propia)</option>
+                  <option value="incluir">Incluir</option>
+                </select></label>
+              <label class="f"><span class="l">Saldos negativos (CxC/Inv/CxP)</span><select class="i" id="mo_saldoneg">
+                  <option value="excluir">Excluir (dato no verosímil)</option>
+                  <option value="incluir">Incluir</option>
+                </select></label>
+              <label class="f"><span class="l">Prioridad geográfica</span><select class="i" id="mo_geo">
+                  <option value="ninguna">Global</option>
+                  <option value="LATAM">América Latina</option>
+                  <option value="ASIA">Asia-Pacífico</option>
+                  <option value="EUROPA">Europa</option>
+                  <option value="NORTEAM">Norteamérica</option>
+                </select></label>
+              <label class="f"><span class="l">Rigor funcional</span><select class="i" id="mo_act">
+                  <option value="estandar">Estándar (servicios+mixtos)</option>
+                  <option value="estricto">Estricto (solo servicios)</option>
+                  <option value="amplio">Amplio (incluye indefinidos)</option>
+                </select></label>
+            </div>
+            <label class="f" id="mo_justw" style="display:none;margin-top:6px"><span class="l">Justificación de
+                preferir
+                pérdidas (≥120 car., va al informe)</span><textarea class="i" id="mo_just" rows="2"></textarea></label>
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn solid" onclick="motorEjecutar()">Ejecutar selección</button>
+              <button class="btn ghost" onclick="motorMas(3)">+ Solicitar 3 más</button>
+              <button class="btn ghost" onclick="motorEscenarios()">⚖ Comparar escenarios</button>
+
+              <span id="mo_info" style="font-size:12px;color:var(--muted);align-self:center"></span>
+            </div>
+            <div id="mo_resultados"></div>
+            <div id="mo_embudo"></div>
+            <div id="mo_esc" style="display:none;margin-top:12px">
+              <div style="font-size:11px;color:var(--muted);margin-bottom:6px">▲ = parte examinada · franja =
+                P25–P75 ·
+                línea = mediana. Elegir un escenario lo aplica, ejecuta el motor y documenta la elección en el
+                informe.
+              </div>
+              <div id="mo_esc_cards"
+                style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px"></div>
+              <label class="f" id="mo_esc_justw" style="display:none;margin-top:8px"><span class="l">¿Por qué este
+                  escenario? (≥80 car., va a la metodología)</span><textarea class="i" id="mo_esc_just"
+                  rows="2"></textarea>
+                <button class="btn" style="margin-top:6px" onclick="motorConfirmarEsc()">Confirmar y
+                  aplicar</button></label>
+            </div>
+          </div>
+
+          <!-- ══════ PASO 2: importar el universo de Capital IQ ══════ -->
           <div class="pi-btns"
             style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
             <div style="display:flex;gap:6px;align-items:center"><label class="mini" style="cursor:pointer">📥 Importar
@@ -1586,6 +1650,7 @@
                   <th>CxP</th>
                   <th>SIC/Act.</th>
                   <th>PLI aj.</th>
+                  <th>ID IQ</th>
                   <th></th>
                 </tr>
               </thead>
@@ -1596,70 +1661,10 @@
           <button class="addrow" onclick="addComp()">+ Agregar comparable</button>
 
           <details class="config" id="ptZonaConfig">
-            <summary><span class="arrow">▶</span> ⚙️ Configuración del motor y criterios de comparabilidad
+            <summary><span class="arrow">▶</span> ⚙️ Otros ajustes
               <span class="hint-inline">valores por defecto ya aplicados · ábrelo solo si necesitas ajustar algo</span>
             </summary>
             <div class="inner" id="ptZonaConfigInner">
-              <!-- ══════ MOTOR DE SELECCIÓN (integrado) ══════ -->
-              <div
-                style="border:1.5px solid var(--hair);border-radius:10px;padding:14px;margin:12px 0;background:var(--white)">
-                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-                  <b style="font-size:13px">⚙ Motor de selección automática (TOP-N)</b>
-                  <span id="mo_pesos_label" style="font-size:11px;color:var(--muted)">Puntúa: actividad 40 · tamaño 20 ·
-                    geografía 15 ·
-                    rentabilidad 15 · datos 10</span>
-                </div>
-                <div
-                  style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
-                  <label class="f"><span class="l">N objetivo</span><input class="i" id="mo_n" type="number" value="12"
-                      min="4" max="12" title="Tope 12: por encima la muestra pierde homogeneidad funcional"></label>
-                  <label class="f"><span class="l">Pérdidas operativas</span><select class="i" id="mo_perd">
-                      <option value="excluir">Excluir (conservador DIAN)</option>
-                      <option value="incluir">Incluir (OCDE: no es causal por sí sola)</option>
-                      <option value="preferir">Preferir (exige justificación)</option>
-                    </select></label>
-                  <label class="f"><span class="l">Prioridad geográfica</span><select class="i" id="mo_geo">
-                      <option value="ninguna">Global</option>
-                      <option value="LATAM">América Latina</option>
-                      <option value="ASIA">Asia-Pacífico</option>
-                      <option value="EUROPA">Europa</option>
-                      <option value="NORTEAM">Norteamérica</option>
-                    </select></label>
-                  <label class="f"><span class="l">Rigor funcional</span><select class="i" id="mo_act">
-                      <option value="estandar">Estándar (servicios+mixtos)</option>
-                      <option value="estricto">Estricto (solo servicios)</option>
-                      <option value="amplio">Amplio (incluye indefinidos)</option>
-                    </select></label>
-                </div>
-                <label class="f" id="mo_justw" style="display:none;margin-top:6px"><span class="l">Justificación de
-                    preferir
-                    pérdidas (≥120 car., va al informe)</span><textarea class="i" id="mo_just"
-                    rows="2"></textarea></label>
-                <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-                  <button class="btn solid" onclick="motorEjecutar()">Ejecutar selección</button>
-                  <button class="btn ghost" onclick="motorMas(3)">+ Solicitar 3 más</button>
-                  <button class="btn ghost" onclick="motorEscenarios()">⚖ Comparar escenarios</button>
-
-                  <span id="mo_info" style="font-size:12px;color:var(--muted);align-self:center"></span>
-                </div>
-                <div id="mo_resultados"></div>
-                <div id="mo_esc" style="display:none;margin-top:12px">
-                  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">▲ = parte examinada · franja =
-                    P25–P75 ·
-                    línea = mediana. Elegir un escenario lo aplica, ejecuta el motor y documenta la elección en el
-                    informe.
-                  </div>
-                  <div id="mo_esc_cards"
-                    style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px"></div>
-                  <label class="f" id="mo_esc_justw" style="display:none;margin-top:8px"><span class="l">¿Por qué este
-                      escenario? (≥80 car., va a la metodología)</span><textarea class="i" id="mo_esc_just"
-                      rows="2"></textarea>
-                    <button class="btn" style="margin-top:6px" onclick="motorConfirmarEsc()">Confirmar y
-                      aplicar</button></label>
-                </div>
-              </div>
-
-              <!-- Módulo de regalías retirado del alcance actual (oculto; funciones inertes por compatibilidad) -->
               <div id="compalert" style="margin-top:10px"></div>
             </div>
           </details>
@@ -2072,7 +2077,7 @@
           if (!x.name && !x.nit) return;
           const amb = (x.country && x.country.includes('colombia')) ? 'Nac' : 'Int';
           if (x.desc) DESCS[x.name] = x.desc;
-          $('cbody').appendChild(compRow([x.name, amb, x.s, x.c, x.op, x.ar, x.inv, x.ap, x.sic || '']));
+          $('cbody').appendChild(compRow([x.name, amb, x.s, x.c, x.op, x.ar, x.inv, x.ap, x.sic || '', x.id || '']));
           n++;
         });
         calc();
@@ -2839,44 +2844,58 @@
       [c[0], c[1]].forEach((v, i) => { let d = document.createElement('td'); let inp = i === 1 ? document.createElement('select') : document.createElement('input'); if (i === 1) { ['Int', 'Nac'].forEach(o => { let op = document.createElement('option'); op.value = o; op.textContent = o; inp.appendChild(op); }); } inp.value = v; inp.oninput = calcD; d.appendChild(inp); tr.appendChild(d); });
       [2, 3, 4, 5, 6, 7, 8].forEach(i => { let d = document.createElement('td'); let n = document.createElement('input'); n.value = (c[i] === null || c[i] === undefined) ? '' : c[i]; n.oninput = calcD; d.appendChild(n); tr.appendChild(d); });
       let mo = document.createElement('td'); mo.className = 'mo'; mo.textContent = '—'; tr.appendChild(mo);
+      let idTd = document.createElement('td'); let idInp = document.createElement('input'); idInp.className = 'iqid'; idInp.style.width = '70px'; idInp.style.fontFamily = 'monospace'; idInp.value = (c[9] === null || c[9] === undefined) ? '' : c[9]; idInp.oninput = calcD; idTd.appendChild(idInp); tr.appendChild(idTd);
       let a = document.createElement('td'); let del = document.createElement('button'); del.textContent = '×'; del.onclick = () => { tr.remove(); calc(); }; a.appendChild(del); tr.appendChild(a);
       return tr;
     }
 
     function calc() {
-      const kind = $('pli').value, cmode = ($('cmode') && $('cmode').value) || 'all', useAdj = $('useadj') ? $('useadj').checked : false;
-      const r = (num($('prime').value) || 0) / 100;
-      const T = { s: num($('t_s').value), c: num($('t_c').value), op: num($('t_op').value), ar: num($('t_ar').value), inv: num($('t_inv').value), ap: num($('t_ap').value) };
-      const tPLI = pliOf(T, kind), tR = ratios(T);
-      $('temo').textContent = PLIN[kind] + ' ' + (tPLI === null ? '—' : pctf(tPLI));
-      const series = [];
-      [...$('cbody').children].forEach(tr => {
-        const v = [...tr.querySelectorAll('input,select')].map(i => i.value);
-        const name = v[0], amb = v[1];
-        const c = { s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]) };
-        let inc = cmode === 'all' ? true : (cmode === 'intl' ? amb === 'Int' : amb === 'Nac');
-        if (inc && MOTOR.activo) { const mk = nameKey(name); if (MOTOR.sel[mk] === false) inc = false; }
-        let pli = pliOf(c, kind), adj = 0; const cR = ratios(c);
-        if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) adj = r * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-        const apli = pli === null ? null : pli + adj;
-        const moCell = tr.querySelector('.mo');
-        moCell.textContent = apli === null ? '—' : pctf(apli);
-        moCell.style.opacity = inc ? 1 : .35;
-        if (inc && apli !== null) series.push(apli);
-      });
-      series.sort((a, b) => a - b);
-      const st = series.length ? { p25: quart(series, .25), med: quart(series, .5), p75: quart(series, .75) } : null;
-      LAST = { T, tPLI, st, kind, base: T.s || 0, unitMult: 1 };
-      renderReport(T, tPLI, st, [], 0, false, kind, T.s || 0, 1);
+      try {
+        const pliElem = $('pli'); if (!pliElem) return;
+        const kind = pliElem.value, cmode = ($('cmode') && $('cmode').value) || 'all', useAdj = $('useadj') ? $('useadj').checked : false;
+        const r = (num($('prime') ? $('prime').value : '') || 0) / 100;
+        const T = { s: num($('t_s') ? $('t_s').value : ''), c: num($('t_c') ? $('t_c').value : ''), op: num($('t_op') ? $('t_op').value : ''), ar: num($('t_ar') ? $('t_ar').value : ''), inv: num($('t_inv') ? $('t_inv').value : ''), ap: num($('t_ap') ? $('t_ap').value : '') };
+        const tPLI = pliOf(T, kind), tR = ratios(T);
+        if ($('temo')) $('temo').textContent = (PLIN[kind] || '') + ' ' + (tPLI === null ? '—' : pctf(tPLI));
+        const series = [];
+        const cbody = $('cbody');
+        if (cbody) {
+          [...cbody.children].forEach(tr => {
+            const v = [...tr.querySelectorAll('input,select')].map(i => i.value);
+            const name = v[0], amb = v[1];
+            const c = { s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]) };
+            let inc = cmode === 'all' ? true : (cmode === 'intl' ? amb === 'Int' : amb === 'Nac');
+            if (inc && typeof MOTOR !== 'undefined' && MOTOR.activo) { const mk = typeof nameKey === 'function' ? nameKey(name) : name; if (MOTOR.sel && MOTOR.sel[mk] === false) inc = false; }
+            let pli = pliOf(c, kind), adj = 0; const cR = ratios(c);
+            if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) adj = r * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
+            const apli = pli === null ? null : pli + adj;
+            const moCell = tr.querySelector('.mo');
+            if (moCell) {
+              moCell.textContent = apli === null ? '—' : pctf(apli);
+              moCell.style.opacity = inc ? 1 : .35;
+            }
+            if (inc && apli !== null) series.push(apli);
+          });
+        }
+        series.sort((a, b) => a - b);
+        const st = series.length ? { p25: quart(series, .25), med: quart(series, .5), p75: quart(series, .75) } : null;
+        LAST = { T, tPLI, st, kind, base: T.s || 0, unitMult: 1 };
+        if (typeof renderReport === 'function') renderReport(T, tPLI, st, [], 0, false, kind, T.s || 0, 1);
+      } catch (eCalc) {
+        console.warn('Error en calc():', eCalc);
+      }
     }
-    function pliOf(o, kind) { const s = o.s; if (!s) return null; if (kind === 'MO') return o.op / s; if (kind === 'MB') return (s - o.c) / s; return null; }
-    function ratios(o) { if (o.s && o.ar !== null && o.inv !== null) return { arS: o.ar / o.s, invS: o.inv / o.s, apC: (o.c && o.ap !== null) ? o.ap / o.c : null }; return null; }
-    function quart(s, p) { return s[Math.floor(p * (s.length - 1))]; }
+    function pliOf(o, kind) { if (!o) return null; const s = o.s; if (!s) return null; if (kind === 'MO') return o.op / s; if (kind === 'MB') return (s - o.c) / s; return null; }
+    function ratios(o) { if (!o) return null; if (o.s && o.ar !== null && o.inv !== null) return { arS: o.ar / o.s, invS: o.inv / o.s, apC: (o.c && o.ap !== null) ? o.ap / o.c : null }; return null; }
+    function quart(s, p) { if (!s || !s.length) return 0; return s[Math.floor(p * (s.length - 1))]; }
 
     function renderReportCore(T, tPLI, st, detail, r, useAdj, kind, base, unitMult) {
-      const g = k => $(k).value || '—'; const anio = g('anio'); const kn = PLIN[kind];
-      const ai = (st && tPLI !== null) ? adjustInfo(T, tPLI, st, base, unitMult) : null;
-      $('doc').innerHTML = `<h1>Informe PT ${g('ent')}</h1>
+      try {
+        const g = k => ($((k)) && $((k)).value) || '—'; const anio = g('anio'); const kn = PLIN[kind] || kind;
+        const ai = (st && tPLI !== null && typeof adjustInfo === 'function') ? adjustInfo(T, tPLI, st, base, unitMult) : null;
+        const docElem = $('doc');
+        if (docElem) {
+          docElem.innerHTML = `<h1>Informe PT ${g('ent')}</h1>
    <h2>1. Información general</h2>
    <p><b>${g('ent')}</b> (NIT ${g('nit')}) - ${g('anio')}. CIIU: ${g('ciiu')}. <b>Objeto:</b> ${g('objeto')}.</p>
    <h2>2. Análisis funcional</h2>
@@ -2884,26 +2903,117 @@
    <h2>3. Resultado</h2>
    <p>${kn} parte examinada: ${pctf(tPLI)}. Rango: ${st ? pctf(st.p25) + ' - ' + pctf(st.p75) : '—'}.</p>
    ${ai && !ai.within ? `<p><b>Ajuste:</b> COP ${fmt(ai.capped)}.</p>` : '<p>Cumple.</p>'}`;
+        }
+      } catch (eR) { console.warn('Error en renderReportCore:', eR); }
     }
     /* ================= EXPORT REPORT ================= */
     const EXPORT_STYLE = 'body{font-family:Georgia,serif;max-width:760px;margin:40px auto;padding:0 24px;color:#222;line-height:1.7}h1{font-size:20px;color:#0E1726}h2{border-bottom:2px solid #111;padding-bottom:4px;margin-top:26px;font-size:17px}h3{color:#0B7C7A;font-size:14px}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}th{background:#111;color:#fff;text-align:left;padding:7px 10px}td{padding:6px 10px;border-bottom:1px solid #ccc}td.n{text-align:right;font-family:monospace}.concl{border-left:3px solid #0B7C7A;background:#f1faf9;padding:12px 16px;margin:12px 0}.concl.adj{border-color:#C0473B;background:#fdf2f0}.norm{background:#f5f7f9;border-radius:8px;padding:9px 13px;margin:9px 0;font-size:12px}.foot{margin-top:24px;border-top:1px solid #ccc;padding-top:10px;font-size:11px;color:#666;font-style:italic}.toc{list-style:none;padding:12px 16px;background:#fafbfc;border:1px solid #ddd;border-radius:8px;font-size:13px}.toc li{padding:3px 0;border-bottom:1px dotted #e2e7ec}.toc li:last-child{border-bottom:none}.toc a{color:#111;text-decoration:none}.calc{background:#0d1420;color:#e7edf5;border-radius:8px;padding:11px 14px;font-family:monospace;font-size:12px;line-height:1.7;margin:10px 0;white-space:pre-wrap}.calc b{color:#F0C060}h2[id]{scroll-margin-top:20px}';
 
     function buildExportHTML() {
-      return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Informe Local PT ' + ($('ent').value || '') + ' ' + ($('anio').value || '') + '</title><style>' + EXPORT_STYLE + '</style></head><body>' + $('doc').innerHTML + '</body></html>';
+      try {
+        var entVal = ($('ent') && $('ent').value) || '';
+        var anioVal = ($('anio') && $('anio').value) || '';
+        var docHTML = ($('doc') && $('doc').innerHTML) || '<p>No hay contenido en el documento.</p>';
+        return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Informe Local PT ' + entVal + ' ' + anioVal + '</title><style>' + EXPORT_STYLE + '</style></head><body>' + docHTML + '</body></html>';
+      } catch (e) {
+        return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Informe Local PT</title></head><body><p>Error generando HTML.</p></body></html>';
+      }
     }
-    function saveBlob(content, fname, mime) { try { const blob = new Blob([content], { type: mime }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) { } }, 1500); } catch (e) { moToast('No se pudo generar la descarga: ' + e.message, 'red'); } }
-    /* Word (el conversor de HTML a .doc de Microsoft) no reconoce la forma
-       corta <meta charset="utf-8">: sin http-equiv, asume la codificacion
-       del sistema (Windows-1252 en Windows en espanol) para bytes que en
-       realidad son UTF-8, produciendo el tipico texto corrupto tipo
-       "exportacion" con caracteres extranos. La forma con http-equiv es
-       la que su parser antiguo si reconoce. */
-    function wordWrap(title, inner) { var _numCSS = 'body{counter-reset:secpt}h2.rep{counter-increment:secpt}h2.rep::before{content:counter(secpt) ". "}p,li,td{text-align:justify}'; return '\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>' + title + '</title><style>' + EXPORT_STYLE + _numCSS + '</style></head><body>' + inner + '</body></html>'; }
+    function saveBlob(content, fname, mime) {
+      try {
+        const blob = new Blob([content], { type: mime });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fname;
+        a.click();
+        setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) { } }, 1500);
+      } catch (e) {
+        if (typeof moToast === 'function') moToast('No se pudo generar la descarga: ' + e.message, 'red');
+        else alert('No se pudo generar la descarga: ' + e.message);
+      }
+    }
 
-    function generateReport() { calc(); saveBlob(buildExportHTML(), 'Informe_PT_' + slug($('ent').value) + '_' + ($('anio').value || '') + '.html', 'text/html'); }
-    function downloadWord() { if (!adjExigirOK()) { try { pt36Rojo('Adjuntos o informe económico incompletos: el Word se generó igualmente; complete los soportes y regenere.'); } catch (e) { } } calc(); saveBlob(wordWrap('Informe Local PT ' + ($('ent').value || ''), $('doc').innerHTML), 'Informe_PT_' + slug($('ent').value) + '_' + ($('anio').value || '') + '.doc', 'application/msword'); }
+    function wordWrap(title, inner) {
+      var _numCSS = 'body{counter-reset:secpt}h2.rep{counter-increment:secpt}h2.rep::before{content:counter(secpt) ". "}p,li,td{text-align:justify}';
+      return '\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>' + (title || 'Informe') + '</title><style>' + EXPORT_STYLE + _numCSS + '</style></head><body>' + (inner || '') + '</body></html>';
+    }
 
-    /* ============== RESUMEN EJECUTIVO PARA EL CLIENTE ============== */
+    function generateReport() {
+      try {
+        try { calc(); } catch (e) { }
+        var entVal = ($('ent') && $('ent').value) || '';
+        var anioVal = ($('anio') && $('anio').value) || '';
+        var filename = 'Informe_PT_' + (typeof slug === 'function' ? slug(entVal) : 'Empresa') + '_' + anioVal + '.html';
+        saveBlob(buildExportHTML(), filename, 'text/html');
+      } catch (e) {
+        if (typeof moToast === 'function') moToast('Error al generar informe: ' + e.message, 'red');
+      }
+    }
+
+    function downloadWord() {
+      try {
+        try {
+          if (typeof adjExigirOK === 'function' && !adjExigirOK()) {
+            try { pt36Rojo('Adjuntos o informe económico incompletos: el Word se generó igualmente; complete los soportes y regenere.'); } catch (e) { }
+          }
+        } catch (eAdj) { }
+        try { calc(); } catch (eCalc) { }
+        var entVal = ($('ent') && $('ent').value) ? $('ent').value.trim() : 'Empresa';
+        var anioVal = ($('anio') && $('anio').value) ? $('anio').value.trim() : '';
+        var docHTML = ($('doc') && $('doc').innerHTML) ? $('doc').innerHTML : '<h1>Informe Local PT</h1><p>Documento listo.</p>';
+        var entSlug = 'Empresa';
+        try { entSlug = typeof slug === 'function' ? slug(entVal) : entVal.replace(/[^a-zA-Z0-9_-]/g, '_'); } catch (eS) { }
+        var filename = 'Informe_PT_' + entSlug + (anioVal ? '_' + anioVal : '') + '.doc';
+        var contenido = wordWrap('Informe Local PT ' + entVal, docHTML);
+        saveBlob(contenido, filename, 'application/msword');
+      } catch (eGlobal) {
+        if (typeof moToast === 'function') moToast('Error al generar la descarga del Word: ' + (eGlobal.message || eGlobal), 'red');
+        else alert('Error descargando Word: ' + (eGlobal.message || eGlobal));
+      }
+    }
+
+    function downloadDeclaracion() {
+      try {
+        try { calc(); } catch (e) { }
+        var entVal = ($('ent') && $('ent').value) || '';
+        var html = (typeof buildDeclaracion120HTML === 'function') ? buildDeclaracion120HTML() : '<p>Declaración 120</p>';
+        saveBlob(wordWrap('Declaracion Informativa 120 ' + entVal, html), 'Declaracion_Informativa_120_' + (typeof slug === 'function' ? slug(entVal) : 'Empresa') + '_' + (($('anio') && $('anio').value) || '') + '.doc', 'application/msword');
+      } catch (e) {
+        if (typeof moToast === 'function') moToast('Error descargando Declaración 120: ' + e.message, 'red');
+      }
+    }
+
+    function downloadWord1125() {
+      try {
+        try { calc(); } catch (e) { }
+        var entVal = ($('ent') && $('ent').value) || '';
+        var html = (typeof build1125HTML === 'function') ? build1125HTML() : '<p>Formato 1125</p>';
+        saveBlob(wordWrap('Formato 1125 ' + entVal, html), 'Formato_1125_' + (typeof slug === 'function' ? slug(entVal) : 'Empresa') + '.doc', 'application/msword');
+      } catch (e) {
+        if (typeof moToast === 'function') moToast('Error descargando Formato 1125: ' + e.message, 'red');
+      }
+    }
+
+    function downloadAuditNorma() {
+      try {
+        try { calc(); } catch (e) { }
+        var html = (typeof auditNormaTecnica === 'function') ? auditNormaTecnica() : '<p>Auditoría</p>';
+        saveBlob(wordWrap('Auditoría', html), 'Auditoria.doc', 'application/msword');
+      } catch (e) {
+        if (typeof moToast === 'function') moToast('Error descargando Auditoría: ' + e.message, 'red');
+      }
+    }
+
+    function downloadExec() {
+      try {
+        try { calc(); } catch (e) { }
+        var entVal = ($('ent') && $('ent').value) || '';
+        var html = (typeof execSummaryHTML === 'function') ? execSummaryHTML() : '<p>Resumen ejecutivo</p>';
+        saveBlob(wordWrap('Resumen ejecutivo ' + entVal, html), 'Resumen_Ejecutivo_' + (typeof slug === 'function' ? slug(entVal) : 'Empresa') + '_' + (($('anio') && $('anio').value) || '') + '.doc', 'application/msword');
+      } catch (e) {
+        if (typeof moToast === 'function') moToast('Error descargando Resumen Ejecutivo: ' + e.message, 'red');
+      }
+    }
     function execSummaryHTML() {
       const g = k => $(k).value || '—'; const anio = g('anio');
       if (!LAST) { return '<h1>Resumen ejecutivo</h1><p>Calcula el estudio para generar el resumen.</p>'; }
@@ -2938,7 +3048,6 @@
    ${accion}
    <p class="foot">Resumen preparado para el cliente a partir del análisis de precios de transferencia del período. El detalle metodológico consta en el Informe Local. Debe ser validado por un profesional de precios de transferencia. No constituye asesoría tributaria.</p>`;
     }
-    function downloadExec() { calc(); saveBlob(wordWrap('Resumen ejecutivo ' + ($('ent').value || ''), execSummaryHTML()), 'Resumen_Ejecutivo_' + slug($('ent').value) + '_' + ($('anio').value || '') + '.doc', 'application/msword'); }
 
     /* ================= INIT (limpio para producción) ================= */
     /* FIX: diferido a DOMContentLoaded — antes corría a mitad del script, cuando
@@ -3469,20 +3578,36 @@ ${textoTotal}`;
     }
     function moPais(name, amb) { const nk = nameKey(name); const m = MATRIX.find(x => similar(x.name, name)); return (m && m.country) ? m.country : (amb === 'Nac' ? 'Colombia' : ''); }
     let _moCache = { sig: '', rows: null };
+    function moPrevias() {
+      const map = {};
+      ((window.PT_ANTERIOR && PT_ANTERIOR.comparables) || []).forEach(function (c) {
+        const k = nameKey(c.name || ''); if (k) map[k] = true;
+      });
+      return map;
+    }
     function moRows() {
       const kind = $('pli').value;
       const sig = kind + '|' + [...$('cbody').children].map(tr => { const i = tr.querySelector('input'); return i ? i.value : ''; }).join('~');
       if (_moCache.sig === sig && _moCache.rows) return _moCache.rows;
+      const previas = moPrevias();
       const out = [...$('cbody').children].map(tr => {
         const v = [...tr.querySelectorAll('input,select')].map(i => i.value);
-        const o = { name: v[0], amb: v[1], s: num(v[2]), c: num(v[3]), op: num(v[4]), sic: (v[8] || '').trim() };
+        const o = { name: v[0], amb: v[1], s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]), sic: (v[8] || '').trim(), id: (v[9] || '').trim() };
         if (!o.name.trim() || o.s === null) return null;
         o.pli = pliOf({ s: o.s, c: o.c, op: o.op }, kind); o.perfil = moPerfil(o.name); o.pais = moPais(o.name, o.amb);
-        o.perdida = (o.op !== null && o.op <= 0); return o;
+        o.perdida = (o.op !== null && o.op <= 0);
+        const meta = (window.COMP_META && COMP_META[o.name]) || {};
+        o.holders = meta.holders || '';
+        o.holding = /\b(investment holding company|holding company|sociedad de inversi[oó]n|sociedad holding)\b/i.test(DESCS[o.name] || '')
+          || /^6719/.test(o.sic || '')
+          || /\bholdings?\b/i.test(o.name || '');
+        o.saldoNeg = ['ar', 'inv', 'ap'].filter(k => o[k] !== null && o[k] < 0);
+        o.previa = !!previas[nameKey(o.name)];
+        return o;
       }).filter(x => x);
       _moCache = { sig, rows: out }; return out;
     }
-    function moCfg() { return { n: Math.max(4, Math.min(12, num($('mo_n').value) || 12)), perd: $('mo_perd').value, geo: $('mo_geo').value, act: $('mo_act').value, just: $('mo_just').value.trim() }; }
+    function moCfg() { return { n: Math.max(4, Math.min(30, num($('mo_n').value) || 12)), perd: $('mo_perd').value, holding: ($('mo_holding') ? $('mo_holding').value : 'excluir'), saldoneg: ($('mo_saldoneg') ? $('mo_saldoneg').value : 'excluir'), geo: $('mo_geo').value, act: $('mo_act').value, just: $('mo_just').value.trim() }; }
     /* Coincidencia del candidato con la actividad específica extraída del estudio
        del año anterior (setActividadEspecifica): palabras clave y SIC contra la
        descripción/SIC del candidato.
@@ -3506,7 +3631,19 @@ ${textoTotal}`;
       const posibles = kws.length + sics.length;
       return { factor: Math.max(0.15, Math.min(1, hits / 4)), hits: hits, posibles: posibles, hayAct: true, tieneDesc: !!descText.trim() };
     }
+    function maxParticipacion(txt) {
+      if (!txt) return null;
+      var v = String(txt).match(/\(([\d.]+)\)/g);
+      if (!v) return null;
+      var m = v.map(function (x) { return parseFloat(x.replace(/[()]/g, '')); }).filter(function (n) { return isFinite(n); });
+      return m.length ? Math.max.apply(null, m) : null;
+    }
     function moScore(o, cfg, medPool, sTP, act) {
+      if (o.holding && cfg.holding === 'excluir') return { out: 'Sociedad de inversión/holding sin actividad operativa propia: excluida (funciones, activos y riesgos no comparables, Art. 260-4 E.T.)' };
+      var socioMax = maxParticipacion(o.holders);
+      var topeIndep = (window.PT_CRITERIOS && PT_CRITERIOS.independenciaTope) || 50;
+      if (socioMax !== null && socioMax > topeIndep) return { out: 'No independiente: un solo accionista concentra el ' + socioMax.toFixed(2) + ' % de la propiedad, superior al ' + topeIndep + ' % admitido; existe vinculación por control (Art. 260-1 E.T.).' };
+      if (o.saldoNeg && o.saldoNeg.length && cfg.saldoneg === 'excluir') return { out: 'Saldo negativo en ' + o.saldoNeg.map(k => ({ ar: 'Cuentas por cobrar', inv: 'Inventario', ap: 'Cuentas por pagar' }[k])).join('/') + ': dato no verosímil, se excluye de la muestra' };
       if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
       if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
@@ -3534,8 +3671,10 @@ ${textoTotal}`;
       const wG = actM.hayAct ? 0.10 : 0.15;
       const wT = actM.hayAct ? 0.15 : 0.20;
       const wR = actM.hayAct ? 0.15 : 0.15;
-      const sc = wA * fA + wK * fK + wG * fG + wT * fT + wR * fR;
-      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : '')].filter(x => x).join(', ');
+      const scBase = wA * fA + wK * fK + wG * fG + wT * fT + wR * fR;
+      const bonoContinuidad = o.previa ? 0.08 : 0;
+      const sc = scBase + bonoContinuidad;
+      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : '')].filter(x => x).join(', ');
       return { sc, raz };
     }
     function moMostrarModalSinCandidatas(motivo) {
@@ -3767,45 +3906,100 @@ ${textoPrompt}`;
       top.forEach(x => { const k = nameKey(x.o.name); MOTOR.sel[k] = true; MOTOR.score[k] = x.r.sc; MOTOR.motivo[k] = 'Seleccionada por motor (' + Math.round(x.r.sc * 100) + 'pt): ' + x.r.raz; });
       reserva.forEach(x => { const k = nameKey(x.o.name); MOTOR.sel[k] = false; MOTOR.score[k] = x.r.sc; MOTOR.motivo[k] = 'Reserva (' + Math.round(x.r.sc * 100) + 'pt): puntaje inferior al TOP. ' + x.r.raz; });
       ev.filter(x => x.r.out).forEach(x => { const k = nameKey(x.o.name); MOTOR.sel[k] = false; MOTOR.score[k] = 0; MOTOR.motivo[k] = x.r.out; });
+      /* Matriz de aceptación/rechazo del universo evaluado por el motor: alimenta
+         el Anexo D y el embudo de depuración, con el motivo individual real de
+         este estudio (no categorías fijas de un caso anterior). */
+      try {
+        MATRIX = rows.map(o => {
+          const k = nameKey(o.name);
+          return { name: o.name, sic: o.sic, country: o.pais, rev: o.s, status: (MOTOR.score[k] > 0) ? 'Aceptada' : 'Rechazada', motivo: MOTOR.motivo[k] || '' };
+        });
+      } catch (e) { }
+      /* Universo completo evaluado, guardado en memoria (no en el DOM): permite
+         reconstruir la tabla al promover reserva («+3 más») o al desactivar el
+         motor, sin depender de que las filas descartadas sigan visibles. */
+      MOTOR.universo = rows;
+      try { motorRenderTabla(); } catch (e) { }
       saveActive(); calc(); motorRefreshUI();
       const excAct = act ? ev.filter(x => x.r.out && x.r.out.indexOf('actividad específica') >= 0).length : 0;
       if (!silencioso) moToast('Motor: TOP ' + top.length + ' seleccionadas · ' + reserva.length + ' en reserva · ' + ev.filter(x => x.r.out).length + ' excluidas por criterio' + (excAct ? ' (de las cuales ' + excAct + ' por no coincidir con la especialidad)' : ''), 'green');
       if (top.length < cfg.n && !silencioso) moToast('Solo ' + top.length + ' elegibles: amplíe rigor funcional o cambie el tratamiento de pérdidas', 'amber');
     }
+    /* Reescribe la tabla visible (única, editable) con las comparables que el
+       motor tiene marcadas como seleccionadas (MOTOR.sel[k]===true), tomando
+       sus cifras completas del universo en memoria. Sustituye el listado
+       aparte de «resultados»: la tabla editable es el único resultado. */
+    function motorRenderTabla() {
+      if (!MOTOR.universo) return;
+      const cuerpo = $('cbody'); if (!cuerpo) return;
+      const byKey = {}; MOTOR.universo.forEach(o => { byKey[nameKey(o.name)] = o; });
+      const keys = Object.keys(MOTOR.sel).filter(k => MOTOR.sel[k] === true).sort((a, b) => (MOTOR.score[b] || 0) - (MOTOR.score[a] || 0));
+      cuerpo.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      keys.forEach(k => { const o = byKey[k]; if (o) frag.appendChild(compRow([o.name, o.amb, o.s, o.c, o.op, o.ar, o.inv, o.ap, o.sic, o.id])); });
+      cuerpo.appendChild(frag);
+    }
     function motorMas(n) {
       if (!MOTOR.activo) { moToast('Ejecute primero el motor', 'amber'); return; }
       const yaSel = Object.values(MOTOR.sel).filter(v => v === true).length;
-      if (yaSel >= 12) { moToast('Tope alcanzado: 12 comparables. Retire alguna antes de agregar', 'amber'); return; }
-      n = Math.min(n, 12 - yaSel);
+      if (yaSel >= 30) { moToast('Tope alcanzado: 30 comparables. Retire alguna antes de agregar', 'amber'); return; }
+      n = Math.min(n, 30 - yaSel);
       const cand = Object.keys(MOTOR.sel).filter(k => MOTOR.sel[k] === false && MOTOR.score[k] > 0).sort((a, b) => MOTOR.score[b] - MOTOR.score[a]).slice(0, n);
       if (!cand.length) { moToast('Sin reserva disponible: amplíe criterios', 'amber'); return; }
       cand.forEach(k => { MOTOR.sel[k] = true; MOTOR.motivo[k] = MOTOR.motivo[k].replace('Reserva', 'Promovida de reserva a solicitud del analista') + ' [ampliación de muestra]'; });
+      try { motorRenderTabla(); } catch (e) { }
       saveActive(); calc(); motorRefreshUI(); moToast(cand.length + ' comparable(s) promovida(s) desde la reserva', 'green');
     }
     function motorLimpiar() {
       const respaldo = JSON.parse(JSON.stringify(MOTOR));
-      MOTOR.activo = false; saveActive(); calc(); motorRefreshUI();
-      moToast('Filtro del motor desactivado: la inclusión vuelve a regirse solo por ámbito', 'amber', { txt: 'Deshacer', fn: () => { MOTOR = respaldo; saveActive(); calc(); motorRefreshUI(); moToast('Selección del motor restaurada', 'green'); } });
+      MOTOR.activo = false;
+      try {
+        if (MOTOR.universo) {
+          const cuerpo = $('cbody'); cuerpo.innerHTML = '';
+          const frag = document.createDocumentFragment();
+          MOTOR.universo.forEach(o => frag.appendChild(compRow([o.name, o.amb, o.s, o.c, o.op, o.ar, o.inv, o.ap, o.sic, o.id])));
+          cuerpo.appendChild(frag);
+        }
+      } catch (e) { }
+      saveActive(); calc(); motorRefreshUI();
+      moToast('Filtro del motor desactivado: se muestra el universo completo evaluado', 'amber', { txt: 'Deshacer', fn: () => { MOTOR = respaldo; try { motorRenderTabla(); } catch (e) { } saveActive(); calc(); motorRefreshUI(); moToast('Selección del motor restaurada', 'green'); } });
     }
     function motorRefreshUI() {
       try {
         $('mo_justw').style.display = $('mo_perd').value === 'preferir' ? 'block' : 'none';
         if (MOTOR.cfg) { $('mo_n').value = MOTOR.cfg.n; $('mo_perd').value = MOTOR.cfg.perd; $('mo_geo').value = MOTOR.cfg.geo; $('mo_act').value = MOTOR.cfg.act; $('mo_just').value = MOTOR.just || ''; }
         const nsel = Object.values(MOTOR.sel || {}).filter(v => v === true).length;
-        $('mo_info').textContent = MOTOR.activo ? ('Activo · ' + nsel + ' seleccionadas' + (MOTOR.escenario ? ' · escenario «' + MOTOR.escenario + '»' : '')) : 'Inactivo';
-        const box = $('mo_resultados');
-        if (box) {
-          if (!MOTOR.activo || !nsel) { box.innerHTML = ''; }
-          else {
-            const nameByKey = {}; moRows().forEach(r => { nameByKey[nameKey(r.name)] = r.name; });
-            const items = Object.keys(MOTOR.sel).filter(k => MOTOR.sel[k] === true)
-              .sort((a, b) => (MOTOR.score[b] || 0) - (MOTOR.score[a] || 0))
-              .map((k, i) => '<tr><td>' + (i + 1) + '</td><td>' + escH(nameByKey[k] || k) + '</td><td class="n">' + Math.round((MOTOR.score[k] || 0) * 100) + '</td><td style="font-size:11px;color:var(--muted)">' + escH(MOTOR.motivo[k] || '') + '</td></tr>').join('');
-            box.innerHTML = '<div class="hint" style="margin:8px 0 4px">✓ ' + nsel + ' comparable(s) seleccionada(s) por el motor (ya incluidas en el cálculo del rango):</div>'
-              + '<div class="tblwrap"><table class="r"><thead><tr><th>#</th><th>Compañía</th><th>Puntaje</th><th>Motivo</th></tr></thead><tbody>' + items + '</tbody></table></div>';
-          }
-        }
+        $('mo_info').textContent = MOTOR.activo ? ('Activo · ' + nsel + ' seleccionadas (ver tabla arriba)' + (MOTOR.escenario ? ' · escenario «' + MOTOR.escenario + '»' : '')) : 'Inactivo';
+        /* El resultado del motor se ve en la tabla editable misma (con su ID IQ);
+           ya no se duplica en un listado aparte. */
+        const box = $('mo_resultados'); if (box) box.innerHTML = '';
+        motorPintarEmbudo();
       } catch (e) { }
+    }
+    /* Embudo de depuración del universo evaluado por el motor — mismo formato
+       visual que el panel de depuración funcional retirado, pero alimentado
+       100% por los criterios y el motivo real de ESTE estudio (no categorías
+       fijas de un caso anterior). */
+    function motorPintarEmbudo() {
+      const box = $('mo_embudo'); if (!box) return;
+      if (!MOTOR.activo || !MATRIX.length) { box.innerHTML = ''; return; }
+      const aceptadas = MATRIX.filter(m => m.status === 'Aceptada');
+      const rechazadas = MATRIX.filter(m => m.status !== 'Aceptada');
+      const motivos = {};
+      rechazadas.forEach(m => { const k = m.motivo || 'Sin motivo registrado'; motivos[k] = (motivos[k] || 0) + 1; });
+      const filas = Object.keys(motivos).sort((a, b) => motivos[b] - motivos[a])
+        .map(k => '<tr><td style="padding:5px 8px">' + escH(k) + '</td><td style="text-align:right;padding:5px 8px;font-weight:700;color:#C0392B">' + motivos[k] + '</td></tr>').join('');
+      box.innerHTML = '<div style="background:#FFF;border:1px solid #E1E8ED;border-radius:8px;padding:12px;margin-top:12px">' +
+        '<div style="font-size:12.5px;font-weight:700;color:#2C3E50;margin-bottom:10px">📊 Embudo de depuración del universo</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px">' +
+        '<div style="background:#F8F9FA;border:1px solid #E9ECEF;padding:8px;border-radius:6px;text-align:center"><div style="font-size:10px;color:#6C757D;text-transform:uppercase;font-weight:700">Universo evaluado</div><div style="font-size:18px;font-weight:800;color:#2C3E50">' + MATRIX.length + '</div></div>' +
+        '<div style="background:#EAF7EE;border:1px solid #C3E6CB;padding:8px;border-radius:6px;text-align:center"><div style="font-size:10px;color:#1E8449;text-transform:uppercase;font-weight:700">Aceptadas</div><div style="font-size:18px;font-weight:800;color:#1E8449">' + aceptadas.length + '</div></div>' +
+        '<div style="background:#FDEDEC;border:1px solid #F5C6CB;padding:8px;border-radius:6px;text-align:center"><div style="font-size:10px;color:#C0392B;text-transform:uppercase;font-weight:700">Rechazadas</div><div style="font-size:18px;font-weight:800;color:#C0392B">' + rechazadas.length + '</div></div>' +
+        '</div>' +
+        (filas ? '<div style="font-size:11.5px;font-weight:700;color:#34495E;margin-bottom:6px">Motivos de descarte (criterios de exclusión):</div>' +
+          '<table style="width:100%;font-size:11px;border-collapse:collapse;background:#FAFAFA;border:1px solid #EEE;border-radius:6px;overflow:hidden">' +
+          '<thead><tr style="background:#F1F3F5;color:#495057"><th style="text-align:left;padding:6px 8px">Criterio de exclusión</th><th style="text-align:right;padding:6px 8px">Empresas</th></tr></thead><tbody>' + filas + '</tbody></table>' : '') +
+        '</div>';
     }
     /* ── Escenarios ── */
     let MO_ESC = [], MO_ESC_P = null;
@@ -6271,6 +6465,24 @@ se guía la descarga manual
         return out.filter(function (v) { return v.nombre || v.nit; });
       }
 
+      /* ───────────────────────────────────────────────────────────────────────
+         Correcciones de «Tipo de operación» hechas en pantalla (sin editar el
+         Excel). Se guardan por hoja+fila y se reaplican en cada análisis, para
+         que la corrección llegue a lo mismo que consume PT36.ops (declaración
+         1125, campo «oper», secciones del informe).
+         ─────────────────────────────────────────────────────────────────────── */
+      var _tipoOverrides = {};
+      function _claveTipoOverride(hoja, fila) { return hoja + '#' + fila; }
+      async function ptCargarTipoOverrides() {
+        try { var v = await stGet('pt36TipoOverrides'); _tipoOverrides = (v && typeof v === 'object') ? v : {}; }
+        catch (e) { _tipoOverrides = {}; }
+        return _tipoOverrides;
+      }
+      window.ptGuardarTipoOverride = async function (hoja, fila, tipo) {
+        _tipoOverrides[_claveTipoOverride(hoja, fila)] = tipo;
+        try { await stSet('pt36TipoOverrides', _tipoOverrides); } catch (e) { }
+      };
+
       window.pt36AnalizarOperaciones = async function () {
         PT36.avisos = [];
         var res = await ptResolverExcel('ops');
@@ -6304,6 +6516,16 @@ se guía la descarga manual
           filas = filas.concat(r.filas);
           huerfanas = huerfanas.concat(r.huerfanas.map(function (h) { h.hoja = n; return h; }));
           Object.keys(r.totales).forEach(function (s) { totales[n + ' · ' + s] = r.totales[s]; });
+        });
+
+        /* Reaplica las correcciones de tipo hechas en pantalla ANTES de agrupar,
+           conciliar y construir la declaración: es el único punto donde se
+           construyen «filas», así que de aquí en adelante todo (grupos, 1125,
+           campo «oper») ya ve el tipo corregido. */
+        await ptCargarTipoOverrides();
+        filas.forEach(function (f) {
+          var ov = _tipoOverrides[_claveTipoOverride(f.hoja, f.fila)];
+          if (ov) { f.tipo = ov; f.origenTipo = 'manual'; }
         });
 
         /* ── Integridad de la identificación de los terceros ────────────────
@@ -6383,12 +6605,23 @@ se guía la descarga manual
         var sinMonto = filas.filter(function (f) { return !f.monto; }).length;
         var sinPais = filas.filter(function (f) { return !f.pais; }).length;
 
+        /* Filas que aún requieren confirmar el tipo en pantalla, y catálogo de
+           tipos ya escritos directamente en el propio archivo (para el <select>). */
+        var pendientesTipo = filas.filter(function (f) { return !f.tipo || f.origenTipo === 'concepto'; })
+          .map(function (f) {
+            return { hoja: f.hoja, fila: f.fila, vinculado: f.vinculado, nit: f.nit, formato: f.formato, concepto: f.concepto, monto: f.monto, seccion: f.seccion, tipoAuto: f.tipo };
+          });
+        var tiposConocidos = Array.from(new Set(
+          filas.filter(function (f) { return f.origenTipo === 'directo' && f.tipo; }).map(function (f) { return f.tipo; })
+        )).sort();
+
         PT36.ops = {
           uvt: uvt, filas: filas, grupos: lista, gruposTerceros: listaTerc, hojas: hojas,
           conciliacion: concil, huerfanas: huerfanas, fuente: res.nombre,
           vinculados: vincs, nVinc: conVinc.length, nTerc: conTerc.length,
           nitDuplicados: nitDup, nombreMultiNit: nombreMultiNit, nitAmbiguo: nitAmbiguo,
           faltantes: { sinTipo: sinTipo, sinMonto: sinMonto, sinPais: sinPais, porConcepto: porConcepto },
+          pendientesTipo: pendientesTipo, tiposConocidos: tiposConocidos,
           totDoc: lista.filter(function (g) { return g.documentable; }).length,
           totInd: lista.filter(function (g) { return !g.documentable && !g.pendiente; }).length,
           totPend: lista.filter(function (g) { return g.pendiente; }).length,
@@ -6399,8 +6632,8 @@ se guía la descarga manual
         /* Avisos de calidad de la fuente (no bloquean la generación) */
         if (!vincs.length) pt36Rojo('No se ha declarado el vinculado económico: no fue posible separar las operaciones con vinculados de las realizadas con terceros independientes. Diligencie «Vinculado» y su identificación.');
         else if (conTerc.length) PT36.avisos.push(conTerc.length + ' operación(es) de la hoja NO corresponden al vinculado declarado (terceros independientes de la información exógena): se relacionan aparte y no se les aplica tope.');
-        if (porConcepto) PT36.avisos.push(porConcepto + ' operación(es) sin «Tipo de operación*» en la fuente: se clasificaron por Formato + Concepto de medios magnéticos (1001/1007). Verifique la equivalencia con el catálogo DIAN antes de radicar.');
-        if (sinTipo) pt36Rojo(sinTipo + ' operación(es) no pudieron clasificarse ni por tipo ni por concepto.');
+        if (porConcepto) PT36.avisos.push(porConcepto + ' operación(es) sin «Tipo de operación*» en la fuente: se clasificaron por Formato + Concepto de medios magnéticos (1001/1007). Verifique la equivalencia con el catálogo DIAN antes de radicar, o confírmelo abajo, en «Operaciones leídas de la plantilla».');
+        if (sinTipo) pt36Rojo(sinTipo + ' operación(es) no pudieron clasificarse ni por tipo ni por concepto. Complételo abajo, en «Operaciones leídas de la plantilla».');
         if (sinMonto) PT36.avisos.push(sinMonto + ' operación(es) sin monto en la fuente.');
         if (sinPais) PT36.avisos.push(sinPais + ' operación(es) sin país de origen.');
         nitDup.forEach(function (d) {
@@ -6446,6 +6679,40 @@ se guía la descarga manual
           '<table style="width:100%;font-size:11px;margin-top:6px"><thead><tr><th>Régimen</th><th>Tipo</th><th>#</th><th>Monto</th><th>Tope</th><th>Tratamiento</th></tr></thead><tbody>' +
           o.grupos.map(fila).join('') + '</tbody></table>';
 
+        /* Tabla editable: confirmar/corregir el Tipo de operación sin editar el Excel.
+           Al guardar, se reejecuta pt36AnalizarOperaciones() completo, así que la
+           corrección llega también a la declaración 1125 y al campo «oper». */
+        if (o.pendientesTipo && o.pendientesTipo.length) {
+          var filaPend = function (p) {
+            var conocido = p.tipoAuto && (o.tiposConocidos || []).indexOf(p.tipoAuto) > -1;
+            var opciones = (o.tiposConocidos || []).map(function (t) {
+              return '<option value="' + escH(t) + '"' + (t === p.tipoAuto ? ' selected' : '') + '>' + escH(t) + '</option>';
+            }).join('');
+            var selValOtro = !conocido && p.tipoAuto ? escH(p.tipoAuto) : '';
+            var hojaJs = escH(p.hoja).replace(/'/g, '');
+            return '<tr>' +
+              '<td>' + escH(p.vinculado || '—') + '</td><td>' + escH(p.nit || '—') + '</td>' +
+              '<td>Formato ' + escH(p.formato || '—') + ' / Concepto ' + escH(p.concepto || '—') + '</td>' +
+              '<td style="text-align:right">' + C(p.monto) + '</td>' +
+              '<td>' +
+              '<select onchange="ptSeleccionarTipo(this, \'' + hojaJs + '\', ' + p.fila + ')" style="width:100%;max-width:220px">' +
+              '<option value="">— seleccione —</option>' + opciones +
+              '<option value="__otro__"' + (!conocido && p.tipoAuto ? ' selected' : '') + '>Otro (escribir)…</option>' +
+              '</select>' +
+              '<input type="text" value="' + selValOtro + '" placeholder="Escriba el tipo de operación" style="display:' + (!conocido && p.tipoAuto ? 'block' : 'none') + ';margin-top:4px;width:100%;max-width:220px" ' +
+              'onkeydown="if(event.key===\'Enter\'){ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')}" ' +
+              'onblur="ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')">' +
+              '</td></tr>';
+          };
+          h += '<div style="margin-top:10px;padding:8px 10px;border:2px solid #B7950B;background:#FEF9E7;border-radius:6px">' +
+            '<b style="color:#7D6608">⚠ ' + o.pendientesTipo.length + ' operación(es) requieren confirmar el «Tipo de operación»</b>' +
+            '<div style="font-size:11px;color:#7D6608;margin:2px 0 6px">Selecciónelo abajo para corregirlo sin editar el Excel. Al confirmar, se actualiza también la declaración y el análisis del informe.</div>' +
+            '<table style="width:100%;font-size:11px"><thead><tr><th>Vinculado</th><th>NIT</th><th>Formato/Concepto</th><th>Monto</th><th>Tipo de operación</th></tr></thead><tbody>' +
+            o.pendientesTipo.map(filaPend).join('') + '</tbody></table></div>';
+        } else {
+          h += '<div style="margin-top:8px;font-size:11px;color:#1E8449">✅ Todas las operaciones tienen «Tipo de operación» confirmado.</div>';
+        }
+
         if (o.conciliacion.length) {
           h += '<div style="margin-top:8px;font-size:11px"><b>Conciliación contra los totales de la plantilla:</b><ul style="margin:4px 0 0 16px">' +
             o.conciliacion.map(function (c) {
@@ -6460,6 +6727,22 @@ se guía la descarga manual
             '</tbody></table></details>';
         }
         host.innerHTML = h + '</div>';
+      };
+
+      /* Controles de la tabla editable de «Tipo de operación» */
+      window.ptSeleccionarTipo = async function (sel, hoja, fila) {
+        var v = sel.value, input = sel.nextElementSibling;
+        if (v === '__otro__') { if (input) { input.style.display = 'block'; input.focus(); } return; }
+        if (input) input.style.display = 'none';
+        if (!v) return;
+        await ptGuardarTipoOverride(hoja, fila, v);
+        if (typeof window.pt36AnalizarOperaciones === 'function') await window.pt36AnalizarOperaciones();
+      };
+      window.ptGuardarTipoTexto = async function (input, hoja, fila) {
+        var v = String(input.value || '').trim();
+        if (!v) return;
+        await ptGuardarTipoOverride(hoja, fila, v);
+        if (typeof window.pt36AnalizarOperaciones === 'function') await window.pt36AnalizarOperaciones();
       };
 
       /* Sección del informe: añade conciliación y separación de terceros */
@@ -7115,7 +7398,7 @@ se guía la descarga manual
         if (!host || !host.parentNode) return;
         var b = document.createElement('button');
         b.type = 'button'; b.id = 'ptContBtn';
-        b.textContent = '🔗 Seleccionar comparables a partir del estudio anterior';
+
         b.style.cssText = 'margin:6px 4px;padding:8px 12px;background:#6C3483;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600';
         b.onclick = function () { ptComparablesContinuidad(); };
         host.parentNode.insertBefore(b, host);
@@ -7425,13 +7708,7 @@ se guía la descarga manual
           (comps.length ? ' · ' + comps.length + ' posible(s) comparable(s) detectadas para la verificación de continuidad' : '') +
           '. El documento NO se reproduce en el informe: se utiliza como fuente.');
 
-        if (comps.length) {
-          moToast('Pulse «🔗 Seleccionar comparables a partir del estudio anterior» para verificar la continuidad.', 'green');
-        }
-        /* El sistema original extraía además la identidad del informante y del
-           vinculado del PDF anterior mediante el conector de IA. Se conserva esa
-           ruta —ahora también para .docx— y se añade una extracción local que
-           funciona sin conexión. */
+
         try { ptIdentidadDesdeAnterior(texto); } catch (e) { }
         return PT_ANTERIOR;
       };
@@ -8503,8 +8780,12 @@ se guía la descarga manual
           '</div><div id="ptFarResultado"></div>';
         ancla.parentNode.insertBefore(d, ancla);
       }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 1500); });
-      else setTimeout(_ui, 1500);
+      /* Panel FAR retirado del flujo visible (index.html): duplicaba, con
+         reglas propias hardcodeadas a un caso de videojuegos, lo que ahora
+         resuelve el «Motor de selección automática» de forma genérica y
+         basada en la actividad específica real de cada estudio. Las funciones
+         de este bloque quedan disponibles (ptClasificarFAR la sigue usando el
+         chequeo de industria) pero ya no se inyecta ningún panel ni botón. */
 
     })();
 
@@ -9680,7 +9961,7 @@ se guía la descarga manual
 
         h += '<table style="width:100%;font-size:11px;margin-top:6px"><thead><tr>' +
           '<th style="text-align:left">Concepto</th><th style="text-align:left">Rótulo leído</th><th style="text-align:left">Ubicación</th>' +
-          '<th style="text-align:right">Lectura por reglas</th><th style="text-align:right">Lectura asistida</th><th></th></tr></thead><tbody>';
+          '<th style="text-align:right">Rubro</th><th style="text-align:right">Lectura asistida</th><th></th></tr></thead><tbody>';
 
         var inputEEFF = function (campo, tipo, valor) {
           return '<input type="text" inputmode="decimal" class="mono" value="' + escH(valor === null || valor === undefined || valor === '' ? '' : fmt(valor)) + '" ' +
@@ -9690,17 +9971,27 @@ se guía la descarga manual
         CAMPOS.forEach(function (c) {
           var d = j[c[0]] || {};
           var val = typeof d.valor === 'number' ? d.valor : null;
-          var prev = R.previos[c[0]];
-          var iguales = (val !== null && prev !== null && Math.abs(val - prev) <= 2);
-          var marca = val === null ? '<span style="color:#888">no hallado</span>'
-            : prev === null || prev === '' ? '<span style="color:#1F618D">nuevo</span>'
-              : iguales ? '<span style="color:#1E8449">coincide</span>'
-                : '<span style="color:#C0392B">difiere</span>';
+          /* utilidad_bruta y gastos_operacionales no tienen un rubro propio en
+             el formulario (c[1] es null): son valores derivados, no hay «Rubro»
+             con qué compararlos. Sin esto, R.previos[c[0]] queda undefined (nunca
+             se asigna) y undefined !== null hacía que la comparación cayera, por
+             descarte, en «difiere» aunque no hubiera ningún dato con qué diferir. */
+          var sinRubro = !c[1];
+          var prev = sinRubro ? null : R.previos[c[0]];
+          var iguales = (val !== null && prev != null && Math.abs(val - prev) <= 2);
+          var marca = sinRubro ? '<span style="color:#888">no aplica</span>'
+            : val === null ? '<span style="color:#888">no hallado</span>'
+              : prev == null || prev === '' ? '<span style="color:#1F618D">nuevo</span>'
+                : iguales ? '<span style="color:#1E8449">coincide</span>'
+                  : '<span style="color:#C0392B">difiere</span>';
+          var celdaRubro = sinRubro
+            ? '<span style="color:#888;font-size:11px">— (calculado)</span>'
+            : inputEEFF(c[0], 'reglas', prev);
           h += '<tr><td>' + escH(c[2]) + '</td><td>' + escH((d.rotulo || '—').slice(0, 40)) + '</td><td>' + escH((d.ubicacion || '—').slice(0, 26)) + '</td>' +
-            '<td style="text-align:right">' + inputEEFF(c[0], 'reglas', prev) + '</td>' +
+            '<td style="text-align:right">' + celdaRubro + '</td>' +
             '<td style="text-align:right">' + inputEEFF(c[0], 'asistida', val) + '</td><td>' + marca + '</td></tr>';
         });
-        h += '</tbody></table><div class="hint" style="margin-top:4px">Puede corregir «Lectura por reglas» y «Lectura asistida» a mano; la verificación aritmética y la comparación de abajo se recalculan con lo que escriba.</div>';
+        h += '</tbody></table><div class="hint" style="margin-top:4px">Puede corregir «Rubro» y «Lectura asistida» a mano; la verificación aritmética y la comparación de abajo se recalculan con lo que escriba.</div>';
 
         h += '<div style="margin-top:8px"><b style="font-size:11.5px">Verificación aritmética</b><ul style="margin:4px 0 0 16px;font-size:11px">' +
           R.hallazgos.map(function (x) {
@@ -9722,8 +10013,8 @@ se guía la descarga manual
       }
       window.ptPintarEeffIA = ptPintarEeffIA;
 
-      /* Permite corregir a mano «Lectura por reglas» y «Lectura asistida» en la
-         tabla de verificación. «Lectura por reglas» escribe directo en el campo
+      /* Permite corregir a mano «Rubro» y «Lectura asistida» en la
+         tabla de verificación. «Rubro» escribe directo en el campo
          real del formulario (es lo que queda si no se incorpora la IA); «Lectura
          asistida» corrige el valor que se aplicaría con «Incorporar al estudio».
          En ambos casos se recalcula la verificación aritmética. */
@@ -11039,11 +11330,21 @@ se guía la descarga manual
       window.ptExtensionObjetivo = function (campo) {
         var E = window.PT_ESTRUCTURA;
         var sec = CAMPO_A_SECCION[campo];
-        if (!E || !sec || !E.mapa[sec]) return 900;
+        if (!sec) return 900;
         var n = (CAMPOS_POR_SECCION[sec] || []).length || 1;
+        /* Sin informe anterior cargado no hay con qué medir la extensión
+           real, pero el apartado sigue debiendo ser extenso: se usa como
+           piso el esqueleto de referencia (medido en informes completos)
+           en vez de una cifra plana insuficiente para un análisis de
+           mercado o de sector. */
+        var objetivoSeccion = (E && E.mapa[sec] && E.mapa[sec].objetivo) || 0;
+        if (!objetivoSeccion) {
+          var ref = ESQUELETO.filter(function (e) { return e.id === sec; })[0];
+          objetivoSeccion = ref ? ref.chars : 3000;
+        }
         /* la extensión de la sección se reparte entre sus apartados, con un
            mínimo razonable por apartado */
-        return Math.max(500, Math.round((E.mapa[sec].objetivo || 3000) / n));
+        return Math.max(900, Math.round(objetivoSeccion / n));
       };
 
       /* se instruye a la redacción para que alcance esa extensión */
@@ -11828,17 +12129,61 @@ se guía la descarga manual
       /* Extrae el JSON de la respuesta aunque el modelo haya añadido narración,
          preguntas o pasos intermedios antes o después del objeto final: nunca se
          debe volcar ese texto de proceso al informe. */
+      /* Los modelos redactan prosa larga dentro del campo "texto" del JSON y con
+         frecuencia dejan saltos de línea crudos dentro de la cadena — inválidos
+         para JSON.parse, aunque el contenido en sí sea correcto. Antes de
+         descartarlo se reintenta escapando los caracteres de control que
+         aparezcan DENTRO de cadenas (nunca fuera, para no tocar la sintaxis). */
+      function _escaparControlEnCadenas(s) {
+        var out = '', dentro = false, escapado = false;
+        for (var i = 0; i < s.length; i++) {
+          var c = s[i];
+          if (dentro) {
+            if (escapado) { out += c; escapado = false; continue; }
+            if (c === '\\') { out += c; escapado = true; continue; }
+            if (c === '"') { dentro = false; out += c; continue; }
+            if (c === '\n') { out += '\\n'; continue; }
+            if (c === '\r') { out += '\\r'; continue; }
+            if (c === '\t') { out += '\\t'; continue; }
+            out += c; continue;
+          }
+          if (c === '"') { dentro = true; }
+          out += c;
+        }
+        return out;
+      }
+      function _intentarJSON(s) {
+        try { return JSON.parse(s); } catch (e) { }
+        try { return JSON.parse(_escaparControlEnCadenas(s)); } catch (e) { return null; }
+      }
       function extraerJSON(texto) {
         var t = String(texto || '').replace(/```json|```/g, '').trim();
-        try { return JSON.parse(t); } catch (e) { }
-        for (var i = t.lastIndexOf('{'); i >= 0; i = t.lastIndexOf('{', i - 1)) {
-          var profundidad = 0, fin = -1;
+        var r = _intentarJSON(t);
+        if (r) return r;
+        /* Recorre cada posible «{» inicial de atrás hacia adelante (con
+           decremento simple: la versión anterior recalculaba lastIndexOf desde
+           i-1, que con i=0 se queda clavada en 0 para siempre — bucle infinito
+           que congela la pestaña en cuanto JSON.parse fallaba una sola vez). El
+           conteo de llaves ignora las que aparezcan dentro de cadenas, para no
+           cortar el objeto en un «{» o «}» que en realidad es solo texto. */
+        for (var i = t.length - 1; i >= 0; i--) {
+          if (t[i] !== '{') continue;
+          var profundidad = 0, fin = -1, dentroStr = false, esc = false;
           for (var k = i; k < t.length; k++) {
-            if (t[k] === '{') profundidad++;
-            else if (t[k] === '}') { profundidad--; if (profundidad === 0) { fin = k; break; } }
+            var c = t[k];
+            if (dentroStr) {
+              if (esc) { esc = false; }
+              else if (c === '\\') { esc = true; }
+              else if (c === '"') { dentroStr = false; }
+              continue;
+            }
+            if (c === '"') { dentroStr = true; continue; }
+            if (c === '{') profundidad++;
+            else if (c === '}') { profundidad--; if (profundidad === 0) { fin = k; break; } }
           }
           if (fin > i) {
-            try { return JSON.parse(t.slice(i, fin + 1)); } catch (e) { }
+            r = _intentarJSON(t.slice(i, fin + 1));
+            if (r) return r;
           }
         }
         return null;
@@ -11871,7 +12216,11 @@ se guía la descarga manual
           'CONTEXTO DEL ESTUDIO:\n' + ctx.slice(0, 30000) + '\n\n' +
           'Devuelve SOLO JSON, sin ningún texto antes ni después: {"texto":"...","fuentes":["url o referencia"],"normas":["citas usadas"],"suficiente":true|false,"faltante":"qué información haría falta"}';
 
-        var data = await ptFetchClaude({ messages: [{ role: 'user', content: prompt }], max_tokens: Math.min(8000, Math.round(meta / 2) + 2000) }, { buscar: s.buscar });
+        /* apartados extensos (económico, sectorial, metodológico): se usa un
+           modelo de nivel Sonnet en vez del Haiku por defecto del conector —
+           es la redacción más larga y cargada de cifras citadas del informe,
+           y la que más se beneficia de un modelo más riguroso frente a Haiku. */
+        var data = await ptFetchClaude({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: prompt }], max_tokens: Math.min(8000, Math.round(meta / 2) + 2000) }, { buscar: s.buscar });
         var rf = ptTextoYFuentes(data);
         var j = extraerJSON(rf.texto);
         if (!j) {
@@ -13162,43 +13511,94 @@ se guía la descarga manual
         } catch (e) { }
       };
 
-      /* exportación: además de la guarda, sin marcadores de pendiente */
+      /* exportación: las guardas advierten pero NUNCA bloquean la generación */
       if (typeof window.wordWrap === 'function') {
         var _wordPrev = window.wordWrap;
         window.wordWrap = function (titulo, cuerpo) {
+          var advertencias = [];
+          var safeEsc = function (s) {
+            if (typeof escH === 'function') return escH(s);
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+          };
           try {
-            var G = ptGuardaInforme();
-            var todas = (G.fallas || []).concat(G.requisitos || []);
-            if (todas.length) throw new Error('exportación bloqueada: ' + todas.map(function (f) { return f.msg; }).join(' · '));
-            /* bloqueo duro: residuos de chat y pendientes declarados obligatorios */
-            var basura = String(cuerpo).match(/```|Entiendo que requieres|Entendido\.\s*Requiero|Perm[ií]tame obtener/i);
-            if (basura) throw new Error('exportación bloqueada: el documento contiene texto de chat o bloques de código sin sanear («' + basura[0] + '»).');
-            var obligatorios = String(cuerpo).match(/\[PENDIENTE\s*[—-]\s*obligatorio[^\]]*\]/gi) || [];
-            if (obligatorios.length) throw new Error('exportación bloqueada: ' + obligatorios.length + ' apartado(s) marcados como pendientes obligatorios.');
-            /* los «[Completar…]» de plantilla no bloquean, pero el documento sale
-               con una carátula de advertencia que los enumera: nunca en silencio */
-            var marcadores = String(cuerpo).match(/\[(Completar|Pendiente|Describir)[^\]]{0,120}\]/g) || [];
-            if (marcadores.length) {
-              var unicos = []; marcadores.forEach(function (m) { if (unicos.indexOf(m) < 0) unicos.push(m); });
-              cuerpo = '<div style="border:3px solid #C0392B;background:#FDEDEC;padding:12px 14px;margin-bottom:16px;border-radius:6px">' +
-                '<b style="color:#7B241C">DOCUMENTO EN BORRADOR — ' + marcadores.length + ' apartado(s) por completar antes de radicar:</b>' +
-                '<ul style="margin:6px 0 0 18px;font-size:12px">' + unicos.slice(0, 20).map(function (m) { return '<li>' + escH(m) + '</li>'; }).join('') + '</ul></div>' + cuerpo;
-              arguments[1] = cuerpo;
-              moToast('El Word sale como BORRADOR: ' + marcadores.length + ' marcador(es) «[Completar…]» enumerados en la carátula.', 'amber');
+            /* ── 1. Guardas del informe: fallas y requisitos ── */
+            try {
+              if (typeof ptGuardaInforme === 'function') {
+                var G = ptGuardaInforme();
+                var todas = (G.fallas || []).concat(G.requisitos || []);
+                if (todas.length) {
+                  todas.forEach(function (f) { advertencias.push(f.msg); });
+                  if (typeof moToast === 'function') moToast('⚠ El informe se genera con ' + todas.length + ' advertencia(s). Revise la carátula del documento.', 'amber');
+                }
+              }
+            } catch (eGuarda) {
+              advertencias.push('No se pudieron evaluar las condiciones de generación: ' + (eGuarda.message || eGuarda));
             }
-          } catch (e) {
-            if (/exportación bloqueada/.test(e.message)) {
-              moToast(e.message, 'red');
-              /* Un comentario HTML suelto, sin <html>/<head>, no declara ninguna
-                 codificación: Word lo abre asumiendo la del sistema y las tildes
-                 salen corruptas («exportaciÃ³n»). Además un comentario es
-                 invisible al renderizarse — el motivo del bloqueo debe verse. */
-              return '﻿<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">' +
-                '<title>Word no generado</title></head><body style="font-family:Calibri,Arial,sans-serif">' +
-                '<h1 style="color:#C0392B">El Word no se generó</h1><p>' + escH(e.message) + '</p></body></html>';
+
+            /* ── 2. Residuos de chat: se intentan limpiar automáticamente ── */
+            try {
+              var basura = String(cuerpo).match(/```|Entiendo que requieres|Entendido\.\s*Requiero|Perm[ií]tame obtener/i);
+              if (basura) {
+                advertencias.push('Se detectaron residuos de chat o bloques de código en el documento (se intentó limpiar automáticamente).');
+                if (typeof ptSanearTexto === 'function') {
+                  cuerpo = ptSanearTexto(cuerpo);
+                } else {
+                  cuerpo = String(cuerpo).replace(/```[a-z]*\s*[\s\S]*?```/g, ' ');
+                }
+              }
+            } catch (eBasura) {
+              advertencias.push('Error al verificar residuos de chat: ' + (eBasura.message || eBasura));
             }
+
+            /* ── 3. Pendientes obligatorios: advertir sin bloquear ── */
+            try {
+              var obligatorios = String(cuerpo).match(/\[PENDIENTE\s*[—-]\s*obligatorio[^\]]*\]/gi) || [];
+              if (obligatorios.length) {
+                advertencias.push(obligatorios.length + ' apartado(s) marcados como pendientes obligatorios.');
+              }
+            } catch (eOblig) {
+              advertencias.push('Error al verificar pendientes obligatorios: ' + (eOblig.message || eOblig));
+            }
+
+            /* ── 4. Marcadores [Completar…] ── */
+            try {
+              var marcadores = String(cuerpo).match(/\[(Completar|Pendiente|Describir)[^\]]{0,120}\]/g) || [];
+              if (marcadores.length) {
+                var unicos = []; marcadores.forEach(function (m) { if (unicos.indexOf(m) < 0) unicos.push(m); });
+                advertencias.push(marcadores.length + ' apartado(s) con marcadores por completar antes de radicar.');
+                if (typeof moToast === 'function') moToast('El Word sale como BORRADOR: ' + marcadores.length + ' marcador(es) «[Completar…]» enumerados en la carátula.', 'amber');
+              }
+            } catch (eMarc) {
+              advertencias.push('Error al verificar marcadores de completar: ' + (eMarc.message || eMarc));
+            }
+
+          } catch (eGlobal) {
+            advertencias.push('Error inesperado en la validación: ' + (eGlobal.message || eGlobal));
           }
-          return _wordPrev.apply(null, arguments);
+
+          /* ── Carátula de advertencias (si las hay) ── */
+          try {
+            if (advertencias.length) {
+              cuerpo = '<div style="border:3px solid #E67E22;background:#FEF9E7;padding:12px 14px;margin-bottom:16px;border-radius:6px">' +
+                '<b style="color:#7D6608">⚠ DOCUMENTO GENERADO CON ' + advertencias.length + ' ADVERTENCIA(S) — revise antes de radicar:</b>' +
+                '<ul style="margin:6px 0 0 18px;font-size:12px">' + advertencias.map(function (m) { return '<li>' + safeEsc(m) + '</li>'; }).join('') + '</ul></div>' + cuerpo;
+            }
+          } catch (eCarat) {
+            /* si incluso la carátula falla, se genera el Word sin ella */
+          }
+
+          /* SIEMPRE se genera el Word pasándole la versión procesada de cuerpo */
+          try {
+            return _wordPrev(titulo, cuerpo);
+          } catch (eFinal) {
+            if (typeof moToast === 'function') moToast('Error al generar el Word: ' + (eFinal.message || eFinal), 'red');
+            return '﻿<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">' +
+              '<title>' + safeEsc(titulo || 'Informe') + '</title></head><body style="font-family:Calibri,Arial,sans-serif">' +
+              (advertencias.length ? '<div style="border:3px solid #E67E22;background:#FEF9E7;padding:12px 14px;margin-bottom:16px;border-radius:6px">' +
+                '<b style="color:#7D6608">⚠ ADVERTENCIAS:</b><ul style="margin:6px 0 0 18px;font-size:12px">' +
+                advertencias.map(function (m) { return '<li>' + safeEsc(m) + '</li>'; }).join('') + '</ul></div>' : '') +
+              cuerpo + '</body></html>';
+          }
         };
       }
 
@@ -13984,13 +14384,28 @@ se guía la descarga manual
       }
 
       function annexRechazoD() {
-        if (!MATRIX.length) return '<p class="norm">La matriz del universo de búsqueda no ha sido cargada. Ejecute la depuración funcional del universo para embeberla íntegra (estado y motivo por compañía).</p>';
+        if (!MATRIX.length) return '<p class="norm">La matriz del universo de búsqueda no ha sido cargada. Ejecute el «Motor de selección automática» en la tarjeta de Comparables para generarla (estado y motivo por compañía).</p>';
         var acc = MATRIX.filter(function (m) { return /acept/i.test(m.status || ''); }).length, rej = MATRIX.length - acc;
+        var motivos = {};
+        MATRIX.filter(function (m) { return !/acept/i.test(m.status || ''); }).forEach(function (m) {
+          var k = m.motivo || 'Sin motivo registrado'; motivos[k] = (motivos[k] || 0) + 1;
+        });
+        var filasMotivo = Object.keys(motivos).sort(function (a, b) { return motivos[b] - motivos[a]; })
+          .map(function (k) { return '<tr><td>' + escH(k) + '</td><td class="n">' + motivos[k] + '</td></tr>'; }).join('');
+        var embudo = '<div class="norm" style="display:flex;gap:14px;flex-wrap:wrap;margin:9px 0">' +
+          '<span><b>Universo evaluado:</b> ' + MATRIX.length + '</span>' +
+          '<span><b>Aceptadas:</b> ' + acc + '</span>' +
+          '<span><b>Rechazadas:</b> ' + rej + '</span>' +
+          '</div>' +
+          (filasMotivo ? '<h3 class="rep">D.0 Motivos de descarte (criterios de exclusión)</h3>' +
+            '<table class="r"><thead><tr><th>Criterio de exclusión</th><th>Empresas</th></tr></thead><tbody>' + filasMotivo + '</tbody></table>' : '');
         var body = MATRIX.map(function (m, i) {
           return '<tr><td>' + (i + 1) + '</td><td>' + escH(m.name || '—') + '</td><td>' + escH(String(m.sic || '').slice(0, 22)) + '</td><td>' + escH(m.country || '—') + '</td><td>' + (/acept/i.test(m.status || '') ? '<b style="color:#1F6D4F">Aceptada</b>' : '<b style="color:#A5352A">Rechazada</b>') + '</td><td>' + escH(m.motivo || (/acept/i.test(m.status || '') ? 'Cumple criterios' : '—')) + '</td></tr>';
         }).join('');
         return '<h2 class="rep">Anexo D — Matriz de aceptación y rechazo del universo de búsqueda</h2>' +
           '<p class="norm">Universo de búsqueda: <b>' + MATRIX.length + '</b> compañías · Aceptadas: <b>' + acc + '</b> · Rechazadas: <b>' + rej + '</b>. Se detalla el estado y el motivo de descarte compañía por compañía (Num. 4, Art. 1.2.2.2.1.5 del Decreto 1625 de 2016).</p>' +
+          embudo +
+          '<h3 class="rep">D.1 Detalle compañía por compañía</h3>' +
           '<table class="r"><thead><tr><th>#</th><th>Compañía</th><th>SIC</th><th>País</th><th>Estado</th><th>Motivo</th></tr></thead><tbody>' + body + '</tbody></table>';
       }
 
@@ -14005,16 +14420,76 @@ se guía la descarga manual
 
       function annexLegislacionF() {
         return '<h2 class="rep">Anexo F — Legislación colombiana en materia de precios de transferencia</h2>' +
-          '<p>Marco legal del régimen de precios de transferencia en Colombia (Estatuto Tributario, Decreto 1625 de 2016 y Decreto 2120 de 2017), en concordancia con las Directrices de la OCDE como criterio auxiliar de interpretación.</p>' +
-          '<h3 class="rep">F.1 Art. 260-1 — Criterios de vinculación</h3><p>Define cuándo existe vinculación económica: subordinadas, sucursales, agencias, establecimientos permanentes, vinculación por capital, por administración o control, operaciones entre vinculados a través de terceros, y vinculación por participación conjunta, entre otros. Las comparables deben ser <b>independientes</b> (no vinculadas), razón por la cual se excluyen entidades controladas/subordinadas.</p>' +
-          '<h3 class="rep">F.2 Art. 260-2 — Operaciones con vinculados</h3><p>Los contribuyentes que celebren operaciones con vinculados del exterior, en zonas francas o con residentes en jurisdicciones no cooperantes, deben determinar sus ingresos, costos y deducciones considerando el <b>principio de plena competencia</b> (precios y márgenes que habrían pactado partes independientes).</p>' +
-          '<h3 class="rep">F.3 Art. 260-3 — Métodos</h3><p>Establece los métodos: Precio Comparable no Controlado (PC), Precio de Reventa (PR), Costo Adicionado (CA), Márgenes Transaccionales de Utilidad de Operación (TU) y Partición de Utilidades (PU). Regula el rango de plena competencia y el ajuste a la mediana cuando el indicador queda por fuera del rango intercuartil.</p>' +
-          '<h3 class="rep">F.4 Art. 260-4 — Criterios de comparabilidad</h3><p>Enumera los cinco factores de comparabilidad: características de las operaciones, análisis funcional (funciones, activos y riesgos), términos contractuales, circunstancias económicas y estrategias de negocio.</p>' +
-          '<h3 class="rep">F.5 Art. 260-5 — Documentación comprobatoria</h3><p>Obliga a preparar y conservar el Informe Local y el Informe Maestro que demuestren la correcta aplicación del régimen.</p>' +
-          '<h3 class="rep">F.6 Art. 260-7 — Jurisdicciones no cooperantes</h3><p>Regula el tratamiento de operaciones con jurisdicciones de baja o nula imposición y regímenes preferenciales.</p>' +
-          '<h3 class="rep">F.7 Art. 260-9 — Declaración informativa</h3><p>Obliga a presentar la Declaración Informativa de Precios de Transferencia (Formulario 120 y su Hoja 2 — Formato 1125) cuando se superan los topes de patrimonio o ingresos y el monto de operaciones supera 45.000 UVT.</p>' +
-          '<h3 class="rep">F.8 Art. 260-11 — Régimen sancionatorio</h3><p>Establece las sanciones por extemporaneidad, inconsistencias, omisión y corrección de la documentación comprobatoria y de la declaración informativa (porcentajes sobre el valor de las operaciones, con topes en UVT).</p>' +
-          '<h3 class="rep">F.9 Decreto 2120 de 2017 y rango intercuartil</h3><p>Incorpora el estándar BEPS Acción 13 (Informe Local, Maestro y País por País) y precisa el cálculo del rango intercuartil y el ajuste a la mediana.</p>';
+          '<p>El Congreso de la República, mediante las Leyes 788 de 2002 y 863 de 2003, incorporó el régimen de precios de transferencia a la legislación colombiana, con aplicación a partir del año gravable 2004. La Ley 1607 de 2012 (arts. 111 a 121, Capítulo VI — Normas Antievasión) modificó integralmente los artículos 260-1 a 260-11 del Estatuto Tributario, reglamentados por el Decreto 1625 de 2016 y, en particular, por el Decreto 2120 del 15 de diciembre de 2017, que alineó la documentación comprobatoria al estándar BEPS Acción 13 (Informe Local, Informe Maestro e Informe País por País). Las Directrices de la OCDE se aplican como criterio auxiliar de interpretación, no vinculante.</p>' +
+
+          '<h3 class="rep">F.1 Vinculación económica y partes relacionadas (Art. 260-1 E.T.)</h3>' +
+          '<p>El régimen se aplica a los contribuyentes del impuesto sobre la renta que celebren operaciones con vinculados económicos o partes relacionadas domiciliadas o residentes en el exterior, en zona franca, o con quienes se presuma vinculación por ubicarse en jurisdicciones no cooperantes. El artículo 260-1 define la vinculación, entre otros, por: subordinación o control (cuando el poder de decisión de una entidad está sometido a la voluntad de otra, que será su matriz o controlante); sucursales y agencias; establecimientos permanentes; vinculación por capital, por administración o por participación conjunta en otras sociedades; y consorcios o uniones temporales con sus miembros. La vinculación económica <b>subsiste</b> aun cuando la operación se realice por medio de terceros no vinculados interpuestos entre las partes relacionadas. Las compañías utilizadas como comparables deben ser <b>independientes</b>: se excluyen las entidades controladas, subordinadas o que a su vez tengan vinculación con la parte examinada o con el grupo económico.</p>' +
+
+          '<h3 class="rep">F.2 Principio de plena competencia (Art. 260-2 E.T.)</h3>' +
+          '<p>Los contribuyentes que celebren operaciones con vinculados del exterior, en zonas francas o con residentes en jurisdicciones no cooperantes deben determinar, para efectos del impuesto sobre la renta y complementarios, sus ingresos ordinarios y extraordinarios y sus costos y deducciones, considerando para esas operaciones los precios y márgenes de utilidad que hubieran pactado partes independientes en operaciones comparables (principio de plena competencia). El parágrafo del artículo dispone que las normas de precios de transferencia producen efectos <b>únicamente</b> en la determinación del impuesto sobre la renta y complementarios, salvo las excepciones que la propia norma señale; por esa razón, los ajustes de precios de transferencia no se trasladan automáticamente a la determinación del IVA.</p>' +
+
+          '<h3 class="rep">F.3 Métodos para determinar el precio o margen de utilidad (Art. 260-3 E.T.)</h3>' +
+          '<p>El precio o margen de utilidad en las operaciones entre vinculados podrá determinarse mediante la aplicación individual o combinada de cualquiera de los siguientes cinco métodos, según cuál resulte más apropiado en función de las características de la operación evaluada. Para operaciones de <i>commodities</i> solo procede acudir a un método distinto del Precio Comparable no Controlado en casos excepcionales, siempre que la documentación comprobatoria incluya las razones económicas, financieras y técnicas que lo justifiquen.</p>' +
+
+          '<h4 class="rep">F.3.1 Precio Comparable no Controlado (PC)</h4>' +
+          '<p>Consiste en valorar el precio del bien o servicio en una operación entre vinculados al precio de un bien o servicio idéntico o de características similares en una operación entre terceros independientes en circunstancias comparables, efectuando los ajustes necesarios para obtener la equivalencia. Es, en general, la medida más confiable cuando las transacciones son idénticas o solo presentan diferencias menores fácilmente cuantificables, pero exige un alto nivel de comparabilidad de producto y de funciones. Los ajustes más habituales corresponden a diferencias en calidad del producto, términos contractuales, nivel de mercado, mercados geográficos, fecha de la transacción, propiedad intangible asociada y riesgo de moneda extranjera.</p>' +
+
+          '<h4 class="rep">F.3.2 Precio de Reventa (PR)</h4>' +
+          '<p>Determina el precio de compra de un bien o de prestación de un servicio entre vinculados, multiplicando el precio de reventa del bien o servicio a partes independientes por el resultado de disminuir de la unidad el margen bruto de utilidad obtenido entre partes independientes en operaciones comparables: <b>PR = P × (1 − MB)</b>, donde P es el precio de reventa acordado con un tercero independiente y MB (utilidad bruta / ventas netas) es el margen bruto de referencia. El punto de partida es el precio al que un producto comprado a un vinculado se revende a un tercero; el margen bruto adecuado puede obtenerse de operaciones comparables del mismo revendedor (interno) o de otros revendedores en operaciones de igual naturaleza (externo). Se utiliza sobre todo en distribuidores que revenden productos sin transformarlos físicamente ni agregarles valor relevante, y requiere ajustes por rotación de inventarios, términos contractuales y costos de transporte, entre otros.</p>' +
+
+          '<h4 class="rep">F.3.3 Costo Adicionado (CA)</h4>' +
+          '<p>Consiste en multiplicar el costo de los bienes o servicios por el resultado de sumar a la unidad el margen de utilidad bruta obtenido entre partes independientes en operaciones comparables. El punto de partida es el costo asumido por el proveedor en la operación con el vinculado; el precio de venta de plena competencia se obtiene añadiendo a ese costo el margen de ganancia adecuado, considerando las funciones realizadas, los riesgos incurridos, los activos intangibles empleados y la complejidad de la fabricación. El margen de referencia puede derivarse de operaciones del mismo proveedor con terceros (interno) o de otros proveedores comparables (externo), con ajustes por rotación de inventarios, términos contractuales y costos de transporte.</p>' +
+
+          '<h4 class="rep">F.3.4 Márgenes Transaccionales de Utilidad de Operación (TU)</h4>' +
+          '<p>Evalúa la utilidad de operación obtenida por el contribuyente en la operación con el vinculado frente a una base pertinente (ventas, costos o activos), comparándola con la utilidad de operación de compañías independientes en operaciones comparables. Exige, en general, menor comparabilidad funcional y de producto que los métodos tradicionales (PC, PR, CA), lo que lo hace especialmente útil cuando la parte examinada no posee intangibles ni activos únicos que la distingan de las comparables. Su confiabilidad puede verse afectada por diferencias en la estructura de costos, en la experiencia del negocio o en la eficiencia administrativa, y suele requerir ajustes por clasificaciones contables, condiciones de crédito, inventario, riesgo de divisas, mercados geográficos y circunstancias del negocio. Los indicadores de rentabilidad (PLI) habitualmente empleados bajo este método son:</p>' +
+          '<ul>' +
+          '<li><b>Margen Operacional (MO)</b> = Utilidad operativa / Ventas netas. Mide la rentabilidad de la actividad principal de la compañía y es menos sensible a la distribución de gastos entre costo de ventas y gastos operativos; se emplea sobre todo en manufactura y distribución.</li>' +
+          '<li><b>Margen sobre Costos y Gastos (MCG)</b> = Utilidad operativa / (Costo de ventas + Gastos operativos). Apropiado en prestación de servicios, ensamble y manufactura, y sensible al uso del capital.</li>' +
+          '<li><b>Rendimiento sobre Activos (ROA)</b> = Utilidad operativa / Activo total. Apropiado cuando la rentabilidad de la compañía depende principalmente del uso de sus activos; tiene menor sensibilidad a las diferencias de clasificación contable entre gastos operativos y costo de ventas y exige menor comparabilidad funcional, pero depende de la información del balance general y de sus criterios de clasificación.</li>' +
+          '<li><b>Razón Berry</b> = Utilidad bruta / Gastos de operación. Es sensible a las diferencias de clasificación contable entre gastos operativos y costo de ventas, por lo que se reserva para casos en que esa clasificación es homogénea entre la parte examinada y las comparables.</li>' +
+          '</ul>' +
+
+          '<h4 class="rep">F.3.5 Partición de Utilidades (PU)</h4>' +
+          '<p>Asigna la utilidad o pérdida de operación global de la transacción entre las partes relacionadas, en proporción a la contribución relativa de cada una (volumen de activos, costos y gastos asumidos). Evalúa si esa asignación es compatible con el principio de plena competencia, con base en el valor relativo de la contribución de cada parte. Se aplica sobre todo a operaciones altamente integradas que no pueden evaluarse por separado y no requiere necesariamente comparaciones con operaciones de terceros independientes; en contrapartida, su confiabilidad es especialmente sensible a la calidad de los datos y de los supuestos utilizados.</p>' +
+
+          '<h3 class="rep">F.4 Criterios de comparabilidad (Art. 260-4 E.T.)</h3>' +
+          '<p>Se entiende que las operaciones son comparables cuando no existen diferencias entre sus características económicas relevantes que puedan afectar de forma significativa el precio, la contraprestación o el margen de utilidad, o cuando tales diferencias pueden eliminarse mediante ajustes técnicos razonables. Para establecer la comparabilidad se deben considerar los siguientes cinco factores.</p>' +
+
+          '<h4 class="rep">F.4.1 Características de las operaciones</h4>' +
+          '<ul>' +
+          '<li><b>Financiamiento:</b> monto del principal, plazo, calificación de riesgo, garantía, solvencia del deudor y tasa de interés; si los términos de la operación no corresponden a prácticas de mercado, no se admite el tratamiento como préstamo ni los intereses como deducibles, sino como aporte de capital tratado como dividendo.</li>' +
+          '<li><b>Prestación de servicios:</b> naturaleza del servicio y del conocimiento técnico (know-how) involucrado.</li>' +
+          '<li><b>Uso o enajenación de bienes tangibles:</b> características físicas, calidad, confiabilidad, disponibilidad del bien y volumen de la oferta.</li>' +
+          '<li><b>Explotación o transferencia de intangibles:</b> clase de bien (patente, marca, nombre comercial o know-how), duración y grado de protección, y beneficios esperados de su uso.</li>' +
+          '<li><b>Enajenación de acciones:</b> valor presente de las utilidades o flujos de efectivo proyectados, o la cotización bursátil del emisor al último día de la enajenación.</li>' +
+          '</ul>' +
+          '<h4 class="rep">F.4.2 Funciones o actividades económicas</h4>' +
+          '<p>Las funciones o actividades económicas desarrolladas por cada parte, incluyendo los activos utilizados y los riesgos asumidos en la operación (análisis funcional).</p>' +
+          '<h4 class="rep">F.4.3 Términos contractuales</h4>' +
+          '<p>Los términos contractuales pactados por las partes, confrontados con la realidad económica de la operación.</p>' +
+          '<h4 class="rep">F.4.4 Circunstancias económicas o de mercado</h4>' +
+          '<p>Entre otras: ubicación geográfica, tamaño del mercado, nivel del mercado (mayorista o detallista), nivel de competencia, posición competitiva de compradores y vendedores, disponibilidad de bienes y servicios sustitutos, niveles de oferta y demanda, poder de compra de los consumidores, reglamentación gubernamental, costos de producción y de transporte, y fecha de la operación.</p>' +
+          '<h4 class="rep">F.4.5 Estrategias de negocio</h4>' +
+          '<p>Las estrategias de negocio de la parte examinada, incluidas las relacionadas con penetración, permanencia y ampliación del mercado.</p>' +
+
+          '<h3 class="rep">F.5 Documentación comprobatoria (Art. 260-5 E.T.)</h3>' +
+          '<p>Deben preparar y conservar el Informe Local y el Informe Maestro los contribuyentes del impuesto sobre la renta cuyo patrimonio bruto en el último día del año o período gravable sea igual o superior a <b>100.000 UVT</b>, o cuyos ingresos brutos del respectivo año sean iguales o superiores a <b>61.000 UVT</b>, y que celebren operaciones con vinculados conforme a los artículos 260-1 y 260-2. La documentación debe conservarse por un término mínimo de <b>cinco (5) años</b>, contados a partir del 1º de enero del año siguiente al de su elaboración, expedición o recibo, y ponerse a disposición de la Administración Tributaria cuando esta lo requiera. La información financiera y contable utilizada para su preparación debe estar <b>certificada por el Revisor Fiscal</b> de la compañía.</p>' +
+
+          '<h3 class="rep">F.6 Jurisdicciones no cooperantes, de baja o nula imposición o regímenes tributarios preferenciales (Art. 260-7 E.T.)</h3>' +
+          '<p>Salvo prueba en contrario, se presume que las operaciones entre contribuyentes residentes o domiciliados en Colombia y sociedades domiciliadas, constituidas o ubicadas en jurisdicciones no cooperantes de baja o nula imposición o en regímenes tributarios preferenciales (señaladas por el Gobierno Nacional) son operaciones entre vinculados económicos, en las que los precios o montos no se pactan conforme a los que hubieran utilizado empresas independientes en condiciones de mercado similares. En consecuencia, quienes celebren operaciones con dichas jurisdicciones deben preparar y conservar la documentación comprobatoria de cada tipo de operación por el mismo término mínimo de cinco años, con independencia de si superan o no los umbrales del artículo 260-5, y con un tope de documentación individual de <b>10.000 UVT</b> por operación conforme al régimen reglamentario.</p>' +
+
+          '<h3 class="rep">F.7 Declaración informativa (Art. 260-9 E.T.)</h3>' +
+          '<p>Los contribuyentes obligados al régimen —mismos umbrales de 100.000 UVT de patrimonio bruto o 61.000 UVT de ingresos brutos del artículo 260-5— deben presentar anualmente una declaración informativa de las operaciones realizadas con sus vinculados (Formulario 120 y su Hoja 2 — Formato 1125), con independencia de que la operación individual supere o no el tope de <b>45.000 UVT</b> que determina si además debe documentarse.</p>' +
+
+          '<h3 class="rep">F.8 Facultades de ajuste de la DIAN y Acuerdos Anticipados de Precios (Art. 260-10 E.T.)</h3>' +
+          '<p>La DIAN, en desarrollo de sus facultades de fiscalización, puede determinar los ingresos, costos y deducciones de las operaciones entre vinculados a partir de los precios o márgenes que hubieren utilizado partes independientes en operaciones comparables, en Colombia o en el exterior, y modificar mediante Liquidación Oficial de Revisión la declaración de renta cuando el régimen no se aplicó o se aplicó incorrectamente.</p>' +
+          '<p>El artículo 260-10 faculta a la DIAN para celebrar con el contribuyente Acuerdos Anticipados de Precios (APA): un conjunto de criterios y una metodología para fijar los precios, montos o márgenes aplicables a las operaciones con vinculados durante determinados períodos fiscales, con efectos hasta por cuatro años (el período en que se solicita y los tres siguientes). El contribuyente que suscribe un APA debe presentar un informe anual de las operaciones amparadas. La solicitud, reglamentada por el Decreto 2120 de 2017 (art. 1.2.2.4.2), debe contener, entre otros elementos: identificación del solicitante y de los vinculados cubiertos; descripción de la actividad económica y de la estructura organizacional y de capital; descripción del contenido del acuerdo y de los tipos de operación cubiertos; los supuestos fundamentales del acuerdo (marco normativo aplicable, aranceles y regulación de comercio exterior, condiciones de mercado, naturaleza de funciones/activos/riesgos, tasas de cambio e interés, estructura de capital y administración, clasificación contable, y jurisdicciones donde operarán los vinculados); la metodología propuesta ilustrada con los tres últimos ejercicios fiscales (o cifras estimadas cuando no exista información histórica); y la información adicional que exija el reglamento o que el contribuyente considere pertinente. Los acuerdos se aplican sin perjuicio de las facultades de fiscalización de la DIAN.</p>' +
+
+          '<h3 class="rep">F.9 Régimen sancionatorio (Art. 260-11 E.T.)</h3>' +
+          '<p>Las sanciones se calculan sobre el valor de las operaciones o, cuando no es posible establecer esa base, sobre los ingresos netos o el patrimonio bruto reportados en la declaración de renta, y en todos los casos tienen un tope expresado en UVT. Para la <b>documentación comprobatoria</b>: extemporaneidad, 0,05 % del valor de las operaciones documentables si se presenta dentro de los 5 días hábiles siguientes al vencimiento (tope 417 UVT), o 0,2 % por cada mes o fracción de retardo con posterioridad (tope 1.667 UVT por mes y 20.000 UVT en total); inconsistencias, 1 % del valor de la operación con información inconsistente (tope 5.000 UVT); no presentarla, 4 % del valor de las operaciones no documentadas (tope 25.000 UVT) o 6 % si involucran jurisdicciones no cooperantes (tope 30.000 UVT), con desconocimiento adicional de los costos y deducciones respectivos; omisión de información, 2 % de la suma omitida (tope 5.000 UVT, o 1.400 UVT si las operaciones documentables del período son inferiores a 80.000 UVT) o 4 % si la omisión corresponde a operaciones con jurisdicciones no cooperantes (tope 10.000 UVT); y corrección voluntaria de la documentación, 1 % del valor corregido (tope 5.000 UVT), o 4 % (tope 20.000 UVT) si la corrección ocurre después de notificado el requerimiento especial o el pliego de cargos. Para la <b>declaración informativa</b>: extemporaneidad, 0,02 % del valor de las operaciones si se presenta dentro de los 5 días hábiles siguientes al vencimiento (tope 313 UVT), o 0,1 % por cada mes o fracción de retardo con posterioridad (tope 1.250 UVT por mes y 15.000 UVT en total); inconsistencias, 0,6 % del valor de la operación inconsistente (tope 2.280 UVT); omisión de información, 1,3 % de la suma omitida (tope 3.000 UVT, o 1.000 UVT si las operaciones del período son inferiores a 80.000 UVT) o 2,6 % si involucra jurisdicciones no cooperantes (tope 6.000 UVT); y no presentarla, previo emplazamiento, 4 % del valor total de las operaciones del período (tope 20.000 UVT), sin que el contribuyente pueda invocarla luego como prueba a su favor. Las sanciones por inconsistencias, omisión y corrección se reducen al 50 % si el contribuyente subsana voluntariamente antes de la notificación del pliego de cargos, del requerimiento especial o de la liquidación oficial de revisión, según el caso. En operaciones de financiamiento la base de la sanción es el monto del principal, no el de los intereses pactados. La utilización de datos falsos, equivocados, incompletos o desfigurados de la que se derive un menor impuesto o un mayor saldo a favor constituye inexactitud sancionable conforme a los artículos 647-1 y 648 del Estatuto Tributario.</p>' +
+
+          '<h3 class="rep">F.10 Decreto 2120 de 2017 y el rango de plena competencia (rango intercuartil)</h3>' +
+          '<p>El Decreto 2120 de 2017 sustituyó la reglamentación de precios de transferencia del Decreto 3030 de 2013 e incorporó el estándar BEPS Acción 13 (Informe Local, Informe Maestro y, cuando aplica, Informe País por País). Dado que la aplicación de cualquiera de los métodos del artículo 260-3 puede arrojar un conjunto de precios o márgenes con un grado de confiabilidad similar —diferencias que a menudo obedecen a niveles de eficiencia productiva o administrativa difíciles de cuantificar—, cuando existen dos o más operaciones comparables el resultado se ajusta mediante métodos estadísticos, en particular el <b>rango intercuartil</b>: se ordenan los indicadores de las comparables y se eliminan el 25 % de los valores más bajos y el 25 % de los valores más altos, conservando el 50 % central de la muestra. Si el indicador de la parte examinada se ubica dentro de ese rango, la operación se considera pactada a valores de mercado; si queda por fuera, se ajusta a la mediana del rango, sin que dicho ajuste, tratándose de un egreso, pueda exceder el monto del costo o la deducción declarada (Concepto DIAN 1212 de 2024).</p>';
       }
 
       var _renderFinalIdx = renderReport;
