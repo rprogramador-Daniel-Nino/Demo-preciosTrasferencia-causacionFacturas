@@ -2010,6 +2010,8 @@
         });
         calc();
         if ($('compalert')) $('compalert').innerHTML = '<div class="alert-green">✓ ' + n + ' comparable(s) importada(s) del Excel (mapeo automático; descripciones al Anexo B).</div>';
+        window.PT_ULTIMO_IMPORT_COMPS = list;
+        if (typeof curarCandidatosConIA === 'function') curarCandidatosConIA(list);
       };
       if (nm.endsWith('.xlsx') || nm.endsWith('.xls')) {
         readExcelRows(file).then(rows => done(smartMapRows(rows))).catch(e => { if ($('compalert')) $('compalert').innerHTML = '<div class="alert-amber">No se pudo leer el Excel (' + e.message + ').</div>'; });
@@ -3775,7 +3777,88 @@ ${textoPrompt}`;
       }
     }
 
+    /* ================= CURACIÓN DE CANDIDATAS POR IA (Business Description real de Capital IQ) =================
+       Al importar el Excel de Capital IQ, se compara la actividad detectada (getActividadEspecifica().resumen)
+       contra el Business Description real de cada candidata (DESCS/o.desc), en lotes, vía /api/gemini.
+       Resultado en window.AI_MATCH_COMPS = { porId: { [id]: {coincide, motivo} }, fecha, actividadUsada, fuenteExcel }.
+       Se integra en moScore/moActMatch (más abajo). Si Gemini falla o no hay actividad, el motor sigue
+       funcionando con la heurística de texto existente — nunca bloquea el flujo. */
+    window.PT_CURANDO_IA = false;
+    function _ptChunk(arr, size) {
+      const out = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    }
+    async function _ptPool(items, worker, limite) {
+      const resultados = new Array(items.length);
+      let idx = 0;
+      async function siguiente() {
+        while (idx < items.length) {
+          const mio = idx++;
+          resultados[mio] = await worker(items[mio], mio);
+        }
+      }
+      const corredores = Array.from({ length: Math.min(limite, items.length) }, siguiente);
+      await Promise.all(corredores);
+      return resultados;
+    }
+    function _moIaInfo(texto) { const el = $('mo_ia_status'); if (el) el.textContent = texto || ''; }
+    async function curarCandidatosConIA(list) {
+      window.PT_ULTIMO_IMPORT_COMPS = list;
+      const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+      if (!act || act.estado !== 'listo' || !act.resumen) { _moIaInfo(''); return; }
+      const evaluables = (list || []).filter(o => o && o.id && String(o.id).trim() && o.desc && String(o.desc).trim());
+      if (!evaluables.length) { _moIaInfo('ℹ Ninguna candidata importada trae ID IQ + Business Description para curar con IA; el motor usará el emparejamiento por palabras clave.'); return; }
+      window.PT_CURANDO_IA = true;
+      window.AI_MATCH_COMPS = { porId: {}, fecha: new Date().toISOString(), actividadUsada: act.resumen, fuenteExcel: (window.CIQ_FUENTE && CIQ_FUENTE.archivo) || '' };
+      const lotes = _ptChunk(evaluables, 60);
+      let evaluadas = 0, fallidas = 0;
+      _moIaInfo('🤖 IA curando candidatas… (0 de ' + evaluables.length + ' evaluadas)');
+      await _ptPool(lotes, async (lote) => {
+        const candidatos = lote.map(o => ({ id: String(o.id).trim(), name: o.name || '', desc: String(o.desc || '').slice(0, 300), country: o.country || o.pais || '' }));
+        const prompt =
+          'Eres un experto en precios de transferencia que revisa comparables de Capital IQ.\n\n' +
+          'La empresa examinada tiene esta actividad económica real:\n"' + act.resumen + '"\n\n' +
+          'A continuación hay una lista de empresas candidatas con su Business Description real de Capital IQ (en inglés). ' +
+          'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, mismos productos/servicios o función equivalente), ' +
+          'sin importar el idioma en que esté escrita la descripción. No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
+          'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
+          'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
+          '{"resultados":[{"id":"","coincide":true,"motivo":""}]}\n' +
+          'Incluye una entrada por cada ID recibido, en el mismo orden.';
+        try {
+          const res = await fetch('/api/gemini', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          const data = await res.json();
+          const cand = data && data.candidates && data.candidates[0];
+          const raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('') : '';
+          if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
+          const j = extraerJSONDeRespuestaIA(raw);
+          (j.resultados || []).forEach(r => {
+            if (!r || !r.id) return;
+            window.AI_MATCH_COMPS.porId[String(r.id).trim()] = { coincide: !!r.coincide, motivo: r.motivo || '' };
+          });
+          evaluadas += lote.length;
+        } catch (e) {
+          fallidas += lote.length;
+          console.error('[curarCandidatosConIA] lote falló:', e);
+        }
+        _moIaInfo('🤖 IA curando candidatas… (' + (evaluadas + fallidas) + ' de ' + evaluables.length + ' procesadas)');
+      }, 3);
+      window.PT_CURANDO_IA = false;
+      const nMatch = Object.values(AI_MATCH_COMPS.porId).filter(v => v.coincide).length;
+      _moIaInfo(fallidas
+        ? ('✓ ' + nMatch + ' de ' + evaluables.length + ' candidatas coinciden con la actividad · ⚠ ' + fallidas + ' no se pudieron evaluar (se dejan pasar sin descartarlas por actividad)')
+        : ('✓ ' + nMatch + ' de ' + evaluables.length + ' candidatas coinciden con la actividad'));
+      saveActive();
+    }
     function motorEjecutar(silencioso) {
+      if (window.PT_CURANDO_IA) {
+        if (!silencioso) moToast('IA aún analizando candidatas por actividad, intente de nuevo en unos segundos', 'amber');
+        return;
+      }
       const cfg = moCfg(); const rows = moRows();
       if (rows.length > 150 && !silencioso) moToast('Puntuando ' + rows.length + ' candidatas…', 'amber');
       if (!rows.length) {
