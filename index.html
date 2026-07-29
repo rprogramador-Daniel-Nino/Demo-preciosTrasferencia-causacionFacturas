@@ -3528,27 +3528,33 @@ ${textoTotal}`;
       _moCache = { sig, rows: out }; return out;
     }
     function moCfg() { return { n: Math.max(4, Math.min(30, num($('mo_n').value) || 12)), perd: $('mo_perd').value, holding: ($('mo_holding') ? $('mo_holding').value : 'excluir'), saldoneg: ($('mo_saldoneg') ? $('mo_saldoneg').value : 'excluir'), geo: $('mo_geo').value, act: $('mo_act').value, just: $('mo_just').value.trim() }; }
-    /* Coincidencia del candidato con la actividad específica extraída del estudio
-       del año anterior (setActividadEspecifica): palabras clave y SIC contra la
-       descripción/SIC del candidato.
-       Devuelve un objeto {factor, hits, posibles, hayAct}.
-       Sin actividad específica cargada → hayAct=false, pesos originales.
-       CON actividad cargada:
-         - hits=0 → moScore EXCLUYE al candidato (no coincide con la especialidad)
-         - hits>0 → fK se pondera al 40% del puntaje total (filtro por nicho). */
-    function moActMatch(o, act) {
-      if (!act) return { factor: 1, hits: 0, posibles: 0, hayAct: false, tieneDesc: false };
+    /* Coincidencia del candidato con la actividad específica.
+       Devuelve un objeto {factor, hits, posibles, hayAct, tieneDesc}.
+       Si aiRec viene de la curación por IA (curarCandidatosConIA) con coincide:true, se usa
+       tal cual (factor máximo) porque la IA ya leyó la Business Description real y decidió
+       que sí es la misma actividad — no hace falta recalcular por palabras clave.
+       Sin aiRec (candidata no evaluada por IA: agregada a mano, sin ID/descripción, Excel no
+       importado, o el lote de su ID falló) se usa la heurística de texto de siempre, ahora
+       por solapamiento de palabras significativas entre la frase de actividad (español) y su
+       traducción aproximada al inglés (ptTraducirKeyword) contra el nombre/descripción/SIC. */
+    var RX_DIACRITICOS = new RegExp('[' + String.fromCharCode(768) + '-' + String.fromCharCode(879) + ']', 'g');
+    function _ptTokensSignificativos(frase) {
+      return String(frase || '').toLowerCase()
+        .normalize('NFD').replace(RX_DIACRITICOS, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(function (t) { return t.length >= 4; });
+    }
+    function moActMatch(o, act, aiRec) {
+      if (aiRec && aiRec.coincide === true) return { factor: 1, hits: 4, posibles: 4, hayAct: true, tieneDesc: true };
+      if (!act || !act.resumen) return { factor: 1, hits: 0, posibles: 0, hayAct: false, tieneDesc: false };
       const descText = (DESCS[o.name] || '');
       const base = (o.name + ' ' + descText + ' ' + (o.sic || '')).toLowerCase();
+      const fraseIngles = (typeof ptTraducirKeyword === 'function') ? ptTraducirKeyword(act.resumen) : act.resumen;
+      const tokens = _ptTokensSignificativos(fraseIngles).concat(_ptTokensSignificativos(act.resumen));
       let hits = 0;
-      const kws = [].concat(act.keywords || [], act.productos || []).filter(Boolean);
-      kws.forEach(k => { if (base.indexOf(String(k).toLowerCase()) >= 0) hits++; });
-      const sics = (act.sic || []).filter(Boolean);
-      sics.forEach(c => {
-        if ((o.sic || '').indexOf(String(c)) >= 0) hits += 2;
-        else if ((o.sic || '').indexOf(String(c).slice(0, 3)) >= 0) hits += 1;
-      });
-      const posibles = kws.length + sics.length;
+      tokens.forEach(function (t) { if (base.indexOf(t) >= 0) hits++; });
+      const posibles = tokens.length;
       return { factor: Math.max(0.15, Math.min(1, hits / 4)), hits: hits, posibles: posibles, hayAct: true, tieneDesc: !!descText.trim() };
     }
     function maxParticipacion(txt) {
@@ -3568,8 +3574,20 @@ ${textoTotal}`;
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
       if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
+      /* ── Curación de candidatas por IA (Business Description real de Capital IQ) ──
+         Solo aplica a filas con ID IQ (vinieron del Excel de Capital IQ); las agregadas a
+         mano o de otras fuentes (SuperSociedades, continuidad) no tienen ID y siguen de
+         largo hacia la heurística de texto de moActMatch, sin verse afectadas. */
+      const descTextIA = DESCS[o.name] || '';
+      const aiRec = (window.AI_MATCH_COMPS && o.id) ? AI_MATCH_COMPS.porId[String(o.id).trim()] : null;
+      if (o.id && window.AI_MATCH_COMPS && !descTextIA.trim()) {
+        return { out: 'Sin descripción de negocio de Capital IQ para verificar la actividad (ID ' + o.id + ')' };
+      }
+      if (aiRec && aiRec.coincide === false) {
+        return { out: 'Rechazada por IA: la descripción de negocio no coincide con la actividad (' + (aiRec.motivo || 'sin motivo detallado') + ')' };
+      }
       /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
-      const actM = moActMatch(o, act);
+      const actM = moActMatch(o, act, aiRec);
       /* Exclusión por especialidad: solo en modo estricto si la candidata cuenta con descripción/SIC y 0 coincidencia.
          En modo estándar/amplio, 0 coincidencias asigna un puntaje bajo en el factor de especialidad (peso del 40%)
          para priorizar las que sí coinciden, sin descartar masivamente cuando faltan descripciones detalladas. */
@@ -3579,7 +3597,7 @@ ${textoTotal}`;
       }
       const fA = o.perfil === 'SERVICIO' ? 1 : (o.perfil === 'MIXTO' ? 0.6 : 0.35);
       const fK = actM.factor;
-      const kTag = (actM.hayAct && fK >= 0.5) ? 'coincide con la actividad específica (' + actM.hits + ' coincidencias)' : (actM.hayAct ? 'coincidencia parcial (' + actM.hits + ')' : '');
+      const kTag = (aiRec && aiRec.coincide) ? 'coincidencia de actividad confirmada por IA (' + (aiRec.motivo || 'Business Description de Capital IQ') + ')' : ((actM.hayAct && fK >= 0.5) ? 'coincide con la actividad específica (' + actM.hits + ' coincidencias)' : (actM.hayAct ? 'coincidencia parcial (' + actM.hits + ')' : ''));
       let fG = 1, gTag = ''; if (cfg.geo !== 'ninguna') { const r = moRegion(o.pais); fG = r === cfg.geo ? 1 : (r === 'OTRA' ? 0.5 : 0.65); if (r === cfg.geo) gTag = 'región prioritaria (' + (o.pais || '') + ')'; }
       let fT = 0.5, tTag = ''; if (sTP && o.s) { const d = Math.abs(Math.log10(o.s / sTP)); fT = 1 / (1 + d); if (d < 1) tTag = 'tamaño próximo'; }
       let fR; if (o.perdida) { fR = cfg.perd === 'preferir' ? 1 : 0.4; } else { fR = cfg.perd === 'preferir' ? 0.4 : Math.max(0, 1 - Math.min(1, Math.abs((o.pli ?? 0) - medPool) / 0.5)); }
