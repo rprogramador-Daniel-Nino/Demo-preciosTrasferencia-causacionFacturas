@@ -3920,6 +3920,7 @@ ${textoPrompt}`;
          motor, sin depender de que las filas descartadas sigan visibles. */
       MOTOR.universo = rows;
       try { motorRenderTabla(); } catch (e) { }
+      try { ptFactores260_4(); } catch (e) { }
       saveActive(); calc(); motorRefreshUI();
       const excAct = act ? ev.filter(x => x.r.out && x.r.out.indexOf('actividad específica') >= 0).length : 0;
       if (!silencioso) moToast('Motor: TOP ' + top.length + ' seleccionadas · ' + reserva.length + ' en reserva · ' + ev.filter(x => x.r.out).length + ' excluidas por criterio' + (excAct ? ' (de las cuales ' + excAct + ' por no coincidir con la especialidad)' : ''), 'green');
@@ -9288,9 +9289,9 @@ se guía la descarga manual
       window.PT_TRM = window.PT_TRM || 4200;
 
       window.ptFactores260_4 = function () {
-        var C = window.PT_CRIBA;
-        if (!C) return null;
+        if (!window.MOTOR || !MOTOR.activo) return null;
         var K = window.PT_CRITERIOS;
+        var rows = moRows();
         var ingPE = ingresoParteExaminada();
         var ingPE_USDmm = ingPE ? (ingPE / window.PT_TRM) / 1e6 : null;
 
@@ -9299,80 +9300,56 @@ se guía la descarga manual
           sinBalance: 0, evaluadas: 0
         };
 
-        C.filas.forEach(function (f) {
-          if (f.estado !== 'Aceptada') return;
+        rows.forEach(function (o) {
+          var k = nameKey(o.name);
+          if (MOTOR.sel[k] !== true) return;
           stats.evaluadas++;
           var añadir = [];
 
           /* d.1 · mercado geográfico (Art. 260-4, circunstancias económicas) */
-          var pais = String(f.pais || '').toLowerCase();
+          var pais = String(o.pais || '').toLowerCase();
           var enRegion = K.regiones.some(function (r) { return pais.indexOf(r) >= 0; });
-          f.geoOK = (K.geografia === 'global') ? true : (K.geografia === 'region' ? enRegion : /colombia/.test(pais));
-          if (!enRegion) stats.geoFuera++;          /* se cuenta siempre, sea cual sea el criterio */
-          if (!f.geoOK) {
-            f.estado = 'Rechazada';
-            añadir.push('Opera en un mercado geográfico distinto del exigido por el criterio adoptado (' + escH(f.pais || 'país no reportado') + ').');
-          }
+          if (!enRegion) stats.geoFuera++;
           if (K.geografia === 'global' && !enRegion) {
-            añadir.push('Mercado geográfico: ' + (f.pais || 'no reportado') + ', distinto del de la parte examinada. Se admite por inexistencia de comparables locales suficientes; la justificación consta en el apartado de criterios.');
+            añadir.push('Mercado geográfico: ' + (o.pais || 'no reportado') + ', distinto del de la parte examinada. Se admite por inexistencia de comparables locales suficientes; la justificación consta en el apartado de criterios.');
           }
 
           /* d.2 · escala */
-          if (ingPE_USDmm && f.s) {
-            var razon = f.s / ingPE_USDmm;
-            f.escalaVeces = razon;
+          if (ingPE_USDmm && o.s) {
+            var razon = o.s / ingPE_USDmm;
             if (razon > K.tamanoFactor || razon < (1 / K.tamanoFactor)) {
               stats.tamanoFuera++;
-              if (K.tamanoModo === 'limitar') { f.estado = 'Rechazada'; añadir.push('Escala incomparable: sus ingresos son ' + razon.toFixed(0) + ' veces los de la parte examinada, por encima del factor admitido de ' + K.tamanoFactor + '.'); }
-              else añadir.push('Diferencia de escala: sus ingresos equivalen a ' + (razon >= 1 ? razon.toFixed(0) + ' veces' : '1/' + (1 / razon).toFixed(0)) + ' los de la parte examinada. Se conserva porque el indicador aplicado es un margen —una razón, no un valor absoluto—, dejando constancia de la diferencia.');
+              añadir.push('Diferencia de escala: sus ingresos equivalen a ' + (razon >= 1 ? razon.toFixed(0) + ' veces' : '1/' + (1 / razon).toFixed(0)) + ' los de la parte examinada. Se conserva porque el indicador aplicado es un margen —una razón, no un valor absoluto—, dejando constancia de la diferencia.');
             }
           }
 
           /* d.3 · resultados negativos */
-          if (f.s && f.op !== null && f.op < 0) {
+          if (o.perdida) {
             stats.perdida++;
-            f.perdida = true;
-            if (K.perdidas === 'excluir') { f.estado = 'Rechazada'; añadir.push('Presenta pérdida operacional en el período; conforme al criterio adoptado, las compañías con pérdida se excluyen del conjunto.'); }
-            else if (K.perdidas === 'marcar') añadir.push('Presenta pérdida operacional en el período (margen ' + ((f.op / f.s) * 100).toFixed(2) + ' %). Las Directrices de la OCDE no imponen su exclusión automática: se conserva tras verificar que la pérdida no obedece a circunstancias extraordinarias ajenas al giro ordinario. Esta verificación debe documentarse.');
+            añadir.push('Presenta pérdida operacional en el período. Las Directrices de la OCDE no imponen su exclusión automática; se conserva conforme al criterio adoptado, dejando constancia.');
           }
 
           /* a/c · datos de balance para los ajustes de capital de trabajo */
-          if (f.ar === null || f.ap === null) {
-            stats.sinBalance++;
-            f.sinBalance = true;
-          }
+          if (o.ar === null || o.ap === null) stats.sinBalance++;
 
           /* independencia sin dato */
-          if (f.socio === null || f.socio === undefined) {
+          var socio = maxParticipacion(o.holders);
+          if (socio === null || socio === undefined) {
             stats.sinDatoIndep++;
-            if (K.independenciaSinDato === 'excluir') { f.estado = 'Rechazada'; añadir.push('La fuente no reporta la composición accionaria: no es posible acreditar su independencia.'); }
-            else añadir.push('La fuente no reporta un accionista con participación de control; se admite su independencia sobre esa base, sin verificación adicional.');
+            añadir.push('La fuente no reporta un accionista con participación de control; se admite su independencia sobre esa base, sin verificación adicional.');
           }
 
-          if (añadir.length) f.motivo = (f.motivo || '') + ' ' + añadir.join(' ');
+          if (añadir.length) MOTOR.motivo[k] = (MOTOR.motivo[k] || '') + ' ' + añadir.join(' ');
         });
 
-        C.aceptadas = C.filas.filter(function (f) { return f.estado === 'Aceptada'; })
-          .sort(function (a, b) { return b.especificidad - a.especificidad; });
-        C.factores = stats;
-
-        /* la matriz del Anexo D se actualiza con los motivos enriquecidos */
         try {
-          MATRIX = C.filas.map(function (f) {
-            return { name: f.name, sic: f.sic, country: f.pais, rev: f.s, status: f.estado, motivo: f.motivo };
+          MATRIX = rows.map(function (o) {
+            var k = nameKey(o.name);
+            return { name: o.name, sic: o.sic, country: o.pais, rev: o.s, status: (MOTOR.score[k] > 0) ? 'Aceptada' : 'Rechazada', motivo: MOTOR.motivo[k] || '' };
           });
         } catch (e) { }
 
         return stats;
-      };
-
-      /* Se encadena a la depuración funcional: siempre se aplican los factores */
-      var _cribaPrev = window.ptCribarUniverso;
-      window.ptCribarUniverso = function (opts) {
-        var r = _cribaPrev(opts);
-        if (r) { try { ptFactores260_4(); } catch (e) { console.warn('[PARCHE] factores 260-4:', e); } }
-        try { if (typeof ptPintarCriba === 'function') ptPintarCriba(); } catch (e) { }
-        return window.PT_CRIBA;
       };
 
       /* ───────────────────────────────────────────────────────────────────────
@@ -9380,8 +9357,8 @@ se guía la descarga manual
          Aparece SIEMPRE, se haya o no ejecutado la depuración.
          ─────────────────────────────────────────────────────────────────────── */
       window.ptTestSuficienciaHTML = function () {
-        var C = window.PT_CRIBA, K = window.PT_CRITERIOS, S = window.PT_SELECCION;
-        var F = C && C.factores;
+        var C = (window.MOTOR && MOTOR.activo) ? true : false, K = window.PT_CRITERIOS, S = null;
+        var F = C ? (function () { try { return ptFactores260_4() || {}; } catch (e) { return {}; } })() : null;
         var fila = function (factor, base, estado, detalle) {
           var col = estado === 'ok' ? '#1E8449' : estado === 'parcial' ? '#B7950B' : '#C0392B';
           var txt = estado === 'ok' ? 'Evaluado' : estado === 'parcial' ? 'Evaluado con limitación' : 'No evaluado';
