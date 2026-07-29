@@ -1199,96 +1199,6 @@
             documentación comprobatoria
             del año anterior.</div>
 
-          <!-- Sub-panel embebido: Perfil de Actividad de la Empresa -->
-          <div style="border:1px solid #E2E8F0;border-radius:12px;background:#FAFAFE;padding:16px;margin-top:10px">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-              <h4 style="margin:0;font-size:14px;font-weight:700;color:#1E293B;display:flex;align-items:center;gap:6px">
-                🧠 Perfil de actividad de la empresa <span
-                  style="font-size:11.5px;font-weight:normal;color:#64748B">(paso clave antes de buscar
-                  comparables)</span>
-              </h4>
-              <span class="card-status-badge pending" id="badge_actividad">🔴 Pendiente</span>
-              <span class="eyebrow" style="margin-left:auto">IA · firma de actividad</span>
-            </div>
-
-            <div class="tip" style="border-left-color:#6B5BD1;background:#F5F3FF;margin-bottom:12px">
-              <b>¿Para qué sirve esto?</b> El sistema necesita saber exactamente en qué trabaja su empresa
-              (no el objeto social genérico, sino la actividad real: qué vende, a quién, cómo) para buscar
-              empresas comparables que hagan lo mismo. Gemini lee el estudio del año anterior y extrae esa
-              información automáticamente. <b>Sin este paso, las comparables pueden ser irrelevantes.</b>
-            </div>
-
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-              <button id="btnExtraerActividad" onclick="extractPriorActivityWithGemini()" style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;
-                   background:#C0473B;color:#fff;border:none;cursor:pointer;
-                   display:inline-flex;align-items:center;gap:7px;transition:background .2s">
-                🤖 Analizar empresa con IA
-              </button>
-              <div id="actmsg_wrap" style="display:flex;align-items:center;gap:8px">
-                <span id="actmsg_icon" style="font-size:18px">🔴</span>
-                <span id="actmsg" style="font-size:12.5px;color:#7a241c;font-weight:600">
-                  Pendiente — cargue primero el estudio del año anterior (arriba) y luego pulse «Analizar empresa con
-                  IA»
-                </span>
-              </div>
-            </div>
-
-            <div
-              style="background:#FFF5F5;border:1px solid #FECACA;border-radius:9px;padding:10px 14px;font-size:12px;color:#7f1d1d;margin-bottom:12px"
-              id="act_steps_hint">
-              <b>Pasos:</b>
-              <span style="margin:0 6px">①</span> Cargue el informe del año anterior (arriba)
-              <span style="margin:0 6px">→</span>
-              <span style="margin:0 6px">②</span> Pulse <b>«Analizar empresa con IA»</b>
-              <span style="margin:0 6px">→</span>
-              <span style="margin:0 6px">③</span> Revise y ajuste los campos generados
-              <span style="margin:0 6px">→</span>
-              <span style="margin:0 6px">④</span> Use las palabras clave para buscar comparables
-            </div>
-
-            <input type="hidden" id="actividad_json" value="">
-            <div id="activity_spec_card" style="display:none;margin-top:12px">
-              <div
-                style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:9px;padding:10px 14px;font-size:12px;color:#14532d;margin-bottom:12px">
-                ✅ <b>Actividad extraída correctamente.</b> Puede editar los campos si Gemini no fue preciso. Los
-                cambios se guardan automáticamente y se usan en la búsqueda de comparables.
-              </div>
-              <div class="row2">
-                <label class="f"><span class="l">¿Qué hace la empresa? (actividad específica real)</span>
-                  <textarea class="i" id="act_resumen" rows="3" oninput="actividadEditada()"
-                    placeholder="Ej: Distribución mayorista de fungicidas e insecticidas importados del vinculado en EE.UU., bajo modelo de compra-reventa con riesgo de inventario completo, para el sector agrícola colombiano."></textarea>
-                </label>
-                <label class="f"><span class="l">Perfil funcional (funciones / activos / riesgos asumidos)</span>
-                  <textarea class="i" id="act_perfil" rows="3" oninput="actividadEditada()"
-                    placeholder="Ej: Funciones: compra, almacenamiento, distribución. Activos: bodega, flota. Riesgos: inventario, crédito, tipo de cambio."></textarea>
-                </label>
-              </div>
-              <div class="row2">
-                <label class="f"><span class="l">Palabras clave para buscar comparables en Capital IQ / Orbis (puedes
-                    escribir en español — se traducen automáticamente)</span>
-                  <div style="font-size:11px;color:#64748B;margin:2px 0 6px">✨ <b>Traducción automática activada:</b>
-                    Escribe palabras en español (ej: <i>"desarrollo de videojuegos"</i> o <i>"distribuidor
-                      mayorista"</i>) y al presionar Enter el sistema las traducirá inmediatamente al inglés para
-                    Capital IQ / Orbis.
-                  </div>
-                  <div class="actchips" id="act_keywords_chips"></div>
-                  <input class="i" id="act_keyword_new"
-                    placeholder="ej: desarrollo de videojuegos, distribuidor agroquímico…"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('keywords', this.value); this.value='';}">
-                </label>
-                <label class="f"><span class="l">Códigos SIC sugeridos (pulse Enter para agregar)</span>
-                  <div class="actchips" id="act_sic_chips"></div>
-                  <input class="i" id="act_sic_new" placeholder="ej: 5169…"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();actividadAgregarChip('sic', this.value); this.value='';}">
-                </label>
-              </div>
-              <div class="hint" id="act_justificacion"
-                style="background:#F8FAFC;border:1px solid var(--hair);border-radius:8px;padding:8px 12px;margin-top:4px">
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
 
       <div class="card full">
@@ -1540,9 +1450,26 @@
             class="eyebrow" id="ccount" style="margin-left:auto">0 · incluidas 0</span>
         </div>
         <div class="bd">
-          <div class="tip">Las comparables son las empresas contra las que se mide el rango de mercado. Defina primero
-            los filtros del motor, importe el Excel de Capital IQ y luego ejecute la selección para que el sistema
-            traiga directamente las mejores candidatas del universo importado.</div>
+          <div class="tip">Las comparables son las empresas contra las que se mide el rango de mercado. El sistema detecta
+            la actividad de la empresa automáticamente al cargar el informe del año anterior; defina los filtros del
+            motor, importe el Excel de Capital IQ y luego ejecute la selección para que la IA cure primero qué
+            candidatas coinciden con esa actividad y el motor traiga directamente las mejores del universo curado.</div>
+
+          <!-- ══════ ACTIVIDAD DE LA EMPRESA (automática, Gemini) ══════ -->
+          <div id="act_status_box" style="border:1px solid #E2E8F0;border-radius:10px;background:#FAFAFE;padding:12px 14px;margin:0 0 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <input type="hidden" id="actividad_json" value="">
+            <span id="act_status_icon" style="font-size:16px">🔴</span>
+            <span id="act_status_text" style="font-size:12.5px;font-weight:600;color:#7a241c;flex:1;min-width:220px">Suba el informe del año anterior (tarjeta de arriba) para que el sistema detecte automáticamente la actividad de la empresa.</span>
+            <button type="button" id="act_btn_edit" onclick="actEditarToggle()" style="display:none;padding:5px 9px;border-radius:7px;border:1px solid #CBD5E1;background:#fff;cursor:pointer;font-size:13px" title="Editar la actividad detectada">✏️</button>
+            <button type="button" id="act_btn_retry" onclick="extractPriorActivityWithGemini()" style="display:none;padding:6px 12px;border-radius:7px;border:none;background:#C0473B;color:#fff;font-weight:700;font-size:12px;cursor:pointer">↻ Reintentar análisis</button>
+            <div id="act_edit_box" style="display:none;width:100%;margin-top:6px">
+              <input class="i" id="act_edit_input" style="width:100%" type="text">
+              <div style="margin-top:6px;display:flex;gap:8px">
+                <button type="button" class="btn solid" onclick="actGuardarEdicion()">Guardar</button>
+                <button type="button" class="btn ghost" onclick="actEditarToggle()">Cancelar</button>
+              </div>
+            </div>
+          </div>
 
           <!-- ══════ MOTOR DE SELECCIÓN (paso 1: filtros, antes de importar) ══════ -->
           <div
@@ -1553,6 +1480,7 @@
                 geografía 15 ·
                 rentabilidad 15 · datos 10</span>
             </div>
+            <div id="mo_ia_status" style="font-size:11.5px;color:var(--muted);margin-top:6px"></div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
               <label class="f"><span class="l">N objetivo</span><input class="i" id="mo_n" type="number" value="12"
                   min="4" max="30" title="Tope 30: por encima la muestra pierde homogeneidad funcional"></label>
@@ -2082,6 +2010,8 @@
         });
         calc();
         if ($('compalert')) $('compalert').innerHTML = '<div class="alert-green">✓ ' + n + ' comparable(s) importada(s) del Excel (mapeo automático; descripciones al Anexo B).</div>';
+        window.PT_ULTIMO_IMPORT_COMPS = list;
+        if (typeof curarCandidatosConIA === 'function') curarCandidatosConIA(list);
       };
       if (nm.endsWith('.xlsx') || nm.endsWith('.xls')) {
         readExcelRows(file).then(rows => done(smartMapRows(rows))).catch(e => { if ($('compalert')) $('compalert').innerHTML = '<div class="alert-amber">No se pudo leer el Excel (' + e.message + ').</div>'; });
@@ -2101,38 +2031,39 @@
           const s = Array.isArray(data) ? data[0] : data;
           if (s) {
             window.PT_ANTERIOR = { texto: JSON.stringify(s), comparables: s.comps || [], fuente: file.name };
-            histMsg('✓ Informe JSON del año anterior cargado («' + file.name + '»).');
-            if (typeof extractPriorActivityWithGemini === 'function' && $('btnExtraerActividad')) {
-              if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
-            }
+            histMsg('✓ Informe JSON del año anterior cargado («' + file.name + '»). Detectando la actividad de la empresa…');
+            if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
           }
         } else if (nm.endsWith('.pdf')) {
           if (typeof readPDF === 'function') {
             readPDF(file, function (txt) {
               window.PT_ANTERIOR = { texto: txt, fuente: file.name };
-              histMsg('✓ Informe PDF del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres).');
-              if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
+              histMsg('✓ Informe PDF del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres). Detectando la actividad de la empresa…');
+              if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
             });
           } else {
             const txt = await file.text();
             window.PT_ANTERIOR = { texto: txt, fuente: file.name };
-            histMsg('✓ Informe del año anterior cargado («' + file.name + '»).');
-            if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
+            histMsg('✓ Informe del año anterior cargado («' + file.name + '»). Detectando la actividad de la empresa…');
+            if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
           }
         } else {
           const txt = await file.text();
           window.PT_ANTERIOR = { texto: txt, fuente: file.name };
-          histMsg('✓ Informe del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres).');
-          if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
+          histMsg('✓ Informe del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres). Detectando la actividad de la empresa…');
+          if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
         }
       } catch (e) {
         histMsg('⚠ Error al leer el informe del año anterior: ' + e.message);
       }
     }
 
-    /* ================= ACTIVIDAD ESPECÍFICA (servicio independiente, Gemini) =================
+    /* ================= ACTIVIDAD ESPECÍFICA (extracción automática, Gemini) =================
        Se guarda en el estudio activo (actividad_json), NO en MOTOR: MOTOR se reinicia por
-       completo en cada motorEjecutar() y perdería el dato. */
+       completo en cada motorEjecutar() y perdería el dato. Modelo simplificado a una sola
+       frase precisa (resumen === keywords[0]); perfil/productos/sic se conservan solo para
+       alimentar el informe (buildClaudeContext, Anexo B/D) y ya no se piden a Gemini ni se
+       muestran en pantalla. */
     function getActividadEspecifica() {
       try { const el = $('actividad_json'); const v = el ? el.value : ''; return v ? JSON.parse(v) : null; } catch (e) { return null; }
     }
@@ -2144,19 +2075,53 @@
     }
     function renderActividadEspecifica() {
       const obj = getActividadEspecifica();
-      const panel = $('activity_spec_card'), msg = $('actmsg');
-      if (!obj) { if (panel) panel.style.display = 'none'; return; }
-      if (panel) panel.style.display = 'block';
-      if ($('act_resumen')) $('act_resumen').value = obj.resumen || '';
-      if ($('act_perfil')) $('act_perfil').value = obj.perfil || '';
-      if ($('act_justificacion')) $('act_justificacion').textContent = obj.justificacion ? ('Justificación de la IA: ' + obj.justificacion) : '';
-      renderActChips('keywords', obj.keywords || []);
-      renderActChips('sic', obj.sic || []);
-      if (msg) msg.textContent = 'Extraído' + (obj.fuente ? (' de «' + obj.fuente + '»') : '') + (obj.fecha ? (' el ' + new Date(obj.fecha).toLocaleString('es-CO')) : '') + '. Edite lo que considere antes de buscar comparables.';
+      const icon = $('act_status_icon'), txt = $('act_status_text'), btnEdit = $('act_btn_edit'), btnRetry = $('act_btn_retry');
+      if (!icon || !txt) return;
+      if (!obj || !obj.estado) {
+        icon.textContent = '🔴'; txt.style.color = '#7a241c';
+        txt.textContent = 'Suba el informe del año anterior (tarjeta de arriba) para que el sistema detecte automáticamente la actividad de la empresa.';
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnRetry) btnRetry.style.display = 'none';
+        return;
+      }
+      if (obj.estado === 'procesando') {
+        icon.textContent = '⏳'; txt.style.color = '#6b5010';
+        txt.textContent = 'Detectando la actividad de la empresa…';
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnRetry) btnRetry.style.display = 'none';
+      } else if (obj.estado === 'error') {
+        icon.textContent = '⚠️'; txt.style.color = '#7a241c';
+        txt.textContent = 'No se pudo detectar la actividad automáticamente' + (obj.errorMsg ? (': ' + obj.errorMsg) : '') + '.';
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnRetry) btnRetry.style.display = 'inline-flex';
+      } else {
+        icon.textContent = '✅'; txt.style.color = '#14532d';
+        txt.innerHTML = '<b>Actividad detectada:</b> «' + escH(obj.resumen || '') + '»';
+        if (btnEdit) btnEdit.style.display = 'inline-flex';
+        if (btnRetry) btnRetry.style.display = 'none';
+      }
     }
-    function renderActChips(campo, lista) {
-      const cont = $(campo === 'sic' ? 'act_sic_chips' : 'act_keywords_chips'); if (!cont) return;
-      cont.innerHTML = (lista || []).map((v, i) => '<span class="actchip' + (campo === 'sic' ? ' sic' : '') + '">' + escH(v) + '<button type="button" onclick="actividadQuitarChip(\'' + campo + '\',' + i + ')" aria-label="Quitar ' + escH(v) + '">×</button></span>').join('');
+    function actEditarToggle() {
+      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '', estado: 'listo' };
+      const box = $('act_edit_box'), input = $('act_edit_input');
+      if (!box || !input) return;
+      const abriendo = box.style.display === 'none';
+      box.style.display = abriendo ? 'block' : 'none';
+      if (abriendo) { input.value = obj.resumen || ''; input.focus(); }
+    }
+    function actGuardarEdicion() {
+      const input = $('act_edit_input'); if (!input) return;
+      const frase = input.value.trim();
+      if (!frase) { moToast('La actividad no puede quedar vacía', 'amber'); return; }
+      const obj = getActividadEspecifica() || { perfil: '', productos: [], sic: [], justificacion: '' };
+      obj.resumen = frase; obj.keywords = [frase]; obj.estado = 'listo';
+      setActividadEspecifica(obj);
+      sicexpDesdeActividad();
+      $('act_edit_box').style.display = 'none';
+      moToast('Actividad actualizada', 'green');
+      if (window.PT_ULTIMO_IMPORT_COMPS && window.PT_ULTIMO_IMPORT_COMPS.length && typeof curarCandidatosConIA === 'function') {
+        curarCandidatosConIA(window.PT_ULTIMO_IMPORT_COMPS);
+      }
     }
     function ptTraducirKeyword(texto) {
       if (!texto) return texto;
@@ -2216,76 +2181,28 @@
     }
     window.ptTraducirKeyword = ptTraducirKeyword;
 
-    function actividadAgregarChip(campo, valor) {
-      valor = (valor || '').trim(); if (!valor) return;
-      if (campo === 'keywords') {
-        valor = ptTraducirKeyword(valor);
-      }
-      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
-      const arr = obj[campo] || [];
-      if (!arr.some(x => x.toLowerCase() === valor.toLowerCase())) arr.push(valor);
-      obj[campo] = arr;
-      setActividadEspecifica(obj);
-      sicexpDesdeActividad();
-    }
-    function actividadQuitarChip(campo, idx) {
-      const obj = getActividadEspecifica(); if (!obj) return;
-      (obj[campo] || []).splice(idx, 1);
-      setActividadEspecifica(obj);
-      sicexpDesdeActividad();
-    }
-    function actividadEditada() {
-      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
-      if ($('act_resumen')) obj.resumen = $('act_resumen').value;
-      if ($('act_perfil')) obj.perfil = $('act_perfil').value;
-      if ($('actividad_json')) $('actividad_json').value = JSON.stringify(obj);
-      saveActive(); calc();
-    }
     function sicexpDesdeActividad() {
       const obj = getActividadEspecifica(); if (!obj || !$('sicexp')) return;
-      const partes = [].concat(obj.sic || [], obj.keywords || []);
-      if (partes.length) { $('sicexp').value = partes.join(', '); calcD(); }
+      if (obj.resumen) { $('sicexp').value = obj.resumen; calcD(); }
     }
 
     async function extractPriorActivityWithGemini() {
-      /* helpers para cambiar el estado visual del botón/mensaje de actividad */
-      function _actEstado(estado, texto) {
-        const btn = $('btnExtraerActividad'), msg = $('actmsg'), icon = $('actmsg_icon');
-        const badge = $('badge_actividad'), hint = $('act_steps_hint');
-        const estados = {
-          pendiente: { bg: '#C0473B', label: '🤖 Analizar empresa con IA', icono: '🔴', color: '#7a241c', badge: '🔴 Pendiente', badgeClass: 'pending' },
-          procesando: { bg: '#B67A0E', label: '⏳ Analizando…', icono: '⏳', color: '#6b5010', badge: '⏳ Procesando', badgeClass: 'partial' },
-          listo: { bg: '#2E8B6B', label: '✅ Volver a analizar', icono: '✅', color: '#14532d', badge: '✅ Listo', badgeClass: 'ok' },
-          error: { bg: '#C0473B', label: '⚠ Reintentar análisis', icono: '⚠️', color: '#7a241c', badge: '⚠ Error', badgeClass: 'pending' }
-        };
-        const e = estados[estado] || estados.pendiente;
-        if (btn) { btn.style.background = e.bg; btn.textContent = e.label; btn.disabled = (estado === 'procesando'); }
-        if (icon) icon.textContent = e.icono;
-        if (msg) { msg.textContent = texto || ''; msg.style.color = e.color; msg.style.fontWeight = (estado === 'listo') ? '500' : '600'; }
-        if (badge) { badge.textContent = e.badge; badge.className = 'card-status-badge ' + e.badgeClass; }
-        if (hint) hint.style.display = (estado === 'listo') ? 'none' : '';
-      }
-
-      const msg = $('actmsg'), btn = $('btnExtraerActividad');
       if (!window.PT_ANTERIOR || !PT_ANTERIOR.texto) {
-        _actEstado('pendiente', '⚠ No hay estudio del año anterior cargado. Cárguelo primero en la tarjeta de arriba y luego pulse «Analizar empresa con IA».');
+        setActividadEspecifica({ estado: 'error', errorMsg: 'no hay estudio del año anterior cargado', resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' });
         return;
       }
-      _actEstado('procesando', 'Analizando el estudio con Gemini, esto puede tardar unos segundos…');
+      setActividadEspecifica({ estado: 'procesando', resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' });
       const texto = PT_ANTERIOR.texto.slice(0, 28000);
       const prompt =
         'Eres un experto en precios de transferencia y búsqueda de comparables en bases de datos como Capital IQ, Orbis y SuperSociedades.\n\n' +
         'Tu única tarea: leer el texto del estudio de precios de transferencia del año anterior que aparece al final, e identificar CON MÁXIMO DETALLE OPERATIVO cuál es la actividad económica REAL Y ESPECIALIZADA que ejerce la Compañía examinada.\n\n' +
         'REGLAS CRÍTICAS — léelas antes de responder:\n' +
         '1. NO uses el objeto social del Certificado de Cámara de Comercio (ese es genérico y jurídico). Busca en el texto del estudio cuál fue la operación real analizada, qué productos o servicios específicos vende o presta, a qué clientes, en qué segmento de mercado, bajo qué modelo de negocio (compra-reventa, agencia, manufactura, servicios, etc.).\n' +
-        '2. "actividad_especifica_corta": máximo 2 oraciones. Debe decir exactamente QUÉ hace la empresa, con QUÉ productos/servicios, para QUIÉN, y bajo QUÉ modelo (ej: "Distribución mayorista de fungicidas e insecticidas técnicos para el sector cafetero y arrocero en Colombia, importados del vinculado en Estados Unidos, bajo modelo de compra-reventa con riesgo de inventario completo"). NUNCA escribas algo tan genérico como "distribución de productos" o "prestación de servicios".\n' +
+        '2. "actividad_especifica_corta": máximo 2 oraciones, en español. Debe decir exactamente QUÉ hace la empresa, con QUÉ productos/servicios, para QUIÉN, y bajo QUÉ modelo (ej: "Distribución mayorista de fungicidas e insecticidas técnicos para el sector cafetero y arrocero en Colombia, importados del vinculado en Estados Unidos, bajo modelo de compra-reventa con riesgo de inventario completo"). NUNCA escribas algo tan genérico como "distribución de productos" o "prestación de servicios". Esta frase se usará TAL CUAL para comparar contra la Business Description (en inglés) de empresas candidatas en Capital IQ, así que debe ser suficientemente descriptiva para que un analista experto entienda de inmediato si otra empresa hace lo mismo.\n' +
         '3. "perfil_funcional_far": describe con precisión qué FUNCIONES ejerce (compra, almacenamiento, distribución, manufactura, servicio posventa…), qué ACTIVOS controla (bodegas, equipos, licencias, marca…) y qué RIESGOS asume (inventario, crédito, tipo de cambio, obsolescencia…).\n' +
-        '4. "productos_servicios_clave": lista los productos o servicios concretos mencionados en el estudio (ej: ["fungicidas sistémicos", "herbicidas de contacto", "insecticidas piretroides"]). Si son servicios, el tipo exacto de servicio.\n' +
-        '5. "keywords_busqueda_comparables": términos en INGLÉS para buscar en Capital IQ / Orbis. Deben ser específicos, no genéricos. Ej: ["agrochemical distributor", "crop protection wholesale", "pesticide distribution Latin America"]. Incluye el sector y la función.\n' +
-        '6. "codigos_sic_sugeridos": al menos 2 códigos SIC de 4 dígitos que correspondan exactamente al negocio. Si es distribución de agroquímicos: 5169. Si es manufactura de plásticos: 3089. Busca el más específico.\n' +
-        '7. "justificacion_perfil": explica en 2-3 oraciones por qué estos keywords y SIC son los correctos para encontrar empresas comparables independientes con el mismo perfil de riesgos y funciones.\n\n' +
+        '4. "justificacion_perfil": explica en 2-3 oraciones por qué esa descripción de actividad es la correcta para encontrar empresas comparables independientes con el mismo perfil de riesgos y funciones.\n\n' +
         'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, sin texto antes ni después:\n' +
-        '{"actividad_especifica_corta":"","perfil_funcional_far":"","productos_servicios_clave":[],"keywords_busqueda_comparables":[],"codigos_sic_sugeridos":[],"justificacion_perfil":""}\n\n' +
+        '{"actividad_especifica_corta":"","perfil_funcional_far":"","justificacion_perfil":""}\n\n' +
         '--- TEXTO DEL ESTUDIO DEL AÑO ANTERIOR ---\n' + texto;
       try {
         const res = await fetch('/api/gemini', {
@@ -2297,16 +2214,19 @@
         const raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('') : '';
         if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
         const j = extraerJSONDeRespuestaIA(raw);
+        const frase = j.actividad_especifica_corta || '';
+        if (!frase) throw new Error('Gemini no devolvió una actividad específica');
         setActividadEspecifica({
-          resumen: j.actividad_especifica_corta || '', perfil: j.perfil_funcional_far || '',
-          productos: j.productos_servicios_clave || [], keywords: j.keywords_busqueda_comparables || [],
-          sic: j.codigos_sic_sugeridos || [], justificacion: j.justificacion_perfil || '',
-          fuente: PT_ANTERIOR.fuente || 'estudio del año anterior', fecha: new Date().toISOString()
+          resumen: frase, perfil: j.perfil_funcional_far || '',
+          productos: [], keywords: [frase], sic: [], justificacion: j.justificacion_perfil || '',
+          fuente: PT_ANTERIOR.fuente || 'estudio del año anterior', fecha: new Date().toISOString(), estado: 'listo'
         });
         sicexpDesdeActividad();
-        _actEstado('listo', '✓ Actividad detectada y aplicada. Revise los campos y ajuste si es necesario antes de buscar comparables.');
+        if (window.PT_ULTIMO_IMPORT_COMPS && window.PT_ULTIMO_IMPORT_COMPS.length && typeof curarCandidatosConIA === 'function') {
+          curarCandidatosConIA(window.PT_ULTIMO_IMPORT_COMPS);
+        }
       } catch (e) {
-        _actEstado('error', '⚠ No se pudo analizar con Gemini: ' + e.message + '. Puede completar los campos manualmente.');
+        setActividadEspecifica({ estado: 'error', errorMsg: e.message, resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' });
       }
     }
 
@@ -2812,7 +2732,8 @@
         useadj: $('useadj') ? $('useadj').checked : true,
         adj: (typeof ADJ !== 'undefined') ? JSON.parse(JSON.stringify(ADJ)) : null,
         motor: (typeof MOTOR !== 'undefined') ? JSON.parse(JSON.stringify(MOTOR)) : null,
-        eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null
+        eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null,
+        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null
       };
       CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) s[id] = el.value; });
       return s;
@@ -2835,6 +2756,19 @@
       window.PT_EEFF_IA = s.eeffIA ? JSON.parse(JSON.stringify(s.eeffIA)) : null;
       const hostIA = document.getElementById('ptEeffIA'); if (hostIA && !s.eeffIA) hostIA.innerHTML = '';
       try { if (typeof ptPintarEeffIA === 'function') ptPintarEeffIA(); } catch (e) { }
+      window.AI_MATCH_COMPS = s.aiMatch ? JSON.parse(JSON.stringify(s.aiMatch)) : null;
+      try {
+        const elIa = $('mo_ia_status');
+        if (elIa) {
+          if (window.AI_MATCH_COMPS && window.AI_MATCH_COMPS.porId) {
+            const valores = Object.values(window.AI_MATCH_COMPS.porId);
+            const nMatch = valores.filter(v => v.coincide).length;
+            elIa.textContent = '✓ ' + nMatch + ' de ' + valores.length + ' candidatas coinciden con la actividad (curación guardada del estudio)';
+          } else {
+            elIa.textContent = '';
+          }
+        }
+      } catch (e) { }
     }
     function saveActive() { if (studies[active]) studies[active] = readForm(); }
     function exportPortfolio() { saveActive(); const blob = new Blob([JSON.stringify(studies, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'portafolio_PT_' + new Date().toISOString().slice(0, 10) + '.json'; a.click(); URL.revokeObjectURL(a.href); }
@@ -3608,27 +3542,33 @@ ${textoTotal}`;
       _moCache = { sig, rows: out }; return out;
     }
     function moCfg() { return { n: Math.max(4, Math.min(30, num($('mo_n').value) || 12)), perd: $('mo_perd').value, holding: ($('mo_holding') ? $('mo_holding').value : 'excluir'), saldoneg: ($('mo_saldoneg') ? $('mo_saldoneg').value : 'excluir'), geo: $('mo_geo').value, act: $('mo_act').value, just: $('mo_just').value.trim() }; }
-    /* Coincidencia del candidato con la actividad específica extraída del estudio
-       del año anterior (setActividadEspecifica): palabras clave y SIC contra la
-       descripción/SIC del candidato.
-       Devuelve un objeto {factor, hits, posibles, hayAct}.
-       Sin actividad específica cargada → hayAct=false, pesos originales.
-       CON actividad cargada:
-         - hits=0 → moScore EXCLUYE al candidato (no coincide con la especialidad)
-         - hits>0 → fK se pondera al 40% del puntaje total (filtro por nicho). */
-    function moActMatch(o, act) {
-      if (!act) return { factor: 1, hits: 0, posibles: 0, hayAct: false, tieneDesc: false };
+    /* Coincidencia del candidato con la actividad específica.
+       Devuelve un objeto {factor, hits, posibles, hayAct, tieneDesc}.
+       Si aiRec viene de la curación por IA (curarCandidatosConIA) con coincide:true, se usa
+       tal cual (factor máximo) porque la IA ya leyó la Business Description real y decidió
+       que sí es la misma actividad — no hace falta recalcular por palabras clave.
+       Sin aiRec (candidata no evaluada por IA: agregada a mano, sin ID/descripción, Excel no
+       importado, o el lote de su ID falló) se usa la heurística de texto de siempre, ahora
+       por solapamiento de palabras significativas entre la frase de actividad (español) y su
+       traducción aproximada al inglés (ptTraducirKeyword) contra el nombre/descripción/SIC. */
+    var RX_DIACRITICOS = new RegExp('[' + String.fromCharCode(768) + '-' + String.fromCharCode(879) + ']', 'g');
+    function _ptTokensSignificativos(frase) {
+      return String(frase || '').toLowerCase()
+        .normalize('NFD').replace(RX_DIACRITICOS, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(function (t) { return t.length >= 4; });
+    }
+    function moActMatch(o, act, aiRec) {
+      if (aiRec && aiRec.coincide === true) return { factor: 1, hits: 4, posibles: 4, hayAct: true, tieneDesc: true };
+      if (!act || !act.resumen) return { factor: 1, hits: 0, posibles: 0, hayAct: false, tieneDesc: false };
       const descText = (DESCS[o.name] || '');
       const base = (o.name + ' ' + descText + ' ' + (o.sic || '')).toLowerCase();
+      const fraseIngles = (typeof ptTraducirKeyword === 'function') ? ptTraducirKeyword(act.resumen) : act.resumen;
+      const tokens = _ptTokensSignificativos(fraseIngles).concat(_ptTokensSignificativos(act.resumen));
       let hits = 0;
-      const kws = [].concat(act.keywords || [], act.productos || []).filter(Boolean);
-      kws.forEach(k => { if (base.indexOf(String(k).toLowerCase()) >= 0) hits++; });
-      const sics = (act.sic || []).filter(Boolean);
-      sics.forEach(c => {
-        if ((o.sic || '').indexOf(String(c)) >= 0) hits += 2;
-        else if ((o.sic || '').indexOf(String(c).slice(0, 3)) >= 0) hits += 1;
-      });
-      const posibles = kws.length + sics.length;
+      tokens.forEach(function (t) { if (base.indexOf(t) >= 0) hits++; });
+      const posibles = tokens.length;
       return { factor: Math.max(0.15, Math.min(1, hits / 4)), hits: hits, posibles: posibles, hayAct: true, tieneDesc: !!descText.trim() };
     }
     function maxParticipacion(txt) {
@@ -3648,8 +3588,20 @@ ${textoTotal}`;
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
       if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
+      /* ── Curación de candidatas por IA (Business Description real de Capital IQ) ──
+         Solo aplica a filas con ID IQ (vinieron del Excel de Capital IQ); las agregadas a
+         mano o de otras fuentes (SuperSociedades, continuidad) no tienen ID y siguen de
+         largo hacia la heurística de texto de moActMatch, sin verse afectadas. */
+      const descTextIA = DESCS[o.name] || '';
+      const aiRec = (window.AI_MATCH_COMPS && o.id) ? AI_MATCH_COMPS.porId[String(o.id).trim()] : null;
+      if (o.id && window.AI_MATCH_COMPS && !descTextIA.trim()) {
+        return { out: 'Sin descripción de negocio de Capital IQ para verificar la actividad (ID ' + o.id + ')' };
+      }
+      if (aiRec && aiRec.coincide === false) {
+        return { out: 'Rechazada por IA: la descripción de negocio no coincide con la actividad (' + (aiRec.motivo || 'sin motivo detallado') + ')' };
+      }
       /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
-      const actM = moActMatch(o, act);
+      const actM = moActMatch(o, act, aiRec);
       /* Exclusión por especialidad: solo en modo estricto si la candidata cuenta con descripción/SIC y 0 coincidencia.
          En modo estándar/amplio, 0 coincidencias asigna un puntaje bajo en el factor de especialidad (peso del 40%)
          para priorizar las que sí coinciden, sin descartar masivamente cuando faltan descripciones detalladas. */
@@ -3659,7 +3611,7 @@ ${textoTotal}`;
       }
       const fA = o.perfil === 'SERVICIO' ? 1 : (o.perfil === 'MIXTO' ? 0.6 : 0.35);
       const fK = actM.factor;
-      const kTag = (actM.hayAct && fK >= 0.5) ? 'coincide con la actividad específica (' + actM.hits + ' coincidencias)' : (actM.hayAct ? 'coincidencia parcial (' + actM.hits + ')' : '');
+      const kTag = (aiRec && aiRec.coincide) ? 'coincidencia de actividad confirmada por IA (' + (aiRec.motivo || 'Business Description de Capital IQ') + ')' : ((actM.hayAct && fK >= 0.5) ? 'coincide con la actividad específica (' + actM.hits + ' coincidencias)' : (actM.hayAct ? 'coincidencia parcial (' + actM.hits + ')' : ''));
       let fG = 1, gTag = ''; if (cfg.geo !== 'ninguna') { const r = moRegion(o.pais); fG = r === cfg.geo ? 1 : (r === 'OTRA' ? 0.5 : 0.65); if (r === cfg.geo) gTag = 'región prioritaria (' + (o.pais || '') + ')'; }
       let fT = 0.5, tTag = ''; if (sTP && o.s) { const d = Math.abs(Math.log10(o.s / sTP)); fT = 1 / (1 + d); if (d < 1) tTag = 'tamaño próximo'; }
       let fR; if (o.perdida) { fR = cfg.perd === 'preferir' ? 1 : 0.4; } else { fR = cfg.perd === 'preferir' ? 0.4 : Math.max(0, 1 - Math.min(1, Math.abs((o.pli ?? 0) - medPool) / 0.5)); }
@@ -3857,7 +3809,88 @@ ${textoPrompt}`;
       }
     }
 
+    /* ================= CURACIÓN DE CANDIDATAS POR IA (Business Description real de Capital IQ) =================
+       Al importar el Excel de Capital IQ, se compara la actividad detectada (getActividadEspecifica().resumen)
+       contra el Business Description real de cada candidata (DESCS/o.desc), en lotes, vía /api/gemini.
+       Resultado en window.AI_MATCH_COMPS = { porId: { [id]: {coincide, motivo} }, fecha, actividadUsada, fuenteExcel }.
+       Se integra en moScore/moActMatch (más abajo). Si Gemini falla o no hay actividad, el motor sigue
+       funcionando con la heurística de texto existente — nunca bloquea el flujo. */
+    window.PT_CURANDO_IA = false;
+    function _ptChunk(arr, size) {
+      const out = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    }
+    async function _ptPool(items, worker, limite) {
+      const resultados = new Array(items.length);
+      let idx = 0;
+      async function siguiente() {
+        while (idx < items.length) {
+          const mio = idx++;
+          resultados[mio] = await worker(items[mio], mio);
+        }
+      }
+      const corredores = Array.from({ length: Math.min(limite, items.length) }, siguiente);
+      await Promise.all(corredores);
+      return resultados;
+    }
+    function _moIaInfo(texto) { const el = $('mo_ia_status'); if (el) el.textContent = texto || ''; }
+    async function curarCandidatosConIA(list) {
+      window.PT_ULTIMO_IMPORT_COMPS = list;
+      const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+      if (!act || act.estado !== 'listo' || !act.resumen) { _moIaInfo(''); return; }
+      const evaluables = (list || []).filter(o => o && o.id && String(o.id).trim() && o.desc && String(o.desc).trim());
+      if (!evaluables.length) { _moIaInfo('ℹ Ninguna candidata importada trae ID IQ + Business Description para curar con IA; el motor usará el emparejamiento por palabras clave.'); return; }
+      window.PT_CURANDO_IA = true;
+      window.AI_MATCH_COMPS = { porId: {}, fecha: new Date().toISOString(), actividadUsada: act.resumen, fuenteExcel: (window.CIQ_FUENTE && CIQ_FUENTE.archivo) || '' };
+      const lotes = _ptChunk(evaluables, 60);
+      let evaluadas = 0, fallidas = 0;
+      _moIaInfo('🤖 IA curando candidatas… (0 de ' + evaluables.length + ' evaluadas)');
+      await _ptPool(lotes, async (lote) => {
+        const candidatos = lote.map(o => ({ id: String(o.id).trim(), name: o.name || '', desc: String(o.desc || '').slice(0, 300), country: o.country || o.pais || '' }));
+        const prompt =
+          'Eres un experto en precios de transferencia que revisa comparables de Capital IQ.\n\n' +
+          'La empresa examinada tiene esta actividad económica real:\n"' + act.resumen + '"\n\n' +
+          'A continuación hay una lista de empresas candidatas con su Business Description real de Capital IQ (en inglés). ' +
+          'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, mismos productos/servicios o función equivalente), ' +
+          'sin importar el idioma en que esté escrita la descripción. No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
+          'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
+          'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
+          '{"resultados":[{"id":"","coincide":true,"motivo":""}]}\n' +
+          'Incluye una entrada por cada ID recibido, en el mismo orden.';
+        try {
+          const res = await fetch('/api/gemini', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          const data = await res.json();
+          const cand = data && data.candidates && data.candidates[0];
+          const raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('') : '';
+          if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
+          const j = extraerJSONDeRespuestaIA(raw);
+          (j.resultados || []).forEach(r => {
+            if (!r || !r.id) return;
+            window.AI_MATCH_COMPS.porId[String(r.id).trim()] = { coincide: !!r.coincide, motivo: r.motivo || '' };
+          });
+          evaluadas += lote.length;
+        } catch (e) {
+          fallidas += lote.length;
+          console.error('[curarCandidatosConIA] lote falló:', e);
+        }
+        _moIaInfo('🤖 IA curando candidatas… (' + (evaluadas + fallidas) + ' de ' + evaluables.length + ' procesadas)');
+      }, 3);
+      window.PT_CURANDO_IA = false;
+      const nMatch = Object.values(AI_MATCH_COMPS.porId).filter(v => v.coincide).length;
+      _moIaInfo(fallidas
+        ? ('✓ ' + nMatch + ' de ' + evaluables.length + ' candidatas coinciden con la actividad · ⚠ ' + fallidas + ' no se pudieron evaluar (se dejan pasar sin descartarlas por actividad)')
+        : ('✓ ' + nMatch + ' de ' + evaluables.length + ' candidatas coinciden con la actividad'));
+      saveActive();
+    }
     function motorEjecutar(silencioso) {
+      if (window.PT_CURANDO_IA) {
+        if (!silencioso) moToast('IA aún analizando candidatas por actividad, intente de nuevo en unos segundos', 'amber');
+        return;
+      }
       const cfg = moCfg(); const rows = moRows();
       if (rows.length > 150 && !silencioso) moToast('Puntuando ' + rows.length + ' candidatas…', 'amber');
       if (!rows.length) {
@@ -6700,9 +6733,12 @@ se guía la descarga manual
               '<option value="">— seleccione —</option>' + opciones +
               '<option value="__otro__"' + (!conocido && p.tipoAuto ? ' selected' : '') + '>Otro (escribir)…</option>' +
               '</select>' +
-              '<input type="text" value="' + selValOtro + '" placeholder="Escriba el tipo de operación" style="display:' + (!conocido && p.tipoAuto ? 'block' : 'none') + ';margin-top:4px;width:100%;max-width:220px" ' +
-              'onkeydown="if(event.key===\'Enter\'){ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')}" ' +
-              'onblur="ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')">' +
+              '<div style="display:' + (!conocido && p.tipoAuto ? 'flex' : 'none') + ';gap:4px;margin-top:4px;max-width:220px">' +
+              '<input type="text" value="' + selValOtro + '" placeholder="Escriba el tipo de operación" style="flex:1;min-width:0" ' +
+              'onkeydown="if(event.key===\'Enter\'){event.preventDefault();ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')}">' +
+              '<button type="button" title="Confirmar" onclick="ptGuardarTipoTexto(this.previousElementSibling, \'' + hojaJs + '\', ' + p.fila + ')" ' +
+              'style="padding:2px 8px;background:#1E8449;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700">✓</button>' +
+              '</div>' +
               '</td></tr>';
           };
           h += '<div style="margin-top:10px;padding:8px 10px;border:2px solid #B7950B;background:#FEF9E7;border-radius:6px">' +
@@ -6732,16 +6768,22 @@ se guía la descarga manual
 
       /* Controles de la tabla editable de «Tipo de operación» */
       window.ptSeleccionarTipo = async function (sel, hoja, fila) {
-        var v = sel.value, input = sel.nextElementSibling;
-        if (v === '__otro__') { if (input) { input.style.display = 'block'; input.focus(); } return; }
-        if (input) input.style.display = 'none';
+        var v = sel.value, wrap = sel.nextElementSibling;
+        if (v === '__otro__') {
+          if (wrap) { wrap.style.display = 'flex'; var inp = wrap.querySelector('input'); if (inp) inp.focus(); }
+          return;
+        }
+        if (wrap) wrap.style.display = 'none';
         if (!v) return;
         await ptGuardarTipoOverride(hoja, fila, v);
         if (typeof window.pt36AnalizarOperaciones === 'function') await window.pt36AnalizarOperaciones();
       };
+      /* Guarda solo al confirmar explícitamente (Enter o el botón ✓): NO se
+         guarda al perder el foco, para no cerrar el cuadro mientras se escribe
+         si el usuario hace clic en otra parte de la pantalla. */
       window.ptGuardarTipoTexto = async function (input, hoja, fila) {
-        var v = String(input.value || '').trim();
-        if (!v) return;
+        var v = String((input && input.value) || '').trim();
+        if (!v) { if (input) input.focus(); return; }
         await ptGuardarTipoOverride(hoja, fila, v);
         if (typeof window.pt36AnalizarOperaciones === 'function') await window.pt36AnalizarOperaciones();
       };
@@ -10742,7 +10784,11 @@ se guía la descarga manual
           headers['anthropic-version'] = '2023-06-01';
           headers['anthropic-dangerous-direct-browser-access'] = 'true';
         } else {
-          url = (C.modo === 'propio' && C.endpoint) ? C.endpoint : '/api/claude';
+          if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && (!C.endpoint || C.endpoint === '/api/claude')) {
+            url = 'https://us-central1-precios-trasnferencia.cloudfunctions.net/claude';
+          } else {
+            url = (C.modo === 'propio' && C.endpoint) ? C.endpoint : '/api/claude';
+          }
         }
 
         var res = await fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) });
