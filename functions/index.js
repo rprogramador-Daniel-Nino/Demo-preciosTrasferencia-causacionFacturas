@@ -8,7 +8,7 @@ const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
 exports.claude = onRequest(
-  { secrets: [ANTHROPIC_API_KEY], region: 'us-central1', cors: true },
+  { secrets: [ANTHROPIC_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
@@ -40,7 +40,7 @@ exports.claude = onRequest(
       res.status(upstream.status).json(data);
     } catch (err) {
       console.error('Error llamando a Anthropic:', err);
-      res.status(502).json({ error: 'No se pudo contactar a la API de Claude.', detail: err.message });
+      res.status(502).json({ error: { message: 'No se pudo contactar a la API de Claude: ' + err.message } });
     }
   }
 );
