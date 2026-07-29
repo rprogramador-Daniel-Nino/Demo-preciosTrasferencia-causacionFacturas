@@ -8189,8 +8189,14 @@ se guía la descarga manual
 
       window.ptFactores260_4 = function () {
         if (!window.MOTOR || !MOTOR.activo) return null;
+        /* idempotente: se ejecuta una sola vez por generación del motor. Si se
+           recalculara en cada llamada (p. ej. desde ptTestSuficienciaHTML en
+           cada renderReport), el motivo de cada compañía se duplicaría en cada
+           llamada, y MATRIX se reconstruiría desde la tabla YA recortada por
+           motorAplicarSeleccion(), perdiendo del Anexo D a las rechazadas. */
+        if (MOTOR._factoresAplicados) return MOTOR._factoresStats || null;
         var K = window.PT_CRITERIOS;
-        var rows = moRows();
+        var rows = MOTOR.universo || moRows();
         var ingPE = ingresoParteExaminada();
         var ingPE_USDmm = ingPE ? (ingPE / window.PT_TRM) / 1e6 : null;
 
@@ -8248,6 +8254,8 @@ se guía la descarga manual
           });
         } catch (e) { }
 
+        MOTOR._factoresAplicados = true;
+        MOTOR._factoresStats = stats;
         return stats;
       };
 
