@@ -13046,49 +13046,39 @@ se guía la descarga manual
       /* ───────────────────────────────────────────────────────────────────────
          1. INDUSTRIA ESPECÍFICA — videojuegos, derivada de la parte examinada
          ─────────────────────────────────────────────────────────────────────── */
-      var IND_DEFECTO = {
-        nombre: 'desarrollo de videojuegos',
-        positivas: /\b(video\s?games?|videojuegos?|game\s?(development|developer|studio|software|publisher|publishing)|(mobile|online|web|pc|browser|social|casual|console)[\s-]{0,3}(and\s+\w+\s+)?games?|gaming(?!\s?(machine|table|casino))|interactive\s+entertainment|game\s+titles?|videogame)\b|\b(develops?|operates?|publishes?|distributes?|produc\w+)[^.]{0,80}\bgames?\b|\bgames?\b[^.]{0,50}\b(develop|operat|publish|studio)/i,
-        negativas: /\b(casino|gambling|betting|lottery|slot\s?machine|igaming|wager)\b/i,
-        sicAfines: ['7372', '7371', '7999', '7929']
-      };
-
-      /* la industria se deriva del objeto social / perfil funcional cuando existe */
+      /* la industria se deriva de la actividad específica (Gemini) cuando existe */
       window.ptIndustriaExaminada = function () {
         try {
-          var F = window.PT_FAR || {};
-          var obj = (($('objeto') && $('objeto').value) || '') + ' ' +
-            ((F.funcionesClave || []).join(' ')) + ' ' +
-            ((F.palabrasClave || []).join(' ')) + ' ' +
-            (F.ingresoConcepto || '');
-          if (/videojuego|video\s?game|gaming|game|juegos?\b/i.test(obj)) return IND_DEFECTO;
-          /* industria distinta o indeterminable: se declara GENÉRICA. En ese
-             caso la doble prueba NO excluye automáticamente — exige verificación
-             manual — porque un patrón construido con palabras sueltas del objeto
-             social no es criterio suficiente para descartar compañías. */
+          var act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+          if (!act || !((act.keywords && act.keywords.length) || (act.sic && act.sic.length))) {
+            return {
+              nombre: 'industria de la parte examinada (no determinada automáticamente)',
+              positivas: /$^/, negativas: /$^/, sicAfines: [], generica: true
+            };
+          }
+          var kws = [].concat(act.keywords || [], act.productos || []).filter(Boolean)
+            .map(function (k) { return String(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+          var positivas = kws.length ? new RegExp('\\b(' + kws.join('|') + ')\\b', 'i') : /$^/;
           return {
-            nombre: 'industria de la parte examinada (no determinada automáticamente)',
-            positivas: /$^/, negativas: IND_DEFECTO.negativas, sicAfines: [], generica: true
+            nombre: act.resumen || (act.keywords || []).join(', ') || 'actividad específica de la parte examinada',
+            positivas: positivas, negativas: /$^/, sicAfines: (act.sic || []).slice(), generica: false
           };
         } catch (e) { }
-        return IND_DEFECTO;
+        return { nombre: 'industria de la parte examinada (no determinada automáticamente)', positivas: /$^/, negativas: /$^/, sicAfines: [], generica: true };
       };
 
-      /* doble prueba: industria + función básica */
+      /* doble prueba: industria + coincidencia con la actividad específica */
       window.ptPerteneceIndustria = function (nombre, desc, sic) {
         var IND = ptIndustriaExaminada();
         desc = String(desc || (window.DESCS && DESCS[nombre]) || '');
         sic = String(sic || '');
-        if (IND.generica) return { ok: null, motivo: 'La industria de la parte examinada no pudo determinarse automáticamente del objeto social; la pertenencia de esta compañía debe verificarse manualmente.' };
-        if (!desc.trim()) return { ok: null, motivo: 'La fuente no publica descripción de negocio: la pertenencia a la industria no puede verificarse automáticamente.' };
-        if (IND.negativas.test(desc)) return { ok: false, motivo: 'Su actividad corresponde a apuestas o casinos, industria distinta y expresamente excluida.' };
-        var enDesc = IND.positivas.test(desc);
-        var rol = '';
-        try { rol = ptClasificarFAR(desc, sic).rol; } catch (e) { }
-        var funcionOK = /^DESARROLLADOR_/.test(rol);
-        if (enDesc && funcionOK) return { ok: true, motivo: 'Pertenece a la industria de ' + IND.nombre + ' y desempeña la función de desarrollo (' + (window.PT_FAR_ROLES && PT_FAR_ROLES[rol] || rol) + ').', rol: rol };
-        if (enDesc && !funcionOK) return { ok: false, motivo: 'Menciona la industria pero su función principal es otra (' + (window.PT_FAR_ROLES && PT_FAR_ROLES[rol] || rol || 'no determinada') + '): no comparte la función básica de desarrollo.', rol: rol };
-        return { ok: false, motivo: 'Su descripción de negocio no hace referencia a la industria de ' + IND.nombre + ' (' + desc.slice(0, 90) + '…).', rol: rol };
+        if (IND.generica) return { ok: null, motivo: 'La actividad específica de la parte examinada no ha sido extraída (use «Analizar empresa con IA»); la pertenencia de esta compañía debe verificarse manualmente.' };
+        if (!desc.trim() && !sic.trim()) return { ok: null, motivo: 'La fuente no publica descripción de negocio ni SIC: la pertenencia a la industria no puede verificarse automáticamente.' };
+        if (IND.negativas.test(desc)) return { ok: false, motivo: 'Su actividad corresponde a un giro expresamente excluido de la actividad específica.' };
+        var enDesc = IND.positivas.test(desc) || IND.positivas.test(nombre || '');
+        var sicOK = IND.sicAfines.some(function (c) { return sic.indexOf(c) >= 0; });
+        if (enDesc || sicOK) return { ok: true, motivo: 'Coincide con la actividad específica (' + IND.nombre + ').' };
+        return { ok: false, motivo: 'Ni su descripción de negocio ni su SIC coinciden con la actividad específica (' + IND.nombre + ').' };
       };
 
       /* verificación de la TABLA, independiente del camino de carga */
