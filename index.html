@@ -9488,19 +9488,24 @@ se guía la descarga manual
          EXPLICACIÓN DE LOS CRITERIOS, CON EJEMPLOS DEL CASO EN CURSO
          ─────────────────────────────────────────────────────────────────────── */
       window.ptExplicacionCriteriosHTML = function () {
-        var C = window.PT_CRIBA, S = window.PT_SELECCION, K = window.PT_CRITERIOS;
+        var C = !!(window.MOTOR && MOTOR.activo), S = null, K = window.PT_CRITERIOS;
         var ent = ($('ent') && $('ent').value) || 'la parte examinada';
+        var ingPE = ingresoParteExaminada();
+        var ingPE_USDmm = ingPE ? (ingPE / window.PT_TRM) / 1e6 : null;
+        var F = C ? (function () { try { return ptFactores260_4() || {}; } catch (e) { return {}; } })() : {};
+        var act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
 
-        /* los ejemplos se toman de la depuración en curso cuando existe */
+        /* los ejemplos se toman de las comparables seleccionadas por el motor unificado */
         function ejemploDe(pred, fallback) {
-          if (!C || !C.filas) return fallback;
-          var f = C.filas.filter(pred)[0];
-          return f ? f : fallback;
+          if (!C) return fallback;
+          var seleccionadas = moRows().filter(function (o) { return MOTOR.sel[nameKey(o.name)] === true; });
+          var o = seleccionadas.filter(pred)[0];
+          return o ? o : fallback;
         }
-        var elControl = ejemploDe(function (f) { return f.socio !== null && f.socio > K.independenciaTope; }, null);
-        var elGrande = ejemploDe(function (f) { return f.estado === 'Aceptada' && f.escalaVeces && f.escalaVeces > 100; }, null);
-        var elPerdida = ejemploDe(function (f) { return f.estado === 'Aceptada' && f.perdida; }, null);
-        var elFuera = ejemploDe(function (f) { return f.estado === 'Aceptada' && !/colombia/i.test(f.pais || ''); }, null);
+        var elControl = ejemploDe(function (o) { var s = maxParticipacion(o.holders); return s !== null && s > K.independenciaTope; }, null);
+        var elGrande = ejemploDe(function (o) { if (!ingPE_USDmm || !o.s) return false; o.escalaVeces = o.s / ingPE_USDmm; return o.escalaVeces > 100; }, null);
+        var elPerdida = ejemploDe(function (o) { return o.perdida; }, null);
+        var elFuera = ejemploDe(function (o) { return !/colombia/i.test(o.pais || ''); }, null);
 
         var bloque = function (titulo, queEs, queDice, opciones, ejemplo) {
           return '<div style="margin:10px 0;padding:10px 12px;background:#fff;border:1px solid #D5DBDB;border-radius:6px">' +
@@ -9528,15 +9533,15 @@ se guía la descarga manual
           'Es una de las «circunstancias económicas» del Art. 260-4. Cuando se acude a comparables extranjeras por no existir locales, esa decisión debe justificarse expresamente en el estudio.',
           '<i>Mismo país</i> rechaza toda compañía no colombiana. <i>Región</i> admite el entorno latinoamericano. <i>Global</i> acepta cualquier país, pero obliga a diligenciar la justificación que aparece bajo este panel.',
           elFuera
-            ? 'En este estudio, <b>' + escH(elFuera.name) + '</b> opera en ' + escH(elFuera.pais || 'el exterior') + '. Con el criterio <i>Global</i> se acepta y el informe deja constancia de la diferencia de mercado. Si se cambiara a <i>Mismo país</i>, esta compañía y otras ' + (C.factores ? (C.factores.geoFuera - 1) : '') + ' quedarían rechazadas, y el conjunto se quedaría sin comparables: en Colombia no cotizan desarrolladoras de videojuegos independientes. Por eso se elige Global y se justifica.'
-            : 'Si ' + escH(ent) + ' desarrolla videojuegos y en Colombia no existen compañías independientes de esa actividad con información pública, se elige <i>Global</i> y se escribe la razón en el campo de justificación.');
+            ? 'En este estudio, <b>' + escH(elFuera.name) + '</b> opera en ' + escH(elFuera.pais || 'el exterior') + '. Con el criterio <i>Global</i> se acepta y el informe deja constancia de la diferencia de mercado. Si se cambiara a <i>Mismo país</i>, esta compañía y otras quedarían rechazadas, y el conjunto podría quedarse sin comparables suficientes si no existen compañías independientes locales de la misma actividad. Por eso se elige Global y se justifica.'
+            : 'Si en Colombia no existen compañías independientes de la actividad de ' + escH(ent) + ' con información pública, se elige <i>Global</i> y se escribe la razón en el campo de justificación.');
 
         h += bloque('2 · Diferencia de escala',
           'La proporción entre el tamaño de la comparable y el de la parte examinada, medida sobre los ingresos operacionales.',
           'También pertenece a las circunstancias económicas. Una diferencia grande de tamaño puede implicar economías de escala, poder de negociación y estructura de costos distintos.',
           '<i>Informar y conservar</i> mantiene la compañía y documenta la diferencia: es razonable cuando el indicador es un margen, que es una razón y no un valor absoluto. <i>Rechazar si excede el factor</i> la elimina cuando supera el múltiplo que usted fije.',
           elGrande
-            ? '<b>' + escH(elGrande.name) + '</b> facturó ' + fmt(elGrande.s) + ' millones de dólares frente a los cerca de 0,8 millones de ' + escH(ent) + ': unas ' + Math.round(elGrande.escalaVeces) + ' veces. Con <i>Informar</i> se conserva y la diferencia queda escrita; con <i>Rechazar</i> y factor 100 saldría del conjunto junto a otras ' + ((C.factores ? C.factores.tamanoFuera : 1) - 1) + '.'
+            ? '<b>' + escH(elGrande.name) + '</b> facturó ' + fmt(elGrande.s) + ' millones de dólares frente a los cerca de ' + (ingPE_USDmm ? ingPE_USDmm.toFixed(1) : '—') + ' millones de ' + escH(ent) + ': unas ' + Math.round(elGrande.escalaVeces) + ' veces. Con <i>Informar</i> se conserva y la diferencia queda escrita; con <i>Rechazar</i> y factor 100 saldría del conjunto junto a otras ' + Math.max(0, (F.tamanoFuera || 1) - 1) + '.'
             : 'Una comparable que factura mil veces más que la parte examinada se conserva si el indicador es un margen, dejando constancia; o se rechaza si usted fija el factor en 100.');
 
         h += bloque('3 · Compañías con pérdida operacional',
@@ -9552,7 +9557,7 @@ se guía la descarga manual
           'El Art. 260-1 del Estatuto Tributario define la vinculación económica. Una compañía controlada no sirve como comparable: sus precios pueden no responder a condiciones de mercado.',
           'El <i>tope</i> fija el porcentaje a partir del cual se considera control —50 % es lo usual—. Para las compañías cuya composición accionaria la fuente no reporta, puede <i>admitirlas con constancia</i> o <i>excluirlas</i>.',
           elControl
-            ? '<b>' + escH(elControl.name) + '</b> tiene un accionista con el ' + elControl.socio.toFixed(2) + ' % de la propiedad. Supera el tope del ' + K.independenciaTope + ' % y se rechaza por no ser independiente, con cita expresa del Art. 260-1.'
+            ? '<b>' + escH(elControl.name) + '</b> tiene un accionista con el ' + maxParticipacion(elControl.holders).toFixed(2) + ' % de la propiedad. Supera el tope del ' + K.independenciaTope + ' % y se rechaza por no ser independiente, con cita expresa del Art. 260-1.'
             : 'Una compañía en la que un solo accionista concentra el 51 % se rechaza por vinculación por control, con cita del Art. 260-1.');
 
         h += bloque('5 · Ejercicios analizados',
@@ -9561,21 +9566,20 @@ se guía la descarga manual
           'Un ejercicio usa solo el año corriente. Tres promedia los indicadores de los tres últimos, lo que suaviza resultados atípicos de un año concreto.',
           'El estudio del año anterior de ' + escH(ent) + ' declaró análisis multianual. Si este año se usa un solo ejercicio, hay un cambio de metodología que debe explicarse; el sistema lo advierte en el test de suficiencia.');
 
-        h += bloque('6 · Tamaño del conjunto',
-          'Los límites mínimo, objetivo y máximo de comparables que integrarán el rango.',
-          'Ninguna norma fija un número. Es una decisión metodológica: con muy pocas observaciones el rango intercuartil pierde representatividad; con demasiadas se diluye la comparabilidad al admitir compañías cada vez menos parecidas.',
-          'El <i>mínimo</i> es el umbral por debajo del cual el sistema amplía el criterio a roles funcionales adyacentes, dejando constancia. El <i>objetivo</i> es el número al que apunta con comparables estrictas. El <i>máximo</i> topa el conjunto.',
-          S
-            ? 'En este estudio solo ' + (S.porNivel ? S.porNivel[1] : 0) + ' compañía(s) presentan identidad funcional estricta con ' + escH(ent) + '. Como el mínimo es ' + K.minConjunto + ', el sistema amplió el criterio y completó el conjunto con ' + (S.porNivel ? S.porNivel[2] + S.porNivel[3] : 0) + ' compañías de funciones adyacentes, dejando la constancia correspondiente.'
-            : 'Si solo hay 2 compañías de identidad estricta y el mínimo es 8, el sistema amplía a roles adyacentes y deja constancia de la ampliación.');
+        h += bloque('6 · Tamaño mínimo defendible del conjunto',
+          'El número mínimo de comparables por debajo del cual el rango intercuartil deja de ser representativo.',
+          'Ninguna norma fija un número. Es una decisión metodológica: con muy pocas observaciones el rango intercuartil pierde representatividad.',
+          'Es el piso que usa la doble prueba de industria: no se remueven comparables por no coincidir con la actividad específica si eso dejaría el conjunto por debajo de este número.',
+          'Con el mínimo en ' + K.minConjunto + ', si la doble prueba de industria dejara el conjunto en menos de ' + K.minConjunto + ' comparables, las candidatas observadas se conservan con constancia en vez de removerse.');
 
         /* ejemplo integrado */
         h += '<div style="margin:12px 0 4px;font-weight:700;font-size:12px;color:#34495E">Ejemplo completo: cómo se aplica la secuencia a una compañía</div>';
         var ej = elControl || elGrande || elPerdida;
+        if (ej && ingPE_USDmm && ej.s && ej.escalaVeces === undefined) ej.escalaVeces = ej.s / ingPE_USDmm;
         h += '<table style="width:100%;font-size:11px;border-collapse:collapse">' +
           '<thead><tr style="background:#EBF5FB"><th style="text-align:left;padding:5px;border:1px solid #D5DBDB">Paso</th><th style="text-align:left;padding:5px;border:1px solid #D5DBDB">Qué se verifica</th><th style="text-align:left;padding:5px;border:1px solid #D5DBDB">Resultado en el ejemplo</th></tr></thead><tbody>' +
-          [['1. Análisis funcional', '¿Su actividad principal coincide con la de la parte examinada?', ej ? escH((window.PT_FAR_ROLES[ej.rol] || ej.rol)) : 'Desarrollador de videojuegos'],
-          ['2. Independencia', '¿Algún accionista supera el ' + K.independenciaTope + ' %?', ej && ej.socio !== null && ej.socio !== undefined ? ej.socio.toFixed(2) + ' % → ' + (ej.socio > K.independenciaTope ? 'RECHAZADA' : 'pasa') : 'sin dato reportado'],
+          [['1. Análisis funcional', '¿Su actividad principal coincide con la de la parte examinada?', ej ? (MOTOR.motivo[nameKey(ej.name)] ? escH(MOTOR.motivo[nameKey(ej.name)].slice(0, 90)) : ((act && act.resumen) ? escH(act.resumen) : 'Ver motivo individual en el Anexo D')) : ((act && act.resumen) ? escH(act.resumen) : 'Actividad específica no determinada')],
+          ['2. Independencia', '¿Algún accionista supera el ' + K.independenciaTope + ' %?', (function () { var s = ej ? maxParticipacion(ej.holders) : null; return s !== null && s !== undefined ? s.toFixed(2) + ' % → ' + (s > K.independenciaTope ? 'RECHAZADA' : 'pasa') : 'sin dato reportado'; })()],
           ['3. Operación vigente', '¿Estuvo en operación durante el período?', 'Sí'],
           ['4. Información financiera', '¿Tiene ingresos y utilidad operacional del período?', ej && ej.s !== null ? 'Sí' : 'No'],
           ['5. Mercado geográfico', '¿Opera en el ámbito exigido?', ej ? escH(ej.pais || 'no reportado') + ' → ' + (K.geografia === 'global' ? 'se acepta y se documenta' : 'se evalúa contra el criterio') : '—'],
@@ -9589,9 +9593,9 @@ se guía la descarga manual
 
         if (ej) {
           h += '<div style="font-size:11px;margin-top:6px;color:#555">Compañía usada en el ejemplo: <b>' + escH(ej.name) + '</b>' +
-            (ej.id ? ' · Excel Company ID ' + escH(ej.id) : '') + '. Los valores provienen de la depuración ejecutada en este estudio.</div>';
+            (ej.id ? ' · Excel Company ID ' + escH(ej.id) : '') + '. Los valores provienen de la selección ejecutada en este estudio.</div>';
         } else {
-          h += '<div style="font-size:11px;margin-top:6px;color:#555">Ejecute la depuración del universo para que este ejemplo se construya con compañías reales del estudio.</div>';
+          h += '<div style="font-size:11px;margin-top:6px;color:#555">Ejecute el motor de selección para que este ejemplo se construya con compañías reales del estudio.</div>';
         }
 
         h += '</div></details>';
@@ -9627,7 +9631,7 @@ se guía la descarga manual
 
       function _ui() {
         if (document.getElementById('ptCriteriosPanel')) return;
-        var ancla = document.getElementById('ptFarPanel');
+        var ancla = document.getElementById('ptFarPanel') || document.getElementById('compalert') || $('cbody');
         if (!ancla || !ancla.parentNode) return;
         var d = document.createElement('div');
         d.style.cssText = 'margin:10px 0;padding:12px;border:2px solid #34495E;background:#F8F9F9;border-radius:8px';
