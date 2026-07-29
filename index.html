@@ -2732,7 +2732,8 @@
         useadj: $('useadj') ? $('useadj').checked : true,
         adj: (typeof ADJ !== 'undefined') ? JSON.parse(JSON.stringify(ADJ)) : null,
         motor: (typeof MOTOR !== 'undefined') ? JSON.parse(JSON.stringify(MOTOR)) : null,
-        eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null
+        eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null,
+        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null
       };
       CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) s[id] = el.value; });
       return s;
@@ -2755,6 +2756,19 @@
       window.PT_EEFF_IA = s.eeffIA ? JSON.parse(JSON.stringify(s.eeffIA)) : null;
       const hostIA = document.getElementById('ptEeffIA'); if (hostIA && !s.eeffIA) hostIA.innerHTML = '';
       try { if (typeof ptPintarEeffIA === 'function') ptPintarEeffIA(); } catch (e) { }
+      window.AI_MATCH_COMPS = s.aiMatch ? JSON.parse(JSON.stringify(s.aiMatch)) : null;
+      try {
+        const elIa = $('mo_ia_status');
+        if (elIa) {
+          if (window.AI_MATCH_COMPS && window.AI_MATCH_COMPS.porId) {
+            const valores = Object.values(window.AI_MATCH_COMPS.porId);
+            const nMatch = valores.filter(v => v.coincide).length;
+            elIa.textContent = '✓ ' + nMatch + ' de ' + valores.length + ' candidatas coinciden con la actividad (curación guardada del estudio)';
+          } else {
+            elIa.textContent = '';
+          }
+        }
+      } catch (e) { }
     }
     function saveActive() { if (studies[active]) studies[active] = readForm(); }
     function exportPortfolio() { saveActive(); const blob = new Blob([JSON.stringify(studies, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'portafolio_PT_' + new Date().toISOString().slice(0, 10) + '.json'; a.click(); URL.revokeObjectURL(a.href); }
