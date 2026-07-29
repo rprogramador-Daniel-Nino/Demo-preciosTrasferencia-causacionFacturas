@@ -10662,17 +10662,16 @@ se guía la descarga manual
           '\n· Operación analizada: ' + (g('oper') || '[no aportada]') +
           '\n· Monto: ' + (g('monto') || '[no aportado]'));
 
-        /* perfil funcional */
+        /* actividad específica (Gemini) */
         try {
-          var F = window.PT_FAR;
-          if (F && F.rol) {
-            P.push('ANÁLISIS FUNCIONAL DE LA PARTE EXAMINADA\n· Rol: ' + (window.PT_FAR_ROLES[F.rol] || F.rol) +
-              '\n· Funciones clave: ' + (F.funcionesClave || []).join('; ') +
-              '\n· Funciones del vinculado: ' + (F.funcionesNoAsumidas || []).join('; ') +
-              '\n· Intangibles: ' + ((F.activosNoPropios || []).length ? 'no es titular — ' + F.activosNoPropios.join('; ') : '[no determinado]') +
-              '\n· Riesgos no asumidos: ' + (F.riesgosNoAsumidos || []).join('; ') +
-              '\n· Origen del ingreso: ' + (F.ingresoConcepto || '[no determinado]') +
-              '\n· Fuente del perfil: ' + (F.origen || ''));
+          var act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
+          if (act && (act.resumen || act.perfil)) {
+            P.push('ACTIVIDAD ESPECÍFICA DE LA PARTE EXAMINADA (extraída con IA del estudio del año anterior; prevalece sobre el objeto social genérico)\n· Resumen: ' + (act.resumen || '[no determinado]') +
+              '\n· Perfil funcional: ' + (act.perfil || '[no determinado]') +
+              '\n· Productos/servicios clave: ' + (act.productos || []).join('; ') +
+              '\n· Palabras clave de búsqueda: ' + (act.keywords || []).join('; ') +
+              '\n· SIC objetivo: ' + (act.sic || []).join('; ') +
+              '\n· Fuente: ' + (act.fuente || ''));
           }
         } catch (e) { }
 
@@ -10694,12 +10693,22 @@ se guía la descarga manual
 
         /* comparables y rango */
         try {
-          var S = window.PT_SELECCION, C = window.PT_CRIBA;
-          if (C) P.push('DEPURACIÓN DEL UNIVERSO\n· Universo ' + C.universo + ' · aceptadas ' + C.aceptadas.length +
-            ' · rechazadas ' + C.rechazadas + '\n· Motivos: ' + Object.keys(C.motivosRechazo).map(function (k) { return k + ' (' + C.motivosRechazo[k] + ')'; }).join(' · '));
-          if (S) P.push('CONJUNTO DE COMPARABLES\n· ' + S.conjunto.length + ' compañías: ' +
-            S.conjunto.map(function (f) { return f.name + ' [' + (f.id || 's/id') + ']'; }).join(' · ') +
-            '\n· Del estudio anterior: ' + S.nPrevias + ' · nuevas: ' + S.nNuevas);
+          if (window.MATRIX && MATRIX.length) {
+            var acc = MATRIX.filter(function (m) { return /acept/i.test(m.status || ''); }).length;
+            var motivos = {};
+            MATRIX.filter(function (m) { return !/acept/i.test(m.status || ''); }).forEach(function (m) {
+              var k = m.motivo || 'Sin motivo registrado'; motivos[k] = (motivos[k] || 0) + 1;
+            });
+            P.push('DEPURACIÓN DEL UNIVERSO\n· Universo ' + MATRIX.length + ' · aceptadas ' + acc +
+              ' · rechazadas ' + (MATRIX.length - acc) + '\n· Motivos: ' + Object.keys(motivos).map(function (k) { return k + ' (' + motivos[k] + ')'; }).join(' · '));
+          }
+          if (window.MOTOR && MOTOR.activo) {
+            var seleccionadas = moRows().filter(function (o) { return MOTOR.sel[nameKey(o.name)] === true; });
+            var nPrevias = seleccionadas.filter(function (o) { return o.previa; }).length;
+            P.push('CONJUNTO DE COMPARABLES\n· ' + seleccionadas.length + ' compañías: ' +
+              seleccionadas.map(function (o) { return o.name + ' [' + (o.id || 's/id') + ']'; }).join(' · ') +
+              '\n· Del estudio anterior: ' + nPrevias + ' · nuevas: ' + (seleccionadas.length - nPrevias));
+          }
           if (window.LAST && LAST.st) P.push('RANGO\n· P25 ' + (LAST.st.p25 * 100).toFixed(3) + ' % · mediana ' +
             (LAST.st.med * 100).toFixed(3) + ' % · P75 ' + (LAST.st.p75 * 100).toFixed(3) + ' %');
         } catch (e) { }
