@@ -9687,7 +9687,7 @@ se guía la descarga manual
         ec_intang: /intangibles|propiedad intelectual/i,
         ec_mercado: /mercado, clientes|clientes y competencia|competencia/i,
         ec_estrategia: /estrategias? de negocio|perspectivas/i,
-        sc_def: /sector|industria del videojuego|alcance del sector/i,
+        sc_def: /sector|alcance del sector/i,
         sc_comp: /competidores|estructura competitiva/i,
         sc_dem: /demanda|clientes|canales/i,
         sc_reg: /marco regulatorio|regulaci[oó]n/i,
@@ -11637,22 +11637,22 @@ se guía la descarga manual
         if (n1 === n2) return true;
         if (!n1 || !n2) return false;
 
-        var esSoftVideojuegos = function (s) {
-          return /video\s*games?|videojuegos?|juegos?|software|programaci[oó]n|desarrollo|encargo|contrato/i.test(s);
+        var esDesarrolloOEncargo = function (s) {
+          return /programaci[oó]n|desarrollo|encargo|contrato/i.test(s);
         };
-        if (esSoftVideojuegos(n1) && esSoftVideojuegos(n2)) return true;
+        if (esDesarrolloOEncargo(n1) && esDesarrolloOEncargo(n2)) return true;
 
         if (campo === 'oper' || campo === 'objeto' || campo === 'vinc' || campo === 'ec_prod' || campo === 'ec_vision' || campo === 'actividad' || campo === 'keywords') {
           var sinEspeciales = function (s) {
             return s.toLowerCase()
               .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-              .replace(/\b(contrato|de|del|para|por|encargo|prestacion|prestación|venta|compra|provision|provisión|ingreso|egreso|servicio|servicios|actividad|desarrollo|empresa|realizar|videojuegos|software)\b/g, '')
+              .replace(/\b(contrato|de|del|para|por|encargo|prestacion|prestación|venta|compra|provision|provisión|ingreso|egreso|servicio|servicios|actividad|desarrollo|empresa|realizar|software)\b/g, '')
               .replace(/[^a-z0-9]/g, '');
           };
           var k1 = sinEspeciales(n1), k2 = sinEspeciales(n2);
           if (k1 && k2 && (k1 === k2 || k1.indexOf(k2) !== -1 || k2.indexOf(k1) !== -1)) return true;
 
-          var esServicio = function (s) { return /servicio|serv|asesor|consultor|soporte|desarrollo|software|tecnolog|juegos|videojuegos/i.test(s); };
+          var esServicio = function (s) { return /servicio|serv|asesor|consultor|soporte|desarrollo|software|tecnolog/i.test(s); };
           if (esServicio(n1) && esServicio(n2)) return true;
 
           var esInventario = function (s) { return /inventario|mercader|producto|bien|compra|reventa|distrib/i.test(s); };
@@ -11903,12 +11903,13 @@ se guía la descarga manual
        PARCHE PT — Bloque 16:  GUARDAS DE PRODUCCIÓN E INDUSTRIA ESPECÍFICA
     
        Correcciones derivadas del análisis crítico del informe generado:
-    
+
        1. INDUSTRIA + FUNCIÓN. No basta con que la comparable "haga software":
-          debe pertenecer a la industria de la parte examinada (videojuegos) Y
-          desempeñar la función básica. Se añade una verificación de industria
-          sobre la TABLA del estudio —cualquiera sea el camino por el que las
-          filas hayan llegado— que rechaza compañías ajenas a la industria.
+          debe coincidir con la actividad específica de la parte examinada
+          (getActividadEspecifica) Y desempeñar la función básica. Se añade una
+          verificación de industria sobre la TABLA del estudio —cualquiera sea
+          el camino por el que las filas hayan llegado— que rechaza compañías
+          ajenas a la actividad.
     
        2. GUARDA DE UNIVERSO. El informe no se genera si la tabla contiene el
           universo sin depurar (cientos o miles de filas): eso produjo un Anexo B
@@ -11931,7 +11932,7 @@ se guía la descarga manual
       'use strict';
 
       /* ───────────────────────────────────────────────────────────────────────
-         1. INDUSTRIA ESPECÍFICA — videojuegos, derivada de la parte examinada
+         1. INDUSTRIA ESPECÍFICA — derivada de la actividad de la parte examinada
          ─────────────────────────────────────────────────────────────────────── */
       /* la industria se deriva de la actividad específica (Gemini) cuando existe */
       window.ptIndustriaExaminada = function () {
@@ -12083,13 +12084,9 @@ se guía la descarga manual
         return { fallas: fallas, avisos: avisos, requisitos: requisitos, ok: fallas.length === 0 };
       };
 
-      /* corrección automática: depurar → conformar → aplicar */
       /* Reduce físicamente #cbody al conjunto que ya seleccionó el motor
          (motorEjecutar), que no depende de tener cargado un estudio del año
-         anterior. Sirve de respaldo cuando la depuración basada en el perfil
-         funcional del año anterior no puede ejecutarse (ptCribarUniverso la
-         necesita: si no hay PT_ANTERIOR, se detiene en silencio y deja la
-         tabla intacta, aunque el resto de la cadena siga "funcionando"). */
+         anterior. */
       function motorAplicarSeleccion() {
         if (!window.MOTOR || !MOTOR.activo) { moToast('El motor de selección no tiene un resultado activo.', 'red'); return false; }
         var seleccionadas = Object.keys(MOTOR.sel).filter(function (k) { return MOTOR.sel[k] === true; });
