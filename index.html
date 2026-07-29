@@ -1287,8 +1287,7 @@
               </div>
             </div>
           </div>
-        </div>
-      </div>
+        
 
 
       <div class="card full">
@@ -2101,38 +2100,39 @@
           const s = Array.isArray(data) ? data[0] : data;
           if (s) {
             window.PT_ANTERIOR = { texto: JSON.stringify(s), comparables: s.comps || [], fuente: file.name };
-            histMsg('✓ Informe JSON del año anterior cargado («' + file.name + '»).');
-            if (typeof extractPriorActivityWithGemini === 'function' && $('btnExtraerActividad')) {
-              if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
-            }
+            histMsg('✓ Informe JSON del año anterior cargado («' + file.name + '»). Detectando la actividad de la empresa…');
+            if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
           }
         } else if (nm.endsWith('.pdf')) {
           if (typeof readPDF === 'function') {
             readPDF(file, function (txt) {
               window.PT_ANTERIOR = { texto: txt, fuente: file.name };
-              histMsg('✓ Informe PDF del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres).');
-              if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
+              histMsg('✓ Informe PDF del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres). Detectando la actividad de la empresa…');
+              if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
             });
           } else {
             const txt = await file.text();
             window.PT_ANTERIOR = { texto: txt, fuente: file.name };
-            histMsg('✓ Informe del año anterior cargado («' + file.name + '»).');
-            if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
+            histMsg('✓ Informe del año anterior cargado («' + file.name + '»). Detectando la actividad de la empresa…');
+            if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
           }
         } else {
           const txt = await file.text();
           window.PT_ANTERIOR = { texto: txt, fuente: file.name };
-          histMsg('✓ Informe del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres).');
-          if ($('actmsg')) $('actmsg').textContent = 'Estudio anterior cargado («' + file.name + '»). Clic en 🤖 Extraer actividad específica con Gemini.';
+          histMsg('✓ Informe del año anterior cargado («' + file.name + '», ' + txt.length.toLocaleString('es-CO') + ' caracteres). Detectando la actividad de la empresa…');
+          if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
         }
       } catch (e) {
         histMsg('⚠ Error al leer el informe del año anterior: ' + e.message);
       }
     }
 
-    /* ================= ACTIVIDAD ESPECÍFICA (servicio independiente, Gemini) =================
+    /* ================= ACTIVIDAD ESPECÍFICA (extracción automática, Gemini) =================
        Se guarda en el estudio activo (actividad_json), NO en MOTOR: MOTOR se reinicia por
-       completo en cada motorEjecutar() y perdería el dato. */
+       completo en cada motorEjecutar() y perdería el dato. Modelo simplificado a una sola
+       frase precisa (resumen === keywords[0]); perfil/productos/sic se conservan solo para
+       alimentar el informe (buildClaudeContext, Anexo B/D) y ya no se piden a Gemini ni se
+       muestran en pantalla. */
     function getActividadEspecifica() {
       try { const el = $('actividad_json'); const v = el ? el.value : ''; return v ? JSON.parse(v) : null; } catch (e) { return null; }
     }
@@ -2144,19 +2144,53 @@
     }
     function renderActividadEspecifica() {
       const obj = getActividadEspecifica();
-      const panel = $('activity_spec_card'), msg = $('actmsg');
-      if (!obj) { if (panel) panel.style.display = 'none'; return; }
-      if (panel) panel.style.display = 'block';
-      if ($('act_resumen')) $('act_resumen').value = obj.resumen || '';
-      if ($('act_perfil')) $('act_perfil').value = obj.perfil || '';
-      if ($('act_justificacion')) $('act_justificacion').textContent = obj.justificacion ? ('Justificación de la IA: ' + obj.justificacion) : '';
-      renderActChips('keywords', obj.keywords || []);
-      renderActChips('sic', obj.sic || []);
-      if (msg) msg.textContent = 'Extraído' + (obj.fuente ? (' de «' + obj.fuente + '»') : '') + (obj.fecha ? (' el ' + new Date(obj.fecha).toLocaleString('es-CO')) : '') + '. Edite lo que considere antes de buscar comparables.';
+      const icon = $('act_status_icon'), txt = $('act_status_text'), btnEdit = $('act_btn_edit'), btnRetry = $('act_btn_retry');
+      if (!icon || !txt) return;
+      if (!obj || !obj.estado) {
+        icon.textContent = '🔴'; txt.style.color = '#7a241c';
+        txt.textContent = 'Suba el informe del año anterior (tarjeta de arriba) para que el sistema detecte automáticamente la actividad de la empresa.';
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnRetry) btnRetry.style.display = 'none';
+        return;
+      }
+      if (obj.estado === 'procesando') {
+        icon.textContent = '⏳'; txt.style.color = '#6b5010';
+        txt.textContent = 'Detectando la actividad de la empresa…';
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnRetry) btnRetry.style.display = 'none';
+      } else if (obj.estado === 'error') {
+        icon.textContent = '⚠️'; txt.style.color = '#7a241c';
+        txt.textContent = 'No se pudo detectar la actividad automáticamente' + (obj.errorMsg ? (': ' + obj.errorMsg) : '') + '.';
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnRetry) btnRetry.style.display = 'inline-flex';
+      } else {
+        icon.textContent = '✅'; txt.style.color = '#14532d';
+        txt.innerHTML = '<b>Actividad detectada:</b> «' + escH(obj.resumen || '') + '»';
+        if (btnEdit) btnEdit.style.display = 'inline-flex';
+        if (btnRetry) btnRetry.style.display = 'none';
+      }
     }
-    function renderActChips(campo, lista) {
-      const cont = $(campo === 'sic' ? 'act_sic_chips' : 'act_keywords_chips'); if (!cont) return;
-      cont.innerHTML = (lista || []).map((v, i) => '<span class="actchip' + (campo === 'sic' ? ' sic' : '') + '">' + escH(v) + '<button type="button" onclick="actividadQuitarChip(\'' + campo + '\',' + i + ')" aria-label="Quitar ' + escH(v) + '">×</button></span>').join('');
+    function actEditarToggle() {
+      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '', estado: 'listo' };
+      const box = $('act_edit_box'), input = $('act_edit_input');
+      if (!box || !input) return;
+      const abriendo = box.style.display === 'none';
+      box.style.display = abriendo ? 'block' : 'none';
+      if (abriendo) { input.value = obj.resumen || ''; input.focus(); }
+    }
+    function actGuardarEdicion() {
+      const input = $('act_edit_input'); if (!input) return;
+      const frase = input.value.trim();
+      if (!frase) { moToast('La actividad no puede quedar vacía', 'amber'); return; }
+      const obj = getActividadEspecifica() || { perfil: '', productos: [], sic: [], justificacion: '' };
+      obj.resumen = frase; obj.keywords = [frase]; obj.estado = 'listo';
+      setActividadEspecifica(obj);
+      sicexpDesdeActividad();
+      $('act_edit_box').style.display = 'none';
+      moToast('Actividad actualizada', 'green');
+      if (window.PT_ULTIMO_IMPORT_COMPS && window.PT_ULTIMO_IMPORT_COMPS.length && typeof curarCandidatosConIA === 'function') {
+        curarCandidatosConIA(window.PT_ULTIMO_IMPORT_COMPS);
+      }
     }
     function ptTraducirKeyword(texto) {
       if (!texto) return texto;
@@ -2216,76 +2250,28 @@
     }
     window.ptTraducirKeyword = ptTraducirKeyword;
 
-    function actividadAgregarChip(campo, valor) {
-      valor = (valor || '').trim(); if (!valor) return;
-      if (campo === 'keywords') {
-        valor = ptTraducirKeyword(valor);
-      }
-      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
-      const arr = obj[campo] || [];
-      if (!arr.some(x => x.toLowerCase() === valor.toLowerCase())) arr.push(valor);
-      obj[campo] = arr;
-      setActividadEspecifica(obj);
-      sicexpDesdeActividad();
-    }
-    function actividadQuitarChip(campo, idx) {
-      const obj = getActividadEspecifica(); if (!obj) return;
-      (obj[campo] || []).splice(idx, 1);
-      setActividadEspecifica(obj);
-      sicexpDesdeActividad();
-    }
-    function actividadEditada() {
-      const obj = getActividadEspecifica() || { resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' };
-      if ($('act_resumen')) obj.resumen = $('act_resumen').value;
-      if ($('act_perfil')) obj.perfil = $('act_perfil').value;
-      if ($('actividad_json')) $('actividad_json').value = JSON.stringify(obj);
-      saveActive(); calc();
-    }
     function sicexpDesdeActividad() {
       const obj = getActividadEspecifica(); if (!obj || !$('sicexp')) return;
-      const partes = [].concat(obj.sic || [], obj.keywords || []);
-      if (partes.length) { $('sicexp').value = partes.join(', '); calcD(); }
+      if (obj.resumen) { $('sicexp').value = obj.resumen; calcD(); }
     }
 
     async function extractPriorActivityWithGemini() {
-      /* helpers para cambiar el estado visual del botón/mensaje de actividad */
-      function _actEstado(estado, texto) {
-        const btn = $('btnExtraerActividad'), msg = $('actmsg'), icon = $('actmsg_icon');
-        const badge = $('badge_actividad'), hint = $('act_steps_hint');
-        const estados = {
-          pendiente: { bg: '#C0473B', label: '🤖 Analizar empresa con IA', icono: '🔴', color: '#7a241c', badge: '🔴 Pendiente', badgeClass: 'pending' },
-          procesando: { bg: '#B67A0E', label: '⏳ Analizando…', icono: '⏳', color: '#6b5010', badge: '⏳ Procesando', badgeClass: 'partial' },
-          listo: { bg: '#2E8B6B', label: '✅ Volver a analizar', icono: '✅', color: '#14532d', badge: '✅ Listo', badgeClass: 'ok' },
-          error: { bg: '#C0473B', label: '⚠ Reintentar análisis', icono: '⚠️', color: '#7a241c', badge: '⚠ Error', badgeClass: 'pending' }
-        };
-        const e = estados[estado] || estados.pendiente;
-        if (btn) { btn.style.background = e.bg; btn.textContent = e.label; btn.disabled = (estado === 'procesando'); }
-        if (icon) icon.textContent = e.icono;
-        if (msg) { msg.textContent = texto || ''; msg.style.color = e.color; msg.style.fontWeight = (estado === 'listo') ? '500' : '600'; }
-        if (badge) { badge.textContent = e.badge; badge.className = 'card-status-badge ' + e.badgeClass; }
-        if (hint) hint.style.display = (estado === 'listo') ? 'none' : '';
-      }
-
-      const msg = $('actmsg'), btn = $('btnExtraerActividad');
       if (!window.PT_ANTERIOR || !PT_ANTERIOR.texto) {
-        _actEstado('pendiente', '⚠ No hay estudio del año anterior cargado. Cárguelo primero en la tarjeta de arriba y luego pulse «Analizar empresa con IA».');
+        setActividadEspecifica({ estado: 'error', errorMsg: 'no hay estudio del año anterior cargado', resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' });
         return;
       }
-      _actEstado('procesando', 'Analizando el estudio con Gemini, esto puede tardar unos segundos…');
+      setActividadEspecifica({ estado: 'procesando', resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' });
       const texto = PT_ANTERIOR.texto.slice(0, 28000);
       const prompt =
         'Eres un experto en precios de transferencia y búsqueda de comparables en bases de datos como Capital IQ, Orbis y SuperSociedades.\n\n' +
         'Tu única tarea: leer el texto del estudio de precios de transferencia del año anterior que aparece al final, e identificar CON MÁXIMO DETALLE OPERATIVO cuál es la actividad económica REAL Y ESPECIALIZADA que ejerce la Compañía examinada.\n\n' +
         'REGLAS CRÍTICAS — léelas antes de responder:\n' +
         '1. NO uses el objeto social del Certificado de Cámara de Comercio (ese es genérico y jurídico). Busca en el texto del estudio cuál fue la operación real analizada, qué productos o servicios específicos vende o presta, a qué clientes, en qué segmento de mercado, bajo qué modelo de negocio (compra-reventa, agencia, manufactura, servicios, etc.).\n' +
-        '2. "actividad_especifica_corta": máximo 2 oraciones. Debe decir exactamente QUÉ hace la empresa, con QUÉ productos/servicios, para QUIÉN, y bajo QUÉ modelo (ej: "Distribución mayorista de fungicidas e insecticidas técnicos para el sector cafetero y arrocero en Colombia, importados del vinculado en Estados Unidos, bajo modelo de compra-reventa con riesgo de inventario completo"). NUNCA escribas algo tan genérico como "distribución de productos" o "prestación de servicios".\n' +
+        '2. "actividad_especifica_corta": máximo 2 oraciones, en español. Debe decir exactamente QUÉ hace la empresa, con QUÉ productos/servicios, para QUIÉN, y bajo QUÉ modelo (ej: "Distribución mayorista de fungicidas e insecticidas técnicos para el sector cafetero y arrocero en Colombia, importados del vinculado en Estados Unidos, bajo modelo de compra-reventa con riesgo de inventario completo"). NUNCA escribas algo tan genérico como "distribución de productos" o "prestación de servicios". Esta frase se usará TAL CUAL para comparar contra la Business Description (en inglés) de empresas candidatas en Capital IQ, así que debe ser suficientemente descriptiva para que un analista experto entienda de inmediato si otra empresa hace lo mismo.\n' +
         '3. "perfil_funcional_far": describe con precisión qué FUNCIONES ejerce (compra, almacenamiento, distribución, manufactura, servicio posventa…), qué ACTIVOS controla (bodegas, equipos, licencias, marca…) y qué RIESGOS asume (inventario, crédito, tipo de cambio, obsolescencia…).\n' +
-        '4. "productos_servicios_clave": lista los productos o servicios concretos mencionados en el estudio (ej: ["fungicidas sistémicos", "herbicidas de contacto", "insecticidas piretroides"]). Si son servicios, el tipo exacto de servicio.\n' +
-        '5. "keywords_busqueda_comparables": términos en INGLÉS para buscar en Capital IQ / Orbis. Deben ser específicos, no genéricos. Ej: ["agrochemical distributor", "crop protection wholesale", "pesticide distribution Latin America"]. Incluye el sector y la función.\n' +
-        '6. "codigos_sic_sugeridos": al menos 2 códigos SIC de 4 dígitos que correspondan exactamente al negocio. Si es distribución de agroquímicos: 5169. Si es manufactura de plásticos: 3089. Busca el más específico.\n' +
-        '7. "justificacion_perfil": explica en 2-3 oraciones por qué estos keywords y SIC son los correctos para encontrar empresas comparables independientes con el mismo perfil de riesgos y funciones.\n\n' +
+        '4. "justificacion_perfil": explica en 2-3 oraciones por qué esa descripción de actividad es la correcta para encontrar empresas comparables independientes con el mismo perfil de riesgos y funciones.\n\n' +
         'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, sin texto antes ni después:\n' +
-        '{"actividad_especifica_corta":"","perfil_funcional_far":"","productos_servicios_clave":[],"keywords_busqueda_comparables":[],"codigos_sic_sugeridos":[],"justificacion_perfil":""}\n\n' +
+        '{"actividad_especifica_corta":"","perfil_funcional_far":"","justificacion_perfil":""}\n\n' +
         '--- TEXTO DEL ESTUDIO DEL AÑO ANTERIOR ---\n' + texto;
       try {
         const res = await fetch('/api/gemini', {
@@ -2297,16 +2283,19 @@
         const raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('') : '';
         if (!res.ok || !raw) throw new Error((data && data.error && (data.error.message || JSON.stringify(data.error))) || 'Respuesta vacía de Gemini');
         const j = extraerJSONDeRespuestaIA(raw);
+        const frase = j.actividad_especifica_corta || '';
+        if (!frase) throw new Error('Gemini no devolvió una actividad específica');
         setActividadEspecifica({
-          resumen: j.actividad_especifica_corta || '', perfil: j.perfil_funcional_far || '',
-          productos: j.productos_servicios_clave || [], keywords: j.keywords_busqueda_comparables || [],
-          sic: j.codigos_sic_sugeridos || [], justificacion: j.justificacion_perfil || '',
-          fuente: PT_ANTERIOR.fuente || 'estudio del año anterior', fecha: new Date().toISOString()
+          resumen: frase, perfil: j.perfil_funcional_far || '',
+          productos: [], keywords: [frase], sic: [], justificacion: j.justificacion_perfil || '',
+          fuente: PT_ANTERIOR.fuente || 'estudio del año anterior', fecha: new Date().toISOString(), estado: 'listo'
         });
         sicexpDesdeActividad();
-        _actEstado('listo', '✓ Actividad detectada y aplicada. Revise los campos y ajuste si es necesario antes de buscar comparables.');
+        if (window.PT_ULTIMO_IMPORT_COMPS && window.PT_ULTIMO_IMPORT_COMPS.length && typeof curarCandidatosConIA === 'function') {
+          curarCandidatosConIA(window.PT_ULTIMO_IMPORT_COMPS);
+        }
       } catch (e) {
-        _actEstado('error', '⚠ No se pudo analizar con Gemini: ' + e.message + '. Puede completar los campos manualmente.');
+        setActividadEspecifica({ estado: 'error', errorMsg: e.message, resumen: '', perfil: '', productos: [], keywords: [], sic: [], justificacion: '' });
       }
     }
 
@@ -6700,9 +6689,12 @@ se guía la descarga manual
               '<option value="">— seleccione —</option>' + opciones +
               '<option value="__otro__"' + (!conocido && p.tipoAuto ? ' selected' : '') + '>Otro (escribir)…</option>' +
               '</select>' +
-              '<input type="text" value="' + selValOtro + '" placeholder="Escriba el tipo de operación" style="display:' + (!conocido && p.tipoAuto ? 'block' : 'none') + ';margin-top:4px;width:100%;max-width:220px" ' +
-              'onkeydown="if(event.key===\'Enter\'){ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')}" ' +
-              'onblur="ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')">' +
+              '<div style="display:' + (!conocido && p.tipoAuto ? 'flex' : 'none') + ';gap:4px;margin-top:4px;max-width:220px">' +
+              '<input type="text" value="' + selValOtro + '" placeholder="Escriba el tipo de operación" style="flex:1;min-width:0" ' +
+              'onkeydown="if(event.key===\'Enter\'){event.preventDefault();ptGuardarTipoTexto(this, \'' + hojaJs + '\', ' + p.fila + ')}">' +
+              '<button type="button" title="Confirmar" onclick="ptGuardarTipoTexto(this.previousElementSibling, \'' + hojaJs + '\', ' + p.fila + ')" ' +
+              'style="padding:2px 8px;background:#1E8449;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700">✓</button>' +
+              '</div>' +
               '</td></tr>';
           };
           h += '<div style="margin-top:10px;padding:8px 10px;border:2px solid #B7950B;background:#FEF9E7;border-radius:6px">' +
@@ -6732,16 +6724,22 @@ se guía la descarga manual
 
       /* Controles de la tabla editable de «Tipo de operación» */
       window.ptSeleccionarTipo = async function (sel, hoja, fila) {
-        var v = sel.value, input = sel.nextElementSibling;
-        if (v === '__otro__') { if (input) { input.style.display = 'block'; input.focus(); } return; }
-        if (input) input.style.display = 'none';
+        var v = sel.value, wrap = sel.nextElementSibling;
+        if (v === '__otro__') {
+          if (wrap) { wrap.style.display = 'flex'; var inp = wrap.querySelector('input'); if (inp) inp.focus(); }
+          return;
+        }
+        if (wrap) wrap.style.display = 'none';
         if (!v) return;
         await ptGuardarTipoOverride(hoja, fila, v);
         if (typeof window.pt36AnalizarOperaciones === 'function') await window.pt36AnalizarOperaciones();
       };
+      /* Guarda solo al confirmar explícitamente (Enter o el botón ✓): NO se
+         guarda al perder el foco, para no cerrar el cuadro mientras se escribe
+         si el usuario hace clic en otra parte de la pantalla. */
       window.ptGuardarTipoTexto = async function (input, hoja, fila) {
-        var v = String(input.value || '').trim();
-        if (!v) return;
+        var v = String((input && input.value) || '').trim();
+        if (!v) { if (input) input.focus(); return; }
         await ptGuardarTipoOverride(hoja, fila, v);
         if (typeof window.pt36AnalizarOperaciones === 'function') await window.pt36AnalizarOperaciones();
       };
@@ -10742,7 +10740,11 @@ se guía la descarga manual
           headers['anthropic-version'] = '2023-06-01';
           headers['anthropic-dangerous-direct-browser-access'] = 'true';
         } else {
-          url = (C.modo === 'propio' && C.endpoint) ? C.endpoint : '/api/claude';
+          if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && (!C.endpoint || C.endpoint === '/api/claude')) {
+            url = 'https://us-central1-precios-trasnferencia.cloudfunctions.net/claude';
+          } else {
+            url = (C.modo === 'propio' && C.endpoint) ? C.endpoint : '/api/claude';
+          }
         }
 
         var res = await fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) });
