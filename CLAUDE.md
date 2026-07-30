@@ -17,12 +17,15 @@ npm run build          # sync-index.js (raíz→public) + build de frontend/ (Vi
 npm start              # corre build (prestart) y levanta server.js en :3000
 npm run dev  --prefix frontend    # Vite dev server del gestor de reportes, proxy /api → :3000
 npm run lint --prefix frontend    # oxlint (única herramienta de lint del repo)
+npm test               # node --test sobre scripts/lib/ — cubre solo los helpers de scripts/
 firebase deploy        # hosting + functions; el predeploy dispara `npm run build`
 ```
 
-**No hay suite de tests automatizada.** La verificación de un cambio es: (a) `grep` de que
-ningún símbolo eliminado siga referenciado, y (b) prueba manual en el navegador. No afirmes
-que algo "pasa los tests"; describe qué verificaste y cómo.
+**La aplicación no tiene tests.** `npm test` cubre únicamente los helpers de `scripts/lib/`;
+nada de `index.html` ni de `frontend/` está bajo test. Para un cambio en la aplicación la
+verificación es: (a) `grep` de que ningún símbolo eliminado siga referenciado, y (b) prueba
+manual en el navegador. No afirmes que algo "pasa los tests" apoyándote en `npm test` si
+tocaste la aplicación; describe qué verificaste y cómo.
 
 ## Regla crítica de edición
 
@@ -118,6 +121,31 @@ implementación derivados, nombrados `YYYY-MM-DD-tema[-design].md`. Los specs ve
 afirmación contra el código antes de proponer cambios (incluyendo marcar como falsas las que
 no se sostienen). Si vas a implementar algo descrito ahí, lee el spec y el plan primero, y
 respeta su alcance.
+
+## Trabajo en equipo
+
+Cada quien trabaja en su rama (`juandev` y las que definan los demás) sobre un `index.html`
+que todos editan. Antes de empezar a aplicar cambios propios, correr:
+
+```
+/revisar-ramas-equipo
+```
+
+Trae las ramas remotas, reporta qué cambió cada compañero **mapeado al bloque concreto de
+`index.html` que toca** —no "conflicto en index.html", que en 13 000 líneas no informa nada—
+e integra de menor a mayor solapamiento, abortando ante cualquier conflicto fuera de
+`public/`. Correrla al empezar, no al terminar: el punto es enterarse antes de duplicar
+trabajo.
+
+No requiere instalación. Vive en `.claude/skills/` y llega con `git pull`.
+
+Su parte determinista es `scripts/revisar-ramas.js`, que solo lee y se puede correr suelto
+si se quiere el JSON crudo.
+
+**Si `git fetch` falla con `bad object refs/desktop.ini`**, es Google Drive: crea
+`desktop.ini` dentro de `.git/refs/` y git los lee como refs corruptas. `.gitignore` no cubre
+`.git/`, así que se repite en cada sincronización. Limpiar con
+`find .git -name desktop.ini -delete`.
 
 ## Notas sueltas
 
