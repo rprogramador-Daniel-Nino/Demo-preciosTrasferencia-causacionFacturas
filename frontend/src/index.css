@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+body {
+  background-color: #f9fafb; /* light mode fallback */
+  color: #09090b;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.dark body {
+  background-color: #09090b; /* dark mode fallback */
+  color: #f9fafb;
+}

@@ -24,6 +24,28 @@ app.use(express.json({ limit: '2mb' }));
 // Sirve el HTML y cualquier asset estático desde public/ (misma carpeta que despliega Firebase Hosting)
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Servir los archivos estáticos de la aplicación React (public/gestor-reportes)
+app.use('/gestor-reportes/assets', express.static(path.join(__dirname, 'public/gestor-reportes/assets')));
+app.use('/assets', express.static(path.join(__dirname, 'public/gestor-reportes/assets')));
+
+// Ruta explícita para el HTML antiguo
+app.get('/index', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/index.html'));
+});
+app.get('/index.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/index.html'));
+});
+
+// Ruta de la aplicación React (Gestor de Reportes)
+app.get('/gestor-reportes-inicio', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/gestor-reportes/index.html'));
+});
+
+// Cualquier ruta que empiece con /gestor-reportes sirve la app de React (para soportar React Router)
+app.get('/gestor-reportes*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/gestor-reportes/index.html'));
+});
+
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
 app.post('/api/claude', async (req, res) => {

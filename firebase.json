@@ -33,6 +33,14 @@
         "function": "gemini"
       },
       {
+        "source": "/gestor-reportes-inicio",
+        "destination": "/gestor-reportes/index.html"
+      },
+      {
+        "source": "/gestor-reportes/**",
+        "destination": "/gestor-reportes/index.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

@@ -1,0 +1,168 @@
+import React from 'react';
+import { ShieldCheck, ShieldAlert, AlertCircle, FileText, CheckCircle2, XCircle } from 'lucide-react';
+import { num, pliOf, quart, adjustInfo, pctf, fmt } from '../utils/calculations';
+
+export default function AuditoriaNorma({ study }) {
+  const auditPoints = [];
+
+  // Check 1: Datos del Contribuyente
+  const hasContribuyente = !!(study.ent && study.nit && study.ciiu);
+  auditPoints.push({
+    type: 'Norma',
+    title: 'Información básica del contribuyente (Razón Social, NIT, CIIU)',
+    status: hasContribuyente,
+    detail: hasContribuyente 
+      ? `Contribuyente: ${study.ent} (NIT: ${study.nit}, CIIU: ${study.ciiu})` 
+      : 'Faltan datos de identificación fiscal principal del contribuyente.'
+  });
+
+  // Check 2: Representante Legal
+  const hasRepLegal = !!study.representante;
+  auditPoints.push({
+    type: 'Norma',
+    title: 'Representación legal identificada',
+    status: hasRepLegal,
+    detail: hasRepLegal 
+      ? `Representante: ${study.representante}` 
+      : 'Falta registrar el representante legal.'
+  });
+
+  // Check 3: Parte Vinculada
+  const hasVinculada = !!(study.vinc && study.pais_vinc && study.vinc_tipo);
+  auditPoints.push({
+    type: 'Norma',
+    title: 'Identificación de la parte vinculada y criterio de vinculación',
+    status: hasVinculada,
+    detail: hasVinculada 
+      ? `Vinculado: ${study.vinc} (${study.pais_vinc}) - Tipo: ${study.vinc_tipo}` 
+      : 'Faltan datos de la contraparte del exterior o el criterio de vinculación.'
+  });
+
+  // Check 4: Cifras financieras
+  const hasFinancials = !!(study.t_s && study.t_op);
+  auditPoints.push({
+    type: 'Técnica',
+    title: 'Cifras financieras de la parte examinada',
+    status: hasFinancials,
+    detail: hasFinancials 
+      ? `Ingresos: COP ${fmt(study.t_s)} | Utilidad Op: COP ${fmt(study.t_op)}` 
+      : 'Falta ingresar las cifras financieras principales (Ventas / Utilidad).'
+  });
+
+  // Check 5: Muestra de comparables
+  const hasComparables = study.comparables && study.comparables.length >= 3;
+  auditPoints.push({
+    type: 'Técnica',
+    title: 'Muestra mínima de comparables (Mínimo 3)',
+    status: hasComparables,
+    detail: hasComparables 
+      ? `Se detectaron ${study.comparables.length} empresas comparables en la muestra.` 
+      : `Muestra insuficiente. Solo hay ${study.comparables ? study.comparables.length : 0} comparables (se exigen al menos 3).`
+  });
+
+  // Check 6: Cumplimiento de margen (Rango Intercuartil)
+  let withinRange = false;
+  let statusDetail = 'No se ha podido calcular el cumplimiento.';
+  let hasRange = false;
+  
+  if (study.comparables && study.comparables.length >= 3 && study.t_s && study.t_op) {
+    const kind = study.pli || 'MO';
+    const T = { s: num(study.t_s), c: num(study.t_c), op: num(study.t_op), ar: num(study.t_ar), inv: num(study.t_inv), ap: num(study.t_ap) };
+    const tPLI = pliOf(T, kind);
+    
+    const activeSeries = study.comparables
+      .map(c => {
+        const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
+        return pliOf(rawVal, kind);
+      })
+      .filter(val => val !== null)
+      .sort((a, b) => a - b);
+
+    if (activeSeries.length >= 3) {
+      hasRange = true;
+      const stats = {
+        p25: quart(activeSeries, .25),
+        med: quart(activeSeries, .5),
+        p75: quart(activeSeries, .75)
+      };
+      
+      const adj = adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso);
+      if (adj) {
+        withinRange = adj.within;
+        statusDetail = adj.within 
+          ? `Cumple: Margen ${pctf(tPLI)} dentro del rango intercuartil [${pctf(stats.p25)} - ${pctf(stats.p75)}]`
+          : `Requiere ajuste: Margen ${pctf(tPLI)} fuera del rango [${pctf(stats.p25)} - ${pctf(stats.p75)}]. Ajuste sugerido: COP ${fmt(adj.capped)}`;
+      }
+    }
+  }
+
+  auditPoints.push({
+    type: 'Técnica',
+    title: 'Cumplimiento del rango intercuartil (Arm\'s Length)',
+    status: hasRange && withinRange,
+    detail: statusDetail,
+    warningOnly: !hasRange
+  });
+
+  const totalWarnings = auditPoints.filter(p => !p.status && p.warningOnly).length;
+  const totalErrors = auditPoints.filter(p => !p.status && !p.warningOnly).length;
+
+  return (
+    <div className="space-y-6">
+      {/* Resumen de Auditoría */}
+      <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm flex flex-col md:flex-row gap-6 justify-between items-start md:items-center">
+        <div>
+          <h3 className="text-lg font-bold text-zinc-950 dark:text-zinc-50">Auditoría de Cumplimiento Técnico y Normativo</h3>
+          <p className="text-sm text-zinc-500">Valida los requisitos de la documentación comprobatoria según el estatuto tributario colombiano.</p>
+        </div>
+        <div className="flex gap-4">
+          <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 px-4 py-2 rounded-lg text-center">
+            <span className="text-xs text-emerald-800 dark:text-emerald-400 block font-medium uppercase">Exitosos</span>
+            <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-300">{auditPoints.filter(p => p.status).length}</span>
+          </div>
+          {totalErrors > 0 && (
+            <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 px-4 py-2 rounded-lg text-center">
+              <span className="text-xs text-rose-800 dark:text-rose-400 block font-medium uppercase">Errores</span>
+              <span className="text-2xl font-bold text-rose-600 dark:text-rose-300">{totalErrors}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Tarjeta de Lista */}
+      <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#0f0f13]">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Reglas de Validación Técnica</h4>
+        </div>
+        <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+          {auditPoints.map((point, idx) => (
+            <div key={idx} className="p-4 flex gap-4 items-start hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20 transition-colors">
+              <div className="pt-0.5">
+                {point.status ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                ) : point.warningOnly ? (
+                  <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-rose-500 flex-shrink-0" />
+                )}
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200">{point.title}</span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                    point.type === 'Norma' 
+                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' 
+                      : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                  }`}>
+                    {point.type}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-normal">{point.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

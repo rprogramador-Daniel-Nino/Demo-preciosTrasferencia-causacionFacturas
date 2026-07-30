@@ -4,7 +4,7 @@
   "description": "Generador de Informes Locales de Precios de Transferencia — servidor local con proxy seguro a la API de Claude",
   "main": "server.js",
   "scripts": {
-    "build": "node scripts/sync-index.js",
+    "build": "node scripts/sync-index.js && npm run build --prefix frontend",
     "prestart": "npm run build",
     "start": "node server.js"
   },
