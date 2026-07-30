@@ -1471,7 +1471,7 @@
             </div>
           </div>
 
-          <!-- ══════ MOTOR DE SELECCIÓN (paso 1: filtros, antes de importar) ══════ -->
+          <!-- ══════ MOTOR DE SELECCIÓN AUTOMÁTICA — wizard de 3 pasos ══════ -->
           <div
             style="border:1.5px solid var(--hair);border-radius:10px;padding:14px;margin:0 0 14px;background:var(--white)">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
@@ -1480,8 +1480,14 @@
                 geografía 15 ·
                 rentabilidad 15 · datos 10</span>
             </div>
-            <div id="mo_ia_status" style="font-size:11.5px;color:var(--muted);margin-top:6px"></div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px">
+
+            <!-- Paso 1: filtros -->
+            <div style="display:flex;align-items:center;gap:10px;margin:16px 0 10px">
+              <span
+                style="flex:none;width:24px;height:24px;border-radius:50%;background:#334155;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center">1</span>
+              <b style="font-size:12.5px;color:#1E293B">Definir los filtros del motor</b>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px">
               <label class="f"><span class="l">N objetivo</span><input class="i" id="mo_n" type="number" value="12"
                   min="4" max="30" title="Tope 30: por encima la muestra pierde homogeneidad funcional"></label>
               <label class="f"><span class="l">Pérdidas operativas</span><select class="i" id="mo_perd">
@@ -1513,7 +1519,38 @@
             <label class="f" id="mo_justw" style="display:none;margin-top:6px"><span class="l">Justificación de
                 preferir
                 pérdidas (≥120 car., va al informe)</span><textarea class="i" id="mo_just" rows="2"></textarea></label>
-            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+
+            <!-- Paso 2: importar Capital IQ -->
+            <div
+              style="display:flex;align-items:center;gap:10px;margin:16px 0 10px;padding-top:14px;border-top:1px solid var(--hair)">
+              <span
+                style="flex:none;width:24px;height:24px;border-radius:50%;background:#334155;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center">2</span>
+              <b style="font-size:12.5px;color:#1E293B">Importar el Excel de Capital IQ</b>
+            </div>
+            <div class="pi-btns"
+              style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+              <div style="display:flex;gap:6px;align-items:center"><label class="mini" style="cursor:pointer">📥 Importar
+                  Excel (Capital IQ)<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none"
+                    onchange="importCompsFile(this.files[0])"></label>
+
+                <label class="mini" style="cursor:pointer">📎
+                  Adjuntar<input type="file" style="display:none"
+                    onchange="attachEvidence('comps',this.files[0])"></label><span id="evid-comps"
+                  style="font-size:10.5px;color:#1F6D4F"></span>
+              </div><button type="button" class="btn mini violet" id="toggleCompsBtn" onclick="toggleCompsTable()"
+                style="margin-left:auto;font-weight:600">👁️ Ocultar /
+                Mostrar tabla</button>
+            </div>
+            <div id="mo_ia_status" style="font-size:11.5px;color:var(--muted);margin-top:8px"></div>
+
+            <!-- Paso 3: ejecutar -->
+            <div
+              style="display:flex;align-items:center;gap:10px;margin:16px 0 10px;padding-top:14px;border-top:1px solid var(--hair)">
+              <span
+                style="flex:none;width:24px;height:24px;border-radius:50%;background:#334155;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center">3</span>
+              <b style="font-size:12.5px;color:#1E293B">Ejecutar la selección</b>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn solid" onclick="motorEjecutar()">Ejecutar selección</button>
               <button class="btn ghost" onclick="motorMas(3)">+ Solicitar 3 más</button>
               <button class="btn ghost" onclick="motorEscenarios()">⚖ Comparar escenarios</button>
@@ -1536,22 +1573,6 @@
                 <button class="btn" style="margin-top:6px" onclick="motorConfirmarEsc()">Confirmar y
                   aplicar</button></label>
             </div>
-          </div>
-
-          <!-- ══════ PASO 2: importar el universo de Capital IQ ══════ -->
-          <div class="pi-btns"
-            style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-            <div style="display:flex;gap:6px;align-items:center"><label class="mini" style="cursor:pointer">📥 Importar
-                Excel (Capital IQ)<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none"
-                  onchange="importCompsFile(this.files[0])"></label>
-
-              <label class="mini" style="cursor:pointer">📎
-                Adjuntar<input type="file" style="display:none"
-                  onchange="attachEvidence('comps',this.files[0])"></label><span id="evid-comps"
-                style="font-size:10.5px;color:#1F6D4F"></span>
-            </div><button type="button" class="btn mini violet" id="toggleCompsBtn" onclick="toggleCompsTable()"
-              style="margin-left:auto;font-weight:600">👁️ Ocultar /
-              Mostrar tabla</button>
           </div>
           <div id="compsSummaryBadge"
             style="display:none;padding:12px 16px;background:#F4F6F7;border:1px solid #D5D8DC;border-radius:10px;margin:10px 0;font-size:12.5px;color:#2C3E50;justify-content:space-between;align-items:center;box-shadow:0 2px 4px rgba(0,0,0,0.03)">
@@ -12138,47 +12159,6 @@ se guía la descarga manual
         return { fallas: fallas, avisos: avisos, requisitos: requisitos, ok: fallas.length === 0 };
       };
 
-      /* Reduce físicamente #cbody al conjunto que ya seleccionó el motor
-         (motorEjecutar), que no depende de tener cargado un estudio del año
-         anterior. */
-      function motorAplicarSeleccion() {
-        if (!window.MOTOR || !MOTOR.activo) { moToast('El motor de selección no tiene un resultado activo.', 'red'); return false; }
-        var seleccionadas = Object.keys(MOTOR.sel).filter(function (k) { return MOTOR.sel[k] === true; });
-        if (!seleccionadas.length) { moToast('El motor no dejó ninguna comparable seleccionada.', 'red'); return false; }
-        var filas = [].slice.call($('cbody').children).map(function (tr) {
-          var v = [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; });
-          return { key: nameKey(v[0]), vals: v };
-        });
-        var conservar = filas.filter(function (f) { return seleccionadas.indexOf(f.key) >= 0; });
-        if (!conservar.length) { moToast('Ninguna fila de la tabla coincide con la selección del motor.', 'red'); return false; }
-        var cuerpo = $('cbody'); cuerpo.innerHTML = '';
-        var frag = document.createDocumentFragment();
-        conservar.forEach(function (f) { frag.appendChild(compRow(f.vals)); });
-        cuerpo.appendChild(frag);
-        try { calc(); } catch (e) { }
-        moToast('Tabla reducida a las ' + conservar.length + ' comparable(s) que seleccionó el motor.', 'green');
-        return true;
-      }
-      window.motorAplicarSeleccion = motorAplicarSeleccion;
-
-      window.ptCorregirTablaAutomaticamente = function () {
-        if (!$('cbody').children.length) {
-          moToast('No hay comparables cargadas: importe el Excel del universo de búsqueda (Capital IQ) primero.', 'red');
-          return false;
-        }
-        try {
-          motorEjecutar(false);
-          if (!motorAplicarSeleccion()) {
-            moToast('El motor no dejó ninguna comparable seleccionada. Ajuste los criterios del «Motor de selección automática» e intente de nuevo.', 'red');
-            return false;
-          }
-          try { ptVerificarIndustriaTabla_yAplicar(); } catch (e) { }
-          try { ptFiltrarAtipicos(); } catch (e) { }
-          moToast('Tabla corregida: ' + $('cbody').children.length + ' comparable(s) en el conjunto final.', 'green');
-          return true;
-        } catch (e) { moToast('La corrección automática falló: ' + e.message, 'red'); return false; }
-      };
-
       /* ───────────────────────────────────────────────────────────────────────
          3. SANEAMIENTO DEL TEXTO PEGADO
          ─────────────────────────────────────────────────────────────────────── */
@@ -12237,122 +12217,6 @@ se guía la descarga manual
         } catch (e) { }
       }, true);
 
-      /* ───────────────────────────────────────────────────────────────────────
-         4. LA GUARDA ENVUELVE LA GENERACIÓN Y LA EXPORTACIÓN
-         ─────────────────────────────────────────────────────────────────────── */
-      /* window.X (no "function X(){}" a secas): el botón del modal y su «×» las
-         llaman desde onclick="..." inline, que resuelve nombres en el ámbito
-         global — una función declarada solo dentro de este cierre nunca sería
-         visible ahí y el clic fallaría con ReferenceError silenciado por
-         window.onerror (igual que adjExigirOK/exportPortfolio/ADJ/MOTOR antes). */
-      window.ptCerrarModalBloqueo = function () {
-        var m = document.getElementById('ptModalBloqueoOverlay');
-        if (m && m.parentNode) m.parentNode.removeChild(m);
-      };
-
-      function ptGenerarExplicacionFallaHtml(f) {
-        var html = '';
-        if (f.id === 'industria') {
-          var ind = (ptIndustriaExaminada() || {}).nombre || 'tu actividad';
-          var empresasList = (f.ajenas || []).slice(0, 4).map(function (x) { return '<b>' + escH(x.name) + '</b>'; }).join(', ');
-          if ((f.ajenas || []).length > 4) empresasList += ' y otras mas';
-
-          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
-            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:8px;display:flex;align-items:center;gap:6px">' +
-            '<span>🏢</span> <span>Se incluyeron empresas de actividades muy distintas a la tuya</span>' +
-            '</div>' +
-            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
-            '<p style="margin:0 0 8px"><b>¿Qué significa esto ?</b><br>' +
-            'Imagina que vendes empanadas y para probar si tus precios son justos te comparas con un taller de mecánica de carros. ¡No tiene sentido! Eso pasó aquí: en tu tabla hay empresas (' + empresasList + ') que prestan servicios de TI o consultoría general, mientras que tu empresa se dedica exclusivamente a <b>' + escH(ind) + '</b>.</p>' +
-            '<p style="margin:0 0 8px"><b>¿Por qué no se puede dejar así?</b><br>' +
-            'La DIAN y las normas tributarias internacionales (OCDE) rechazan estudios donde se comparen negocios distintos, porque sus márgenes de ganancia son completamente diferentes. Si enviamos esto así, la DIAN anula el estudio inmediatamente.</p>' +
-            '<p style="margin:0;color:#1E8449;font-weight:700">' +
-            '💡 <b>¿Cómo lo resuelves?</b> Haz clic abajo en el botón verde. El sistema eliminará esas empresas equivocadas, buscará las idóneas de tu misma industria y corregirá todo por ti en 1 segundo.' +
-            '</p>' +
-            '</div>' +
-            '</div>';
-        } else if (f.id === 'universo_en_tabla') {
-          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
-            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:8px;display:flex;align-items:center;gap:6px">' +
-            '<span>📊</span> <span>La tabla tiene demasiadas empresas cargadas sin filtrar</span>' +
-            '</div>' +
-            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
-            '<p style="margin:0 0 8px"><b>¿Qué significa esto ?</b><br>' +
-            'Cargaste el directorio telefónico entero del mercado en lugar de seleccionar solo a tus competidores reales. En la tabla hay más de 50 empresas metidas.</p>' +
-            '<p style="margin:0 0 8px"><b>¿Por qué no se puede dejar así?</b><br>' +
-            'Un estudio legal exige seleccionar un grupo pequeño de 5 a 15 empresas reales. Si imprimimos el informe con el universo completo sin filtrar, saldrían cientos de páginas inservibles.</p>' +
-            '<p style="margin:0;color:#1E8449;font-weight:700">' +
-            '💡 <b>¿Cómo lo resuelves?</b> Presiona el botón verde abajo. El sistema aplicará los filtros inteligentes, descartará el exceso y dejará las 10 mejores empresas.' +
-            '</p>' +
-            '</div>' +
-            '</div>';
-        } else if (f.id && f.id.indexOf('anio_en_') === 0) {
-          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
-            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:8px;display:flex;align-items:center;gap:6px">' +
-            '<span>🔢</span> <span>Pusiste un año en una casilla donde va una cantidad de dinero</span>' +
-            '</div>' +
-            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' +
-            '<p style="margin:0 0 8px"><b>¿Qué significa esto ?</b><br>' +
-            'En una de las casillas de saldo (como cartera o inventarios) escribiste el año "2025" en vez del monto real en dinero. Esto hace que las fórmulas financieras den resultados equivocados.</p>' +
-            '<p style="margin:0;color:#1E8449;font-weight:700">💡 <b>¿Cómo lo resuelves?</b> Busca esa casilla en el formulario y cambia "2025" por el valor en dinero verdadero.</p>' +
-            '</div>' +
-            '</div>';
-        } else {
-          html += '<div style="background:#FFF5F5;border:1px solid #FEB2B2;border-radius:8px;padding:14px;margin-bottom:12px">' +
-            '<div style="font-size:13.5px;font-weight:700;color:#9B2C2C;margin-bottom:6px">⚠️ Requisito Pendiente</div>' +
-            '<div style="font-size:12.5px;color:#2D3748;line-height:1.5">' + escH(f.msg) + '</div>' +
-            '</div>';
-        }
-        return html;
-      }
-
-      window.ptMostrarModalBloqueo = function (G) {
-        ptCerrarModalBloqueo();
-        var overlay = document.createElement('div');
-        overlay.id = 'ptModalBloqueoOverlay';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.65);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;backdrop-filter:blur(2px)';
-
-        var canAutoFix = G.fallas.some(function (f) { return f.id === 'universo_en_tabla' || f.id === 'industria'; });
-
-        var cuerpoExplicaciones = G.fallas.map(function (f) { return ptGenerarExplicacionFallaHtml(f); }).join('');
-
-        overlay.innerHTML = '<div style="background:#FFFFFF;width:100%;max-width:620px;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.35);border:2px solid #C0392B;overflow:hidden;font-family:system-ui,-apple-system,sans-serif">' +
-          '<div style="background:#C0392B;color:#FFFFFF;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #922B21">' +
-          '<div style="font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px"><span>🚨</span> <span>No pudimos generar tu informe: Te explicamos qué pasó</span></div>' +
-          '<button type="button" onclick="ptCerrarModalBloqueo()" style="background:none;border:none;color:#FFF;font-size:22px;cursor:pointer;line-height:1;padding:0;margin:0">&times;</button>' +
-          '</div>' +
-          '<div style="padding:18px 20px;max-height:70vh;overflow-y:auto">' +
-          '<p style="margin:0 0 14px;font-size:13px;color:#4A5568">Aquí tienes el detalle en palabras muy sencillas de por qué se detuvo la generación y qué debes hacer:</p>' +
-          cuerpoExplicaciones +
-          (G.avisos && G.avisos.length ? '<div style="margin-top:10px;padding:10px;background:#FEF9E7;border:1px solid #F5ECC6;border-radius:6px;font-size:12px;color:#7D6608"><b>Notas adicionales:</b><br>' + G.avisos.map(escH).join('<br>') + '</div>' : '') +
-          '</div>' +
-          '<div style="background:#F8F9FA;padding:14px 18px;display:flex;gap:10px;justify-content:space-between;align-items:center;border-top:1px solid #E9ECEF;flex-wrap:wrap">' +
-          '<button type="button" onclick="ptCerrarModalBloqueo()" style="padding:9px 16px;background:#718096;color:#FFFFFF;border:none;border-radius:6px;cursor:pointer;font-size:12.5px;font-weight:600">Cerrar y revisar</button>' +
-          (canAutoFix
-            ? '<button type="button" onclick="ptCerrarModalBloqueo();if(ptCorregirTablaAutomaticamente()){calc();}" style="padding:10px 18px;background:#1E8449;color:#FFFFFF;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;box-shadow:0 3px 8px rgba(30,132,73,0.35)">🛠️ Solucionar todo automáticamente en 1 clic</button>'
-            : '') +
-          '</div>' +
-          '</div>';
-
-        document.body.appendChild(overlay);
-      }
-
-      function pintarBloqueo(G) {
-        var doc = $('doc');
-        if (doc) {
-          doc.innerHTML = '<div style="border:3px solid #C0392B;background:#FDEDEC;border-radius:8px;padding:16px">' +
-            '<div style="font-weight:800;color:#7B241C;font-size:15px">El informe no se generó: hay condiciones sin cumplir</div>' +
-            '<ol style="margin:10px 0 0 18px;font-size:13px;line-height:1.6">' +
-            G.fallas.map(function (f) { return '<li>' + escH(f.msg) + '</li>'; }).join('') + '</ol>' +
-            (G.fallas.some(function (f) { return f.id === 'universo_en_tabla' || f.id === 'industria'; })
-              ? '<button type="button" onclick="if(ptCorregirTablaAutomaticamente()){calc();}" style="margin-top:10px;padding:8px 14px;background:#1E8449;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700">Corregir automáticamente (depurar → conformar → aplicar)</button>'
-              : '') +
-            (G.avisos.length ? '<div style="margin-top:8px;font-size:12px;color:#7D6608">' + G.avisos.map(escH).join('<br>') + '</div>' : '') +
-            '</div>';
-        }
-        try { ptMostrarModalBloqueo(G); } catch (e) { }
-      }
-
       /* la fecha de actualización de la base (dato obligatorio del num. 4) se
          diligencia sola desde la procedencia registrada del universo, sin
          sobrescribir lo que el usuario haya escrito */
@@ -12369,8 +12233,6 @@ se guía la descarga manual
         try { ptCompletarFechaBase(); } catch (e) { }
         var G;
         try { G = ptGuardaInforme(); } catch (e) { G = { ok: true, fallas: [], avisos: [] }; }
-        if (!G.ok) { pintarBloqueo(G); try { moToast('Informe bloqueado: ' + G.fallas.length + ' condición(es) sin cumplir.', 'red'); } catch (e) { } return; }
-        try { ptCerrarModalBloqueo(); } catch (e) { }
         _renderGuard.apply(null, arguments);
 
         /* requisitos de exportación pendientes: banda al inicio, sin bloquear la vista */
@@ -12510,40 +12372,6 @@ se guía la descarga manual
           }
         };
       }
-
-      /* ───────────────────────────────────────────────────────────────────────
-         5. PANEL DE ESTADO
-         ─────────────────────────────────────────────────────────────────────── */
-      window.ptEstadoGuardas = function () {
-        var G = ptGuardaInforme();
-        var host = document.getElementById('ptGuardasEstado');
-        if (!host) return G;
-        host.innerHTML = G.ok
-          ? '<div style="font-size:11.5px;color:#1E8449">✓ Condiciones de generación cumplidas.' +
-          ((G.requisitos && G.requisitos.length) ? '<br><span style="color:#B7950B">Pendientes para exportar: ' + G.requisitos.map(function (r) { return escH(r.id); }).join(', ') + '</span>' : '') +
-          (G.avisos.length ? '<br><span style="color:#B7950B">⚠ ' + G.avisos.map(escH).join('<br>⚠ ') + '</span>' : '') + '</div>'
-          : '<div style="font-size:11.5px;color:#C0392B"><b>✗ ' + G.fallas.length + ' condición(es) sin cumplir:</b><ul style="margin:4px 0 0 16px">' +
-          G.fallas.map(function (f) { return '<li>' + escH(f.msg) + '</li>'; }).join('') + '</ul></div>';
-        return G;
-      };
-
-      function _ui() {
-        if (document.getElementById('ptGuardasEstado')) return;
-        var ancla = document.getElementById('ptConectorPanel') || document.getElementById('ptFarPanel') || document.getElementById('compalert') || $('cbody');
-        if (!ancla || !ancla.parentNode) return;
-        var d = document.createElement('div');
-        d.style.cssText = 'margin:10px 0;padding:12px;border:2px solid #7B241C;background:#FDF2F0;border-radius:8px';
-        d.innerHTML = '<b>🛡️ Guardas de producción · industria y función</b>' +
-          '<div style="font-size:11px;color:#7B241C;margin:4px 0 8px">El informe sólo se genera si: la tabla contiene un conjunto depurado (no el universo), toda comparable pertenece a la industria de la parte examinada y desempeña la función básica, y están diligenciados el año gravable, la UVT y la tasa del ajuste. Los textos pegados desde un chat se limpian automáticamente.</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-          '<button type="button" onclick="ptEstadoGuardas()" style="padding:6px 10px;background:#7B241C;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Verificar condiciones</button>' +
-          '<button type="button" onclick="var I=ptVerificarIndustriaTabla();moToast(I.conformes.length+\' de industria conforme · \'+I.ajenas.length+\' ajenas · \'+I.sinDato.length+\' sin dato · \'+I.locales.length+\' locales\', I.ajenas.length?\'red\':\'green\');ptEstadoGuardas();" style="padding:6px 10px;background:#6C3483;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Verificar industria de la tabla</button>' +
-          '<button type="button" onclick="ptSanearCampos()||moToast(\'Los campos ya están limpios\',\'green\')" style="padding:6px 10px;background:#B7950B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Sanear textos pegados</button>' +
-          '</div><div id="ptGuardasEstado" style="margin-top:6px"></div>';
-        ancla.parentNode.insertBefore(d, ancla);
-      }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(_ui, 950); });
-      else setTimeout(_ui, 950);
 
     })();
 
