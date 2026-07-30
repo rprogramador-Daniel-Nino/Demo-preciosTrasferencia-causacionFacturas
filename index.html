@@ -2352,8 +2352,11 @@
     async function readPDF(file, cb) {
       try {
         console.group('%c[readPDF] ' + (file && file.name || 'archivo'), 'color:#2874A6;font-weight:bold');
-        if (!window.pdfjsLib) { console.log('cargando pdf.js local…'); await loadScript('vendor/pdfjs/pdf.min.js'); if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js'; }
-        console.log('pdfjsLib disponible:', !!window.pdfjsLib);
+        if (!window.pdfjsLib) { console.log('cargando pdf.js local…'); await loadScript('vendor/pdfjs/pdf.min.js'); }
+        if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js';
+        }
+        console.log('pdfjsLib disponible:', !!window.pdfjsLib, '· workerSrc:', window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions && window.pdfjsLib.GlobalWorkerOptions.workerSrc);
         const buf = await file.arrayBuffer(); const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise; let txt = '';
         console.log('numero de paginas:', pdf.numPages);
         for (let i = 1; i <= pdf.numPages; i++) { const pg = await pdf.getPage(i); const c = await pg.getTextContent(); txt += pdfExtraerTextoPosicional(c.items) + '\n'; }
