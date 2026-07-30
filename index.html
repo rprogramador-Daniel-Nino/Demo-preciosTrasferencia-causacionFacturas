@@ -3893,9 +3893,14 @@ ${textoPrompt}`;
       if (!evaluables.length) { _moIaInfo('ℹ Ninguna candidata importada trae ID IQ + Business Description para curar con IA; el motor usará el emparejamiento por palabras clave.'); return; }
       window.PT_CURANDO_IA = true;
       window.AI_MATCH_COMPS = { porId: {}, fecha: new Date().toISOString(), actividadUsada: act.resumen, fuenteExcel: (window.CIQ_FUENTE && CIQ_FUENTE.archivo) || '' };
+      const CONCURRENCIA = 6;
       const lotes = _ptChunk(evaluables, 60);
       let evaluadas = 0, fallidas = 0;
-      _moIaInfo('🤖 IA curando candidatas… (0 de ' + evaluables.length + ' evaluadas)');
+      /* cada lote real tarda ~30-45s (la IA razona una justificación por candidata);
+         con universos grandes eso suma varios minutos — se avisa desde el inicio para
+         que el analista sepa que debe esperar y no cierre la pestaña a medias. */
+      const etaMin = Math.ceil((lotes.length / CONCURRENCIA) * 35 / 60);
+      _moIaInfo('🤖 IA curando candidatas… (0 de ' + evaluables.length + ' evaluadas · ' + lotes.length + ' lotes · estimado ~' + etaMin + ' min, no cierre esta pestaña)');
       await _ptPool(lotes, async (lote) => {
         const candidatos = lote.map(o => ({ id: String(o.id).trim(), name: o.name || '', desc: String(o.desc || '').slice(0, 300), country: o.country || o.pais || '' }));
         const prompt =
@@ -3907,6 +3912,7 @@ ${textoPrompt}`;
           'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
           'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
           '{"resultados":[{"id":"","coincide":true,"motivo":""}]}\n' +
+          '"motivo" debe ser brevísimo (máximo 12 palabras, sin explicaciones largas). ' +
           'Incluye una entrada por cada ID recibido, en el mismo orden.';
         try {
           const res = await fetch('/api/gemini', {
@@ -3928,7 +3934,10 @@ ${textoPrompt}`;
           console.error('[curarCandidatosConIA] lote falló:', e);
         }
         _moIaInfo('🤖 IA curando candidatas… (' + (evaluadas + fallidas) + ' de ' + evaluables.length + ' procesadas)');
-      }, 3);
+        /* progreso persistido lote a lote: si el navegador se recarga a medias,
+           lo ya curado no se pierde (antes solo se guardaba al terminar todo). */
+        try { saveActive(); } catch (e) { }
+      }, CONCURRENCIA);
       window.PT_CURANDO_IA = false;
       const nMatch = Object.values(AI_MATCH_COMPS.porId).filter(v => v.coincide).length;
       _moIaInfo(fallidas
