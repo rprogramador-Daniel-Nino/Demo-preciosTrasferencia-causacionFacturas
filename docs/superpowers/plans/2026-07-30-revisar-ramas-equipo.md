@@ -796,7 +796,13 @@ function main() {
   /* --- ramas de compañeros --- */
   const remotas = lineas(
     gitOpcional(['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin']) || ''
-  ).filter((r) => r !== PRINCIPAL && r !== 'origin/HEAD' && r !== 'origin/' + yo);
+  )
+    /* Exigir el prefijo "origin/" descarta el symref HEAD, que git abrevia a
+       "origin" a secas desde la 2.52 y a "origin/HEAD" en versiones anteriores.
+       Filtrar por el literal no es portable entre versiones; el prefijo sí. */
+    .filter(
+      (r) => r.startsWith('origin/') && r !== PRINCIPAL && r !== 'origin/HEAD' && r !== 'origin/' + yo
+    );
 
   for (const remota of remotas) {
     const compa = {
