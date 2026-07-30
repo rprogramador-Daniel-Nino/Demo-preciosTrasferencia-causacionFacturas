@@ -196,3 +196,15 @@ test('el título multilínea no se toma de una línea que es solo borde', () => 
   ].join('\n');
   assert.deepStrictEqual(extraerAnclas(src), [{ linea: 3, etiqueta: 'TÍTULO REAL' }]);
 });
+
+test('una función tras un banner sin título conserva el formato estable', () => {
+  const src = ['/* ====', '', '', 'function calcularRango(datos) {'].join('\n');
+  assert.deepStrictEqual(extraerAnclas(src), [
+    { linea: 4, etiqueta: 'función calcularRango()' },
+  ]);
+});
+
+test('un window.X tras un banner sin título conserva el formato estable', () => {
+  const src = ['/* ====', 'window.MOTOR = {'].join('\n');
+  assert.deepStrictEqual(extraerAnclas(src), [{ linea: 2, etiqueta: 'window.MOTOR' }]);
+});

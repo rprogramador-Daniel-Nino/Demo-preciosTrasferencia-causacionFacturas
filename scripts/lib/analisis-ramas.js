@@ -45,19 +45,23 @@ function extraerAnclas(contenido) {
     let etiqueta = null;
 
     const banner = linea.match(RE_BANNER) || linea.match(RE_BANNER_HTML);
+    const fn = linea.match(RE_FUNCION);
+    const win = linea.match(RE_WINDOW);
     if (banner) {
       etiqueta = _normalizar(banner[1]);
     } else if (RE_PARCHE.test(linea)) {
       etiqueta = _normalizar(linea);
     } else if (RE_MODULO.test(linea) && /^\s*(?:\/\*+|\/\/+|\*+)/.test(linea)) {
       etiqueta = _normalizar(linea);
+    } else if (fn) {
+      etiqueta = 'función ' + fn[1] + '()';
+    } else if (win) {
+      etiqueta = 'window.' + win[1];
     } else if (esperandoTitulo && !RE_SOLO_BORDE.test(linea)) {
+      /* Título de banner multilínea. Va al final de la cadena a propósito: una
+         declaración real de función o de window siempre gana, para no romper el
+         formato estable de etiqueta del que dependen las Tasks 3 y 5. */
       etiqueta = _normalizar(linea);
-    } else {
-      const fn = linea.match(RE_FUNCION);
-      const win = linea.match(RE_WINDOW);
-      if (fn) etiqueta = 'función ' + fn[1] + '()';
-      else if (win) etiqueta = 'window.' + win[1];
     }
 
     /* El flag se consume en la primera línea con contenido, haya dado etiqueta
