@@ -4043,10 +4043,6 @@ ${textoPrompt}`;
       if (!MOTOR.activo || !MATRIX.length) { box.innerHTML = ''; return; }
       const aceptadas = MATRIX.filter(m => m.status === 'Aceptada');
       const rechazadas = MATRIX.filter(m => m.status !== 'Aceptada');
-      const motivos = {};
-      rechazadas.forEach(m => { const k = m.motivo || 'Sin motivo registrado'; motivos[k] = (motivos[k] || 0) + 1; });
-      const filas = Object.keys(motivos).sort((a, b) => motivos[b] - motivos[a])
-        .map(k => '<tr><td style="padding:5px 8px">' + escH(k) + '</td><td style="text-align:right;padding:5px 8px;font-weight:700;color:#C0392B">' + motivos[k] + '</td></tr>').join('');
       box.innerHTML = '<div style="background:#FFF;border:1px solid #E1E8ED;border-radius:8px;padding:12px;margin-top:12px">' +
         '<div style="font-size:12.5px;font-weight:700;color:#2C3E50;margin-bottom:10px">📊 Embudo de depuración del universo</div>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px">' +
@@ -4054,9 +4050,6 @@ ${textoPrompt}`;
         '<div style="background:#EAF7EE;border:1px solid #C3E6CB;padding:8px;border-radius:6px;text-align:center"><div style="font-size:10px;color:#1E8449;text-transform:uppercase;font-weight:700">Aceptadas</div><div style="font-size:18px;font-weight:800;color:#1E8449">' + aceptadas.length + '</div></div>' +
         '<div style="background:#FDEDEC;border:1px solid #F5C6CB;padding:8px;border-radius:6px;text-align:center"><div style="font-size:10px;color:#C0392B;text-transform:uppercase;font-weight:700">Rechazadas</div><div style="font-size:18px;font-weight:800;color:#C0392B">' + rechazadas.length + '</div></div>' +
         '</div>' +
-        (filas ? '<div style="font-size:11.5px;font-weight:700;color:#34495E;margin-bottom:6px">Motivos de descarte (criterios de exclusión):</div>' +
-          '<table style="width:100%;font-size:11px;border-collapse:collapse;background:#FAFAFA;border:1px solid #EEE;border-radius:6px;overflow:hidden">' +
-          '<thead><tr style="background:#F1F3F5;color:#495057"><th style="text-align:left;padding:6px 8px">Criterio de exclusión</th><th style="text-align:right;padding:6px 8px">Empresas</th></tr></thead><tbody>' + filas + '</tbody></table>' : '') +
         '</div>';
     }
     /* ── Escenarios ── */
