@@ -2087,7 +2087,16 @@
        alimentar el informe (buildClaudeContext, Anexo B/D) y ya no se piden a Gemini ni se
        muestran en pantalla. */
     function getActividadEspecifica() {
-      try { const el = $('actividad_json'); const v = el ? el.value : ''; return v ? JSON.parse(v) : null; } catch (e) { return null; }
+      try {
+        const el = $('actividad_json'); const v = el ? el.value : ''; if (!v) return null;
+        const obj = JSON.parse(v);
+        /* compatibilidad con estudios guardados antes de que existiera "estado":
+           si ya tienen un resumen extraído, es una actividad válida y lista,
+           aunque le falte esa marca — si no, la curación por IA nunca reintenta
+           y la tarjeta se queda mostrando "pendiente" para siempre. */
+        if (obj && !obj.estado && obj.resumen) obj.estado = 'listo';
+        return obj;
+      } catch (e) { return null; }
     }
     function setActividadEspecifica(obj) {
       if (!$('actividad_json')) return;
@@ -6163,14 +6172,15 @@ se guía la descarga manual
       },
 
       async _ensurePdfjs() {
-        if (window.pdfjsLib) return true;
-        await new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src = 'vendor/pdfjs/pdf.min.js';
-          s.onload = res; s.onerror = () => rej(new Error('No se pudo cargar pdf.js'));
-          document.head.appendChild(s);
-        });
-        if (window.pdfjsLib && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        if (!window.pdfjsLib) {
+          await new Promise((res, rej) => {
+            const s = document.createElement('script');
+            s.src = 'vendor/pdfjs/pdf.min.js';
+            s.onload = res; s.onerror = () => rej(new Error('No se pudo cargar pdf.js'));
+            document.head.appendChild(s);
+          });
+        }
+        if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
           window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js';
         }
         return !!window.pdfjsLib;
