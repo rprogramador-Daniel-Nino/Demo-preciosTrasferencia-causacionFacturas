@@ -1232,15 +1232,20 @@ Expected: el merge falla con conflicto, y tras el abort `git status --short` sal
 
 - [ ] **Step 5: Deshacer la prueba**
 
+El punto de retorno es el tag creado en el Step 4, no una variable de shell: los dos steps
+corren en invocaciones distintas y las variables no sobreviven entre ellas.
+
 Run:
 ```bash
-git reset --hard "$SHA_ANTES"
+git reset --hard sdd-punto-retorno
+git tag -d sdd-punto-retorno
 git branch -D prueba-conflicto
 git log --oneline -1
 git status --short
 ```
 
-Expected: `git log` muestra el commit previo a la prueba y `git status` sale vacío.
+Expected: `git log` muestra el commit previo a la prueba, el tag desaparece y `git status`
+sale vacío.
 
 Nota: el criterio 4 del spec (excepción de `public/`) se verifica en la primera integración real con una rama de compañero, porque provocar un conflicto que caiga *solo* en `public/` requiere que dos ramas hayan corrido `npm run build` sobre fuentes distintas. Anotarlo como pendiente y confirmarlo la primera vez que ocurra.
 
