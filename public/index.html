@@ -1608,6 +1608,7 @@
           </div>
 
           <button class="addrow" onclick="addComp()">+ Agregar comparable</button>
+          <button type="button" class="btn mini" style="background:#1F6D4F;color:#fff;font-weight:600;margin-left:6px" onclick="exportarComparablesExcel()">⬇ Exportar Excel</button>
 
           <details class="config" id="ptZonaConfig">
             <summary><span class="arrow">▶</span> ⚙️ Otros ajustes
@@ -2680,6 +2681,31 @@
     let SUPER = [];
     async function loadXLSX() { if (!window.XLSX) { await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'); } return window.XLSX; }
     async function readExcelRows(file) { const XLSX = await loadXLSX(); const buf = await file.arrayBuffer(); const wb = XLSX.read(buf, { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }); }
+    async function exportarComparablesExcel() {
+      try {
+        const XLSX = await loadXLSX();
+        const kind = ($('pli') && $('pli').value) || 'MO';
+        const filas = [['Compañía', 'Ámbito', 'Ventas', 'Costo', 'Util.Op', 'CxC', 'Inv', 'CxP', 'SIC/Act.', 'PLI aj.', 'ID IQ']];
+        [...$('cbody').children].forEach(tr => {
+          const v = [...tr.querySelectorAll('input,select')].map(i => i.value);
+          const nombre = (v[0] || '').trim();
+          if (!nombre) return;
+          const s = num(v[2]), c = num(v[3]), op = num(v[4]);
+          const pli = pliOf({ s, c, op }, kind);
+          filas.push([nombre, v[1] || '', s, c, op, num(v[5]), num(v[6]), num(v[7]), v[8] || '', (pli === null ? '' : pli), v[9] || '']);
+        });
+        if (filas.length <= 1) { moToast('No hay comparables en la tabla para exportar', 'amber'); return; }
+        const ws = XLSX.utils.aoa_to_sheet(filas);
+        ws['!cols'] = [{ wch: 28 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 22 }, { wch: 10 }, { wch: 12 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Comparables');
+        const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = 'Comparables_' + slug(($('ent') && $('ent').value) || 'estudio') + '.xlsx';
+        a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) { } }, 1500);
+      } catch (e) { try { moToast('No se pudo exportar el Excel: ' + e.message, 'red'); } catch (x) { } }
+    }
     const SYN = { nit: ['nit', 'id'], name: ['razón', 'nombre', 'company name'], s: ['ingresos', 'total revenue', 'revenue'], c: ['costo', 'cost of goods sold', 'cogs'], op: ['utilidad', 'operating income', 'ebit'], ar: ['cxc', 'accounts receivable'], inv: ['inv'], ap: ['cxp', 'accounts payable'], sic: ['sic'], country: ['país', 'country'], control: ['control'] };
     function findCol(headers, keys) { for (let i = 0; i < headers.length; i++) { const h = String(headers[i] || '').toLowerCase().trim(); if (keys.some(k => h.includes(k))) return i; } return -1; }
     /* Detecta la fila de encabezados entre las primeras filas de un Excel/CSV
