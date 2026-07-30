@@ -49,7 +49,7 @@ exports.claude = onRequest(
 // de documentos (más económico que Claude para esta tarea), nunca directo a
 // generativelanguage.googleapis.com — así la key queda oculta.
 exports.gemini = onRequest(
-  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true },
+  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
@@ -87,7 +87,7 @@ exports.gemini = onRequest(
 // Proxy para extracción de RUT con visión/documentos, vía Gemini (lectura de
 // archivos: más económico que Claude para esta tarea).
 exports.extraerRut = onRequest(
-  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true },
+  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
@@ -162,7 +162,7 @@ exports.extraerRut = onRequest(
 // Proxy para extracción del Certificado de Existencia y Representación Legal
 // (Cámara de Comercio), vía Gemini Vision — mismo patrón que el RUT.
 exports.extraerCamara = onRequest(
-  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true },
+  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
