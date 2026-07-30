@@ -7765,6 +7765,9 @@ se guía la descarga manual
           try {
             if (!window.pdfjsLib) { try { await loadScript('vendor/pdfjs/pdf.min.js'); } catch (e) { } }
             if (!window.pdfjsLib) { pt36Rojo('Motor PDF no disponible: convierta el informe anterior a .docx o pegue su contenido.'); return; }
+            if (pdfjsLib.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+              pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js';
+            }
             docMsg('Transcribiendo el informe anterior…');
             var pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
             var t = '', paginas = [];
@@ -7795,6 +7798,12 @@ se guía la descarga manual
           fecha: new Date().toISOString()
         };
         window.PT_PREV_OK = true;
+        /* dispara la detección automática de actividad (Comparables): esta es
+           la función que de verdad fija PT_ANTERIOR en el flujo .docx/.pdf —
+           cargarInformeAnterior() de más arriba en el archivo quedó sin efecto
+           porque esta reasignación posterior de window.cargarInformeAnterior
+           la sustituye por completo. */
+        if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
 
         /* El texto se guarda como insumo, marcado para que NO se reproduzca */
         try {
