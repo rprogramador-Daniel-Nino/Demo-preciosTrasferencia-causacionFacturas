@@ -16,12 +16,20 @@ function _normalizar(texto) {
     .trim();
 }
 
-// Banner de una línea: /* ===== ETIQUETA ===== */ — al menos 3 signos por lado.
-const RE_BANNER = /\/\*\s*[=═]{3,}\s*(.+?)\s*[=═]{3,}\s*\*\//;
+/* Banner de una línea. Bordes admitidos: =, ═, ─ y guion, al menos 3 por lado. */
+const RE_BANNER = /\/\*\s*[=═─-]{3,}\s*(.+?)\s*[=═─-]{3,}\s*\*\//;
+/* Mismo banner dentro de comentario HTML, usado en el marcado fuera de <script>. */
+const RE_BANNER_HTML = /<!--\s*[=═─-]{3,}\s*(.+?)\s*[=═─-]{3,}\s*-->/;
+/* Apertura de banner multilínea: el borde llega al final de la línea y el
+   título viene en la siguiente, sin marcador de comentario propio. */
+const RE_BANNER_ABRE = /\/\*\s*[=═─-]{3,}\s*$/;
 const RE_PARCHE = /PARCHE PT\s*[—–-]\s*Bloque\b/;
-const RE_MODULO = /^\s*(?:\/\*+|\/\/+|\*+)?\s*(MÓDULO\s+\S.*?)\s*$/;
+/* Admite tanto "MÓDULO X" como "MÓDULO: X". */
+const RE_MODULO = /^\s*(?:\/\*+|\/\/+|\*+)?\s*(MÓDULO[\s:]+\S.*?)\s*$/;
 const RE_FUNCION = /^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/;
 const RE_WINDOW = /^\s*window\.([A-Za-z_$][\w$]*)\s*=/;
+/* Una línea que es solo borde o cierre no puede ser el título de un banner. */
+const RE_SOLO_BORDE = /^[\s=═─*\/-]*$/;
 
 /* Convierte el contenido de index.html en anclas {linea, etiqueta}, ordenadas
    por línea ascendente. Las etiquetas son estables entre versiones del archivo;
@@ -30,17 +38,20 @@ const RE_WINDOW = /^\s*window\.([A-Za-z_$][\w$]*)\s*=/;
 function extraerAnclas(contenido) {
   const lineas = String(contenido).split(/\r?\n/);
   const anclas = [];
+  let esperandoTitulo = false;
 
   for (let i = 0; i < lineas.length; i++) {
     const linea = lineas[i];
     let etiqueta = null;
 
-    const banner = linea.match(RE_BANNER);
+    const banner = linea.match(RE_BANNER) || linea.match(RE_BANNER_HTML);
     if (banner) {
       etiqueta = _normalizar(banner[1]);
     } else if (RE_PARCHE.test(linea)) {
       etiqueta = _normalizar(linea);
     } else if (RE_MODULO.test(linea) && /^\s*(?:\/\*+|\/\/+|\*+)/.test(linea)) {
+      etiqueta = _normalizar(linea);
+    } else if (esperandoTitulo && !RE_SOLO_BORDE.test(linea)) {
       etiqueta = _normalizar(linea);
     } else {
       const fn = linea.match(RE_FUNCION);
@@ -48,6 +59,11 @@ function extraerAnclas(contenido) {
       if (fn) etiqueta = 'función ' + fn[1] + '()';
       else if (win) etiqueta = 'window.' + win[1];
     }
+
+    /* El flag se consume en la primera línea con contenido, haya dado etiqueta
+       o no, para no arrastrarlo por todo el cuerpo del comentario. */
+    if (esperandoTitulo && !RE_SOLO_BORDE.test(linea)) esperandoTitulo = false;
+    if (RE_BANNER_ABRE.test(linea)) esperandoTitulo = true;
 
     if (etiqueta) anclas.push({ linea: i + 1, etiqueta });
   }

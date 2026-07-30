@@ -155,3 +155,44 @@ test('ordenarPorSolapamiento no muta la entrada', () => {
   ordenarPorSolapamiento(entrada);
   assert.strictEqual(entrada[0].rama, 'origin/b');
 });
+
+test('extraerAnclas reconoce MÓDULO con dos puntos', () => {
+  const src = '    // MÓDULO: AUTO-GUARDADO, AUTO-EXPORTACIÓN Y AUTO-LIMPIEZA';
+  assert.deepStrictEqual(extraerAnclas(src), [
+    { linea: 1, etiqueta: 'MÓDULO: AUTO-GUARDADO, AUTO-EXPORTACIÓN Y AUTO-LIMPIEZA' },
+  ]);
+});
+
+test('extraerAnclas reconoce banners con borde de guiones', () => {
+  const src = '    /* ─── OCR de una página con Claude ─── */';
+  assert.deepStrictEqual(extraerAnclas(src), [
+    { linea: 1, etiqueta: 'OCR de una página con Claude' },
+  ]);
+});
+
+test('extraerAnclas reconoce banners en comentario HTML', () => {
+  const src = '  <!-- ══════ ACTIVIDAD DE LA EMPRESA ══════ -->';
+  assert.deepStrictEqual(extraerAnclas(src), [
+    { linea: 1, etiqueta: 'ACTIVIDAD DE LA EMPRESA' },
+  ]);
+});
+
+test('extraerAnclas toma el título de un banner multilínea', () => {
+  const src = [
+    '  <script>/* ==========================',
+    'MÓDULO OCR REAL + ENRUTADOR',
+    'No toca el motor PT.',
+  ].join('\n');
+  assert.deepStrictEqual(extraerAnclas(src), [
+    { linea: 2, etiqueta: 'MÓDULO OCR REAL + ENRUTADOR' },
+  ]);
+});
+
+test('el título multilínea no se toma de una línea que es solo borde', () => {
+  const src = [
+    '    /* ═══════════════════',
+    '       ═══════════════════',
+    '       TÍTULO REAL',
+  ].join('\n');
+  assert.deepStrictEqual(extraerAnclas(src), [{ linea: 3, etiqueta: 'TÍTULO REAL' }]);
+});
