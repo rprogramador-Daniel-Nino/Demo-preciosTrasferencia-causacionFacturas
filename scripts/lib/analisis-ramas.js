@@ -55,4 +55,46 @@ function extraerAnclas(contenido) {
   return anclas;
 }
 
-module.exports = { extraerAnclas };
+// Cabecera de hunk: @@ -viejo,n +nuevo,m @@ — los conteos son opcionales.
+// Interesa solo el lado nuevo, porque las anclas se calculan sobre la punta.
+const RE_HUNK = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+const SIN_BLOQUE = '(antes del primer bloque)';
+
+// Extrae los rangos de líneas modificadas, en la numeración del lado nuevo.
+function parsearHunks(textoDiff) {
+  const hunks = [];
+  for (const linea of String(textoDiff).split(/\r?\n/)) {
+    const m = linea.match(RE_HUNK);
+    if (!m) continue;
+    const inicio = parseInt(m[1], 10);
+    // Sin conteo explícito el hunk es de una línea. Con conteo 0 el hunk es un
+    // borrado puro: no hay líneas nuevas, pero el cambio ocurre en ese punto.
+    const cantidad = m[2] === undefined ? 1 : parseInt(m[2], 10);
+    const fin = cantidad === 0 ? inicio : inicio + cantidad - 1;
+    hunks.push({ inicio, fin });
+  }
+  return hunks;
+}
+
+// Atribuye cada hunk a los bloques que toca: el ancla vigente donde empieza,
+// más todas las que caigan dentro del rango.
+function etiquetasDeHunks(hunks, anclas) {
+  const ordenadas = [...anclas].sort((a, b) => a.linea - b.linea);
+  const vistas = new Set();
+
+  for (const hunk of hunks) {
+    let vigente = null;
+    for (const ancla of ordenadas) {
+      if (ancla.linea <= hunk.inicio) vigente = ancla.etiqueta;
+      else if (ancla.linea <= hunk.fin) vistas.add(ancla.etiqueta);
+    }
+    vistas.add(vigente === null ? SIN_BLOQUE : vigente);
+  }
+
+  // Se devuelve en orden de aparición en el archivo, no de descubrimiento.
+  const orden = [SIN_BLOQUE, ...ordenadas.map((a) => a.etiqueta)];
+  return orden.filter((e, i) => vistas.has(e) && orden.indexOf(e) === i);
+}
+
+module.exports = { extraerAnclas, parsearHunks, etiquetasDeHunks, SIN_BLOQUE };
