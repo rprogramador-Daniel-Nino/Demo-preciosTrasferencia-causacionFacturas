@@ -97,4 +97,33 @@ function etiquetasDeHunks(hunks, anclas) {
   return orden.filter((e, i) => vistas.has(e) && orden.indexOf(e) === i);
 }
 
-module.exports = { extraerAnclas, parsearHunks, etiquetasDeHunks, SIN_BLOQUE };
+/* Elementos de `a` presentes en `b`, sin repetir y en el orden de `a`. */
+function interseccion(a, b) {
+  const enB = new Set(b);
+  const vistos = new Set();
+  return a.filter((x) => {
+    if (!enB.has(x) || vistos.has(x)) return false;
+    vistos.add(x);
+    return true;
+  });
+}
+
+/* Ordena de menor a mayor roce con el trabajo propio. La skill integra en este
+   orden para que, si algo revienta, ya esté integrado lo más simple. */
+function ordenarPorSolapamiento(companeros) {
+  return [...companeros].sort((x, y) => {
+    const bx = (x.bloques_en_conflicto_potencial || []).length;
+    const by = (y.bloques_en_conflicto_potencial || []).length;
+    if (bx !== by) return bx - by;
+    return (x.solapamiento || []).length - (y.solapamiento || []).length;
+  });
+}
+
+module.exports = {
+  extraerAnclas,
+  parsearHunks,
+  etiquetasDeHunks,
+  interseccion,
+  ordenarPorSolapamiento,
+  SIN_BLOQUE,
+};

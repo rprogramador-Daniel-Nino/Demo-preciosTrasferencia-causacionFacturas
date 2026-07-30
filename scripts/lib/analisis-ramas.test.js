@@ -120,3 +120,38 @@ test('etiquetasDeHunks no repite etiquetas', () => {
 test('etiquetasDeHunks devuelve vacío sin anclas ni hunks', () => {
   assert.deepStrictEqual(etiquetasDeHunks([], []), []);
 });
+
+const { interseccion, ordenarPorSolapamiento } = require('./analisis-ramas');
+
+test('interseccion conserva el orden del primer arreglo', () => {
+  assert.deepStrictEqual(interseccion(['c', 'a', 'b'], ['b', 'c']), ['c', 'b']);
+});
+
+test('interseccion no repite', () => {
+  assert.deepStrictEqual(interseccion(['a', 'a'], ['a']), ['a']);
+});
+
+test('interseccion sin coincidencias devuelve vacío', () => {
+  assert.deepStrictEqual(interseccion(['a'], ['b']), []);
+});
+
+test('ordenarPorSolapamiento pone primero lo que menos choca', () => {
+  const entrada = [
+    { rama: 'origin/c', solapamiento: ['x'], bloques_en_conflicto_potencial: ['A', 'B'] },
+    { rama: 'origin/a', solapamiento: [], bloques_en_conflicto_potencial: [] },
+    { rama: 'origin/b', solapamiento: ['x'], bloques_en_conflicto_potencial: ['A'] },
+  ];
+  assert.deepStrictEqual(
+    ordenarPorSolapamiento(entrada).map((c) => c.rama),
+    ['origin/a', 'origin/b', 'origin/c']
+  );
+});
+
+test('ordenarPorSolapamiento no muta la entrada', () => {
+  const entrada = [
+    { rama: 'origin/b', solapamiento: ['x'], bloques_en_conflicto_potencial: ['A'] },
+    { rama: 'origin/a', solapamiento: [], bloques_en_conflicto_potencial: [] },
+  ];
+  ordenarPorSolapamiento(entrada);
+  assert.strictEqual(entrada[0].rama, 'origin/b');
+});
