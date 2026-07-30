@@ -74,6 +74,9 @@ Desktop.ini
 # el resto (settings.local.json, cachés) es local de cada máquina.
 .claude/*
 !.claude/skills/
+
+# Scratch de ejecución de planes (superpowers). Efímero, no se comparte.
+.superpowers/
 ```
 
 El orden importa: git no desciende a un directorio excluido, así que `!.claude/skills/` tiene que venir después de `.claude/*` para reincorporarlo.
@@ -122,6 +125,10 @@ ls -la Cpanel/public_html/api/config.php
 
 Expected: git reporta `rm 'Cpanel/public_html/api/config.php'` y el `ls` confirma que el archivo **sigue existiendo** en disco.
 
+`git rm --cached` ya deja la eliminación *staged*. En el Step 7 **no** hay que volver a hacer
+`git add` sobre esa ruta: tras el nuevo `.gitignore` está ignorada, y `git add` sobre un
+archivo ignorado falla con `paths are ignored by one of your .gitignore files`.
+
 - [ ] **Step 6: Agregar el script de tests a `package.json`**
 
 En `package.json`, buscar:
@@ -148,7 +155,7 @@ Reemplazar por:
 - [ ] **Step 7: Commit**
 
 ```bash
-git add .gitignore package.json Cpanel/public_html/api/config.php
+git add .gitignore package.json
 git commit -m "Corregir patrones de .gitignore anclados a la raíz
 
 desktop.ini de Google Drive no estaba ignorado y ensuciaba git status.
@@ -1164,9 +1171,13 @@ si se quiere el JSON crudo.
 
 Es el criterio más importante: si el abort no deja el árbol intacto, la skill es peligrosa.
 
+Los Steps 4 y 5 corren en invocaciones de shell distintas y **las variables de entorno no
+sobreviven entre ellas**. Por eso el punto de retorno se marca con un tag de git, que sí
+persiste, en vez de con una variable.
+
 Run:
 ```bash
-SHA_ANTES=$(git rev-parse HEAD)
+git tag sdd-punto-retorno
 git checkout -b prueba-conflicto
 node -e "
 const fs=require('fs');
