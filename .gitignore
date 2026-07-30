@@ -1,6 +1,5 @@
 # Logs
 .agents
-.claude
 logs
 *.log
 npm-debug.log*
@@ -72,9 +71,23 @@ node_modules/
 
 package-lock.json
 
-# cPanel PHP secret config
-api/config.php
-api/usage_data.json
+# cPanel PHP secret config.
+# Los patrones anteriores (api/config.php) llevaban barra, así que git los
+# anclaba a la raíz del repo y nunca alcanzaron los archivos reales, que viven
+# en Cpanel/public_html/api/. Por esa falla se filtró una API key en 318d187.
+**/api/config.php
+**/api/usage_data.json
 
+# Google Drive File Stream crea desktop.ini en cada carpeta que sincroniza.
+# Sin barra inicial, el patrón aplica en todo el árbol. Se incluye la variante
+# con mayúscula porque NTFS no distingue mayúsculas pero git sí.
+desktop.ini
+Desktop.ini
 
+# Claude Code — se versiona .claude/skills/ para compartir skills con el equipo;
+# el resto (settings.local.json, cachés) es local de cada máquina.
+.claude/*
+!.claude/skills/
 
+# Scratch de ejecución de planes (superpowers). Efímero, no se comparte.
+.superpowers/
