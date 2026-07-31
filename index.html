@@ -3633,6 +3633,7 @@ ${textoTotal}`;
           || /\b(holdings?|grupo|group|groupe|gruppo)\b/i.test(o.name || '');
         o.saldoNeg = ['ar', 'inv', 'ap'].filter(k => o[k] !== null && o[k] < 0);
         o.previa = !!previas[nameKey(o.name)];
+        o.continuidadTabla = !!(window.PT_CONTINUIDAD_TABLA_KEYS && PT_CONTINUIDAD_TABLA_KEYS[nameKey(o.name)]);
         return o;
       }).filter(x => x);
       _moCache = { sig, rows: out }; return out;
@@ -3680,9 +3681,9 @@ ${textoTotal}`;
       var topeIndep = (window.PT_CRITERIOS && PT_CRITERIOS.independenciaTope) || 50;
       if (socioMax !== null && socioMax > topeIndep) return { out: 'No independiente: un solo accionista concentra el ' + socioMax.toFixed(2) + ' % de la propiedad, superior al ' + topeIndep + ' % admitido; existe vinculación por control (Art. 260-1 E.T.).' };
       if (o.saldoNeg && o.saldoNeg.length && cfg.saldoneg === 'excluir') return { out: 'Saldo negativo en ' + o.saldoNeg.map(k => ({ ar: 'Cuentas por cobrar', inv: 'Inventario', ap: 'Cuentas por pagar' }[k])).join('/') + ': dato no verosímil, se excluye de la muestra' };
-      if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
-      if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
-      if (o.perfil === 'EMPRESARIO' && cfg.act !== 'amplio') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
+      if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO' && !o.continuidadTabla) return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
+      if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO' && !o.continuidadTabla) return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
+      if (o.perfil === 'EMPRESARIO' && cfg.act !== 'amplio' && !o.continuidadTabla) return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
       /* ── Curación de candidatas por IA (Business Description real de Capital IQ) ──
          Solo aplica a filas con ID IQ (vinieron del Excel de Capital IQ); las agregadas a
@@ -3693,7 +3694,7 @@ ${textoTotal}`;
       if (o.id && window.AI_MATCH_COMPS && !descTextIA.trim()) {
         return { out: 'Sin descripción de negocio de Capital IQ para verificar la actividad (ID ' + o.id + ')' };
       }
-      if (aiRec && aiRec.coincide === false) {
+      if (aiRec && aiRec.coincide === false && !o.continuidadTabla) {
         return { out: 'Rechazada por IA: la descripción de negocio no coincide con la actividad (' + (aiRec.motivo || 'sin motivo detallado') + ')' };
       }
       /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
@@ -3701,7 +3702,7 @@ ${textoTotal}`;
       /* Exclusión por especialidad: solo en modo estricto si la candidata cuenta con descripción/SIC y 0 coincidencia.
          En modo estándar/amplio, 0 coincidencias asigna un puntaje bajo en el factor de especialidad (peso del 40%)
          para priorizar las que sí coinciden, sin descartar masivamente cuando faltan descripciones detalladas. */
-      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc) {
+      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc && !o.continuidadTabla) {
         const resumen = (act.resumen || '').slice(0, 90);
         return { out: 'Sin coincidencia con la actividad específica: la descripción del candidato no coincide con ninguna palabra clave del perfil (' + resumen + (resumen.length >= 90 ? '…' : '') + ')' };
       }
@@ -3722,7 +3723,7 @@ ${textoTotal}`;
       const scBase = wA * fA + wK * fK + wG * fG + wT * fT + wR * fR;
       const bonoContinuidad = o.previa ? 0.08 : 0;
       const sc = scBase + bonoContinuidad;
-      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : '')].filter(x => x).join(', ');
+      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : ''), (o.continuidadTabla ? 'comparable confirmada en la tabla del estudio anterior' : '')].filter(x => x).join(', ');
       return { sc, raz };
     }
     function moMostrarModalSinCandidatas(motivo) {
