@@ -1,0 +1,402 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  DUMP DE AUDITORÍA: EL WIZARD — APP & CONFIG BUILD               ║
+║  SISTEMA: Precios de Transferencia / Causación Facturas          ║
+║  VERSIÓN: 0.0.0                                                  ║
+║  FECHA: 30/7/2026, 5:36:27 p. m.                                 ║
+║  ARCHIVOS: 10                                                    ║
+║  TAMAÑO: 8.4 KB                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+CONTENIDO
+------------------------------------------------------------------
+  1. frontend/src/App.css
+  2. frontend/src/App.jsx
+  3. frontend/src/index.css
+  4. frontend/src/main.jsx
+  5. frontend/index.html
+  6. frontend/vite.config.js
+  7. frontend/tailwind.config.js
+  8. frontend/postcss.config.js
+  9. frontend/package.json
+ 10. frontend/.oxlintrc.json
+
+
+============================================================
+FILE: frontend/src/App.css
+============================================================
+
+/* Custom app styles */
+
+
+============================================================
+FILE: frontend/src/App.jsx
+============================================================
+
+import React, { useState, useEffect } from 'react';
+import Layout from './components/Layout';
+import Dashboard from './components/Dashboard';
+import DatosContribuyente from './components/DatosContribuyente';
+import IngestaOperaciones from './components/IngestaOperaciones';
+import IngestaCifras from './components/IngestaCifras';
+import MotorComparables from './components/MotorComparables';
+import AuditoriaNorma from './components/AuditoriaNorma';
+import ReporteGenerador from './components/ReporteGenerador';
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeStudyId, setActiveStudyId] = useState(null);
+  const [study, setStudy] = useState({});
+
+  // Auto-save study detail when it changes
+  useEffect(() => {
+    if (activeStudyId && study && Object.keys(study).length > 0) {
+      localStorage.setItem(`pt:study:${activeStudyId}`, JSON.stringify(study));
+      
+      // Update study index details
+      const idxKey = 'pt:study:index';
+      const raw = localStorage.getItem(idxKey);
+      const ix = raw ? JSON.parse(raw) : {};
+      
+      ix[activeStudyId] = {
+        ent: study.ent || 'Sin Razón Social',
+        nit: study.nit || '—',
+        anio: study.anio || '—',
+        updated: Date.now()
+      };
+      localStorage.setItem(idxKey, JSON.stringify(ix));
+    }
+  }, [study, activeStudyId]);
+
+  // Load a study from localStorage
+  const selectStudy = (id) => {
+    setActiveStudyId(id);
+    const detailRaw = localStorage.getItem(`pt:study:${id}`);
+    if (detailRaw) {
+      setStudy(JSON.parse(detailRaw));
+    } else {
+      setStudy({});
+    }
+    setActiveTab('contribuyente'); // Go to first step
+  };
+
+  // Create a blank new study
+  const newStudy = () => {
+    const newId = 'study_' + Date.now();
+    const blank = {
+      ent: 'Nueva Empresa S.A.S',
+      nit: '',
+      anio: new Date().getFullYear(),
+      ciiu: '',
+      objeto: '',
+      representante: '',
+      vinc: '',
+      pais_vinc: '',
+      vinc_id: '',
+      vinc_tipo: '',
+      t_s: '',
+      t_c: '',
+      t_op: '',
+      t_ar: '',
+      t_inv: '',
+      t_ap: '',
+      pli: 'MO',
+      useadj: false,
+      prime: '',
+      comparables: [],
+      cmode: 'all'
+    };
+
+    localStorage.setItem(`pt:study:${newId}`, JSON.stringify(blank));
+    
+    const idxKey = 'pt:study:index';
+    const raw = localStorage.getItem(idxKey);
+    const ix = raw ? JSON.parse(raw) : {};
+    ix[newId] = {
+      ent: blank.ent,
+      nit: blank.nit,
+      anio: blank.anio,
+      updated: Date.now()
+    };
+    localStorage.setItem(idxKey, JSON.stringify(ix));
+
+    selectStudy(newId);
+  };
+
+  // Delete a study
+  const deleteStudy = (id) => {
+    localStorage.removeItem(`pt:study:${id}`);
+
+    const idxKey = 'pt:study:index';
+    const raw = localStorage.getItem(idxKey);
+    if (raw) {
+      const ix = JSON.parse(raw);
+      delete ix[id];
+      localStorage.setItem(idxKey, JSON.stringify(ix));
+    }
+
+    if (activeStudyId === id) {
+      setActiveStudyId(null);
+      setStudy({});
+      setActiveTab('dashboard');
+    }
+  };
+
+  // Duplicate an existing study
+  const duplicateStudy = (id) => {
+    const detailRaw = localStorage.getItem(`pt:study:${id}`);
+    if (detailRaw) {
+      const original = JSON.parse(detailRaw);
+      const newId = 'study_' + Date.now();
+      const duplicate = {
+        ...original,
+        ent: original.ent + ' (Copia)',
+        updated: Date.now()
+      };
+      
+      localStorage.setItem(`pt:study:${newId}`, JSON.stringify(duplicate));
+      
+      const idxKey = 'pt:study:index';
+      const raw = localStorage.getItem(idxKey);
+      const ix = raw ? JSON.parse(raw) : {};
+      ix[newId] = {
+        ent: duplicate.ent,
+        nit: duplicate.nit,
+        anio: duplicate.anio,
+        updated: Date.now()
+      };
+      localStorage.setItem(idxKey, JSON.stringify(ix));
+    }
+  };
+
+  const updateStudy = (fields) => {
+    setStudy(prev => ({ ...prev, ...fields }));
+  };
+
+  return (
+    <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
+      {activeTab === 'dashboard' && (
+        <Dashboard 
+          selectStudy={selectStudy} 
+          newStudy={newStudy} 
+          deleteStudy={deleteStudy}
+          duplicateStudy={duplicateStudy}
+        />
+      )}
+
+      {activeStudyId ? (
+        <>
+          {activeTab === 'contribuyente' && (
+            <DatosContribuyente study={study} updateStudy={updateStudy} />
+          )}
+
+          {(activeTab === 'operaciones' || activeTab === 'Operaciones') && (
+            <IngestaOperaciones study={study} updateStudy={updateStudy} />
+          )}
+
+          {(activeTab === 'eeff' || activeTab === 'Estados financieros' || activeTab === 'cifras') && (
+            <IngestaCifras study={study} updateStudy={updateStudy} />
+          )}
+
+          {activeTab === 'comparables' && (
+            <MotorComparables study={study} updateStudy={updateStudy} />
+          )}
+
+          {activeTab === 'auditoria' && (
+            <AuditoriaNorma study={study} />
+          )}
+
+          {activeTab === 'informe' && (
+            <ReporteGenerador study={study} />
+          )}
+        </>
+      ) : (
+        activeTab !== 'dashboard' && (
+          <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 text-amber-800 dark:text-amber-300 p-4 rounded-lg text-sm text-center">
+            Por favor, seleccione o cree un estudio en la pestaña de <strong>Inicio</strong> antes de continuar.
+          </div>
+        )
+      )}
+    </Layout>
+  );
+}
+
+
+============================================================
+FILE: frontend/src/index.css
+============================================================
+
+@import "tailwindcss";
+
+body {
+  background-color: #f9fafb; /* light mode fallback */
+  color: #09090b;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.dark body {
+  background-color: #09090b; /* dark mode fallback */
+  color: #f9fafb;
+}
+
+
+============================================================
+FILE: frontend/src/main.jsx
+============================================================
+
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+============================================================
+FILE: frontend/index.html
+============================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>frontend</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+============================================================
+FILE: frontend/vite.config.js
+============================================================
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  base: '/gestor-reportes/',
+  build: {
+    outDir: '../public/gestor-reportes',
+    emptyOutDir: true
+  },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/extraer-rut': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/extraer-camara': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      }
+    }
+  }
+})
+
+
+============================================================
+FILE: frontend/tailwind.config.js
+============================================================
+
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        serif: ['Merriweather', 'Georgia', 'serif'],
+      },
+    },
+  },
+  plugins: [],
+}
+
+
+============================================================
+FILE: frontend/postcss.config.js
+============================================================
+
+export default {
+  plugins: {
+    '@tailwindcss/postcss': {},
+    autoprefixer: {},
+  },
+}
+
+
+============================================================
+FILE: frontend/package.json
+============================================================
+
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "axios": "^1.19.0",
+    "date-fns": "^4.4.0",
+    "docxtemplater": "^3.69.3",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "lucide-react": "^1.27.0",
+    "mammoth": "^1.12.0",
+    "pizzip": "^3.2.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "autoprefixer": "^10.5.4",
+    "oxlint": "^1.71.0",
+    "postcss": "^8.5.25",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.1.1"
+  }
+}
+
+
+============================================================
+FILE: frontend/.oxlintrc.json
+============================================================
+
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "oxc"],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+  }
+}

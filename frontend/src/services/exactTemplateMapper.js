@@ -98,6 +98,15 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     html = html.replace(/1\.989\.688\.200/g, wrap(fmt(totalActivos)));
   }
 
+  // Reemplazo dinámico de la Tabla 6. Composición Accionaria
+  if (study.accionistas && study.accionistas.length > 0) {
+    const mainAcc = study.accionistas[0];
+    if (mainAcc.nombre) html = html.replace(/END GAME INTERACTIVE INC\./gi, wrap(mainAcc.nombre));
+    if (mainAcc.pais) html = html.replace(/ESTADOS UNIDOS/g, wrap(mainAcc.pais));
+    if (mainAcc.acciones) html = html.replace(/200\.000/g, wrap(fmt(mainAcc.acciones)));
+    if (mainAcc.valor_capital) html = html.replace(/200\.000\.000/g, wrap(fmt(mainAcc.valor_capital)));
+  }
+
   // Reemplazar Rango Intercuartil si se calculó
   if (stats) {
     html = html.replace(/Percentil 25:?\s*[\d\.\,%]+/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);

@@ -1,0 +1,471 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  DUMP DE AUDITORÍA: LA PASARELA — API DEMO                       ║
+║  SISTEMA: Precios de Transferencia / Causación Facturas          ║
+║  VERSIÓN: 1.0.0                                                  ║
+║  FECHA: 30/7/2026, 5:36:27 p. m.                                 ║
+║  ARCHIVOS: 4                                                     ║
+║  TAMAÑO: 16.4 KB                                                 ║
+╚══════════════════════════════════════════════════════════════════╝
+
+CONTENIDO
+------------------------------------------------------------------
+  1. Cpanel/public_html/demo-precios-transferencia/api/claude.php
+  2. Cpanel/public_html/demo-precios-transferencia/api/extraer-rut.php
+  3. Cpanel/public_html/demo-precios-transferencia/api/logger.php
+  4. Cpanel/public_html/demo-precios-transferencia/api/usage.php
+
+
+============================================================
+FILE: Cpanel/public_html/demo-precios-transferencia/api/claude.php
+============================================================
+
+<?php
+// api/claude.php — Proxy PHP hacia la API de Anthropic con control de consumo de Tokens (cPanel)
+header('Content-Type: application/json');
+require_once __DIR__ . '/logger.php';
+
+// Permitir solicitudes solo mediante POST
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['error' => 'Method not allowed']);
+    exit;
+}
+
+// 1. Cargar configuración
+$config = file_exists(__DIR__ . '/config.php') ? (require __DIR__ . '/config.php') : [];
+$apiKey = getenv('ANTHROPIC_API_KEY') ?: ($config['ANTHROPIC_API_KEY'] ?? null);
+
+if (!$apiKey || empty($apiKey)) {
+    http_response_code(500);
+    echo json_encode(['error' => 'Servidor sin ANTHROPIC_API_KEY configurada.']);
+    exit;
+}
+
+// 2. Verificar límite diario si está configurado
+if (!checkDailyLimit($config)) {
+    http_response_code(429);
+    echo json_encode(['error' => 'Límite diario de consumo de tokens alcanzado. Intenta de nuevo mañana.']);
+    exit;
+}
+
+// 3. Leer la solicitud enviada por el frontend
+$inputData = file_get_contents('php://input');
+
+// 4. Reenviar la petición a Anthropic mediante cURL
+$ch = curl_init('https://api.anthropic.com/v1/messages');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $inputData);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'x-api-key: ' . trim($apiKey),
+    'anthropic-version: 2023-06-01'
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    $errorMsg = curl_error($ch);
+    curl_close($ch);
+    http_response_code(502);
+    echo json_encode(['error' => 'No se pudo contactar a la API de Claude.', 'detail' => $errorMsg]);
+    exit;
+}
+
+curl_close($ch);
+
+// 5. Registrar el consumo de tokens si la respuesta fue exitosa
+$resData = json_decode($response, true);
+if ($httpCode >= 200 && $httpCode < 300 && isset($resData['usage'])) {
+    $inTokens = $resData['usage']['input_tokens'] ?? 0;
+    $outTokens = $resData['usage']['output_tokens'] ?? 0;
+    $model = $resData['model'] ?? 'claude-3-5-sonnet';
+    logClaudeUsage('Precios de Transferencia', $inTokens, $outTokens, $model);
+}
+
+// 6. Devolver la respuesta de Anthropic al cliente
+http_response_code($httpCode > 0 ? $httpCode : 200);
+echo $response;
+
+
+============================================================
+FILE: Cpanel/public_html/demo-precios-transferencia/api/extraer-rut.php
+============================================================
+
+<?php
+// api/extraer-rut.php — Proxy PHP para extracción de datos de RUT usando Claude API con control de Tokens
+header('Content-Type: application/json');
+require_once __DIR__ . '/logger.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['error' => 'Method not allowed']);
+    exit;
+}
+
+$config = file_exists(__DIR__ . '/config.php') ? (require __DIR__ . '/config.php') : [];
+$apiKey = getenv('ANTHROPIC_API_KEY') ?: ($config['ANTHROPIC_API_KEY'] ?? null);
+
+if (!$apiKey || empty($apiKey)) {
+    http_response_code(500);
+    echo json_encode(['error' => 'Servidor sin ANTHROPIC_API_KEY configurada.']);
+    exit;
+}
+
+if (!checkDailyLimit($config)) {
+    http_response_code(429);
+    echo json_encode(['error' => 'Límite diario de consumo de tokens alcanzado. Intenta de nuevo mañana.']);
+    exit;
+}
+
+$rawInput = file_get_contents('php://input');
+$body = json_decode($rawInput, true);
+
+$b64 = $body['archivo_base64'] ?? '';
+$mime = $body['tipo'] ?? 'application/pdf';
+
+if (empty($b64)) {
+    http_response_code(400);
+    echo json_encode(['error' => 'Falta el archivo_base64 en la solicitud.']);
+    exit;
+}
+
+// Determinar el bloque según si es PDF o imagen
+$contentBlock = [];
+if (strpos($mime, 'pdf') !== false) {
+    $contentBlock = [
+        'type' => 'document',
+        'source' => [
+            'type' => 'base64',
+            'media_type' => 'application/pdf',
+            'data' => $b64
+        ]
+    ];
+} else {
+    $mediaType = strpos($mime, 'png') !== false ? 'image/png' : 'image/jpeg';
+    $contentBlock = [
+        'type' => 'image',
+        'source' => [
+            'type' => 'base64',
+            'media_type' => $mediaType,
+            'data' => $b64
+        ]
+    ];
+}
+
+$promptText = "Extrae la información de este RUT colombiano (DIAN) en formato JSON estricto con las siguientes llaves:\n"
+    . "- nit: string con dígito de verificación (ejemplo: '900123456-7')\n"
+    . "- razon_social: string con la razón social o nombre completo\n"
+    . "- municipio: string con la ciudad o municipio principal de la dirección (ej: 'BOGOTA D.C.', 'MEDELLIN')\n"
+    . "- direccion: string con la dirección física\n"
+    . "- responsabilidades: array de strings con los códigos numéricos de casillas 53/54 (ej: ['05', '09', '14', '48'])\n"
+    . "- confianza: número de 0 a 100 indicando legibilidad\n\n"
+    . "Responde ÚNICAMENTE con el objeto JSON válido sin marcas de markdown ```json ni texto adicional.";
+
+$payload = [
+    'model' => 'claude-3-5-sonnet-20241022',
+    'max_tokens' => 1024,
+    'messages' => [
+        [
+            'role' => 'user',
+            'content' => [
+                $contentBlock,
+                ['type' => 'text', 'text' => $promptText]
+            ]
+        ]
+    ]
+];
+
+$ch = curl_init('https://api.anthropic.com/v1/messages');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'x-api-key: ' . trim($apiKey),
+    'anthropic-version: 2023-06-01'
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    $errorMsg = curl_error($ch);
+    curl_close($ch);
+    http_response_code(502);
+    echo json_encode(['error' => 'No se pudo contactar a la API de Claude.', 'detail' => $errorMsg]);
+    exit;
+}
+
+curl_close($ch);
+
+$responseData = json_decode($response, true);
+
+if ($httpCode >= 200 && $httpCode < 300 && isset($responseData['content'][0]['text'])) {
+    if (isset($responseData['usage'])) {
+        $inTokens = $responseData['usage']['input_tokens'] ?? 0;
+        $outTokens = $responseData['usage']['output_tokens'] ?? 0;
+        logClaudeUsage('Causación Facturas (RUT)', $inTokens, $outTokens, 'claude-3-5-sonnet-20241022');
+    }
+
+    $text = trim($responseData['content'][0]['text']);
+    $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
+    $text = preg_replace('/\s*```$/', '', $text);
+    $rutData = json_decode($text, true);
+
+    if ($rutData && is_array($rutData)) {
+        http_response_code(200);
+        echo json_encode($rutData);
+        exit;
+    }
+}
+
+// Si hubo error o la respuesta no vino en JSON esperado:
+http_response_code($httpCode > 0 ? $httpCode : 500);
+echo json_encode([
+    'error' => 'No se pudo extraer la información del RUT.',
+    'raw_response' => $responseData
+]);
+
+
+============================================================
+FILE: Cpanel/public_html/demo-precios-transferencia/api/logger.php
+============================================================
+
+<?php
+// api/logger.php — Helper para registro y control de consumo de Tokens de Claude
+
+function getUsageFile() {
+    return __DIR__ . '/usage_data.json';
+}
+
+function loadUsageData() {
+    $file = getUsageFile();
+    if (file_exists($file)) {
+        $content = file_get_contents($file);
+        $data = json_decode($content, true);
+        if (is_array($data)) {
+            return $data;
+        }
+    }
+    return [
+        'total_input_tokens' => 0,
+        'total_output_tokens' => 0,
+        'daily_usage' => [],
+        'history' => []
+    ];
+}
+
+function saveUsageData($data) {
+    $file = getUsageFile();
+    // Guardar con formateo legible
+    file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT));
+}
+
+function checkDailyLimit($config) {
+    $maxDaily = $config['MAX_DAILY_TOKENS'] ?? 0; // 0 significa sin límite
+    if ($maxDaily <= 0) return true;
+
+    $today = date('Y-m-d');
+    $data = loadUsageData();
+    $todayUsage = $data['daily_usage'][$today]['total_tokens'] ?? 0;
+
+    return $todayUsage < $maxDaily;
+}
+
+function logClaudeUsage($appName, $inputTokens, $outputTokens, $model = 'claude-3-5-sonnet-20241022') {
+    $data = loadUsageData();
+    $today = date('Y-m-d');
+    $now = date('Y-m-d H:i:s');
+
+    $inputTokens = max(0, (int)$inputTokens);
+    $outputTokens = max(0, (int)$outputTokens);
+    $totalTokens = $inputTokens + $outputTokens;
+
+    // Calcular costo estimado aproximado (USD)
+    // Precios aprox Sonnet 3.5: $3.00 / M input, $15.00 / M output
+    $estCost = ($inputTokens * 0.000003) + ($outputTokens * 0.000015);
+
+    // 1. Acumulados totales
+    $data['total_input_tokens'] = ($data['total_input_tokens'] ?? 0) + $inputTokens;
+    $data['total_output_tokens'] = ($data['total_output_tokens'] ?? 0) + $outputTokens;
+
+    // 2. Acumulados por día
+    if (!isset($data['daily_usage'][$today])) {
+        $data['daily_usage'][$today] = [
+            'input_tokens' => 0,
+            'output_tokens' => 0,
+            'total_tokens' => 0,
+            'est_cost' => 0,
+            'requests' => 0
+        ];
+    }
+
+    $data['daily_usage'][$today]['input_tokens'] += $inputTokens;
+    $data['daily_usage'][$today]['output_tokens'] += $outputTokens;
+    $data['daily_usage'][$today]['total_tokens'] += $totalTokens;
+    $data['daily_usage'][$today]['est_cost'] += $estCost;
+    $data['daily_usage'][$today]['requests'] += 1;
+
+    // 3. Historial de solicitudes (últimas 100)
+    if (!isset($data['history'])) {
+        $data['history'] = [];
+    }
+
+    array_unshift($data['history'], [
+        'fecha' => $now,
+        'app' => $appName,
+        'model' => $model,
+        'input_tokens' => $inputTokens,
+        'output_tokens' => $outputTokens,
+        'total_tokens' => $totalTokens,
+        'est_cost' => round($estCost, 4)
+    ]);
+
+    // Mantener solo las últimas 100 peticiones en el historial
+    $data['history'] = array_slice($data['history'], 0, 100);
+
+    saveUsageData($data);
+}
+
+
+============================================================
+FILE: Cpanel/public_html/demo-precios-transferencia/api/usage.php
+============================================================
+
+<?php
+// api/usage.php — Panel de control y monitoreo de Tokens de Claude
+require_once __DIR__ . '/logger.php';
+
+$data = loadUsageData();
+$today = date('Y-m-d');
+$todayData = $data['daily_usage'][$today] ?? [
+    'input_tokens' => 0,
+    'output_tokens' => 0,
+    'total_tokens' => 0,
+    'est_cost' => 0,
+    'requests' => 0
+];
+
+$totalInput = $data['total_input_tokens'] ?? 0;
+$totalOutput = $data['total_output_tokens'] ?? 0;
+$totalTokens = $totalInput + $totalOutput;
+$totalCost = ($totalInput * 0.000003) + ($totalOutput * 0.000015);
+$history = $data['history'] ?? [];
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoreo de Tokens — Claude API</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans p-4 md:p-8 min-h-screen">
+    <div class="max-w-6xl mx-auto space-y-6">
+
+        <!-- Encabezado -->
+        <div class="flex flex-wrap justify-between items-center bg-slate-800/80 p-5 rounded-xl border border-slate-700">
+            <div>
+                <h1 class="text-2xl font-bold text-blue-400 flex items-center gap-2">
+                    📊 Control de Consumo de Tokens
+                </h1>
+                <p class="text-xs text-slate-400 mt-1">Monitoreo en tiempo real de peticiones enviadas a Anthropic Claude</p>
+            </div>
+            <button onclick="location.reload()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-semibold shadow">
+                🔄 Actualizar
+            </button>
+        </div>
+
+        <!-- Tarjetas Metricas -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <!-- Hoy Tokens -->
+            <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700 text-center">
+                <span class="text-xs font-semibold text-slate-400 uppercase">Tokens Consumidos (Hoy)</span>
+                <div class="text-2xl font-bold text-emerald-400 mt-2">
+                    <?php echo number_format($todayData['total_tokens']); ?>
+                </div>
+                <span class="text-[11px] text-slate-400 mt-1 block">
+                    <?php echo number_format($todayData['requests']); ?> peticiones hoy
+                </span>
+            </div>
+
+            <!-- Hoy Costo -->
+            <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700 text-center">
+                <span class="text-xs font-semibold text-slate-400 uppercase">Costo Estimado (Hoy)</span>
+                <div class="text-2xl font-bold text-cyan-400 mt-2">
+                    $<?php echo number_format($todayData['est_cost'], 4); ?> USD
+                </div>
+                <span class="text-[11px] text-slate-400 mt-1 block">Entrada + Salida</span>
+            </div>
+
+            <!-- Total Tokens -->
+            <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700 text-center">
+                <span class="text-xs font-semibold text-slate-400 uppercase">Tokens Totales (Acumulado)</span>
+                <div class="text-2xl font-bold text-purple-400 mt-2">
+                    <?php echo number_format($totalTokens); ?>
+                </div>
+                <span class="text-[11px] text-slate-400 mt-1 block">
+                    Entrada: <?php echo number_format($totalInput); ?> | Salida: <?php echo number_format($totalOutput); ?>
+                </span>
+            </div>
+
+            <!-- Total Costo -->
+            <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700 text-center">
+                <span class="text-xs font-semibold text-slate-400 uppercase">Costo Acumulado Total</span>
+                <div class="text-2xl font-bold text-amber-400 mt-2">
+                    $<?php echo number_format($totalCost, 4); ?> USD
+                </div>
+                <span class="text-[11px] text-slate-400 mt-1 block">Total histórico</span>
+            </div>
+        </div>
+
+        <!-- Tabla Historial -->
+        <div class="bg-slate-800/80 rounded-xl p-5 border border-slate-700 space-y-4">
+            <h2 class="text-base font-bold text-slate-200 flex items-center justify-between">
+                <span>📜 Historial de Peticiones Recientes</span>
+                <span class="text-xs font-normal text-slate-400">Últimas <?php echo count($history); ?> peticiones</span>
+            </h2>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase text-[10px] border-b border-slate-700">
+                        <tr>
+                            <th class="p-3">Fecha / Hora</th>
+                            <th class="p-3">Aplicación</th>
+                            <th class="p-3">Modelo</th>
+                            <th class="p-3 text-right">Input Tokens</th>
+                            <th class="p-3 text-right">Output Tokens</th>
+                            <th class="p-3 text-right">Total Tokens</th>
+                            <th class="p-3 text-right">Costo Est. ($USD)</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-700/50">
+                        <?php if (empty($history)): ?>
+                            <tr>
+                                <td colspan="7" class="text-center py-6 text-slate-500">
+                                    No hay registros de consumo todavía.
+                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($history as $row): ?>
+                                <tr class="hover:bg-slate-700/30">
+                                    <td class="p-3 font-mono"><?php echo htmlspecialchars($row['fecha'] ?? '—'); ?></td>
+                                    <td class="p-3 font-semibold text-blue-300"><?php echo htmlspecialchars($row['app'] ?? '—'); ?></td>
+                                    <td class="p-3 text-slate-400 font-mono text-[11px]"><?php echo htmlspecialchars($row['model'] ?? '—'); ?></td>
+                                    <td class="p-3 text-right font-mono text-emerald-400"><?php echo number_format($row['input_tokens'] ?? 0); ?></td>
+                                    <td class="p-3 text-right font-mono text-cyan-400"><?php echo number_format($row['output_tokens'] ?? 0); ?></td>
+                                    <td class="p-3 text-right font-mono font-bold text-slate-100"><?php echo number_format($row['total_tokens'] ?? 0); ?></td>
+                                    <td class="p-3 text-right font-mono text-amber-400">$<?php echo number_format($row['est_cost'] ?? 0, 4); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>

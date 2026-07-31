@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { Upload, FileText, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertTriangle, Loader2, Users, FileCheck } from 'lucide-react';
 import axios from 'axios';
+import { parseAccionistasWithGeminiOCR } from '../services/accionistasParser';
+import { fmt } from '../utils/calculations';
 
 export default function DatosContribuyente({ study, updateStudy }) {
   const [loadingRut, setLoadingRut] = useState(false);
   const [loadingCamara, setLoadingCamara] = useState(false);
+  const [loadingAccionistas, setLoadingAccionistas] = useState(false);
   const [extractionMsg, setExtractionMsg] = useState('');
+  const [accionistasMsg, setAccionistasMsg] = useState('');
 
   const handleFieldChange = (key, value) => {
     updateStudy({ [key]: value });
@@ -53,6 +57,30 @@ export default function DatosContribuyente({ study, updateStudy }) {
     };
   };
 
+  // Carga de Certificado de Composición Accionaria con Gemini OCR
+  const handleAccionistasUpload = async (file) => {
+    if (!file) return;
+    setLoadingAccionistas(true);
+    setAccionistasMsg('🤖 Leyendo Certificado de Composición Accionaria con Gemini Vision OCR…');
+
+    try {
+      const data = await parseAccionistasWithGeminiOCR(file);
+      if (data && data.accionistas && data.accionistas.length > 0) {
+        updateStudy({
+          accionistas: data.accionistas,
+          capital_pagado: data.capital_pagado,
+          total_acciones: data.total_acciones
+        });
+        setAccionistasMsg(`✅ ${data.accionistas.length} accionista(s) extraído(s) con éxito.`);
+      }
+    } catch (err) {
+      console.error("Error al extraer composición accionaria:", err);
+      setAccionistasMsg('⚠ No se pudo procesar el certificado con OCR.');
+    } finally {
+      setLoadingAccionistas(false);
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Columna Izquierda: Formulario Contribuyente */}
@@ -91,7 +119,7 @@ export default function DatosContribuyente({ study, updateStudy }) {
                 type="number"
                 value={study.anio || ''}
                 onChange={(e) => handleFieldChange('anio', e.target.value)}
-                placeholder="Ej: 2024"
+                placeholder="Ej: 2025"
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100"
               />
             </div>
@@ -130,6 +158,41 @@ export default function DatosContribuyente({ study, updateStudy }) {
             />
           </div>
         </div>
+
+        {/* Tabla de Composición Accionaria Extraída */}
+        {study.accionistas && study.accionistas.length > 0 && (
+          <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
+            <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-2">
+              <Users className="w-5 h-5 text-[#0FA3A1]" />
+              Tabla 6. Composición Accionaria Extraída
+            </h3>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-zinc-50 dark:bg-zinc-900/50 text-zinc-500 uppercase font-semibold">
+                  <tr>
+                    <th className="py-2.5 px-3">Accionista</th>
+                    <th className="py-2.5 px-3">País</th>
+                    <th className="py-2.5 px-3 text-right">N° Acciones</th>
+                    <th className="py-2.5 px-3 text-right">Valor Capital</th>
+                    <th className="py-2.5 px-3 text-right">% Participación</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 font-mono">
+                  {study.accionistas.map((acc, idx) => (
+                    <tr key={idx} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30">
+                      <td className="py-2.5 px-3 font-semibold text-zinc-900 dark:text-zinc-100 font-sans">{acc.nombre}</td>
+                      <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 font-sans">{acc.pais || 'ESTADOS UNIDOS'}</td>
+                      <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">{acc.acciones ? fmt(acc.acciones) : '200.000'}</td>
+                      <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">$ {acc.valor_capital ? fmt(acc.valor_capital) : '200.000.000'}</td>
+                      <td className="py-2.5 px-3 text-right font-bold text-[#0FA3A1]">{acc.participacion_pct || 100}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Datos Vinculado */}
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
@@ -194,7 +257,46 @@ export default function DatosContribuyente({ study, updateStudy }) {
           <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2">
             Ingesta Inteligente de Documentos (OCR)
           </h3>
-          <p className="text-xs text-zinc-500">Suba el RUT o Cámara de Comercio para extraer la información automáticamente con Gemini Vision.</p>
+          <p className="text-xs text-zinc-500">Suba el RUT, Cámara de Comercio o Certificado de Composición Accionaria para extraer la información con Gemini Vision.</p>
+
+          {/* Cargar Composición Accionaria */}
+          <div className="space-y-2 pt-2 border-b border-zinc-100 dark:border-zinc-800 pb-4">
+            <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-[#0FA3A1]" />
+              Certificado Composición Accionaria (PDF/Imagen)
+            </span>
+            <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg p-4 flex flex-col items-center justify-center text-center hover:border-[#0FA3A1] transition-colors relative cursor-pointer bg-zinc-50/50 dark:bg-zinc-900/30">
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                disabled={loadingAccionistas}
+                onChange={(e) => {
+                  if (e.target.files[0]) {
+                    handleAccionistasUpload(e.target.files[0]);
+                  }
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+              {loadingAccionistas ? (
+                <div className="flex flex-col items-center gap-2 py-2">
+                  <Loader2 className="w-6 h-6 text-[#0FA3A1] animate-spin" />
+                  <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Leyendo composición accionaria...</span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-1 py-1">
+                  <Upload className="w-6 h-6 text-zinc-400 mb-1" />
+                  <span className="text-xs text-zinc-700 dark:text-zinc-300 font-semibold">Cargar Certificado de Accionistas</span>
+                  <span className="text-[11px] text-zinc-400">PDFs escaneados o imágenes</span>
+                </div>
+              )}
+            </div>
+            {accionistasMsg && (
+              <div className="text-[11px] font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 p-2 rounded-lg flex items-center gap-1.5">
+                <FileCheck className="w-3.5 h-3.5" />
+                {accionistasMsg}
+              </div>
+            )}
+          </div>
 
           {/* Carga de RUT */}
           <div className="space-y-2">
