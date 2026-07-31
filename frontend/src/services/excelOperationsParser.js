@@ -103,11 +103,11 @@ export async function parseExcelOperations(file) {
     if (mainPais === '249') paisNombre = 'ESTADOS UNIDOS';
 
     return {
-      vinc: mainVinculado || 'END GAME INTERACTIVE INC',
-      vinc_id: mainVinculadoId || '604477955',
-      pais_vinc: paisNombre || 'ESTADOS UNIDOS',
+      vinc: mainVinculado || null,
+      vinc_id: mainVinculadoId || null,
+      pais_vinc: paisNombre || null,
       vinc_tipo: mainTipo || 'Otros servicios (07)',
-      t_s: totalMonto || 3435357400,
+      t_s: totalMonto || null,
       rows: rowsParsed
     };
   } catch (err) {

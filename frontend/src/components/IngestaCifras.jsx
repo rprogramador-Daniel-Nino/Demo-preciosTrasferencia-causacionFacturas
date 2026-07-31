@@ -26,7 +26,7 @@ export default function IngestaCifras({ study, updateStudy }) {
     
     try {
       const res = await parseExcelOperations(file);
-      if (res) {
+      if (res && res.vinc && res.t_s) {
         updateStudy({
           vinc: res.vinc,
           vinc_id: res.vinc_id,
@@ -35,6 +35,8 @@ export default function IngestaCifras({ study, updateStudy }) {
           t_s: res.t_s
         });
         setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(res.t_s)}`);
+      } else {
+        setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
       }
     } catch (err) {
       console.error("Error al procesar el Excel de operaciones:", err);
