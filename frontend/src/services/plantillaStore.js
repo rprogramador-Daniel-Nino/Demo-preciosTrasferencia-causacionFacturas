@@ -1,0 +1,65 @@
+/* Persistencia de la plantilla marcada y de los recursos del cliente.
+   Va en IndexedDB y no en localStorage: el tope de localStorage ronda los
+   5 MB por origen y ya lo ocupan los estudios (pt:study:*), el anexo del PDF
+   de referencia pesa 5.25 MB en base64, y setItem no falla limpio — lanza
+   QuotaExceededError a mitad de la escritura y puede dejar el estudio a
+   medias. */
+
+const BASE = 'pt-plantillas';
+const VERSION = 1;
+const ALMACENES = ['plantillas', 'recursos', 'anexos'];
+
+/* Los ids se escapan porque un ':' dentro de uno haría colisionar dos claves
+   distintas: 'a:b' + 'c' y 'a' + 'b:c'. */
+const esc = (s) => String(s).replace(/%/g, '%25').replace(/:/g, '%3A');
+
+export function clave(estudioId, recursoId) {
+  return esc(estudioId) + ':' + esc(recursoId);
+}
+
+/* Identifica una plantilla por el contenido del PDF del que salió, no por el
+   estudio: la plantilla es muy parecida entre clientes, así que dos estudios
+   que carguen el mismo documento comparten el marcado y no se vuelve a pagar. */
+export async function hashPlantilla(datos) {
+  const buf = await crypto.subtle.digest('SHA-256', datos);
+  return [...new Uint8Array(buf)].slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function abrir() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(BASE, VERSION);
+    req.onupgradeneeded = () => {
+      for (const nombre of ALMACENES) {
+        if (!req.result.objectStoreNames.contains(nombre)) req.result.createObjectStore(nombre);
+      }
+    };
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+async function operar(almacen, modo, fn) {
+  const db = await abrir();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(almacen, modo);
+    const req = fn(tx.objectStore(almacen));
+    tx.oncomplete = () => res(req ? req.result : undefined);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+export const guardarRecursos = (estudioId, imagenes) =>
+  operar('recursos', 'readwrite', (s) => s.put(imagenes, esc(estudioId)));
+
+export const leerRecursos = (estudioId) =>
+  operar('recursos', 'readonly', (s) => s.get(esc(estudioId))).then((r) => r || []);
+
+export const borrarRecursos = (estudioId) =>
+  operar('recursos', 'readwrite', (s) => s.delete(esc(estudioId)));
+
+export const guardarPlantilla = (plantillaId, html) =>
+  operar('plantillas', 'readwrite', (s) => s.put(html, plantillaId));
+
+export const leerPlantilla = (plantillaId) =>
+  operar('plantillas', 'readonly', (s) => s.get(plantillaId)).then((r) => r || null);
