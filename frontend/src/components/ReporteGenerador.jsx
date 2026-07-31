@@ -11,6 +11,20 @@ export default function ReporteGenerador({ study, estudioId }) {
   const [loading, setLoading] = useState(false);
   const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
   const [recursosCargados, setRecursosCargados] = useState([]);
+  /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
+     aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
+     que se abre el estudio sería más molesto que informativo. El alert sí se
+     conserva en la carga manual del PDF, donde es una reacción directa a la
+     acción que el usuario acaba de hacer. */
+  const [avisoHidratacion, setAvisoHidratacion] = useState('');
+
+  /* La hidratación sustituye por literales del informe de End Game 2024. Con
+     el PDF de otro cliente no coincide ninguno y el documento sale con los
+     datos del PDF subido, sin ninguna señal. Se usa el NIT del estudio como
+     testigo: si el estudio tiene NIT y no aparece en el HTML ya hidratado, la
+     sustitución no ocurrió. El arreglo de fondo —marcado por campos con
+     nombre— es del plan 2; esto solo evita que pase desapercibido. */
+  const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
   /* Rehidratación: sin esto las imágenes del informe de referencia se pierden
      al recargar la página, que es el fallo que motivó este trabajo. La bandera
@@ -67,9 +81,12 @@ export default function ReporteGenerador({ study, estudioId }) {
         let html;
         if (esPdf) {
           const datos = new Uint8Array(arrayBuffer);
+          /* El hash va antes de extraer: pdf.js transfiere el buffer al worker
+             y lo desprende, y crypto.subtle.digest sobre un buffer desprendido
+             no falla, hashea cero bytes. Todos los PDF darían el mismo id. */
+          const idPlantilla = await hashPlantilla(datos);
           const ref = await extraerReferencia(datos);
           html = ref.html;
-          const idPlantilla = await hashPlantilla(datos);
           await guardarPlantilla(idPlantilla, ref.html);
           if (estudioId) await guardarRecursos(estudioId, ref.imagenes);
           if (estudioId) await guardarVinculo(estudioId, idPlantilla);
