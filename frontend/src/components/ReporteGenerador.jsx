@@ -29,7 +29,12 @@ export default function ReporteGenerador({ study, estudioId }) {
       if (!idPlantilla) return;
       const html = await leerPlantilla(idPlantilla);
       if (vivo && html) {
-        setHtmlContent(html);
+        /* Se guarda el HTML crudo del extractor y se hidrata al leerlo, no al
+           guardarlo: el estudio puede cambiar después de haber subido la
+           plantilla, y entonces los valores almacenados quedarían viejos. Sin
+           esta línea, tras recargar se ven las cifras del informe de
+           referencia en vez de las del estudio actual. */
+        setHtmlContent(hydrateExactWordTemplate(html, study));
         /* Evita que el efecto de la plantilla maestra sobrescriba lo
            recuperado. Es lo que hacía fallar la recarga. */
         setCustomTemplateLoaded(true);
