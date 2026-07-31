@@ -1,8 +1,7 @@
 import axios from 'axios';
 
 /**
- * Prompt para la lectura de Estados Financieros (EEFF) por Gemini Vision OCR.
- * Extrae tanto P&L como la matriz completa del Balance General (Activos, Pasivos, Patrimonio).
+ * Prompt para la lectura de Estados Financieros del Contribuyente por Gemini Vision OCR.
  */
 const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
 Extrae las cifras del ESTADO DE RESULTADOS y del ESTADO DE SITUACIÓN FINANCIERA del ejercicio más reciente que aparezca.
@@ -54,7 +53,30 @@ Devuelve SOLO este JSON estricto sin marcas markdown:
 }`;
 
 /**
- * Función auxiliar con reintento automático para manejar errores de límite de tasa 429 (Too Many Requests)
+ * Prompt especializado para la Ingesta Asistida de EEFF de Empresas Comparables
+ */
+const EEFF_COMPARABLE_PROMPT = `Eres un analista senior de Precios de Transferencia. Lee los Estados Financieros de la empresa comparable y extrae la matriz contable completa.
+
+Devuelve SOLO un JSON estricto con esta estructura:
+{
+  "periodo": "Año o rango del ejercicio (ej: 2025 o 2024)",
+  "moneda": "USD, COP, EUR, etc.",
+  "unidad_origen": "unidades|miles|millones",
+  "ingresos_operacionales": 0,
+  "costo_ventas": 0,
+  "utilidad_bruta": 0,
+  "gastos_operacionales": 0,
+  "utilidad_operacional": 0,
+  "cuentas_por_cobrar": 0,
+  "inventarios": 0,
+  "cuentas_por_pagar": 0,
+  "total_activos": 0,
+  "total_pasivos": 0,
+  "patrimonio": 0
+}`;
+
+/**
+ * Función auxiliar con reintento automático para manejar errores de límite de tasa 429
  */
 async function postGeminiWithRetry(payload, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -65,7 +87,7 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
       const is429 = err.response && err.response.status === 429;
       if (is429 && attempt < maxRetries) {
         const delayMs = attempt * 3000;
-        console.warn(`[Gemini OCR] HTTP 429 (Límite de peticiones). Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
+        console.warn(`[Gemini OCR] HTTP 429. Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
         await new Promise(r => setTimeout(r, delayMs));
       } else {
         throw err;
@@ -75,7 +97,7 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
 }
 
 /**
- * Extrae Estados Financieros con Gemini Vision OCR enviando el documento
+ * Extrae Estados Financieros del Contribuyente con Gemini Vision OCR
  */
 export async function parseEeffWithGeminiOCR(file) {
   return new Promise((resolve, reject) => {
@@ -88,10 +110,6 @@ export async function parseEeffWithGeminiOCR(file) {
 
         if (file.type.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
           mimeType = file.type || 'image/jpeg';
-        } else if (file.name.match(/\.(pdf)$/i)) {
-          mimeType = 'application/pdf';
-        } else {
-          mimeType = 'application/pdf';
         }
 
         const payload = {
@@ -105,7 +123,6 @@ export async function parseEeffWithGeminiOCR(file) {
         };
 
         const response = await postGeminiWithRetry(payload);
-
         const cand = response.data?.candidates?.[0];
         const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
 
@@ -113,7 +130,6 @@ export async function parseEeffWithGeminiOCR(file) {
           const cleanJsonStr = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
           const parsed = JSON.parse(cleanJsonStr);
 
-          // Extraer valores absolutos numéricos con factor de escala
           const extractVal = (obj) => {
             if (!obj || typeof obj.valor !== 'number') return null;
             let v = obj.valor;
@@ -146,13 +162,111 @@ export async function parseEeffWithGeminiOCR(file) {
         }
       } catch (err) {
         console.error("Error en parseEeffWithGeminiOCR:", err);
-        if (err.response && err.response.status === 429) {
-          reject(new Error("La API de Gemini alcanzó el límite de solicitudes por minuto (Error 429). Por favor espere 10 segundos y vuelva a intentarlo."));
-        } else {
-          reject(err);
-        }
+        reject(err);
       }
     };
     reader.onerror = (e) => reject(e);
   });
+}
+
+/**
+ * Extrae y verifica los EEFF de una Empresa Comparable específica conservando escala/unidad original.
+ */
+export async function parseEEFFComparableOCR(file, studyYear) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = async () => {
+      try {
+        const base64Data = reader.result.split(',')[1];
+        let mimeType = 'application/pdf';
+        if (file.type.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
+          mimeType = file.type || 'image/jpeg';
+        }
+
+        const payload = {
+          model: 'gemini-3-flash-preview',
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: mimeType, data: base64Data } },
+              { text: EEFF_COMPARABLE_PROMPT }
+            ]
+          }]
+        };
+
+        const response = await postGeminiWithRetry(payload);
+        const text = response.data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+
+        if (text) {
+          const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+          const data = JSON.parse(cleanJson);
+
+          const verificacion = verifyAccountingEqualities(data, studyYear);
+
+          resolve({
+            data,
+            verificacion,
+            filename: file.name
+          });
+        } else {
+          reject(new Error("No se pudo obtener el JSON de EEFF de la comparable."));
+        }
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = (e) => reject(e);
+  });
+}
+
+/**
+ * Verificación Aritmética Automática de Identidades Contables
+ */
+export function verifyAccountingEqualities(data, studyYear) {
+  const hallazgos = [];
+  let esValido = true;
+
+  const s = data.ingresos_operacionales || 0;
+  const c = Math.abs(data.costo_ventas || 0);
+  const ub = data.utilidad_bruta || (s - c);
+  const go = data.gastos_operacionales || 0;
+  const op = data.utilidad_operacional || 0;
+  const at = data.total_activos || 0;
+  const pas = data.total_pasivos || 0;
+  const pat = data.patrimonio || 0;
+
+  // 1. Verificación U. Bruta = Ventas - Costo
+  if (ub !== 0 && Math.abs(ub - (s - c)) > 2) {
+    hallazgos.push(`⚠️ Inconsistencia U. Bruta: leída ${ub}, calculada (${s} - ${c}) = ${s - c}`);
+    esValido = false;
+  }
+
+  // 2. Verificación U. Op = UB - GO
+  if (op !== 0 && go !== 0 && Math.abs(op - (ub - go)) > 2) {
+    hallazgos.push(`⚠️ Inconsistencia U. Operacional: leída ${op}, calculada (${ub} - ${go}) = ${ub - go}`);
+    esValido = false;
+  }
+
+  // 3. Verificación Ecuación Patrimonial (Activos = Pasivos + Patrimonio)
+  if (at !== 0 && (pas !== 0 || pat !== 0)) {
+    if (Math.abs(at - (pas + pat)) > 2) {
+      hallazgos.push(`⚠️ Ecuación patrimonial no cuadra: Activos (${at}) ≠ Pasivos (${pas}) + Patrimonio (${pat})`);
+      esValido = false;
+    }
+  }
+
+  // 4. Verificación de Período
+  if (studyYear && data.periodo && !String(data.periodo).includes(String(studyYear))) {
+    hallazgos.push(`⚠️ El período leído (${data.periodo}) no coincide con el año del estudio (${studyYear}).`);
+    esValido = false;
+  }
+
+  if (esValido && hallazgos.length === 0) {
+    hallazgos.push(`✅ Verificación contable superada. Período: ${data.periodo || studyYear}`);
+  }
+
+  return {
+    esValido,
+    hallazgos
+  };
 }
