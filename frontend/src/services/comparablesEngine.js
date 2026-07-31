@@ -16,47 +16,140 @@ export function nameKey(str) {
 }
 
 /**
- * Parsea archivo de Capital IQ (.xlsx, .xls, .csv)
+ * Localiza la hoja de cribado. El export de Capital IQ trae varias —Screening,
+ * Aggregates, Screen Criteria— y las candidatas están en la primera. Tomar
+ * SheetNames[0] a ciegas funciona por casualidad cuando Screening va primera.
  */
-export async function importCapitalIQExcel(file) {
+export function elegirHoja(nombresDeHoja) {
+  const lista = nombresDeHoja || [];
+  return lista.find(n => /screening|cribado|candidat/i.test(n)) || lista[0] || '';
+}
+
+/**
+ * Localiza la fila de encabezados. El export de Capital IQ NO los pone en la
+ * primera fila: la 0 es el título del reporte ("Capital IQ Company Screening
+ * Report > ..."), la 1 va vacía y los encabezados están en la 2. Asumir json[0]
+ * dejaba todos los índices de columna en -1, el bucle saltaba las 2.990 filas y
+ * la función devolvía un array vacío SIN lanzar ninguna excepción: en pantalla no
+ * aparecía ni un error ni un resultado.
+ *
+ * Se elige la fila con más celdas de texto entre las 15 primeras, que es la
+ * heurística que ya usaba el monolito y acierta con los reportes reales.
+ */
+export function encontrarFilaEncabezados(filas) {
+  let mejor = 0, mejorPuntaje = -1;
+  const tope = Math.min((filas || []).length, 15);
+  for (let i = 0; i < tope; i++) {
+    const celdas = (filas[i] || []).filter(x => String(x ?? '').trim() !== '');
+    if (!celdas.length) continue;
+    const textuales = celdas.filter(x => isNaN(parseFloat(x)) || !isFinite(x));
+    const puntaje = textuales.length + (celdas.length >= 3 ? 1 : 0);
+    if (puntaje > mejorPuntaje) { mejorPuntaje = puntaje; mejor = i; }
+  }
+  return mejor;
+}
+
+/** Sinónimos por columna, en un solo sitio para poder informar qué se buscó. */
+export const COLUMNAS_IQ = {
+  name: { etiqueta: 'Compañía', esencial: true, claves: ['company name', 'compañía', 'compania', 'empresa', 'razon social', 'razón social', 'nombre'] },
+  s: { etiqueta: 'Ingresos', esencial: true, claves: ['total revenue', 'revenue', 'ventas', 'ingresos'] },
+  c: { etiqueta: 'Costo de ventas', esencial: false, claves: ['cost of goods', 'cost of revenue', 'costo de ventas', 'costos'] },
+  op: { etiqueta: 'Utilidad operacional', esencial: true, claves: ['operating income', 'operating profit', 'utilidad operacional', 'ebit'] },
+  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, claves: ['accounts receivable', 'cuentas por cobrar', 'cxc'] },
+  inv: { etiqueta: 'Inventarios', esencial: false, claves: ['total inventory', 'inventarios', 'inventario'] },
+  ap: { etiqueta: 'Cuentas por pagar', esencial: false, claves: ['accounts payable', 'cuentas por pagar', 'cxp'] },
+  sic: { etiqueta: 'SIC', esencial: false, claves: ['primary sic', 'sic', 'ciiu'] },
+  id: { etiqueta: 'Identificador de la fuente', esencial: false, claves: ['excel company id', 'capital iq id', 'company id', 'iqid'] },
+  desc: { etiqueta: 'Descripción del negocio', esencial: false, claves: ['business description', 'descripción', 'descripcion', 'actividad', 'profile'] },
+  country: { etiqueta: 'País', esencial: false, claves: ['country', 'país', 'pais', 'ubicación', 'location'] },
+};
+
+/**
+ * Parsea archivo de Capital IQ (.xlsx, .xls, .csv).
+ *
+ * Devuelve { rows, meta }: meta lleva la hoja elegida, la fila de encabezados, las
+ * columnas reconocidas y las que faltan, para que la interfaz pueda explicar qué
+ * se leyó en lugar de quedarse muda. onProgress(etapa, hechas, total) permite
+ * mostrar el avance.
+ */
+export async function importCapitalIQExcel(file, onProgress) {
+  const avisar = (etapa, hechas, total) => {
+    if (typeof onProgress === 'function') {
+      try { onProgress(etapa, hechas, total); } catch (e) { /* la UI no debe romper la lectura */ }
+    }
+  };
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
+        avisar('Abriendo el archivo…', 0, null);
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const hoja = elegirHoja(workbook.SheetNames);
+        const worksheet = workbook.Sheets[hoja];
+        if (!worksheet) throw new Error('El archivo no tiene ninguna hoja legible.');
 
+        const json = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
         if (!json || json.length < 2) {
-          throw new Error('El archivo no contiene suficientes filas.');
+          throw new Error('La hoja «' + hoja + '» no contiene suficientes filas.');
         }
 
-        const headers = json[0].map(h => String(h || '').trim().toLowerCase());
-        
+        avisar('Reconociendo columnas…', 0, null);
+        const filaEncabezados = encontrarFilaEncabezados(json);
+        const headers = (json[filaEncabezados] || []).map(h => String(h || '').trim().toLowerCase());
+
         // Mapeo flexible de encabezados
         const findCol = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
 
-        const nameIdx = findCol(['company name', 'compañía', 'empresa', 'razon social', 'nombre']);
-        const sIdx = findCol(['total revenue', 'revenue', 'ventas', 'ingresos']);
-        const cIdx = findCol(['cost of goods', 'cost of goods sold', 'costo de ventas', 'costos']);
-        const opIdx = findCol(['operating income', 'operating profit', 'utilidad operacional', 'ebit']);
-        const arIdx = findCol(['accounts receivable', 'cuentas por cobrar', 'cxc']);
-        const invIdx = findCol(['total inventory', 'inventarios', 'inventario', 'inv']);
-        const apIdx = findCol(['accounts payable', 'cuentas por pagar', 'cxp']);
-        const sicIdx = findCol(['primary sic', 'sic', 'ciiu']);
-        const idIdx = findCol(['iqid', 'capital iq id', 'company id', 'id']);
-        const descIdx = findCol(['business description', 'descripción', 'actividad', 'profile']);
-        const countryIdx = findCol(['country', 'país', 'ubicación', 'location']);
+        const idx = {};
+        const reconocidas = [], faltantes = [];
+        Object.entries(COLUMNAS_IQ).forEach(([clave, def]) => {
+          const i = findCol(def.claves);
+          idx[clave] = i;
+          if (i >= 0) reconocidas.push({ clave, etiqueta: def.etiqueta, columna: i, header: (json[filaEncabezados] || [])[i] });
+          else faltantes.push({ clave, etiqueta: def.etiqueta, esencial: def.esencial, claves: def.claves });
+        });
 
+        const meta = {
+          archivo: file.name || '',
+          hojas: workbook.SheetNames.slice(),
+          hoja,
+          filas: json.length,
+          filaEncabezados,
+          encabezados: (json[filaEncabezados] || []).map(h => String(h || '')).filter(h => h.trim()),
+          reconocidas,
+          faltantes,
+          sinCuentasDeBalance: ['ar', 'inv', 'ap'].every(k => idx[k] < 0),
+        };
+
+        const nameIdx = idx.name;
+        if (nameIdx < 0) {
+          /* Antes esto devolvía [] en silencio. Un error explícito con lo que sí se
+             encontró es lo que permite corregir el export. */
+          const err = new Error(
+            'No se encontró la columna de la compañía en la hoja «' + hoja + '» (encabezados en la fila ' +
+            (filaEncabezados + 1) + '). Encabezados leídos: ' +
+            (meta.encabezados.slice(0, 10).join(' | ') || '(ninguno)')
+          );
+          err.meta = meta;
+          throw err;
+        }
+        const sIdx = idx.s, cIdx = idx.c, opIdx = idx.op, arIdx = idx.ar, invIdx = idx.inv,
+          apIdx = idx.ap, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc, countryIdx = idx.country;
+        const total = json.length - filaEncabezados - 1;
+        avisar('Leyendo compañías…', 0, total);
         const rows = [];
-        for (let i = 1; i < json.length; i++) {
+        let saltadas = 0;
+        /* desde la fila SIGUIENTE a los encabezados, no desde la 1: con el título
+           del reporte arriba, empezar en 1 leía la fila de encabezados como dato */
+        for (let i = filaEncabezados + 1; i < json.length; i++) {
+          if (i % 500 === 0) avisar('Leyendo compañías…', i - filaEncabezados - 1, total);
           const row = json[i];
-          if (!row || !row[nameIdx]) continue;
+          if (!row || !row[nameIdx]) { saltadas++; continue; }
 
           const name = String(row[nameIdx]).trim();
-          if (!name) continue;
+          if (!name) { saltadas++; continue; }
 
           const s = sIdx >= 0 ? num(row[sIdx]) : null;
           const c = cIdx >= 0 ? Math.abs(num(row[cIdx]) || 0) : null;
@@ -94,12 +187,15 @@ export async function importCapitalIQExcel(file) {
           });
         }
 
-        resolve(rows);
+        meta.candidatas = rows.length;
+        meta.saltadas = saltadas;
+        avisar('Leyendo compañías…', total, total);
+        resolve({ rows, meta });
       } catch (err) {
         reject(err);
       }
     };
-    reader.onerror = (err) => reject(err);
+    reader.onerror = () => reject(new Error('No se pudo leer «' + (file.name || 'el archivo') + '».'));
     reader.readAsArrayBuffer(file);
   });
 }

@@ -46,6 +46,11 @@ export default function MotorComparables({ study, updateStudy }) {
   const [uploadingEEFF, setUploadingEEFF] = useState(false);
   const [eeffLog, setEeffLog] = useState({});
 
+  // Visibilidad de la importación de Capital IQ: progreso, diagnóstico y registro.
+  const [importProgreso, setImportProgreso] = useState(null);
+  const [importMeta, setImportMeta] = useState(null);
+  const [importLog, setImportLog] = useState([]);
+
   useEffect(() => {
     updateStudy({ 
       actividad_especifica: actividad,
@@ -85,15 +90,62 @@ export default function MotorComparables({ study, updateStudy }) {
     }
   };
 
+  // Registro de lo que va pasando durante una importación, visible en pantalla.
+  // Antes el único rastro era console.error, así que un archivo que no se podía
+  // mapear se veía igual que uno cargado con éxito: sin nada.
+  const anotar = (texto, tipo = 'info') => {
+    const hora = new Date().toLocaleTimeString('es-CO', { hour12: false });
+    setImportLog(prev => [...prev.slice(-60), { hora, texto, tipo }]);
+    if (tipo === 'error') console.error('[Capital IQ] ' + texto);
+    else console.log('[Capital IQ] ' + texto);
+  };
+
   // Handle Capital IQ File Upload
   const handleImportExcel = async (file) => {
     if (!file) return;
     setLoadingExcel(true);
+    setImportLog([]);
+    setImportMeta(null);
+    setImportProgreso({ etapa: 'Abriendo el archivo…', hechas: 0, total: null });
+    anotar(`Archivo recibido: «${file.name}» (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     try {
-      const rows = await importCapitalIQExcel(file);
+      const { rows, meta } = await importCapitalIQExcel(file, (etapa, hechas, total) => {
+        setImportProgreso({ etapa, hechas, total });
+      });
+
+      setImportMeta(meta);
+      anotar(`Hoja «${meta.hoja}» de ${meta.hojas.length} (${meta.hojas.join(', ')})`);
+      anotar(`Encabezados detectados en la fila ${meta.filaEncabezados + 1}; ${meta.filas} filas en la hoja`);
+      anotar(`Columnas reconocidas (${meta.reconocidas.length}): ${meta.reconocidas.map(r => r.etiqueta).join(', ')}`);
+      if (meta.faltantes.length) {
+        anotar(`Columnas no encontradas: ${meta.faltantes.map(f => f.etiqueta).join(', ')}`,
+          meta.faltantes.some(f => f.esencial) ? 'error' : 'aviso');
+      }
+      if (meta.saltadas) anotar(`${meta.saltadas} filas sin compañía se omitieron (totales, notas o filas vacías)`, 'aviso');
+
+      if (!rows.length) {
+        anotar('No se obtuvo ninguna compañía del archivo.', 'error');
+        setImportProgreso(null);
+        return;
+      }
+
       setUniverso(rows);
+      anotar(`${rows.length} compañías cargadas como universo evaluable`, 'ok');
+      if (meta.sinCuentasDeBalance) {
+        anotar('El cribado no trae cartera, inventarios ni proveedores: el ajuste de capital de trabajo queda pendiente hasta cargar los estados financieros.', 'aviso');
+      }
+      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3.', 'ok');
+      setImportProgreso(null);
     } catch (err) {
-      console.error("Error importando Excel Capital IQ:", err);
+      // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
+      // saber qué encabezados había es lo que permite corregir el export.
+      if (err && err.meta) {
+        setImportMeta(err.meta);
+        anotar(`Hoja «${err.meta.hoja}», encabezados en la fila ${err.meta.filaEncabezados + 1}`);
+        anotar(`Encabezados leídos: ${err.meta.encabezados.slice(0, 12).join(' | ') || '(ninguno)'}`);
+      }
+      anotar(err && err.message ? err.message : 'Falló la importación.', 'error');
+      setImportProgreso(null);
     } finally {
       setLoadingExcel(false);
     }
@@ -368,6 +420,87 @@ export default function MotorComparables({ study, updateStudy }) {
               </span>
             )}
           </div>
+
+          {/* Progreso de la carga: etapa, contador y barra. Sin esto, un archivo de
+              3.000 filas parece no hacer nada. */}
+          {importProgreso && (
+            <div className="bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#0FA3A1]" />
+                <span>{importProgreso.etapa}</span>
+                {importProgreso.total ? (
+                  <span className="ml-auto tabular-nums text-zinc-500">
+                    {importProgreso.hechas.toLocaleString('es-CO')} de {importProgreso.total.toLocaleString('es-CO')}
+                    {' · '}{Math.min(100, Math.round((importProgreso.hechas / importProgreso.total) * 100))} %
+                  </span>
+                ) : null}
+              </div>
+              <div className="h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-2 overflow-hidden">
+                <div
+                  className={'h-full bg-[#0FA3A1] transition-all duration-150' + (importProgreso.total ? '' : ' opacity-40 w-full animate-pulse')}
+                  style={importProgreso.total
+                    ? { width: Math.min(100, Math.round((importProgreso.hechas / importProgreso.total) * 100)) + '%' }
+                    : undefined}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Diagnóstico de lo que se leyó: hoja, fila de encabezados y columnas.
+              Es lo que permite corregir el export cuando el mapeo no cuadra. */}
+          {importMeta && (
+            <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1">
+              <div className="text-zinc-700 dark:text-zinc-200">
+                <span className="font-semibold">Hoja «{importMeta.hoja}»</span>
+                {importMeta.hojas.length > 1 && <span className="text-zinc-500"> de {importMeta.hojas.length} ({importMeta.hojas.join(', ')})</span>}
+                <span className="text-zinc-500"> · encabezados en la fila {importMeta.filaEncabezados + 1} · {importMeta.filas.toLocaleString('es-CO')} filas</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {importMeta.reconocidas.map(r => (
+                  <span key={r.clave} title={String(r.header || '')} className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                    {r.etiqueta}
+                  </span>
+                ))}
+                {importMeta.faltantes.map(f => (
+                  <span key={f.clave} title={'Se buscó: ' + f.claves.join(', ')} className={'px-1.5 py-0.5 rounded border ' + (f.esencial
+                    ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800/60'
+                    : 'bg-zinc-100 dark:bg-zinc-800/60 text-zinc-500 border-zinc-200 dark:border-zinc-700')}>
+                    {f.etiqueta} {f.esencial ? '✗' : '—'}
+                  </span>
+                ))}
+              </div>
+              {importMeta.encabezados && importMeta.encabezados.length > 0 && (
+                <details>
+                  <summary className="cursor-pointer text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">Ver los {importMeta.encabezados.length} encabezados del archivo</summary>
+                  <div className="mt-1 text-zinc-500 font-mono text-[10px] leading-relaxed">{importMeta.encabezados.join(' | ')}</div>
+                </details>
+              )}
+            </div>
+          )}
+
+          {/* Registro de la importación */}
+          {importLog.length > 0 && (
+            <details open className="text-[11px]">
+              <summary className="cursor-pointer font-semibold text-zinc-600 dark:text-zinc-300 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5" /> Registro de la importación ({importLog.length})
+              </summary>
+              <div className="mt-1.5 max-h-56 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#09090b] divide-y divide-zinc-100 dark:divide-zinc-800/70">
+                {importLog.map((l, i) => (
+                  <div key={i} className="flex gap-2 px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed">
+                    <span className="text-zinc-400 tabular-nums flex-none">{l.hora}</span>
+                    <span className={
+                      l.tipo === 'error' ? 'text-red-600 dark:text-red-400'
+                        : l.tipo === 'aviso' ? 'text-amber-600 dark:text-amber-400'
+                          : l.tipo === 'ok' ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-zinc-600 dark:text-zinc-300'
+                    }>
+                      {l.tipo === 'error' ? '✗' : l.tipo === 'aviso' ? '⚠' : l.tipo === 'ok' ? '✓' : '·'} {l.texto}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
 
         {/* Paso 2: Filtros del Motor */}
