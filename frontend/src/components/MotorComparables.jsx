@@ -51,16 +51,24 @@ export default function MotorComparables({ study, updateStudy }) {
   const [importMeta, setImportMeta] = useState(null);
   const [importLog, setImportLog] = useState([]);
 
+  // Curación por IA del universo: veredicto por identificador y su progreso.
+  const [iaMatch, setIaMatch] = useState(study.iaMatch || null);
+  const [curando, setCurando] = useState(false);
+  const [curacionProgreso, setCuracionProgreso] = useState(null);
+
   useEffect(() => {
     updateStudy({ 
       actividad_especifica: actividad,
       estudioAnterior: estudioAnteriorInfo,
       motorConfig: engineConfig,
       universo,
-      comparables, 
-      cmode 
+      comparables,
+      cmode,
+      /* el veredicto de la curación viaja con el estudio: es la constancia de por
+         qué se aceptó o rechazó cada candidata, y evita volver a pagar la consulta */
+      iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -100,6 +108,49 @@ export default function MotorComparables({ study, updateStudy }) {
     else console.log('[Capital IQ] ' + texto);
   };
 
+  /* Cura el universo contra la actividad detectada. El veredicto se guarda por
+     identificador y se persiste con el estudio: si el navegador se recarga, lo ya
+     curado no se pierde. Mientras corre, la selección del paso 3 queda bloqueada,
+     porque ejecutarla a medias produciría un conjunto con criterios distintos
+     según qué lotes hubieran terminado. */
+  const curarUniverso = async (candidatas) => {
+    const act = String(actividad || '').trim();
+    if (!act) {
+      anotar('Sin actividad detectada: se omite la curación por IA y el motor usará las palabras clave. Cargue el informe del año anterior para detectarla.', 'aviso');
+      return null;
+    }
+    setCurando(true);
+    setCuracionProgreso({ etapa: 'inicio', mensaje: 'Preparando la curación…' });
+    try {
+      const priorComps = (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [];
+      const veredicto = await curateCandidatesWithGemini(candidatas, act, {
+        priorComps,
+        fuente: (importMeta && importMeta.archivo) || '',
+        onProgress: (info) => {
+          setCuracionProgreso(info);
+          if (info.etapa === 'inicio' || info.etapa === 'omitida') anotar(info.mensaje, info.etapa === 'omitida' ? 'aviso' : 'info');
+        },
+      });
+      setIaMatch(veredicto);
+      if (veredicto.omitida) {
+        anotar(veredicto.omitida, 'aviso');
+      } else {
+        anotar(`Curación terminada: ${veredicto.coinciden} de ${veredicto.total} coinciden con la actividad`, 'ok');
+        if (veredicto.fallidas) {
+          anotar(`${veredicto.fallidas} candidatas no se pudieron evaluar; se dejan pasar sin descartarlas por actividad.`, 'aviso');
+        }
+      }
+      return veredicto;
+    } catch (err) {
+      anotar('La curación por IA falló: ' + (err && err.message ? err.message : 'error desconocido') +
+        '. El motor seguirá con las palabras clave.', 'error');
+      return null;
+    } finally {
+      setCurando(false);
+      setCuracionProgreso(null);
+    }
+  };
+
   // Handle Capital IQ File Upload
   const handleImportExcel = async (file) => {
     if (!file) return;
@@ -134,8 +185,14 @@ export default function MotorComparables({ study, updateStudy }) {
       if (meta.sinCuentasDeBalance) {
         anotar('El cribado no trae cartera, inventarios ni proveedores: el ajuste de capital de trabajo queda pendiente hasta cargar los estados financieros.', 'aviso');
       }
-      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3.', 'ok');
       setImportProgreso(null);
+
+      /* La curación se hace aquí, sobre el UNIVERSO recién importado, no después
+         de seleccionar: su veredicto es uno de los filtros del motor, así que
+         tiene que existir antes de puntuar. Curar después obligaba a quedarse
+         corto de comparables cuando la IA rechazaba parte de las elegidas. */
+      await curarUniverso(rows);
+      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
       // saber qué encabezados había es lo que permite corregir el export.
@@ -157,24 +214,63 @@ export default function MotorComparables({ study, updateStudy }) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
     }
+    if (curando) {
+      alert('Espere a que termine la curación por IA: el motor necesita su veredicto para puntuar.');
+      return;
+    }
     setLoadingSelection(true);
+    setImportLog([]);
     try {
       const priorComps = (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [];
-      
-      // 1. Scoring & Filtering
-      let result = scoreCandidates(universo, engineConfig, actividad, priorComps);
-      
-      // 2. Curación con Gemini AI
-      const curatedSeleccionadas = await curateCandidatesWithGemini(result.seleccionadas, actividad);
-      
-      setComparables(curatedSeleccionadas);
+      anotar(`Evaluando ${universo.length} candidatas del universo…`);
+
+      /* El veredicto de la curación entra como uno de los filtros del motor, junto
+         con holding, saldos negativos y pérdida operativa. Si no se curó —sin
+         actividad detectada o sin descripciones— el motor sigue con las palabras
+         clave, no descarta a nadie por omisión. */
+      let veredicto = iaMatch;
+      if (!veredicto && String(actividad || '').trim()) {
+        anotar('El universo no estaba curado; curando ahora antes de puntuar…', 'aviso');
+        veredicto = await curarUniverso(universo);
+      }
+
+      const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
+        ventasParteExaminada: study.t_s,
+        iaMatch: veredicto,
+      });
+
+      const porIA = result.rechazadas.filter(c => /Curación IA|Sin descripción del negocio/.test(c.motivoRechazo || '')).length;
+      anotar(`${result.totalValidas} pasaron los filtros; ${result.rechazadas.length} descartadas` +
+        (porIA ? ` (${porIA} por la curación con IA)` : ''));
+      if (!result.ventasParteExaminada) {
+        anotar('Sin ventas de la parte examinada: el factor de tamaño queda neutro. Diligéncielas en la tarjeta de cifras.', 'aviso');
+      }
+      if (!result.conActividad) {
+        anotar('Sin actividad detectada: la especialidad pesa 15 % en lugar de 40 %.', 'aviso');
+      }
+
+      const nTarget = engineConfig.nTarget || 12;
+      const finales = result.seleccionadas;
+      setComparables(finales);
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
-        seleccionadas: curatedSeleccionadas.length
+        rechazadasFiltros: result.rechazadas.length - porIA,
+        curadas: veredicto ? veredicto.total : 0,
+        rechazadasIA: porIA,
+        seleccionadas: finales.length,
+        objetivo: nTarget,
+        reserva: result.reserva.length,
       });
+
+      if (finales.length < nTarget) {
+        anotar(`Solo ${finales.length} de las ${nTarget} buscadas: no quedan más candidatas válidas. Amplíe los criterios del paso 2.`, 'aviso');
+      } else {
+        anotar(`${finales.length} comparables seleccionadas · ${result.reserva.length} en reserva`, 'ok');
+      }
     } catch (err) {
       console.error("Error ejecutando selección del motor:", err);
+      anotar(err && err.message ? err.message : 'Falló la selección.', 'error');
     } finally {
       setLoadingSelection(false);
     }
@@ -391,8 +487,13 @@ export default function MotorComparables({ study, updateStudy }) {
             <Sparkles className="w-4 h-4 text-[#0FA3A1]" />
             ⚙️ Motor de Selección Automática (TOP-N)
           </h3>
+          {/* Los pesos que se anuncian son los que aplica scoreCandidates de verdad
+              y cambian según haya o no actividad detectada. Antes el encabezado
+              declaraba una ponderación que el código no implementaba. */}
           <span className="text-[11px] font-medium text-zinc-500">
-            Ponderación: Actividad (40%) · Tamaño (20%) · Geografía (15%) · Rentabilidad (15%) · Datos (10%)
+            {actividad && actividad.trim()
+              ? 'Ponderación: Actividad (40%) · Perfil (20%) · Tamaño (15%) · Rentabilidad (15%) · Geografía (10%)'
+              : 'Ponderación sin actividad detectada: Perfil (35%) · Tamaño (20%) · Actividad (15%) · Rentabilidad (15%) · Geografía (15%)'}
           </span>
         </div>
 
@@ -475,6 +576,65 @@ export default function MotorComparables({ study, updateStudy }) {
                   <div className="mt-1 text-zinc-500 font-mono text-[10px] leading-relaxed">{importMeta.encabezados.join(' | ')}</div>
                 </details>
               )}
+            </div>
+          )}
+
+          {/* Curación por IA del universo: corre al importar, porque su veredicto
+              es uno de los filtros del motor. Con miles de candidatas son varios
+              lotes y varios minutos, así que hay que decir cuánto falta. */}
+          {curacionProgreso && (
+            <div className="bg-[#0FA3A1]/5 border border-[#0FA3A1]/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
+                <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1] animate-pulse" />
+                <span>Curación con Gemini: {curacionProgreso.mensaje}</span>
+                {curacionProgreso.total ? (
+                  <span className="ml-auto tabular-nums text-zinc-500">
+                    {Math.min(100, Math.round(((curacionProgreso.evaluadas || 0) / curacionProgreso.total) * 100))} %
+                  </span>
+                ) : null}
+              </div>
+              {curacionProgreso.total ? (
+                <div className="h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-2 overflow-hidden">
+                  <div className="h-full bg-[#0FA3A1] transition-all duration-200"
+                    style={{ width: Math.min(100, Math.round(((curacionProgreso.evaluadas || 0) / curacionProgreso.total) * 100)) + '%' }} />
+                </div>
+              ) : null}
+              {curacionProgreso.etaMinutos ? (
+                <div className="text-[10.5px] text-zinc-500 mt-1.5">
+                  {curacionProgreso.lotes} lote(s) · estimado ~{curacionProgreso.etaMinutos} min · no cierre la pestaña
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* Resultado de la curación, ya terminada */}
+          {!curando && iaMatch && !iaMatch.omitida && (
+            <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
+              <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-200">
+                <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
+                <span className="font-semibold">Universo curado con IA</span>
+                <span className="text-zinc-500">
+                  · {iaMatch.coinciden} de {iaMatch.total} coinciden con la actividad
+                  {iaMatch.fallidas ? ` · ${iaMatch.fallidas} sin evaluar` : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => curarUniverso(universo)}
+                  disabled={curando || !universo.length}
+                  className="ml-auto text-[10.5px] px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  title="Volver a curar el universo, por ejemplo si corrigió la actividad detectada"
+                >
+                  ↻ Volver a curar
+                </button>
+              </div>
+              {iaMatch.fallidas ? (
+                <div className="text-amber-600 dark:text-amber-400 mt-1">
+                  Las que no se pudieron evaluar se dejan pasar sin descartarlas por actividad: un fallo de red no debe excluir comparables.
+                </div>
+              ) : null}
+              {iaMatch.actividadUsada ? (
+                <div className="text-zinc-500 mt-1">Actividad usada: «{iaMatch.actividadUsada.slice(0, 160)}{iaMatch.actividadUsada.length > 160 ? '…' : ''}»</div>
+              ) : null}
             </div>
           )}
 
@@ -595,21 +755,52 @@ export default function MotorComparables({ study, updateStudy }) {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* bloqueado mientras cura: ejecutar a medias daría un conjunto con
+                criterios distintos según qué lotes hubieran terminado */}
             <button
               onClick={runEngineSelection}
-              disabled={loadingSelection}
-              className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white px-5 py-2.5 rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm"
+              disabled={loadingSelection || curando}
+              className={'flex items-center gap-2 text-white px-5 py-2.5 rounded-lg text-xs font-bold transition-colors shadow-sm ' +
+                (loadingSelection || curando ? 'bg-zinc-400 cursor-not-allowed' : 'bg-[#0FA3A1] hover:bg-[#0B7C7A] cursor-pointer')}
+              title={curando ? 'Espere a que termine la curación por IA' : undefined}
             >
               <Sparkles className="w-4 h-4" />
-              <span>{loadingSelection ? 'Curando candidatas con Gemini AI...' : 'Ejecutar Selección Automática'}</span>
+              <span>
+                {curando ? 'Curando el universo con IA…'
+                  : loadingSelection ? 'Puntuando y seleccionando…'
+                    : 'Ejecutar Selección Automática'}
+              </span>
             </button>
 
-            {selectionFunnel && (
-              <span className="text-xs text-zinc-500 font-semibold">
-                📊 Evaluadas: {selectionFunnel.evaluadas} | Válidas: {selectionFunnel.validas} | Seleccionadas: {selectionFunnel.seleccionadas}
-              </span>
-            )}
           </div>
+
+          {/* Embudo de depuración: cada etapa con lo que dejó fuera. Antes eran
+              tres números y el de «seleccionadas» contaba el total del pool,
+              porque el resultado de la curación no se filtraba. */}
+          {selectionFunnel && (
+            <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1.5">
+              <div className="font-semibold text-zinc-700 dark:text-zinc-200">Embudo de depuración</div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-zinc-600 dark:text-zinc-300">
+                <div>Universo evaluado <b className="tabular-nums">{selectionFunnel.evaluadas.toLocaleString('es-CO')}</b></div>
+                <div>Descartadas por los filtros <b className="tabular-nums text-amber-600 dark:text-amber-400">{(selectionFunnel.rechazadasFiltros ?? 0).toLocaleString('es-CO')}</b></div>
+                <div>Válidas <b className="tabular-nums">{selectionFunnel.validas.toLocaleString('es-CO')}</b></div>
+                <div>Curadas con IA <b className="tabular-nums">{selectionFunnel.curadas ?? '—'}</b></div>
+                <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{selectionFunnel.rechazadasIA ?? 0}</b></div>
+                <div>
+                  Seleccionadas{' '}
+                  <b className={'tabular-nums ' + (selectionFunnel.objetivo && selectionFunnel.seleccionadas < selectionFunnel.objetivo ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')}>
+                    {selectionFunnel.seleccionadas}
+                  </b>
+                  {selectionFunnel.objetivo ? <span className="text-zinc-400"> de {selectionFunnel.objetivo}</span> : null}
+                </div>
+              </div>
+              {selectionFunnel.objetivo && selectionFunnel.seleccionadas < selectionFunnel.objetivo && (
+                <div className="text-amber-600 dark:text-amber-400">
+                  No se alcanzó el objetivo: tras la curación no quedó reserva suficiente. Amplíe los criterios del paso 2 o revise la actividad detectada.
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Paso 4: Ingesta EEFF Comparables por Fila / Elección Explícita del Usuario */}

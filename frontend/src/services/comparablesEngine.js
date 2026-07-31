@@ -200,22 +200,131 @@ export async function importCapitalIQExcel(file, onProgress) {
   });
 }
 
+/* ══════════════ Factores de la puntuación ══════════════
+   Los mismos que aplica el motor del monolito. Antes aquí la puntuación era
+   score = 0.5, +0.15 si venía del año anterior y +0.1 si el país era de LATAM:
+   con casi 3.000 candidatas todas empataban en 0,5, de modo que quedarse con las
+   primeras nTarget equivalía a tomar las primeras del archivo en orden
+   alfabético. El encabezado anunciaba una ponderación que no existía. */
+
+const REGIONES = {
+  LATAM: ['colombia', 'argentina', 'brazil', 'brasil', 'chile', 'mexico', 'méxico', 'peru', 'perú', 'uruguay', 'ecuador', 'panam', 'costa rica', 'guatemala'],
+  ASIA: ['japan', 'japón', 'korea', 'corea', 'china', 'india', 'taiwan', 'thailand', 'singapore', 'malaysia', 'vietnam', 'indonesia', 'philippines', 'hong kong'],
+  EUROPA: ['poland', 'polonia', 'german', 'aleman', 'france', 'francia', 'spain', 'españa', 'united kingdom', 'reino unido', 'sweden', 'norway', 'finland', 'italy', 'netherlands', 'denmark', 'romania', 'ukraine', 'czech', 'suiza', 'switzerland'],
+  NORTEAM: ['united states', 'estados unidos', 'canada', 'canadá'],
+};
+
+/** Región del país, para el factor geográfico. Antes solo se reconocía LATAM. */
+export function regionDe(pais) {
+  const p = String(pais || '').toLowerCase();
+  for (const r in REGIONES) if (REGIONES[r].some(x => p.includes(x))) return r;
+  return 'OTRA';
+}
+
+const CLAVES_PERFIL = {
+  servicio: /software development services|it services|information technology services|custom software|application development|development .{0,25}services|systems integration|software engineering|technology consulting|outsourc|offshore|nearshore|contract develop|develops? .{0,20}for |work[- ]?for[- ]?hire|co-develop|porting/i,
+  empresario: /publish|free[- ]?to[- ]?play|in-house|its own|own (ip|titles|games|brands|products)|monetiz|franchis|licenses its|its (own )?(products?|platform)|saas|subscription|proprietary/i,
+};
+
 /**
- * Puntuación de candidatas (Motor TOP-N) con 5 criterios ponderados
+ * Perfil funcional a partir de la descripción del negocio. El prestador de
+ * servicios es comparable con una filial que presta servicios; el empresario
+ * pleno —con propiedad intelectual y riesgo de mercado propios— no lo es
+ * (Art. 260-4 E.T.).
+ *
+ * Antes el gestor lo derivaba de la utilidad: `op > 0 ? 'SERVICIO' : 'INDEFINIDO'`,
+ * que no dice nada de las funciones asumidas.
  */
-export function scoreCandidates(candidates, config, companyActivity = '', priorComps = []) {
+export function perfilDe(descripcion) {
+  const d = String(descripcion || '');
+  const esServicio = CLAVES_PERFIL.servicio.test(d);
+  const esEmpresario = CLAVES_PERFIL.empresario.test(d);
+  if (esServicio && !esEmpresario) return 'SERVICIO';
+  if (esServicio && esEmpresario) return 'MIXTO';
+  if (esEmpresario) return 'EMPRESARIO';
+  return 'INDEFINIDO';
+}
+
+const VACIAS = /^(de|del|la|el|los|las|y|o|para|con|por|the|and|for|with|its|del)$/i;
+
+/** Palabras con carga semántica de un texto: 4 letras o más, sin repetir. */
+export function tokensSignificativos(texto) {
+  return [...new Set(
+    String(texto || '')
+      .toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 4 && !VACIAS.test(t))
+  )];
+}
+
+/**
+ * Coincidencia de la candidata con la actividad del contribuyente. Es el factor
+ * de mayor peso (40 %) cuando hay actividad detectada, porque es lo que separa a
+ * una comparable del sector de una del mismo código pero otro nicho.
+ */
+export function coincidenciaActividad(candidata, actividad) {
+  if (candidata && candidata.iaCoincide === true) {
+    return { factor: 1, hits: 4, posibles: 4, hayActividad: true, tieneDescripcion: true };
+  }
+  const texto = String(actividad || '').trim();
+  if (!texto) return { factor: 1, hits: 0, posibles: 0, hayActividad: false, tieneDescripcion: false };
+  const desc = String((candidata && candidata.desc) || '');
+  const base = [(candidata && candidata.name) || '', desc, (candidata && candidata.sic) || ''].join(' ').toLowerCase();
+  const tokens = tokensSignificativos(texto);
+  let hits = 0;
+  tokens.forEach(t => { if (base.includes(t)) hits++; });
+  return {
+    factor: Math.max(0.15, Math.min(1, hits / 4)),
+    hits,
+    posibles: tokens.length,
+    hayActividad: true,
+    tieneDescripcion: !!desc.trim(),
+  };
+}
+
+/** Mediana de una lista de números, para el factor de rentabilidad. */
+function medianaDe(valores) {
+  const v = valores.filter(x => typeof x === 'number' && isFinite(x)).sort((a, b) => a - b);
+  if (!v.length) return 0;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+/**
+ * Puntuación de candidatas (Motor TOP-N) con 5 criterios ponderados.
+ *
+ * Pesos, los del monolito: con actividad detectada la especialidad pesa 40 % y el
+ * perfil baja a 20 %; sin actividad, el perfil sube a 35 % y la especialidad baja
+ * a 15 %. Más un bono de 0,08 por continuidad con el estudio anterior.
+ *
+ * `contexto.ventasParteExaminada` alimenta el factor de tamaño: sin él, ese
+ * factor queda neutro en 0,5 para todas.
+ */
+export function scoreCandidates(candidates, config, companyActivity = '', priorComps = [], contexto = {}) {
   const {
     nTarget = 12,
     perdidaOp = 'excluir',
     holding = 'excluir',
     saldoNegativo = 'excluir',
     geo = 'ninguna',
-    rigor = 'estandar'
   } = config;
 
-  const priorSet = new Set((priorComps || []).map(c => nameKey(c.name || c)));
+  const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
+  const ventasTP = num(contexto.ventasParteExaminada);
+  /* Veredicto de la curación por IA, por identificador de la fuente. Se aplica
+     como filtro duro y, cuando confirma la coincidencia, como factor máximo de
+     especialidad. */
+  const iaPorId = (contexto.iaMatch && contexto.iaMatch.porId) || null;
 
-  const evaluated = candidates.map(cand => {
+  /* Mediana del margen operacional del pool: el factor de rentabilidad premia a
+     las candidatas próximas al comportamiento central del conjunto. */
+  const medianaPool = medianaDe(
+    (candidates || []).map(c => (c.s ? (c.op ?? 0) / c.s : null)).filter(x => x !== null)
+  );
+
+  const evaluated = (candidates || []).map(cand => {
     let descartada = false;
     let motivoRechazo = '';
 
@@ -231,28 +340,88 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivoRechazo = 'Pérdida operativa (criterio conservador DIAN).';
     }
 
-    // Puntuación
-    let score = 0.5;
+    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
 
-    // Bono por continuidad del año anterior
-    const esContinuidad = priorSet.has(cand.nameKey);
-    if (esContinuidad) {
-      score += 0.15;
+    /* ── veredicto de la curación por IA ──
+       Solo alcanza a las candidatas con identificador: las de otras fuentes no se
+       curaron y no deben quedar descartadas por omisión. Una comparable que venía
+       del estudio anterior no se retira aunque la IA diga que no coincide: su
+       inclusión ya se sustentó en su momento. */
+    const idIQ = cand.id ? String(cand.id).trim() : '';
+    const ia = iaPorId && idIQ ? iaPorId[idIQ] : null;
+    if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim()) {
+      descartada = true;
+      motivoRechazo = `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`;
+    } else if (!descartada && ia && ia.coincide === false && !esContinuidad) {
+      descartada = true;
+      motivoRechazo = `Curación IA: la descripción del negocio no coincide con la actividad${ia.motivo ? ' (' + ia.motivo + ')' : ''}.`;
     }
 
-    // Factor geográfico
-    if (geo !== 'ninguna') {
-      if (geo === 'LATAM' && /colombia|mexico|chile|peru|argentina|brasil/i.test(cand.country)) {
-        score += 0.1;
-      }
+    /* ── perfil funcional ── */
+    const perfil = cand.perfilFuncional || perfilDe(cand.desc);
+    const fPerfil = perfil === 'SERVICIO' ? 1 : (perfil === 'MIXTO' ? 0.6 : 0.35);
+
+    /* ── especialidad: coincidencia con la actividad del contribuyente ──
+       Si la IA ya confirmó la coincidencia sobre la descripción real, se toma su
+       veredicto en lugar de recontar palabras clave. */
+    const act = coincidenciaActividad(
+      ia && ia.coincide ? { ...cand, iaCoincide: true } : cand,
+      companyActivity
+    );
+    const fEspecialidad = act.factor;
+
+    /* ── geografía ── */
+    let fGeo = 1;
+    const region = regionDe(cand.country);
+    if (geo !== 'ninguna') fGeo = region === geo ? 1 : (region === 'OTRA' ? 0.5 : 0.65);
+
+    /* ── tamaño: cercanía de las ventas a las de la parte examinada ── */
+    let fTamano = 0.5, distancia = null;
+    if (ventasTP && cand.s) {
+      distancia = Math.abs(Math.log10(cand.s / ventasTP));
+      fTamano = 1 / (1 + distancia);
     }
+
+    /* ── rentabilidad: cercanía a la mediana del pool, o preferencia por pérdida ── */
+    let fRent;
+    if (cand.hasLoss) fRent = perdidaOp === 'preferir' ? 1 : 0.4;
+    else if (perdidaOp === 'preferir') fRent = 0.4;
+    else {
+      const pli = cand.s ? (cand.op ?? 0) / cand.s : 0;
+      fRent = Math.max(0, 1 - Math.min(1, Math.abs(pli - medianaPool) / 0.5));
+    }
+
+    /* Pesos dinámicos: con actividad detectada el nicho manda. */
+    const hayAct = act.hayActividad;
+    const wPerfil = hayAct ? 0.20 : 0.35;
+    const wEspecialidad = hayAct ? 0.40 : 0.15;
+    const wGeo = hayAct ? 0.10 : 0.15;
+    const wTamano = hayAct ? 0.15 : 0.20;
+    const wRent = 0.15;
+
+    const score = Math.min(1,
+      wPerfil * fPerfil + wEspecialidad * fEspecialidad + wGeo * fGeo +
+      wTamano * fTamano + wRent * fRent + (esContinuidad ? 0.08 : 0)
+    );
+
+    const razones = [
+      'perfil ' + perfil.toLowerCase(),
+      hayAct ? (fEspecialidad >= 0.5 ? `coincide con la actividad (${act.hits} coincidencias)` : `coincidencia parcial (${act.hits})`) : '',
+      geo !== 'ninguna' && region === geo ? `región prioritaria (${cand.country || ''})` : '',
+      distancia !== null && distancia < 1 ? 'tamaño próximo al de la parte examinada' : '',
+      cand.hasLoss ? `con pérdida operativa (${perdidaOp})` : '',
+      esContinuidad ? 'continuidad con el año anterior' : '',
+    ].filter(Boolean).join(', ');
 
     return {
       ...cand,
-      score: Math.min(1.0, score),
+      perfilFuncional: perfil,
+      score,
+      factores: { perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano, rentabilidad: fRent },
+      razones,
       esContinuidad,
       descartada,
-      motivoRechazo
+      motivoRechazo,
     };
   });
 
@@ -265,56 +434,210 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     evaluadas: evaluated.length,
     seleccionadas,
     rechazadas,
-    totalValidas: validas.length
+    totalValidas: validas.length,
+    /* reserva: las válidas que no entraron al TOP-N, para poder reponer las que
+       la curación por IA descarte sin quedarse corto de comparables */
+    reserva: validas.slice(nTarget),
+    medianaPool,
+    conActividad: !!String(companyActivity || '').trim(),
+    ventasParteExaminada: ventasTP,
   };
 }
 
 /**
- * Curación de candidatas enviando descripciones a Gemini Vision/AI API
+ * Extrae el objeto JSON de una respuesta de la IA.
+ *
+ * Los modelos devuelven el JSON envuelto en prosa o en vallas de markdown con
+ * frecuencia. Quitar las vallas y hacer JSON.parse falla en cuanto el modelo
+ * añade una frase después del objeto, y entonces la curación se descartaba
+ * entera. Aquí se escanean llaves balanceadas respetando las cadenas, que es lo
+ * que hace `extraerJSONDeRespuestaIA` en el monolito.
  */
-export async function curateCandidatesWithGemini(candidates, companyActivity) {
-  if (!companyActivity || !candidates.length) return candidates;
-
-  const prompt = `Eres un experto en precios de transferencia.
-La empresa examinada tiene la siguiente actividad económica real:
-"${companyActivity}"
-
-A continuación se lista un conjunto de empresas candidatas con sus descripciones de negocio.
-Para cada una, evalúa si su actividad real COINCIDE con la actividad de la empresa examinada.
-
-Candidatas:
-${candidates.slice(0, 30).map((c, i) => `${i + 1}. ID: ${c.id} | Nombre: ${c.name} | Desc: ${c.desc || 'Sin descripción'}`).join('\n')}
-
-Devuelve SOLO un JSON estricto:
-{
-  "evaluacion": [
-    { "id": "", "coincide": true, "motivo": "Explicación breve" }
-  ]
-}`;
-
-  try {
-    const response = await axios.post('/api/gemini', {
-      model: 'gemini-3-flash-preview',
-      contents: [{ parts: [{ text: prompt }] }]
-    });
-
-    const candText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (candText) {
-      const cleanJson = candText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-      const parsed = JSON.parse(cleanJson);
-      const evalMap = new Map((parsed.evaluacion || []).map(item => [item.id, item]));
-
-      return candidates.map(c => {
-        const ev = evalMap.get(c.id);
-        if (ev && ev.coincide === false && !c.esContinuidad) {
-          return { ...c, descartada: true, motivoRechazo: `Curación IA: ${ev.motivo}` };
-        }
-        return c;
-      });
+export function extraerJSON(texto) {
+  const s = String(texto || '');
+  const inicio = s.indexOf('{');
+  if (inicio < 0) throw new Error('La respuesta no contiene ningún objeto JSON.');
+  let nivel = 0, enCadena = false, escapado = false;
+  for (let i = inicio; i < s.length; i++) {
+    const ch = s[i];
+    if (escapado) { escapado = false; continue; }
+    if (ch === '\\') { escapado = true; continue; }
+    if (ch === '"') { enCadena = !enCadena; continue; }
+    if (enCadena) continue;
+    if (ch === '{') nivel++;
+    else if (ch === '}') {
+      nivel--;
+      if (nivel === 0) return JSON.parse(s.slice(inicio, i + 1));
     }
-  } catch (err) {
-    console.warn("Curación IA omitida por error o límite API:", err);
+  }
+  throw new Error('El objeto JSON de la respuesta quedó incompleto.');
+}
+
+/** Parte una lista en trozos del tamaño pedido. */
+function enLotes(lista, tamano) {
+  const out = [];
+  for (let i = 0; i < lista.length; i += tamano) out.push(lista.slice(i, i + tamano));
+  return out;
+}
+
+/**
+ * Ejecuta tareas con un tope de concurrencia. Sin esto, curar un universo grande
+ * sería una consulta detrás de otra —minutos de espera secuencial— o todas a la
+ * vez, que la API rechaza.
+ */
+async function conConcurrencia(items, trabajo, limite) {
+  const resultados = new Array(items.length);
+  let siguiente = 0;
+  async function corredor() {
+    while (siguiente < items.length) {
+      const mio = siguiente++;
+      resultados[mio] = await trabajo(items[mio], mio);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limite, items.length) }, corredor));
+  return resultados;
+}
+
+/** Comparables confirmadas en el estudio anterior, como referencia para la IA. */
+function bloqueConfirmadas(priorComps) {
+  const nombres = (priorComps || []).map(c => (c && c.name) || c).filter(Boolean).slice(0, 25);
+  if (!nombres.length) return '';
+  return 'Estas compañías fueron aceptadas como comparables en el estudio del año anterior, ' +
+    'así que su actividad ya se consideró coincidente; úsalas como referencia de qué cuenta como la misma actividad:\n' +
+    nombres.map(n => '- ' + n).join('\n') + '\n\n';
+}
+
+export const CURACION_LOTE = 60;
+export const CURACION_CONCURRENCIA = 6;
+/* Cada lote tarda del orden de 30-45 s porque el modelo razona un motivo por
+   candidata. Se usa para estimar la espera y avisarla desde el principio. */
+const SEGUNDOS_POR_LOTE = 35;
+
+/**
+ * Curación de candidatas contra la actividad del contribuyente, con la Business
+ * Description real de la fuente.
+ *
+ * Solo evalúa las que traen identificador Y descripción: las agregadas a mano o
+ * venidas de otras fuentes no tienen con qué compararse y siguen de largo hacia
+ * la heurística de palabras clave, sin quedar descartadas por omisión.
+ *
+ * Devuelve un veredicto por identificador, NO una lista filtrada: el descarte lo
+ * decide el motor, que es quien conoce las excepciones (una comparable de
+ * continuidad no se descarta aunque la IA diga que no coincide). Antes esta
+ * función devolvía las candidatas marcadas y el componente las pasaba enteras a
+ * la tabla, así que las rechazadas seguían entrando al rango.
+ *
+ * Los lotes que fallan NO descartan a sus candidatas: un problema de red no puede
+ * traducirse en excluir comparables del estudio.
+ */
+export async function curateCandidatesWithGemini(candidates, companyActivity, opciones = {}) {
+  const { onProgress, priorComps = [], fuente = '' } = opciones;
+  const avisar = (info) => {
+    if (typeof onProgress === 'function') {
+      try { onProgress(info); } catch (e) { /* la UI no debe romper la curación */ }
+    }
+  };
+
+  const actividad = String(companyActivity || '').trim();
+  const veredicto = {
+    porId: {},
+    fecha: new Date().toISOString(),
+    actividadUsada: actividad,
+    fuente,
+    total: 0,
+    evaluadas: 0,
+    fallidas: 0,
+    omitida: null,
+  };
+
+  if (!actividad) {
+    veredicto.omitida = 'Sin actividad detectada: no hay contra qué comparar. El motor usará las palabras clave.';
+    avisar({ etapa: 'omitida', mensaje: veredicto.omitida });
+    return veredicto;
   }
 
-  return candidates;
+  const evaluables = (candidates || []).filter(
+    c => c && c.id && String(c.id).trim() && c.desc && String(c.desc).trim()
+  );
+  veredicto.total = evaluables.length;
+
+  if (!evaluables.length) {
+    veredicto.omitida = 'Ninguna candidata trae identificador y descripción del negocio para curar con IA; ' +
+      'el motor usará el emparejamiento por palabras clave.';
+    avisar({ etapa: 'omitida', mensaje: veredicto.omitida });
+    return veredicto;
+  }
+
+  const lotes = enLotes(evaluables, CURACION_LOTE);
+  const etaMinutos = Math.ceil((lotes.length / CURACION_CONCURRENCIA) * SEGUNDOS_POR_LOTE / 60);
+  const referencia = bloqueConfirmadas(priorComps);
+
+  avisar({
+    etapa: 'inicio', evaluadas: 0, total: evaluables.length, lotes: lotes.length, etaMinutos,
+    mensaje: `Curando ${evaluables.length} candidatas en ${lotes.length} lote(s); estimado ~${etaMinutos} min. No cierre la pestaña.`,
+  });
+
+  await conConcurrencia(lotes, async (lote) => {
+    const candidatos = lote.map(c => ({
+      id: String(c.id).trim(),
+      name: c.name || '',
+      desc: String(c.desc || '').slice(0, 300),
+      country: c.country || '',
+    }));
+
+    const prompt =
+      'Eres un experto en precios de transferencia que revisa comparables de una base de datos financiera.\n\n' +
+      'La empresa examinada tiene esta actividad económica real:\n"' + actividad + '"\n\n' +
+      referencia +
+      'A continuación hay una lista de empresas candidatas con su descripción de negocio real (habitualmente en inglés). ' +
+      'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, ' +
+      'mismos productos o servicios, o función equivalente), sin importar el idioma en que esté escrita la descripción. ' +
+      'No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
+      'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
+      'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
+      '{"resultados":[{"id":"","coincide":true,"motivo":""}]}\n' +
+      '"motivo" debe ser brevísimo (máximo 12 palabras, sin explicaciones largas). ' +
+      'Incluye una entrada por cada ID recibido, en el mismo orden.';
+
+    try {
+      const respuesta = await axios.post('/api/gemini', {
+        model: 'gemini-3-flash-preview',
+        contents: [{ parts: [{ text: prompt }] }],
+      });
+      /* todas las partes, no solo la primera: los modelos parten la respuesta */
+      const texto = (respuesta.data?.candidates?.[0]?.content?.parts || [])
+        .map(p => p.text || '').join('');
+      if (!texto) throw new Error('Respuesta vacía de Gemini');
+
+      const j = extraerJSON(texto);
+      (j.resultados || j.evaluacion || []).forEach(r => {
+        if (!r || !r.id) return;
+        veredicto.porId[String(r.id).trim()] = { coincide: !!r.coincide, motivo: r.motivo || '' };
+      });
+      veredicto.evaluadas += lote.length;
+    } catch (err) {
+      veredicto.fallidas += lote.length;
+      console.error('[curación IA] lote falló:', err);
+    }
+
+    avisar({
+      etapa: 'lote',
+      evaluadas: veredicto.evaluadas + veredicto.fallidas,
+      total: evaluables.length,
+      fallidas: veredicto.fallidas,
+      mensaje: `${veredicto.evaluadas + veredicto.fallidas} de ${evaluables.length} procesadas`,
+    });
+  }, CURACION_CONCURRENCIA);
+
+  const coinciden = Object.values(veredicto.porId).filter(v => v.coincide).length;
+  veredicto.coinciden = coinciden;
+  avisar({
+    etapa: 'fin',
+    evaluadas: veredicto.evaluadas, total: evaluables.length, fallidas: veredicto.fallidas, coinciden,
+    mensaje: veredicto.fallidas
+      ? `${coinciden} de ${evaluables.length} coinciden con la actividad · ${veredicto.fallidas} no se pudieron evaluar (se dejan pasar sin descartarlas)`
+      : `${coinciden} de ${evaluables.length} coinciden con la actividad`,
+  });
+
+  return veredicto;
 }
