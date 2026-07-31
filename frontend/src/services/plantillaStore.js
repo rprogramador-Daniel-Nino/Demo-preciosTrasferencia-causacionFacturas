@@ -7,6 +7,9 @@
 
 const BASE = 'pt-plantillas';
 const VERSION = 1;
+/* Al agregar un almacén aquí hay que subir VERSION: si no, onupgradeneeded no
+   se dispara para quien ya tenga la base creada, el almacén nuevo no existe, y
+   la transacción falla con un NotFoundError cuyo mensaje no delata la causa. */
 const ALMACENES = ['plantillas', 'recursos', 'anexos'];
 
 /* Los ids se escapan porque un ':' dentro de uno haría colisionar dos claves
@@ -39,14 +42,22 @@ function abrir() {
   });
 }
 
+/* Cada operación abre y cierra su propia conexión. Dejarlas abiertas parece
+   inofensivo, pero bloquea cualquier futuro `open` con versión mayor: el
+   evento `blocked` no resuelve ni rechaza, así que subir el esquema colgaría
+   la aplicación en silencio. */
 async function operar(almacen, modo, fn) {
   const db = await abrir();
-  return new Promise((res, rej) => {
-    const tx = db.transaction(almacen, modo);
-    const req = fn(tx.objectStore(almacen));
-    tx.oncomplete = () => res(req ? req.result : undefined);
-    tx.onerror = () => rej(tx.error);
-  });
+  try {
+    return await new Promise((res, rej) => {
+      const tx = db.transaction(almacen, modo);
+      const req = fn(tx.objectStore(almacen));
+      tx.oncomplete = () => res(req ? req.result : undefined);
+      tx.onerror = () => rej(tx.error);
+    });
+  } finally {
+    db.close();
+  }
 }
 
 export const guardarRecursos = (estudioId, imagenes) =>
@@ -63,3 +74,13 @@ export const guardarPlantilla = (plantillaId, html) =>
 
 export const leerPlantilla = (plantillaId) =>
   operar('plantillas', 'readonly', (s) => s.get(plantillaId)).then((r) => r || null);
+
+/* Vínculo estudio -> plantilla. Sin esto, al recargar no hay forma de saber qué
+   plantilla corresponde al estudio abierto, y la vista previa vuelve a la
+   maestra genérica: las imágenes guardadas se quedan sin sitio donde ir.
+   Se guarda en el almacén de plantillas con un prefijo, en vez de crear un
+   almacén nuevo, para no subir VERSION del esquema. */
+export const guardarVinculo = (estudioId, plantillaId) =>
+  guardarPlantilla('vinculo:' + esc(estudioId), plantillaId);
+
+export const leerVinculo = (estudioId) => leerPlantilla('vinculo:' + esc(estudioId));

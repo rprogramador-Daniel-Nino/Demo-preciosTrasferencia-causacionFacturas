@@ -4,7 +4,7 @@ import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate } from '../services/exactTemplateMapper';
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
-import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla } from '../services/plantillaStore';
+import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla, guardarVinculo, leerVinculo } from '../services/plantillaStore';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
@@ -21,7 +21,24 @@ export default function ReporteGenerador({ study, estudioId }) {
     (async () => {
       if (!estudioId) return;
       const recursos = await leerRecursos(estudioId);
-      if (vivo && recursos.length) setRecursosCargados(recursos);
+      /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
+         estudio quedarían los recursos del anterior. */
+      if (vivo) setRecursosCargados(recursos);
+
+      const idPlantilla = await leerVinculo(estudioId);
+      if (!idPlantilla) return;
+      const html = await leerPlantilla(idPlantilla);
+      if (vivo && html) {
+        /* Se guarda el HTML crudo del extractor y se hidrata al leerlo, no al
+           guardarlo: el estudio puede cambiar después de haber subido la
+           plantilla, y entonces los valores almacenados quedarían viejos. Sin
+           esta línea, tras recargar se ven las cifras del informe de
+           referencia en vez de las del estudio actual. */
+        setHtmlContent(hydrateExactWordTemplate(html, study));
+        /* Evita que el efecto de la plantilla maestra sobrescriba lo
+           recuperado. Es lo que hacía fallar la recarga. */
+        setCustomTemplateLoaded(true);
+      }
     })();
     return () => { vivo = false; };
   }, [estudioId]);
@@ -55,6 +72,7 @@ export default function ReporteGenerador({ study, estudioId }) {
           const idPlantilla = await hashPlantilla(datos);
           await guardarPlantilla(idPlantilla, ref.html);
           if (estudioId) await guardarRecursos(estudioId, ref.imagenes);
+          if (estudioId) await guardarVinculo(estudioId, idPlantilla);
           if (!ref.etiquetado) {
             alert('El PDF no trae estructura interna: la plantilla saldrá sin secciones.');
           }
@@ -68,7 +86,7 @@ export default function ReporteGenerador({ study, estudioId }) {
         setHtmlContent(hydrated);
         setCustomTemplateLoaded(true);
       } catch (err) {
-        console.error("Error parsing custom template:", err);
+        console.error("Error al analizar la plantilla personalizada:", err);
         alert("No se pudo analizar la plantilla seleccionada.");
       } finally {
         setLoading(false);
