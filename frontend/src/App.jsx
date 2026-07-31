@@ -172,7 +172,7 @@ export default function App() {
           )}
 
           {activeTab === 'informe' && (
-            <ReporteGenerador study={study} />
+            <ReporteGenerador study={study} estudioId={activeStudyId} />
           )}
         </>
       ) : (

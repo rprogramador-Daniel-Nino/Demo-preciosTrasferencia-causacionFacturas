@@ -3,11 +3,28 @@ import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'luc
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate } from '../services/exactTemplateMapper';
+import { extraerReferencia } from '../services/pdfReferenceExtractor';
+import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla } from '../services/plantillaStore';
 
-export default function ReporteGenerador({ study }) {
+export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
+  const [recursosCargados, setRecursosCargados] = useState([]);
+
+  /* Rehidratación: sin esto las imágenes del informe de referencia se pierden
+     al recargar la página, que es el fallo que motivó este trabajo. La bandera
+     `vivo` evita escribir estado si el componente se desmonta antes de que
+     IndexedDB responda. */
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      if (!estudioId) return;
+      const recursos = await leerRecursos(estudioId);
+      if (vivo && recursos.length) setRecursosCargados(recursos);
+    })();
+    return () => { vivo = false; };
+  }, [estudioId]);
 
   // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
   const loadExactMasterTemplate = () => {
@@ -29,21 +46,48 @@ export default function ReporteGenerador({ study }) {
     reader.onload = async (e) => {
       try {
         const arrayBuffer = e.target.result;
-        const result = await mammoth.convertToHtml({ arrayBuffer });
-        let html = result.value;
+        const esPdf = /\.pdf$/i.test(file.name);
+        let html;
+        if (esPdf) {
+          const datos = new Uint8Array(arrayBuffer);
+          const ref = await extraerReferencia(datos);
+          html = ref.html;
+          const idPlantilla = await hashPlantilla(datos);
+          await guardarPlantilla(idPlantilla, ref.html);
+          if (estudioId) await guardarRecursos(estudioId, ref.imagenes);
+          if (!ref.etiquetado) {
+            alert('El PDF no trae estructura interna: la plantilla saldrá sin secciones.');
+          }
+        } else {
+          const result = await mammoth.convertToHtml({ arrayBuffer });
+          html = result.value;
+        }
 
         // Aplicar reemplazo de variables sobre la nueva plantilla subida
         const hydrated = hydrateExactWordTemplate(html, study);
         setHtmlContent(hydrated);
         setCustomTemplateLoaded(true);
       } catch (err) {
-        console.error("Error parsing custom DOCX template:", err);
-        alert("No se pudo analizar la plantilla Word seleccionada.");
+        console.error("Error parsing custom template:", err);
+        alert("No se pudo analizar la plantilla seleccionada.");
       } finally {
         setLoading(false);
       }
     };
   };
+
+  /* Vuelve a poner las imágenes rehidratadas en los huecos que dejó el
+     extractor. Se hace al descargar y no al cargar la plantilla, porque el
+     HTML guardado ya trae las marcas pero puede venir de una sesión anterior. */
+  const conImagenes = (htmlBase) =>
+    recursosCargados.reduce(
+      (acc, r) =>
+        acc.replace(
+          new RegExp('<img data-recurso="' + r.id + '"[^>]*>'),
+          '<img src="' + r.dataUrl + '" />'
+        ),
+      htmlBase
+    );
 
   const handleDownload = () => {
     // Estilos compatibles con Word (.doc)
@@ -56,7 +100,7 @@ export default function ReporteGenerador({ study }) {
       .replace(/border-bottom:\s*1px\s*dashed\s*#0FA3A1;\s*/g, '')
       .replace(/color:\s*#0B7C7A;\s*/g, '');
 
-    const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${cleanHtml}</body></html>`;
+    const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${conImagenes(cleanHtml)}</body></html>`;
 
     const blob = new Blob([content], { type: 'application/msword' });
     const a = document.createElement('a');
@@ -89,7 +133,7 @@ export default function ReporteGenerador({ study }) {
             </button>
             <input
               type="file"
-              accept=".docx"
+              accept=".docx,.pdf"
               disabled={loading}
               onChange={(e) => {
                 if (e.target.files[0]) {
