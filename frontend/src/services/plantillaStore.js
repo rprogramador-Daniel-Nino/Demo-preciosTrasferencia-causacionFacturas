@@ -74,3 +74,13 @@ export const guardarPlantilla = (plantillaId, html) =>
 
 export const leerPlantilla = (plantillaId) =>
   operar('plantillas', 'readonly', (s) => s.get(plantillaId)).then((r) => r || null);
+
+/* Vínculo estudio -> plantilla. Sin esto, al recargar no hay forma de saber qué
+   plantilla corresponde al estudio abierto, y la vista previa vuelve a la
+   maestra genérica: las imágenes guardadas se quedan sin sitio donde ir.
+   Se guarda en el almacén de plantillas con un prefijo, en vez de crear un
+   almacén nuevo, para no subir VERSION del esquema. */
+export const guardarVinculo = (estudioId, plantillaId) =>
+  guardarPlantilla('vinculo:' + esc(estudioId), plantillaId);
+
+export const leerVinculo = (estudioId) => leerPlantilla('vinculo:' + esc(estudioId));
