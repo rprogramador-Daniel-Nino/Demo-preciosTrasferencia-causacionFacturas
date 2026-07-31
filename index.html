@@ -2829,7 +2829,8 @@
         adj: (typeof ADJ !== 'undefined') ? JSON.parse(JSON.stringify(ADJ)) : null,
         motor: (typeof MOTOR !== 'undefined') ? JSON.parse(JSON.stringify(MOTOR)) : null,
         eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null,
-        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null
+        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null,
+        continuidadTabla: window.PT_CONTINUIDAD_TABLA_KEYS ? JSON.parse(JSON.stringify(window.PT_CONTINUIDAD_TABLA_KEYS)) : null
       };
       CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) s[id] = el.value; });
       return s;
@@ -2853,6 +2854,7 @@
       const hostIA = document.getElementById('ptEeffIA'); if (hostIA && !s.eeffIA) hostIA.innerHTML = '';
       try { if (typeof ptPintarEeffIA === 'function') ptPintarEeffIA(); } catch (e) { }
       window.AI_MATCH_COMPS = s.aiMatch ? JSON.parse(JSON.stringify(s.aiMatch)) : null;
+      window.PT_CONTINUIDAD_TABLA_KEYS = s.continuidadTabla ? JSON.parse(JSON.stringify(s.continuidadTabla)) : {};
       try {
         const elIa = $('mo_ia_status');
         if (elIa) {
