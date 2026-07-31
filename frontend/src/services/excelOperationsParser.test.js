@@ -47,3 +47,25 @@ test('con la hoja "Op. Vinculados Economicos" y datos reales, sí extrae el vinc
   assert.strictEqual(res.pais_vinc, 'MEXICO');
   assert.strictEqual(res.t_s, 50000000);
 });
+
+test('título de hoja con "Vinculados" y columna de NIT con "país" no desvían la lectura de la fila de encabezados real', async () => {
+  const filas = [];
+  filas.push(['Operaciones con Vinculados']); // título de la hoja: contiene 'vinculado' pero no es el encabezado
+  for (let i = 0; i < 8; i++) filas.push(['(portada)']);
+  filas.push([
+    'Vinculado (razón social)',
+    'Número de Identificación fiscal del país de origen', // contiene 'país', pero es la columna de NIT
+    'País de origen',
+    'Tipo de operación',
+    'Monto operación'
+  ]);
+  filas.push(['ACME COLOMBIA S.A.S', '900123456', 'MEXICO', 'Compra de inventarios (01)', 50000000]);
+  filas.push(['* Ver lista de tipo de operaciones según DIAN', '', '', '', 50000000]); // nota al pie, no es una fila de datos
+  const wb = workbookConHoja('Op. Vinculados Economicos', filas);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.vinc, 'ACME COLOMBIA S.A.S');
+  assert.strictEqual(res.pais_vinc, 'MEXICO', 'no debe leer el NIT como si fuera el país');
+  assert.strictEqual(res.t_s, 50000000, 'no debe duplicar el monto con la nota al pie');
+});
