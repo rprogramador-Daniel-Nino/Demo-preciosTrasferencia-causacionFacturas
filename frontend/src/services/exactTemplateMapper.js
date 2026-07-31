@@ -1,5 +1,46 @@
 import { fmt, pctf, pliOf, ratios, quart, adjustInfo, num, getUvtValue } from '../utils/calculations.js';
 
+const DATOS_MACRO = {
+  pib_mundial: {
+    '2022': '3.5',
+    '2023': '3.2',
+    '2024': '3.3',
+    '2025': '3.2',
+    '2026': '3.2', // Proyección FMI
+    '2027': '3.1'  // Proyección FMI
+  },
+  pib_colombia: {
+    '2022': '7.3',
+    '2023': '0.6',
+    '2024': '1.7',
+    '2025': '2.6', // Real DANE
+    '2026': '3.0', // Proyección OCDE
+    '2027': '3.2'
+  }
+};
+
+function generarTablaPibMundial(year, wrap) {
+  const y1 = year - 1;
+  const y2 = year;
+  const y3 = year + 1;
+  const v1 = DATOS_MACRO.pib_mundial[y1] || '—';
+  const v2 = DATOS_MACRO.pib_mundial[y2] || '—';
+  const v3 = DATOS_MACRO.pib_mundial[y3] || '—';
+
+  return '<p>\n<strong>Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')</strong>\n</p>\n<table>\n<tr>\n<td>\n<p>\n<strong>Año</strong>\n</p>\n</td>\n<td>\n<p>\n<strong>Crecimiento Mundial (%)</strong>\n</p>\n</td>\n</tr>\n<tr>\n<td>\n<p>\n' + wrap(y1) + '\n</p>\n</td>\n<td>\n<p>\n' + wrap(v1) + '\n</p>\n</td>\n</tr>\n<tr>\n<td>\n<p>\n' + wrap(y2) + '\n</p>\n</td>\n<td>\n<p>\n' + wrap(v2) + '\n</p>\n</td>\n</tr>\n<tr>\n<td>\n<p>\n' + wrap(y3) + ' (Proyección)\n</p>\n</td>\n<td>\n<p>\n' + wrap(v3) + '\n</p>\n</td>\n</tr>\n</table>';
+}
+
+function generarTablaPibColombia(year, wrap) {
+  const y1 = year - 1;
+  const y2 = year;
+  const y3 = year + 1;
+  const v1 = DATOS_MACRO.pib_colombia[y1] || '—';
+  const v2 = DATOS_MACRO.pib_colombia[y2] || '—';
+  const v3 = DATOS_MACRO.pib_colombia[y3] || '—';
+
+  return '<p>\n<strong>Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')</strong>\n</p>\n<table>\n<tr>\n<td>\n<p>\n<strong>Año</strong>\n</p>\n</td>\n<td>\n<p>\n<strong>Crecimiento del PIB (%)</strong>\n</p>\n</td>\n</tr>\n<tr>\n<td>\n<p>\n' + wrap(y1) + '\n</p>\n</td>\n<td>\n<p>\n' + wrap(v1) + '\n</p>\n</td>\n</tr>\n<tr>\n<td>\n<p>\n' + wrap(y2) + '\n</p>\n</td>\n<td>\n<p>\n' + wrap(v2) + '\n</p>\n</td>\n</tr>\n<tr>\n<td>\n<p>\n' + wrap(y3) + ' (Proyección OCDE)\n</p>\n</td>\n<td>\n<p>\n' + wrap(v3) + '\n</p>\n</td>\n</tr>\n</table>';
+}
+
 /**
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
  * y realiza el reemplazo quirúrgico de las variables del cliente activo.
@@ -159,6 +200,14 @@ export function hydrateExactWordTemplate(rawHtml, study) {
 
   // Reemplazar resultado Cumple/No Cumple
   html = html.replace(/cumple con el principio de plena competencia/gi, `${wrap(cumpleStr)} con el principio de plena competencia`);
+
+  // Reemplazar de forma quirúrgica la tabla de PIB Mundial
+  const rxPibMundial = /<p>\s*<strong>Crecimiento del PIB Mundial \(2023-2025\)<\/strong>\s*<\/p>\s*<table>[\s\S]*?<\/table>/gi;
+  html = html.replace(rxPibMundial, generarTablaPibMundial(year, wrap));
+
+  // Reemplazar de forma quirúrgica la tabla de PIB de Colombia
+  const rxPibColombia = /<p>\s*<strong>Crecimiento del PIB en Colombia \(2023-2025\)<\/strong>\s*<\/p>\s*<table>[\s\S]*?<\/table>/gi;
+  html = html.replace(rxPibColombia, generarTablaPibColombia(year, wrap));
 
   return html;
 }
