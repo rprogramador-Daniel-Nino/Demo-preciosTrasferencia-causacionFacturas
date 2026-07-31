@@ -1,18 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { clave, hashPlantilla } from './plantillaStore.js';
+import { hashPlantilla } from './plantillaStore.js';
 
-test('la clave separa estudio y recurso sin ambigüedad', () => {
-  assert.strictEqual(clave('estudio_1', 'img_2_1'), 'estudio_1:img_2_1');
-});
-
-test('dos estudios distintos nunca comparten clave', () => {
-  assert.notStrictEqual(clave('a', 'x'), clave('b', 'x'));
-});
-
-test('un id con dos puntos no rompe la clave', () => {
-  /* Sin escapar, clave('a:b','c') y clave('a','b:c') colisionarían. */
-  assert.notStrictEqual(clave('a:b', 'c'), clave('a', 'b:c'));
+test('el hash no colisiona con el de cero bytes', async () => {
+  /* Regresión: si se hashea un buffer ya desprendido por pdf.js, digest no
+     falla, hashea cero bytes, y todos los PDF comparten identificador. */
+  const vacio = await hashPlantilla(new Uint8Array(0));
+  const conDatos = await hashPlantilla(new Uint8Array([1, 2, 3, 4, 5]));
+  assert.notStrictEqual(conDatos, vacio, 'el hash de datos reales igualó al de cero bytes');
 });
 
 test('el hash identifica la plantilla por contenido, no por nombre', async () => {

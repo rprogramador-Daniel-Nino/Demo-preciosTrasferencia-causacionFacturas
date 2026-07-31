@@ -4,13 +4,27 @@ import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate } from '../services/exactTemplateMapper';
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
-import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla } from '../services/plantillaStore';
+import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla, guardarVinculo, leerVinculo } from '../services/plantillaStore';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
   const [recursosCargados, setRecursosCargados] = useState([]);
+  /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
+     aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
+     que se abre el estudio sería más molesto que informativo. El alert sí se
+     conserva en la carga manual del PDF, donde es una reacción directa a la
+     acción que el usuario acaba de hacer. */
+  const [avisoHidratacion, setAvisoHidratacion] = useState('');
+
+  /* La hidratación sustituye por literales del informe de End Game 2024. Con
+     el PDF de otro cliente no coincide ninguno y el documento sale con los
+     datos del PDF subido, sin ninguna señal. Se usa el NIT del estudio como
+     testigo: si el estudio tiene NIT y no aparece en el HTML ya hidratado, la
+     sustitución no ocurrió. El arreglo de fondo —marcado por campos con
+     nombre— es del plan 2; esto solo evita que pase desapercibido. */
+  const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
   /* Rehidratación: sin esto las imágenes del informe de referencia se pierden
      al recargar la página, que es el fallo que motivó este trabajo. La bandera
@@ -21,7 +35,24 @@ export default function ReporteGenerador({ study, estudioId }) {
     (async () => {
       if (!estudioId) return;
       const recursos = await leerRecursos(estudioId);
-      if (vivo && recursos.length) setRecursosCargados(recursos);
+      /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
+         estudio quedarían los recursos del anterior. */
+      if (vivo) setRecursosCargados(recursos);
+
+      const idPlantilla = await leerVinculo(estudioId);
+      if (!idPlantilla) return;
+      const html = await leerPlantilla(idPlantilla);
+      if (vivo && html) {
+        /* Se guarda el HTML crudo del extractor y se hidrata al leerlo, no al
+           guardarlo: el estudio puede cambiar después de haber subido la
+           plantilla, y entonces los valores almacenados quedarían viejos. Sin
+           esta línea, tras recargar se ven las cifras del informe de
+           referencia en vez de las del estudio actual. */
+        setHtmlContent(hydrateExactWordTemplate(html, study));
+        /* Evita que el efecto de la plantilla maestra sobrescriba lo
+           recuperado. Es lo que hacía fallar la recarga. */
+        setCustomTemplateLoaded(true);
+      }
     })();
     return () => { vivo = false; };
   }, [estudioId]);
@@ -50,11 +81,15 @@ export default function ReporteGenerador({ study, estudioId }) {
         let html;
         if (esPdf) {
           const datos = new Uint8Array(arrayBuffer);
+          /* El hash va antes de extraer: pdf.js transfiere el buffer al worker
+             y lo desprende, y crypto.subtle.digest sobre un buffer desprendido
+             no falla, hashea cero bytes. Todos los PDF darían el mismo id. */
+          const idPlantilla = await hashPlantilla(datos);
           const ref = await extraerReferencia(datos);
           html = ref.html;
-          const idPlantilla = await hashPlantilla(datos);
           await guardarPlantilla(idPlantilla, ref.html);
           if (estudioId) await guardarRecursos(estudioId, ref.imagenes);
+          if (estudioId) await guardarVinculo(estudioId, idPlantilla);
           if (!ref.etiquetado) {
             alert('El PDF no trae estructura interna: la plantilla saldrá sin secciones.');
           }
@@ -68,7 +103,7 @@ export default function ReporteGenerador({ study, estudioId }) {
         setHtmlContent(hydrated);
         setCustomTemplateLoaded(true);
       } catch (err) {
-        console.error("Error parsing custom template:", err);
+        console.error("Error al analizar la plantilla personalizada:", err);
         alert("No se pudo analizar la plantilla seleccionada.");
       } finally {
         setLoading(false);

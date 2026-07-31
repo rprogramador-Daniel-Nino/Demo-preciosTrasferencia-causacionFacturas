@@ -1513,6 +1513,7 @@
                 style="margin-left:auto;font-weight:600">👁️ Ocultar /
                 Mostrar tabla</button>
             </div>
+            <div id="compsImportStatus" style="margin-top:8px"></div>
             <div id="mo_ia_status" style="font-size:11.5px;color:var(--muted);margin-top:8px"></div>
 
             <!-- Paso 2: filtros -->
@@ -13655,6 +13656,9 @@ se guía la descarga manual
         var cuerpo = $('cbody'); if (!cuerpo || !window.MutationObserver || cuerpo._ptObs18) return;
         cuerpo._ptObs18 = true;
         new MutationObserver(function () {
+          /* también cuando el motor sustituye unas filas por otras y el total
+             coincide: sin esto la firma de moRows no notaría el cambio */
+          try { marcarTablaSucia(); } catch (e) { }
           if (_reflejando) return;
           clearTimeout(_obsT);
           _obsT = setTimeout(function () {
@@ -13755,14 +13759,36 @@ se guía la descarga manual
          decir el nombre: después de cualquier ingesta que cambie cifras sin
          cambiar nombres, moRows devolvía filas obsoletas y motorEjecutar puntuaba
          con datos viejos. Ya ocurría con la vía Excel del Bloque 9. */
+      /* Versión de la tabla: sube cuando cambia su contenido, sea porque se
+         añaden o quitan filas o porque el analista teclea en una celda. Sustituye
+         a construir una firma leyendo todos los valores de todas las filas: con
+         2.987 filas eso eran unas 30.000 lecturas de .value en CADA llamada a
+         moRows, y moRows corre en cada corrida del motor. Aquí el coste es
+         constante, con un solo listener delegado en el tbody en lugar de uno por
+         input. */
+      window.PT_TABLA_VERSION = window.PT_TABLA_VERSION || 0;
+      function marcarTablaSucia() { window.PT_TABLA_VERSION++; }
+      (function engancharVersionTabla() {
+        /* en try: este bloque instala todas las envolturas de más abajo, así que
+           una excepción aquí lo dejaría sin aplicar entero */
+        try {
+          var cuerpo = $('cbody');
+          if (!cuerpo || cuerpo._ptVer18 || typeof cuerpo.addEventListener !== 'function') return;
+          cuerpo._ptVer18 = true;
+          cuerpo.addEventListener('input', marcarTablaSucia, true);
+          cuerpo.addEventListener('change', marcarTablaSucia, true);
+        } catch (e) { console.error('[Bloque 18] enganche de versión de la tabla:', e); }
+      })();
+
       if (typeof window.moRows === 'function' && !window.moRows._pt18) {
         var _moRowsPrev = window.moRows, _sigPrev = null;
         window.moRows = function () {
           try {
             var cuerpo = $('cbody');
-            var sig = !cuerpo ? '' : [].slice.call(cuerpo.children).map(function (tr) {
-              return [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; }).join('');
-            }).join('');
+            /* PT_TABLA_VERSION cubre las ediciones; el número de filas cubre las
+               altas y bajas por si alguna mutación no pasó por el observer. */
+            var sig = ($('pli') ? $('pli').value : '') + '|' + window.PT_TABLA_VERSION + '|' +
+              (cuerpo ? cuerpo.children.length : 0);
             if (_sigPrev !== sig) {
               _sigPrev = sig;
               try { _moCache = { sig: '', rows: null }; } catch (e) { }
@@ -14539,11 +14565,24 @@ se guía la descarga manual
         host.innerHTML = h + pli;
       }
 
+      /* Tope de filas que se listan aquí. Esta lista existe para cargar el
+         documento de una comparable concreta, y el universo recién importado
+         puede traer miles: construir un <input type="file"> por cada una es lo
+         más caro de todo el repintado y no le sirve a nadie con 2.987 filas. El
+         conjunto final del estudio son 12-30, así que 60 cubre de sobra el caso
+         real y acota el patológico. */
+      var TOPE_FILAS_LISTA = 60;
+
       function pintarFilas() {
         var host = document.getElementById('ptEeffCompFilas'); if (!host) return;
-        var filas = filasComp();
-        if (!filas.length) { host.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Todavía no hay comparables en la tabla: ejecute la selección en el paso 3.</div>'; return; }
-        host.innerHTML = filas.map(function (f, i) {
+        var todas = filasComp();
+        if (!todas.length) { host.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Todavía no hay comparables en la tabla: ejecute la selección en el paso 3.</div>'; return; }
+        var filas = todas.slice(0, TOPE_FILAS_LISTA);
+        var sobran = todas.length - filas.length;
+        host.innerHTML = (sobran
+          ? '<div style="font-size:11.5px;color:' + COL.aviso + ';margin-bottom:6px">Se listan las primeras ' +
+          filas.length + ' de ' + todas.length + ' comparables de la tabla. Ejecute la selección del paso 3 para quedarse con el conjunto final; entonces aparecerán todas aquí.</div>'
+          : '') + filas.map(function (f, i) {
           var reg = vincular(f);
           var est = !reg ? '<span style="color:' + COL.aviso + '">sin EEFF</span>'
             : (reg.aplicado ? '<span style="color:' + COL.ok + '">✓ incorporado · ' + escH(reg.periodo || '') + (reg.moneda ? ' · ' + escH(reg.moneda) : '') + '</span>'
@@ -14814,6 +14853,521 @@ se guía la descarga manual
       else setTimeout(arrancar, 1900);
 
       /* ——— fin del Bloque 18 ——— */
+    })();
+
+    /* ═══════════════════════════════════════════════════════════════════════════
+       PARCHE PT — Bloque 19:  LA IMPORTACIÓN DE CAPITAL IQ TIENE QUE INFORMAR
+
+       Síntoma reportado: «intento cargar la base IQ pero no me indica nada, no
+       muestra nada, no tiene funcionalidad».
+
+       La importación SÍ funcionaba. Con el archivo real de prueba
+       (END GAME 2025.xls) el mapeo reconoce 13 columnas y produce 2.987
+       candidatas con ventas y utilidad operacional legibles. Lo que no hacía era
+       decírselo a nadie, por tres razones que se suman:
+
+       1. importCompsFile escribe TODO su resultado —éxito y error— en #compalert,
+          que vive dentro de <details id="ptZonaConfig">, el acordeón «⚙️ Otros
+          ajustes», cerrado por defecto. Y no llama a moToast en ningún caso. El
+          mensaje existe; nadie lo ve.
+       2. Inserta las 2.987 filas de golpe: unos 30.000 elementos en el DOM, y
+          después calc() las recorre todas. La pestaña se queda sin responder
+          varios segundos, que es exactamente la sensación de «no hace nada».
+       3. Al terminar dispara curarCandidatosConIA con las 2.987 candidatas: 50
+          lotes de llamadas a Gemini, del orden de cinco minutos y con coste real,
+          sin preguntar ni advertir.
+       4. Y si el mapeo no reconociera nada, el mensaje diría «✓ 0 comparable(s)
+          importada(s)»: un éxito con cero, dentro del acordeón cerrado.
+
+       Este bloque no reimplementa la importación: la envuelve. Antes de delegar
+       diagnostica el archivo por su cuenta (hoja, fila de encabezados, columnas
+       reconocidas y ausentes, candidatas), lo informa en el paso 1 donde está el
+       botón, pide confirmación cuando el volumen lo amerita, y al terminar
+       reporta cuántas filas entraron de verdad contándolas en la tabla.
+       ═══════════════════════════════════════════════════════════════════════════ */
+    (function () {
+      'use strict';
+
+      /* Por encima de este número de candidatas se pide confirmación: no por el
+         mapeo, que aguanta, sino por el DOM y por el coste de la curación. */
+      var UMBRAL_VOLUMEN = 400;
+
+      function host() { return document.getElementById('compsImportStatus'); }
+
+      function estado(html) {
+        var h = host();
+        if (h) h.innerHTML = html || '';
+      }
+
+      function caja(color, borde, fondo, cuerpo) {
+        return '<div style="font-size:11.5px;padding:8px 10px;border-radius:6px;border:1px solid ' + borde +
+          ';background:' + fondo + ';color:' + color + '">' + cuerpo + '</div>';
+      }
+      var VERDE = ['#145A32', '#A9DFBF', '#EAFAF1'];
+      var AMBAR = ['#7E5109', '#F5CBA7', '#FEF9E7'];
+      var ROJO = ['#7B241C', '#E6B0AA', '#FDEDEC'];
+      var GRIS = ['#566573', '#D5D8DC', '#F4F6F7'];
+      function pinta(paleta, cuerpo) { return caja(paleta[0], paleta[1], paleta[2], cuerpo); }
+
+      /* Progreso con barra y porcentaje, en el paso 1 y junto al botón. La
+         importación tenía cuatro etapas invisibles: leer el archivo, reconocer las
+         columnas, construir las filas y meterlas en la tabla. Un texto que no se
+         mueve durante veinte segundos es indistinguible de algo colgado, así que
+         cada etapa se anuncia y la última avanza por lotes. */
+      function progreso(etapa, hechas, total, detalle) {
+        var pct = total ? Math.min(100, Math.round((hechas / total) * 100)) : null;
+        var h = '<div style="display:flex;align-items:center;gap:8px"><b>' + escH(etapa) + '</b>' +
+          (pct === null ? '' : '<span style="margin-left:auto;font-variant-numeric:tabular-nums">' +
+            hechas.toLocaleString('es-CO') + ' de ' + total.toLocaleString('es-CO') + ' · ' + pct + ' %</span>') +
+          '</div>';
+        h += '<div style="height:6px;background:#D5D8DC;border-radius:3px;margin-top:6px;overflow:hidden">' +
+          '<div style="height:100%;width:' + (pct === null ? 100 : pct) + '%;background:#2874A6;' +
+          (pct === null ? 'opacity:.35;' : 'transition:width .15s;') + '"></div></div>';
+        if (detalle) h += '<div style="margin-top:5px">' + detalle + '</div>';
+        estado(pinta(GRIS, h));
+      }
+
+      /* Cede el hilo para que el navegador pinte antes de seguir bloqueándolo.
+         requestAnimationFrame acierta con el momento del repintado; el setTimeout
+         es el respaldo si la pestaña está en segundo plano, donde rAF no corre. */
+      function cederHilo() {
+        return new Promise(function (r) {
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function () { setTimeout(r, 0); });
+          else setTimeout(r, 0);
+        });
+      }
+
+      /* Lee el archivo aparte de la importación, solo para poder explicar qué se
+         encontró. Reutiliza las mismas piezas que usa el mapeo real —findHeaderRow,
+         findCol y el diccionario SYN, que el Bloque 2 amplía con desc, id, ticker,
+         estado, tipo y holders— para que el diagnóstico no diverja de lo que de
+         verdad va a pasar. */
+      async function diagnosticar(file) {
+        var d = {
+          hojas: [], hoja: '', filas: 0, filaEncabezado: null, headers: [],
+          reconocidas: [], faltantes: [], candidatas: 0, esExcel: false
+        };
+        var nombre = (file.name || '').toLowerCase();
+        d.esExcel = /\.(xlsx?|xlsm)$/i.test(nombre);
+        var rows;
+        if (d.esExcel) {
+          var XL = await loadXLSX();
+          var wb = XL.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
+          d.hojas = wb.SheetNames.slice();
+          d.hoja = wb.SheetNames[0];
+          wb.SheetNames.forEach(function (n) { if (/screening/i.test(n)) d.hoja = n; });
+          rows = XL.utils.sheet_to_json(wb.Sheets[d.hoja], { header: 1, defval: '' });
+        } else {
+          var txt = await file.text();
+          rows = txt.split(/\r?\n/).map(function (l) { return l.split(/\t|;|,/); });
+        }
+        d.filas = rows.length;
+        d.filaEncabezado = (typeof findHeaderRow === 'function') ? findHeaderRow(rows) : 0;
+        d.headers = (rows[d.filaEncabezado] || []).map(function (x) { return String(x); });
+
+        var ESENCIALES = { name: 'compañía', s: 'ingresos', c: 'costo de ventas', op: 'utilidad operacional' };
+        Object.keys(SYN).forEach(function (k) {
+          var i = findCol(d.headers, SYN[k]);
+          if (i >= 0) d.reconocidas.push({ clave: k, col: i, header: d.headers[i] });
+          else d.faltantes.push({ clave: k, esencial: !!ESENCIALES[k], etiqueta: ESENCIALES[k] || k });
+        });
+        try {
+          d.candidatas = smartMapRows(rows).filter(function (x) { return String(x.name || '').trim() || x.nit; }).length;
+        } catch (e) { d.candidatas = 0; d.errorMapeo = e.message; }
+        return d;
+      }
+
+      function resumenColumnas(d) {
+        var rec = d.reconocidas.map(function (r) { return r.clave; }).join(', ');
+        var faltanEsenciales = d.faltantes.filter(function (f) { return f.esencial; });
+        var h = '<div style="margin-top:4px">Hoja «' + escH(d.hoja || '(texto plano)') + '»' +
+          (d.hojas.length > 1 ? ' de ' + d.hojas.length + ' (' + d.hojas.map(escH).join(', ') + ')' : '') +
+          ' · encabezados en la fila ' + (d.filaEncabezado + 1) + ' · ' + d.filas + ' filas</div>';
+        h += '<div style="margin-top:2px">Columnas reconocidas (' + d.reconocidas.length + '): ' + escH(rec) + '</div>';
+        if (faltanEsenciales.length) {
+          h += '<div style="margin-top:2px"><b>Faltan columnas esenciales:</b> ' +
+            faltanEsenciales.map(function (f) { return escH(f.etiqueta); }).join(', ') + '</div>';
+        }
+        return h;
+      }
+
+      /* «incluidas» tiene que ser lo que calc() mete de verdad en el rango, no lo
+         que el motor marcó como seleccionado: una comparable añadida a mano
+         después de ejecutar el motor no está en MOTOR.sel y sin embargo sí entra,
+         porque calc() solo excluye las marcadas explícitamente en false. Contar
+         las === true dejaba fuera todas las altas manuales. Se replica aquí el
+         mismo criterio: el ámbito según #cmode, y fuera solo lo vetado por el
+         motor. Las filas sin razón social no cuentan: existen pero no aportan al
+         rango hasta que se diligencien. */
+      function refrescarContadores(total) {
+        try {
+          var cuerpo = $('cbody');
+          var filas = cuerpo ? [].slice.call(cuerpo.children) : [];
+          if (total === undefined || total === null) total = filas.length;
+          var cmode = (document.getElementById('cmode') && document.getElementById('cmode').value) || 'all';
+          var incluidas = 0;
+          filas.forEach(function (tr) {
+            var v = [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; });
+            var nombre = String(v[0] || '').trim(), amb = v[1];
+            if (!nombre) return;
+            var inc = cmode === 'all' ? true : (cmode === 'intl' ? amb === 'Int' : amb === 'Nac');
+            try {
+              if (inc && window.MOTOR && MOTOR.activo && MOTOR.sel && MOTOR.sel[nameKey(nombre)] === false) inc = false;
+            } catch (e) { }
+            if (inc) incluidas++;
+          });
+          var el = document.getElementById('ccount');
+          if (el) el.textContent = total + ' · incluidas ' + incluidas;
+          var badge = document.getElementById('compsBadgeCount');
+          if (badge) badge.textContent = String(total);
+        } catch (e) { }
+      }
+      /* lo usa también el alta manual de comparables (Bloque 20) */
+      window.ptRefrescarContadoresComps = refrescarContadores;
+
+      if (typeof window.importCompsFile === 'function' && !window.importCompsFile._pt19) {
+        var _impPrev = window.importCompsFile;
+        window.importCompsFile = async function (file) {
+          if (!file) return;
+          estado(pinta(GRIS, '⏳ Leyendo «' + escH(file.name) + '»…'));
+
+          var d;
+          try {
+            d = await diagnosticar(file);
+          } catch (e) {
+            estado(pinta(ROJO, '✗ No se pudo leer «' + escH(file.name) + '»: ' + escH(e.message) +
+              '<div style="margin-top:4px">Si es un archivo de Capital IQ, expórtelo de nuevo como .xlsx y vuelva a intentarlo.</div>'));
+            try { moToast('No se pudo leer el archivo: ' + e.message, 'red'); } catch (e2) { }
+            return;
+          }
+
+          if (!d.candidatas) {
+            estado(pinta(ROJO, '✗ El archivo se leyó, pero no se reconoció ninguna compañía.' +
+              resumenColumnas(d) +
+              (d.errorMapeo ? '<div style="margin-top:4px">Error del mapeo: ' + escH(d.errorMapeo) + '</div>' : '') +
+              '<div style="margin-top:4px">Encabezados encontrados: ' +
+              escH(d.headers.filter(function (h) { return String(h).trim(); }).slice(0, 12).join(' | ') || '(ninguno)') + '</div>'));
+            try { moToast('El archivo se leyó pero no se reconoció ninguna compañía: revise el detalle en el paso 1', 'red'); } catch (e) { }
+            return;
+          }
+
+          if (d.candidatas > UMBRAL_VOLUMEN) {
+            var seguir = confirm('El archivo trae ' + d.candidatas + ' compañías.\n\n' +
+              'Todas entran a la tabla como universo evaluable, así que la interfaz puede tardar unos segundos en responder ' +
+              'mientras se cargan, y la curación por IA que viene después son unas ' + Math.ceil(d.candidatas / 60) +
+              ' tandas de consultas.\n\n¿Continuar con la importación?');
+            if (!seguir) {
+              estado(pinta(AMBAR, 'Importación cancelada. El archivo traía ' + d.candidatas + ' compañías.' + resumenColumnas(d)));
+              return;
+            }
+          }
+
+          var cuerpo = $('cbody');
+          var antes = (cuerpo && cuerpo.children.length) || 0;
+
+          progreso('Construyendo ' + d.candidatas.toLocaleString('es-CO') + ' filas…', 0, null,
+            'Reconocidas ' + d.reconocidas.length + ' columnas de la hoja «' + escH(d.hoja || file.name) + '».');
+          await cederHilo();
+
+          /* La función original inserta cada fila directamente en la tabla, una por
+             una: con 2.987 compañías son 2.987 inserciones en el DOM vivo y unos
+             75.000 nodos, y es la única del archivo que no usa DocumentFragment
+             (writeForm, motorRenderTabla, integrarSuper y la continuidad sí lo
+             hacen). En lugar de reimplementar su done() —donde vive la segunda
+             pasada del Bloque 2 con identificador, descripción y accionistas— se le
+             cambia el destino: mientras corre, el appendChild del tbody desvía a un
+             fragmento fuera del documento. Ahí construir es barato, no hay reflow,
+             y el MutationObserver no se dispara. Después se vuelca por lotes
+             cediendo el hilo, que es lo que permite mostrar el avance. */
+          var bandeja = document.createDocumentFragment();
+          var desviando = true;
+          if (cuerpo) {
+            cuerpo.appendChild = function (n) {
+              return desviando ? bandeja.appendChild(n) : Object.getPrototypeOf(cuerpo).appendChild.call(cuerpo, n);
+            };
+          }
+          function dejarDeDesviar() {
+            desviando = false;
+            try { if (cuerpo) delete cuerpo.appendChild; } catch (e) { }
+          }
+
+          try {
+            _impPrev(file);
+          } catch (e) {
+            dejarDeDesviar();
+            estado(pinta(ROJO, '✗ Falló la importación: ' + escH(e.message) + resumenColumnas(d)));
+            try { moToast('Falló la importación: ' + e.message, 'red'); } catch (e2) { }
+            return;
+          }
+
+          /* La original es asíncrona por dentro y no devuelve promesa, así que se
+             espera a que la bandeja deje de crecer. */
+          await new Promise(function (listo) {
+            var previo = -1, quietos = 0, vueltas = 0;
+            (function tic() {
+              var n = bandeja.childNodes.length;
+              if (n === previo) quietos++; else quietos = 0;
+              if (n !== previo && n) progreso('Construyendo filas…', n, d.candidatas);
+              previo = n;
+              if ((quietos >= 3 && n > 0) || ++vueltas > 240) { listo(); return; }
+              setTimeout(tic, 120);
+            })();
+          });
+
+          var construidas = bandeja.childNodes.length;
+          dejarDeDesviar();
+
+          if (cuerpo && construidas) {
+            var LOTE = 250, puestas = 0;
+            while (bandeja.firstChild) {
+              var trozo = document.createDocumentFragment();
+              for (var i = 0; i < LOTE && bandeja.firstChild; i++) trozo.appendChild(bandeja.firstChild);
+              cuerpo.appendChild(trozo);
+              puestas += trozo.childNodes.length || Math.min(LOTE, construidas - puestas);
+              puestas = Math.min(puestas, construidas);
+              progreso('Cargando en la tabla…', puestas, construidas);
+              await cederHilo();
+            }
+          }
+
+          /* La original ya llamó a calc(), pero con la tabla todavía vacía porque
+             las filas estaban desviadas: hay que recalcular ahora que están puestas. */
+          try { calc(); } catch (e) { }
+
+          (function (nuevas) {
+            var total = ($('cbody') && $('cbody').children.length) || 0;
+            refrescarContadores(total);
+            if (!nuevas) {
+              estado(pinta(ROJO, '✗ El archivo traía ' + d.candidatas + ' compañías, pero ninguna llegó a la tabla.' + resumenColumnas(d)));
+              try { moToast('Ninguna compañía llegó a la tabla: revise el detalle en el paso 1', 'red'); } catch (e) { }
+              return;
+            }
+            var sinBalance = ['ar', 'inv', 'ap'].filter(function (k) {
+              return d.faltantes.some(function (f) { return f.clave === k; });
+            }).length === 3;
+            var h = '✓ <b>' + nuevas + ' compañías importadas</b> como universo evaluable' +
+              (total !== nuevas ? ' (la tabla queda con ' + total + ' filas)' : '') + '.' + resumenColumnas(d);
+            if (sinBalance) {
+              h += '<div style="margin-top:4px">El archivo de cribado no trae cuentas de balance (cartera, inventarios ni proveedores), ' +
+                'así que el ajuste de capital de trabajo queda pendiente hasta cargar los estados financieros en el paso 4.</div>';
+            }
+            h += '<div style="margin-top:4px">Siguiente: defina los filtros en el paso 2 y ejecute la selección en el paso 3 para quedarse con las mejores.</div>';
+            estado(pinta(VERDE, h));
+            try { moToast(nuevas + ' compañías importadas de «' + (d.hoja || file.name) + '». Ejecute la selección en el paso 3.', 'green'); } catch (e) { }
+          })(($('cbody') && $('cbody').children.length ? $('cbody').children.length - antes : 0));
+        };
+        window.importCompsFile._pt19 = true;
+      }
+
+      /* La curación por IA se dispara sola al final de la importación. Con 2.987
+         candidatas son unas 50 tandas de consultas a Gemini y varios minutos. Se
+         pide confirmación por encima del umbral y se explica el coste, en lugar de
+         lanzarlo callando. */
+      if (typeof window.curarCandidatosConIA === 'function' && !window.curarCandidatosConIA._pt19) {
+        var _curarPrev = window.curarCandidatosConIA;
+        window.curarCandidatosConIA = function (list) {
+          var n = (list || []).length;
+          if (n > UMBRAL_VOLUMEN) {
+            var ok = confirm('La curación por IA va a evaluar ' + n + ' compañías contra la actividad del contribuyente, ' +
+              'en unas ' + Math.ceil(n / 60) + ' tandas de consultas.\n\n' +
+              'Puede omitirla ahora y ejecutar la selección del paso 3 con los criterios numéricos; ' +
+              'la curación se puede lanzar después sobre un universo ya reducido.\n\n¿Ejecutar la curación por IA ahora?');
+            if (!ok) {
+              try {
+                var el = document.getElementById('mo_ia_status');
+                if (el) el.textContent = 'Curación por IA omitida para ' + n + ' compañías. La selección del paso 3 usará solo los criterios numéricos y la coincidencia por palabras clave.';
+                moToast('Curación por IA omitida: la selección usará los criterios numéricos', 'amber');
+              } catch (e) { }
+              return;
+            }
+          }
+          return _curarPrev.apply(this, arguments);
+        };
+        window.curarCandidatosConIA._pt19 = true;
+      }
+
+      /* ——— fin del Bloque 19 ——— */
+    })();
+
+    /* ═══════════════════════════════════════════════════════════════════════════
+       PARCHE PT — Bloque 20:  ALTA MANUAL DE COMPARABLES
+
+       El botón «+ Agregar comparable», que está bajo la tabla desde siempre,
+       invoca addComp(). Esa función NO EXISTE en ninguna parte del archivo: el
+       clic lanzaba ReferenceError y window.onerror lo desviaba a #docmsg, así que
+       el botón simplemente no hacía nada. (Sí existe en el legado
+       «Sistema PT con OCR.html», de donde se copió el HTML sin la función.)
+
+       Hace falta de verdad: no todo comparable sale del cribado de Capital IQ.
+       Las comparables locales de la Superintendencia de Sociedades, las que vienen
+       por continuidad del estudio del año anterior y cualquier corrección del
+       conjunto se capturan a mano.
+
+       Además de crear la fila, este bloque resuelve tres cosas que la harían
+       inútil:
+
+       1. Si la tabla está oculta —el botón «Ocultar / Mostrar tabla» y el badge
+          «la vista detallada está oculta» la esconden— la fila nueva se crearía
+          donde no se ve. Se fuerza a mostrarla y se lleva el foco al campo de la
+          razón social.
+       2. Una fila creada después de ejecutar el motor NO está en MOTOR.universo,
+          así que la próxima corrida de motorRenderTabla o de motorLimpiar la
+          borraría en silencio: ambas vacían #cbody y lo reconstruyen desde ese
+          universo. Las filas manuales se marcan y se vuelven a inyectar.
+       3. El botón × de cada fila hace tr.remove() y calc(), pero no guarda ni
+          refresca los contadores, así que el conteo quedaba desfasado hasta el
+          siguiente autoguardado.
+       ═══════════════════════════════════════════════════════════════════════════ */
+    (function () {
+      'use strict';
+
+      function contadores() {
+        try {
+          if (typeof window.ptRefrescarContadoresComps === 'function') {
+            window.ptRefrescarContadoresComps(($('cbody') && $('cbody').children.length) || 0);
+          }
+        } catch (e) { }
+      }
+
+      function verTabla() {
+        try {
+          if (typeof toggleCompsTable === 'function') { toggleCompsTable(true); return; }
+          var wrap = $('compsTblWrap'); if (wrap) wrap.style.display = '';
+        } catch (e) { }
+      }
+
+      /* Valores de una fila, en el orden que espera compRow. */
+      function valoresDe(tr) {
+        var v = [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; });
+        return [
+          v[0] || '', v[1] || 'Int',
+          num(v[2]), num(v[3]), num(v[4]), num(v[5]), num(v[6]), num(v[7]),
+          v[8] || '', v[9] || '',
+          (tr.dataset && tr.dataset.rid) || ''
+        ];
+      }
+
+      function esManual(tr) { return !!(tr.dataset && tr.dataset.manual === '1'); }
+
+      function manualesActuales() {
+        var cuerpo = $('cbody'); if (!cuerpo) return [];
+        return [].slice.call(cuerpo.children).filter(esManual).map(valoresDe);
+      }
+
+      function reponerManuales(guardadas) {
+        if (!guardadas || !guardadas.length) return 0;
+        var cuerpo = $('cbody'); if (!cuerpo) return 0;
+        /* Si el motor volvió a traer la compañía por su cuenta, no se duplica. */
+        var yaEstan = {};
+        [].slice.call(cuerpo.children).forEach(function (tr) {
+          var inp = tr.querySelector('input');
+          if (inp) yaEstan[nameKey(inp.value)] = true;
+        });
+        var puestas = 0;
+        guardadas.forEach(function (c) {
+          var k = nameKey(c[0] || '');
+          if (k && yaEstan[k]) return;
+          var tr = compRow(c);
+          if (tr.dataset) tr.dataset.manual = '1';
+          cuerpo.appendChild(tr);
+          puestas++;
+        });
+        return puestas;
+      }
+
+      window.addComp = function (valores) {
+        var cuerpo = $('cbody');
+        if (!cuerpo) { try { moToast('No se encontró la tabla de comparables', 'red'); } catch (e) { } return null; }
+        var base = valores || ['', 'Int', null, null, null, null, null, null, '', '', ''];
+        var tr = compRow(base);
+        if (tr.dataset) tr.dataset.manual = '1';
+        cuerpo.appendChild(tr);
+        verTabla();
+        contadores();
+        try { calc(); } catch (e) { }
+        try { saveActive(); } catch (e) { }
+        try {
+          var primer = tr.querySelector('input');
+          if (primer) {
+            if (typeof tr.scrollIntoView === 'function') tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            primer.focus();
+          }
+        } catch (e) { }
+        try {
+          moToast('Fila añadida. Escriba la razón social, las ventas, el costo y la utilidad operacional: sin ventas y utilidad la comparable no entra al rango.', 'green');
+        } catch (e) { }
+        return tr;
+      };
+
+      /* Las dos funciones que reconstruyen la tabla desde MOTOR.universo. Se
+         capturan las filas manuales antes y se reponen después, porque el universo
+         del motor se fijó cuando se ejecutó y no las contiene. */
+      ['motorRenderTabla', 'motorLimpiar'].forEach(function (nombre) {
+        if (typeof window[nombre] !== 'function' || window[nombre]._pt20) return;
+        var prev = window[nombre];
+        window[nombre] = function () {
+          var guardadas = manualesActuales();
+          var r = prev.apply(this, arguments);
+          try {
+            var puestas = reponerManuales(guardadas);
+            if (puestas) {
+              contadores();
+              try { calc(); } catch (e) { }
+              moToast(puestas + ' comparable(s) agregada(s) a mano se conservaron: el motor no las tenía en su universo.', 'amber');
+            }
+          } catch (e) { console.error('[Bloque 20] reponer manuales:', e); }
+          return r;
+        };
+        window[nombre]._pt20 = true;
+      });
+
+      /* El × de cada fila: se le añade el guardado y el refresco del conteo, que
+         la versión original no hacía. */
+      if (typeof window.compRow === 'function' && !window.compRow._pt20) {
+        var _compRowPrev = window.compRow;
+        window.compRow = function (c) {
+          var tr = _compRowPrev.apply(this, arguments);
+          /* la marca de alta manual viaja en comps[11]: sin ella, al recargar el
+             estudio la fila perdería la marca y la siguiente corrida del motor la
+             borraría. Se extiende por el final, donde no estorba a los lectores
+             por índice fijo. */
+          try { if (c && c[11] === '1' && tr.dataset) tr.dataset.manual = '1'; } catch (e) { }
+          try {
+            var botones = tr.querySelectorAll('button');
+            var x = botones[botones.length - 1];
+            if (x && String(x.textContent).trim() === '×') {
+              var alBorrar = x.onclick;
+              x.onclick = function () {
+                var nombre = '';
+                try { var i = tr.querySelector('input'); nombre = (i && i.value) || ''; } catch (e) { }
+                if (typeof alBorrar === 'function') alBorrar.apply(this, arguments);
+                contadores();
+                try { saveActive(); } catch (e) { }
+                try { moToast('Comparable retirada' + (nombre ? ': ' + nombre : ''), 'amber'); } catch (e) { }
+              };
+            }
+          } catch (e) { }
+          return tr;
+        };
+        window.compRow._pt20 = true;
+      }
+
+      if (typeof window.readForm === 'function' && !window.readForm._pt20) {
+        var _readFormPrev20 = window.readForm;
+        window.readForm = function () {
+          var s = _readFormPrev20.apply(this, arguments);
+          try {
+            var trs = [].slice.call($('cbody').children);
+            (s.comps || []).forEach(function (c, i) {
+              c[11] = (trs[i] && esManual(trs[i])) ? '1' : '';
+            });
+          } catch (e) { }
+          return s;
+        };
+        window.readForm._pt20 = true;
+      }
+
+      /* ——— fin del Bloque 20 ——— */
     })();
 
   </script>
