@@ -13,6 +13,11 @@ export function clasificarImagen(render, pagina) {
   const areaPagina = (pagina?.ancho || 0) * (pagina?.alto || 0);
   const areaRender = (render?.ancho || 0) * (render?.alto || 0);
   if (areaPagina <= 0 || areaRender <= 0) return 'recurso';
+  /* El épsilon absorbe el error de coma flotante del test del umbral inclusivo:
+     ese test construye un lado con Math.sqrt(area) y aquí se vuelve a elevar al
+     cuadrado, así que la razón sale 0.7999999999999999 en vez de 0.8 exacto.
+     No mueve la frontera en ningún caso real: 79%, 80,01% y 81% se clasifican
+     igual con épsilon o sin él. Quitarlo hace fallar el test del umbral. */
   const EPSILON = 1e-9;
   return areaRender / areaPagina >= UMBRAL_PAGINA - EPSILON ? 'pagina' : 'recurso';
 }
