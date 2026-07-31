@@ -3597,7 +3597,7 @@ ${textoTotal}`;
         o.holders = meta.holders || '';
         o.holding = /\b(investment holding company|holding company|sociedad de inversi[oó]n|sociedad holding)\b/i.test(DESCS[o.name] || '')
           || /^6719/.test(o.sic || '')
-          || /\bholdings?\b/i.test(o.name || '');
+          || /\b(holdings?|grupo|group|groupe|gruppo)\b/i.test(o.name || '');
         o.saldoNeg = ['ar', 'inv', 'ap'].filter(k => o[k] !== null && o[k] < 0);
         o.previa = !!previas[nameKey(o.name)];
         return o;
@@ -3649,7 +3649,7 @@ ${textoTotal}`;
       if (o.saldoNeg && o.saldoNeg.length && cfg.saldoneg === 'excluir') return { out: 'Saldo negativo en ' + o.saldoNeg.map(k => ({ ar: 'Cuentas por cobrar', inv: 'Inventario', ap: 'Cuentas por pagar' }[k])).join('/') + ': dato no verosímil, se excluye de la muestra' };
       if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
-      if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
+      if (o.perfil === 'EMPRESARIO' && cfg.act !== 'amplio') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
       /* ── Curación de candidatas por IA (Business Description real de Capital IQ) ──
          Solo aplica a filas con ID IQ (vinieron del Excel de Capital IQ); las agregadas a
