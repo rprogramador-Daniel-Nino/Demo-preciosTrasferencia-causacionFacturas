@@ -209,106 +209,200 @@ este archivo en el plan 2."
 
 ---
 
-### Task 2: Clasificador de imágenes por superficie renderizada
+### Task 2: Detección de páginas de anexo por rachas
 
-Función pura, sin pdf.js ni DOM. Decide si una imagen del PDF es una página escaneada o un recurso reutilizable.
+Funciones puras, sin pdf.js ni DOM. Deciden qué páginas del PDF corresponden a un anexo escaneado.
+
+**Por qué rachas y no un umbral de superficie:** sobre el PDF de referencia real, las páginas del anexo se dibujan al **52,1–54,4 %** de la página, no cerca del 100 %: van insertadas dentro de los márgenes del documento. Un umbral alto no detecta ninguna, y uno bajo confundiría un gráfico grande con un escaneo. Lo que de verdad distingue un anexo es que son **muchas páginas seguidas** con una imagen dominante. Medido: páginas 44 a 58 (quince consecutivas) al 52 %, y lo siguiente más grande es un gráfico suelto en la página 19 al 20,9 %.
 
 **Files:**
-- Create: `frontend/src/services/clasificadorImagenes.js`
-- Create: `frontend/src/services/clasificadorImagenes.test.js`
+- Modify: `frontend/src/services/clasificadorImagenes.js` — reemplaza `clasificarImagen`
+- Modify: `frontend/src/services/clasificadorImagenes.test.js`
 
 **Interfaces:**
 - Consumes: nada.
-- Produces: `clasificarImagen(render, pagina) => 'pagina' | 'recurso'` donde `render = { ancho, alto }` y `pagina = { ancho, alto }`, ambos en unidades de PDF. Lo consume la Task 4.
-- Produces: `UMBRAL_PAGINA = 0.8`, exportado para que el test y el extractor compartan el valor.
+- Produces:
+  - `fraccionDePagina(render, pagina) => number` — fracción del área de la página que ocupa la imagen, `0` si falta algún dato. `render` y `pagina` son `{ ancho, alto }` en unidades de PDF.
+  - `detectarPaginasDeAnexo(dibujos) => Set<number>` — `dibujos` es un array de `{ pagina, fraccion }`; devuelve el conjunto de páginas que forman parte de un anexo.
+  - `UMBRAL_DOMINANTE = 0.35` y `MIN_PAGINAS_ANEXO = 3`, exportados para que test y extractor compartan los valores.
+- Se retiran `clasificarImagen` y `UMBRAL_PAGINA`: todavía no los consume nadie.
 
-- [ ] **Step 1: Escribir los tests que fallan**
+- [ ] **Step 1: Reemplazar los tests**
 
-Crear `frontend/src/services/clasificadorImagenes.test.js`:
+Sustituye el contenido completo de `frontend/src/services/clasificadorImagenes.test.js` por:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { clasificarImagen, UMBRAL_PAGINA } from './clasificadorImagenes.js';
+import {
+  fraccionDePagina,
+  detectarPaginasDeAnexo,
+  UMBRAL_DOMINANTE,
+  MIN_PAGINAS_ANEXO,
+} from './clasificadorImagenes.js';
 
 /* Carta en unidades PDF: 612 x 792 puntos. */
 const CARTA = { ancho: 612, alto: 792 };
 
-test('una imagen que cubre casi toda la página es un escaneo', () => {
-  assert.strictEqual(clasificarImagen({ ancho: 600, alto: 780 }, CARTA), 'pagina');
+test('fraccionDePagina calcula la proporción de área', () => {
+  assert.strictEqual(fraccionDePagina({ ancho: 306, alto: 396 }, CARTA), 0.25);
 });
 
-test('un logo en una esquina es un recurso', () => {
-  assert.strictEqual(clasificarImagen({ ancho: 120, alto: 27 }, CARTA), 'recurso');
+test('fraccionDePagina devuelve 0 si falta alguna dimensión', () => {
+  assert.strictEqual(fraccionDePagina({ ancho: 100, alto: 100 }, { ancho: 0, alto: 0 }), 0);
+  assert.strictEqual(fraccionDePagina({ ancho: 0, alto: 0 }, CARTA), 0);
+  assert.strictEqual(fraccionDePagina(null, CARTA), 0);
 });
 
-test('el umbral es inclusivo: justo en 80% cuenta como página', () => {
-  const area = CARTA.ancho * CARTA.alto * UMBRAL_PAGINA;
-  const lado = Math.sqrt(area);
-  assert.strictEqual(clasificarImagen({ ancho: lado, alto: lado }, CARTA), 'pagina');
+test('una racha de páginas consecutivas dominantes es anexo', () => {
+  const dibujos = [
+    { pagina: 44, fraccion: 0.52 },
+    { pagina: 45, fraccion: 0.52 },
+    { pagina: 46, fraccion: 0.52 },
+  ];
+  assert.deepStrictEqual([...detectarPaginasDeAnexo(dibujos)].sort(), [44, 45, 46]);
 });
 
-test('justo por debajo del umbral es recurso', () => {
-  const area = CARTA.ancho * CARTA.alto * (UMBRAL_PAGINA - 0.01);
-  const lado = Math.sqrt(area);
-  assert.strictEqual(clasificarImagen({ ancho: lado, alto: lado }, CARTA), 'recurso');
+/* Un gráfico grande en una sola página no es un anexo: lo que distingue al
+   anexo es la continuidad, no el tamaño de una imagen suelta. */
+test('una página dominante aislada no es anexo', () => {
+  assert.strictEqual(detectarPaginasDeAnexo([{ pagina: 19, fraccion: 0.9 }]).size, 0);
 });
 
-/* El criterio es la superficie sobre la página, no los píxeles del archivo:
-   un logo en alta resolución tiene más píxeles que un escaneo mediocre pero
-   ocupa una esquina. */
-test('una página con dimensiones cero no revienta', () => {
-  assert.strictEqual(clasificarImagen({ ancho: 100, alto: 100 }, { ancho: 0, alto: 0 }), 'recurso');
+test('una racha más corta que el mínimo no es anexo', () => {
+  const dibujos = [
+    { pagina: 10, fraccion: 0.6 },
+    { pagina: 11, fraccion: 0.6 },
+  ];
+  assert.strictEqual(detectarPaginasDeAnexo(dibujos).size, 0);
 });
 
-test('una imagen sin dimensiones es recurso', () => {
-  assert.strictEqual(clasificarImagen({ ancho: 0, alto: 0 }, CARTA), 'recurso');
+test('dos rachas separadas se detectan ambas', () => {
+  const dibujos = [
+    { pagina: 5, fraccion: 0.6 }, { pagina: 6, fraccion: 0.6 }, { pagina: 7, fraccion: 0.6 },
+    { pagina: 20, fraccion: 0.6 }, { pagina: 21, fraccion: 0.6 }, { pagina: 22, fraccion: 0.6 },
+  ];
+  assert.deepStrictEqual(
+    [...detectarPaginasDeAnexo(dibujos)].sort((a, b) => a - b),
+    [5, 6, 7, 20, 21, 22]
+  );
+});
+
+/* El logo se dibuja como encabezado en las 112 páginas: son muchas páginas
+   consecutivas, pero ninguna dominante. No debe confundirse con un anexo. */
+test('un logo repetido en todas las páginas no es anexo', () => {
+  const dibujos = Array.from({ length: 40 }, (_, i) => ({ pagina: i + 1, fraccion: 0.02 }));
+  assert.strictEqual(detectarPaginasDeAnexo(dibujos).size, 0);
+});
+
+test('se toma la imagen más grande de cada página', () => {
+  /* Una página del anexo lleva además el logo de encabezado: debe contar la
+     imagen dominante, no la primera ni la última que aparezca. */
+  const dibujos = [
+    { pagina: 44, fraccion: 0.02 }, { pagina: 44, fraccion: 0.52 },
+    { pagina: 45, fraccion: 0.52 }, { pagina: 45, fraccion: 0.02 },
+    { pagina: 46, fraccion: 0.52 },
+  ];
+  assert.deepStrictEqual([...detectarPaginasDeAnexo(dibujos)].sort(), [44, 45, 46]);
+});
+
+test('sin dibujos no hay anexo', () => {
+  assert.strictEqual(detectarPaginasDeAnexo([]).size, 0);
+});
+
+test('los umbrales son los verificados contra el PDF real', () => {
+  /* 0,35 cae en el hueco entre el gráfico más grande (20,9 %) y el anexo
+     (52,1 %). Tres páginas es el mínimo para hablar de una secuencia. */
+  assert.strictEqual(UMBRAL_DOMINANTE, 0.35);
+  assert.strictEqual(MIN_PAGINAS_ANEXO, 3);
 });
 ```
 
-- [ ] **Step 2: Correr para verificar que falla**
+- [ ] **Step 2: Correr los tests para verificar que fallan**
 
 Run: `npm test`
-Expected: FAIL con `Cannot find module './clasificadorImagenes.js'`.
+Expected: FAIL. `fraccionDePagina` y `detectarPaginasDeAnexo` no existen todavía.
 
-- [ ] **Step 3: Implementar**
+- [ ] **Step 3: Reemplazar la implementación**
 
-Crear `frontend/src/services/clasificadorImagenes.js`:
+Sustituye el contenido completo de `frontend/src/services/clasificadorImagenes.js` por:
 
 ```js
-/* Clasificación de las imágenes embebidas en un PDF de referencia.
-   Función pura: no toca pdf.js, ni el DOM, ni disco. */
+/* Detección de las páginas de un PDF de referencia que corresponden a un anexo
+   escaneado. Funciones puras: no tocan pdf.js, ni el DOM, ni disco. */
 
 /* Fracción del área de la página a partir de la cual una imagen se considera
-   una página escaneada y no un recurso reutilizable. */
-export const UMBRAL_PAGINA = 0.8;
+   dominante en esa página. Verificado contra el PDF de referencia real: las
+   páginas del anexo se dibujan al 52,1-54,4 %, y lo siguiente más grande es un
+   gráfico suelto al 20,9 %. 0,35 cae en mitad de ese hueco. */
+export const UMBRAL_DOMINANTE = 0.35;
 
-/* Decide qué es una imagen a partir del espacio que ocupa sobre la página.
-   Se usa la superficie renderizada y no las dimensiones en píxeles del
-   archivo: un logo en alta resolución puede tener más píxeles que un escaneo
-   mediocre, pero en la página ocupa una esquina. */
-export function clasificarImagen(render, pagina) {
+/* Páginas consecutivas con imagen dominante que hacen falta para considerarlo
+   un anexo y no una ilustración suelta. */
+export const MIN_PAGINAS_ANEXO = 3;
+
+/* Proporción de la página que ocupa una imagen. Se mide sobre la superficie
+   renderizada y no sobre los píxeles del archivo: un logo en alta resolución
+   tiene más píxeles que un escaneo mediocre, pero ocupa una esquina. */
+export function fraccionDePagina(render, pagina) {
   const areaPagina = (pagina?.ancho || 0) * (pagina?.alto || 0);
   const areaRender = (render?.ancho || 0) * (render?.alto || 0);
-  if (areaPagina <= 0 || areaRender <= 0) return 'recurso';
-  return areaRender / areaPagina >= UMBRAL_PAGINA ? 'pagina' : 'recurso';
+  if (areaPagina <= 0 || areaRender <= 0) return 0;
+  return areaRender / areaPagina;
+}
+
+/* Devuelve el conjunto de páginas que forman parte de un anexo escaneado.
+   El criterio es la continuidad, no el tamaño: un gráfico grande en una sola
+   página no es un anexo, y un logo pequeño repetido en cuarenta páginas
+   tampoco. */
+export function detectarPaginasDeAnexo(dibujos) {
+  const dominanteDe = new Map();
+  for (const d of dibujos || []) {
+    const previa = dominanteDe.get(d.pagina) || 0;
+    if (d.fraccion > previa) dominanteDe.set(d.pagina, d.fraccion);
+  }
+
+  const candidatas = [...dominanteDe.entries()]
+    .filter(([, f]) => f >= UMBRAL_DOMINANTE)
+    .map(([p]) => p)
+    .sort((a, b) => a - b);
+
+  const anexo = new Set();
+  let racha = [];
+  const cerrarRacha = () => {
+    if (racha.length >= MIN_PAGINAS_ANEXO) for (const p of racha) anexo.add(p);
+    racha = [];
+  };
+
+  for (const p of candidatas) {
+    if (racha.length && p === racha[racha.length - 1] + 1) racha.push(p);
+    else { cerrarRacha(); racha = [p]; }
+  }
+  cerrarRacha();
+
+  return anexo;
 }
 ```
 
 - [ ] **Step 4: Correr los tests**
 
 Run: `npm test`
-Expected: PASS. 37 tests (31 previos + 6 nuevos).
+Expected: PASS. 46 tests (42 previos − 6 del clasificador viejo + 10 nuevos).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add frontend/src/services/clasificadorImagenes.js frontend/src/services/clasificadorImagenes.test.js
-git commit -m "Agregar clasificador de imagenes por superficie renderizada
+git commit -m "Detectar el anexo por rachas de paginas, no por umbral de superficie
 
-Separa las paginas escaneadas de los recursos reutilizables por el area que
-ocupan sobre la pagina, no por sus pixeles: un logo en alta resolucion tiene
-mas pixeles que un escaneo mediocre pero ocupa una esquina."
+El umbral del 80 % no detectaba nada: sobre el PDF de referencia real las
+paginas del anexo se dibujan al 52 %, insertadas dentro de los margenes y no
+a sangre. Bajarlo sin mas confundiria un grafico grande con un escaneo.
+
+Lo que distingue un anexo es la continuidad. Con dominante >= 0,35 y rachas
+de >= 3 paginas consecutivas se detectan exactamente las 15 paginas del anexo
+(44-58), y quedan fuera el grafico de la pagina 19 y el logo de encabezado que
+se repite en las 112 paginas."
 ```
 
 ---
@@ -479,25 +573,25 @@ como en Node, asi que el mismo codigo corre en los tests."
 Lee el PDF con pdf.js y devuelve el HTML de su estructura más el catálogo de imágenes ya clasificadas.
 
 **Files:**
-- Modify: `frontend/package.json` — agregar `pdfjs-dist`
 - Create: `frontend/src/services/pdfReferenceExtractor.js`
 - Create: `frontend/src/services/pdfReferenceExtractor.test.js`
+- Ya hecho, no repetir: `pdfjs-dist@^4` está instalado en `frontend/package.json`
 
 **Interfaces:**
-- Consumes: `clasificarImagen` de la Task 2; `codificarPNG` y `aBase64` de la Task 3.
-- Produces: `extraerReferencia(datos) => Promise<{ html, imagenes, huecos, paginas, etiquetado }>` donde `datos` es un `Uint8Array`; `imagenes` es un array de `{ id, dataUrl, pagina, orden }`; `huecos` es un array de `{ id, pagina, orden, paginasCubiertas }`. Lo consumen las Tasks 5 y 6.
+- Consumes: `fraccionDePagina`, `detectarPaginasDeAnexo` de la Task 2; `codificarPNG`, `aBase64` de la Task 3.
+- Produces: `extraerReferencia(datos) => Promise<{ html, imagenes, huecos, paginas, etiquetado }>` donde `datos` es un `Uint8Array`; `imagenes` es `[{ id, dataUrl, pagina, orden }]`; `huecos` es `[{ id, pagina }]`. Lo consumen las Tasks 5 y 6.
 
-- [ ] **Step 1: Instalar la dependencia**
+**Cómo se comporta pdf.js aquí — todo verificado contra el PDF real, no des nada por supuesto:**
 
-Run:
-```bash
-npm install --prefix frontend pdfjs-dist@^4
-node -e "console.log(require('./frontend/package.json').dependencies['pdfjs-dist'])"
-```
+1. El operador inmediatamente anterior a `paintImageXObject` **no es** `transform`: pdf.js interpone `OPS.dependency`. No busques la matriz en `k-1`.
+2. Los argumentos de `transform` llegan **planos** (`[a,b,c,d,e,f]`), no anidados.
+3. `paintImageXObject` trae `[objId, ancho, alto]`, pero ese ancho y alto son los **píxeles intrínsecos** de la imagen, no el tamaño al que se dibuja. No sirven para clasificar.
+4. La única forma correcta de saber a qué tamaño se dibuja una imagen es **llevar la matriz acumulada** (CTM) recorriendo `save`, `restore` y `transform`.
+5. `page.objs.get(clave, callback)` **solo resuelve las imágenes que se hayan renderizado**. Fuera del navegador muchas no resuelven nunca: hace falta un límite de tiempo o la extracción se cuelga.
+6. Hay **126 dibujos pero solo 20 imágenes únicas** —el logo se repite como encabezado en las 112 páginas—. Decodificar por dibujo en vez de por clave única fue lo que hizo que una corrida tardara 18 minutos.
+7. pdf.js escupe avisos inofensivos en Node (`standardFontDataUrl`, `TT: undefined function`). Afectan al renderizado de fuentes, que no usamos. No los persigas.
 
-Expected: imprime la versión instalada. Se fija la mayor 4 a propósito: la API de `getStructTree` y `getOperatorList` es estable ahí, y la 5+ cambió el empaquetado de los workers.
-
-- [ ] **Step 2: Escribir el test que falla**
+- [ ] **Step 1: Escribir el test que falla**
 
 Crear `frontend/src/services/pdfReferenceExtractor.test.js`:
 
@@ -509,41 +603,46 @@ import { extraerReferencia } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
 
-test('extrae el PDF de referencia real', async () => {
-  const datos = new Uint8Array(readFileSync(RUTA));
-  const r = await extraerReferencia(datos);
+/* Una sola extracción compartida: procesar 112 páginas dos veces duplicaría el
+   tiempo del test sin aportar nada. */
+let cache = null;
+const extraer = async () => {
+  if (!cache) cache = await extraerReferencia(new Uint8Array(readFileSync(RUTA)));
+  return cache;
+};
 
+test('lee la estructura del PDF de referencia real', async () => {
+  const r = await extraer();
   assert.strictEqual(r.paginas, 112, 'número de páginas');
   assert.strictEqual(r.etiquetado, true, 'el PDF de referencia está etiquetado');
   assert.ok(r.html.length > 1000, 'el HTML salió vacío');
+});
 
-  /* Las 16 páginas escaneadas del anexo firmado producen hueco y no se
-     guardan: son del ejercicio 2024 y no deben viajar al informe siguiente.
-     Los huecos NO dependen de que la imagen se decodifique, solo de su tamaño
-     sobre la página, así que esta cuenta sí es fiable fuera del navegador. */
-  assert.ok(r.huecos.length >= 10, 'se esperaban huecos por el anexo, hubo ' + r.huecos.length);
+test('detecta el anexo escaneado y no lo guarda como recurso', async () => {
+  const r = await extraer();
+  /* Las páginas 44 a 58 del PDF real son el anexo de estados financieros
+     firmado: quince páginas seguidas con una imagen dominante al 52 %. */
+  const paginasConHueco = [...new Set(r.huecos.map((h) => h.pagina))].sort((a, b) => a - b);
+  assert.deepStrictEqual(
+    paginasConHueco,
+    [44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58],
+    'las páginas de anexo detectadas no son las esperadas'
+  );
+});
 
-  /* Ninguna página escaneada debe haberse colado como recurso reutilizable. */
-  assert.ok(r.imagenes.length <= 6, 'se colaron escaneos como recursos: ' + r.imagenes.length);
-
-  /* Toda imagen que SÍ se haya decodificado debe traer una dataUrl válida.
-     No se exige un número mínimo: fuera del navegador pdf.js deja sin
-     resolver las imágenes que no se renderizan, así que la cuenta exacta
-     varía. La verificación de que los dos logos aparecen de verdad es
-     manual, en el navegador, en la Task 6. */
+test('conserva los recursos reutilizables sin colar escaneos', async () => {
+  const r = await extraer();
+  /* Sólo 5 imágenes únicas quedan fuera del anexo en este documento: los dos
+     logos, el banner y un par de gráficos. Si salen muchas más, la detección
+     del anexo está fallando. */
+  assert.ok(r.imagenes.length <= 8, 'se colaron escaneos como recursos: ' + r.imagenes.length);
   assert.ok(
     r.imagenes.every((i) => typeof i.dataUrl === 'string' && i.dataUrl.startsWith('data:image/')),
     'alguna dataUrl mal formada'
   );
-});
-
-test('una imagen que pdf.js no resuelve no cuelga la extracción', async () => {
-  /* Regresión: sin límite de tiempo en objs.get, una sola imagen sin resolver
-     dejaba la extracción colgada para siempre. Verificado sobre el PDF real:
-     3 de 5 imágenes de las primeras páginas no resuelven fuera del navegador. */
-  const datos = new Uint8Array(readFileSync(RUTA));
-  const r = await extraerReferencia(datos);
-  assert.ok(r, 'la extracción no terminó');
+  /* No se exige un número mínimo: fuera del navegador pdf.js deja sin resolver
+     las imágenes que no se renderizan, así que la cuenta exacta varía. Que los
+     logos aparezcan de verdad se verifica a mano en la Task 6. */
 });
 
 test('un buffer que no es PDF falla con un mensaje claro', async () => {
@@ -554,12 +653,12 @@ test('un buffer que no es PDF falla con un mensaje claro', async () => {
 });
 ```
 
-- [ ] **Step 3: Correr para verificar que falla**
+- [ ] **Step 2: Correr para verificar que falla**
 
 Run: `npm test`
 Expected: FAIL con `Cannot find module './pdfReferenceExtractor.js'`.
 
-- [ ] **Step 4: Implementar**
+- [ ] **Step 3: Implementar**
 
 Crear `frontend/src/services/pdfReferenceExtractor.js`:
 
@@ -569,10 +668,15 @@ Crear `frontend/src/services/pdfReferenceExtractor.js`:
    No conoce el dominio de precios de transferencia ni persiste nada. */
 
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { clasificarImagen } from './clasificadorImagenes.js';
+import { fraccionDePagina, detectarPaginasDeAnexo } from './clasificadorImagenes.js';
 import { codificarPNG, aBase64 } from './png.js';
 
-/* Etiquetas del árbol de estructura del PDF y su equivalente en HTML. */
+/* pdf.js resuelve los objetos de imagen mientras renderiza la página. Sin
+   renderizar —caso de los tests, que corren sin canvas— `objs.get` puede no
+   llamar nunca a su callback. Sin este límite la extracción se cuelga entera
+   por una sola imagen. */
+const TIEMPO_LIMITE_IMAGEN = 5000;
+
 const MAPA_ETIQUETAS = {
   H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6',
   P: 'p', L: 'ul', LI: 'li', Table: 'table', TR: 'tr', TD: 'td', TH: 'th',
@@ -581,31 +685,34 @@ const MAPA_ETIQUETAS = {
 const escapar = (s) =>
   String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/* pdf.js resuelve los objetos de imagen mientras renderiza la página. Si no se
-   renderiza —caso de los tests, que corren sin canvas—, `objs.get` puede no
-   llamar nunca a su callback. Sin este límite la extracción se cuelga entera
-   por una sola imagen. Verificado: de 5 imágenes en las primeras 8 páginas del
-   PDF de referencia, 3 no resuelven fuera del navegador. */
-const TIEMPO_LIMITE_IMAGEN = 5000;
+/* Composición de matrices de transformación, en el mismo orden que usa pdf.js:
+   CTM_nuevo = CTM_viejo x M. */
+function componer(m1, m2) {
+  return [
+    m1[0] * m2[0] + m1[1] * m2[2],
+    m1[0] * m2[1] + m1[1] * m2[3],
+    m1[2] * m2[0] + m1[3] * m2[2],
+    m1[2] * m2[1] + m1[3] * m2[3],
+    m1[4] * m2[0] + m1[5] * m2[2] + m2[4],
+    m1[4] * m2[1] + m1[5] * m2[3] + m2[5],
+  ];
+}
 
 function conTiempoLimite(promesa, ms) {
-  return Promise.race([
-    promesa,
-    new Promise((res) => setTimeout(() => res(null), ms)),
-  ]);
+  return Promise.race([promesa, new Promise((res) => setTimeout(() => res(null), ms))]);
 }
 
 export async function extraerReferencia(datos) {
   let doc;
   try {
-    doc = await pdfjs.getDocument({ data: datos, useSystemFonts: true }).promise;
+    doc = await pdfjs.getDocument({ data: datos }).promise;
   } catch (e) {
     throw new Error('no se pudo leer el PDF: ' + e.message);
   }
 
-  const partes = [];
-  const imagenes = [];
-  const huecos = [];
+  /* --- Primera pasada: estructura y censo de dibujos --- */
+  const bloques = [];
+  const dibujos = [];
   let etiquetado = false;
 
   for (let n = 1; n <= doc.numPages; n++) {
@@ -613,51 +720,90 @@ export async function extraerReferencia(datos) {
     const vista = pagina.getViewport({ scale: 1 });
     const dimPagina = { ancho: vista.width, alto: vista.height };
 
-    /* Estructura. Si el PDF no está etiquetado, getStructTree devuelve null y
-       se degrada a texto plano: la plantilla saldrá sin secciones. */
     const arbol = await pagina.getStructTree().catch(() => null);
     const texto = await pagina.getTextContent();
     if (arbol) {
       etiquetado = true;
-      partes.push(aHTML(arbol, texto));
+      bloques.push({ pagina: n, html: aHTML(arbol, texto) });
     } else {
-      partes.push('<p>' + escapar(texto.items.map((i) => i.str).join(' ')) + '</p>');
+      bloques.push({ pagina: n, html: '<p>' + escapar(texto.items.map((i) => i.str).join(' ')) + '</p>' });
     }
 
-    /* Imágenes. La matriz del operador da el tamaño renderizado sobre la
-       página, que es lo que decide si es un escaneo o un recurso. */
+    /* La matriz acumulada es la única forma de saber a qué tamaño se dibuja
+       una imagen: los argumentos de paintImageXObject traen los píxeles
+       intrínsecos, no el tamaño renderizado. */
     const ops = await pagina.getOperatorList();
+    let ctm = [1, 0, 0, 1, 0, 0];
+    const pila = [];
     let orden = 0;
+
     for (let k = 0; k < ops.fnArray.length; k++) {
-      if (ops.fnArray[k] !== pdfjs.OPS.paintImageXObject) continue;
-      const [clave] = ops.argsArray[k];
-      const m = ops.argsArray[k - 1] && Array.isArray(ops.argsArray[k - 1][0])
-        ? ops.argsArray[k - 1][0]
-        : null;
-      const render = m
-        ? { ancho: Math.abs(m[0]), alto: Math.abs(m[3]) }
-        : { ancho: 0, alto: 0 };
-      orden++;
-
-      if (clasificarImagen(render, dimPagina) === 'pagina') {
-        const id = 'hueco_' + n + '_' + orden;
-        huecos.push({ id, pagina: n, orden, paginasCubiertas: 1 });
-        partes.push('<div data-hueco="anexo_eeff" data-id="' + id + '"></div>');
-        continue;
+      const fn = ops.fnArray[k];
+      const args = ops.argsArray[k];
+      if (fn === pdfjs.OPS.save) {
+        pila.push(ctm.slice());
+      } else if (fn === pdfjs.OPS.restore) {
+        ctm = pila.pop() || [1, 0, 0, 1, 0, 0];
+      } else if (fn === pdfjs.OPS.transform) {
+        ctm = componer(ctm, args.length === 1 ? args[0] : args);
+      } else if (fn === pdfjs.OPS.paintImageXObject) {
+        const render = { ancho: Math.hypot(ctm[0], ctm[1]), alto: Math.hypot(ctm[2], ctm[3]) };
+        dibujos.push({
+          pagina: n,
+          orden: ++orden,
+          clave: args[0],
+          fraccion: fraccionDePagina(render, dimPagina),
+        });
       }
-
-      const dataUrl = await aDataUrl(pagina, clave);
-      if (!dataUrl) continue;
-      const id = 'img_' + n + '_' + orden;
-      imagenes.push({ id, dataUrl, pagina: n, orden });
-      partes.push('<img data-recurso="' + id + '" src="' + dataUrl + '" />');
     }
   }
 
-  return { html: partes.join('\n'), imagenes, huecos, paginas: doc.numPages, etiquetado };
+  /* --- Decisión: qué páginas son anexo --- */
+  const paginasDeAnexo = detectarPaginasDeAnexo(dibujos);
+
+  /* --- Segunda pasada: decodificar solo lo que se conserva, una vez por clave --- */
+  const imagenes = [];
+  const huecos = [];
+  const marcasPorPagina = new Map();
+  const yaDecodificada = new Map();
+
+  for (const d of dibujos) {
+    const marcas = marcasPorPagina.get(d.pagina) || [];
+    marcasPorPagina.set(d.pagina, marcas);
+
+    if (paginasDeAnexo.has(d.pagina)) {
+      /* Un hueco por página, no por dibujo: el logo de encabezado también cae
+         dentro de una página de anexo y no debe generar su propio hueco. */
+      if (!huecos.some((h) => h.pagina === d.pagina)) {
+        const id = 'hueco_' + d.pagina;
+        huecos.push({ id, pagina: d.pagina });
+        marcas.push('<div data-hueco="anexo_eeff" data-id="' + id + '"></div>');
+      }
+      continue;
+    }
+
+    /* Deduplicación por clave: hay 126 dibujos pero solo unas 20 imágenes
+       distintas, y decodificar por dibujo multiplicaba el trabajo por seis. */
+    if (!yaDecodificada.has(d.clave)) {
+      const pagina = await doc.getPage(d.pagina);
+      yaDecodificada.set(d.clave, await aDataUrl(pagina, d.clave));
+    }
+    const dataUrl = yaDecodificada.get(d.clave);
+    if (!dataUrl) continue;
+
+    const id = 'img_' + d.pagina + '_' + d.orden;
+    imagenes.push({ id, dataUrl, pagina: d.pagina, orden: d.orden });
+    marcas.push('<img data-recurso="' + id + '" src="' + dataUrl + '" />');
+  }
+
+  const html = bloques
+    .map((b) => b.html + (marcasPorPagina.get(b.pagina) || []).join('\n'))
+    .join('\n');
+
+  return { html, imagenes, huecos, paginas: doc.numPages, etiquetado };
 }
 
-/* Convierte el nodo de imagen de pdf.js en un data URL PNG. pdf.js entrega
+/* Convierte el objeto de imagen de pdf.js en un data URL PNG. pdf.js entrega
    las muestras ya decodificadas; el número de canales varía según el espacio
    de color del original, así que se normaliza a RGB antes de empaquetar. */
 async function aDataUrl(pagina, clave) {
@@ -667,6 +813,7 @@ async function aDataUrl(pagina, clave) {
       TIEMPO_LIMITE_IMAGEN
     );
     if (!obj || !obj.width || !obj.height || !obj.data) return null;
+
     const { width, height, data } = obj;
     const canales = data.length / (width * height);
     if (canales < 1) return null;
@@ -687,53 +834,60 @@ async function aDataUrl(pagina, clave) {
 /* Recorre el árbol de estructura y emite HTML con la jerarquía del documento. */
 function aHTML(nodo, texto) {
   if (!nodo) return '';
-  const hijos = (nodo.children || []).map((h) => aHTML(h, texto)).join('');
-  const etiqueta = MAPA_ETIQUETAS[nodo.role];
   if (nodo.type === 'content') {
     const item = texto.items.find((i) => i.id === nodo.id);
     return item ? escapar(item.str) : '';
   }
-  if (!etiqueta) return hijos;
-  return '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>';
+  const hijos = (nodo.children || []).map((h) => aHTML(h, texto)).join('');
+  const etiqueta = MAPA_ETIQUETAS[nodo.role];
+  return etiqueta ? '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>' : hijos;
 }
-
 ```
 
-- [ ] **Step 5: Correr los tests**
+- [ ] **Step 4: Correr los tests**
 
-Run: `npm test`
-Expected: PASS. 45 tests (42 previos + 3 nuevos). El primero tarda unos segundos: procesa 112 páginas reales.
+Run: `time npm test`
+Expected: PASS, 50 tests (46 previos + 4 nuevos).
 
-- [ ] **Step 6: Verificar el reparto contra el PDF real**
+**Vigila el tiempo.** Con la deduplicación por clave y el anexo descartado antes de decodificar, quedan unas 5 imágenes que decodificar en lugar de 126. Si `npm test` pasa de **90 segundos**, algo no está deduplicando: **repórtalo con el número medido en vez de subir el límite de tiempo o recortar el test.**
+
+- [ ] **Step 5: Verificar el reparto contra el PDF real**
 
 Run:
 ```bash
 node --input-type=module -e "
 import { readFileSync } from 'node:fs';
 const { extraerReferencia } = await import('./frontend/src/services/pdfReferenceExtractor.js');
+const t = Date.now();
 const r = await extraerReferencia(new Uint8Array(readFileSync('Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf')));
+console.log('segundos:', ((Date.now()-t)/1000).toFixed(1));
 console.log('paginas:', r.paginas, '| etiquetado:', r.etiquetado);
 console.log('recursos conservados:', r.imagenes.length);
-console.log('huecos de anexo:', r.huecos.length);
+console.log('paginas con hueco:', [...new Set(r.huecos.map(h=>h.pagina))].join(','));
 console.log('peso de los recursos:', Math.round(r.imagenes.reduce((a,i)=>a+i.dataUrl.length,0)/1024), 'KB');
-"
+" 2>&1 | grep -v "^Warning"
 ```
 
-Expected: 112 páginas, etiquetado `true`, entre 2 y 6 recursos, al menos 10 huecos, y el peso de los recursos por debajo de 500 KB. Si los recursos pesan megas, la clasificación está dejando pasar escaneos y hay que revisarla antes de seguir.
+Expected: 112 páginas, etiquetado `true`, páginas con hueco `44,45,…,58`, recursos por debajo de 500 KB en total, y menos de 90 segundos. Si los recursos pesan megas, la detección del anexo está fallando y hay que reportarlo, no ajustar el umbral para que el número salga bien.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/src/services/pdfReferenceExtractor.js frontend/src/services/pdfReferenceExtractor.test.js
 git commit -m "Agregar extractor del PDF de referencia
 
-Lee estructura e imagenes con pdf.js. El PDF de referencia esta etiquetado
-(/StructTreeRoot), asi que se recorre getStructTree para conservar secciones;
-sin etiquetas degrada a texto plano y lo reporta.
+Lee estructura e imagenes con pdf.js en dos pasadas: primero censa los
+dibujos con su tamano real sobre la pagina, decide que paginas son anexo, y
+solo entonces decodifica lo que se conserva.
 
-Las paginas escaneadas del anexo firmado no se guardan: producen un hueco en
-su posicion, porque son del ejercicio 2024 y no deben viajar al informe del
-año siguiente."
+El tamano se obtiene llevando la matriz acumulada, no de los argumentos de
+paintImageXObject: esos traen los pixeles intrinsecos de la imagen, no el
+tamano al que se dibuja. Y el operador anterior no es transform, pdf.js
+interpone dependency.
+
+Se decodifica una vez por clave de imagen y no por dibujo: hay 126 dibujos
+pero unas 20 imagenes distintas, porque el logo se repite como encabezado en
+las 112 paginas."
 ```
 
 ---
@@ -870,7 +1024,7 @@ export const leerPlantilla = (plantillaId) =>
 - [ ] **Step 4: Correr los tests**
 
 Run: `npm test`
-Expected: PASS. 49 tests (45 previos + 4 nuevos).
+Expected: PASS. 54 tests (50 previos + 4 nuevos).
 
 - [ ] **Step 5: Commit**
 
@@ -1042,7 +1196,7 @@ Se acepta ademas .pdf en la carga de referencia; antes solo .docx via mammoth."
 ## Verificación final del plan 1
 
 ```bash
-npm test                                   # 49 tests en verde
+npm test                                   # 54 tests en verde
 git status --short                         # limpio
 ```
 
