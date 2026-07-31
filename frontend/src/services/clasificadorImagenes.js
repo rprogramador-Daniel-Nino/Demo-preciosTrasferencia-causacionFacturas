@@ -52,3 +52,14 @@ export function detectarPaginasDeAnexo(dibujos) {
 
   return anexo;
 }
+
+/* Compatibilidad hacia atrás con pdfReferenceExtractor que aún usa clasificarImagen.
+   Esta función usa el antiguo umbral (0.8) para mantener comportamiento previo. */
+export const UMBRAL_PAGINA = 0.8;
+export function clasificarImagen(render, pagina) {
+  const areaPagina = (pagina?.ancho || 0) * (pagina?.alto || 0);
+  const areaRender = (render?.ancho || 0) * (render?.alto || 0);
+  if (areaPagina <= 0 || areaRender <= 0) return 'recurso';
+  const EPSILON = 1e-9;
+  return areaRender / areaPagina >= UMBRAL_PAGINA - EPSILON ? 'pagina' : 'recurso';
+}
