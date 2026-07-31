@@ -3932,6 +3932,20 @@ ${textoPrompt}`;
       return resultados;
     }
     function _moIaInfo(texto) { const el = $('mo_ia_status'); if (el) el.textContent = texto || ''; }
+    function _ptBloqueComparablesConfirmadas() {
+      var tabla = (window.PT_ANTERIOR && PT_ANTERIOR.comparablesTabla) || [];
+      if (!tabla.length || !window.COMP_META) return '';
+      var idx = {};
+      Object.keys(COMP_META).forEach(function (nombre) { idx[nameKey(nombre)] = nombre; });
+      var lineas = [];
+      tabla.forEach(function (t) {
+        var real = idx[nameKey(t.name)];
+        var desc = real && COMP_META[real] && COMP_META[real].desc;
+        if (desc) lineas.push('- ' + real + ': ' + desc.slice(0, 300));
+      });
+      if (!lineas.length) return '';
+      return 'Estas empresas fueron confirmadas como comparables reales en el estudio de precios de transferencia del año anterior (su actividad SÍ coincide con la de la empresa examinada) — úsalas como referencia de qué tipo de negocio es realmente comparable:\n' + lineas.join('\n') + '\n\n';
+    }
     async function curarCandidatosConIA(list) {
       window.PT_ULTIMO_IMPORT_COMPS = list;
       const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
@@ -3940,6 +3954,7 @@ ${textoPrompt}`;
       if (!evaluables.length) { _moIaInfo('ℹ Ninguna candidata importada trae ID IQ + Business Description para curar con IA; el motor usará el emparejamiento por palabras clave.'); return; }
       window.PT_CURANDO_IA = true;
       window.AI_MATCH_COMPS = { porId: {}, fecha: new Date().toISOString(), actividadUsada: act.resumen, fuenteExcel: (window.CIQ_FUENTE && CIQ_FUENTE.archivo) || '' };
+      const bloqueConfirmadas = _ptBloqueComparablesConfirmadas();
       const CONCURRENCIA = 6;
       const lotes = _ptChunk(evaluables, 60);
       let evaluadas = 0, fallidas = 0;
@@ -3953,6 +3968,7 @@ ${textoPrompt}`;
         const prompt =
           'Eres un experto en precios de transferencia que revisa comparables de Capital IQ.\n\n' +
           'La empresa examinada tiene esta actividad económica real:\n"' + act.resumen + '"\n\n' +
+          bloqueConfirmadas +
           'A continuación hay una lista de empresas candidatas con su Business Description real de Capital IQ (en inglés). ' +
           'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, mismos productos/servicios o función equivalente), ' +
           'sin importar el idioma en que esté escrita la descripción. No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
