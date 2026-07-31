@@ -13656,6 +13656,9 @@ se guía la descarga manual
         var cuerpo = $('cbody'); if (!cuerpo || !window.MutationObserver || cuerpo._ptObs18) return;
         cuerpo._ptObs18 = true;
         new MutationObserver(function () {
+          /* también cuando el motor sustituye unas filas por otras y el total
+             coincide: sin esto la firma de moRows no notaría el cambio */
+          try { marcarTablaSucia(); } catch (e) { }
           if (_reflejando) return;
           clearTimeout(_obsT);
           _obsT = setTimeout(function () {
@@ -13756,14 +13759,36 @@ se guía la descarga manual
          decir el nombre: después de cualquier ingesta que cambie cifras sin
          cambiar nombres, moRows devolvía filas obsoletas y motorEjecutar puntuaba
          con datos viejos. Ya ocurría con la vía Excel del Bloque 9. */
+      /* Versión de la tabla: sube cuando cambia su contenido, sea porque se
+         añaden o quitan filas o porque el analista teclea en una celda. Sustituye
+         a construir una firma leyendo todos los valores de todas las filas: con
+         2.987 filas eso eran unas 30.000 lecturas de .value en CADA llamada a
+         moRows, y moRows corre en cada corrida del motor. Aquí el coste es
+         constante, con un solo listener delegado en el tbody en lugar de uno por
+         input. */
+      window.PT_TABLA_VERSION = window.PT_TABLA_VERSION || 0;
+      function marcarTablaSucia() { window.PT_TABLA_VERSION++; }
+      (function engancharVersionTabla() {
+        /* en try: este bloque instala todas las envolturas de más abajo, así que
+           una excepción aquí lo dejaría sin aplicar entero */
+        try {
+          var cuerpo = $('cbody');
+          if (!cuerpo || cuerpo._ptVer18 || typeof cuerpo.addEventListener !== 'function') return;
+          cuerpo._ptVer18 = true;
+          cuerpo.addEventListener('input', marcarTablaSucia, true);
+          cuerpo.addEventListener('change', marcarTablaSucia, true);
+        } catch (e) { console.error('[Bloque 18] enganche de versión de la tabla:', e); }
+      })();
+
       if (typeof window.moRows === 'function' && !window.moRows._pt18) {
         var _moRowsPrev = window.moRows, _sigPrev = null;
         window.moRows = function () {
           try {
             var cuerpo = $('cbody');
-            var sig = !cuerpo ? '' : [].slice.call(cuerpo.children).map(function (tr) {
-              return [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; }).join('');
-            }).join('');
+            /* PT_TABLA_VERSION cubre las ediciones; el número de filas cubre las
+               altas y bajas por si alguna mutación no pasó por el observer. */
+            var sig = ($('pli') ? $('pli').value : '') + '|' + window.PT_TABLA_VERSION + '|' +
+              (cuerpo ? cuerpo.children.length : 0);
             if (_sigPrev !== sig) {
               _sigPrev = sig;
               try { _moCache = { sig: '', rows: null }; } catch (e) { }
@@ -14540,11 +14565,24 @@ se guía la descarga manual
         host.innerHTML = h + pli;
       }
 
+      /* Tope de filas que se listan aquí. Esta lista existe para cargar el
+         documento de una comparable concreta, y el universo recién importado
+         puede traer miles: construir un <input type="file"> por cada una es lo
+         más caro de todo el repintado y no le sirve a nadie con 2.987 filas. El
+         conjunto final del estudio son 12-30, así que 60 cubre de sobra el caso
+         real y acota el patológico. */
+      var TOPE_FILAS_LISTA = 60;
+
       function pintarFilas() {
         var host = document.getElementById('ptEeffCompFilas'); if (!host) return;
-        var filas = filasComp();
-        if (!filas.length) { host.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Todavía no hay comparables en la tabla: ejecute la selección en el paso 3.</div>'; return; }
-        host.innerHTML = filas.map(function (f, i) {
+        var todas = filasComp();
+        if (!todas.length) { host.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Todavía no hay comparables en la tabla: ejecute la selección en el paso 3.</div>'; return; }
+        var filas = todas.slice(0, TOPE_FILAS_LISTA);
+        var sobran = todas.length - filas.length;
+        host.innerHTML = (sobran
+          ? '<div style="font-size:11.5px;color:' + COL.aviso + ';margin-bottom:6px">Se listan las primeras ' +
+          filas.length + ' de ' + todas.length + ' comparables de la tabla. Ejecute la selección del paso 3 para quedarse con el conjunto final; entonces aparecerán todas aquí.</div>'
+          : '') + filas.map(function (f, i) {
           var reg = vincular(f);
           var est = !reg ? '<span style="color:' + COL.aviso + '">sin EEFF</span>'
             : (reg.aplicado ? '<span style="color:' + COL.ok + '">✓ incorporado · ' + escH(reg.periodo || '') + (reg.moneda ? ' · ' + escH(reg.moneda) : '') + '</span>'
@@ -14871,6 +14909,34 @@ se guía la descarga manual
       var GRIS = ['#566573', '#D5D8DC', '#F4F6F7'];
       function pinta(paleta, cuerpo) { return caja(paleta[0], paleta[1], paleta[2], cuerpo); }
 
+      /* Progreso con barra y porcentaje, en el paso 1 y junto al botón. La
+         importación tenía cuatro etapas invisibles: leer el archivo, reconocer las
+         columnas, construir las filas y meterlas en la tabla. Un texto que no se
+         mueve durante veinte segundos es indistinguible de algo colgado, así que
+         cada etapa se anuncia y la última avanza por lotes. */
+      function progreso(etapa, hechas, total, detalle) {
+        var pct = total ? Math.min(100, Math.round((hechas / total) * 100)) : null;
+        var h = '<div style="display:flex;align-items:center;gap:8px"><b>' + escH(etapa) + '</b>' +
+          (pct === null ? '' : '<span style="margin-left:auto;font-variant-numeric:tabular-nums">' +
+            hechas.toLocaleString('es-CO') + ' de ' + total.toLocaleString('es-CO') + ' · ' + pct + ' %</span>') +
+          '</div>';
+        h += '<div style="height:6px;background:#D5D8DC;border-radius:3px;margin-top:6px;overflow:hidden">' +
+          '<div style="height:100%;width:' + (pct === null ? 100 : pct) + '%;background:#2874A6;' +
+          (pct === null ? 'opacity:.35;' : 'transition:width .15s;') + '"></div></div>';
+        if (detalle) h += '<div style="margin-top:5px">' + detalle + '</div>';
+        estado(pinta(GRIS, h));
+      }
+
+      /* Cede el hilo para que el navegador pinte antes de seguir bloqueándolo.
+         requestAnimationFrame acierta con el momento del repintado; el setTimeout
+         es el respaldo si la pestaña está en segundo plano, donde rAF no corre. */
+      function cederHilo() {
+        return new Promise(function (r) {
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function () { setTimeout(r, 0); });
+          else setTimeout(r, 0);
+        });
+      }
+
       /* Lee el archivo aparte de la importación, solo para poder explicar qué se
          encontró. Reutiliza las mismas piezas que usa el mapeo real —findHeaderRow,
          findCol y el diccionario SYN, que el Bloque 2 amplía con desc, id, ticker,
@@ -14923,24 +14989,6 @@ se guía la descarga manual
             faltanEsenciales.map(function (f) { return escH(f.etiqueta); }).join(', ') + '</div>';
         }
         return h;
-      }
-
-      /* Cuenta las filas de la tabla hasta que deje de crecer: la importación
-         original es asíncrona por dentro y no devuelve promesa, así que no hay a
-         qué encadenarse. Se resuelve observando el resultado. */
-      function esperarTabla(antes, cb) {
-        var cuerpo = $('cbody');
-        if (!cuerpo) { cb(0); return; }
-        var previo = -1, quietos = 0, vueltas = 0;
-        (function tic() {
-          var ahora = cuerpo.children.length;
-          if (ahora === previo) quietos++; else quietos = 0;
-          previo = ahora;
-          vueltas++;
-          /* dos lecturas iguales seguidas y algo que contar: ya terminó */
-          if ((quietos >= 2 && ahora !== antes) || vueltas > 120) { cb(ahora - antes); return; }
-          setTimeout(tic, 250);
-        })();
       }
 
       /* «incluidas» tiene que ser lo que calc() mete de verdad en el rango, no lo
@@ -15014,24 +15062,79 @@ se guía la descarga manual
             }
           }
 
-          var antes = ($('cbody') && $('cbody').children.length) || 0;
-          estado(pinta(GRIS, '⏳ Cargando ' + d.candidatas + ' compañías en la tabla…' +
-            '<div style="margin-top:4px">La interfaz puede quedarse quieta unos segundos: son ' + d.candidatas + ' filas.</div>'));
+          var cuerpo = $('cbody');
+          var antes = (cuerpo && cuerpo.children.length) || 0;
 
-          /* Se cede el hilo para que el navegador alcance a pintar el estado antes
-             de bloquearse insertando las filas. Sin esto el usuario no ve ni el
-             «cargando». */
-          await new Promise(function (r) { setTimeout(r, 60); });
+          progreso('Construyendo ' + d.candidatas.toLocaleString('es-CO') + ' filas…', 0, null,
+            'Reconocidas ' + d.reconocidas.length + ' columnas de la hoja «' + escH(d.hoja || file.name) + '».');
+          await cederHilo();
+
+          /* La función original inserta cada fila directamente en la tabla, una por
+             una: con 2.987 compañías son 2.987 inserciones en el DOM vivo y unos
+             75.000 nodos, y es la única del archivo que no usa DocumentFragment
+             (writeForm, motorRenderTabla, integrarSuper y la continuidad sí lo
+             hacen). En lugar de reimplementar su done() —donde vive la segunda
+             pasada del Bloque 2 con identificador, descripción y accionistas— se le
+             cambia el destino: mientras corre, el appendChild del tbody desvía a un
+             fragmento fuera del documento. Ahí construir es barato, no hay reflow,
+             y el MutationObserver no se dispara. Después se vuelca por lotes
+             cediendo el hilo, que es lo que permite mostrar el avance. */
+          var bandeja = document.createDocumentFragment();
+          var desviando = true;
+          if (cuerpo) {
+            cuerpo.appendChild = function (n) {
+              return desviando ? bandeja.appendChild(n) : Object.getPrototypeOf(cuerpo).appendChild.call(cuerpo, n);
+            };
+          }
+          function dejarDeDesviar() {
+            desviando = false;
+            try { if (cuerpo) delete cuerpo.appendChild; } catch (e) { }
+          }
 
           try {
             _impPrev(file);
           } catch (e) {
+            dejarDeDesviar();
             estado(pinta(ROJO, '✗ Falló la importación: ' + escH(e.message) + resumenColumnas(d)));
             try { moToast('Falló la importación: ' + e.message, 'red'); } catch (e2) { }
             return;
           }
 
-          esperarTabla(antes, function (nuevas) {
+          /* La original es asíncrona por dentro y no devuelve promesa, así que se
+             espera a que la bandeja deje de crecer. */
+          await new Promise(function (listo) {
+            var previo = -1, quietos = 0, vueltas = 0;
+            (function tic() {
+              var n = bandeja.childNodes.length;
+              if (n === previo) quietos++; else quietos = 0;
+              if (n !== previo && n) progreso('Construyendo filas…', n, d.candidatas);
+              previo = n;
+              if ((quietos >= 3 && n > 0) || ++vueltas > 240) { listo(); return; }
+              setTimeout(tic, 120);
+            })();
+          });
+
+          var construidas = bandeja.childNodes.length;
+          dejarDeDesviar();
+
+          if (cuerpo && construidas) {
+            var LOTE = 250, puestas = 0;
+            while (bandeja.firstChild) {
+              var trozo = document.createDocumentFragment();
+              for (var i = 0; i < LOTE && bandeja.firstChild; i++) trozo.appendChild(bandeja.firstChild);
+              cuerpo.appendChild(trozo);
+              puestas += trozo.childNodes.length || Math.min(LOTE, construidas - puestas);
+              puestas = Math.min(puestas, construidas);
+              progreso('Cargando en la tabla…', puestas, construidas);
+              await cederHilo();
+            }
+          }
+
+          /* La original ya llamó a calc(), pero con la tabla todavía vacía porque
+             las filas estaban desviadas: hay que recalcular ahora que están puestas. */
+          try { calc(); } catch (e) { }
+
+          (function (nuevas) {
             var total = ($('cbody') && $('cbody').children.length) || 0;
             refrescarContadores(total);
             if (!nuevas) {
@@ -15051,7 +15154,7 @@ se guía la descarga manual
             h += '<div style="margin-top:4px">Siguiente: defina los filtros en el paso 2 y ejecute la selección en el paso 3 para quedarse con las mejores.</div>';
             estado(pinta(VERDE, h));
             try { moToast(nuevas + ' compañías importadas de «' + (d.hoja || file.name) + '». Ejecute la selección en el paso 3.', 'green'); } catch (e) { }
-          });
+          })(($('cbody') && $('cbody').children.length ? $('cbody').children.length - antes : 0));
         };
         window.importCompsFile._pt19 = true;
       }
