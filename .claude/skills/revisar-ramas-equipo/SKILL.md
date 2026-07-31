@@ -1,6 +1,6 @@
 ---
 name: revisar-ramas-equipo
-description: Usar al empezar a trabajar en este repo, antes de aplicar cambios propios, y otra vez al cerrar cada spec o feature antes del merge — trae las ramas remotas de los compañeros, reporta qué cambiaron y dónde se solapa con tu trabajo en index.html, y las integra abortando ante cualquier conflicto fuera de public/index.html y public/gestor-reportes/.
+description: Usar al empezar a trabajar en este repo, antes de aplicar cambios propios, y otra vez al cerrar cada spec o feature antes del merge — trae main y las ramas remotas de los compañeros, reporta qué cambiaron y dónde se solapa con tu trabajo en index.html, y las integra todas (main primero) abortando ante cualquier conflicto fuera de public/index.html y public/gestor-reportes/.
 ---
 
 # Revisar las ramas del equipo antes de seguir
@@ -9,7 +9,13 @@ El equipo trabaja en ramas separadas sobre un `index.html` de ~13 000 líneas qu
 todos editan. El riesgo no es el conflicto de git —ese avisa— sino descubrir
 tarde que alguien ya arregló lo que estás arreglando.
 
-Anunciar al empezar: "Usando revisar-ramas-equipo para ver qué cambiaron tus compañeros."
+**`main` cuenta como una rama más.** Es el tronco al que todos convergen, y
+quedarse atrás de él ensucia la siguiente integración exactamente igual que
+quedarse atrás de un compañero: el trabajo que otro ya mergeó a `main` llega
+tarde y con más líneas de por medio. Por eso el script la analiza con el mismo
+detalle y va primero en el orden de integración.
+
+Anunciar al empezar: "Usando revisar-ramas-equipo para ver qué cambiaron en main y en las ramas de tus compañeros."
 
 ## Cuándo correrla
 
@@ -54,23 +60,34 @@ limpieza y explicar que Google Drive los recrea en cada sincronización, así qu
 va a repetirse. No continuar con datos viejos: un reporte de ramas
 desactualizadas es peor que ninguno, porque da falsa confianza.
 
-### 3. Si `companeros` está vacío, terminar
+### 3. Si `orden_integracion` está vacío, terminar
 
-No es un error. Informar que no hay ramas de compañeros además de `main`, y
-mencionar `atras_de_main` si es mayor que cero.
+No es un error: significa que no hay nada que traer, ni de `main` ni de ningún
+compañero. Informarlo y terminar.
+
+**Mirar `orden_integracion`, no `companeros`.** Que `companeros` esté vacío no
+autoriza a cerrar: puede no haber ramas de compañeros y sí haber commits en
+`main` esperando. Al revés también pasa — hay compañeros pero sin nada nuevo.
+`orden_integracion` ya resuelve las dos cosas: contiene solo las ramas que
+tienen algo que traer y son integrables, `main` primero.
 
 ### 4. Reportar en prosa
 
-Por cada compañero: quién, cuándo, qué hizo (a partir de `commits_que_me_faltan`,
-que trae sha corto, autor, fecha y asunto), y si `bloques_en_conflicto_potencial`
-no está vacío, decir explícitamente en qué bloques de `index.html` chocan. Esa
-es la información que importa; el resto es contexto.
+Empezar por **`principal`**, que es el análisis de `origin/main`, y seguir con
+cada compañero. Los dos traen los mismos campos, así que se reportan igual:
+quién, cuándo, qué hizo (a partir de `commits_que_me_faltan`, que trae sha
+corto, autor, fecha y asunto), y si `bloques_en_conflicto_potencial` no está
+vacío, decir explícitamente en qué bloques de `index.html` chocan. Esa es la
+información que importa; el resto es contexto.
 
-Si el compañero trae `nota`, mencionarla también: indica que falta contexto
-para evaluarlo bien —sin ancestro común con mi rama, o `index.html` ausente en
-la punta de la suya— y por eso el resto de sus campos puede venir vacío.
+Si una rama trae `nota`, mencionarla también: indica que falta contexto para
+evaluarla bien —sin ancestro común con mi rama, `index.html` ausente en su
+punta, o que la rama de trabajo es `main` y no se integra sobre sí misma— y por
+eso el resto de sus campos puede venir vacío.
 
-Si `atras_de_main` es mayor que cero, mencionarlo también.
+`atras_de_main` sigue siendo el número que se cita para decir cuánto falta del
+tronco, pero **el qué está en `principal.commits_que_me_faltan`**: reportarlo con
+el mismo detalle que el de un compañero, no como un contador suelto.
 
 ### 5. Compuerta: árbol limpio
 
@@ -93,20 +110,33 @@ Comunicar el SHA al usuario de forma explícita, diciéndole que puede volver co
 `git reset --hard <sha>`. Debe quedar en el chat, no solo en memoria de la
 sesión.
 
-### 7. Integrar, de menor a mayor solapamiento
+### 7. Integrar en el orden de `orden_integracion`
 
-`companeros` ya viene ordenado así. Antes de mergear, mirar el campo `nota` de
-cada uno: si dice que no hay ancestro común, **no proponer su integración**;
-reportarlo al usuario tal cual y pasar al siguiente compañero. Con los demás,
-una rama a la vez:
+**Recorrer `orden_integracion` tal como viene, sin reordenarlo.** Ya trae
+`origin/main` primero y después los compañeros de menor a mayor solapamiento.
+
+`main` va al frente por una razón práctica: las ramas de los compañeros suelen
+tenerlo ya mergeado, así que integrarlo antes deja menos que resolver en las
+siguientes. Al revés se resuelve el mismo cambio dos veces.
+
+Una rama a la vez:
 
 ```bash
 git merge --no-ff <rama>
 ```
 
-El campo `rama` de cada compañero ya viene con el prefijo `origin/` (por
-ejemplo `"origin/antoniodev"`); usar el valor tal cual. Anteponer `origin/` de
-nuevo produce `origin/origin/antoniodev`, que no existe, y el merge no corre.
+Los nombres de `orden_integracion` ya vienen con el prefijo `origin/` (por
+ejemplo `"origin/main"`, `"origin/antoniodev"`); usar el valor tal cual.
+Anteponer `origin/` de nuevo produce `origin/origin/main`, que no existe, y el
+merge no corre.
+
+Las ramas sin ancestro común no aparecen en `orden_integracion` —tienen
+`integrable: false`—, así que no hay que filtrarlas a mano. Si alguna quedó
+fuera, reportarla al usuario con su `nota` en lugar de intentar mergearla.
+
+Tras cada merge, **verificar antes de seguir con la siguiente**: `npm run build`
+y comprobar que el árbol quedó como se espera. Encadenar merges sin mirar
+convierte dos conflictos separados en uno solo, imposible de atribuir.
 
 ### 8. Ante conflicto, mirar dónde cayó
 
@@ -171,6 +201,12 @@ manual en el navegador, porque el repo no tiene tests de la aplicación.
 
 - No resolver conflictos de lógica automáticamente.
 - No integrar con el árbol sucio.
+- **No integrar solo las ramas de compañeros y dejar `main` atrás.** Es el error
+  que esta versión de la skill viene a cerrar: antes `main` solo se contaba en
+  `atras_de_main` y se mencionaba de pasada, así que la rama quedaba integrada
+  con los compañeros pero divergiendo del tronco.
+- No dar por cerrado el escaneo porque `companeros` esté vacío: mirar
+  `orden_integracion`.
 - No editar `public/index.html` a mano: se regenera con `npm run build` desde
   `index.html` de la raíz.
 - No seguir si `fetch` falló.

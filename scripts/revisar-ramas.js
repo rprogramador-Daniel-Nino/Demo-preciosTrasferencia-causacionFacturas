@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 
-/* Escaneo determinista de las ramas de los compañeros.
+/* Escaneo determinista de las ramas del equipo: main y las de los compañeros.
    Solo lee: no muta el repo, no escribe en disco. Toda integración la decide y
-   ejecuta la skill revisar-ramas-equipo a partir de este JSON. */
+   ejecuta la skill revisar-ramas-equipo a partir de este JSON.
+
+   main se analiza con el MISMO detalle que una rama de compañero —commits que
+   faltan, archivos tocados, solapamiento y bloques de index.html— porque
+   quedarse atrás del tronco ensucia la siguiente integración tanto como
+   quedarse atrás de un compañero. Antes solo se contaba en `atras_de_main`, que
+   decía cuánto faltaba pero no qué. */
 
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -14,6 +20,7 @@ const {
   etiquetasDeHunks,
   interseccion,
   ordenarPorSolapamiento,
+  ordenIntegracion,
 } = require('./lib/analisis-ramas');
 
 const PRINCIPAL = 'origin/main';
@@ -82,7 +89,12 @@ function main() {
     mis_archivos_sin_commitear: [],
     mis_bloques_tocados: [],
     atras_de_main: 0,
+    /* main con el mismo detalle que un compañero. atras_de_main se conserva
+       porque es el número que el reporte cita, pero el análisis vive aquí. */
+    principal: null,
     companeros: [],
+    /* main primero, después los compañeros de menor a mayor solapamiento. */
+    orden_integracion: [],
   };
 
   /* rev-parse --abbrev-ref HEAD lanza en un repo sin ningún commit (HEAD no
@@ -152,40 +164,34 @@ function main() {
     );
   }
 
-  /* --- ramas de compañeros --- */
-  const remotas = lineas(
-    gitOpcional(['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin']) || ''
-  )
-    /* Exigir el prefijo "origin/" descarta el symref HEAD, que git abrevia a
-       "origin" a secas desde la 2.52 y a "origin/HEAD" en versiones anteriores.
-       Filtrar por el literal no es portable entre versiones; el prefijo sí. */
-    .filter(
-      (r) => r.startsWith('origin/') && r !== PRINCIPAL && r !== 'origin/HEAD' && r !== 'origin/' + yo
-    );
-
-  for (const remota of remotas) {
-    const compa = {
+  /* Analiza una rama remota contra la mía. Se usa igual para main y para las
+     ramas de compañeros: el tronco no merece menos detalle que un compañero. */
+  function analizarRama(remota) {
+    const info = {
       rama: remota,
       ultimo: null,
       commits_que_me_faltan: [],
       archivos_tocados: [],
       solapamiento: [],
       bloques_en_conflicto_potencial: [],
+      integrable: false,
       nota: null,
     };
 
     const base = gitOpcional(['merge-base', yo, remota]);
     if (!base) {
-      compa.nota = 'Sin ancestro común con ' + yo + '; no se propone integrarla.';
-      resultado.companeros.push(compa);
-      continue;
+      info.nota = 'Sin ancestro común con ' + yo + '; no se propone integrarla.';
+      return info;
     }
     const desde = base.trim();
+    /* Hay ancestro común: el merge es planteable. Que además haya algo que traer
+       lo dice commits_que_me_faltan, no este campo. */
+    info.integrable = true;
 
     const ultimo = gitOpcional(['log', '-1', '--format=%an%x1f%ad%x1f%s', '--date=short', remota]);
     if (ultimo) {
       const [autor, fecha, asunto] = ultimo.trim().split('\x1f');
-      compa.ultimo = { autor, fecha, asunto };
+      info.ultimo = { autor, fecha, asunto };
     }
 
     const log =
@@ -195,34 +201,72 @@ function main() {
         '--date=short',
         desde + '..' + remota,
       ]) || '';
-    compa.commits_que_me_faltan = lineas(log).map((l) => {
+    info.commits_que_me_faltan = lineas(log).map((l) => {
       const [sha, autor, fecha, asunto] = l.split('\x1f');
       return { sha, autor, fecha, asunto };
     });
 
-    compa.archivos_tocados = lineas(
-      gitOpcional(['diff', '--name-only', desde, remota]) || ''
-    );
-    compa.solapamiento = interseccion(compa.archivos_tocados, [...misArchivos]);
+    info.archivos_tocados = lineas(gitOpcional(['diff', '--name-only', desde, remota]) || '');
+    info.solapamiento = interseccion(info.archivos_tocados, [...misArchivos]);
 
     /* Bloques solo si ambos tocamos index.html: si no, no hay nada que cruzar. */
-    if (compa.solapamiento.includes('index.html')) {
+    if (info.solapamiento.includes('index.html')) {
       const contenido = gitOpcional(['show', remota + ':index.html']);
       if (contenido === null) {
-        compa.nota = 'index.html no existe en ' + remota + '; se omite el mapeo de bloques.';
+        info.nota = 'index.html no existe en ' + remota + '; se omite el mapeo de bloques.';
       } else {
         const suyos = etiquetasDeHunks(
           parsearHunks(gitOpcional(['diff', '-U0', desde, remota, '--', 'index.html']) || ''),
           extraerAnclas(contenido)
         );
-        compa.bloques_en_conflicto_potencial = interseccion(suyos, resultado.mis_bloques_tocados);
+        info.bloques_en_conflicto_potencial = interseccion(suyos, resultado.mis_bloques_tocados);
       }
     }
 
-    resultado.companeros.push(compa);
+    return info;
+  }
+
+  /* --- main, como un objetivo de integración más --- */
+  /* Si la rama de trabajo ES main, no se integra sobre sí misma. Se compara por
+     el nombre corto y por la referencia completa, porque `yo` puede llegar como
+     'main' o como 'HEAD' desprendido. */
+  if (PRINCIPAL === 'origin/' + yo || yo === 'main') {
+    resultado.principal = {
+      rama: PRINCIPAL,
+      ultimo: null,
+      commits_que_me_faltan: [],
+      archivos_tocados: [],
+      solapamiento: [],
+      bloques_en_conflicto_potencial: [],
+      integrable: false,
+      nota: 'La rama de trabajo es ' + yo + ': no se integra sobre sí misma.',
+    };
+  } else {
+    resultado.principal = analizarRama(PRINCIPAL);
+  }
+
+  /* --- ramas de compañeros --- */
+  const remotas = lineas(
+    gitOpcional(['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin']) || ''
+  )
+    /* Exigir el prefijo "origin/" descarta el symref HEAD, que git abrevia a
+       "origin" a secas desde la 2.52 y a "origin/HEAD" en versiones anteriores.
+       Filtrar por el literal no es portable entre versiones; el prefijo sí.
+       main queda fuera de esta lista porque ya se analizó aparte, como tronco. */
+    .filter(
+      (r) => r.startsWith('origin/') && r !== PRINCIPAL && r !== 'origin/HEAD' && r !== 'origin/' + yo
+    );
+
+  for (const remota of remotas) {
+    resultado.companeros.push(analizarRama(remota));
   }
 
   resultado.companeros = ordenarPorSolapamiento(resultado.companeros);
+
+  /* La regla de qué se integra y en qué orden vive en lib/, donde npm test la
+     cubre: es una decisión, no un detalle de plomería. */
+  resultado.orden_integracion = ordenIntegracion(resultado.principal, resultado.companeros);
+
   process.stdout.write(JSON.stringify(resultado, null, 2) + '\n');
 }
 

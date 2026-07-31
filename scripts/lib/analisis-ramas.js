@@ -139,11 +139,31 @@ function ordenarPorSolapamiento(companeros) {
   });
 }
 
+/* Orden en que la skill debe integrar: `main` primero y después los compañeros
+   ya ordenados de menor a mayor solapamiento.
+
+   `main` va al frente porque las ramas de los compañeros suelen traerlo ya
+   mergeado: integrarlo antes deja menos que resolver en las siguientes. Al revés
+   se resuelve el mismo cambio dos veces.
+
+   Solo entran las ramas que (a) tienen ancestro común, porque sin él el merge no
+   es planteable, y (b) traen algo nuevo. Una rama integrable pero sin commits
+   pendientes no se mergea: produciría un merge vacío. */
+function ordenIntegracion(principal, companeros) {
+  const tieneAlgo = (r) =>
+    !!r && r.integrable === true && (r.commits_que_me_faltan || []).length > 0;
+  return [
+    ...(tieneAlgo(principal) ? [principal.rama] : []),
+    ...(companeros || []).filter(tieneAlgo).map((c) => c.rama),
+  ];
+}
+
 module.exports = {
   extraerAnclas,
   parsearHunks,
   etiquetasDeHunks,
   interseccion,
   ordenarPorSolapamiento,
+  ordenIntegracion,
   SIN_BLOQUE,
 };

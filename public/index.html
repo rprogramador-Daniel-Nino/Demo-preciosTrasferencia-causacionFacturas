@@ -13626,7 +13626,15 @@ se guía la descarga manual
               if (!cel || cel.v === null || cel.v === undefined) return;
               var inp = f.ins[ESPEJO[clave]]; if (!inp) return;
               var v = (clave === 'c') ? Math.abs(cel.v) : cel.v;
-              var texto = String(Math.round(v));
+              /* NO redondear a entero. Los estados financieros de comparables
+                 extranjeras vienen en miles o millones con decimales, y ahí el
+                 decimal es material: una utilidad operacional de 0,43 sobre
+                 ventas de 28,81 es un margen del 1,49 %, pero redondeada a 0 da
+                 0 % y entra así al rango intercuartil. Se conservan dos
+                 decimales, que es lo que publican las fuentes, y se recorta la
+                 basura de coma flotante. */
+              var v2 = Math.round(v * 100) / 100;
+              var texto = String(v2);
               if (inp.value !== texto) { inp.value = texto; tocada = true; }
             });
             if (tocada) escritas++;
@@ -14288,6 +14296,17 @@ se guía la descarga manual
 
       /* ──────────────────── 8. NORMALIZACIÓN Y CRUCE ──────────────────── */
 
+      /* Los modelos rellenan los campos que no encuentran con prosa —"No
+         especificada", "N/A", "no aplica"— en lugar de dejarlos nulos. Guardarlo
+         así haría que el informe declarara la moneda como «No especificada», que
+         es peor que no declararla: parece un dato cuando es una ausencia. */
+      function vacioSiIndeterminado(v) {
+        var s = String(v === null || v === undefined ? '' : v).trim();
+        if (!s) return '';
+        if (/^(no\s+(especificad|aplic|determinad|declarad|disponible)|n\/?a|nd|desconocid|sin\s+especificar|-+|—+)/i.test(s)) return '';
+        return s;
+      }
+
       function leerCelda(entrada, claveJSON) {
         var o = entrada[claveJSON];
         if (o === null || o === undefined) return { v: null, rotulo: '', ubicacion: '' };
@@ -14339,8 +14358,8 @@ se guía la descarga manual
         reg.vinculadoPor = cr.modo; reg.cruce = { modo: cr.modo, punt: cr.punt };
         reg.sinCruce = !cr.fila;
         reg.periodo = String(entrada.periodo || (doc.meta && doc.meta.periodo) || '');
-        reg.moneda = String(entrada.moneda || (doc.meta && doc.meta.moneda) || '');
-        reg.unidad = String(entrada.unidad_origen || (doc.meta && doc.meta.unidad_origen) || '');
+        reg.moneda = vacioSiIndeterminado(entrada.moneda || (doc.meta && doc.meta.moneda));
+        reg.unidad = vacioSiIndeterminado(entrada.unidad_origen || (doc.meta && doc.meta.unidad_origen));
         reg.huerfano = false;
 
         reg.cifras = {};

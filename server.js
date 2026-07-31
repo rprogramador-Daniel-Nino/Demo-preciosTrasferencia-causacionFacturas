@@ -19,9 +19,10 @@ if (!GEMINI_API_KEY) {
   console.error('\n⚠️  Falta GEMINI_API_KEY en el archivo .env — la lectura de archivos con Gemini no va a funcionar.\n');
 }
 
-// 12 MB: la lectura de estados financieros de comparables escaneados manda
-// varias páginas rasterizadas en base64 en un solo cuerpo, y 2 MB las rechazaba
-// con 413. Firebase Functions admite 32 MB, así que no hay que tocar functions/.
+// La lectura de documentos manda varias páginas rasterizadas en base64 en un
+// solo cuerpo, y el 2 MB por defecto las rechazaba con 413. Solo aplica al
+// servidor local: Firebase Functions admite 32 MB, así que no hay que tocar
+// functions/, y por encima de esa cifra el límite de aquí deja de importar.
 app.use(express.json({ limit: '50mb' }));
 
 // Sirve el HTML y cualquier asset estático desde public/ (misma carpeta que despliega Firebase Hosting)
