@@ -85,7 +85,11 @@ function main() {
     companeros: [],
   };
 
-  const rama = git(['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  /* rev-parse --abbrev-ref HEAD lanza en un repo sin ningún commit (HEAD no
+     resuelve todavía). Se degrada a null y se sigue con "HEAD" como referencia
+     de trabajo, igual que cuando hay commits pero HEAD está desprendido. */
+  const ramaCruda = gitOpcional(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const rama = ramaCruda === null ? 'HEAD' : ramaCruda.trim();
   resultado.rama_actual = rama === 'HEAD' ? null : rama;
   const yo = resultado.rama_actual || 'HEAD';
 
@@ -109,7 +113,9 @@ function main() {
   }
 
   /* --- estado del árbol propio --- */
-  const sinCommitear = lineas(git(['diff', '--name-only', 'HEAD']));
+  /* diff --name-only HEAD también lanza sin ningún commit (HEAD no resuelve);
+     se degrada a "sin cambios sobre HEAD" en vez de reventar. */
+  const sinCommitear = lineas(gitOpcional(['diff', '--name-only', 'HEAD']) || '');
   const noTrackeados = lineas(git(['ls-files', '--others', '--exclude-standard']));
   resultado.mis_archivos_sin_commitear = [...new Set([...sinCommitear, ...noTrackeados])];
   resultado.arbol_limpio = resultado.mis_archivos_sin_commitear.length === 0;
@@ -127,8 +133,14 @@ function main() {
     }
   }
 
-  if (misArchivos.has('index.html') && fs.existsSync('index.html')) {
-    const anclasMias = extraerAnclas(fs.readFileSync('index.html', 'utf8'));
+  /* Las rutas que devuelve git (index.html, etc.) son relativas a la raíz del
+     repo, no al cwd desde donde se invoque este script. dirGit es la ruta
+     absoluta de .git; la raíz es su padre. Resolver contra ella, no contra
+     dirGit, para que corra igual desde cualquier subdirectorio. */
+  const raizRepo = path.join(dirGit, '..');
+  const rutaIndex = path.join(raizRepo, 'index.html');
+  if (misArchivos.has('index.html') && fs.existsSync(rutaIndex)) {
+    const anclasMias = extraerAnclas(fs.readFileSync(rutaIndex, 'utf8'));
     const partes = [];
     if (baseMain) {
       partes.push(gitOpcional(['diff', '-U0', baseMain.trim(), yo, '--', 'index.html']) || '');
@@ -176,10 +188,16 @@ function main() {
       compa.ultimo = { autor, fecha, asunto };
     }
 
-    const log = gitOpcional(['log', '--format=%h%x1f%an%x1f%s', desde + '..' + remota]) || '';
+    const log =
+      gitOpcional([
+        'log',
+        '--format=%h%x1f%an%x1f%ad%x1f%s',
+        '--date=short',
+        desde + '..' + remota,
+      ]) || '';
     compa.commits_que_me_faltan = lineas(log).map((l) => {
-      const [sha, autor, asunto] = l.split('\x1f');
-      return { sha, autor, asunto };
+      const [sha, autor, fecha, asunto] = l.split('\x1f');
+      return { sha, autor, fecha, asunto };
     });
 
     compa.archivos_tocados = lineas(
