@@ -1577,6 +1577,39 @@
                 <button class="btn" style="margin-top:6px" onclick="motorConfirmarEsc()">Confirmar y
                   aplicar</button></label>
             </div>
+
+            <!-- Paso 4: estados financieros de las comparables (PDF/imagen, lectura asistida) -->
+            <div
+              style="display:flex;align-items:center;gap:10px;margin:16px 0 10px;padding-top:14px;border-top:1px solid var(--hair)">
+              <span
+                style="flex:none;width:24px;height:24px;border-radius:50%;background:#334155;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center">4</span>
+              <b style="font-size:12.5px;color:#1E293B">Cargar los estados financieros de las comparables</b>
+              <span style="font-size:11px;color:var(--muted)">PDF o imagen · lectura asistida por IA</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--muted);margin-bottom:8px">Los estados financieros de las
+              comparables se publican después del cierre del ejercicio, así que llegan aparte del archivo de la base de
+              datos. Cárguelos aquí: el sistema los lee, verifica las identidades contables de cada compañía (utilidad
+              bruta, utilidad operacional, ecuación patrimonial) y comprueba que el período corresponda al año gravable
+              del estudio. <b>Ninguna cifra entra a la tabla sin superar esa verificación</b>, y el documento queda
+              reproducido en el Anexo C.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <label class="btn solid" style="margin:0;cursor:pointer">📄 Cargar EEFF de comparables (PDF/imagen)<input
+                  type="file" accept="application/pdf,image/*" multiple style="display:none"
+                  onchange="ptEeffCompLeerDocumentos(this.files);this.value=''"></label>
+              <label class="btn ghost" style="margin:0;cursor:pointer">🧾 Vía alterna: Excel/CSV<input type="file"
+                  accept=".xlsx,.xls,.csv,.txt" style="display:none"
+                  onchange="ptIngestarEEFFComparables(this.files[0]);this.value=''"></label>
+              <button type="button" class="btn ghost" onclick="ptPlantillaEEFFComparables()">⬇ Plantilla CSV</button>
+              <button type="button" class="btn ghost" onclick="ptEeffCompRevalidar()">↻ Volver a verificar</button>
+            </div>
+            <div id="ptEeffCompIA_prog" style="font-size:11.5px;color:var(--muted);margin-top:8px"></div>
+            <div id="ptEeffCompResumen" style="margin-top:6px"></div>
+            <div id="ptEeffCompIA" style="margin-top:8px"></div>
+            <details id="ptEeffCompPorFila" style="margin-top:8px">
+              <summary style="font-size:11.5px;cursor:pointer">Cargar el documento de una comparable en concreto
+                (asignación explícita, sin cruce automático)</summary>
+              <div id="ptEeffCompFilas" style="margin-top:6px"></div>
+            </details>
           </div>
           <div id="compsSummaryBadge"
             style="display:none;padding:12px 16px;background:#F4F6F7;border:1px solid #D5D8DC;border-radius:10px;margin:10px 0;font-size:12.5px;color:#2C3E50;justify-content:space-between;align-items:center;box-shadow:0 2px 4px rgba(0,0,0,0.03)">
@@ -2796,7 +2829,8 @@
         adj: (typeof ADJ !== 'undefined') ? JSON.parse(JSON.stringify(ADJ)) : null,
         motor: (typeof MOTOR !== 'undefined') ? JSON.parse(JSON.stringify(MOTOR)) : null,
         eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null,
-        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null
+        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null,
+        continuidadTabla: window.PT_CONTINUIDAD_TABLA_KEYS ? JSON.parse(JSON.stringify(window.PT_CONTINUIDAD_TABLA_KEYS)) : null
       };
       CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) s[id] = el.value; });
       return s;
@@ -2820,6 +2854,7 @@
       const hostIA = document.getElementById('ptEeffIA'); if (hostIA && !s.eeffIA) hostIA.innerHTML = '';
       try { if (typeof ptPintarEeffIA === 'function') ptPintarEeffIA(); } catch (e) { }
       window.AI_MATCH_COMPS = s.aiMatch ? JSON.parse(JSON.stringify(s.aiMatch)) : null;
+      window.PT_CONTINUIDAD_TABLA_KEYS = s.continuidadTabla ? JSON.parse(JSON.stringify(s.continuidadTabla)) : {};
       try {
         const elIa = $('mo_ia_status');
         if (elIa) {
@@ -3597,9 +3632,10 @@ ${textoTotal}`;
         o.holders = meta.holders || '';
         o.holding = /\b(investment holding company|holding company|sociedad de inversi[oó]n|sociedad holding)\b/i.test(DESCS[o.name] || '')
           || /^6719/.test(o.sic || '')
-          || /\bholdings?\b/i.test(o.name || '');
+          || /\b(holdings?|grupo|group|groupe|gruppo)\b/i.test(o.name || '');
         o.saldoNeg = ['ar', 'inv', 'ap'].filter(k => o[k] !== null && o[k] < 0);
         o.previa = !!previas[nameKey(o.name)];
+        o.continuidadTabla = !!(window.PT_CONTINUIDAD_TABLA_KEYS && PT_CONTINUIDAD_TABLA_KEYS[nameKey(o.name)]);
         return o;
       }).filter(x => x);
       _moCache = { sig, rows: out }; return out;
@@ -3647,9 +3683,9 @@ ${textoTotal}`;
       var topeIndep = (window.PT_CRITERIOS && PT_CRITERIOS.independenciaTope) || 50;
       if (socioMax !== null && socioMax > topeIndep) return { out: 'No independiente: un solo accionista concentra el ' + socioMax.toFixed(2) + ' % de la propiedad, superior al ' + topeIndep + ' % admitido; existe vinculación por control (Art. 260-1 E.T.).' };
       if (o.saldoNeg && o.saldoNeg.length && cfg.saldoneg === 'excluir') return { out: 'Saldo negativo en ' + o.saldoNeg.map(k => ({ ar: 'Cuentas por cobrar', inv: 'Inventario', ap: 'Cuentas por pagar' }[k])).join('/') + ': dato no verosímil, se excluye de la muestra' };
-      if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
-      if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
-      if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
+      if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO' && !o.continuidadTabla) return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
+      if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO' && !o.continuidadTabla) return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
+      if (o.perfil === 'EMPRESARIO' && cfg.act !== 'amplio' && !o.continuidadTabla) return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
       /* ── Curación de candidatas por IA (Business Description real de Capital IQ) ──
          Solo aplica a filas con ID IQ (vinieron del Excel de Capital IQ); las agregadas a
@@ -3660,7 +3696,7 @@ ${textoTotal}`;
       if (o.id && window.AI_MATCH_COMPS && !descTextIA.trim()) {
         return { out: 'Sin descripción de negocio de Capital IQ para verificar la actividad (ID ' + o.id + ')' };
       }
-      if (aiRec && aiRec.coincide === false) {
+      if (aiRec && aiRec.coincide === false && !o.continuidadTabla) {
         return { out: 'Rechazada por IA: la descripción de negocio no coincide con la actividad (' + (aiRec.motivo || 'sin motivo detallado') + ')' };
       }
       /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
@@ -3668,7 +3704,7 @@ ${textoTotal}`;
       /* Exclusión por especialidad: solo en modo estricto si la candidata cuenta con descripción/SIC y 0 coincidencia.
          En modo estándar/amplio, 0 coincidencias asigna un puntaje bajo en el factor de especialidad (peso del 40%)
          para priorizar las que sí coinciden, sin descartar masivamente cuando faltan descripciones detalladas. */
-      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc) {
+      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc && !o.continuidadTabla) {
         const resumen = (act.resumen || '').slice(0, 90);
         return { out: 'Sin coincidencia con la actividad específica: la descripción del candidato no coincide con ninguna palabra clave del perfil (' + resumen + (resumen.length >= 90 ? '…' : '') + ')' };
       }
@@ -3689,7 +3725,7 @@ ${textoTotal}`;
       const scBase = wA * fA + wK * fK + wG * fG + wT * fT + wR * fR;
       const bonoContinuidad = o.previa ? 0.08 : 0;
       const sc = scBase + bonoContinuidad;
-      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : '')].filter(x => x).join(', ');
+      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : ''), (o.continuidadTabla ? 'comparable confirmada en la tabla del estudio anterior' : '')].filter(x => x).join(', ');
       return { sc, raz };
     }
     function moMostrarModalSinCandidatas(motivo) {
@@ -3898,6 +3934,20 @@ ${textoPrompt}`;
       return resultados;
     }
     function _moIaInfo(texto) { const el = $('mo_ia_status'); if (el) el.textContent = texto || ''; }
+    function _ptBloqueComparablesConfirmadas() {
+      var tabla = (window.PT_ANTERIOR && PT_ANTERIOR.comparablesTabla) || [];
+      if (!tabla.length || !window.COMP_META) return '';
+      var idx = {};
+      Object.keys(COMP_META).forEach(function (nombre) { idx[nameKey(nombre)] = nombre; });
+      var lineas = [];
+      tabla.forEach(function (t) {
+        var real = idx[nameKey(t.name)];
+        var desc = real && COMP_META[real] && COMP_META[real].desc;
+        if (desc) lineas.push('- ' + real + ': ' + desc.slice(0, 300));
+      });
+      if (!lineas.length) return '';
+      return 'Estas empresas fueron confirmadas como comparables reales en el estudio de precios de transferencia del año anterior (su actividad SÍ coincide con la de la empresa examinada) — úsalas como referencia de qué tipo de negocio es realmente comparable:\n' + lineas.join('\n') + '\n\n';
+    }
     async function curarCandidatosConIA(list) {
       window.PT_ULTIMO_IMPORT_COMPS = list;
       const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
@@ -3906,6 +3956,7 @@ ${textoPrompt}`;
       if (!evaluables.length) { _moIaInfo('ℹ Ninguna candidata importada trae ID IQ + Business Description para curar con IA; el motor usará el emparejamiento por palabras clave.'); return; }
       window.PT_CURANDO_IA = true;
       window.AI_MATCH_COMPS = { porId: {}, fecha: new Date().toISOString(), actividadUsada: act.resumen, fuenteExcel: (window.CIQ_FUENTE && CIQ_FUENTE.archivo) || '' };
+      const bloqueConfirmadas = _ptBloqueComparablesConfirmadas();
       const CONCURRENCIA = 6;
       const lotes = _ptChunk(evaluables, 60);
       let evaluadas = 0, fallidas = 0;
@@ -3919,6 +3970,7 @@ ${textoPrompt}`;
         const prompt =
           'Eres un experto en precios de transferencia que revisa comparables de Capital IQ.\n\n' +
           'La empresa examinada tiene esta actividad económica real:\n"' + act.resumen + '"\n\n' +
+          bloqueConfirmadas +
           'A continuación hay una lista de empresas candidatas con su Business Description real de Capital IQ (en inglés). ' +
           'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, mismos productos/servicios o función equivalente), ' +
           'sin importar el idioma en que esté escrita la descripción. No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
@@ -4877,7 +4929,12 @@ ${textoPrompt}`;
         const key = `pt:study:${typeof slug === 'function' ? slug(ent) : ent.toLowerCase().replace(/\s+/g, '_')}:${yr}`;
 
         if (typeof stSet === 'function') {
-          stSet(key, JSON.stringify(formData));
+          /* stSet ya hace JSON.stringify internamente. Serializar aquí también
+             dejaba en la clave un string doblemente codificado: stGet devolvía
+             un string en lugar del objeto y writeForm(string) dejaba el
+             formulario en blanco. saveToMemory() sí pasa el objeto crudo, y
+             ambos escriben en la MISMA clave pt:study:<slug>:<año>. */
+          stSet(key, formData);
           console.log(`⏱️ Auto-guardado: ${ent} · ${yr}`);
           autoSaveConfig.lastSave = Date.now();
         }
@@ -7203,6 +7260,7 @@ se guía la descarga manual
         } catch (e) { console.warn('[PARCHE] mapeo extendido de comparables:', e); }
         /* el universo completo queda disponible para el motor de continuidad */
         try { if (out.length > 20) window.CIQ_UNIVERSO = out.slice(); } catch (e) { }
+        try { setTimeout(function () { try { ptCruceContinuidadTablaAuto(); } catch (e) { console.warn('[PARCHE] cruce de continuidad automático:', e); } }, 0); } catch (e) { }
         return out;
       };
 
@@ -7299,6 +7357,63 @@ se guía la descarga manual
       }
 
       window.PT_CONTINUIDAD = null;
+
+      window.PT_CONTINUIDAD_TABLA_KEYS = window.PT_CONTINUIDAD_TABLA_KEYS || {};
+
+      /* Cruce automático (sin botón) de la tabla "Muestra Compañías comparables"
+         del estudio anterior contra el universo de Capital IQ ya importado.
+         Se dispara sola desde smartMapRows() (al terminar de importar el Excel)
+         y desde ptProcesarTextoAnterior() en el Bloque 3 (al terminar de leer el
+         estudio anterior) — cubre los dos órdenes de carga posibles. */
+      window.ptCruceContinuidadTablaAuto = function () {
+        var tabla = (window.PT_ANTERIOR && PT_ANTERIOR.comparablesTabla) || [];
+        if (!tabla.length || !CIQ_UNIVERSO.length) return null;
+        var porNombre = {};
+        CIQ_UNIVERSO.forEach(function (u) { if (u.name) porNombre[K(u.name)] = u; });
+        var existentes = {};
+        ptComparablesEnTabla().forEach(function (c) { existentes[K(c.name)] = 1; });
+        var encontradas = [], noEncontradas = [], sinDatos = [];
+        var nuevasKeys = {};
+        var frag = document.createDocumentFragment(), n = 0;
+        tabla.forEach(function (p) {
+          var hit = porNombre[K(p.name)];
+          if (!hit) { noEncontradas.push(p.name); return; }
+          if (hit.s === null || hit.op === null) { sinDatos.push(p.name); return; }
+          nuevasKeys[K(hit.name)] = { name: hit.name, id: hit.id || '' };
+          encontradas.push(hit.name);
+          if (existentes[K(hit.name)]) return;
+          _registrar(hit);
+          frag.appendChild(compRow(_fila(hit)));
+          existentes[K(hit.name)] = 1; n++;
+        });
+        window.PT_CONTINUIDAD_TABLA_KEYS = nuevasKeys;
+        if (n) { $('cbody').appendChild(frag); calc(); }
+        ptPintarCruceContinuidadTabla(encontradas, noEncontradas, sinDatos);
+        return { encontradas: encontradas, noEncontradas: noEncontradas, sinDatos: sinDatos };
+      };
+
+      function ptPintarCruceContinuidadTabla(encontradas, noEncontradas, sinDatos) {
+        sinDatos = sinDatos || [];
+        var host = document.getElementById('ptContTablaAlerta');
+        if (!noEncontradas.length && !sinDatos.length) { if (host) host.innerHTML = ''; return; }
+        if (!host) {
+          var ancla = document.getElementById('ptZonaConfig') || document.getElementById('compalert') || $('cbody');
+          if (!ancla || !ancla.parentNode) return;
+          host = document.createElement('div'); host.id = 'ptContTablaAlerta';
+          ancla.parentNode.insertBefore(host, ancla);
+        }
+        var partes = [];
+        if (noEncontradas.length) {
+          partes.push('<b>⚠ ' + noEncontradas.length + ' comparable(s) de la tabla del estudio anterior no aparecen en el universo de este año:</b> ' +
+            noEncontradas.map(escH).join(', ') +
+            '. No aparece en el universo de búsqueda del año corriente (posible fusión, deslistamiento o cambio de razón social). Verificar en la fuente antes de descartarla.');
+        }
+        if (sinDatos.length) {
+          partes.push('<b>⚠ ' + sinDatos.length + ' comparable(s) aparecen en el universo pero sin información financiera completa del período:</b> ' +
+            sinDatos.map(escH).join(', ') + '. No permite calcular el indicador; verificar en la fuente.');
+        }
+        host.innerHTML = '<div style="margin:8px 0;padding:8px 10px;border:1px solid #C0392B;background:#FDEDEC;border-radius:6px;font-size:11.5px">' + partes.join('<br>') + '</div>';
+      }
 
       window.ptComparablesContinuidad = async function (objetivo) {
         var prev = await ptComparablesAnterior();
@@ -7404,7 +7519,7 @@ se guía la descarga manual
         if (!u || !u.name) return;
         if (u.desc) DESCS[u.name] = u.desc;
         if (u.id) COMP_ID[u.name] = u.id;
-        COMP_META[u.name] = { id: u.id || '', ticker: u.ticker || '', sic: u.sic || '', pais: u.country || '', desc: u.desc || '', estado: u.estado || '', tipo: u.tipoCia || '' };
+        COMP_META[u.name] = Object.assign({}, COMP_META[u.name] || {}, { id: u.id || '', ticker: u.ticker || '', sic: u.sic || '', pais: u.country || '', desc: u.desc || '', estado: u.estado || '', tipo: u.tipoCia || '' });
       }
 
       window.ptAplicarMantenidas = function () {
@@ -7412,6 +7527,7 @@ se guía la descarga manual
         var existentes = {}; ptComparablesEnTabla().forEach(function (x) { existentes[K(x.name)] = 1; });
         var frag = document.createDocumentFragment(), n = 0;
         c.mantenidas.forEach(function (m) {
+          window.PT_CONTINUIDAD_TABLA_KEYS[K(m.cand.name)] = { name: m.cand.name, id: m.cand.id || '' };
           if (existentes[K(m.cand.name)]) return;
           _registrar(m.cand);
           frag.appendChild(compRow(_fila(m.cand))); n++;
@@ -7735,6 +7851,41 @@ se guía la descarga manual
         return out;
       }
 
+      /* Tabla "Muestra Compañías comparables" del estudio anterior: patrón
+         recurrente en todos los estudios (con o sin el prefijo "Tabla N."),
+         con columnas Número / Nombre de la Compañía / Ámbito (Internacional|
+         Nacional). El texto llega aquí ya aplanado por pdfjs (una página =
+         una sola línea larga, ver cargarInformeAnterior más abajo), así que
+         NO se puede depender de saltos de línea entre filas: se localiza el
+         encabezado y se recorren las filas por posición dentro del bloque de
+         texto que sigue, usando el valor de Ámbito (Internacional/Nacional, en
+         cualquier capitalización) solo como delimitador de fin de fila — su
+         contenido no se conserva. */
+      function ptTablaComparablesEstudioAnterior(texto) {
+        var out = [], vistos = {};
+        var t = String(texto || '');
+        var rxTitulo = /(?:tabla\s*\d+\.?\s*)?(?:muestra\s+)?compañ[ií]as?\s+comparables?/gi;
+        var mTitulo;
+        while ((mTitulo = rxTitulo.exec(t))) {
+          var desde = mTitulo.index + mTitulo[0].length;
+          var corte = t.slice(desde).search(/fuente\s*:/i);
+          var bloque = corte >= 0 ? t.slice(desde, desde + corte) : t.slice(desde, desde + 6000);
+          var rxFila = /(\d{1,3})\s+([A-ZÁÉÍÓÚÑ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.,'()\-\s]{2,90}?)\s+(INTERNACIONAL|NACIONAL)\b/gi;
+          var m, bloqueHasRows = false;
+          while ((m = rxFila.exec(bloque))) {
+            bloqueHasRows = true;
+            var nombre = m[2].replace(/\s+/g, ' ').trim();
+            if (nombre.length < 3) continue;
+            var k = nombre.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (vistos[k]) continue;
+            vistos[k] = 1;
+            out.push({ numero: parseInt(m[1], 10), name: nombre });
+          }
+          if (bloqueHasRows) break;
+        }
+        return out;
+      }
+
       /* ───────────────────────────────────────────────────────────────────────
          3. CARGA DEL INFORME ANTERIOR (docx / doc / pdf / json)
          ─────────────────────────────────────────────────────────────────────── */
@@ -7795,8 +7946,17 @@ se guía la descarga manual
       window.ptProcesarTextoAnterior = function (texto, nombre) {
         var r = ptDistribuir(texto, nombre);
         var comps = ptComparablesDelTexto(texto);
+        var tablaComps = ptTablaComparablesEstudioAnterior(texto);
+        if (tablaComps.length) {
+          var vistosFusion = {};
+          comps.forEach(function (c) { vistosFusion[nameKey(c.name)] = 1; });
+          tablaComps.forEach(function (tc) {
+            var k = nameKey(tc.name);
+            if (!vistosFusion[k]) { vistosFusion[k] = 1; comps.push({ name: tc.name, id: '', sic: '', desc: '' }); }
+          });
+        }
         window.PT_ANTERIOR = {
-          fuente: nombre, texto: texto, comparables: comps,
+          fuente: nombre, texto: texto, comparables: comps, comparablesTabla: tablaComps,
           paginas: window.__PT_PAGINAS_PREV || null,
           descripcionNegocio: [INFOGEN.productos, INFOGEN.clientes, INFOGEN.sector].filter(Boolean).join(' '),
           fecha: new Date().toISOString()
@@ -7808,6 +7968,7 @@ se guía la descarga manual
            porque esta reasignación posterior de window.cargarInformeAnterior
            la sustituye por completo. */
         if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
+        try { if (typeof ptCruceContinuidadTablaAuto === 'function') ptCruceContinuidadTablaAuto(); } catch (e) { }
 
         /* El texto se guarda como insumo, marcado para que NO se reproduzca */
         try {
@@ -9420,8 +9581,14 @@ se guía la descarga manual
             if (ci < 0) return;
             var v = String(f[ci] === undefined ? '' : f[ci]).trim();
             if (v === '') return;
-            var n = parseFloat(v.replace(/[^0-9.\-]/g, ''));
-            if (!isFinite(n)) return;
+            /* num() distingue miles-con-punto de decimales-con-coma y trata los
+               paréntesis como negativo; parseFloat truncaba "2.761.202.249" en
+               2,761 al toparse con el segundo punto. Mismo criterio que _numEEFF
+               usa para los EEFF de la parte examinada. num() devuelve null en lo
+               no numérico e isFinite(null) es true, así que el guardia necesita
+               comprobar el null para no escribir un 0 espurio. */
+            var n = num(v);
+            if (n === null || !isFinite(n)) return;
             inputs[m[1]].value = n;
             tocada = true;
           });
@@ -13227,6 +13394,1166 @@ se guía la descarga manual
         } catch (e) { }
       };
 
+    })();
+
+    /* ═══════════════════════════════════════════════════════════════════════════
+       PARCHE PT — Bloque 18:  ESTADOS FINANCIEROS DE LAS COMPARABLES
+                               INGESTA DESDE PDF O IMAGEN CON LECTURA ASISTIDA
+
+       Los estados financieros de las comparables se publican después del cierre
+       del ejercicio, así que llegan aparte del archivo de la base de datos que
+       alimenta el motor de selección. El Bloque 9 ya trae una vía por Excel/CSV;
+       este bloque añade la vía por PDF o imagen, que es como la fuente los
+       publica, y cierra los huecos de la existente.
+
+       Principio heredado del Bloque 8: LA IA PROPONE Y LA ARITMÉTICA DISPONE.
+       Ninguna cifra entra a la tabla sin superar las identidades del propio
+       estado (utilidad bruta, utilidad operacional, ecuación patrimonial) y sin
+       que el período corresponda al año gravable del estudio.
+
+       DIVERGENCIA DELIBERADA CON EL BLOQUE 8 — UNIDADES.
+       El prompt del Bloque 8 pide llevar las cifras a unidades de la moneda. Aquí
+       se pide lo contrario: se conservan TAL COMO ESTÁN IMPRESAS y se declara la
+       unidad. Razón: el PLI es un ratio y el ajuste de capital de trabajo también
+       (ratios() devuelve ar/s, inv/s, ap/c, cocientes intra-compañía), así que
+       ninguno se altera al mezclar unidades entre compañías. Lo que SÍ se altera
+       es el factor de tamaño de moScore (fT = 1/(1+|log10(o.s/sTP)|)): escalar de
+       miles a unidades solo la comparable que trae PDF mueve log10 en 3 y hunde
+       su fT de ~1 a ~0,25. La columna ya viene de la base de datos en miles, y el
+       Anexo C ya declara que las cifras van en la moneda y unidad de la fuente.
+       La consistencia interna de la tabla vale más que la exactitud absoluta.
+       No se convierte moneda con ninguna tasa, en ninguna circunstancia.
+
+       CLAVE DE VÍNCULO: rid opaco e inmutable, no COMP_ID ni nameKey. COMP_ID es
+       volátil (solo se llena al importar el Excel en la sesión) y nameKey colapsa
+       compañías distintas, porque borra COLOMBIA|INC|CORP|LTD|S.A.|SAS|LTDA:
+       "Servicios CO S.A." y "Servicios S.A." producen la misma clave. El rid vive
+       en tr.dataset.rid y se persiste en comps[10], al FINAL del array, donde no
+       estorba a los lectores por índice fijo. De paso se recupera comps[9] (el ID
+       de la base de datos), que readForm descartaba.
+
+       Todo va aquí: el script principal no se toca. Funciona porque readForm,
+       writeForm, compRow, moRows, pliOf y renderReport son declaraciones function
+       de nivel superior, es decir propiedades de window, reasignables desde un
+       bloque posterior. Los globales nuevos se crean SOLO como window.X, sin let
+       homónimo: MOTOR sufre justamente ese defecto (se declara con let y
+       writeForm asigna window.MOTOR, que es otra cosa).
+       ═══════════════════════════════════════════════════════════════════════════ */
+    (function () {
+      'use strict';
+
+      var MODELO = 'gemini-3-flash-preview';   /* lectura de documentos: notablemente más barato */
+      var MAX_DOCS = 30;        /* tope de documentos por lote (= tope de comparables de motorMas) */
+      var MAX_IMGS = 4;         /* páginas rasterizadas por llamada: límite del cuerpo HTTP */
+      var MAX_PAG_EVID = 3;     /* páginas de evidencia que se conservan por documento */
+      var CONCURRENCIA = 3;     /* no 6 como curarCandidatosConIA: aquí el payload es grande
+                                   y cada tarea compite con pdf.js por el hilo principal */
+      var TOL_MIN = 2, TOL_REL = 0.005;        /* misma tolerancia que ptValidarEEFF */
+
+      /* [claveAlmacén, claveJSON, índice del input en la fila o null, etiqueta] */
+      var RUBROS = [
+        ['s', 'ingresos_operacionales', 1, 'Ingresos operacionales'],
+        ['c', 'costo_ventas', 2, 'Costo de ventas'],
+        ['ub', 'utilidad_bruta', null, 'Utilidad bruta'],
+        ['go', 'gastos_operacionales', null, 'Gastos operacionales'],
+        ['op', 'utilidad_operacional', 3, 'Utilidad operacional'],
+        ['ar', 'cuentas_por_cobrar', 4, 'Cuentas por cobrar'],
+        ['inv', 'inventarios', 5, 'Inventarios'],
+        ['ap', 'cuentas_por_pagar', 6, 'Cuentas por pagar'],
+        ['at', 'total_activos', null, 'Activos totales'],
+        ['pas', 'total_pasivos', null, 'Pasivos totales'],
+        ['pat', 'patrimonio', null, 'Patrimonio']
+      ];
+      /* Índices de tr.querySelectorAll('input') según compRow:
+         [0] nombre · [1] ventas · [2] costo · [3] util.op · [4] CxC · [5] Inv · [6] CxP
+         [7] SIC · [8] ID de la base de datos.  El ámbito es un <select>, no cuenta. */
+      var ESPEJO = { s: 1, c: 2, op: 3, ar: 4, inv: 5, ap: 6 };
+
+      /* ─────────────────────────── 1. ALMACÉN ─────────────────────────── */
+
+      /* Se EXTIENDE PT_EEFF_COMP en lugar de crear un global nuevo al lado.
+         Con dos objetos habría dos respuestas a "¿están cargadas las cifras?" y
+         el informe podría imprimir una mientras el rango usa la otra. Los campos
+         del recibo (cargado, archivo, actualizadas, total, sinCruce, conBalance)
+         conservan su forma literal, así que ptPintarEeffComp,
+         ptAtipicosInformeHTML y ptOrigenCifrasComparablesHTML siguen leyéndolos
+         sin una sola edición: al persistirlos desaparece el falso "Pendiente". */
+      function E() {
+        var A = window.PT_EEFF_COMP;
+        if (!A || typeof A !== 'object') A = window.PT_EEFF_COMP = {};
+        if (A.version !== 2) {
+          A.version = 2;
+          A.seq = A.seq || 0;
+          A.registros = A.registros || {};
+          if (A.cargado === undefined) A.cargado = null;
+          if (A.archivo === undefined) A.archivo = '';
+          if (A.actualizadas === undefined) A.actualizadas = 0;
+          if (A.total === undefined) A.total = 0;
+          if (!A.sinCruce) A.sinCruce = [];
+          if (A.conBalance === undefined) A.conBalance = 0;
+          if (!A.via) A.via = '';
+        }
+        return A;
+      }
+
+      function nuevoRid() {
+        var A = E(); A.seq = (A.seq || 0) + 1;
+        return 'e' + Date.now().toString(36) + A.seq.toString(36);
+      }
+
+      function regs() { return E().registros; }
+      function conCifras() {
+        var R = regs(), out = [], k;
+        for (k in R) if (R.hasOwnProperty(k) && !R[k].huerfano) out.push(R[k]);
+        return out;
+      }
+      function aplicados() { return conCifras().filter(function (r) { return r.aplicado; }); }
+
+      function nuevoRegistro(nombre) {
+        var rid = nuevoRid();
+        return regs()[rid] = {
+          rid: rid, nombre: nombre || '', nombreKey: nameKey(nombre || ''), nombreDoc: '',
+          idIQ: '', vinculadoPor: 'manual', renombres: [], huerfano: false,
+          periodo: '', moneda: '', unidad: '',
+          cifras: {}, hallazgos: [], estado: 'aviso',
+          fuente: null, aplicado: null, aplicadoValores: null, divergente: [],
+          notas: ''
+        };
+      }
+
+      /* ──────────────────── 2. FILAS Y VÍNCULO CON EL DOM ──────────────────── */
+
+      /* filasTabla() del Bloque 9 es local a ese IIFE, así que aquí va la propia,
+         que además expone el rid y el ID de la base de datos. */
+      function filasComp() {
+        var cuerpo = $('cbody'); if (!cuerpo) return [];
+        return [].slice.call(cuerpo.children).map(function (tr) {
+          var ins = tr.querySelectorAll('input');
+          function val(i) { return ins[i] ? ins[i].value : ''; }
+          return {
+            tr: tr, ins: ins, rid: tr.dataset ? (tr.dataset.rid || '') : '',
+            name: val(0), idIQ: String(val(8) || '').trim(),
+            s: num(val(1)), c: num(val(2)), op: num(val(3)),
+            ar: num(val(4)), inv: num(val(5)), ap: num(val(6))
+          };
+        }).filter(function (r) { return String(r.name || '').trim(); });
+      }
+
+      /* Re-vinculación en cascada: rid → ID de la base de datos → nameKey.
+         Es lo que hace que el vínculo sobreviva a motorRenderTabla y
+         motorLimpiar, que vacían #cbody y lo reconstruyen desde MOTOR.universo
+         sin conocer el rid. Cuando se cae al nombre queda anotado en
+         vinculadoPor, para que la UI lo liste como revisable en vez de darlo por
+         bueno en silencio. */
+      function vincular(fila) {
+        var R = regs(), k, reg = null;
+        if (fila.rid && R[fila.rid]) reg = R[fila.rid];
+        if (!reg && fila.idIQ) {
+          for (k in R) if (R[k].idIQ && String(R[k].idIQ).toUpperCase() === fila.idIQ.toUpperCase()) { reg = R[k]; reg.vinculadoPor = 'id'; break; }
+        }
+        if (!reg) {
+          var nk = nameKey(fila.name);
+          if (nk) for (k in R) if (R[k].nombreKey === nk) { reg = R[k]; reg.vinculadoPor = 'nombre'; break; }
+        }
+        if (!reg) return null;
+        if (fila.tr.dataset) fila.tr.dataset.rid = reg.rid;
+        fila.rid = reg.rid;
+        reg.huerfano = false;
+        /* el analista pudo corregir la razón social en la tabla: el rid no cambia,
+           se apila el renombre y el informe declara el rótulo de la fuente */
+        if (reg.nombre && fila.name && reg.nombre !== fila.name) {
+          reg.renombres.push({ de: reg.nombre, a: fila.name, fecha: new Date().toISOString().slice(0, 10) });
+          reg.nombre = fila.name; reg.nombreKey = nameKey(fila.name);
+        }
+        if (!reg.idIQ && fila.idIQ) reg.idIQ = fila.idIQ;
+        return reg;
+      }
+
+      /* Los registros cuya fila desapareció NO se borran: motorRenderTabla vacía
+         #cbody rutinariamente, así que "no está en la tabla" es transitorio. Los
+         huérfanos nunca entran al informe. */
+      function marcarHuerfanos() {
+        var vivos = {}, R = regs(), k;
+        filasComp().forEach(function (f) { var r = vincular(f); if (r) vivos[r.rid] = true; });
+        for (k in R) {
+          if (!vivos[k] && !R[k].huerfano) { R[k].huerfano = true; R[k].huerfanoDesde = new Date().toISOString(); }
+        }
+      }
+
+      /* ──────────────────── 3. ESPEJO HACIA #cbody ──────────────────── */
+
+      /* Fuente de verdad de los 6 rubros compartidos: #cbody, sin excepción. Los
+         leen calc(), moRows(), annexBfin() y exportarComparablesExcel(); una
+         segunda fuente abriría la puerta a que el informe imprima una cifra y el
+         rango use otra. El almacén guarda el origen documentado y aplicadoValores,
+         que es lo que permite detectar una edición manual posterior. Los rubros
+         nuevos (go, at, pas, pat, ub) viven SOLO en el almacén. */
+      var _reflejando = false;
+
+      function reflejar() {
+        if (_reflejando) return { filas: 0, escritas: 0 };
+        _reflejando = true;
+        var escritas = 0, filas = 0;
+        try {
+          filasComp().forEach(function (f) {
+            filas++;
+            var reg = vincular(f);
+            if (!reg || !reg.aplicado) return;
+            var tocada = false;
+            Object.keys(ESPEJO).forEach(function (clave) {
+              var cel = reg.cifras[clave];
+              if (!cel || cel.v === null || cel.v === undefined) return;
+              var inp = f.ins[ESPEJO[clave]]; if (!inp) return;
+              var v = (clave === 'c') ? Math.abs(cel.v) : cel.v;
+              var texto = String(Math.round(v));
+              if (inp.value !== texto) { inp.value = texto; tocada = true; }
+            });
+            if (tocada) escritas++;
+          });
+          if (escritas) { try { calc(); } catch (e) { } }
+        } catch (e) { console.error('[Bloque 18] reflejar:', e); }
+        _reflejando = false;
+        return { filas: filas, escritas: escritas };
+      }
+      window.ptEeffCompReflejar = reflejar;
+
+      /* Red que cubre de una sola vez todos los caminos que reconstruyen #cbody
+         (motorRenderTabla, motorLimpiar y su Deshacer, motorMas, importCompsFile,
+         ptAgregarPropuestas, la carga del año anterior, writeForm) en lugar de
+         envolver cada uno. Idempotente: escribe el mismo valor. */
+      var _obsT = null;
+      function observarTabla() {
+        var cuerpo = $('cbody'); if (!cuerpo || !window.MutationObserver || cuerpo._ptObs18) return;
+        cuerpo._ptObs18 = true;
+        new MutationObserver(function () {
+          if (_reflejando) return;
+          clearTimeout(_obsT);
+          _obsT = setTimeout(function () {
+            try { reflejar(); pintarFilas(); pintarResumen(); } catch (e) { }
+          }, 300);
+        }).observe(cuerpo, { childList: true });
+      }
+
+      /* ──────────────────── 4. ROUND-TRIP ──────────────────── */
+
+      if (typeof window.compRow === 'function' && !window.compRow._pt18) {
+        var _compRowPrev = window.compRow;
+        window.compRow = function (c) {
+          var tr = _compRowPrev.apply(this, arguments);
+          try {
+            if (tr && tr.dataset) {
+              var rid = (c && c[10]) ? String(c[10]) : '';
+              if (rid && regs()[rid]) tr.dataset.rid = rid;
+              else {
+                /* fila reconstruida sin rid (motorRenderTabla, motorLimpiar,
+                   importCompsFile): se re-vincula por ID o por nombre */
+                var R = regs(), k, id = String((c && c[9]) || '').trim().toUpperCase(), nk = nameKey((c && c[0]) || '');
+                for (k in R) {
+                  if (id && R[k].idIQ && String(R[k].idIQ).toUpperCase() === id) { tr.dataset.rid = k; break; }
+                  if (nk && R[k].nombreKey === nk) { tr.dataset.rid = k; break; }
+                }
+              }
+            }
+          } catch (e) { }
+          return tr;
+        };
+        window.compRow._pt18 = true;
+      }
+
+      if (typeof window.readForm === 'function' && !window.readForm._pt18) {
+        var _readFormPrev = window.readForm;
+        window.readForm = function () {
+          var s = _readFormPrev.apply(this, arguments);
+          try {
+            /* readForm serializa comps con 9 posiciones y descarta v[9], el ID de
+               la base de datos, que compRow y writeForm sí leen: al recargar, el
+               cruce por identificador y la curación de IA persistida dejaban de
+               aplicarse. Se repone, y se añade el rid en [10]. Ningún lector por
+               índice fijo pasa de [9], y los estudios viejos traen 9 elementos:
+               c[9]/c[10] quedan undefined y compRow los trata como ''. */
+            var trs = [].slice.call($('cbody').children);
+            (s.comps || []).forEach(function (c, i) {
+              var tr = trs[i]; if (!tr) return;
+              var idInp = tr.querySelector('input.iqid');
+              c[9] = idInp ? (idInp.value || '') : (c[9] || '');
+              c[10] = (tr.dataset && tr.dataset.rid) || '';
+            });
+          } catch (e) { }
+          try { s.eeffComp = JSON.parse(JSON.stringify(E())); } catch (e) { s.eeffComp = null; }
+          return s;
+        };
+        window.readForm._pt18 = true;
+      }
+
+      if (typeof window.writeForm === 'function' && !window.writeForm._pt18) {
+        var _writeFormPrev = window.writeForm;
+        window.writeForm = function (s) {
+          /* Escudo: autoGuardarEnMemoria pasaba JSON.stringify(formData) a stSet,
+             que serializa otra vez, de modo que stGet devolvía un string y
+             writeForm(string) dejaba el formulario en blanco. El origen quedó
+             corregido, pero las claves ya envenenadas siguen ahí. */
+          if (typeof s === 'string') { try { s = JSON.parse(s); } catch (e) { } }
+          var r = _writeFormPrev.call(this, s);
+          try {
+            if (s && s.eeffComp && typeof s.eeffComp === 'object') window.PT_EEFF_COMP = JSON.parse(JSON.stringify(s.eeffComp));
+            else window.PT_EEFF_COMP = { cargado: null, archivo: '', actualizadas: 0, total: 0, sinCruce: [], conBalance: 0 };
+            E();
+            /* COMP_ID es volátil: se repuebla desde los registros para que el
+               cruce por identificador funcione tras recargar */
+            window.COMP_ID = window.COMP_ID || {};
+            conCifras().forEach(function (reg) { if (reg.nombre && reg.idIQ) window.COMP_ID[reg.nombre] = reg.idIQ; });
+          } catch (e) { console.error('[Bloque 18] writeForm:', e); }
+          try { observarTabla(); reflejar(); } catch (e) { }
+          try { pintarTodo(); } catch (e) { }
+          try { if (typeof ptPintarEeffComp === 'function') ptPintarEeffComp(); } catch (e) { }
+          return r;
+        };
+        window.writeForm._pt18 = true;
+      }
+
+      /* ──────────────────── 5. moRows Y pliOf ──────────────────── */
+
+      /* La firma del caché de moRows solo mira el PRIMER input de cada fila, es
+         decir el nombre: después de cualquier ingesta que cambie cifras sin
+         cambiar nombres, moRows devolvía filas obsoletas y motorEjecutar puntuaba
+         con datos viejos. Ya ocurría con la vía Excel del Bloque 9. */
+      if (typeof window.moRows === 'function' && !window.moRows._pt18) {
+        var _moRowsPrev = window.moRows, _sigPrev = null;
+        window.moRows = function () {
+          try {
+            var cuerpo = $('cbody');
+            var sig = !cuerpo ? '' : [].slice.call(cuerpo.children).map(function (tr) {
+              return [].slice.call(tr.querySelectorAll('input,select')).map(function (i) { return i.value; }).join('');
+            }).join('');
+            if (_sigPrev !== sig) {
+              _sigPrev = sig;
+              try { _moCache = { sig: '', rows: null }; } catch (e) { }
+            }
+          } catch (e) { }
+          var rows = _moRowsPrev.apply(this, arguments);
+          try {
+            var porRid = {};
+            filasComp().forEach(function (f) { var reg = vincular(f); if (reg) porRid[nameKey(f.name)] = reg; });
+            rows.forEach(function (o) {
+              var reg = porRid[nameKey(o.name)]; if (!reg) return;
+              o.rid = reg.rid;
+              o.go = celda(reg, 'go'); o.at = celda(reg, 'at'); o.patr = celda(reg, 'pat');
+              o.moneda = reg.moneda || ''; o.unidad = reg.unidad || '';
+            });
+          } catch (e) { }
+          return rows;
+        };
+        window.moRows._pt18 = true;
+      }
+
+      function celda(reg, clave) {
+        var c = reg && reg.cifras && reg.cifras[clave];
+        return (c && c.v !== undefined && c.v !== null) ? c.v : null;
+      }
+
+      /* Berry ya estaba previsto en el sistema y quedó a medias: PLIN lo declara,
+         el select #pli lo ofrece y calc() lo excluye del ajuste de capital de
+         trabajo, pero pliOf devolvía null para él, así que el rango salía vacío
+         SIN EXPLICACIÓN. Los gastos operativos son s − c − op, exactamente lo que
+         el Anexo C ya imprime como "Gastos operacionales", de modo que la fórmula
+         es pura y no necesita el almacén (pliOf recibe {s,c,op} sin nombre). Los
+         gastos LEÍDOS del documento sirven para VERIFICAR ese derivado, no para
+         calcularlo. */
+      if (typeof window.pliOf === 'function' && !window.pliOf._pt18) {
+        var _pliOfPrev = window.pliOf;
+        window.pliOf = function (o, kind) {
+          var base = _pliOfPrev.apply(this, arguments);
+          if (base !== null || !o) return base;
+          if (kind === 'Berry') {
+            if (o.s === null || o.s === undefined || o.c === null || o.c === undefined || o.op === null || o.op === undefined) return null;
+            var ub = o.s - o.c, go = ub - o.op;
+            if (!(go > 0)) return null;   /* denominador nulo o negativo: sin sentido económico */
+            return ub / go;
+          }
+          return null;
+        };
+        window.pliOf._pt18 = true;
+      }
+
+      /* ──────────────────── 6. LECTURA DEL DOCUMENTO ──────────────────── */
+
+      function progreso(txt) { var el = $('ptEeffCompIA_prog'); if (el) el.textContent = txt || ''; }
+
+      function barra(total) {
+        var d = document.createElement('div');
+        d.setAttribute('role', 'status'); d.setAttribute('aria-live', 'polite');
+        d.style.cssText = 'position:fixed;bottom:16px;left:16px;z-index:9999;background:#1E293B;color:#fff;' +
+          'padding:10px 14px;border-radius:8px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,.25);min-width:230px';
+        d.innerHTML = '<div class="pt18txt">Preparando…</div>' +
+          '<div style="height:5px;background:#475569;border-radius:3px;margin-top:6px;overflow:hidden">' +
+          '<div class="pt18bar" style="height:100%;width:0%;background:#38BDF8;transition:width .2s"></div></div>';
+        document.body.appendChild(d);
+        return {
+          upd: function (i, txt) {
+            var t = d.querySelector('.pt18txt'), b = d.querySelector('.pt18bar');
+            if (t) t.textContent = txt || ('Página ' + i + ' de ' + total);
+            if (b) b.style.width = Math.round(i / Math.max(1, total) * 100) + '%';
+          },
+          fin: function () { try { d.remove(); } catch (e) { } }
+        };
+      }
+
+      async function pdfjs() {
+        if (!window.pdfjsLib) { try { await loadScript('vendor/pdfjs/pdf.min.js'); } catch (e) { } }
+        if (!window.pdfjsLib) throw new Error('el motor de PDF no está disponible: convierta el documento a imagen (JPG/PNG) y cárguelo así');
+        if (window.pdfjsLib.GlobalWorkerOptions && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js';
+        }
+        return window.pdfjsLib;
+      }
+
+      function aBase64(file) {
+        return new Promise(function (res, rej) {
+          var r = new FileReader();
+          r.onload = function () { res(String(r.result || '').split(',')[1] || ''); };
+          r.onerror = function () { rej(new Error('no se pudo leer ' + file.name)); };
+          r.readAsDataURL(file);
+        });
+      }
+
+      /* Ruta texto si el PDF trae capa de texto (la barata: sin tokens de imagen);
+         ruta imagen solo si no la trae. El umbral es el mismo de ORQ_OCR. */
+      async function extraerDoc(file) {
+        var umbral = (window.ORQ_OCR && ORQ_OCR.UMBRAL_TEXTO) || 100;
+        if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) {
+          return { ruta: 'imagen', texto: '', imagenes: [{ mime: file.type || 'image/jpeg', data: await aBase64(file) }], paginas: 1 };
+        }
+        var lib = await pdfjs();
+        var buf = await file.arrayBuffer();
+        var pdf = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
+        var total = pdf.numPages, b = barra(total), texto = '';
+        try {
+          for (var i = 1; i <= total; i++) {
+            b.upd(i, 'Leyendo ' + file.name + ' · página ' + i + ' de ' + total);
+            var pg = await pdf.getPage(i);
+            var tc = await pg.getTextContent();
+            texto += (typeof pdfExtraerTextoPosicional === 'function'
+              ? pdfExtraerTextoPosicional(tc.items)
+              : tc.items.map(function (it) { return it.str; }).join(' ')) + '\n';
+          }
+          if (texto.replace(/\s/g, '').length >= umbral) {
+            return { ruta: 'texto-nativo', texto: texto, imagenes: [], paginas: total };
+          }
+          /* sin capa de texto: se rasterizan las primeras páginas, que es donde
+             viven el estado de resultados y el balance en un juego de EEFF */
+          var imgs = [], tope = Math.min(total, MAX_IMGS);
+          for (var j = 1; j <= tope; j++) {
+            b.upd(j, 'Rasterizando ' + file.name + ' · página ' + j + ' de ' + tope);
+            var p2 = await pdf.getPage(j);
+            var vp = p2.getViewport({ scale: 2.0 });
+            var cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
+            await p2.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+            imgs.push({ mime: 'image/jpeg', data: cv.toDataURL('image/jpeg', 0.82).split(',')[1] });
+            cv.width = cv.height = 0;
+          }
+          return { ruta: 'ocr-imagen', texto: '', imagenes: imgs, paginas: total, truncado: total > tope };
+        } finally { b.fin(); }
+      }
+
+      function prompt18(anio, nombres) {
+        return 'Eres un analista de precios de transferencia. Lee los ESTADOS FINANCIEROS que se adjuntan y ' +
+          'devuelve ÚNICAMENTE un objeto JSON con esta forma exacta:\n' +
+          '{"documento":{"titulo":"","periodo":"","moneda":"","unidad_origen":"unidades|miles|millones"},' +
+          '"companias":[{"nombre":"","identificador_fuente":"","periodo":"","moneda":"",' +
+          '"unidad_origen":"unidades|miles|millones",' +
+          RUBROS.map(function (r) { return '"' + r[1] + '":{"valor":0,"rotulo":"","ubicacion":""}'; }).join(',') +
+          '}],"observaciones":""}\n\nREGLAS:\n' +
+          '1. Interpreta el rótulo, no lo busques literal. "Cost of revenue", "Cost of sales", "Costo de ventas" y ' +
+          '"Costo de la prestación de servicios" son lo mismo. "Operating expenses", "SG&A", "Gastos de administración ' +
+          'y ventas" y "Gastos operacionales" son lo mismo. "Total equity" y "Shareholders equity" son patrimonio.\n' +
+          '2. Un valor entre paréntesis o con signo menos es NEGATIVO.\n' +
+          '3. Devuelve las cifras TAL COMO ESTÁN IMPRESAS. NO multipliques ni dividas para llevarlas a unidades: ' +
+          'informa la escala en "unidad_origen" y la moneda en "moneda". NO conviertas de una moneda a otra.\n' +
+          '4. PROHIBIDO DERIVAR POR DIFERENCIA. Si los gastos operacionales no aparecen como una línea propia del ' +
+          'estado, pon "gastos_operacionales":{"valor":null,...}. No los calcules restando. Lo mismo con cualquier ' +
+          'otro concepto: si no aparece, valor null. No estimes, no deduzcas, no inventes.\n' +
+          '5. Para cada cifra indica el rótulo exacto que aparece en el documento y dónde estaba (página y sección).\n' +
+          '6. El año gravable del estudio es ' + anio + '. Si el documento presenta varios ejercicios en columnas, ' +
+          'devuelve el de ' + anio + '. Si ese año no aparece, dilo en "observaciones" y devuelve el más reciente ' +
+          'indicando su período en "periodo".\n' +
+          '7. Un documento puede contener VARIAS compañías (por ejemplo un reporte de base de datos con una tabla). ' +
+          'Devuelve una entrada en "companias" por cada compañía que traiga cifras. Si es de una sola, la lista tiene ' +
+          'un elemento.\n' +
+          (nombres && nombres.length
+            ? '8. Estas son las comparables del estudio, para que puedas emparejar la razón social del documento: ' +
+            nombres.slice(0, 30).join(' | ') + '\n'
+            : '') +
+          '\nResponde solo con el JSON, sin texto adicional y sin marcas de markdown.';
+      }
+
+      /* Gemini es un passthrough genérico en server.js y en functions/index.js, así
+         que acepta inline_data sin tocar los tres backends. El fallback a Claude no
+         es un lujo: Cpanel/public_html/api/ no tiene gemini.php, de modo que en ese
+         hosting la vía Gemini devuelve 404. */
+      async function preguntar(doc, texto) {
+        var partes = [];
+        doc.imagenes.forEach(function (im) { partes.push({ inline_data: { mime_type: im.mime, data: im.data } }); });
+        partes.push({ text: texto + (doc.texto ? '\n\nCONTENIDO DEL DOCUMENTO:\n' + doc.texto.slice(0, 60000) : '') });
+        var errGemini = '';
+        try {
+          var res = await fetch('/api/gemini', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: MODELO, contents: [{ parts: partes }] })
+          });
+          var data = await res.json();
+          var cand = data && data.candidates && data.candidates[0];
+          var raw = cand && cand.content && cand.content.parts ? cand.content.parts.map(function (p) { return p.text || ''; }).join('') : '';
+          if (res.ok && raw) return { json: extraerJSONDeRespuestaIA(raw), motor: MODELO };
+          errGemini = (data && data.error && (data.error.message || JSON.stringify(data.error))) || ('HTTP ' + res.status);
+        } catch (e) { errGemini = e.message; }
+
+        var contenido = [];
+        doc.imagenes.forEach(function (im) { contenido.push({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.data } }); });
+        contenido.push({ type: 'text', text: texto + (doc.texto ? '\n\nCONTENIDO DEL DOCUMENTO:\n' + doc.texto.slice(0, 60000) : '') });
+        var body = { max_tokens: 4000, messages: [{ role: 'user', content: contenido }] };
+        var j;
+        if (typeof window.ptFetchClaude === 'function') {
+          try { j = await window.ptFetchClaude(body); } catch (e) { throw new Error('Gemini: ' + errGemini + ' · Claude: ' + e.message); }
+        } else {
+          body.model = 'claude-haiku-4-5-20251001';
+          var r2 = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          j = await r2.json();
+          if (!r2.ok) throw new Error('Gemini: ' + errGemini + ' · Claude: HTTP ' + r2.status);
+        }
+        var t2 = j && j.content && j.content[0] && j.content[0].text;
+        if (!t2) throw new Error('Gemini: ' + errGemini + ' · Claude devolvió una respuesta vacía');
+        return { json: extraerJSONDeRespuestaIA(t2), motor: 'claude (respaldo)' };
+      }
+
+      /* ──────────────────── 7. VERIFICACIÓN ARITMÉTICA ──────────────────── */
+
+      function tol(a) { return Math.max(TOL_MIN, Math.abs(a) * TOL_REL); }
+      function cuadra(a, b) { return Math.abs(a - b) <= tol(a); }
+
+      /* Calcada de ptValidarEEFF: misma tolerancia, mismo no_verificable ante
+         null, mismos textos de informe. Lo que bloquea es lo que haría que el
+         rango se calculara con cifras que no son del año o que no cuadran con el
+         propio estado; lo demás advierte. */
+      function validar(reg, ctx) {
+        var H = [], c = reg.cifras;
+        function v(k) { return celda(reg, k); }
+        function add(id, estado, msg, sev) { H.push({ id: id, estado: estado, msg: msg, sev: sev || 'aviso' }); }
+
+        if (v('s') === null) add('falta_ingresos', 'error', 'No se leyeron los ingresos operacionales. Sin ellos la comparable no entra al rango: el indicador de rentabilidad no es calculable.', 'error');
+        else if (v('s') <= 0) add('falta_ingresos', 'error', 'Los ingresos operacionales leídos son cero o negativos (' + fnum(v('s')) + ').', 'error');
+        else add('falta_ingresos', 'ok', 'Ingresos operacionales: ' + fnum(v('s')) + '.', 'error');
+
+        if (v('op') === null) add('sin_utilidad', 'error', 'No se leyó la utilidad operacional y no hay costo y gastos para derivarla.', 'error');
+        else add('sin_utilidad', 'ok', 'Utilidad operacional: ' + fnum(v('op')) + '.', 'error');
+
+        if (v('ub') !== null && v('s') !== null && v('c') !== null) {
+          var ubCalc = v('s') - Math.abs(v('c'));
+          add('utilidad_bruta', cuadra(v('ub'), ubCalc) ? 'ok' : 'error',
+            'Utilidad bruta = ingresos − costo de ventas: ' + fnum(v('ub')) + ' contra ' + fnum(ubCalc) + '.', 'error');
+        } else add('utilidad_bruta', 'no_verificable', 'No hay utilidad bruta, ingresos o costo leídos para verificar la identidad.', 'error');
+
+        if (v('op') !== null && v('ub') !== null && v('go') !== null) {
+          var opCalc = v('ub') - Math.abs(v('go'));
+          add('utilidad_operacional', cuadra(v('op'), opCalc) ? 'ok' : 'error',
+            'Utilidad operacional = utilidad bruta − gastos operacionales: ' + fnum(v('op')) + ' contra ' + fnum(opCalc) + '.', 'error');
+        } else add('utilidad_operacional', 'no_verificable', 'Falta utilidad bruta o gastos operacionales para verificar la identidad.', 'error');
+
+        var per = String(reg.periodo || '');
+        if (!per) add('periodo', 'error', 'El documento no declara el período de los estados financieros.', 'error');
+        else if (ctx.anio && per.indexOf(String(ctx.anio)) < 0) {
+          add('periodo', 'error', 'El período leído («' + per + '») no corresponde al año gravable del estudio (' + ctx.anio + '). Concluir sobre un año con cifras de otro vicia el análisis.', 'error');
+        } else add('periodo', 'ok', 'Período: ' + per + ', corresponde al año gravable ' + ctx.anio + '.', 'error');
+
+        /* Guardia de unidad: en lugar de reescalar, se compara la magnitud contra
+           lo que ya trae la fila (que viene de la base de datos, típicamente en
+           miles). Un salto de tres órdenes es unidad distinta, no crecimiento. */
+        if (v('s') !== null && v('s') > 0 && ctx.filaS !== null && ctx.filaS > 0) {
+          var salto = Math.abs(Math.log(v('s') / ctx.filaS) / Math.LN10);
+          if (salto >= 1) {
+            add('magnitud_unidad', 'error', 'Los ingresos leídos (' + fnum(v('s')) + ') difieren en más de un orden de magnitud de los que ya tiene la tabla (' +
+              fnum(ctx.filaS) + '). Probablemente el documento está expresado en otra unidad; verifique antes de incorporar.', 'error');
+          } else add('magnitud_unidad', 'ok', 'La magnitud de los ingresos es consistente con la de la tabla.', 'error');
+        } else add('magnitud_unidad', 'no_verificable', 'La fila no tenía ingresos previos con los que comparar la magnitud.', 'error');
+
+        if (!reg.rid || reg.sinCruce) add('sin_cruce', 'error', 'El documento no se pudo asociar a ninguna comparable del conjunto. Asígnela a mano.', 'error');
+
+        if (v('at') !== null && v('pas') !== null && v('pat') !== null) {
+          var ok = cuadra(v('at'), v('pas') + v('pat'));
+          reg.balanceConfiable = ok;
+          add('ecuacion_patrimonial', ok ? 'ok' : 'aviso',
+            'Activos = pasivos + patrimonio: ' + fnum(v('at')) + ' contra ' + fnum(v('pas') + v('pat')) + '.' +
+            (ok ? '' : ' Los rubros de balance quedan marcados como no fiables; no afectan el margen operacional, solo el ajuste de capital de trabajo y los indicadores sobre activos.'));
+        } else add('ecuacion_patrimonial', 'no_verificable', 'No se leyeron activos, pasivos y patrimonio completos.');
+
+        if (c.go && c.go.derivado) {
+          add('gastos_derivados', 'aviso', 'Los gastos operacionales no se leyeron del documento: se obtuvieron por diferencia (ingresos − costo − utilidad operacional). La Razón Berry es sensible a la clasificación entre costo de ventas y gastos operativos.');
+        } else if (v('go') !== null && v('s') !== null && v('c') !== null && v('op') !== null) {
+          var goDer = v('s') - Math.abs(v('c')) - v('op');
+          if (!cuadra(Math.abs(v('go')), goDer)) {
+            add('clasificacion_berry', 'aviso', 'Los gastos operacionales leídos (' + fnum(Math.abs(v('go'))) + ') no coinciden con la diferencia del estado (' + fnum(goDer) +
+              '). La clasificación contable entre costo y gasto de esta comparable difiere de la de la parte examinada: es la advertencia que exige el uso de la Razón Berry.');
+          }
+        }
+
+        if (v('c') !== null && v('c') < 0) add('signo_costo', 'aviso', 'El costo de ventas se leyó con signo negativo; se incorpora en valor absoluto.');
+        ['ar', 'inv', 'ap'].forEach(function (k) {
+          if (v(k) !== null && v(k) < 0) add('saldo_negativo_' + k, 'aviso', 'El saldo de ' + etiqueta(k).toLowerCase() + ' es negativo (' + fnum(v(k)) + '); el motor puede excluir la comparable según el criterio de saldos negativos.');
+        });
+        if (v('c') !== null && v('s') !== null && Math.abs(v('c')) > v('s') * 3) {
+          add('magnitud_costo', 'aviso', 'El costo de ventas supera tres veces los ingresos; verifique la lectura.');
+        }
+        if (reg.unidad && reg.unidad !== 'unidades') {
+          add('unidad', 'aviso', 'El documento está expresado en ' + reg.unidad + '. Las cifras se conservan en esa unidad, igual que las de la base de datos: el indicador es un cociente y no se altera.');
+        }
+        if (reg.moneda && ctx.monedaDominante && reg.moneda !== ctx.monedaDominante) {
+          add('moneda', 'aviso', 'La moneda de esta comparable (' + reg.moneda + ') difiere de la mayoritaria del conjunto (' + ctx.monedaDominante + '). El indicador de rentabilidad es un cociente y no se afecta; el factor de tamaño del motor sí.');
+        }
+        if (reg.vinculadoPor === 'nombre') {
+          add('vinculo', 'aviso', 'La correspondencia con la comparable se estableció por razón social, no por identificador. Confírmela.');
+        }
+
+        reg.hallazgos = H;
+        reg.estado = H.some(function (h) { return h.estado === 'error'; }) ? 'error'
+          : (H.some(function (h) { return h.estado === 'aviso'; }) ? 'aviso' : 'ok');
+        return H;
+      }
+
+      function etiqueta(clave) {
+        for (var i = 0; i < RUBROS.length; i++) if (RUBROS[i][0] === clave) return RUBROS[i][3];
+        return clave;
+      }
+      function fnum(v) {
+        if (v === null || v === undefined || v === '') return '—';
+        try { return (typeof fmt === 'function') ? fmt(v) : Number(v).toLocaleString('es-CO'); }
+        catch (e) { return String(v); }
+      }
+
+      function contexto() {
+        var monedas = {}, dom = '', max = 0;
+        conCifras().forEach(function (r) { if (r.moneda) monedas[r.moneda] = (monedas[r.moneda] || 0) + 1; });
+        Object.keys(monedas).forEach(function (m) { if (monedas[m] > max) { max = monedas[m]; dom = m; } });
+        return { anio: (($('anio') && $('anio').value) || '').trim(), monedaDominante: dom };
+      }
+
+      window.ptEeffCompRevalidar = function () {
+        var ctx = contexto(), porRid = {};
+        filasComp().forEach(function (f) { var r = vincular(f); if (r) porRid[r.rid] = f; });
+        conCifras().forEach(function (reg) {
+          var f = porRid[reg.rid];
+          reg.sinCruce = !f;
+          validar(reg, { anio: ctx.anio, monedaDominante: ctx.monedaDominante, filaS: f ? f.s : null });
+        });
+        actualizarRecibo();
+        pintarTodo();
+        try { saveActive(); } catch (e) { }
+        moToast('Verificación recalculada sobre ' + conCifras().length + ' compañía(s) con el año gravable ' + (ctx.anio || '—'), 'green');
+      };
+
+      /* ──────────────────── 8. NORMALIZACIÓN Y CRUCE ──────────────────── */
+
+      function leerCelda(entrada, claveJSON) {
+        var o = entrada[claveJSON];
+        if (o === null || o === undefined) return { v: null, rotulo: '', ubicacion: '' };
+        if (typeof o !== 'object') return { v: num(String(o)), rotulo: '', ubicacion: '' };
+        var v = (o.valor === null || o.valor === undefined || o.valor === '') ? null : num(String(o.valor));
+        return { v: v, rotulo: String(o.rotulo || ''), ubicacion: String(o.ubicacion || '') };
+      }
+
+      /* Solapamiento de tokens significativos entre la razón social del documento
+         y la de la fila. Solo se usa como última vía y siempre queda a confirmar. */
+      function tokens(s) {
+        return String(s || '').toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').split(/\s+/)
+          .filter(function (t) { return t.length >= 4 && !/^(SOCIEDAD|LIMITED|COMPANY|GROUP|HOLDING|COLOMBIA)$/.test(t); });
+      }
+      function parecido(a, b) {
+        var ta = tokens(a), tb = tokens(b);
+        if (!ta.length || !tb.length) return 0;
+        var hits = ta.filter(function (t) { return tb.indexOf(t) >= 0; }).length;
+        return hits / Math.max(ta.length, tb.length);
+      }
+
+      function cruzar(entrada, nombreArchivo, filas) {
+        var id = String(entrada.identificador_fuente || '').trim().toUpperCase();
+        var nom = String(entrada.nombre || '').trim();
+        var i, mejor = null, mejorPunt = 0;
+        if (id) for (i = 0; i < filas.length; i++) if (filas[i].idIQ && filas[i].idIQ.toUpperCase() === id) return { fila: filas[i], modo: 'id', punt: 1 };
+        var nk = nameKey(nom);
+        if (nk) for (i = 0; i < filas.length; i++) if (nameKey(filas[i].name) === nk) return { fila: filas[i], modo: 'nombre', punt: 1 };
+        var nka = nameKey(String(nombreArchivo || '').replace(/\.[a-z0-9]+$/i, ''));
+        if (nka) for (i = 0; i < filas.length; i++) if (nameKey(filas[i].name) === nka) return { fila: filas[i], modo: 'archivo', punt: 0.9 };
+        for (i = 0; i < filas.length; i++) {
+          var p = Math.max(parecido(nom, filas[i].name), parecido(nombreArchivo, filas[i].name));
+          if (p > mejorPunt) { mejorPunt = p; mejor = filas[i]; }
+        }
+        if (mejor && mejorPunt >= 0.5) return { fila: mejor, modo: 'tokens', punt: mejorPunt };
+        return { fila: null, modo: 'sin-cruce', punt: 0 };
+      }
+
+      function normalizar(entrada, doc, nombreArchivo, filaForzada, filas) {
+        var cr = filaForzada ? { fila: filaForzada, modo: 'manual', punt: 1 } : cruzar(entrada, nombreArchivo, filas);
+        var reg = (cr.fila && vincular(cr.fila)) || nuevoRegistro(cr.fila ? cr.fila.name : (entrada.nombre || nombreArchivo));
+        if (cr.fila) {
+          if (cr.fila.tr.dataset) cr.fila.tr.dataset.rid = reg.rid;
+          reg.nombre = cr.fila.name; reg.nombreKey = nameKey(cr.fila.name);
+          if (cr.fila.idIQ) reg.idIQ = cr.fila.idIQ;
+        }
+        reg.nombreDoc = String(entrada.nombre || '');
+        if (!reg.idIQ && entrada.identificador_fuente) reg.idIQ = String(entrada.identificador_fuente).trim();
+        reg.vinculadoPor = cr.modo; reg.cruce = { modo: cr.modo, punt: cr.punt };
+        reg.sinCruce = !cr.fila;
+        reg.periodo = String(entrada.periodo || (doc.meta && doc.meta.periodo) || '');
+        reg.moneda = String(entrada.moneda || (doc.meta && doc.meta.moneda) || '');
+        reg.unidad = String(entrada.unidad_origen || (doc.meta && doc.meta.unidad_origen) || '');
+        reg.huerfano = false;
+
+        reg.cifras = {};
+        RUBROS.forEach(function (r) { reg.cifras[r[0]] = leerCelda(entrada, r[1]); });
+        /* si los gastos operacionales no venían como línea propia, se derivan y se
+           MARCA que fueron derivados: sin la marca la identidad se verificaría
+           sola y la comprobación no valdría nada */
+        var g = reg.cifras.go, s = reg.cifras.s.v, c = reg.cifras.c.v, op = reg.cifras.op.v;
+        if ((!g || g.v === null) && s !== null && c !== null && op !== null) {
+          reg.cifras.go = { v: s - Math.abs(c) - op, rotulo: '', ubicacion: '', derivado: true };
+        }
+        if (reg.cifras.ub.v === null && s !== null && c !== null) {
+          reg.cifras.ub = { v: s - Math.abs(c), rotulo: '', ubicacion: '', derivado: true };
+        }
+        reg.fuente = {
+          tipo: doc.ruta === 'imagen' ? 'imagen' : 'pdf', archivo: nombreArchivo,
+          paginas: doc.paginas || 0, ruta: doc.ruta, motor: doc.motor || MODELO,
+          leido: new Date().toISOString(), truncado: !!doc.truncado
+        };
+        reg.aplicado = null; reg.aplicadoValores = null; reg.divergente = [];
+        return reg;
+      }
+
+      /* ──────────────────── 9. ORQUESTADOR ──────────────────── */
+
+      window.PT_EEFF_COMP_LEYENDO = false;
+
+      async function leerDocumentos(files, filaForzada) {
+        var lista = [].slice.call(files || []);
+        if (!lista.length) return null;
+        if (window.PT_EEFF_COMP_LEYENDO) { moToast('Ya hay una lectura en curso; espere a que termine', 'amber'); return null; }
+        if (lista.length > MAX_DOCS) {
+          moToast('Se procesan los primeros ' + MAX_DOCS + ' documentos de los ' + lista.length + ' seleccionados; cargue el resto en un segundo lote', 'amber');
+          lista = lista.slice(0, MAX_DOCS);
+        }
+        E(); observarTabla();
+        window.PT_EEFF_COMP_LEYENDO = true;
+
+        /* La evidencia se asegura ANTES de gastar tokens: el Anexo C ya imprime
+           ADJ.eeffcomp con adjGaleriaHTML, así que el documento queda reproducido
+           aunque la lectura falle. */
+        try { if (typeof adjCargar === 'function') adjCargar(files, 'eeffcomp'); } catch (e) { }
+
+        var ctx = contexto();
+        var nombres = filasComp().map(function (f) { return f.name; });
+        var texto = prompt18(ctx.anio || 'el año del estudio', nombres);
+        var listos = 0, fallidos = [], nuevos = [];
+        var t0 = Date.now();
+
+        await _ptPool(lista, async function (file) {
+          try {
+            progreso('📄 Leyendo ' + (listos + 1) + ' de ' + lista.length + '… (' + file.name + ')');
+            var doc = await extraerDoc(file);
+            var resp = await preguntar(doc, texto);
+            doc.motor = resp.motor;
+            doc.meta = (resp.json && resp.json.documento) || {};
+            var comps = (resp.json && resp.json.companias) || [];
+            if (!comps.length) throw new Error('la lectura no devolvió ninguna compañía con cifras');
+            var filas = filasComp();
+            comps.forEach(function (entrada) {
+              var reg = normalizar(entrada, doc, file.name, filaForzada || null, filas);
+              validar(reg, { anio: ctx.anio, monedaDominante: ctx.monedaDominante, filaS: (reg.rid && buscarFila(reg.rid)) ? buscarFila(reg.rid).s : null });
+              nuevos.push(reg.rid);
+            });
+            listos++;
+          } catch (e) {
+            fallidos.push({ archivo: file.name, motivo: e.message || String(e) });
+            console.error('[Bloque 18] documento falló:', file.name, e);
+          }
+          var trans = (Date.now() - t0) / 1000, hechos = listos + fallidos.length;
+          var eta = hechos ? Math.ceil((trans / hechos) * (lista.length - hechos)) : 0;
+          progreso('📄 ' + hechos + ' de ' + lista.length + ' documento(s) procesados' + (eta > 0 ? ' · faltan ~' + eta + ' s' : ''));
+          try { saveActive(); } catch (e) { }
+        }, CONCURRENCIA);
+
+        window.PT_EEFF_COMP_LEYENDO = false;
+        podarEvidencia();
+        E().fallidos = fallidos;
+        actualizarRecibo();
+        pintarTodo();
+        try { saveActive(); } catch (e) { }
+        avisarCuota();
+        progreso(fallidos.length
+          ? '✓ ' + listos + ' de ' + lista.length + ' documento(s) leídos · ⚠ ' + fallidos.length + ' no se pudieron leer'
+          : '✓ ' + listos + ' de ' + lista.length + ' documento(s) leídos · revise la verificación antes de incorporar');
+        moToast(listos + ' documento(s) leído(s): ' + nuevos.length + ' compañía(s) con cifras propuestas. Nada entra a la tabla hasta que las incorpore.', listos ? 'green' : 'red');
+        return window.PT_EEFF_COMP;
+      }
+
+      function buscarFila(rid) {
+        var f = filasComp().filter(function (x) { return x.rid === rid; });
+        return f.length ? f[0] : null;
+      }
+
+      window.ptEeffCompLeerDocumentos = function (files) { return leerDocumentos(files, null); };
+      window.ptEeffCompCargarPara = function (indice, files) {
+        var filas = filasComp();
+        return leerDocumentos(files, filas[indice] || null);
+      };
+
+      /* Se conservan las primeras páginas de cada documento: son las que traen el
+         estado de resultados y el balance. adjCargar rasteriza el PDF completo a
+         ~150 KB por página, y 30 comparables por varias páginas desbordan de sobra
+         los ~5 MB de localStorage; además evita que el Anexo C imprima cientos de
+         páginas. */
+      function podarEvidencia() {
+        try {
+          if (typeof ADJ === 'undefined' || !ADJ.eeffcomp) return;
+          var porDoc = {}, out = [];
+          ADJ.eeffcomp.forEach(function (a) {
+            var k = a.origenPDF || a.nombre || '';
+            porDoc[k] = (porDoc[k] || 0) + 1;
+            if (!a.origenPDF || porDoc[k] <= MAX_PAG_EVID) out.push(a);
+          });
+          var quitadas = ADJ.eeffcomp.length - out.length;
+          if (quitadas > 0) {
+            ADJ.eeffcomp = out;
+            try { if (typeof adjRefreshUI === 'function') adjRefreshUI(); } catch (e) { }
+            moToast(quitadas + ' página(s) de evidencia recortadas: se conservan las ' + MAX_PAG_EVID + ' primeras de cada documento para no desbordar el almacenamiento del navegador', 'amber');
+          }
+        } catch (e) { }
+      }
+
+      /* stSet se come el QuotaExceededError y degrada a memoria en silencio: el
+         estudio parece guardado y no lo está. Al menos hay que avisarlo. */
+      function avisarCuota() {
+        try {
+          var bytes = (typeof adjPeso === 'function') ? adjPeso() : 0;
+          if (bytes > 4 * 1048576) {
+            moToast('El estudio pesa ' + (bytes / 1048576).toFixed(1) + ' MB por los documentos adjuntos y el navegador puede estar rechazando el guardado en silencio. Exporte el portafolio a JSON para no perder el trabajo.', 'red',
+              { txt: 'Exportar', fn: function () { try { exportPortfolio(); } catch (e) { } } });
+          }
+        } catch (e) { }
+      }
+
+      function actualizarRecibo() {
+        var A = E(), lista = aplicados(), filas = filasComp();
+        var conBal = lista.filter(function (r) { return celda(r, 'ar') !== null && celda(r, 'ap') !== null; }).length;
+        var sinCruce = conCifras().filter(function (r) { return r.sinCruce; }).map(function (r) { return r.nombreDoc || r.nombre; });
+        var docs = {}; lista.forEach(function (r) { if (r.fuente && r.fuente.archivo) docs[r.fuente.archivo] = true; });
+        var nDocs = Object.keys(docs).length;
+        var viaIA = lista.some(function (r) { return r.fuente && r.fuente.tipo !== 'excel'; });
+        A.cargado = lista.length ? new Date().toISOString() : null;
+        A.archivo = nDocs === 1 ? Object.keys(docs)[0] : (nDocs ? nDocs + ' documentos leídos con lectura asistida' : '');
+        A.actualizadas = lista.length;
+        A.total = filas.length;
+        A.sinCruce = sinCruce.slice(0, 12);
+        A.conBalance = conBal;
+        A.via = viaIA ? 'ia-pdf' : 'excel';
+      }
+
+      /* ──────────────────── 10. INTERFAZ ──────────────────── */
+
+      var COL = { ok: '#1E8449', error: '#C0392B', aviso: '#B7950B', neutro: '#666' };
+      var ICO = { ok: '✓', error: '✗', aviso: '⚠', no_verificable: '·' };
+
+      function pintarTodo() { try { pintarTabla(); pintarFilas(); pintarResumen(); } catch (e) { console.error('[Bloque 18] pintar:', e); } }
+
+      function pintarResumen() {
+        var host = document.getElementById('ptEeffCompResumen'); if (!host) return;
+        var A = E(), lista = aplicados(), total = filasComp().length, leidos = conCifras().length;
+        if (!leidos && !lista.length) { host.innerHTML = ''; return; }
+        var h = '<div style="font-size:11.5px;padding:8px 10px;border-radius:6px;background:#F4F6F7;border:1px solid #D5D8DC">';
+        h += '<b>' + lista.length + ' de ' + total + '</b> comparable(s) con estados financieros incorporados';
+        if (A.conBalance) h += ' · <b>' + A.conBalance + '</b> con cuentas de balance (el ajuste de capital de trabajo ya es practicable)';
+        if (leidos > lista.length) h += ' · <span style="color:' + COL.aviso + '">' + (leidos - lista.length) + ' leída(s) sin incorporar</span>';
+        if (A.sinCruce && A.sinCruce.length) h += ' · <span style="color:' + COL.error + '">' + A.sinCruce.length + ' documento(s) sin correspondencia</span>';
+        if (A.fallidos && A.fallidos.length) {
+          h += '<div style="margin-top:6px;color:' + COL.error + '">No se pudieron leer: ' +
+            A.fallidos.map(function (f) { return escH(f.archivo) + ' (' + escH(f.motivo) + ')'; }).join(' · ') + '</div>';
+        }
+        h += '</div>';
+        host.innerHTML = h;
+      }
+
+      function pintarFilas() {
+        var host = document.getElementById('ptEeffCompFilas'); if (!host) return;
+        var filas = filasComp();
+        if (!filas.length) { host.innerHTML = '<div style="font-size:11.5px;color:var(--muted)">Todavía no hay comparables en la tabla: ejecute la selección en el paso 3.</div>'; return; }
+        host.innerHTML = filas.map(function (f, i) {
+          var reg = vincular(f);
+          var est = !reg ? '<span style="color:' + COL.aviso + '">sin EEFF</span>'
+            : (reg.aplicado ? '<span style="color:' + COL.ok + '">✓ incorporado · ' + escH(reg.periodo || '') + (reg.moneda ? ' · ' + escH(reg.moneda) : '') + '</span>'
+              : '<span style="color:' + COL.aviso + '">leído, sin incorporar</span>');
+          return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--hair);font-size:11.5px">' +
+            '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escH(f.name) + '</span>' +
+            '<span style="flex:none">' + est + '</span>' +
+            '<label class="btn mini" style="margin:0;flex:none;cursor:pointer">📎 Cargar' +
+            '<input type="file" accept="application/pdf,image/*" style="display:none" onchange="ptEeffCompCargarPara(' + i + ',this.files);this.value=\'\'"></label>' +
+            '</div>';
+        }).join('');
+      }
+
+      function pintarTabla() {
+        var host = document.getElementById('ptEeffCompIA'); if (!host) return;
+        var lista = conCifras();
+        if (!lista.length) { host.innerHTML = ''; return; }
+        var filas = filasComp();
+        var conError = lista.filter(function (r) { return r.estado === 'error'; }).length;
+        var sinAplicar = lista.filter(function (r) { return !r.aplicado; }).length;
+
+        var h = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">' +
+          '<thead><tr style="background:#EAECEE;text-align:left">' +
+          ['Documento', 'Razón social leída', 'Comparable del conjunto', 'Período', 'Moneda / unidad']
+            .concat(RUBROS.map(function (r) { return r[3]; }))
+            .concat(['Estado']).map(function (t) { return '<th style="padding:4px 6px;white-space:nowrap">' + escH(t) + '</th>'; }).join('') +
+          '</tr></thead><tbody>';
+
+        lista.forEach(function (reg) {
+          var f = buscarFila(reg.rid);
+          var borde = reg.estado === 'error' ? COL.error : (reg.estado === 'aviso' ? COL.aviso : COL.ok);
+          h += '<tr style="border-bottom:1px solid #E5E7E9;background:' + (reg.sinCruce ? '#FEF9E7' : 'transparent') + '">';
+          h += '<td style="padding:4px 6px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escH((reg.fuente && reg.fuente.archivo) || '') + '">' +
+            escH((reg.fuente && reg.fuente.archivo) || '—') + '</td>';
+          h += '<td style="padding:4px 6px">' + escH(reg.nombreDoc || '—') + '</td>';
+          h += '<td style="padding:4px 6px"><select onchange="ptAsignarEeffComp(\'' + reg.rid + '\',this.value)" style="font-size:11px;max-width:170px">' +
+            '<option value="">— sin asignar —</option>' +
+            filas.map(function (x, i) {
+              return '<option value="' + i + '"' + (f && x.tr === f.tr ? ' selected' : '') + '>' + escH(x.name) + '</option>';
+            }).join('') + '</select>' +
+            (reg.cruce && reg.cruce.modo === 'tokens' ? '<div style="font-size:10px;color:' + COL.aviso + '">propuesto por similitud (' + Math.round(reg.cruce.punt * 100) + ' %)</div>' : '') +
+            (reg.cruce && reg.cruce.modo === 'id' ? '<div style="font-size:10px;color:' + COL.ok + '">por identificador</div>' : '') +
+            '</td>';
+          h += '<td style="padding:4px 6px;white-space:nowrap">' + escH(reg.periodo || '—') + '</td>';
+          h += '<td style="padding:4px 6px;white-space:nowrap">' + escH((reg.moneda || '—') + (reg.unidad ? ' / ' + reg.unidad : '')) + '</td>';
+
+          RUBROS.forEach(function (r) {
+            var cel = reg.cifras[r[0]] || { v: null };
+            var marca = '';
+            if (ESPEJO[r[0]] !== undefined && f) {
+              var prev = f[r[0]];
+              if (cel.v === null) marca = '<span style="color:' + COL.neutro + '"> ·</span>';
+              else if (prev === null || prev === undefined) marca = '<span style="color:' + COL.ok + '" title="valor nuevo"> +</span>';
+              else marca = cuadra(cel.v, prev)
+                ? '<span style="color:' + COL.ok + '" title="coincide con la tabla"> =</span>'
+                : '<span style="color:' + COL.aviso + '" title="difiere de la tabla: ' + escH(fnum(prev)) + '"> ≠</span>';
+            }
+            h += '<td style="padding:4px 6px;text-align:right;white-space:nowrap" ' +
+              (cel.rotulo ? 'title="' + escH(cel.rotulo + (cel.ubicacion ? ' · ' + cel.ubicacion : '')) + '"' : '') + '>' +
+              '<span contenteditable="true" style="display:inline-block;min-width:52px;text-align:right;outline:none;border-bottom:1px dotted #AAB" ' +
+              'onblur="ptEditarEeffComp(\'' + reg.rid + '\',\'' + r[0] + '\',this.textContent)">' + escH(fnum(cel.v)) + '</span>' +
+              (cel.derivado ? '<sup title="derivado por diferencia, no leído del documento">†</sup>' : '') + marca + '</td>';
+          });
+
+          h += '<td style="padding:4px 6px;color:' + borde + ';font-weight:600;white-space:nowrap">' + ICO[reg.estado] + ' ' + reg.estado + '</td>';
+          h += '</tr>';
+        });
+        h += '</tbody></table></div>';
+
+        /* verificación aritmética, agrupada y colapsable por compañía */
+        h += '<div style="margin-top:8px">';
+        lista.forEach(function (reg) {
+          var malos = reg.hallazgos.filter(function (x) { return x.estado !== 'ok'; }).length;
+          h += '<details style="margin-bottom:4px"><summary style="font-size:11.5px;cursor:pointer;color:' +
+            (reg.estado === 'error' ? COL.error : (reg.estado === 'aviso' ? COL.aviso : COL.ok)) + '">' +
+            ICO[reg.estado] + ' ' + escH(reg.nombre || reg.nombreDoc) + ' — ' +
+            (malos ? malos + ' punto(s) que requieren atención' : 'todas las verificaciones cuadran') + '</summary>' +
+            '<ul style="margin:4px 0 4px 18px;font-size:11px;padding:0">' +
+            reg.hallazgos.map(function (x) {
+              return '<li style="color:' + (COL[x.estado] || COL.neutro) + '">' + (ICO[x.estado] || '·') + ' ' + escH(x.msg) + '</li>';
+            }).join('') + '</ul></details>';
+        });
+        h += '</div>';
+
+        if (sinAplicar) {
+          if (conError) {
+            h += '<div class="alert-red" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FDEDEC;border:1px solid #E6B0AA;font-size:11.5px">' +
+              '<b>' + conError + ' compañía(s) no superan la verificación.</b> Las demás sí se pueden incorporar. Corrija la lectura en la tabla, ' +
+              'asigne la comparable que falte o incorpore bajo su responsabilidad.' +
+              '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' +
+              '<button type="button" class="btn mini solid" onclick="ptAplicarEeffCompTodas(false)">Incorporar las que cuadran</button>' +
+              '<button type="button" class="btn mini" style="background:#7B241C;color:#fff" onclick="ptAplicarEeffCompTodas(true)">Incorporar todas de todos modos (bajo mi responsabilidad)</button>' +
+              '</div></div>';
+          } else {
+            h += '<div style="margin-top:8px"><button type="button" class="btn solid" style="background:' + COL.ok + '" onclick="ptAplicarEeffCompTodas(false)">' +
+              'Incorporar al estudio (' + sinAplicar + ')</button></div>';
+          }
+        }
+        host.innerHTML = h;
+      }
+
+      /* ──────────────────── 11. EDICIÓN Y APLICACIÓN ──────────────────── */
+
+      window.ptEditarEeffComp = function (rid, clave, valor) {
+        var reg = regs()[rid]; if (!reg) return;
+        var v = num(String(valor || '').replace(/[—·]/g, '').trim());
+        var cel = reg.cifras[clave] || (reg.cifras[clave] = { v: null, rotulo: '', ubicacion: '' });
+        if (cel.v === v) return;
+        cel.v = v; cel.derivado = false; cel.editado = true;
+        reg.editado = true;
+        var f = buscarFila(rid), ctx = contexto();
+        validar(reg, { anio: ctx.anio, monedaDominante: ctx.monedaDominante, filaS: f ? f.s : null });
+        if (reg.aplicado) { reg.aplicado = new Date().toISOString(); reflejar(); }
+        actualizarRecibo(); pintarTodo();
+        try { saveActive(); } catch (e) { }
+      };
+
+      window.ptAsignarEeffComp = function (rid, indice) {
+        var reg = regs()[rid]; if (!reg) return;
+        var filas = filasComp();
+        /* se libera la fila anterior para que no queden dos registros peleando */
+        filas.forEach(function (x) { if (x.rid === rid && x.tr.dataset) x.tr.dataset.rid = ''; });
+        var f = (indice === '' || indice === null) ? null : filas[Number(indice)];
+        if (f) {
+          if (f.tr.dataset) f.tr.dataset.rid = rid;
+          reg.nombre = f.name; reg.nombreKey = nameKey(f.name);
+          if (f.idIQ) reg.idIQ = f.idIQ;
+          reg.vinculadoPor = 'manual'; reg.cruce = { modo: 'manual', punt: 1 };
+          reg.sinCruce = false;
+        } else { reg.sinCruce = true; reg.aplicado = null; }
+        var ctx = contexto();
+        validar(reg, { anio: ctx.anio, monedaDominante: ctx.monedaDominante, filaS: f ? f.s : null });
+        if (reg.aplicado) reflejar();
+        actualizarRecibo(); pintarTodo();
+        try { saveActive(); } catch (e) { }
+      };
+
+      window.ptAplicarEeffComp = function (rid, forzar) {
+        var reg = regs()[rid]; if (!reg) return false;
+        if (reg.sinCruce) { moToast('Asigne primero la comparable a la que corresponde el documento', 'amber'); return false; }
+        if (reg.estado === 'error' && !forzar) return false;
+        reg.aplicado = new Date().toISOString();
+        reg.aplicadoValores = {};
+        Object.keys(ESPEJO).forEach(function (k) { reg.aplicadoValores[k] = celda(reg, k); });
+        reg.forzado = !!(forzar && reg.estado === 'error');
+        return true;
+      };
+
+      window.ptAplicarEeffCompTodas = function (forzar) {
+        var n = 0;
+        conCifras().forEach(function (reg) { if (!reg.aplicado && window.ptAplicarEeffComp(reg.rid, forzar)) n++; });
+        if (!n) { moToast('No hay lecturas pendientes que se puedan incorporar', 'amber'); return; }
+        var r = reflejar();
+        actualizarRecibo();
+        try { calc(); } catch (e) { }
+        try { if (window.PT_CRITERIOS && PT_CRITERIOS.atipicos !== 'ninguno' && typeof ptFiltrarAtipicos === 'function') ptFiltrarAtipicos(); } catch (e) { }
+        try { saveActive(); } catch (e) { }
+        pintarTodo();
+        try { if (typeof ptPintarEeffComp === 'function') ptPintarEeffComp(); } catch (e) { }
+        avisarCuota();
+        var A = E();
+        moToast('Estados financieros incorporados: ' + n + ' compañía(s), ' + r.escritas + ' fila(s) actualizadas' +
+          (A.conBalance ? ' · ' + A.conBalance + ' con cuentas de balance: el ajuste de capital de trabajo ya es practicable' : ''), 'green');
+      };
+
+      /* ──────────────────── 12. CONSTANCIA EN EL INFORME ──────────────────── */
+
+      /* El Anexo C no se toca: adjGaleriaHTML('eeffcomp', …) ya imprime los
+         documentos. Esto añade la procedencia y el resultado de las
+         verificaciones, que es lo que sostiene la cifra frente a un
+         requerimiento. */
+      window.ptEeffCompIAInformeHTML = function () {
+        var lista = aplicados().filter(function (r) { return r.fuente && r.fuente.tipo !== 'excel'; });
+        if (!lista.length) return '';
+        var h = '<h3 class="rep">Procedencia y verificación de la información financiera de las comparables</h3>';
+        h += '<p class="norm">Las cifras financieras de las compañías comparables se tomaron de los estados financieros ' +
+          'aportados por la fuente de información, que se reproducen en el Anexo C. La identificación de cada rubro se ' +
+          'practicó por interpretación del rótulo contable empleado en cada documento y fue verificada contra las ' +
+          'identidades del propio estado financiero: utilidad bruta como diferencia entre ingresos y costo de ventas, ' +
+          'utilidad operacional como diferencia entre utilidad bruta y gastos operacionales, y ecuación patrimonial. ' +
+          'Se comprobó además que el período de cada juego de estados financieros corresponda al año gravable objeto ' +
+          'de análisis. <b>Las cifras se conservan en la moneda y en la unidad de expresión reportadas por la fuente, ' +
+          'sin conversión alguna</b>: el indicador de rentabilidad es un cociente entre magnitudes de la misma ' +
+          'compañía y no se altera por la unidad en que se expresen.</p>';
+
+        h += '<table class="rep"><thead><tr><th>Compañía</th><th>Documento</th><th>Período</th><th>Moneda y unidad</th>' +
+          '<th>Rótulo de ingresos</th><th>Rótulo de costo</th><th>Ubicación</th></tr></thead><tbody>';
+        lista.forEach(function (r) {
+          var cs = r.cifras.s || {}, cc = r.cifras.c || {};
+          h += '<tr><td>' + escH(r.nombre) + (r.nombreDoc && nameKey(r.nombreDoc) !== nameKey(r.nombre) ? ' <i>(en la fuente: ' + escH(r.nombreDoc) + ')</i>' : '') + '</td>' +
+            '<td>' + escH(r.fuente.archivo) + '</td><td>' + escH(r.periodo || '—') + '</td>' +
+            '<td>' + escH((r.moneda || '—') + (r.unidad ? ' · ' + r.unidad : '')) + '</td>' +
+            '<td>' + escH(cs.rotulo || '—') + '</td><td>' + escH(cc.rotulo || '—') + '</td>' +
+            '<td>' + escH(cs.ubicacion || '—') + '</td></tr>';
+        });
+        h += '</tbody></table>';
+
+        h += '<table class="rep"><thead><tr><th>Compañía</th><th>Verificación</th><th>Resultado</th></tr></thead><tbody>';
+        lista.forEach(function (r) {
+          r.hallazgos.forEach(function (x) {
+            h += '<tr><td>' + escH(r.nombre) + '</td><td>' + escH(etiquetaHallazgo(x.id)) + '</td><td>' + escH(x.msg) + '</td></tr>';
+          });
+        });
+        h += '</tbody></table>';
+
+        var forzadas = lista.filter(function (r) { return r.forzado; });
+        if (forzadas.length) {
+          h += '<p class="norm">Se incorporaron bajo responsabilidad expresa del contribuyente, pese a presentar ' +
+            'observaciones en la verificación aritmética, las cifras de: ' +
+            forzadas.map(function (r) { return escH(r.nombre); }).join(', ') + '.</p>';
+        }
+        var divergentes = lista.filter(function (r) {
+          if (!r.aplicadoValores) return false;
+          var f = buscarFila(r.rid); if (!f) return false;
+          return Object.keys(ESPEJO).some(function (k) {
+            var a = r.aplicadoValores[k];
+            return a !== null && a !== undefined && f[k] !== null && !cuadra(k === 'c' ? Math.abs(a) : a, f[k]);
+          });
+        });
+        if (divergentes.length) {
+          h += '<p class="norm">Con posterioridad a la incorporación, el analista ajustó manualmente cifras de: ' +
+            divergentes.map(function (r) { return escH(r.nombre); }).join(', ') +
+            '. Los valores que constan en el análisis son los ajustados, no los leídos del documento.</p>';
+        }
+        var A = E();
+        if (A.sinCruce && A.sinCruce.length) {
+          h += '<p class="norm">Se aportaron además estados financieros que no corresponden a ninguna compañía del ' +
+            'conjunto final de comparables: ' + A.sinCruce.map(function (x) { return escH(x); }).join(', ') +
+            '. Se conservan como soporte documental sin incidencia en el rango.</p>';
+        }
+        return h;
+      };
+
+      function etiquetaHallazgo(id) {
+        var M = {
+          falta_ingresos: 'Ingresos operacionales leídos', sin_utilidad: 'Utilidad operacional leída',
+          utilidad_bruta: 'Utilidad bruta = ingresos − costo', utilidad_operacional: 'Utilidad operacional = utilidad bruta − gastos',
+          periodo: 'Correspondencia del período con el año gravable', magnitud_unidad: 'Consistencia de la unidad de expresión',
+          ecuacion_patrimonial: 'Ecuación patrimonial', gastos_derivados: 'Origen de los gastos operacionales',
+          clasificacion_berry: 'Clasificación entre costo y gasto', signo_costo: 'Signo del costo de ventas',
+          magnitud_costo: 'Proporción del costo respecto de los ingresos', unidad: 'Unidad de expresión',
+          moneda: 'Moneda de presentación', vinculo: 'Correspondencia con la comparable', sin_cruce: 'Correspondencia con la comparable'
+        };
+        if (M[id]) return M[id];
+        if (id.indexOf('saldo_negativo_') === 0) return 'Signo del saldo de ' + etiqueta(id.replace('saldo_negativo_', '')).toLowerCase();
+        return id;
+      }
+
+      if (typeof window.renderReport === 'function' && !window.renderReport._pt18) {
+        var _renderPrev = window.renderReport;
+        window.renderReport = function () {
+          var r = _renderPrev.apply(this, arguments);
+          try {
+            var s = window.ptEeffCompIAInformeHTML();
+            if (s) { var d = $('doc'); if (d) d.insertAdjacentHTML('beforeend', s); }
+          } catch (e) { console.error('[Bloque 18] informe:', e); }
+          return r;
+        };
+        window.renderReport._pt18 = true;
+      }
+
+      /* ──────────────────── 13. ARRANQUE ──────────────────── */
+
+      function arrancar() {
+        try { E(); observarTabla(); marcarHuerfanos(); reflejar(); pintarTodo(); } catch (e) { console.error('[Bloque 18] arranque:', e); }
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(arrancar, 1900); });
+      else setTimeout(arrancar, 1900);
+
+      /* ——— fin del Bloque 18 ——— */
     })();
 
   </script>
