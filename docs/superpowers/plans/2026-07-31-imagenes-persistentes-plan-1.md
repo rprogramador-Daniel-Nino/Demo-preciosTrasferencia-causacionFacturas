@@ -515,15 +515,35 @@ test('extrae el PDF de referencia real', async () => {
 
   assert.strictEqual(r.paginas, 112, 'número de páginas');
   assert.strictEqual(r.etiquetado, true, 'el PDF de referencia está etiquetado');
+  assert.ok(r.html.length > 1000, 'el HTML salió vacío');
 
-  /* Los dos logos de ENDGAME se conservan; las 16 páginas del anexo firmado
-     no, porque son del ejercicio 2024 y no deben viajar al informe siguiente. */
-  assert.ok(r.imagenes.length >= 2, 'se esperaban al menos los 2 logos, hubo ' + r.imagenes.length);
-  assert.ok(r.imagenes.length <= 6, 'se colaron páginas escaneadas como recursos: ' + r.imagenes.length);
+  /* Las 16 páginas escaneadas del anexo firmado producen hueco y no se
+     guardan: son del ejercicio 2024 y no deben viajar al informe siguiente.
+     Los huecos NO dependen de que la imagen se decodifique, solo de su tamaño
+     sobre la página, así que esta cuenta sí es fiable fuera del navegador. */
   assert.ok(r.huecos.length >= 10, 'se esperaban huecos por el anexo, hubo ' + r.huecos.length);
 
-  assert.ok(r.imagenes.every((i) => i.dataUrl.startsWith('data:image/')), 'dataUrl mal formada');
-  assert.ok(r.html.length > 1000, 'el HTML salió vacío');
+  /* Ninguna página escaneada debe haberse colado como recurso reutilizable. */
+  assert.ok(r.imagenes.length <= 6, 'se colaron escaneos como recursos: ' + r.imagenes.length);
+
+  /* Toda imagen que SÍ se haya decodificado debe traer una dataUrl válida.
+     No se exige un número mínimo: fuera del navegador pdf.js deja sin
+     resolver las imágenes que no se renderizan, así que la cuenta exacta
+     varía. La verificación de que los dos logos aparecen de verdad es
+     manual, en el navegador, en la Task 6. */
+  assert.ok(
+    r.imagenes.every((i) => typeof i.dataUrl === 'string' && i.dataUrl.startsWith('data:image/')),
+    'alguna dataUrl mal formada'
+  );
+});
+
+test('una imagen que pdf.js no resuelve no cuelga la extracción', async () => {
+  /* Regresión: sin límite de tiempo en objs.get, una sola imagen sin resolver
+     dejaba la extracción colgada para siempre. Verificado sobre el PDF real:
+     3 de 5 imágenes de las primeras páginas no resuelven fuera del navegador. */
+  const datos = new Uint8Array(readFileSync(RUTA));
+  const r = await extraerReferencia(datos);
+  assert.ok(r, 'la extracción no terminó');
 });
 
 test('un buffer que no es PDF falla con un mensaje claro', async () => {
@@ -560,6 +580,20 @@ const MAPA_ETIQUETAS = {
 
 const escapar = (s) =>
   String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/* pdf.js resuelve los objetos de imagen mientras renderiza la página. Si no se
+   renderiza —caso de los tests, que corren sin canvas—, `objs.get` puede no
+   llamar nunca a su callback. Sin este límite la extracción se cuelga entera
+   por una sola imagen. Verificado: de 5 imágenes en las primeras 8 páginas del
+   PDF de referencia, 3 no resuelven fuera del navegador. */
+const TIEMPO_LIMITE_IMAGEN = 5000;
+
+function conTiempoLimite(promesa, ms) {
+  return Promise.race([
+    promesa,
+    new Promise((res) => setTimeout(() => res(null), ms)),
+  ]);
+}
 
 export async function extraerReferencia(datos) {
   let doc;
@@ -628,7 +662,10 @@ export async function extraerReferencia(datos) {
    de color del original, así que se normaliza a RGB antes de empaquetar. */
 async function aDataUrl(pagina, clave) {
   try {
-    const obj = await new Promise((res) => pagina.objs.get(clave, res));
+    const obj = await conTiempoLimite(
+      new Promise((res) => pagina.objs.get(clave, res)),
+      TIEMPO_LIMITE_IMAGEN
+    );
     if (!obj || !obj.width || !obj.height || !obj.data) return null;
     const { width, height, data } = obj;
     const canales = data.length / (width * height);
@@ -665,7 +702,7 @@ function aHTML(nodo, texto) {
 - [ ] **Step 5: Correr los tests**
 
 Run: `npm test`
-Expected: PASS. 44 tests (42 previos + 2 nuevos). El primero tarda unos segundos: procesa 112 páginas reales.
+Expected: PASS. 45 tests (42 previos + 3 nuevos). El primero tarda unos segundos: procesa 112 páginas reales.
 
 - [ ] **Step 6: Verificar el reparto contra el PDF real**
 
@@ -833,7 +870,7 @@ export const leerPlantilla = (plantillaId) =>
 - [ ] **Step 4: Correr los tests**
 
 Run: `npm test`
-Expected: PASS. 48 tests (44 previos + 4 nuevos).
+Expected: PASS. 49 tests (45 previos + 4 nuevos).
 
 - [ ] **Step 5: Commit**
 
@@ -1005,7 +1042,7 @@ Se acepta ademas .pdf en la carga de referencia; antes solo .docx via mammoth."
 ## Verificación final del plan 1
 
 ```bash
-npm test                                   # 48 tests en verde
+npm test                                   # 49 tests en verde
 git status --short                         # limpio
 ```
 
