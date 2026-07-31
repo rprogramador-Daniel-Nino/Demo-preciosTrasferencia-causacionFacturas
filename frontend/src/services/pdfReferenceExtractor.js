@@ -6,6 +6,17 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { fraccionDePagina, detectarPaginasDeAnexo } from './clasificadorImagenes.js';
 import { codificarPNG, aBase64 } from './png.js';
 
+/* En Node la librería desactiva el worker y autoconfigura esta ruta, por eso
+   los tests pasan sin tocar nada. En el navegador no: getDocument construye el
+   worker de forma síncrona y lanza si workerSrc no está puesto. Se resuelve con
+   la URL del propio módulo para que Vite lo empaquete. */
+if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/legacy/build/pdf.worker.mjs',
+    import.meta.url
+  ).href;
+}
+
 /* pdf.js resuelve los objetos de imagen mientras renderiza la página. Sin
    renderizar —caso de los tests, que corren sin canvas— `objs.get` puede no
    llamar nunca a su callback. Sin este límite la extracción se cuelga entera

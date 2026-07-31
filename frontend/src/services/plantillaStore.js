@@ -16,10 +16,6 @@ const ALMACENES = ['plantillas', 'recursos', 'anexos'];
    distintas: 'a:b' + 'c' y 'a' + 'b:c'. */
 const esc = (s) => String(s).replace(/%/g, '%25').replace(/:/g, '%3A');
 
-export function clave(estudioId, recursoId) {
-  return esc(estudioId) + ':' + esc(recursoId);
-}
-
 /* Identifica una plantilla por el contenido del PDF del que salió, no por el
    estudio: la plantilla es muy parecida entre clientes, así que dos estudios
    que carguen el mismo documento comparten el marcado y no se vuelve a pagar. */
