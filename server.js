@@ -22,7 +22,7 @@ if (!GEMINI_API_KEY) {
 // 12 MB: la lectura de estados financieros de comparables escaneados manda
 // varias páginas rasterizadas en base64 en un solo cuerpo, y 2 MB las rechazaba
 // con 413. Firebase Functions admite 32 MB, así que no hay que tocar functions/.
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // Sirve el HTML y cualquier asset estático desde public/ (misma carpeta que despliega Firebase Hosting)
 app.use(express.static(path.join(__dirname, 'public')));
