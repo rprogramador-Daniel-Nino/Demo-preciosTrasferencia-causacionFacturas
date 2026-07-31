@@ -32,7 +32,10 @@ tocaste la aplicación; describe qué verificaste y cómo.
 `index.html` (raíz) es la **fuente**; `public/index.html` es un **artefacto generado**
 (`scripts/sync-index.js` copia raíz→public, nunca al revés). Editar `public/index.html`
 directamente produce drift y el cambio se pierde en el siguiente `npm run build`.
-Lo mismo aplica a `vendor/` → `public/vendor/`.
+`public/vendor/` (pdf.js, `pdf.min.js`, `pdf.worker.min.js`) **no** sigue esa regla: no hay
+`vendor/` en la raíz del repo, así que `scripts/sync-index.js` nunca copia nada ahí (el copiado
+`vendor/` → `public/vendor/` solo se dispara si existe una carpeta `vendor/` en la raíz).
+`public/vendor/` está commiteado directamente y se edita ahí mismo.
 
 ## Arquitectura
 
@@ -134,8 +137,9 @@ que todos editan. Antes de empezar a aplicar cambios propios, correr:
 Trae las ramas remotas, reporta qué cambió cada compañero **mapeado al bloque concreto de
 `index.html` que toca** —no "conflicto en index.html", que en 13 000 líneas no informa nada—
 e integra de menor a mayor solapamiento, abortando ante cualquier conflicto fuera de
-`public/`. Correrla al empezar, no al terminar: el punto es enterarse antes de duplicar
-trabajo.
+`public/index.html` y `public/gestor-reportes/` (los únicos artefactos que regenera
+`npm run build`; `public/vendor/` está commiteado directamente y no es generado). Correrla al
+empezar, no al terminar: el punto es enterarse antes de duplicar trabajo.
 
 No requiere instalación. Vive en `.claude/skills/` y llega con `git pull`.
 
