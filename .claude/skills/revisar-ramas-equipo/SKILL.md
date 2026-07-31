@@ -1,6 +1,6 @@
 ---
 name: revisar-ramas-equipo
-description: Usar al empezar a trabajar en este repo o antes de aplicar cambios propios — trae las ramas remotas de los compañeros, reporta qué cambiaron y dónde se solapa con tu trabajo en index.html, y las integra abortando ante cualquier conflicto fuera de public/index.html y public/gestor-reportes/.
+description: Usar al empezar a trabajar en este repo, antes de aplicar cambios propios, y otra vez al cerrar cada spec o feature antes del merge — trae las ramas remotas de los compañeros, reporta qué cambiaron y dónde se solapa con tu trabajo en index.html, y las integra abortando ante cualquier conflicto fuera de public/index.html y public/gestor-reportes/.
 ---
 
 # Revisar las ramas del equipo antes de seguir
@@ -10,6 +10,32 @@ todos editan. El riesgo no es el conflicto de git —ese avisa— sino descubrir
 tarde que alguien ya arregló lo que estás arreglando.
 
 Anunciar al empezar: "Usando revisar-ramas-equipo para ver qué cambiaron tus compañeros."
+
+## Cuándo correrla
+
+**Dos momentos, no uno:**
+
+1. **Al empezar** un spec, feature o corrección, antes de tocar código.
+2. **Al cerrarlo**, antes del merge o del PR.
+
+Correrla solo al arrancar deja una ventana abierta: lo que un compañero publique
+mientras dura tu trabajo no se ve hasta el siguiente arranque, y para entonces la
+integración ya llega sucia. El objetivo es que el equipo avance hacia el mismo
+punto, no que cada quien descubra al final lo que hicieron los demás.
+
+## Lo que esta skill NO detecta
+
+El script mira **commits ya publicados**. No puede ver un choque que todavía no
+existe en git.
+
+Si el trabajo que vas a empezar **retira, renombra o reescribe** un archivo que
+un compañero viene tocando, eso no aparece en ningún escaneo: su trabajo aún no
+está publicado, o el conflicto no es de líneas sino de que su código se queda sin
+sitio donde vivir. Ese aviso es hacia adelante y va por fuera de la herramienta —
+hay que hablarlo antes de empezar.
+
+Al reportar (paso 4), si notas que el trabajo planeado toca archivos que un
+compañero editó recientemente, dilo aunque el solapamiento salga vacío.
 
 ## Procedimiento
 
