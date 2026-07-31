@@ -2829,7 +2829,8 @@
         adj: (typeof ADJ !== 'undefined') ? JSON.parse(JSON.stringify(ADJ)) : null,
         motor: (typeof MOTOR !== 'undefined') ? JSON.parse(JSON.stringify(MOTOR)) : null,
         eeffIA: window.PT_EEFF_IA ? JSON.parse(JSON.stringify(window.PT_EEFF_IA)) : null,
-        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null
+        aiMatch: window.AI_MATCH_COMPS ? JSON.parse(JSON.stringify(window.AI_MATCH_COMPS)) : null,
+        continuidadTabla: window.PT_CONTINUIDAD_TABLA_KEYS ? JSON.parse(JSON.stringify(window.PT_CONTINUIDAD_TABLA_KEYS)) : null
       };
       CAMPOS_ESTUDIO.forEach(id => { const el = $(id); if (el) s[id] = el.value; });
       return s;
@@ -2853,6 +2854,7 @@
       const hostIA = document.getElementById('ptEeffIA'); if (hostIA && !s.eeffIA) hostIA.innerHTML = '';
       try { if (typeof ptPintarEeffIA === 'function') ptPintarEeffIA(); } catch (e) { }
       window.AI_MATCH_COMPS = s.aiMatch ? JSON.parse(JSON.stringify(s.aiMatch)) : null;
+      window.PT_CONTINUIDAD_TABLA_KEYS = s.continuidadTabla ? JSON.parse(JSON.stringify(s.continuidadTabla)) : {};
       try {
         const elIa = $('mo_ia_status');
         if (elIa) {
@@ -3630,9 +3632,10 @@ ${textoTotal}`;
         o.holders = meta.holders || '';
         o.holding = /\b(investment holding company|holding company|sociedad de inversi[oó]n|sociedad holding)\b/i.test(DESCS[o.name] || '')
           || /^6719/.test(o.sic || '')
-          || /\bholdings?\b/i.test(o.name || '');
+          || /\b(holdings?|grupo|group|groupe|gruppo)\b/i.test(o.name || '');
         o.saldoNeg = ['ar', 'inv', 'ap'].filter(k => o[k] !== null && o[k] < 0);
         o.previa = !!previas[nameKey(o.name)];
+        o.continuidadTabla = !!(window.PT_CONTINUIDAD_TABLA_KEYS && PT_CONTINUIDAD_TABLA_KEYS[nameKey(o.name)]);
         return o;
       }).filter(x => x);
       _moCache = { sig, rows: out }; return out;
@@ -3680,9 +3683,9 @@ ${textoTotal}`;
       var topeIndep = (window.PT_CRITERIOS && PT_CRITERIOS.independenciaTope) || 50;
       if (socioMax !== null && socioMax > topeIndep) return { out: 'No independiente: un solo accionista concentra el ' + socioMax.toFixed(2) + ' % de la propiedad, superior al ' + topeIndep + ' % admitido; existe vinculación por control (Art. 260-1 E.T.).' };
       if (o.saldoNeg && o.saldoNeg.length && cfg.saldoneg === 'excluir') return { out: 'Saldo negativo en ' + o.saldoNeg.map(k => ({ ar: 'Cuentas por cobrar', inv: 'Inventario', ap: 'Cuentas por pagar' }[k])).join('/') + ': dato no verosímil, se excluye de la muestra' };
-      if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO') return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
-      if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO') return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
-      if (o.perfil === 'EMPRESARIO') return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
+      if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO' && !o.continuidadTabla) return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
+      if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO' && !o.continuidadTabla) return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
+      if (o.perfil === 'EMPRESARIO' && cfg.act !== 'amplio' && !o.continuidadTabla) return { out: 'Empresario pleno (IP propia, riesgo de mercado): funciones/activos/riesgos incomparables (Art. 260-4 E.T.)' };
       if (o.perdida && cfg.perd === 'excluir') return { out: 'Pérdida operativa: excluida por criterio conservador del analista (posibles circunstancias económicas anormales)' };
       /* ── Curación de candidatas por IA (Business Description real de Capital IQ) ──
          Solo aplica a filas con ID IQ (vinieron del Excel de Capital IQ); las agregadas a
@@ -3693,7 +3696,7 @@ ${textoTotal}`;
       if (o.id && window.AI_MATCH_COMPS && !descTextIA.trim()) {
         return { out: 'Sin descripción de negocio de Capital IQ para verificar la actividad (ID ' + o.id + ')' };
       }
-      if (aiRec && aiRec.coincide === false) {
+      if (aiRec && aiRec.coincide === false && !o.continuidadTabla) {
         return { out: 'Rechazada por IA: la descripción de negocio no coincide con la actividad (' + (aiRec.motivo || 'sin motivo detallado') + ')' };
       }
       /* ── Coincidencia con la actividad específica (nicho/especialidad) ── */
@@ -3701,7 +3704,7 @@ ${textoTotal}`;
       /* Exclusión por especialidad: solo en modo estricto si la candidata cuenta con descripción/SIC y 0 coincidencia.
          En modo estándar/amplio, 0 coincidencias asigna un puntaje bajo en el factor de especialidad (peso del 40%)
          para priorizar las que sí coinciden, sin descartar masivamente cuando faltan descripciones detalladas. */
-      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc) {
+      if (actM.hayAct && actM.posibles > 0 && actM.hits === 0 && cfg.act === 'estricto' && actM.tieneDesc && !o.continuidadTabla) {
         const resumen = (act.resumen || '').slice(0, 90);
         return { out: 'Sin coincidencia con la actividad específica: la descripción del candidato no coincide con ninguna palabra clave del perfil (' + resumen + (resumen.length >= 90 ? '…' : '') + ')' };
       }
@@ -3722,7 +3725,7 @@ ${textoTotal}`;
       const scBase = wA * fA + wK * fK + wG * fG + wT * fT + wR * fR;
       const bonoContinuidad = o.previa ? 0.08 : 0;
       const sc = scBase + bonoContinuidad;
-      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : '')].filter(x => x).join(', ');
+      const raz = ['perfil ' + o.perfil.toLowerCase(), kTag, gTag, tTag, (o.perdida ? 'con pérdida (' + cfg.perd + ')' : ''), (o.previa ? 'continuidad con el año anterior' : ''), (o.continuidadTabla ? 'comparable confirmada en la tabla del estudio anterior' : '')].filter(x => x).join(', ');
       return { sc, raz };
     }
     function moMostrarModalSinCandidatas(motivo) {
@@ -3931,6 +3934,20 @@ ${textoPrompt}`;
       return resultados;
     }
     function _moIaInfo(texto) { const el = $('mo_ia_status'); if (el) el.textContent = texto || ''; }
+    function _ptBloqueComparablesConfirmadas() {
+      var tabla = (window.PT_ANTERIOR && PT_ANTERIOR.comparablesTabla) || [];
+      if (!tabla.length || !window.COMP_META) return '';
+      var idx = {};
+      Object.keys(COMP_META).forEach(function (nombre) { idx[nameKey(nombre)] = nombre; });
+      var lineas = [];
+      tabla.forEach(function (t) {
+        var real = idx[nameKey(t.name)];
+        var desc = real && COMP_META[real] && COMP_META[real].desc;
+        if (desc) lineas.push('- ' + real + ': ' + desc.slice(0, 300));
+      });
+      if (!lineas.length) return '';
+      return 'Estas empresas fueron confirmadas como comparables reales en el estudio de precios de transferencia del año anterior (su actividad SÍ coincide con la de la empresa examinada) — úsalas como referencia de qué tipo de negocio es realmente comparable:\n' + lineas.join('\n') + '\n\n';
+    }
     async function curarCandidatosConIA(list) {
       window.PT_ULTIMO_IMPORT_COMPS = list;
       const act = (typeof getActividadEspecifica === 'function') ? getActividadEspecifica() : null;
@@ -3939,6 +3956,7 @@ ${textoPrompt}`;
       if (!evaluables.length) { _moIaInfo('ℹ Ninguna candidata importada trae ID IQ + Business Description para curar con IA; el motor usará el emparejamiento por palabras clave.'); return; }
       window.PT_CURANDO_IA = true;
       window.AI_MATCH_COMPS = { porId: {}, fecha: new Date().toISOString(), actividadUsada: act.resumen, fuenteExcel: (window.CIQ_FUENTE && CIQ_FUENTE.archivo) || '' };
+      const bloqueConfirmadas = _ptBloqueComparablesConfirmadas();
       const CONCURRENCIA = 6;
       const lotes = _ptChunk(evaluables, 60);
       let evaluadas = 0, fallidas = 0;
@@ -3952,6 +3970,7 @@ ${textoPrompt}`;
         const prompt =
           'Eres un experto en precios de transferencia que revisa comparables de Capital IQ.\n\n' +
           'La empresa examinada tiene esta actividad económica real:\n"' + act.resumen + '"\n\n' +
+          bloqueConfirmadas +
           'A continuación hay una lista de empresas candidatas con su Business Description real de Capital IQ (en inglés). ' +
           'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, mismos productos/servicios o función equivalente), ' +
           'sin importar el idioma en que esté escrita la descripción. No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
@@ -7241,6 +7260,7 @@ se guía la descarga manual
         } catch (e) { console.warn('[PARCHE] mapeo extendido de comparables:', e); }
         /* el universo completo queda disponible para el motor de continuidad */
         try { if (out.length > 20) window.CIQ_UNIVERSO = out.slice(); } catch (e) { }
+        try { setTimeout(function () { try { ptCruceContinuidadTablaAuto(); } catch (e) { console.warn('[PARCHE] cruce de continuidad automático:', e); } }, 0); } catch (e) { }
         return out;
       };
 
@@ -7337,6 +7357,63 @@ se guía la descarga manual
       }
 
       window.PT_CONTINUIDAD = null;
+
+      window.PT_CONTINUIDAD_TABLA_KEYS = window.PT_CONTINUIDAD_TABLA_KEYS || {};
+
+      /* Cruce automático (sin botón) de la tabla "Muestra Compañías comparables"
+         del estudio anterior contra el universo de Capital IQ ya importado.
+         Se dispara sola desde smartMapRows() (al terminar de importar el Excel)
+         y desde ptProcesarTextoAnterior() en el Bloque 3 (al terminar de leer el
+         estudio anterior) — cubre los dos órdenes de carga posibles. */
+      window.ptCruceContinuidadTablaAuto = function () {
+        var tabla = (window.PT_ANTERIOR && PT_ANTERIOR.comparablesTabla) || [];
+        if (!tabla.length || !CIQ_UNIVERSO.length) return null;
+        var porNombre = {};
+        CIQ_UNIVERSO.forEach(function (u) { if (u.name) porNombre[K(u.name)] = u; });
+        var existentes = {};
+        ptComparablesEnTabla().forEach(function (c) { existentes[K(c.name)] = 1; });
+        var encontradas = [], noEncontradas = [], sinDatos = [];
+        var nuevasKeys = {};
+        var frag = document.createDocumentFragment(), n = 0;
+        tabla.forEach(function (p) {
+          var hit = porNombre[K(p.name)];
+          if (!hit) { noEncontradas.push(p.name); return; }
+          if (hit.s === null || hit.op === null) { sinDatos.push(p.name); return; }
+          nuevasKeys[K(hit.name)] = { name: hit.name, id: hit.id || '' };
+          encontradas.push(hit.name);
+          if (existentes[K(hit.name)]) return;
+          _registrar(hit);
+          frag.appendChild(compRow(_fila(hit)));
+          existentes[K(hit.name)] = 1; n++;
+        });
+        window.PT_CONTINUIDAD_TABLA_KEYS = nuevasKeys;
+        if (n) { $('cbody').appendChild(frag); calc(); }
+        ptPintarCruceContinuidadTabla(encontradas, noEncontradas, sinDatos);
+        return { encontradas: encontradas, noEncontradas: noEncontradas, sinDatos: sinDatos };
+      };
+
+      function ptPintarCruceContinuidadTabla(encontradas, noEncontradas, sinDatos) {
+        sinDatos = sinDatos || [];
+        var host = document.getElementById('ptContTablaAlerta');
+        if (!noEncontradas.length && !sinDatos.length) { if (host) host.innerHTML = ''; return; }
+        if (!host) {
+          var ancla = document.getElementById('ptZonaConfig') || document.getElementById('compalert') || $('cbody');
+          if (!ancla || !ancla.parentNode) return;
+          host = document.createElement('div'); host.id = 'ptContTablaAlerta';
+          ancla.parentNode.insertBefore(host, ancla);
+        }
+        var partes = [];
+        if (noEncontradas.length) {
+          partes.push('<b>⚠ ' + noEncontradas.length + ' comparable(s) de la tabla del estudio anterior no aparecen en el universo de este año:</b> ' +
+            noEncontradas.map(escH).join(', ') +
+            '. No aparece en el universo de búsqueda del año corriente (posible fusión, deslistamiento o cambio de razón social). Verificar en la fuente antes de descartarla.');
+        }
+        if (sinDatos.length) {
+          partes.push('<b>⚠ ' + sinDatos.length + ' comparable(s) aparecen en el universo pero sin información financiera completa del período:</b> ' +
+            sinDatos.map(escH).join(', ') + '. No permite calcular el indicador; verificar en la fuente.');
+        }
+        host.innerHTML = '<div style="margin:8px 0;padding:8px 10px;border:1px solid #C0392B;background:#FDEDEC;border-radius:6px;font-size:11.5px">' + partes.join('<br>') + '</div>';
+      }
 
       window.ptComparablesContinuidad = async function (objetivo) {
         var prev = await ptComparablesAnterior();
@@ -7442,7 +7519,7 @@ se guía la descarga manual
         if (!u || !u.name) return;
         if (u.desc) DESCS[u.name] = u.desc;
         if (u.id) COMP_ID[u.name] = u.id;
-        COMP_META[u.name] = { id: u.id || '', ticker: u.ticker || '', sic: u.sic || '', pais: u.country || '', desc: u.desc || '', estado: u.estado || '', tipo: u.tipoCia || '' };
+        COMP_META[u.name] = Object.assign({}, COMP_META[u.name] || {}, { id: u.id || '', ticker: u.ticker || '', sic: u.sic || '', pais: u.country || '', desc: u.desc || '', estado: u.estado || '', tipo: u.tipoCia || '' });
       }
 
       window.ptAplicarMantenidas = function () {
@@ -7450,6 +7527,7 @@ se guía la descarga manual
         var existentes = {}; ptComparablesEnTabla().forEach(function (x) { existentes[K(x.name)] = 1; });
         var frag = document.createDocumentFragment(), n = 0;
         c.mantenidas.forEach(function (m) {
+          window.PT_CONTINUIDAD_TABLA_KEYS[K(m.cand.name)] = { name: m.cand.name, id: m.cand.id || '' };
           if (existentes[K(m.cand.name)]) return;
           _registrar(m.cand);
           frag.appendChild(compRow(_fila(m.cand))); n++;
@@ -7773,6 +7851,41 @@ se guía la descarga manual
         return out;
       }
 
+      /* Tabla "Muestra Compañías comparables" del estudio anterior: patrón
+         recurrente en todos los estudios (con o sin el prefijo "Tabla N."),
+         con columnas Número / Nombre de la Compañía / Ámbito (Internacional|
+         Nacional). El texto llega aquí ya aplanado por pdfjs (una página =
+         una sola línea larga, ver cargarInformeAnterior más abajo), así que
+         NO se puede depender de saltos de línea entre filas: se localiza el
+         encabezado y se recorren las filas por posición dentro del bloque de
+         texto que sigue, usando el valor de Ámbito (Internacional/Nacional, en
+         cualquier capitalización) solo como delimitador de fin de fila — su
+         contenido no se conserva. */
+      function ptTablaComparablesEstudioAnterior(texto) {
+        var out = [], vistos = {};
+        var t = String(texto || '');
+        var rxTitulo = /(?:tabla\s*\d+\.?\s*)?(?:muestra\s+)?compañ[ií]as?\s+comparables?/gi;
+        var mTitulo;
+        while ((mTitulo = rxTitulo.exec(t))) {
+          var desde = mTitulo.index + mTitulo[0].length;
+          var corte = t.slice(desde).search(/fuente\s*:/i);
+          var bloque = corte >= 0 ? t.slice(desde, desde + corte) : t.slice(desde, desde + 6000);
+          var rxFila = /(\d{1,3})\s+([A-ZÁÉÍÓÚÑ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.,'()\-\s]{2,90}?)\s+(INTERNACIONAL|NACIONAL)\b/gi;
+          var m, bloqueHasRows = false;
+          while ((m = rxFila.exec(bloque))) {
+            bloqueHasRows = true;
+            var nombre = m[2].replace(/\s+/g, ' ').trim();
+            if (nombre.length < 3) continue;
+            var k = nombre.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (vistos[k]) continue;
+            vistos[k] = 1;
+            out.push({ numero: parseInt(m[1], 10), name: nombre });
+          }
+          if (bloqueHasRows) break;
+        }
+        return out;
+      }
+
       /* ───────────────────────────────────────────────────────────────────────
          3. CARGA DEL INFORME ANTERIOR (docx / doc / pdf / json)
          ─────────────────────────────────────────────────────────────────────── */
@@ -7833,8 +7946,17 @@ se guía la descarga manual
       window.ptProcesarTextoAnterior = function (texto, nombre) {
         var r = ptDistribuir(texto, nombre);
         var comps = ptComparablesDelTexto(texto);
+        var tablaComps = ptTablaComparablesEstudioAnterior(texto);
+        if (tablaComps.length) {
+          var vistosFusion = {};
+          comps.forEach(function (c) { vistosFusion[nameKey(c.name)] = 1; });
+          tablaComps.forEach(function (tc) {
+            var k = nameKey(tc.name);
+            if (!vistosFusion[k]) { vistosFusion[k] = 1; comps.push({ name: tc.name, id: '', sic: '', desc: '' }); }
+          });
+        }
         window.PT_ANTERIOR = {
-          fuente: nombre, texto: texto, comparables: comps,
+          fuente: nombre, texto: texto, comparables: comps, comparablesTabla: tablaComps,
           paginas: window.__PT_PAGINAS_PREV || null,
           descripcionNegocio: [INFOGEN.productos, INFOGEN.clientes, INFOGEN.sector].filter(Boolean).join(' '),
           fecha: new Date().toISOString()
@@ -7846,6 +7968,7 @@ se guía la descarga manual
            porque esta reasignación posterior de window.cargarInformeAnterior
            la sustituye por completo. */
         if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
+        try { if (typeof ptCruceContinuidadTablaAuto === 'function') ptCruceContinuidadTablaAuto(); } catch (e) { }
 
         /* El texto se guarda como insumo, marcado para que NO se reproduzca */
         try {

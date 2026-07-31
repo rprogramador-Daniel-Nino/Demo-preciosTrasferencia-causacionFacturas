@@ -1,4 +1,4 @@
-import { fmt, pctf, pliOf, quart, adjustInfo, num, getUvtValue } from '../utils/calculations';
+import { fmt, pctf, pliOf, ratios, quart, adjustInfo, num, getUvtValue } from '../utils/calculations';
 
 /**
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
@@ -28,10 +28,24 @@ export function hydrateExactWordTemplate(rawHtml, study) {
   };
   const tPLI = pliOf(T, kind);
 
+  const useAdj = study.useadj || false;
+  const interestRate = (num(study.prime) || 0) / 100;
+  const tR = ratios(T);
+
   let stats = null;
   if (study.comparables && study.comparables.length >= 3) {
     const activeSeries = study.comparables
-      .map(c => pliOf({ s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) }, kind))
+      .map(c => {
+        const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
+        const pliVal = pliOf(rawVal, kind);
+        if (pliVal === null) return null;
+        let adjVal = 0;
+        const cR = ratios(rawVal);
+        if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
+          adjVal = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
+        }
+        return pliVal + adjVal;
+      })
       .filter(val => val !== null)
       .sort((a, b) => a - b);
 
