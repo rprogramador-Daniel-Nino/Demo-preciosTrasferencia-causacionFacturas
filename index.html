@@ -7746,21 +7746,24 @@ se guía la descarga manual
       function ptTablaComparablesEstudioAnterior(texto) {
         var out = [], vistos = {};
         var t = String(texto || '');
-        var rxTitulo = /(?:tabla\s*\d+\.?\s*)?(?:muestra\s+)?compañ[ií]as?\s+comparables?/i;
-        var mTitulo = rxTitulo.exec(t);
-        if (!mTitulo) return out;
-        var desde = mTitulo.index + mTitulo[0].length;
-        var corte = t.slice(desde).search(/fuente\s*:/i);
-        var bloque = corte >= 0 ? t.slice(desde, desde + corte) : t.slice(desde, desde + 6000);
-        var rxFila = /(\d{1,3})\s+([A-ZÁÉÍÓÚÑ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.,'()\-\s]{2,90}?)\s+(INTERNACIONAL|NACIONAL)\b/g;
-        var m;
-        while ((m = rxFila.exec(bloque))) {
-          var nombre = m[2].replace(/\s+/g, ' ').trim();
-          if (nombre.length < 3) continue;
-          var k = nombre.toUpperCase().replace(/[^A-Z0-9]/g, '');
-          if (vistos[k]) continue;
-          vistos[k] = 1;
-          out.push({ numero: parseInt(m[1], 10), name: nombre });
+        var rxTitulo = /(?:tabla\s*\d+\.?\s*)?(?:muestra\s+)?compañ[ií]as?\s+comparables?/gi;
+        var mTitulo;
+        while ((mTitulo = rxTitulo.exec(t))) {
+          var desde = mTitulo.index + mTitulo[0].length;
+          var corte = t.slice(desde).search(/fuente\s*:/i);
+          var bloque = corte >= 0 ? t.slice(desde, desde + corte) : t.slice(desde, desde + 6000);
+          var rxFila = /(\d{1,3})\s+([A-ZÁÉÍÓÚÑ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.,'()\-\s]{2,90}?)\s+(INTERNACIONAL|NACIONAL)\b/g;
+          var m, bloqueHasRows = false;
+          while ((m = rxFila.exec(bloque))) {
+            bloqueHasRows = true;
+            var nombre = m[2].replace(/\s+/g, ' ').trim();
+            if (nombre.length < 3) continue;
+            var k = nombre.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (vistos[k]) continue;
+            vistos[k] = 1;
+            out.push({ numero: parseInt(m[1], 10), name: nombre });
+          }
+          if (bloqueHasRows) break;
         }
         return out;
       }
