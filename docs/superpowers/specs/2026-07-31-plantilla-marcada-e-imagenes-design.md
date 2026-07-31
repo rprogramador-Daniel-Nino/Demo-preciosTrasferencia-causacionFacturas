@@ -17,7 +17,7 @@ Todos verificados contra el repositorio y contra el PDF de referencia
 |---|---|---|
 | 1 | Las imágenes se pierden **al recargar la página**, no al leerlas | `ReporteGenerador.jsx` guarda el HTML en `useState`; no hay persistencia. Confirmado por un compañero del equipo: en Word **sí se ven**, así que el formato de exportación actual sirve y no hace falta MHTML. |
 | 2 | El PDF de referencia trae **20 imágenes**: 2 logos (~11 KB), 16 páginas escaneadas del anexo EEFF firmado (3.6 MB) y 3 sin identificar (225 KB) | Los dos grupos tienen ciclos de vida opuestos. El anexo es específico del año 2024 y no debe arrastrarse a un informe de 2025. |
-| 3 | `exactTemplateMapper.js` sustituye **por valor literal**, no por marcador | De 11 cifras de dinero de la plantilla, 6 tienen regla y **5 no**, incluido `901.337.576`, el NIT de End Game. Un informe generado para otro cliente sale hoy con el NIT y tres cifras financieras de End Game. |
+| 3 | `exactTemplateMapper.js` sustituye **por valor literal**, no por marcador | De 16 cifras de siete o más dígitos en la plantilla, 10 tienen regla y **6 no**. Un informe generado para otro cliente sale hoy con el NIT de End Game y cinco cifras financieras suyas. Detalle en la fase 0. |
 | 4 | El PDF de referencia está **etiquetado** (`/StructTreeRoot`, `/Marked true`) | Lleva estructura semántica, así que reconstruir la plantilla desde él es viable vía `getStructTree()`. Para PDFs sin etiquetar habrá que degradar. |
 | 5 | `pdf.js 3.11.174` está vendorizado en `public/vendor/` pero **no es dependencia de `frontend/`** | Hay que agregarlo al proyecto React. Expone `getStructTree` y `paintImageXObject`, que es lo que hace falta. |
 | 6 | `masterTemplate.js` ya contiene `<img src="IMAGE_PLACEHOLDER" />` | Alguien se topó antes con este problema y dejó el hueco marcado. |
@@ -57,9 +57,27 @@ por construcción, pero solo cuando `plantillaRenderer.js` sustituya al mapper v
 al final. Hasta entonces cada informe generado para un cliente distinto de End Game seguiría
 saliendo con su NIT.
 
-Se agregan a `exactTemplateMapper.js` reglas para las cinco cifras hoy huérfanas —`901.337.576`
-(NIT), `983.180.000`, `247.447.456`, `206.129.230` y la variante `435.357.400`— apuntando a los
-campos correspondientes del estudio. Es un cambio de minutos sobre código existente.
+Se agregan a `exactTemplateMapper.js` reglas para las seis cifras hoy huérfanas:
+
+| Cifra | Apariciones | Qué es | Campo del estudio |
+|---|---|---|---|
+| `901.337.576` | 1 | NIT de End Game, escrito como `901.337.576-6` | `nit` |
+| `983.180.000` | 2 | Monto del ajuste de plena competencia | calculado por `adjustInfo` |
+| `1.247.447.456` | 1 | Inversiones asociadas | `t_inv_assoc` |
+| `4.703.375` | 1 | Intangibles | `t_intang` |
+| `83.801.656` | 1 | Diferidos | `t_dif` |
+| `206.129.230` | 1 | Total activos no corrientes | `t_act_nocurr` |
+
+Los cuatro campos de EEFF **ya los captura `IngestaCifras.jsx`**; el mapper simplemente nunca
+los consulta. No hay que tocar la ingesta.
+
+**Los patrones deben delimitarse para no partir números más largos.** `247.447.456` y
+`435.357.400` *parecen* cifras huérfanas si se busca sin delimitar, pero son la cola de
+`1.247.447.456` y de `3.435.357.400`; reemplazarlas por separado corrompería ambas. Usar
+`(?<![\d.])` y `(?![\d.])` alrededor de cada patrón. El NIT lleva además dígito de
+verificación pegado (`-6`), que debe conservarse o recalcularse.
+
+Es un cambio acotado sobre código existente.
 
 No es la solución buena: sigue siendo sustitución por valor literal, y el próximo dato de End
 Game que alguien agregue a la plantilla volverá a filtrarse. Es una contención mientras se
