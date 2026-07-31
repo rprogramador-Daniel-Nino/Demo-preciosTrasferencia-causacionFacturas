@@ -128,7 +128,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     // Estilos compatibles con Word (.doc)
     const exportStyle = `body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:0 24px;color:#222;line-height:1.7}h1{font-size:22px;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px}h2{border-bottom:1px solid #E2E8F0;padding-bottom:4px;margin-top:26px;font-size:16px;color:#0E1726}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}th{background:#0E1726;color:#fff;text-align:left;padding:8px 12px}td{padding:8px 12px;border-bottom:1px solid #E2E8F0}`;
     const wordCSS = 'body{counter-reset:secpt}h2::before{content:""}p,li,td{text-align:justify}';
-    
+
     // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable
     const cleanHtml = htmlContent
       .replace(/background-color:\s*#F0FDF4;\s*/g, '')
@@ -174,6 +174,8 @@ export default function ReporteGenerador({ study, estudioId }) {
                 if (e.target.files[0]) {
                   handleTemplateUpload(e.target.files[0]);
                 }
+                // Añade esta línea para limpiar el input
+                e.target.value = null;
               }}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
@@ -196,8 +198,8 @@ export default function ReporteGenerador({ study, estudioId }) {
             <span>Cargando plantilla...</span>
           </div>
         ) : (
-          <div 
-            dangerouslySetInnerHTML={{ __html: htmlContent }} 
+          <div
+            dangerouslySetInnerHTML={{ __html: htmlContent }}
             className="prose dark:prose-invert max-w-none focus:outline-none"
             contentEditable
             onBlur={(e) => setHtmlContent(e.currentTarget.innerHTML)}
