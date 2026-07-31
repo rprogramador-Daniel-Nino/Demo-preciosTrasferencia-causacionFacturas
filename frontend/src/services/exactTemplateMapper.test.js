@@ -43,6 +43,30 @@ test('no se parte un número largo por su cola', () => {
   assert.ok(!salida.includes('1.5.000.000'), 'quedó un número corrupto');
 });
 
+test('la fila de accionista principal no se congela con los datos de End Game cuando coincide con el vinculado', () => {
+  // La plantilla real tiene "END GAME INTERACTIVE INC"/"ESTADOS UNIDOS" tanto
+  // en las secciones del vinculado como en la fila del accionista principal
+  // (Tabla 6. Composición Accionaria) — misma empresa, mismo país, en el
+  // estudio original. Si el reemplazo del vinculado corre primero y es
+  // global, no queda texto literal para que el reemplazo del accionista
+  // encuentre después: la fila de accionistas se congela con End Game.
+  const html =
+    '<p>Funciones llevadas a cabo por el vinculado END GAME INTERACTIVE INC en las operaciones.</p>' +
+    '<p>País vinculado</p><p>ESTADOS UNIDOS</p>' +
+    '<tr>\n<td>\n<p>\nEND GAME INTERACTIVE INC.\n</p>\n</td>\n<td>\n<p>\nESTADOS UNIDOS\n</p>\n</td>\n<td>\n<p>\n200.000\n</p>\n</td>\n<td>\n<p>\n200.000.000\n</p>\n</td>\n<td>\n<p>\n100%\n</p>\n</td>\n</tr>';
+  const estudio = {
+    ...otroCliente,
+    vinc: 'PARTNER GAMES LLC',
+    pais_vinc: 'CANADA',
+    accionistas: [{ nombre: 'HOLDCO ASIA PTE LTD', pais: 'SINGAPUR', acciones: 500000, valor_capital: 900000000 }]
+  };
+  const salida = hydrateExactWordTemplate(html, estudio);
+  assert.ok(salida.includes('HOLDCO ASIA PTE LTD'), 'la fila de accionistas debió reflejar el nombre del accionista, no quedarse en End Game ni en el vinculado');
+  assert.ok(salida.includes('SINGAPUR'), 'la fila de accionistas debió reflejar el país del accionista');
+  assert.ok(salida.includes('500.000'), 'la fila de accionistas debió reflejar las acciones del accionista');
+  assert.ok(salida.includes('900.000.000'), 'la fila de accionistas debió reflejar el valor de capital del accionista');
+});
+
 test('sin datos del estudio no se filtran los de End Game', () => {
   const html = '<p>NIT 901.337.576-6</p><td>4.703.375</td>';
   const salida = hydrateExactWordTemplate(html, {});
