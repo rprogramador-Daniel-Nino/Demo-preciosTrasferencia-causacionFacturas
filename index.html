@@ -1328,6 +1328,12 @@
             <label class="f"><span class="l">Cuentas x pagar</span><input class="i mono" id="t_ap"
                 placeholder="Ej: 27.255.376" oninput="calcD()"></label>
           </div>
+          <div class="row3">
+            <label class="f"><span class="l">Activos totales</span><input class="i mono" id="t_at"
+                placeholder="Ej: 1.750.000.000" oninput="calcD()"><span
+                style="font-size:10.5px;color:var(--muted)">Solo se exige si el indicador elegido es el Rendimiento
+                sobre Activos (ROA). No es el patrimonio bruto fiscal: es el total del activo del balance.</span></label>
+          </div>
 
           <div id="ptEeffIA" style="margin-top:8px"></div>
 
@@ -1393,6 +1399,8 @@
                 <option value="MO">MO — Margen Operacional (Uo/Ventas)</option>
                 <option value="MB">MB — Margen Bruto (Ub/Ventas)</option>
                 <option value="Berry">Berry (Ub / Gastos operativos)</option>
+                <option value="MCG">MCG — Margen sobre Costos y Gastos (Uo / (Costos + Gastos))</option>
+                <option value="ROA">ROA — Rendimiento sobre Activos (Uo / Activos totales)</option>
               </select></label>
             <label class="f" style="display:none"><span class="l">Comparables a incluir</span><select class="i"
                 id="cmode" onchange="calc()">
@@ -2886,7 +2894,11 @@
         const pliElem = $('pli'); if (!pliElem) return;
         const kind = pliElem.value, cmode = ($('cmode') && $('cmode').value) || 'all', useAdj = $('useadj') ? $('useadj').checked : false;
         const r = (num($('prime') ? $('prime').value : '') || 0) / 100;
-        const T = { s: num($('t_s') ? $('t_s').value : ''), c: num($('t_c') ? $('t_c').value : ''), op: num($('t_op') ? $('t_op').value : ''), ar: num($('t_ar') ? $('t_ar').value : ''), inv: num($('t_inv') ? $('t_inv').value : ''), ap: num($('t_ap') ? $('t_ap').value : '') };
+        /* at = activos totales del balance, necesarios solo para el ROA: es el
+           único indicador cuyo denominador no se deriva de ventas, costo y
+           utilidad. No confundir con «patrimonio», que es patrimonio bruto
+           fiscal a 31-dic capturado para los umbrales del art. 260-5. */
+        const T = { s: num($('t_s') ? $('t_s').value : ''), c: num($('t_c') ? $('t_c').value : ''), op: num($('t_op') ? $('t_op').value : ''), ar: num($('t_ar') ? $('t_ar').value : ''), inv: num($('t_inv') ? $('t_inv').value : ''), ap: num($('t_ap') ? $('t_ap').value : ''), at: num($('t_at') ? $('t_at').value : '') };
         const tPLI = pliOf(T, kind), tR = ratios(T);
         if ($('temo')) $('temo').textContent = (PLIN[kind] || '') + ' ' + (tPLI === null ? '—' : pctf(tPLI));
         const series = [];
@@ -2895,11 +2907,20 @@
           [...cbody.children].forEach(tr => {
             const v = [...tr.querySelectorAll('input,select')].map(i => i.value);
             const name = v[0], amb = v[1];
-            const c = { s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]) };
+            /* name, rid e id viajan con el objeto para que pliOf pueda resolver
+               los rubros que no están en la tabla —activos totales, para el ROA—
+               desde el almacén de EEFF de comparables (Bloque 18). Sin identidad
+               no habría forma de saber a qué comparable pertenece el objeto. */
+            const c = { s: num(v[2]), c: num(v[3]), op: num(v[4]), ar: num(v[5]), inv: num(v[6]), ap: num(v[7]), name: name, rid: (tr.dataset && tr.dataset.rid) || '', id: (v[9] || '').trim() };
             let inc = cmode === 'all' ? true : (cmode === 'intl' ? amb === 'Int' : amb === 'Nac');
             if (inc && typeof MOTOR !== 'undefined' && MOTOR.activo) { const mk = typeof nameKey === 'function' ? nameKey(name) : name; if (MOTOR.sel && MOTOR.sel[mk] === false) inc = false; }
             let pli = pliOf(c, kind), adj = 0; const cR = ratios(c);
-            if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) adj = r * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
+            /* El ajuste de capital de trabajo está expresado en puntos de margen
+               sobre ventas, así que solo es sumable a un indicador de esa misma
+               dimensión. Berry ya estaba excluido; MCG (sobre costos y gastos) y
+               ROA (sobre activos) se excluyen por la misma razón: sumarles el
+               ajuste sería incoherente en unidades. */
+            if (useAdj && kind !== 'Berry' && kind !== 'MCG' && kind !== 'ROA' && tR && cR && tR.apC !== null && cR.apC !== null) adj = r * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
             const apli = pli === null ? null : pli + adj;
             const moCell = tr.querySelector('.mo');
             if (moCell) {
@@ -13679,6 +13700,11 @@ se guía la descarga manual
               c[10] = (tr.dataset && tr.dataset.rid) || '';
             });
           } catch (e) { }
+          /* readForm arma s.t con los seis rubros de siempre; los activos totales
+             son el séptimo y solo se usan para el ROA, así que se añaden aquí en
+             lugar de tocar el original. Los estudios anteriores no lo traen y
+             quedan con at undefined, que pliOf trata como ausente. */
+          try { if (!s.t) s.t = {}; s.t.at = num($('t_at') ? $('t_at').value : ''); } catch (e) { }
           try { s.eeffComp = JSON.parse(JSON.stringify(E())); } catch (e) { s.eeffComp = null; }
           return s;
         };
@@ -13694,6 +13720,10 @@ se guía la descarga manual
              corregido, pero las claves ya envenenadas siguen ahí. */
           if (typeof s === 'string') { try { s = JSON.parse(s); } catch (e) { } }
           var r = _writeFormPrev.call(this, s);
+          try {
+            var elAt = $('t_at');
+            if (elAt) elAt.value = (s && s.t && s.t.at !== null && s.t.at !== undefined) ? s.t.at : '';
+          } catch (e) { }
           try {
             if (s && s.eeffComp && typeof s.eeffComp === 'object') window.PT_EEFF_COMP = JSON.parse(JSON.stringify(s.eeffComp));
             else window.PT_EEFF_COMP = { cargado: null, archivo: '', actualizadas: 0, total: 0, sinCruce: [], conBalance: 0 };
@@ -13759,20 +13789,227 @@ se guía la descarga manual
          es pura y no necesita el almacén (pliOf recibe {s,c,op} sin nombre). Los
          gastos LEÍDOS del documento sirven para VERIFICAR ese derivado, no para
          calcularlo. */
+      /* Resuelve los activos totales de una comparable: el único rubro que no se
+         deriva del estado de resultados. Para la parte examinada llega ya en el
+         objeto (T.at, del campo t_at); para una comparable se busca en el almacén
+         por rid, por identificador y por nombre. calc() pasa name/rid/id justo
+         para esto. */
+      function activosDe(o) {
+        if (!o) return null;
+        if (typeof o.at === 'number') return o.at;
+        var R = regs(), k;
+        if (o.rid && R[o.rid]) return celda(R[o.rid], 'at');
+        if (o.id) for (k in R) if (R[k].idIQ && String(R[k].idIQ).toUpperCase() === String(o.id).toUpperCase()) return celda(R[k], 'at');
+        if (o.name) { var nk = nameKey(o.name); if (nk) for (k in R) if (R[k].nombreKey === nk) return celda(R[k], 'at'); }
+        return null;
+      }
+
       if (typeof window.pliOf === 'function' && !window.pliOf._pt18) {
         var _pliOfPrev = window.pliOf;
         window.pliOf = function (o, kind) {
           var base = _pliOfPrev.apply(this, arguments);
           if (base !== null || !o) return base;
+          var s = o.s, c = o.c, op = o.op;
+          var hay = function (x) { return x !== null && x !== undefined; };
+
+          /* Berry, MCG: los gastos operativos son s − c − op, que es lo que el
+             Anexo C ya imprime como «Gastos operacionales». Se derivan del propio
+             estado, así que no hacen falta datos nuevos. Los gastos LEÍDOS del
+             documento sirven para verificar ese derivado, no para calcularlo. */
           if (kind === 'Berry') {
-            if (o.s === null || o.s === undefined || o.c === null || o.c === undefined || o.op === null || o.op === undefined) return null;
-            var ub = o.s - o.c, go = ub - o.op;
+            if (!hay(s) || !hay(c) || !hay(op)) return null;
+            var ub = s - Math.abs(c), go = ub - op;
             if (!(go > 0)) return null;   /* denominador nulo o negativo: sin sentido económico */
             return ub / go;
+          }
+          if (kind === 'MCG') {
+            /* MCG = utilidad operacional / (costos + gastos operacionales). Con
+               los gastos derivados, el denominador se simplifica:
+                  c + go = c + (s − c − op) = s − op
+               de modo que basta con ventas y utilidad operacional. */
+            if (!hay(s) || !hay(op)) return null;
+            var base2 = s - op;
+            if (!(base2 > 0)) return null;
+            return op / base2;
+          }
+          if (kind === 'ROA') {
+            if (!hay(op)) return null;
+            var at = activosDe(o);
+            if (!hay(at) || !(at > 0)) return null;
+            return op / at;
           }
           return null;
         };
         window.pliOf._pt18 = true;
+      }
+
+      /* PLIN es const, pero es un objeto: se puede extender. Alimenta la etiqueta
+         de #temo y los encabezados del informe. */
+      try { Object.assign(PLIN, { MCG: 'Margen sobre Costos y Gastos (MCG)', ROA: 'Rendimiento sobre Activos (ROA)' }); } catch (e) { }
+
+      /* Quiénes se quedan fuera del rango con el indicador elegido, calculado en
+         el momento y no acumulado: dejar el rango vacío sin explicación es el
+         defecto que arrastraba Berry. */
+      function pliFaltantes(kind) {
+        var out = [];
+        filasComp().forEach(function (f) {
+          var o = { s: f.s, c: f.c, op: f.op, name: f.name, rid: f.rid, id: f.idIQ };
+          if (window.pliOf(o, kind) === null) out.push(f.name);
+        });
+        return out;
+      }
+
+      function avisoPLI() {
+        var kind = ($('pli') && $('pli').value) || 'MO';
+        if (kind !== 'MCG' && kind !== 'ROA' && kind !== 'Berry') return '';
+        var faltan = pliFaltantes(kind), h = '';
+        var etq = { Berry: 'la Razón Berry', MCG: 'el Margen sobre Costos y Gastos', ROA: 'el Rendimiento sobre Activos' }[kind];
+        if (kind === 'ROA' && !num($('t_at') ? $('t_at').value : '')) {
+          h += '<div style="font-size:11.5px;color:' + COL.error + ';margin-top:6px">✗ Falta diligenciar <b>Activos totales</b> de la parte examinada en la tarjeta de estados financieros: sin ese dato no hay indicador propio con el que comparar el rango.</div>';
+        }
+        if (faltan.length) {
+          h += '<div style="font-size:11.5px;color:' + COL.aviso + ';margin-top:6px">⚠ ' + etq + ' no es calculable en ' +
+            faltan.length + ' comparable(s)' + (kind === 'ROA' ? ', porque no tienen activos totales cargados' : '') +
+            ', así que quedan fuera del rango: ' + faltan.slice(0, 6).map(escH).join(' · ') +
+            (faltan.length > 6 ? ' y ' + (faltan.length - 6) + ' más' : '') + '.</div>';
+        }
+        return h;
+      }
+
+      /* El código DIAN del indicador de rentabilidad del Formato 1125 se resuelve
+         hoy como MO→1, MB→2 y CUALQUIER OTRO→3, de modo que MCG y ROA se
+         declararían con el código de Berry. El catálogo oficial no está en el
+         repositorio, así que se devuelve vacío y se advierte: mejor un campo en
+         blanco que un código equivocado en una declaración. */
+      if (typeof window.code1125_indicador === 'function' && !window.code1125_indicador._pt18) {
+        var _codePrev = window.code1125_indicador;
+        window.code1125_indicador = function (kind) {
+          if (kind === 'MCG' || kind === 'ROA') {
+            if (!window._pt18AvisoCode) {
+              window._pt18AvisoCode = true;
+              try {
+                moToast('El código DIAN del indicador de rentabilidad para ' + kind + ' debe confirmarse contra la resolución vigente del Formato 1125 antes de radicar: el campo se deja en blanco, no se asume un código.', 'red');
+              } catch (e) { }
+            }
+            return '';
+          }
+          return _codePrev.apply(this, arguments);
+        };
+        window.code1125_indicador._pt18 = true;
+      }
+
+      /* Sustentación del método y justificación del indicador. Las originales
+         tratan cualquier kind desconocido como Berry (methodJust) o caen a un
+         texto genérico (_pt315JustificacionAuto), y la elección del indicador es
+         exigencia expresa del estudio: aquí van los textos propios de MCG y ROA. */
+      var DOCTRINA = {
+        MCG: 'El <b>Margen sobre Costos y Gastos</b> se adopta cuando la remuneración de la parte examinada se ' +
+          'determina sobre la base de los costos y gastos en que incurre, como ocurre en la prestación de servicios ' +
+          'intragrupo, la manufactura por encargo y la maquila. En esos supuestos las ventas no constituyen la base ' +
+          'económica del retorno, porque la parte examinada no asume el riesgo de mercado del producto final: ' +
+          'recupera sus costos y gastos más un margen convenido. El indicador se calcula como la utilidad ' +
+          'operacional sobre la suma de costos y gastos operacionales.',
+        ROA: 'El <b>Rendimiento sobre Activos</b> se adopta cuando la utilidad de la actividad depende de los activos ' +
+          'empleados en ella, como en la distribución con inversión relevante en inventario y cartera o en la ' +
+          'manufactura intensiva en capital. El indicador relaciona la utilidad operacional con el total del activo, ' +
+          'de modo que compara la eficiencia con que cada compañía remunera los recursos invertidos, y no el margen ' +
+          'obtenido sobre el volumen de ventas.'
+      };
+
+      if (typeof window.methodJust === 'function' && !window.methodJust._pt18) {
+        var _methodPrev = window.methodJust;
+        window.methodJust = function (kind) {
+          if (DOCTRINA[kind]) return 'Se adopta ' + DOCTRINA[kind].charAt(0).toLowerCase() + DOCTRINA[kind].slice(1);
+          return _methodPrev.apply(this, arguments);
+        };
+        window.methodJust._pt18 = true;
+      }
+
+      if (typeof window._pt315JustificacionAuto === 'function' && !window._pt315JustificacionAuto._pt18) {
+        var _justPrev = window._pt315JustificacionAuto;
+        window._pt315JustificacionAuto = function () {
+          var kind = ($('pli') && $('pli').value) || 'MO';
+          if (!DOCTRINA[kind]) return _justPrev.apply(this, arguments);
+          var oper = ($('oper') && $('oper').value) || 'la operación analizada';
+          var ent = ($('ent') && $('ent').value) || 'la parte examinada';
+          var natur = ($('natur') && $('natur').value) || '';
+          return '<h3 class="rep">Justificación de la selección del indicador de rentabilidad</h3>' +
+            '<p class="norm">Para el análisis de «' + escH(oper) + '» de ' + escH(ent) + ' se adopta el <b>' +
+            escH(PLIN[kind] || kind) + '</b>, conforme al método del Margen Transaccional de Utilidad de Operación ' +
+            '(num. 6 del art. 260-3 E.T.). ' + DOCTRINA[kind] +
+            (natur ? ' La operación es de naturaleza «' + escH(natur) + '», lo que resulta consistente con el indicador escogido.' : '') +
+            '</p>';
+        };
+        window._pt315JustificacionAuto._pt18 = true;
+      }
+
+      /* Los activos totales de la parte examinada ya se leen del documento en la
+         lectura de EEFF con IA (el Bloque 8 pide total_activos pero no tenía
+         dónde ponerlos). Al aplicar la lectura, se lleva también al campo nuevo. */
+      if (typeof window.ptAplicarEEFFIA === 'function' && !window.ptAplicarEEFFIA._pt18) {
+        var _aplicarIAPrev = window.ptAplicarEEFFIA;
+        window.ptAplicarEEFFIA = function () {
+          var r = _aplicarIAPrev.apply(this, arguments);
+          try {
+            var d = window.PT_EEFF_IA && window.PT_EEFF_IA.datos, el = $('t_at');
+            var v = d && d.total_activos && (typeof d.total_activos === 'object' ? d.total_activos.valor : d.total_activos);
+            if (el && !String(el.value || '').trim() && v !== null && v !== undefined && v !== '') {
+              el.value = String(Math.round(Math.abs(num(String(v)))));
+              try { calc(); } catch (e) { }
+              moToast('Activos totales de la parte examinada tomados de la lectura de los estados financieros: ' + fnum(num(el.value)), 'green');
+            }
+          } catch (e) { }
+          return r;
+        };
+        window.ptAplicarEEFFIA._pt18 = true;
+      }
+
+      /* El Excel del rango con fórmulas vivas está escrito solo para MO y MB:
+         `kind === 'MB' ? …margen bruto… : …margen operacional…`, de modo que con
+         cualquier otro indicador exporta fórmulas de MO y las rotula «Margen
+         Operacional». Ya ocurría con Berry. Un archivo con cifras que no
+         corresponden al indicador del estudio es peor que no tener archivo, así
+         que se bloquea con explicación en lugar de exportar algo equivocado. */
+      if (typeof window.exportarRangoExcel === 'function' && !window.exportarRangoExcel._pt18) {
+        var _expRangoPrev = window.exportarRangoExcel;
+        window.exportarRangoExcel = function () {
+          var kind = ($('pli') && $('pli').value) || 'MO';
+          if (kind !== 'MO' && kind !== 'MB') {
+            try {
+              moToast('La exportación del rango con fórmulas vivas solo está implementada para el Margen Operacional y el Margen Bruto. Con ' +
+                (PLIN[kind] || kind) + ' generaría un archivo rotulado como Margen Operacional y con fórmulas que no corresponden al indicador del estudio. Use el informe o la exportación de comparables.', 'red');
+            } catch (e) { }
+            return null;
+          }
+          return _expRangoPrev.apply(this, arguments);
+        };
+        window.exportarRangoExcel._pt18 = true;
+      }
+
+      /* El aviso de «ajuste de capital de trabajo inoperante» excluye a Berry
+         porque Berry no lo usa. MCG y ROA quedaron excluidos del ajuste por la
+         misma razón dimensional, así que el aviso tampoco les aplica: dejarlo
+         reclamaría cuentas de balance que ese indicador no necesita. */
+      if (typeof window.ptAvisoAjusteInoperante === 'function' && !window.ptAvisoAjusteInoperante._pt18) {
+        var _avisoAjPrev = window.ptAvisoAjusteInoperante;
+        window.ptAvisoAjusteInoperante = function () {
+          var kind = ($('pli') && $('pli').value) || '';
+          if (kind === 'MCG' || kind === 'ROA') return '';
+          return _avisoAjPrev.apply(this, arguments);
+        };
+        window.ptAvisoAjusteInoperante._pt18 = true;
+      }
+
+      /* calc() se envuelve solo para que el aviso de indicadores no calculables se
+         repinte con cada recálculo. No llama a calc, así que no hay ciclo. */
+      if (typeof window.calc === 'function' && !window.calc._pt18) {
+        var _calcPrev = window.calc;
+        window.calc = function () {
+          var r = _calcPrev.apply(this, arguments);
+          try { pintarResumen(); } catch (e) { }
+          return r;
+        };
+        window.calc._pt18 = true;
       }
 
       /* ──────────────────── 6. LECTURA DEL DOCUMENTO ──────────────────── */
@@ -14265,7 +14502,11 @@ se guía la descarga manual
       function pintarResumen() {
         var host = document.getElementById('ptEeffCompResumen'); if (!host) return;
         var A = E(), lista = aplicados(), total = filasComp().length, leidos = conCifras().length;
-        if (!leidos && !lista.length) { host.innerHTML = ''; return; }
+        var pli = avisoPLI();
+        /* el aviso del indicador se pinta aunque no haya lecturas: es justo cuando
+           no hay cifras cargadas que hace falta explicar por qué el rango sale
+           vacío o incompleto */
+        if (!leidos && !lista.length) { host.innerHTML = pli; return; }
         var h = '<div style="font-size:11.5px;padding:8px 10px;border-radius:6px;background:#F4F6F7;border:1px solid #D5D8DC">';
         h += '<b>' + lista.length + ' de ' + total + '</b> comparable(s) con estados financieros incorporados';
         if (A.conBalance) h += ' · <b>' + A.conBalance + '</b> con cuentas de balance (el ajuste de capital de trabajo ya es practicable)';
@@ -14276,7 +14517,7 @@ se guía la descarga manual
             A.fallidos.map(function (f) { return escH(f.archivo) + ' (' + escH(f.motivo) + ')'; }).join(' · ') + '</div>';
         }
         h += '</div>';
-        host.innerHTML = h;
+        host.innerHTML = h + pli;
       }
 
       function pintarFilas() {

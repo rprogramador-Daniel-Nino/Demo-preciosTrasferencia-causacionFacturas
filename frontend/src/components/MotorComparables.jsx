@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator, 
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini } from '../services/comparablesEngine';
 import { parseEEFFComparableOCR } from '../services/eeffParser';
+import { parsePriorStudyFile } from '../services/priorStudyParser';
 
 export default function MotorComparables({ study, updateStudy }) {
+  // Prior Study Ingestion State
+  const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
+  const [priorStudyMsg, setPriorStudyMsg] = useState('');
+  const [estudioAnteriorInfo, setEstudioAnteriorInfo] = useState(study.estudioAnterior || null);
+
   // State for Extracted Company Activity
   const [actividad, setActividad] = useState(study.actividad_especifica || 'Prestación de servicios interactivos, diseño digital y soluciones de tecnología.');
   const [editingAct, setEditingAct] = useState(false);
@@ -37,19 +43,47 @@ export default function MotorComparables({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   const [selectionFunnel, setSelectionFunnel] = useState(null);
-  const [selectedCompForUpload, setSelectedCompForUpload] = useState(null);
   const [uploadingEEFF, setUploadingEEFF] = useState(false);
   const [eeffLog, setEeffLog] = useState({});
 
   useEffect(() => {
     updateStudy({ 
       actividad_especifica: actividad,
+      estudioAnterior: estudioAnteriorInfo,
       motorConfig: engineConfig,
       universo,
       comparables, 
       cmode 
     });
-  }, [actividad, engineConfig, universo, comparables, cmode]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode]);
+
+  // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
+  const handlePriorStudyUpload = async (file) => {
+    if (!file) return;
+    setLoadingPriorStudy(true);
+    setPriorStudyMsg('🤖 Leyendo informe del año anterior con Gemini AI…');
+    try {
+      const result = await parsePriorStudyFile(file);
+      if (result) {
+        if (result.actividad_especifica) {
+          setActividad(result.actividad_especifica);
+          setActInput(result.actividad_especifica);
+        }
+        const info = {
+          fuente: result.filename,
+          actividad: result.actividad_especifica,
+          comparables: result.comparables || []
+        };
+        setEstudioAnteriorInfo(info);
+        setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad y ${result.comparables.length} comparables de la tabla anterior.`);
+      }
+    } catch (err) {
+      console.error("Error al leer informe del año anterior:", err);
+      setPriorStudyMsg('⚠️ No se pudo procesar el informe anterior con IA.');
+    } finally {
+      setLoadingPriorStudy(false);
+    }
+  };
 
   // Handle Capital IQ File Upload
   const handleImportExcel = async (file) => {
@@ -73,7 +107,7 @@ export default function MotorComparables({ study, updateStudy }) {
     }
     setLoadingSelection(true);
     try {
-      const priorComps = (study.estudioAnterior && study.estudioAnterior.comparables) || [];
+      const priorComps = (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [];
       
       // 1. Scoring & Filtering
       let result = scoreCandidates(universo, engineConfig, actividad, priorComps);
@@ -210,6 +244,46 @@ export default function MotorComparables({ study, updateStudy }) {
   return (
     <div className="space-y-6">
 
+      {/* ══════ BANNER: INGESTA DEL ESTUDIO DEL AÑO ANTERIOR ══════ */}
+      <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm space-y-4">
+        <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3">
+          <div className="flex items-center gap-2">
+            <BookOpen className="w-5 h-5 text-[#0FA3A1]" />
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+              Documentación Comprobatoria del Año Anterior (Fuente Histórica)
+            </h3>
+          </div>
+          {estudioAnteriorInfo && (
+            <span className="text-xs bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-1 rounded-full font-semibold border border-emerald-200 dark:border-emerald-800">
+              ✓ {estudioAnteriorInfo.fuente}
+            </span>
+          )}
+        </div>
+
+        <p className="text-xs text-zinc-500">
+          Cargue aquí el informe o estudio de precios de transferencia del año anterior (.pdf, .docx, .json, .txt). El sistema detectará automáticamente la actividad de la empresa y la matriz de comparables anteriores para garantizar el principio de continuidad.
+        </p>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white px-4 py-2.5 rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm">
+            <FileUp className="w-4 h-4" />
+            <span>{loadingPriorStudy ? 'Analizando con Gemini AI...' : '📎 Cargar Informe del Año Anterior'}</span>
+            <input
+              type="file"
+              accept=".pdf,.docx,.doc,.json,.txt"
+              disabled={loadingPriorStudy}
+              onChange={(e) => e.target.files[0] && handlePriorStudyUpload(e.target.files[0])}
+              className="hidden"
+            />
+          </label>
+          {priorStudyMsg && (
+            <span className="text-xs font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 px-3 py-1.5 rounded-lg">
+              {priorStudyMsg}
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* ══════ BANNER: ACTIVIDAD DE LA EMPRESA ══════ */}
       <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm space-y-3">
         <div className="flex items-center justify-between">
@@ -221,7 +295,7 @@ export default function MotorComparables({ study, updateStudy }) {
           </div>
           <button
             onClick={() => { setEditingAct(!editingAct); setActInput(actividad); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900 text-xs font-semibold text-zinc-700 dark:text-zinc-300 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900 text-xs font-semibold text-zinc-700 dark:text-zinc-300 transition-colors cursor-pointer"
           >
             <Edit3 className="w-3.5 h-3.5" />
             Editar
