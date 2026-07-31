@@ -208,3 +208,53 @@ test('un window.X tras un banner sin título conserva el formato estable', () =>
   const src = ['/* ====', 'window.MOTOR = {'].join('\n');
   assert.deepStrictEqual(extraerAnclas(src), [{ linea: 2, etiqueta: 'window.MOTOR' }]);
 });
+
+/* ── orden de integración: main es una rama más, no un contador ── */
+const { ordenIntegracion } = require('./analisis-ramas');
+
+const ramaCon = (nombre, faltan, integrable = true) => ({
+  rama: nombre,
+  integrable,
+  commits_que_me_faltan: Array.from({ length: faltan }, (_, i) => ({ sha: 'a' + i })),
+});
+
+test('ordenIntegracion pone main primero, antes de los compañeros', () => {
+  const orden = ordenIntegracion(ramaCon('origin/main', 2), [
+    ramaCon('origin/juandev', 3),
+    ramaCon('origin/otro', 1),
+  ]);
+  assert.deepStrictEqual(orden, ['origin/main', 'origin/juandev', 'origin/otro']);
+});
+
+test('ordenIntegracion conserva el orden de compañeros que ya venía dado', () => {
+  // ordenarPorSolapamiento los deja de menor a mayor roce; aquí no se reordena.
+  const orden = ordenIntegracion(null, [ramaCon('origin/z', 1), ramaCon('origin/a', 1)]);
+  assert.deepStrictEqual(orden, ['origin/z', 'origin/a']);
+});
+
+test('ordenIntegracion excluye main si no trae nada nuevo', () => {
+  const orden = ordenIntegracion(ramaCon('origin/main', 0), [ramaCon('origin/juandev', 2)]);
+  assert.deepStrictEqual(orden, ['origin/juandev']);
+});
+
+test('ordenIntegracion incluye main aunque no haya ramas de compañeros', () => {
+  assert.deepStrictEqual(ordenIntegracion(ramaCon('origin/main', 4), []), ['origin/main']);
+});
+
+test('ordenIntegracion excluye lo no integrable aunque tenga commits', () => {
+  const orden = ordenIntegracion(ramaCon('origin/main', 2, false), [
+    ramaCon('origin/x', 5, false),
+  ]);
+  assert.deepStrictEqual(orden, []);
+});
+
+test('ordenIntegracion tolera principal nulo y compañeros ausentes', () => {
+  assert.deepStrictEqual(ordenIntegracion(null, null), []);
+  assert.deepStrictEqual(ordenIntegracion(undefined, undefined), []);
+});
+
+test('ordenIntegracion no cuenta una rama sin el campo integrable', () => {
+  // Defensivo: un objeto de una versión anterior del script no debe colarse.
+  const viejo = { rama: 'origin/viejo', commits_que_me_faltan: [{ sha: 'a' }] };
+  assert.deepStrictEqual(ordenIntegracion(null, [viejo]), []);
+});

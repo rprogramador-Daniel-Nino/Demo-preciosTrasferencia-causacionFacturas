@@ -128,18 +128,26 @@ respeta su alcance.
 ## Trabajo en equipo
 
 Cada quien trabaja en su rama (`juandev` y las que definan los demás) sobre un `index.html`
-que todos editan. Antes de empezar a aplicar cambios propios, correr:
+que todos editan. Correr:
 
 ```
 /revisar-ramas-equipo
 ```
 
-Trae las ramas remotas, reporta qué cambió cada compañero **mapeado al bloque concreto de
-`index.html` que toca** —no "conflicto en index.html", que en 13 000 líneas no informa nada—
-e integra de menor a mayor solapamiento, abortando ante cualquier conflicto fuera de
+Trae `main` y las ramas remotas de los compañeros, reporta qué cambió cada una **mapeado al
+bloque concreto de `index.html` que toca** —no "conflicto en index.html", que en 13 000 líneas
+no informa nada— e integra en el orden que emite el escaneo: **`main` primero** y después los
+compañeros de menor a mayor solapamiento, abortando ante cualquier conflicto fuera de
 `public/index.html` y `public/gestor-reportes/` (los únicos artefactos que regenera
-`npm run build`; `public/vendor/` está commiteado directamente y no es generado). Correrla al
-empezar, no al terminar: el punto es enterarse antes de duplicar trabajo.
+`npm run build`; `public/vendor/` está commiteado directamente y no es generado).
+
+**Dos momentos, no uno:** al empezar un spec o feature, para no duplicar trabajo, y otra vez
+al cerrarlo antes del merge, para integrar limpio lo que los demás publicaron mientras duraba.
+Correrla solo al arrancar deja una ventana abierta y la integración llega sucia.
+
+`main` se trata como una rama más y no como un contador: quedarse atrás del tronco ensucia
+la siguiente integración igual que quedarse atrás de un compañero, y va primero porque las
+ramas de los compañeros suelen traerlo ya mergeado.
 
 No requiere instalación. Vive en `.claude/skills/` y llega con `git pull`.
 
