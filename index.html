@@ -7260,7 +7260,7 @@ se guía la descarga manual
         } catch (e) { console.warn('[PARCHE] mapeo extendido de comparables:', e); }
         /* el universo completo queda disponible para el motor de continuidad */
         try { if (out.length > 20) window.CIQ_UNIVERSO = out.slice(); } catch (e) { }
-        try { ptCruceContinuidadTablaAuto(); } catch (e) { console.warn('[PARCHE] cruce de continuidad automático:', e); }
+        try { setTimeout(function () { try { ptCruceContinuidadTablaAuto(); } catch (e) { console.warn('[PARCHE] cruce de continuidad automático:', e); } }, 0); } catch (e) { }
         return out;
       };
 
@@ -7372,36 +7372,47 @@ se guía la descarga manual
         CIQ_UNIVERSO.forEach(function (u) { if (u.name) porNombre[K(u.name)] = u; });
         var existentes = {};
         ptComparablesEnTabla().forEach(function (c) { existentes[K(c.name)] = 1; });
-        var encontradas = [], noEncontradas = [];
+        var encontradas = [], noEncontradas = [], sinDatos = [];
+        var nuevasKeys = {};
         var frag = document.createDocumentFragment(), n = 0;
         tabla.forEach(function (p) {
           var hit = porNombre[K(p.name)];
           if (!hit) { noEncontradas.push(p.name); return; }
-          window.PT_CONTINUIDAD_TABLA_KEYS[K(hit.name)] = { name: hit.name, id: hit.id || '' };
+          if (hit.s === null || hit.op === null) { sinDatos.push(p.name); return; }
+          nuevasKeys[K(hit.name)] = { name: hit.name, id: hit.id || '' };
           encontradas.push(hit.name);
           if (existentes[K(hit.name)]) return;
           _registrar(hit);
           frag.appendChild(compRow(_fila(hit)));
           existentes[K(hit.name)] = 1; n++;
         });
+        window.PT_CONTINUIDAD_TABLA_KEYS = nuevasKeys;
         if (n) { $('cbody').appendChild(frag); calc(); }
-        ptPintarCruceContinuidadTabla(encontradas, noEncontradas);
-        return { encontradas: encontradas, noEncontradas: noEncontradas };
+        ptPintarCruceContinuidadTabla(encontradas, noEncontradas, sinDatos);
+        return { encontradas: encontradas, noEncontradas: noEncontradas, sinDatos: sinDatos };
       };
 
-      function ptPintarCruceContinuidadTabla(encontradas, noEncontradas) {
+      function ptPintarCruceContinuidadTabla(encontradas, noEncontradas, sinDatos) {
+        sinDatos = sinDatos || [];
         var host = document.getElementById('ptContTablaAlerta');
-        if (!noEncontradas.length) { if (host) host.innerHTML = ''; return; }
+        if (!noEncontradas.length && !sinDatos.length) { if (host) host.innerHTML = ''; return; }
         if (!host) {
-          var ancla = document.getElementById('compalert') || $('cbody');
+          var ancla = document.getElementById('ptZonaConfig') || document.getElementById('compalert') || $('cbody');
           if (!ancla || !ancla.parentNode) return;
           host = document.createElement('div'); host.id = 'ptContTablaAlerta';
           ancla.parentNode.insertBefore(host, ancla);
         }
-        host.innerHTML = '<div style="margin:8px 0;padding:8px 10px;border:1px solid #C0392B;background:#FDEDEC;border-radius:6px;font-size:11.5px">' +
-          '<b>⚠ ' + noEncontradas.length + ' comparable(s) de la tabla del estudio anterior no aparecen en el universo de este año:</b> ' +
-          noEncontradas.map(escH).join(', ') +
-          '. No aparece en el universo de búsqueda del año corriente (posible fusión, deslistamiento o cambio de razón social). Verificar en la fuente antes de descartarla.</div>';
+        var partes = [];
+        if (noEncontradas.length) {
+          partes.push('<b>⚠ ' + noEncontradas.length + ' comparable(s) de la tabla del estudio anterior no aparecen en el universo de este año:</b> ' +
+            noEncontradas.map(escH).join(', ') +
+            '. No aparece en el universo de búsqueda del año corriente (posible fusión, deslistamiento o cambio de razón social). Verificar en la fuente antes de descartarla.');
+        }
+        if (sinDatos.length) {
+          partes.push('<b>⚠ ' + sinDatos.length + ' comparable(s) aparecen en el universo pero sin información financiera completa del período:</b> ' +
+            sinDatos.map(escH).join(', ') + '. No permite calcular el indicador; verificar en la fuente.');
+        }
+        host.innerHTML = '<div style="margin:8px 0;padding:8px 10px;border:1px solid #C0392B;background:#FDEDEC;border-radius:6px;font-size:11.5px">' + partes.join('<br>') + '</div>';
       }
 
       window.ptComparablesContinuidad = async function (objetivo) {
@@ -7508,7 +7519,7 @@ se guía la descarga manual
         if (!u || !u.name) return;
         if (u.desc) DESCS[u.name] = u.desc;
         if (u.id) COMP_ID[u.name] = u.id;
-        COMP_META[u.name] = { id: u.id || '', ticker: u.ticker || '', sic: u.sic || '', pais: u.country || '', desc: u.desc || '', estado: u.estado || '', tipo: u.tipoCia || '' };
+        COMP_META[u.name] = Object.assign({}, COMP_META[u.name] || {}, { id: u.id || '', ticker: u.ticker || '', sic: u.sic || '', pais: u.country || '', desc: u.desc || '', estado: u.estado || '', tipo: u.tipoCia || '' });
       }
 
       window.ptAplicarMantenidas = function () {
@@ -7516,6 +7527,7 @@ se guía la descarga manual
         var existentes = {}; ptComparablesEnTabla().forEach(function (x) { existentes[K(x.name)] = 1; });
         var frag = document.createDocumentFragment(), n = 0;
         c.mantenidas.forEach(function (m) {
+          window.PT_CONTINUIDAD_TABLA_KEYS[K(m.cand.name)] = { name: m.cand.name, id: m.cand.id || '' };
           if (existentes[K(m.cand.name)]) return;
           _registrar(m.cand);
           frag.appendChild(compRow(_fila(m.cand))); n++;
@@ -7846,7 +7858,9 @@ se guía la descarga manual
          una sola línea larga, ver cargarInformeAnterior más abajo), así que
          NO se puede depender de saltos de línea entre filas: se localiza el
          encabezado y se recorren las filas por posición dentro del bloque de
-         texto que sigue, ignorando la columna de Ámbito. */
+         texto que sigue, usando el valor de Ámbito (Internacional/Nacional, en
+         cualquier capitalización) solo como delimitador de fin de fila — su
+         contenido no se conserva. */
       function ptTablaComparablesEstudioAnterior(texto) {
         var out = [], vistos = {};
         var t = String(texto || '');
@@ -7856,7 +7870,7 @@ se guía la descarga manual
           var desde = mTitulo.index + mTitulo[0].length;
           var corte = t.slice(desde).search(/fuente\s*:/i);
           var bloque = corte >= 0 ? t.slice(desde, desde + corte) : t.slice(desde, desde + 6000);
-          var rxFila = /(\d{1,3})\s+([A-ZÁÉÍÓÚÑ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.,'()\-\s]{2,90}?)\s+(INTERNACIONAL|NACIONAL)\b/g;
+          var rxFila = /(\d{1,3})\s+([A-ZÁÉÍÓÚÑ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.,'()\-\s]{2,90}?)\s+(INTERNACIONAL|NACIONAL)\b/gi;
           var m, bloqueHasRows = false;
           while ((m = rxFila.exec(bloque))) {
             bloqueHasRows = true;
