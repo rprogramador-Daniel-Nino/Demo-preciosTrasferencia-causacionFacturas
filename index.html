@@ -7241,6 +7241,7 @@ se guía la descarga manual
         } catch (e) { console.warn('[PARCHE] mapeo extendido de comparables:', e); }
         /* el universo completo queda disponible para el motor de continuidad */
         try { if (out.length > 20) window.CIQ_UNIVERSO = out.slice(); } catch (e) { }
+        try { ptCruceContinuidadTablaAuto(); } catch (e) { console.warn('[PARCHE] cruce de continuidad automático:', e); }
         return out;
       };
 
@@ -7337,6 +7338,52 @@ se guía la descarga manual
       }
 
       window.PT_CONTINUIDAD = null;
+
+      window.PT_CONTINUIDAD_TABLA_KEYS = window.PT_CONTINUIDAD_TABLA_KEYS || {};
+
+      /* Cruce automático (sin botón) de la tabla "Muestra Compañías comparables"
+         del estudio anterior contra el universo de Capital IQ ya importado.
+         Se dispara sola desde smartMapRows() (al terminar de importar el Excel)
+         y desde ptProcesarTextoAnterior() en el Bloque 3 (al terminar de leer el
+         estudio anterior) — cubre los dos órdenes de carga posibles. */
+      window.ptCruceContinuidadTablaAuto = function () {
+        var tabla = (window.PT_ANTERIOR && PT_ANTERIOR.comparablesTabla) || [];
+        if (!tabla.length || !CIQ_UNIVERSO.length) return null;
+        var porNombre = {};
+        CIQ_UNIVERSO.forEach(function (u) { if (u.name) porNombre[K(u.name)] = u; });
+        var existentes = {};
+        ptComparablesEnTabla().forEach(function (c) { existentes[K(c.name)] = 1; });
+        var encontradas = [], noEncontradas = [];
+        var frag = document.createDocumentFragment(), n = 0;
+        tabla.forEach(function (p) {
+          var hit = porNombre[K(p.name)];
+          if (!hit) { noEncontradas.push(p.name); return; }
+          window.PT_CONTINUIDAD_TABLA_KEYS[K(hit.name)] = { name: hit.name, id: hit.id || '' };
+          encontradas.push(hit.name);
+          if (existentes[K(hit.name)]) return;
+          _registrar(hit);
+          frag.appendChild(compRow(_fila(hit)));
+          existentes[K(hit.name)] = 1; n++;
+        });
+        if (n) { $('cbody').appendChild(frag); calc(); }
+        ptPintarCruceContinuidadTabla(encontradas, noEncontradas);
+        return { encontradas: encontradas, noEncontradas: noEncontradas };
+      };
+
+      function ptPintarCruceContinuidadTabla(encontradas, noEncontradas) {
+        var host = document.getElementById('ptContTablaAlerta');
+        if (!noEncontradas.length) { if (host) host.innerHTML = ''; return; }
+        if (!host) {
+          var ancla = document.getElementById('compalert') || $('cbody');
+          if (!ancla || !ancla.parentNode) return;
+          host = document.createElement('div'); host.id = 'ptContTablaAlerta';
+          ancla.parentNode.insertBefore(host, ancla);
+        }
+        host.innerHTML = '<div style="margin:8px 0;padding:8px 10px;border:1px solid #C0392B;background:#FDEDEC;border-radius:6px;font-size:11.5px">' +
+          '<b>⚠ ' + noEncontradas.length + ' comparable(s) de la tabla del estudio anterior no aparecen en el universo de este año:</b> ' +
+          noEncontradas.map(escH).join(', ') +
+          '. No aparece en el universo de búsqueda del año corriente (posible fusión, deslistamiento o cambio de razón social). Verificar en la fuente antes de descartarla.</div>';
+      }
 
       window.ptComparablesContinuidad = async function (objetivo) {
         var prev = await ptComparablesAnterior();
@@ -7888,6 +7935,7 @@ se guía la descarga manual
            porque esta reasignación posterior de window.cargarInformeAnterior
            la sustituye por completo. */
         if (typeof extractPriorActivityWithGemini === 'function') extractPriorActivityWithGemini();
+        try { if (typeof ptCruceContinuidadTablaAuto === 'function') ptCruceContinuidadTablaAuto(); } catch (e) { }
 
         /* El texto se guarda como insumo, marcado para que NO se reproduzca */
         try {
