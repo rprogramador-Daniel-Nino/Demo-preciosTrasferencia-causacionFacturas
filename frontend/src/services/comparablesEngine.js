@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import axios from 'axios';
-import { num, pliOf } from '../utils/calculations';
+import { num, pliOf } from '../utils/calculations.js';
 
 /**
  * Normaliza nombres de empresas para cruces de continuidad
@@ -210,7 +210,7 @@ Devuelve SOLO un JSON estricto:
 
       return candidates.map(c => {
         const ev = evalMap.get(c.id);
-        if (ev && ev.coincide === false) {
+        if (ev && ev.coincide === false && !c.esContinuidad) {
           return { ...c, descartada: true, motivoRechazo: `Curación IA: ${ev.motivo}` };
         }
         return c;

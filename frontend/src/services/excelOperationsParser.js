@@ -28,20 +28,41 @@ export async function parseExcelOperations(file) {
       const d = XLSX.utils.sheet_to_json(sh, { header: 1, defval: '' });
       if (!d || d.length < 10) return;
 
-      // Buscar fila de encabezados entre las primeras 15 filas
+      // Buscar fila de encabezados entre las primeras 25 filas. Se prioriza
+      // 'identificaci' porque el título de la hoja ("Operaciones con
+      // Vinculados") también contiene 'vinculado' y, al buscar por ese solo
+      // término, ganaba el título en vez de la fila real de encabezados de
+      // columna, dejando iNit/iPais/iTipo/iMonto en -1 y el monto en 0.
       let encIdx = 9; // por defecto fila 10
+      let encFound = false;
       for (let i = 0; i < Math.min(d.length, 25); i++) {
         const rowStr = (d[i] || []).join(' ').toLowerCase();
-        if (rowStr.includes('vinculado') || rowStr.includes('identificaci')) {
+        if (rowStr.includes('identificaci')) {
           encIdx = i;
+          encFound = true;
           break;
+        }
+      }
+      if (!encFound) {
+        for (let i = 0; i < Math.min(d.length, 25); i++) {
+          const rowStr = (d[i] || []).join(' ').toLowerCase();
+          if (rowStr.includes('vinculado')) {
+            encIdx = i;
+            break;
+          }
         }
       }
 
       const enc = d[encIdx] || [];
       const iNom = enc.findIndex(x => String(x).toLowerCase().includes('vinculado') || String(x).toLowerCase().includes('razón social'));
       const iNit = enc.findIndex(x => String(x).toLowerCase().includes('identificaci'));
-      const iPais = enc.findIndex(x => { const s = String(x).toLowerCase(); return s.includes('país') || s.includes('pais'); });
+      // Excluye la columna de identificación: su encabezado ("Número de
+      // Identificación fiscal del país de origen") también contiene 'país',
+      // y sin este filtro ganaba por estar antes que "País de origen".
+      const iPais = enc.findIndex(x => {
+        const s = String(x).toLowerCase();
+        return (s.includes('país') || s.includes('pais')) && !s.includes('identificaci');
+      });
       const iTipo = enc.findIndex(x => String(x).toLowerCase().includes('tipo de operaci'));
       const iMonto = enc.findIndex(x => String(x).toLowerCase().includes('monto'));
 
@@ -53,7 +74,10 @@ export async function parseExcelOperations(file) {
         if (/tipos de operacion/i.test(a)) break; // Fin de datos / Catálogo
 
         const nom = String(iNom > -1 ? f[iNom] : '').trim();
-        if (!nom || nom.toLowerCase().includes('vinculado')) continue;
+        // Las notas al pie ("* Ver lista de tipo de operaciones según DIAN")
+        // a veces caen justo en la columna del monto y se colaban como fila
+        // de operación real, duplicando el total.
+        if (!nom || nom.toLowerCase().includes('vinculado') || nom.startsWith('*')) continue;
 
         const tRaw = String(iTipo > -1 ? f[iTipo] : '').trim();
         if (tRaw) currentTipo = tRaw;
@@ -103,11 +127,11 @@ export async function parseExcelOperations(file) {
     if (mainPais === '249') paisNombre = 'ESTADOS UNIDOS';
 
     return {
-      vinc: mainVinculado || 'END GAME INTERACTIVE INC',
-      vinc_id: mainVinculadoId || '604477955',
-      pais_vinc: paisNombre || 'ESTADOS UNIDOS',
+      vinc: mainVinculado || null,
+      vinc_id: mainVinculadoId || null,
+      pais_vinc: paisNombre || null,
       vinc_tipo: mainTipo || 'Otros servicios (07)',
-      t_s: totalMonto || 3435357400,
+      t_s: totalMonto || null,
       rows: rowsParsed
     };
   } catch (err) {

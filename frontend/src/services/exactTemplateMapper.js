@@ -70,6 +70,26 @@ export function hydrateExactWordTemplate(rawHtml, study) {
   const formattedMonto = study.t_s ? fmt(study.t_s) : '3.435.357.400';
   const formattedTipo = study.vinc_tipo || 'Otros servicios (07)';
 
+  /* Fila del accionista principal (Tabla 6. Composición Accionaria): en la
+     plantilla real, esta fila comparte texto literal con el vinculado
+     ("END GAME INTERACTIVE INC"/"ESTADOS UNIDOS" — misma empresa, mismo país
+     en el estudio original). Debe sustituirse ANTES y de forma acotada a esta
+     fila exacta: si corriera después del reemplazo genérico del vinculado
+     (global, sin acotar), ya no quedaría texto literal que sustituir aquí y
+     la fila de accionistas se congelaría con los datos de End Game. */
+  if (study.accionistas && study.accionistas.length > 0) {
+    const mainAcc = study.accionistas[0];
+    const rxFilaAccionista = /<tr>\n<td>\n<p>\nEND GAME INTERACTIVE INC\.\n<\/p>\n<\/td>\n<td>\n<p>\nESTADOS UNIDOS\n<\/p>\n<\/td>\n<td>\n<p>\n200\.000\n<\/p>\n<\/td>\n<td>\n<p>\n200\.000\.000\n<\/p>\n<\/td>\n<td>\n<p>\n100%\n<\/p>\n<\/td>\n<\/tr>/;
+    html = html.replace(rxFilaAccionista, (fila) => {
+      let out = fila;
+      if (mainAcc.nombre) out = out.replace(/END GAME INTERACTIVE INC\./, wrap(mainAcc.nombre));
+      if (mainAcc.pais) out = out.replace(/ESTADOS UNIDOS/, wrap(mainAcc.pais));
+      if (mainAcc.acciones) out = out.replace(/200\.000\n/, wrap(fmt(mainAcc.acciones)) + '\n');
+      if (mainAcc.valor_capital) out = out.replace(/200\.000\.000/, wrap(fmt(mainAcc.valor_capital)));
+      return out;
+    });
+  }
+
   // Reemplazos de las variables del cliente
   const replacements = [
     { target: /END GAME INTERACTIVE COLOMBIA S\.A\.S/gi, val: wrap(study.ent || 'END GAME INTERACTIVE COLOMBIA S.A.S') },
@@ -121,15 +141,6 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     html = html.replace(/1\.783\.558\.970/g, wrap(fmt(totalActivoCorriente)));
     html = html.replace(/117\.624\.200/g, wrap(fmt(eeff2025.ppe)));
     html = html.replace(/1\.989\.688\.200/g, wrap(fmt(totalActivos)));
-  }
-
-  // Reemplazo dinámico de la Tabla 6. Composición Accionaria
-  if (study.accionistas && study.accionistas.length > 0) {
-    const mainAcc = study.accionistas[0];
-    if (mainAcc.nombre) html = html.replace(/END GAME INTERACTIVE INC\./gi, wrap(mainAcc.nombre));
-    if (mainAcc.pais) html = html.replace(/ESTADOS UNIDOS/g, wrap(mainAcc.pais));
-    if (mainAcc.acciones) html = html.replace(/200\.000/g, wrap(fmt(mainAcc.acciones)));
-    if (mainAcc.valor_capital) html = html.replace(/200\.000\.000/g, wrap(fmt(mainAcc.valor_capital)));
   }
 
   // Reemplazar Rango Intercuartil si se calculó
