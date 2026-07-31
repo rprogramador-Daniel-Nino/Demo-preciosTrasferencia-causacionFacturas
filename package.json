@@ -7,7 +7,7 @@
     "build": "node scripts/sync-index.js && npm run build --prefix frontend",
     "prestart": "npm run build",
     "start": "node server.js",
-    "test": "node --test \"scripts/lib/*.test.js\""
+    "test": "node --test \"scripts/lib/*.test.js\" \"frontend/src/services/*.test.js\""
   },
   "engines": {
     "node": ">=18"

@@ -1,4 +1,4 @@
-import { fmt, pctf, pliOf, quart, adjustInfo, num, getUvtValue } from '../utils/calculations';
+import { fmt, pctf, pliOf, quart, adjustInfo, num, getUvtValue } from '../utils/calculations.js';
 
 /**
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
@@ -70,7 +70,18 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     { target: /2\.117\.925\.000/g, val: wrap(fmt(uvt45k)) },
     { target: /470\.650\.000/g, val: wrap(fmt(uvt10k)) },
     
-    { target: /2024/g, val: wrap(year) }
+    { target: /2024/g, val: wrap(year) },
+
+    /* Cifras que no tenían regla y por eso viajaban de End Game a cualquier
+       informe generado con esta plantilla. Los delimitadores (?<![\d.]) y
+       (?![\d.]) son obligatorios: sin ellos, "1.247.447.456" se reemplazaría
+       por su cola "247.447.456" y quedaría un número corrupto.
+       El NIT se captura con su dígito de verificación para no dejarlo colgando. */
+    { target: /(?<![\d.])901\.337\.576-\d(?![\d])/g, val: wrap(study.nit || '—') },
+    { target: /(?<![\d.])1\.247\.447\.456(?![\d.])/g, val: wrap(study.t_inv_assoc ? fmt(num(study.t_inv_assoc)) : '—') },
+    { target: /(?<![\d.])4\.703\.375(?![\d.])/g, val: wrap(study.t_intang ? fmt(num(study.t_intang)) : '—') },
+    { target: /(?<![\d.])83\.801\.656(?![\d.])/g, val: wrap(study.t_dif ? fmt(num(study.t_dif)) : '—') },
+    { target: /(?<![\d.])206\.129\.230(?![\d.])/g, val: wrap(study.t_act_nocurr ? fmt(num(study.t_act_nocurr)) : '—') }
   ];
 
   // Aplicar reemplazos iniciales
@@ -113,6 +124,13 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     html = html.replace(/Mediana:?\s*[\d\.\,%]+/gi, `Mediana: ${wrap(pctf(stats.med))}`);
     html = html.replace(/Percentil 75:?\s*[\d\.\,%]+/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
   }
+
+  /* Monto del ajuste. Si el estudio está dentro del rango no hay ajuste que
+     reportar, pero la frase de la plantilla sí existe: se pone un marcador
+     visible en vez de la cifra de End Game. Corregir la redacción de esa frase
+     queda para el plan 2, cuando la plantilla tenga campos con nombre. */
+  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '—';
+  html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
 
   // Reemplazar resultado Cumple/No Cumple
   html = html.replace(/cumple con el principio de plena competencia/gi, `${wrap(cumpleStr)} con el principio de plena competencia`);
