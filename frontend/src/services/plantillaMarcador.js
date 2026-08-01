@@ -10,7 +10,11 @@ import { esCampoValido } from './plantillaVocabulario.js';
 
 /* Trocea el HTML en segmentos de texto y de etiqueta. La búsqueda solo entra en
    los de texto: buscar sobre el HTML crudo permitiría marcar dentro de un
-   atributo y romper la etiqueta. */
+   atributo y romper la etiqueta.
+
+   Las etiquetas originales se marcan con original:true para distinguirlas de las
+   que se insertan al marcar. Eso permite detectar cuándo un fragmento está
+   partido por una frontera real del documento vs. una etiqueta insertada. */
 function segmentar(html) {
   const segmentos = [];
   let i = 0;
@@ -23,17 +27,38 @@ function segmentar(html) {
     if (abre > i) segmentos.push({ tipo: 'texto', valor: html.slice(i, abre) });
     const cierra = html.indexOf('>', abre);
     if (cierra === -1) {
-      segmentos.push({ tipo: 'etiqueta', valor: html.slice(abre) });
+      segmentos.push({ tipo: 'etiqueta', valor: html.slice(abre), original: true });
       break;
     }
-    segmentos.push({ tipo: 'etiqueta', valor: html.slice(abre, cierra + 1) });
+    segmentos.push({ tipo: 'etiqueta', valor: html.slice(abre, cierra + 1), original: true });
     i = cierra + 1;
   }
   return segmentos;
 }
 
-function obtenerTextoVisible(segmentos) {
-  return segmentos.filter(s => s.tipo !== 'etiqueta').map(s => s.valor).join('');
+/* Devuelve un array de strings que son trozos de texto visible, respetando las
+   fronteras de las etiquetas originales del documento. Las etiquetas
+   insertadas al marcar (sin original:true) no interrumpen la continuidad.
+
+   Esto permite detectar si un fragmento está partido por una frontera real del
+   HTML original: si busca en estos tokens y aparece completamente en uno,
+   existe contiguo; si no aparece en ninguno, está partido o no existe. */
+function obtenerTokenosTexto(segmentos) {
+  const tokens = [];
+  let token = '';
+  for (const s of segmentos) {
+    if (s.tipo === 'etiqueta' && s.original) {
+      if (token) tokens.push(token);
+      token = '';
+    } else if (s.tipo === 'etiqueta') {
+      // Etiqueta insertada (sin original:true): ignoro pero continúo el token
+    } else {
+      // tipo === 'texto' o 'marcado'
+      token += s.valor;
+    }
+  }
+  if (token) tokens.push(token);
+  return tokens;
 }
 
 export function aplicarMarcas(html, marcas) {
@@ -88,8 +113,8 @@ export function aplicarMarcas(html, marcas) {
 
     if (puesta) aplicadas++;
     else {
-      const textoVisible = obtenerTextoVisible(segmentos);
-      if (textoVisible.includes(fragmento)) {
+      const tokens = obtenerTokenosTexto(segmentos);
+      if (tokens.some(t => t.includes(fragmento))) {
         descartadas.push({ marca, motivo: 'se solapa con una marca ya aplicada' });
       } else {
         descartadas.push({ marca, motivo: 'el fragmento no aparece en el documento' });

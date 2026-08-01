@@ -63,8 +63,8 @@ test('marcas sobre el mismo texto no se pisan entre sí', () => {
 });
 
 test('solapamiento: contenedora primero, contenida después se rechaza', () => {
-  const html = '<p>ACME COLOMBIA S.A.S</p>';
-  const r = aplicarMarcas(html, [
+  const original = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(original, [
     { fragmento: 'ACME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 },
     { fragmento: 'COLOMBIA', campo: 'nit', ocurrencia: 1 },
   ]);
@@ -72,11 +72,13 @@ test('solapamiento: contenedora primero, contenida después se rechaza', () => {
   assert.strictEqual(r.descartadas.length, 1);
   assert.match(r.descartadas[0].motivo, /solapa/i);
   assert.ok(r.html.includes('<span data-campo="ent">ACME COLOMBIA S.A.S</span>'));
+  const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
+  assert.strictEqual(sinSpans, original);
 });
 
 test('solapamiento: contenida primero, contenedora después se rechaza', () => {
-  const html = '<p>ACME COLOMBIA S.A.S</p>';
-  const r = aplicarMarcas(html, [
+  const original = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(original, [
     { fragmento: 'COLOMBIA', campo: 'nit', ocurrencia: 1 },
     { fragmento: 'ACME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 },
   ]);
@@ -84,28 +86,44 @@ test('solapamiento: contenida primero, contenedora después se rechaza', () => {
   assert.strictEqual(r.descartadas.length, 1);
   assert.match(r.descartadas[0].motivo, /solapa/i);
   assert.ok(r.html.includes('<span data-campo="nit">COLOMBIA</span>'));
+  const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
+  assert.strictEqual(sinSpans, original);
 });
 
 test('solapamiento parcial: dos fragmentos que comparten parte se rechazan', () => {
-  const html = '<p>ACME COLOMBIA S.A.S</p>';
-  const r = aplicarMarcas(html, [
+  const original = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(original, [
     { fragmento: 'ACME COLOMBIA', campo: 'ent', ocurrencia: 1 },
     { fragmento: 'COLOMBIA S.A.S', campo: 'nit', ocurrencia: 1 },
   ]);
   assert.strictEqual(r.aplicadas, 1);
   assert.strictEqual(r.descartadas.length, 1);
   assert.match(r.descartadas[0].motivo, /solapa/i);
+  const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
+  assert.strictEqual(sinSpans, original);
 });
 
 test('caso realista: cifra menor dentro de mayor se rechaza', () => {
-  const html = '<p>Total 1.234.567</p>';
-  const r = aplicarMarcas(html, [
+  const original = '<p>Total 1.234.567</p>';
+  const r = aplicarMarcas(original, [
     { fragmento: '1.234.567', campo: 'eeff.t_act_tot', ocurrencia: 1 },
     { fragmento: '234.567', campo: 'eeff.t_inv', ocurrencia: 1 },
   ]);
   assert.strictEqual(r.aplicadas, 1);
   assert.strictEqual(r.descartadas.length, 1);
   assert.match(r.descartadas[0].motivo, /solapa/i);
+  const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
+  assert.strictEqual(sinSpans, original);
+});
+
+test('fragmento partido por etiqueta original se rechaza con "no aparece"', () => {
+  const html = '<p>ACME</p><p>COLOMBIA</p>';
+  const r = aplicarMarcas(html, [{ fragmento: 'MECOLOM', campo: 'ent', ocurrencia: 1 }]);
+  assert.strictEqual(r.aplicadas, 0);
+  assert.strictEqual(r.html, html, 'el documento no debe cambiar');
+  assert.strictEqual(r.descartadas.length, 1);
+  assert.match(r.descartadas[0].motivo, /no aparece/i);
+  assert.doesNotMatch(r.descartadas[0].motivo, /solapa/i);
 });
 
 test('remover los spans recupera el documento original', () => {
