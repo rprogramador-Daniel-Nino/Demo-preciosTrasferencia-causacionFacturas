@@ -349,7 +349,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        inclusión ya se sustentó en su momento. */
     const idIQ = cand.id ? String(cand.id).trim() : '';
     const ia = iaPorId && idIQ ? iaPorId[idIQ] : null;
-    if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim()) {
+    if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim() && !esContinuidad) {
       descartada = true;
       motivoRechazo = `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`;
     } else if (!descartada && ia && ia.coincide === false && !esContinuidad) {

@@ -117,6 +117,18 @@ test('una candidata de continuidad no se descarta aunque la IA diga que no coinc
   }
 });
 
+test('una candidata de continuidad ya no se descarta por falta de descripción', () => {
+  const candidatas = [
+    { id: 'X', name: 'Continuidad Corp', nameKey: nameKey('Continuidad Corp'), desc: '', s: 100, op: 10 }
+  ];
+  const priorComps = [{ name: 'Continuidad Corp' }];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, 'desarrollo de software', priorComps,
+    { iaMatch: { porId: { OTRO: { coincide: true } } } });
+  assert.strictEqual(r.rechazadas.length, 0, 'ya no se descarta por falta de descripción');
+  assert.strictEqual(r.seleccionadas.length, 1);
+  assert.strictEqual(r.seleccionadas[0].esContinuidad, true);
+});
+
 /* ══════ Curación por IA: comportamiento completo migrado del monolito ══════ */
 
 test('la curación solo evalúa candidatas con identificador y descripción', async () => {
