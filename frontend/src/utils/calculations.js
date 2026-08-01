@@ -34,12 +34,61 @@ export const PAIS_DIAN = {
   'TAIWAN': '158', 'AUSTRALIA': '036', 'SUDAFRICA': '710', 'EGIPTO': '818', 'SINGAPUR': '702'
 };
 
+/**
+ * Convierte a número lo que escriben los analistas y lo que traen los archivos.
+ *
+ * La versión anterior hacía String(v).replace(/[^\d.-]/g,'') + parseFloat, que
+ * con "2.761.202.249" devolvía 2,761 —parseFloat se detiene en el segundo punto—
+ * y con "(1.500)" devolvía 1.500 en positivo. Sobre cifras de estados financieros
+ * eso falsea el margen sin avisar.
+ *
+ * Reglas, las mismas que aplica el monolito:
+ *  · paréntesis o signo menos → negativo
+ *  · si hay punto y coma, el ÚLTIMO manda: "1.234,56" es coma decimal,
+ *    "1,234.56" es punto decimal
+ *  · si solo hay un separador, se decide por la forma de los grupos: "27.255.376"
+ *    y "1,234" son miles; "1,5" y "1.5" son decimales
+ *  · se descartan el símbolo de moneda, los espacios y el porcentaje
+ */
 export function num(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === 'number') return v;
-  const s = String(v).replace(/[^\d.-]/g, '');
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+
+  let s = String(v).trim();
+  if (!s) return null;
+
+  let negativo = false;
+  const enParentesis = /^\((.*)\)$/.exec(s);
+  if (enParentesis) { negativo = true; s = enParentesis[1]; }
+
+  s = s.replace(/[\s$€%]/g, '').replace(/[^\d.,-]/g, '');
+  if (s.startsWith('-')) { negativo = true; s = s.slice(1); }
+  if (!s) return null;
+
+  // ¿los grupos tienen forma de separador de miles?
+  const sonMiles = (partes) =>
+    partes.length >= 2 &&
+    partes.slice(1).every(g => /^\d{3}$/.test(g)) &&
+    /^\d{1,3}$/.test(partes[0]);
+
+  const ultPunto = s.lastIndexOf('.');
+  const ultComa = s.lastIndexOf(',');
+
+  if (ultPunto > -1 && ultComa > -1) {
+    s = ultComa > ultPunto
+      ? s.replace(/\./g, '').replace(',', '.')   // 1.234,56
+      : s.replace(/,/g, '');                     // 1,234.56
+  } else if (ultComa > -1) {
+    const partes = s.split(',');
+    s = sonMiles(partes) ? s.replace(/,/g, '') : s.replace(',', '.');
+  } else if (ultPunto > -1) {
+    const partes = s.split('.');
+    if (sonMiles(partes)) s = s.replace(/\./g, '');
+  }
+
   const n = parseFloat(s);
-  return isNaN(n) ? null : n;
+  if (isNaN(n) || !isFinite(n)) return null;
+  return negativo ? -n : n;
 }
 
 export function pctf(v) {
