@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
-import { hydrateExactWordTemplate } from '../services/exactTemplateMapper';
+import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
 import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla, guardarVinculo, leerVinculo } from '../services/plantillaStore';
 
@@ -26,6 +26,44 @@ export default function ReporteGenerador({ study, estudioId }) {
      nombre— es del plan 2; esto solo evita que pase desapercibido. */
   const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
+  /* Qué quedó sin cubrir en la sección III (TENDENCIAS DE LA ECONOMÍA). Se informa
+     en concreto —qué serie y de qué año— porque un aviso genérico se ignora, y
+     estas son las cifras que el Decreto 1625 de 2016 obliga a respaldar con fuente
+     y fecha de consulta antes de radicar. */
+  const avisosDeMercado = (htmlBase) => {
+    const d = diagnosticarCobertura(htmlBase, study);
+    const avisos = [];
+    if (!d.sectorialCubierto) {
+      avisos.push(
+        'esta plantilla no trae la sección del análisis del sector, así que no se ' +
+        'reemplazó por la actividad de la compañía: revísala a mano'
+      );
+    }
+    if (d.seriesFaltantes.length) {
+      avisos.push(
+        'no hay datos de ' + d.year + ' para ' + d.seriesFaltantes.join(', ') +
+        '; esas tablas quedaron con un marcador que hay que completar'
+      );
+    }
+    return avisos;
+  };
+
+  /* Reúne el testigo del NIT y los avisos de la sección III en un solo mensaje.
+     Hasta ahora `faltaSustitucion` y el estado `avisoHidratacion` estaban
+     declarados pero nadie los invocaba ni los pintaba, así que el aviso que
+     debían dar no llegaba nunca. */
+  const componerAviso = (htmlBase, hidratado) => {
+    const partes = [];
+    if (faltaSustitucion(hidratado)) {
+      partes.push(
+        'no se encontró el NIT del estudio en el documento: la plantilla no ' +
+        'coincide con los literales que se sustituyen, revisa las cifras una a una'
+      );
+    }
+    partes.push(...avisosDeMercado(htmlBase));
+    return partes.length ? 'Revisa antes de radicar — ' + partes.join('. ') + '.' : '';
+  };
+
   /* Rehidratación: sin esto las imágenes del informe de referencia se pierden
      al recargar la página, que es el fallo que motivó este trabajo. La bandera
      `vivo` evita escribir estado si el componente se desmonta antes de que
@@ -48,7 +86,9 @@ export default function ReporteGenerador({ study, estudioId }) {
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
            esta línea, tras recargar se ven las cifras del informe de
            referencia en vez de las del estudio actual. */
-        setHtmlContent(hydrateExactWordTemplate(html, study));
+        const hidratado = hydrateExactWordTemplate(html, study);
+        setHtmlContent(hidratado);
+        setAvisoHidratacion(componerAviso(html, hidratado));
         /* Evita que el efecto de la plantilla maestra sobrescriba lo
            recuperado. Es lo que hacía fallar la recarga. */
         setCustomTemplateLoaded(true);
@@ -61,6 +101,7 @@ export default function ReporteGenerador({ study, estudioId }) {
   const loadExactMasterTemplate = () => {
     const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study);
     setHtmlContent(hydrated);
+    setAvisoHidratacion(componerAviso(MASTER_WORD_TEMPLATE, hydrated));
   };
 
   useEffect(() => {
@@ -101,6 +142,7 @@ export default function ReporteGenerador({ study, estudioId }) {
         // Aplicar reemplazo de variables sobre la nueva plantilla subida
         const hydrated = hydrateExactWordTemplate(html, study);
         setHtmlContent(hydrated);
+        setAvisoHidratacion(componerAviso(html, hydrated));
         setCustomTemplateLoaded(true);
       } catch (err) {
         console.error("Error al analizar la plantilla personalizada:", err);
@@ -189,6 +231,15 @@ export default function ReporteGenerador({ study, estudioId }) {
           </button>
         </div>
       </div>
+
+      {/* Lo que quedó sin sustituir. No es un alert porque este componente se
+          monta cada vez que se abre el estudio y un modal bloqueante en cada
+          apertura molestaría más de lo que informa. */}
+      {avisoHidratacion && (
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 rounded-xl px-5 py-4 text-xs leading-relaxed">
+          <strong className="font-semibold">⚠ {avisoHidratacion}</strong>
+        </div>
+      )}
 
       {/* Contenedor del Editor de HTML Renderizado */}
       <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-8 shadow-sm overflow-x-auto min-h-[600px]">
