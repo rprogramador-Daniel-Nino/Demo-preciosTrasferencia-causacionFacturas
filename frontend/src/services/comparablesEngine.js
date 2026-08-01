@@ -349,7 +349,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        inclusión ya se sustentó en su momento. */
     const idIQ = cand.id ? String(cand.id).trim() : '';
     const ia = iaPorId && idIQ ? iaPorId[idIQ] : null;
-    if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim()) {
+    if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim() && !esContinuidad) {
       descartada = true;
       motivoRechazo = `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`;
     } else if (!descartada && ia && ia.coincide === false && !esContinuidad) {
@@ -428,7 +428,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const validas = evaluated.filter(c => !c.descartada).sort((a, b) => b.score - a.score);
   const rechazadas = evaluated.filter(c => c.descartada);
 
-  const seleccionadas = validas.slice(0, nTarget);
+  /* Las de continuidad ya pasaron los filtros duros (holding/saldo negativo/pérdida
+     operativa aplican igual para todas, arriba); a partir de aquí no compiten por el
+     cupo nTarget ni por puntaje — se agregan siempre, aparte. */
+  const continuidadIncluidas = validas.filter(c => c.esContinuidad);
+  const otrasValidas = validas.filter(c => !c.esContinuidad);
+
+  const seleccionadas = [...continuidadIncluidas, ...otrasValidas.slice(0, nTarget)];
 
   return {
     evaluadas: evaluated.length,
@@ -437,7 +443,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     totalValidas: validas.length,
     /* reserva: las válidas que no entraron al TOP-N, para poder reponer las que
        la curación por IA descarte sin quedarse corto de comparables */
-    reserva: validas.slice(nTarget),
+    reserva: otrasValidas.slice(nTarget),
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,
