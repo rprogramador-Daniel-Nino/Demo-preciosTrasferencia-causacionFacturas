@@ -113,8 +113,12 @@ export function hydrateExactWordTemplate(rawHtml, study) {
 
   // Reemplazos de las variables del cliente
   const replacements = [
-    { target: /END GAME INTERACTIVE COLOMBIA S\.A\.S/gi, val: wrap(study.ent || 'END GAME INTERACTIVE COLOMBIA S.A.S') },
-    { target: /END GAME INTERACTIVE COLOMBIA SAS/gi, val: wrap(study.ent || 'END GAME INTERACTIVE COLOMBIA SAS') },
+    /* Una sola regla para las tres formas en que el informe de referencia
+       escribe la razón social —"S.A.S", "SAS" y "SA"—: con una regla por forma
+       se olvidó la última y el nombre del cliente anterior se quedaba dentro
+       del informe nuevo. El `(?!\w)` evita que "SA" muerda el arranque de una
+       palabra que siga. */
+    { target: /END GAME INTERACTIVE COLOMBIA\s+S\.?A\.?S?\.?(?!\w)/gi, val: wrap(study.ent || 'END GAME INTERACTIVE COLOMBIA S.A.S') },
     { target: /END GAME INTERACTIVE INC/gi, val: wrap(study.vinc || 'END GAME INTERACTIVE INC') },
     { target: /ESTADOS UNIDOS/gi, val: wrap(study.pais_vinc || 'ESTADOS UNIDOS') },
     { target: /604477955/g, val: wrap(study.vinc_id || '604477955') },
