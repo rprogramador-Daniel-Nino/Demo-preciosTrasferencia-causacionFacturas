@@ -7,6 +7,7 @@ import IngestaCifras from './components/IngestaCifras';
 import MotorComparables from './components/MotorComparables';
 import AuditoriaNorma from './components/AuditoriaNorma';
 import ReporteGenerador from './components/ReporteGenerador';
+import { guardarJSON } from './services/persistenciaLocal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -16,20 +17,20 @@ export default function App() {
   // Auto-save study detail when it changes
   useEffect(() => {
     if (activeStudyId && study && Object.keys(study).length > 0) {
-      localStorage.setItem(`pt:study:${activeStudyId}`, JSON.stringify(study));
-      
+      guardarJSON(`pt:study:${activeStudyId}`, study);
+
       // Update study index details
       const idxKey = 'pt:study:index';
       const raw = localStorage.getItem(idxKey);
       const ix = raw ? JSON.parse(raw) : {};
-      
+
       ix[activeStudyId] = {
         ent: study.ent || 'Sin Razón Social',
         nit: study.nit || '—',
         anio: study.anio || '—',
         updated: Date.now()
       };
-      localStorage.setItem(idxKey, JSON.stringify(ix));
+      guardarJSON(idxKey, ix);
     }
   }, [study, activeStudyId]);
 
@@ -72,8 +73,8 @@ export default function App() {
       cmode: 'all'
     };
 
-    localStorage.setItem(`pt:study:${newId}`, JSON.stringify(blank));
-    
+    guardarJSON(`pt:study:${newId}`, blank);
+
     const idxKey = 'pt:study:index';
     const raw = localStorage.getItem(idxKey);
     const ix = raw ? JSON.parse(raw) : {};
@@ -83,7 +84,7 @@ export default function App() {
       anio: blank.anio,
       updated: Date.now()
     };
-    localStorage.setItem(idxKey, JSON.stringify(ix));
+    guardarJSON(idxKey, ix);
 
     selectStudy(newId);
   };
@@ -97,7 +98,7 @@ export default function App() {
     if (raw) {
       const ix = JSON.parse(raw);
       delete ix[id];
-      localStorage.setItem(idxKey, JSON.stringify(ix));
+      guardarJSON(idxKey, ix);
     }
 
     if (activeStudyId === id) {
@@ -119,8 +120,8 @@ export default function App() {
         updated: Date.now()
       };
       
-      localStorage.setItem(`pt:study:${newId}`, JSON.stringify(duplicate));
-      
+      guardarJSON(`pt:study:${newId}`, duplicate);
+
       const idxKey = 'pt:study:index';
       const raw = localStorage.getItem(idxKey);
       const ix = raw ? JSON.parse(raw) : {};
@@ -130,7 +131,7 @@ export default function App() {
         anio: duplicate.anio,
         updated: Date.now()
       };
-      localStorage.setItem(idxKey, JSON.stringify(ix));
+      guardarJSON(idxKey, ix);
     }
   };
 

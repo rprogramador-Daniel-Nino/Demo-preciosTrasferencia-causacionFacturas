@@ -41,14 +41,16 @@ directamente produce drift y el cambio se pierde en el siguiente `npm run build`
 
 ### Dos aplicaciones conviviendo
 
-1. **Sistema PT (`index.html`)** — la aplicación principal y activa. Monolito de ~13 000
-   líneas: HTML + CSS + JavaScript vanilla en un solo archivo. Sin framework, sin bundler,
-   sin módulos. Se sirve en `/`.
+1. **Sistema PT (`index.html`)** — monolito de ~13 000 líneas: HTML + CSS + JavaScript
+   vanilla en un solo archivo. Sin framework, sin bundler, sin módulos. Se sirve en `/`.
+   **No recibe desarrollo nuevo** (decisión del usuario, 2026-07-31): solo correcciones
+   puntuales sobre lo que ya existe ahí, cuando el problema es inherente a ese archivo.
+   Cualquier feature o funcionalidad nueva va en `frontend/`, nunca aquí.
 2. **Gestor de Reportes (`frontend/`)** — app React 19 + Vite + Tailwind 4, servida bajo
    `/gestor-reportes/` (`vite.config.js` fija `base` y `outDir: ../public/gestor-reportes`).
-   Reimplementación parcial y más joven del mismo dominio (ver `frontend/src/services/`,
-   que porta lógica de `index.html`). No es un reemplazo terminado: el trabajo del día a día
-   ocurre casi siempre en `index.html`.
+   Reimplementación del mismo dominio (ver `frontend/src/services/`, que porta lógica de
+   `index.html`) y **destino de todo el desarrollo activo**: el trabajo del día a día ocurre
+   aquí, no en `index.html`.
 
 ### Estructura interna de `index.html`
 
