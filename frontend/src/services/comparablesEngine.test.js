@@ -366,6 +366,8 @@ test('importCapitalIQExcel lee un export con el título arriba, como el real', a
     assert.strictEqual(rows[0].s, 1000);
     assert.strictEqual(rows[0].op, 100);
     assert.strictEqual(rows[0].id, 'IQ111', 'conserva el identificador de la fuente');
+    assert.strictEqual(rows[1].name, 'Beta Holdings Ltd');
+    assert.strictEqual(rows[1].isHolding, true, 'Holdings en plural también debe reconocerse como holding');
     assert.strictEqual(meta.candidatas, rows.length);
     assert.ok(meta.saltadas >= 1, 'cuenta la fila vacía que omitió');
     assert.ok(meta.sinCuentasDeBalance, 'detecta que no vienen cartera, inventarios ni proveedores');

@@ -162,7 +162,7 @@ export async function importCapitalIQExcel(file, onProgress) {
           const desc = descIdx >= 0 ? String(row[descIdx] || '').trim() : '';
           const country = countryIdx >= 0 ? String(row[countryIdx] || '').trim() : '';
 
-          const isHolding = /\b(holding|inversiones|investment)\b/i.test(name + ' ' + desc);
+          const isHolding = /\b(holdings?|inversiones|investment)\b/i.test(name + ' ' + desc);
           const hasNegativeBalance = (ar !== null && ar < 0) || (inv !== null && inv < 0) || (ap !== null && ap < 0);
           const hasLoss = op !== null && op < 0;
 
