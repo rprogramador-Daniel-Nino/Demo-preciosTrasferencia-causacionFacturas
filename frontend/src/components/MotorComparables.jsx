@@ -5,8 +5,9 @@ import {
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini } from '../services/comparablesEngine';
-import { parseEEFFComparableOCR } from '../services/eeffParser';
+import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
+import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 
 export default function MotorComparables({ study, updateStudy }) {
   // Prior Study Ingestion State
@@ -43,8 +44,17 @@ export default function MotorComparables({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   const [selectionFunnel, setSelectionFunnel] = useState(null);
+  /* Estado visible de la carga de EEFF. `uploadingEEFF` y `eeffLog` ya existían
+     pero nadie los leía en el JSX, así que al cargar un EEFF no se veía nada:
+     ni que estaba trabajando, ni los hallazgos contables, ni los errores, que
+     solo iban a la consola. */
   const [uploadingEEFF, setUploadingEEFF] = useState(false);
-  const [eeffLog, setEeffLog] = useState({});
+  /* No hay un `eeffLog` aparte: los hallazgos contables viven en la propia fila
+     (comp.eeffHallazgos), que es lo que se guarda con el estudio. El estado
+     paralelo que había antes duplicaba esa información, se perdía al recargar y
+     tampoco se leía en ninguna parte. */
+  const [cargaEeff, setCargaEeff] = useState(null);          // { etapa, hechas, total }
+  const [resultadoCarga, setResultadoCarga] = useState(null); // { aplicadas, rechazadas }
 
   // Visibilidad de la importación de Capital IQ: progreso, diagnóstico y registro.
   const [importProgreso, setImportProgreso] = useState(null);
@@ -280,41 +290,136 @@ export default function MotorComparables({ study, updateStudy }) {
     }
   };
 
-  // Handle EEFF Ingestion for a Selected Comparable
+  /* Vuelca en una fila las cifras leídas de un documento. Devuelve el arreglo
+     nuevo; no toca el estado, para poder aplicar varias de una sola vez. */
+  const aplicarEeffEnFila = (filas, indice, datos, verificacion, archivo, cruce) => {
+    const copia = [...filas];
+    copia[indice] = {
+      ...copia[indice],
+      s: datos.ingresos_operacionales || copia[indice].s,
+      c: datos.costo_ventas || copia[indice].c,
+      op: datos.utilidad_operacional || copia[indice].op,
+      ar: datos.cuentas_por_cobrar || copia[indice].ar,
+      inv: datos.inventarios || copia[indice].inv,
+      ap: datos.cuentas_por_pagar || copia[indice].ap,
+      eeffVerificado: verificacion.esValido,
+      eeffHallazgos: verificacion.hallazgos,
+      eeffArchivo: archivo,
+      /* Se guarda cómo cruzó: un cruce por solapamiento de palabras hay que
+         confirmarlo a ojo, y sin dejar rastro nadie lo haría. */
+      eeffCruce: cruce ? { modo: cruce.modo, punt: cruce.punt, nombreLeido: datos.nombre || '' } : null,
+      eeffPorConfirmar: cruce ? !esCruceFirme(cruce) : false,
+    };
+    return copia;
+  };
+
+  /* Carga de EEFF sobre una fila concreta. Ahora comprueba que el documento sea
+     de esa empresa: antes las cifras entraban en la fila donde se soltaba el
+     archivo, fuera o no la correcta, y de ahí pasaban al rango intercuartil. */
   const handleComparableEEFFUpload = async (compIndex, file) => {
     if (!file) return;
     setUploadingEEFF(true);
+    setCargaEeff({ etapa: 'Leyendo ' + file.name + '…', hechas: 0, total: 1 });
+    setResultadoCarga(null);
     try {
       const studyYear = study.anio || 2025;
       const result = await parseEEFFComparableOCR(file, studyYear);
+      if (!result || !result.data) throw new Error('El documento no devolvió cifras legibles.');
 
-      if (result && result.data) {
-        const next = [...comparables];
-        const data = result.data;
+      const destino = comparables[compIndex];
+      const cruce = cruzar(result.data, file.name, comparables);
 
-        next[compIndex] = {
-          ...next[compIndex],
-          s: data.ingresos_operacionales || next[compIndex].s,
-          c: data.costo_ventas || next[compIndex].c,
-          op: data.utilidad_operacional || next[compIndex].op,
-          ar: data.cuentas_por_cobrar || next[compIndex].ar,
-          inv: data.inventarios || next[compIndex].inv,
-          ap: data.cuentas_por_pagar || next[compIndex].ap,
-          eeffVerificado: result.verificacion.esValido,
-          eeffHallazgos: result.verificacion.hallazgos,
-          eeffArchivo: result.filename
-        };
-
-        setComparables(next);
-        setEeffLog(prev => ({
-          ...prev,
-          [next[compIndex].name]: result.verificacion
-        }));
+      /* Cruzó con OTRA fila, o no cruzó con ninguna: no se aplica nada y se
+         explica por qué. Si el documento no trae razón social no hay nada que
+         contrastar, así que se acepta pero queda marcado por confirmar. */
+      const traeNombre = String(result.data.nombre || '').trim() || String(result.data.identificador_fuente || '').trim();
+      if (traeNombre && cruce.indice !== compIndex) {
+        setResultadoCarga({
+          aplicadas: [],
+          rechazadas: [{
+            archivo: file.name,
+            datos: result.data,
+            motivo: motivoRechazoEnFila(result.data, destino, file.name),
+          }],
+        });
+        return;
       }
+
+      const cruceEfectivo = traeNombre
+        ? cruce
+        : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
+      setComparables(aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo));
+      setResultadoCarga({
+        aplicadas: [{
+          archivo: file.name,
+          datos: result.data,
+          motivo: traeNombre
+            ? motivoCruce(cruce, result.data, file.name)
+            : 'El documento no trae razón social, así que se aplicó a «' + destino.name +
+              '» sin poder verificar que le corresponde: confírmalo.',
+          firme: traeNombre && esCruceFirme(cruce),
+          verificacion: result.verificacion,
+        }],
+        rechazadas: [],
+      });
     } catch (err) {
-      console.error("Error al procesar EEFF de comparable:", err);
+      console.error('Error al procesar EEFF de comparable:', err);
+      setResultadoCarga({
+        aplicadas: [],
+        rechazadas: [{ archivo: file.name, motivo: 'No se pudo leer el documento: ' + (err?.message || err) }],
+      });
     } finally {
       setUploadingEEFF(false);
+      setCargaEeff(null);
+    }
+  };
+
+  /* Carga masiva: uno o varios archivos, y cada archivo puede traer los EEFF de
+     varias comparables. Se lee todo, se reparte por cruce de razón social y se
+     informa qué entró, con qué confianza, y qué se rechazó y por qué. */
+  const handleCargaMasivaEEFF = async (files) => {
+    const lista = Array.from(files || []);
+    if (!lista.length) return;
+
+    setUploadingEEFF(true);
+    setResultadoCarga(null);
+    const entradas = [];
+    const fallosLectura = [];
+
+    try {
+      const studyYear = study.anio || 2025;
+      for (let i = 0; i < lista.length; i++) {
+        const file = lista[i];
+        setCargaEeff({ etapa: 'Leyendo ' + file.name + '…', hechas: i, total: lista.length });
+        try {
+          const leidas = await parseEEFFComparablesLote(file, studyYear);
+          if (!leidas.length) {
+            fallosLectura.push({
+              archivo: file.name,
+              motivo: 'No se pudo identificar ninguna empresa con razón social en el documento. ' +
+                'Si es el estado financiero de una sola comparable, cárgalo desde su fila.',
+            });
+          }
+          entradas.push(...leidas);
+        } catch (err) {
+          fallosLectura.push({ archivo: file.name, motivo: 'No se pudo leer: ' + (err?.message || err) });
+        }
+      }
+
+      setCargaEeff({ etapa: 'Cruzando ' + entradas.length + ' empresa(s) con las comparables…', hechas: lista.length, total: lista.length });
+      const { aplicadas, rechazadas } = repartir(entradas, comparables);
+
+      /* Se acumulan todas las filas antes de un único setComparables: un set por
+         empresa se sobrescribiría entre iteraciones y solo entraría la última. */
+      let filas = comparables;
+      aplicadas.forEach((a) => {
+        filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
+      });
+      if (aplicadas.length) setComparables(filas);
+      setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
+    } finally {
+      setUploadingEEFF(false);
+      setCargaEeff(null);
     }
   };
 
@@ -815,8 +920,103 @@ export default function MotorComparables({ study, updateStudy }) {
           </div>
 
           <p className="text-xs text-zinc-500">
-            Elija a continuación la empresa comparable a la que desea cargarle sus Estados Financieros (PDF o Imagen). El sistema verificará automáticamente las identidades contables antes de incorporar los datos.
+            Cargue un solo PDF con los estados financieros de todas las comparables y el sistema los reparte por razón social,
+            o cárguelos uno por uno desde su fila. En ambos casos se comprueba a qué empresa pertenece cada documento antes de
+            incorporar las cifras, y se verifican las identidades contables.
           </p>
+
+          {/* Carga masiva: varios archivos, y cada archivo puede traer varias empresas */}
+          <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-xl px-4 py-5 text-xs font-semibold transition-colors ${
+            uploadingEEFF
+              ? 'border-zinc-200 dark:border-zinc-800 text-zinc-400 cursor-not-allowed'
+              : 'border-[#0FA3A1]/40 text-[#0B7C7A] dark:text-[#0FA3A1] hover:bg-[#0FA3A1]/5 cursor-pointer'
+          }`}>
+            {uploadingEEFF ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
+            <span>
+              {uploadingEEFF
+                ? 'Procesando…'
+                : 'Cargar EEFF de todas las comparables (uno o varios PDF)'}
+            </span>
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              multiple
+              disabled={uploadingEEFF}
+              className="hidden"
+              onChange={(e) => { handleCargaMasivaEEFF(e.target.files); e.target.value = null; }}
+            />
+          </label>
+
+          {/* Progreso: qué archivo va y cuántos faltan */}
+          {cargaEeff && (
+            <div className="bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#0FA3A1]" />
+                <span>{cargaEeff.etapa}</span>
+                {cargaEeff.total > 1 && (
+                  <span className="ml-auto font-mono text-[11px] text-zinc-500">
+                    {cargaEeff.hechas}/{cargaEeff.total}
+                  </span>
+                )}
+              </div>
+              {cargaEeff.total > 1 && (
+                <div className="mt-2 h-1 bg-zinc-200 dark:bg-zinc-800 rounded overflow-hidden">
+                  <div
+                    className="h-full bg-[#0FA3A1] transition-all"
+                    style={{ width: Math.round((cargaEeff.hechas / cargaEeff.total) * 100) + '%' }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Resultado: qué entró, con qué confianza, y qué se rechazó y por qué */}
+          {resultadoCarga && (
+            <div className="space-y-2">
+              {resultadoCarga.aplicadas.map((a, i) => (
+                <div
+                  key={'ok' + i}
+                  className={`rounded-lg px-4 py-3 text-xs border ${
+                    a.firme
+                      ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300'
+                      : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    {a.firme ? <CheckCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+                    <div>
+                      <div className="font-semibold">{a.archivo}</div>
+                      <div className="mt-0.5 leading-relaxed">{a.motivo}</div>
+                      {a.verificacion && a.verificacion.hallazgos && a.verificacion.hallazgos.length > 0 && (
+                        <ul className="mt-1.5 space-y-0.5 list-disc list-inside">
+                          {a.verificacion.hallazgos.map((h, j) => <li key={j}>{h}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {resultadoCarga.rechazadas.map((r, i) => (
+                <div
+                  key={'no' + i}
+                  className="rounded-lg px-4 py-3 text-xs border bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900 text-red-800 dark:text-red-300"
+                >
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-semibold">Rechazado: {r.archivo}</div>
+                      <div className="mt-0.5 leading-relaxed">{r.motivo}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {!resultadoCarga.aplicadas.length && !resultadoCarga.rechazadas.length && (
+                <div className="text-xs text-zinc-500">No se encontró ningún estado financiero en los documentos.</div>
+              )}
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
@@ -844,8 +1044,27 @@ export default function MotorComparables({ study, updateStudy }) {
                       ) : (
                         <span className="text-zinc-400 text-[11px]">Sin EEFF cargados</span>
                       )}
+                      {/* Los hallazgos contables ya se calculaban y se guardaban en
+                          eeffLog, pero no se mostraban en ninguna parte. */}
+                      {comp.eeffHallazgos && comp.eeffHallazgos.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-[10px] text-amber-700 dark:text-amber-400 list-disc list-inside">
+                          {comp.eeffHallazgos.map((h, j) => <li key={j}>{h}</li>)}
+                        </ul>
+                      )}
                     </td>
-                    <td className="py-2.5 px-3 text-zinc-500 text-[11px]">{comp.eeffArchivo || '—'}</td>
+                    <td className="py-2.5 px-3 text-zinc-500 text-[11px]">
+                      {comp.eeffArchivo || '—'}
+                      {/* Un cruce por solapamiento de palabras hay que confirmarlo:
+                          se deja a la vista el nombre que se leyó y el porcentaje. */}
+                      {comp.eeffPorConfirmar && comp.eeffCruce && (
+                        <div className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                          Por confirmar: se leyó «{comp.eeffCruce.nombreLeido || '(sin razón social)'}»
+                          {comp.eeffCruce.modo === 'manual'
+                            ? ' y el documento no permitía verificarlo'
+                            : ' · ' + Math.round((comp.eeffCruce.punt || 0) * 100) + '% de coincidencia'}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2.5 px-3 text-right">
                       <label className="cursor-pointer bg-zinc-100 dark:bg-zinc-800 hover:bg-[#0FA3A1] hover:text-white px-3 py-1 rounded text-[11px] font-semibold transition-colors inline-flex items-center gap-1">
                         <Upload className="w-3 h-3" />
