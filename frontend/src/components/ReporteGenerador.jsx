@@ -48,7 +48,10 @@ export default function ReporteGenerador({ study, estudioId }) {
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
            esta línea, tras recargar se ven las cifras del informe de
            referencia en vez de las del estudio actual. */
-        setHtmlContent(hydrateExactWordTemplate(html, study));
+        /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
+           setState de arriba no ha surtido efecto todavía dentro de este mismo
+           efecto, y las imágenes saldrían rotas en la primera pintada. */
+        setHtmlContent(conImagenes(hydrateExactWordTemplate(html, study), recursos));
         /* Evita que el efecto de la plantilla maestra sobrescriba lo
            recuperado. Es lo que hacía fallar la recarga. */
         setCustomTemplateLoaded(true);
@@ -79,6 +82,9 @@ export default function ReporteGenerador({ study, estudioId }) {
         const arrayBuffer = e.target.result;
         const esPdf = /\.pdf$/i.test(file.name);
         let html;
+        /* Los recursos del PDF recién leído. En la rama .docx queda vacío
+           porque mammoth ya incrusta las imágenes en el propio HTML. */
+        let recursos = [];
         if (esPdf) {
           const datos = new Uint8Array(arrayBuffer);
           /* El hash va antes de extraer: pdf.js transfiere el buffer al worker
@@ -87,6 +93,11 @@ export default function ReporteGenerador({ study, estudioId }) {
           const idPlantilla = await hashPlantilla(datos);
           const ref = await extraerReferencia(datos);
           html = ref.html;
+          /* Sin esto las imágenes recién extraídas sólo aparecerían tras
+             recargar la página: el efecto de arranque es el único otro sitio
+             donde se pueblan, y el HTML nuevo trae marcas sin base64. */
+          recursos = ref.imagenes;
+          setRecursosCargados(ref.imagenes);
           await guardarPlantilla(idPlantilla, ref.html);
           if (estudioId) await guardarRecursos(estudioId, ref.imagenes);
           if (estudioId) await guardarVinculo(estudioId, idPlantilla);
@@ -100,7 +111,7 @@ export default function ReporteGenerador({ study, estudioId }) {
 
         // Aplicar reemplazo de variables sobre la nueva plantilla subida
         const hydrated = hydrateExactWordTemplate(html, study);
-        setHtmlContent(hydrated);
+        setHtmlContent(conImagenes(hydrated, recursos));
         setCustomTemplateLoaded(true);
       } catch (err) {
         console.error("Error al analizar la plantilla personalizada:", err);
@@ -111,15 +122,20 @@ export default function ReporteGenerador({ study, estudioId }) {
     };
   };
 
-  /* Vuelve a poner las imágenes rehidratadas en los huecos que dejó el
-     extractor. Se hace al descargar y no al cargar la plantilla, porque el
-     HTML guardado ya trae las marcas pero puede venir de una sesión anterior. */
-  const conImagenes = (htmlBase) =>
-    recursosCargados.reduce(
+  /* Resuelve las marcas que dejó el extractor contra el catálogo de recursos.
+     El HTML guardado sólo trae `<img data-recurso="...">` sin el base64 dentro,
+     así que esto hace falta tanto para ver el informe como para descargarlo.
+
+     El reemplazo es global: una misma imagen —el logo del encabezado— aparece
+     marcada en casi cien páginas y con un reemplazo simple sólo la primera
+     habría salido. Y conserva el atributo `data-recurso` para que aplicarlo dos
+     veces sobre el mismo HTML no rompa nada. */
+  const conImagenes = (htmlBase, recursos = recursosCargados) =>
+    recursos.reduce(
       (acc, r) =>
         acc.replace(
-          new RegExp('<img data-recurso="' + r.id + '"[^>]*>'),
-          '<img src="' + r.dataUrl + '" />'
+          new RegExp('<img data-recurso="' + r.id + '"[^>]*>', 'g'),
+          '<img data-recurso="' + r.id + '" src="' + r.dataUrl + '" />'
         ),
       htmlBase
     );
