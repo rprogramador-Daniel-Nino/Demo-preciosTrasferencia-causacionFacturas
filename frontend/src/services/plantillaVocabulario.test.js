@@ -88,3 +88,31 @@ test('sin comparables suficientes el rango sale nulo, no inventado', () => {
   assert.strictEqual(valorDeCampo({ ...estudio, comparables: [] }, 'rango.p25'), null);
   assert.strictEqual(valorDeCampo(estudio, 'rango.mediana'), null);
 });
+
+test('sin año gravable el tope UVT sale nulo, no por defecto', () => {
+  assert.strictEqual(valorDeCampo({}, 'uvt.tope45k'), null, 'estudio sin anio -> null');
+  assert.strictEqual(valorDeCampo({}, 'uvt.tope10k'), null, 'estudio sin anio -> null');
+});
+
+test('con año fuera de UVT_VALUES el tope sale nulo, no por defecto', () => {
+  assert.strictEqual(valorDeCampo({ anio: 2030 }, 'uvt.tope45k'), null, 'año 2030 no existe -> null');
+  assert.strictEqual(valorDeCampo({ anio: 2030 }, 'uvt.tope10k'), null, 'año 2030 no existe -> null');
+});
+
+test('dato no numérico en EEFF sale nulo, no como placeholder', () => {
+  assert.strictEqual(valorDeCampo({ t_cash: 'abc' }, 'eeff.t_cash'), null, 'dato inválido -> null');
+  assert.strictEqual(valorDeCampo({ t_inv: 'xyz' }, 'eeff.t_inv'), null, 'dato no parseble -> null');
+});
+
+test('dato no numérico en accionista sale nulo, no como placeholder', () => {
+  const conAccionistaMalo = {
+    ...estudio,
+    accionistas: [{ nombre: 'ACME INC', pais: 'MÉXICO', acciones: 'abc', valor_capital: 200000000 }],
+  };
+  assert.strictEqual(valorDeCampo(conAccionistaMalo, 'accionista.acciones'), null, 'acciones inválidas -> null');
+  const conValorMalo = {
+    ...estudio,
+    accionistas: [{ nombre: 'ACME INC', pais: 'MÉXICO', acciones: 200000, valor_capital: 'xyz' }],
+  };
+  assert.strictEqual(valorDeCampo(conValorMalo, 'accionista.valor_capital'), null, 'valor_capital inválido -> null');
+});

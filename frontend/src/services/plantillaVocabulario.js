@@ -5,7 +5,7 @@
    un campo inventado produciría una marca que nunca se resuelve y dejaría el
    valor del cliente anterior en el documento sin que nada lo delate. */
 
-import { fmt, num, getUvtValue } from '../utils/calculations.js';
+import { fmt, num, UVT_VALUES } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
 
 const EEFF = [
@@ -69,8 +69,9 @@ export function valorDeCampo(estudio, campo) {
   if (!estudio || !esCampoValido(campo)) return null;
 
   if (campo.startsWith('uvt.')) {
-    const tasa = getUvtValue(estudio.anio);
-    if (!tasa) return null;
+    const y = parseInt(estudio.anio, 10);
+    if (!UVT_VALUES[y]) return null;
+    const tasa = UVT_VALUES[y];
     return fmt((campo === 'uvt.tope45k' ? 45000 : 10000) * tasa);
   }
 
@@ -84,7 +85,9 @@ export function valorDeCampo(estudio, campo) {
 
   if (campo.startsWith('eeff.')) {
     const bruto = estudio[campo.slice(5)];
-    return bruto === undefined || bruto === null || bruto === '' ? null : fmt(num(bruto));
+    if (bruto === undefined || bruto === null || bruto === '') return null;
+    const numerico = num(bruto);
+    return numerico === null ? null : fmt(numerico);
   }
 
   if (campo.startsWith('accionista.')) {
@@ -93,7 +96,11 @@ export function valorDeCampo(estudio, campo) {
     const clave = campo.slice(11);
     const bruto = a[clave];
     if (bruto === undefined || bruto === null || bruto === '') return null;
-    return clave === 'acciones' || clave === 'valor_capital' ? fmt(num(bruto)) : String(bruto);
+    if (clave === 'acciones' || clave === 'valor_capital') {
+      const numerico = num(bruto);
+      return numerico === null ? null : fmt(numerico);
+    }
+    return String(bruto);
   }
 
   const bruto = estudio[campo];
