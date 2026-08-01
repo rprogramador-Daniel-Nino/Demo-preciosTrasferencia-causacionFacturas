@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator, 
+import {
+  Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
@@ -78,7 +78,7 @@ export default function MotorComparables({ study, updateStudy }) {
   const handlePriorStudyUpload = async (file) => {
     if (!file) return;
     setLoadingPriorStudy(true);
-    setPriorStudyMsg('🤖 Leyendo informe del año anterior con Gemini AI…');
+    setPriorStudyMsg('🤖 Leyendo informe del año anterior ');
     try {
       const result = await parsePriorStudyFile(file);
       if (result) {
@@ -96,7 +96,7 @@ export default function MotorComparables({ study, updateStudy }) {
       }
     } catch (err) {
       console.error("Error al leer informe del año anterior:", err);
-      setPriorStudyMsg('⚠️ No se pudo procesar el informe anterior con IA.');
+      setPriorStudyMsg('⚠️ No se pudo procesar el informe .');
     } finally {
       setLoadingPriorStudy(false);
     }
@@ -338,7 +338,7 @@ export default function MotorComparables({ study, updateStudy }) {
   const kind = study.pli || 'MO';
   const useAdj = study.useadj || false;
   const interestRate = (num(study.prime) || 0) / 100;
-  
+
   const T = {
     s: num(study.t_s),
     c: num(study.t_c),
@@ -347,7 +347,7 @@ export default function MotorComparables({ study, updateStudy }) {
     inv: num(study.t_inv),
     ap: num(study.t_ap)
   };
-  
+
   const tPLI = pliOf(T, kind);
   const tR = ratios(T);
 
@@ -360,7 +360,7 @@ export default function MotorComparables({ study, updateStudy }) {
       inv: num(c.inv),
       ap: num(c.ap)
     };
-    
+
     let pliVal = pliOf(rawVal, kind);
     let adj = 0;
     const cR = ratios(rawVal);
@@ -511,12 +511,12 @@ export default function MotorComparables({ study, updateStudy }) {
             <label className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors shadow-sm">
               <Upload className="w-4 h-4" />
               <span>{loadingExcel ? 'Importando...' : '📥 Importar Excel (Capital IQ)'}</span>
-              <input 
-                type="file" 
-                accept=".xlsx,.xls,.csv" 
-                disabled={loadingExcel} 
-                onChange={(e) => e.target.files[0] && handleImportExcel(e.target.files[0])} 
-                className="hidden" 
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                disabled={loadingExcel}
+                onChange={(e) => e.target.files[0] && handleImportExcel(e.target.files[0])}
+                className="hidden"
               />
             </label>
             {universo.length > 0 && (
@@ -961,13 +961,12 @@ export default function MotorComparables({ study, updateStudy }) {
             </thead>
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-xs">
               {calculatedRows.map((row, idx) => (
-                <tr 
+                <tr
                   key={row.id || idx}
-                  className={`transition-colors ${
-                    row.isIncluded 
-                      ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40' 
+                  className={`transition-colors ${row.isIncluded
+                      ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
                       : 'opacity-35 bg-zinc-100/50 dark:bg-zinc-950/20'
-                  }`}
+                    }`}
                 >
                   <td className="py-2 px-3">
                     <input
