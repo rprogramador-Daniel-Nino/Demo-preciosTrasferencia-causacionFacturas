@@ -1,4 +1,5 @@
-import { fmt, pctf, pliOf, ratios, quart, adjustInfo, num, getUvtValue } from '../utils/calculations.js';
+import { fmt, pctf, num, getUvtValue } from '../utils/calculations.js';
+import { analizarRango } from './rangoIntercuartil.js';
 
 const DATOS_MACRO = {
   pib_mundial: {
@@ -57,50 +58,8 @@ export function hydrateExactWordTemplate(rawHtml, study) {
   const uvt45k = 45000 * uvtRate;
   const uvt10k = 10000 * uvtRate;
 
-  // Calculamos el Rango Intercuartil y Ajuste si hay comparables
-  const kind = study.pli || 'MO';
-  const T = { 
-    s: num(study.t_s), 
-    c: num(study.t_c), 
-    op: num(study.t_op), 
-    ar: num(study.t_ar), 
-    inv: num(study.t_inv), 
-    ap: num(study.t_ap) 
-  };
-  const tPLI = pliOf(T, kind);
-
-  const useAdj = study.useadj || false;
-  const interestRate = (num(study.prime) || 0) / 100;
-  const tR = ratios(T);
-
-  let stats = null;
-  if (study.comparables && study.comparables.length >= 3) {
-    const activeSeries = study.comparables
-      .map(c => {
-        const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
-        const pliVal = pliOf(rawVal, kind);
-        if (pliVal === null) return null;
-        let adjVal = 0;
-        const cR = ratios(rawVal);
-        if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
-          adjVal = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-        }
-        return pliVal + adjVal;
-      })
-      .filter(val => val !== null)
-      .sort((a, b) => a - b);
-
-    if (activeSeries.length >= 3) {
-      stats = {
-        p25: quart(activeSeries, .25),
-        med: quart(activeSeries, .5),
-        p75: quart(activeSeries, .75)
-      };
-    }
-  }
-
-  const adj = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
-  const cumpleStr = adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : 'CUMPLE';
+  // El cálculo vive en su propio módulo: lo comparte la sustitución por campos.
+  const { stats, adj, cumple: cumpleStr } = analizarRango(study);
 
   // Helper para destacar visualmente las variables reemplazadas en el editor web
   const wrap = (val) => {
