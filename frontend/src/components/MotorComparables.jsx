@@ -942,7 +942,8 @@ export default function MotorComparables({ study, updateStudy }) {
           <table className="w-full text-left border-collapse min-w-[900px]">
             <thead>
               <tr className="bg-zinc-50 dark:bg-[#0f0f13] text-zinc-500 dark:text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
-                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 w-[18%]">Razón Social</th>
+                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 w-[10%]">Razón Social</th>
+                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 w-[8%]">ID IQ</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 w-[8%]">Ámbito</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[10%]">Ventas</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[10%]">Costos</th>
@@ -972,6 +973,14 @@ export default function MotorComparables({ study, updateStudy }) {
                       onChange={(e) => handleRowChange(idx, 'name', e.target.value)}
                       className="w-full bg-transparent border-0 border-b border-transparent hover:border-zinc-300 focus:border-[#0FA3A1] py-1 text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
+                    {row.esContinuidad && (
+                      <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400">
+                        Continuidad
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
+                    {row.id || '—'}
                   </td>
                   <td className="py-2 px-3">
                     <select
