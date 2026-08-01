@@ -57,11 +57,15 @@ export default function MotorComparables({ study, updateStudy }) {
   const [curacionProgreso, setCuracionProgreso] = useState(null);
 
   useEffect(() => {
-    updateStudy({ 
+    updateStudy({
       actividad_especifica: actividad,
       estudioAnterior: estudioAnteriorInfo,
       motorConfig: engineConfig,
-      universo,
+      /* universo NO se persiste: es el Excel de Capital IQ completo (miles de filas
+         con descripción de negocio) y guardarlo en cada estudio hacía que el JSON
+         superara la cuota de localStorage y tumbara toda la app (QuotaExceededError
+         sin capturar). Se recalcula re-importando el Excel; lo que sí importa para
+         el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
       /* el veredicto de la curación viaja con el estudio: es la constancia de por
