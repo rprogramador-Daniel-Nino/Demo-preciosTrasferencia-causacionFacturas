@@ -63,13 +63,20 @@ desactualizadas es peor que ninguno, porque da falsa confianza.
 ### 3. Si `orden_integracion` está vacío, terminar
 
 No es un error: significa que no hay nada que traer, ni de `main` ni de ningún
-compañero. Informarlo y terminar.
+compañero. Informarlo y terminar — pero informarlo nombrando cada rama de
+`companeros` explícitamente ("antoniodev y juandev ya están al día, nada que
+traer de ninguna"), no con un genérico "nada que hacer". Que no haya nada que
+integrar no es lo mismo que no haber revisado a alguien: el usuario necesita
+ver que ambas ramas SÍ se revisaron y por eso no hace falta tocar nada, no
+solo que el resultado salió vacío.
 
-**Mirar `orden_integracion`, no `companeros`.** Que `companeros` esté vacío no
-autoriza a cerrar: puede no haber ramas de compañeros y sí haber commits en
-`main` esperando. Al revés también pasa — hay compañeros pero sin nada nuevo.
-`orden_integracion` ya resuelve las dos cosas: contiene solo las ramas que
-tienen algo que traer y son integrables, `main` primero.
+**Mirar `orden_integracion`, no `companeros`, para decidir si hay que integrar.**
+Que `companeros` esté vacío no autoriza a cerrar: puede no haber ramas de
+compañeros y sí haber commits en `main` esperando. Al revés también pasa — hay
+compañeros pero sin nada nuevo. `orden_integracion` ya resuelve las dos cosas:
+contiene solo las ramas que tienen algo que traer y son integrables, `main`
+primero. Pero para el reporte en prosa (paso 4), la fuente son los nombres en
+`companeros`, tengan o no algo que traer.
 
 ### 4. Reportar en prosa
 
@@ -207,6 +214,10 @@ manual en el navegador, porque el repo no tiene tests de la aplicación.
   con los compañeros pero divergiendo del tronco.
 - No dar por cerrado el escaneo porque `companeros` esté vacío: mirar
   `orden_integracion`.
+- No reportar "nada que hacer" en genérico cuando `orden_integracion` sale
+  vacío: nombrar cada rama de `companeros` aunque no tenga nada que traer, para
+  que quede claro que sí se revisó a cada compañero y no solo que no hubo
+  novedades.
 - No editar `public/index.html` a mano: se regenera con `npm run build` desde
   `index.html` de la raíz.
 - No seguir si `fetch` falló.
