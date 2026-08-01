@@ -38,6 +38,170 @@ Los cuatro servicios son funciones puras salvo la llamada a la IA, que se inyect
 
 ---
 
+### Task 0: Extraer el cálculo del rango a un módulo compartido
+
+**Files:**
+- Create: `frontend/src/services/rangoIntercuartil.js`
+- Test: `frontend/src/services/rangoIntercuartil.test.js`
+- Modify: `frontend/src/services/exactTemplateMapper.js:60-103`
+
+**Interfaces:**
+- Consumes: `num`, `pliOf`, `ratios`, `quart`, `adjustInfo` de `frontend/src/utils/calculations.js`.
+- Produces: `analizarRango(estudio) => { stats: {p25, med, p75} | null, adj: object | null, cumple: string }`
+
+El cálculo del rango intercuartil lo van a necesitar dos rutas: la nueva por campos con nombre (Task 1) y `exactTemplateMapper.js`, que se conserva como respaldo. Se extrae a un módulo propio para tener una sola copia.
+
+**Esta tarea no debe cambiar ningún comportamiento.** `exactTemplateMapper.test.js` ya existe y debe seguir pasando sin tocarlo. En particular hay una rareza que **se conserva tal cual**: cuando no hay comparables suficientes, `cumpleStr` vale `'CUMPLE'`, no vacío ni nulo. Puede parecer un defecto, pero cambiarlo alteraría los informes que hoy salen por esa ruta, y esta tarea es una extracción, no un arreglo. Quien quiera discutir ese valor, que lo haga en otra tarea.
+
+- [ ] **Step 1: Escribir el test que falla**
+
+Crear `frontend/src/services/rangoIntercuartil.test.js`:
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert';
+import { analizarRango } from './rangoIntercuartil.js';
+
+const conComparables = {
+  pli: 'MO', t_s: 100000, t_c: 80000, t_op: 10000,
+  comparables: [
+    { s: 1000, c: 800, op: 100 }, { s: 2000, c: 1600, op: 260 },
+    { s: 3000, c: 2400, op: 300 }, { s: 4000, c: 3200, op: 520 },
+  ],
+};
+
+test('con cuatro comparables sale el rango completo y ordenado', () => {
+  const r = analizarRango(conComparables);
+  assert.ok(r.stats, 'debería haber rango');
+  assert.ok(r.stats.p25 <= r.stats.med && r.stats.med <= r.stats.p75, 'cuartiles desordenados');
+});
+
+test('con menos de tres comparables no hay rango', () => {
+  assert.strictEqual(analizarRango({ ...conComparables, comparables: [{ s: 1, c: 1, op: 1 }] }).stats, null);
+  assert.strictEqual(analizarRango({}).stats, null);
+});
+
+/* Comportamiento heredado de exactTemplateMapper.js. Se conserva exactamente:
+   cambiarlo alteraría los informes que hoy salen por esa ruta. */
+test('sin rango, la conclusión heredada sigue siendo CUMPLE', () => {
+  assert.strictEqual(analizarRango({}).cumple, 'CUMPLE');
+  assert.strictEqual(analizarRango({}).adj, null);
+});
+
+test('una comparable sin PLI calculable no rompe el resto', () => {
+  const r = analizarRango({
+    ...conComparables,
+    comparables: [...conComparables.comparables, { s: null, c: null, op: null }],
+  });
+  assert.ok(r.stats, 'la comparable inservible debe descartarse, no tumbar el cálculo');
+});
+```
+
+- [ ] **Step 2: Correr el test y verificar que falla**
+
+```bash
+node --test frontend/src/services/rangoIntercuartil.test.js
+```
+
+Esperado: FALLA con `Cannot find module './rangoIntercuartil.js'`.
+
+- [ ] **Step 3: Crear el módulo**
+
+Crear `frontend/src/services/rangoIntercuartil.js` moviendo el bloque tal cual está hoy en `exactTemplateMapper.js:60-103`:
+
+```js
+/* Rango intercuartil de las comparables y conclusión de cumplimiento.
+   Vive aparte porque lo usan dos rutas: la sustitución por campos con nombre y
+   `exactTemplateMapper.js`, que queda como respaldo de las plantillas sin
+   marcar. Cuando el mapper se retire, este módulo se queda donde está. */
+
+import { num, pliOf, ratios, quart, adjustInfo } from '../utils/calculations.js';
+
+export function analizarRango(estudio) {
+  const study = estudio || {};
+  const kind = study.pli || 'MO';
+  const T = {
+    s: num(study.t_s), c: num(study.t_c), op: num(study.t_op),
+    ar: num(study.t_ar), inv: num(study.t_inv), ap: num(study.t_ap),
+  };
+  const tPLI = pliOf(T, kind);
+
+  const useAdj = study.useadj || false;
+  const interestRate = (num(study.prime) || 0) / 100;
+  const tR = ratios(T);
+
+  let stats = null;
+  if (study.comparables && study.comparables.length >= 3) {
+    const activeSeries = study.comparables
+      .map((c) => {
+        const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
+        const pliVal = pliOf(rawVal, kind);
+        if (pliVal === null) return null;
+        let adjVal = 0;
+        const cR = ratios(rawVal);
+        if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
+          adjVal = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
+        }
+        return pliVal + adjVal;
+      })
+      .filter((val) => val !== null)
+      .sort((a, b) => a - b);
+
+    if (activeSeries.length >= 3) {
+      stats = { p25: quart(activeSeries, 0.25), med: quart(activeSeries, 0.5), p75: quart(activeSeries, 0.75) };
+    }
+  }
+
+  const adj = stats && tPLI !== null ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
+  /* 'CUMPLE' cuando no hay ajuste es comportamiento heredado, no un descuido.
+     Ver la nota de la Task 0 del plan antes de cambiarlo. */
+  const cumple = adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : 'CUMPLE';
+
+  return { stats, adj, cumple };
+}
+```
+
+- [ ] **Step 4: Hacer que el mapper lo use**
+
+En `frontend/src/services/exactTemplateMapper.js`, sustituir el bloque completo de las líneas 60-103 (desde el comentario `// Calculamos el Rango Intercuartil y Ajuste si hay comparables` hasta la línea de `const cumpleStr = ...`) por:
+
+```js
+  // El cálculo vive en su propio módulo: lo comparte la sustitución por campos.
+  const { stats, adj, cumple: cumpleStr } = analizarRango(study);
+```
+
+Añadir el import al principio del archivo:
+
+```js
+import { analizarRango } from './rangoIntercuartil.js';
+```
+
+Después, quitar del import de `calculations.js` los símbolos que dejen de usarse en este archivo. Comprobar cuáles con:
+
+```bash
+grep -nE "\b(pliOf|ratios|quart|adjustInfo)\b" frontend/src/services/exactTemplateMapper.js
+```
+
+Si alguno ya no aparece fuera de la línea del import, quitarlo de ahí; oxlint avisa de los imports sin usar.
+
+- [ ] **Step 5: Correr la suite completa y verificar que nada cambió**
+
+```bash
+npm test
+npm run lint --prefix frontend
+```
+
+Esperado: todos los tests pasan, **incluidos los de `exactTemplateMapper.test.js` sin haberlos tocado**. Si alguno falla, la extracción cambió comportamiento y hay que corregirla, no ajustar el test.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/services/rangoIntercuartil.js frontend/src/services/rangoIntercuartil.test.js frontend/src/services/exactTemplateMapper.js
+git commit -m "refactor: extraer el cálculo del rango intercuartil a su propio módulo"
+```
+
+---
+
 ### Task 1: Vocabulario de campos
 
 **Files:**
@@ -168,7 +332,8 @@ Crear `frontend/src/services/plantillaVocabulario.js`:
    un campo inventado produciría una marca que nunca se resuelve y dejaría el
    valor del cliente anterior en el documento sin que nada lo delate. */
 
-import { fmt, num, pliOf, ratios, quart, adjustInfo, getUvtValue } from '../utils/calculations.js';
+import { fmt, num, getUvtValue } from '../utils/calculations.js';
+import { analizarRango } from './rangoIntercuartil.js';
 
 const EEFF = [
   ['t_cash', 'Efectivo'],
@@ -216,44 +381,13 @@ const CAMPOS = new Set(VOCABULARIO.map((v) => v.campo));
 
 export const esCampoValido = (campo) => CAMPOS.has(campo);
 
-/* Rango intercuartil de las comparables. Es la misma cuenta que hace hoy
-   `exactTemplateMapper.js`, duplicada a propósito: aquel archivo es la ruta de
-   respaldo de las plantillas sin marcar y se retira cuando deje de haberlas.
-   Extraer un módulo común para algo que muere pronto costaría más de lo que
-   ahorra; cuando el mapper se borre, esta queda como única copia. */
-function estadisticas(estudio) {
-  const comparables = estudio.comparables || [];
-  if (comparables.length < 3) return null;
-
-  const kind = estudio.pli || 'MO';
-  const T = {
-    s: num(estudio.t_s), c: num(estudio.t_c), op: num(estudio.t_op),
-    ar: num(estudio.t_ar), inv: num(estudio.t_inv), ap: num(estudio.t_ap),
-  };
-  const tR = ratios(T);
-  const interes = (num(estudio.prime) || 0) / 100;
-
-  const serie = comparables
-    .map((c) => {
-      const bruto = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
-      const pli = pliOf(bruto, kind);
-      if (pli === null) return null;
-      let ajuste = 0;
-      const cR = ratios(bruto);
-      if (estudio.useadj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
-        ajuste = interes * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-      }
-      return pli + ajuste;
-    })
-    .filter((v) => v !== null)
-    .sort((a, b) => a - b);
-
-  if (serie.length < 3) return null;
-  const stats = { p25: quart(serie, 0.25), med: quart(serie, 0.5), p75: quart(serie, 0.75) };
-  const tPLI = pliOf(T, kind);
-  const adj = tPLI !== null ? adjustInfo(T, tPLI, stats, T.s || 0, 1, estudio.egreso) : null;
-  return { ...stats, cumple: adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : null };
-}
+/* El cálculo vive en `rangoIntercuartil.js` (Task 0), compartido con
+   `exactTemplateMapper.js`. Aquí solo se decide qué se publica: si no hay
+   rango, el campo sale nulo y el renderizador pondrá un hueco visible. Ojo con
+   la diferencia deliberada respecto al mapper: aquel devuelve 'CUMPLE' cuando
+   no hay comparables —comportamiento heredado que la Task 0 conserva— y esta
+   ruta prefiere el hueco, porque afirmar cumplimiento sin haberlo calculado es
+   justo lo que no debe llegar a un documento que se radica ante la DIAN. */
 
 /* Devuelve el valor listo para insertar, o null si el estudio no lo trae.
    Nunca devuelve un valor por defecto: un campo sin dato tiene que verse como
@@ -268,10 +402,10 @@ export function valorDeCampo(estudio, campo) {
   }
 
   if (campo.startsWith('rango.')) {
-    const s = estadisticas(estudio);
-    if (!s) return null;
-    if (campo === 'rango.cumple') return s.cumple;
-    const v = { 'rango.p25': s.p25, 'rango.mediana': s.med, 'rango.p75': s.p75 }[campo];
+    const { stats, cumple } = analizarRango(estudio);
+    if (!stats) return null;
+    if (campo === 'rango.cumple') return cumple;
+    const v = { 'rango.p25': stats.p25, 'rango.mediana': stats.med, 'rango.p75': stats.p75 }[campo];
     return v === null || v === undefined ? null : fmt(v);
   }
 
