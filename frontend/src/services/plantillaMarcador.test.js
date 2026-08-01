@@ -61,3 +61,68 @@ test('marcas sobre el mismo texto no se pisan entre sí', () => {
   assert.ok(r.html.includes('<span data-campo="ent">ACME S.A.S</span>'));
   assert.ok(r.html.includes('<span data-campo="nit">800123456-7</span>'));
 });
+
+test('solapamiento: contenedora primero, contenida después se rechaza', () => {
+  const html = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(html, [
+    { fragmento: 'ACME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 },
+    { fragmento: 'COLOMBIA', campo: 'nit', ocurrencia: 1 },
+  ]);
+  assert.strictEqual(r.aplicadas, 1, 'solo la primera marca debe aplicarse');
+  assert.strictEqual(r.descartadas.length, 1);
+  assert.match(r.descartadas[0].motivo, /solapa/i);
+  assert.ok(r.html.includes('<span data-campo="ent">ACME COLOMBIA S.A.S</span>'));
+});
+
+test('solapamiento: contenida primero, contenedora después se rechaza', () => {
+  const html = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(html, [
+    { fragmento: 'COLOMBIA', campo: 'nit', ocurrencia: 1 },
+    { fragmento: 'ACME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 },
+  ]);
+  assert.strictEqual(r.aplicadas, 1, 'solo la primera marca debe aplicarse');
+  assert.strictEqual(r.descartadas.length, 1);
+  assert.match(r.descartadas[0].motivo, /solapa/i);
+  assert.ok(r.html.includes('<span data-campo="nit">COLOMBIA</span>'));
+});
+
+test('solapamiento parcial: dos fragmentos que comparten parte se rechazan', () => {
+  const html = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(html, [
+    { fragmento: 'ACME COLOMBIA', campo: 'ent', ocurrencia: 1 },
+    { fragmento: 'COLOMBIA S.A.S', campo: 'nit', ocurrencia: 1 },
+  ]);
+  assert.strictEqual(r.aplicadas, 1);
+  assert.strictEqual(r.descartadas.length, 1);
+  assert.match(r.descartadas[0].motivo, /solapa/i);
+});
+
+test('caso realista: cifra menor dentro de mayor se rechaza', () => {
+  const html = '<p>Total 1.234.567</p>';
+  const r = aplicarMarcas(html, [
+    { fragmento: '1.234.567', campo: 'eeff.t_act_tot', ocurrencia: 1 },
+    { fragmento: '234.567', campo: 'eeff.t_inv', ocurrencia: 1 },
+  ]);
+  assert.strictEqual(r.aplicadas, 1);
+  assert.strictEqual(r.descartadas.length, 1);
+  assert.match(r.descartadas[0].motivo, /solapa/i);
+});
+
+test('remover los spans recupera el documento original', () => {
+  const original = '<p>ACME COLOMBIA S.A.S</p>';
+  const r = aplicarMarcas(original, [
+    { fragmento: 'ACME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 },
+  ]);
+  const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
+  assert.strictEqual(sinSpans, original);
+});
+
+test('remover los spans con múltiples marcas recupera el original', () => {
+  const original = '<p>ACME S.A.S con NIT 800123456-7</p>';
+  const r = aplicarMarcas(original, [
+    { fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 },
+    { fragmento: '800123456-7', campo: 'nit', ocurrencia: 1 },
+  ]);
+  const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
+  assert.strictEqual(sinSpans, original);
+});

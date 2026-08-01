@@ -32,6 +32,10 @@ function segmentar(html) {
   return segmentos;
 }
 
+function obtenerTextoVisible(segmentos) {
+  return segmentos.filter(s => s.tipo !== 'etiqueta').map(s => s.valor).join('');
+}
+
 export function aplicarMarcas(html, marcas) {
   const segmentos = segmentar(html);
   const descartadas = [];
@@ -52,7 +56,10 @@ export function aplicarMarcas(html, marcas) {
 
     /* Se recorre contando apariciones en el texto ya segmentado, de modo que
        las marcas anteriores (que introdujeron etiquetas) no desplacen la
-       cuenta ni se marquen dos veces. */
+       cuenta ni se marquen dos veces.
+
+       Solo busca en segmentos tipo 'texto': los marcados quedan ineligibles para
+       evitar solapamientos. */
     let vistas = 0;
     let puesta = false;
     for (let s = 0; s < segmentos.length && !puesta; s++) {
@@ -68,7 +75,7 @@ export function aplicarMarcas(html, marcas) {
             s, 1,
             { tipo: 'texto', valor: v.slice(0, pos) },
             { tipo: 'etiqueta', valor: '<span data-campo="' + campo + '">' },
-            { tipo: 'texto', valor: fragmento },
+            { tipo: 'marcado', valor: fragmento },
             { tipo: 'etiqueta', valor: '</span>' },
             { tipo: 'texto', valor: v.slice(pos + fragmento.length) }
           );
@@ -80,7 +87,14 @@ export function aplicarMarcas(html, marcas) {
     }
 
     if (puesta) aplicadas++;
-    else descartadas.push({ marca, motivo: 'el fragmento no aparece en el documento' });
+    else {
+      const textoVisible = obtenerTextoVisible(segmentos);
+      if (textoVisible.includes(fragmento)) {
+        descartadas.push({ marca, motivo: 'se solapa con una marca ya aplicada' });
+      } else {
+        descartadas.push({ marca, motivo: 'el fragmento no aparece en el documento' });
+      }
+    }
   }
 
   return { html: segmentos.map((s) => s.valor).join(''), aplicadas, descartadas };
