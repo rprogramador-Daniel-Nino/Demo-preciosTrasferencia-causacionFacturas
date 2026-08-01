@@ -129,6 +129,34 @@ test('una candidata de continuidad ya no se descarta por falta de descripción',
   assert.strictEqual(r.seleccionadas[0].esContinuidad, true);
 });
 
+test('el cupo nTarget no limita a las candidatas de continuidad: se agregan aparte', () => {
+  const candidatas = [
+    { id: '1', name: 'Continuidad Uno', nameKey: nameKey('Continuidad Uno'), s: 100, op: 10 },
+    { id: '2', name: 'Continuidad Dos', nameKey: nameKey('Continuidad Dos'), s: 100, op: 10 },
+    { id: '3', name: 'Nueva Uno', nameKey: nameKey('Nueva Uno'), s: 100, op: 10 },
+    { id: '4', name: 'Nueva Dos', nameKey: nameKey('Nueva Dos'), s: 100, op: 10 },
+  ];
+  const priorComps = [{ name: 'Continuidad Uno' }, { name: 'Continuidad Dos' }];
+  const r = scoreCandidates(candidatas, { nTarget: 1 }, '', priorComps);
+  assert.strictEqual(r.seleccionadas.length, 3, '2 de continuidad + 1 por cupo, aunque nTarget sea 1');
+  const continuidad = r.seleccionadas.filter(c => c.esContinuidad);
+  assert.strictEqual(continuidad.length, 2, 'las dos de continuidad entran completas');
+  const otras = r.seleccionadas.filter(c => !c.esContinuidad);
+  assert.strictEqual(otras.length, 1, 'solo una de las nuevas, por el cupo de 1');
+  assert.strictEqual(r.reserva.length, 1, 'la otra nueva queda en reserva, no la de continuidad');
+});
+
+test('holding y saldo negativo siguen excluyendo a una candidata de continuidad', () => {
+  const priorComps = [{ name: 'Holding Corp' }, { name: 'Saldo Corp' }];
+  const candidatas = [
+    { id: 'H', name: 'Holding Corp', nameKey: nameKey('Holding Corp'), isHolding: true },
+    { id: 'S', name: 'Saldo Corp', nameKey: nameKey('Saldo Corp'), hasNegativeBalance: true },
+  ];
+  const r = scoreCandidates(candidatas, {}, '', priorComps);
+  assert.strictEqual(r.seleccionadas.length, 0, 'ninguna debe pasar pese a ser de continuidad');
+  assert.strictEqual(r.rechazadas.length, 2);
+});
+
 /* ══════ Curación por IA: comportamiento completo migrado del monolito ══════ */
 
 test('la curación solo evalúa candidatas con identificador y descripción', async () => {
