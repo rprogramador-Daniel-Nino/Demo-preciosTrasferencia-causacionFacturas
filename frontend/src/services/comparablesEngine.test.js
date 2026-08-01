@@ -1,3 +1,4 @@
+
 import { test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -144,6 +145,12 @@ test('el cupo nTarget no limita a las candidatas de continuidad: se agregan apar
   const otras = r.seleccionadas.filter(c => !c.esContinuidad);
   assert.strictEqual(otras.length, 1, 'solo una de las nuevas, por el cupo de 1');
   assert.strictEqual(r.reserva.length, 1, 'la otra nueva queda en reserva, no la de continuidad');
+});
+
+test('nameKey ignora el sufijo de bolsa/ticker entre paréntesis de Capital IQ', () => {
+  assert.strictEqual(nameKey('Akatsuki Inc. (TSE:3932)'), nameKey('AKATSUKI INC.'));
+  assert.strictEqual(nameKey('COLOPL, Inc. (TSE:3668)'), nameKey('COLOPL, INC.'));
+  assert.strictEqual(nameKey('QubicGames S.A. (WSE:QUB)'), nameKey('QUBICGAMES S.A.'));
 });
 
 test('holding y saldo negativo siguen excluyendo a una candidata de continuidad', () => {

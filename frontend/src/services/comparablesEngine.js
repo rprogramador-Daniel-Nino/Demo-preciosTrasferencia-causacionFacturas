@@ -11,6 +11,11 @@ export function nameKey(str) {
     .toUpperCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    /* Capital IQ agrega el sufijo de bolsa/ticker entre parentesis al nombre,
+       p. ej. "Akatsuki Inc. (TSE:3932)" - el estudio del anio anterior nunca
+       lo trae, asi que sin esto el cruce de continuidad nunca encontraba
+       coincidencias aunque la compania siguiera en el universo. */
+    .replace(/\([^)]*\)/g, '')
     .replace(/\b(COLOMBIA|INC|INC\.|CORP|CORP\.|LTD|LTD\.|LLC|S\.A\.S\.|SAS|S\.A\.|SA|LTDA|S\.A\. DE C\.V\.|C\.A\.|PLC|NV|GMBH|BV|CO\.|COMPANY|CORPORATION|LIMITED)\b/gi, '')
     .replace(/[^A-Z0-9]/g, '');
 }
