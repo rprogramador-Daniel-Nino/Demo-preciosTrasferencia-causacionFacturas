@@ -7,11 +7,15 @@ import { extraerReferencia } from '../services/pdfReferenceExtractor';
 import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado,
+  guardarHuecos, leerHuecos,
 } from '../services/plantillaStore';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
-import { proponerMarcas, aplicarMarcas } from '../services/plantillaMarcador.js';
+import {
+  proponerMarcas, aplicarMarcas,
+  MOTIVO_NO_APARECE, MOTIVO_SOLAPE, MOTIVO_SIN_APARICION_LIBRE,
+} from '../services/plantillaMarcador.js';
 import { renderizar } from '../services/plantillaRenderer.js';
-import { revisarAntesDeGenerar } from '../services/plantillaGuardas.js';
+import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
@@ -30,46 +34,65 @@ export default function ReporteGenerador({ study, estudioId }) {
   const [marcasPropuestas, setMarcasPropuestas] = useState(null);
   const [plantillaPendiente, setPlantillaPendiente] = useState(null);
   const [avisos, setAvisos] = useState([]);
+  /* Resultado del marcado (trozos enviados, fallidos, propuestas rechazadas).
+     Se muestra dentro del revisor mientras se revisan las marcas. */
+  const [avisoMarcado, setAvisoMarcado] = useState('');
 
   /* La hidratación sustituye por literales del informe de End Game 2024. Con
      el PDF de otro cliente no coincide ninguno y el documento sale con los
      datos del PDF subido, sin ninguna señal. Se usa el NIT del estudio como
      testigo: si el estudio tiene NIT y no aparece en el HTML ya hidratado, la
-     sustitución no ocurrió. El arreglo de fondo —marcado por campos con
-     nombre— es del plan 2; esto solo evita que pase desapercibido. */
+     sustitución no ocurrió. El arreglo de fondo es el marcado por campos con
+     nombre; esto solo evita que la ruta de respaldo falle en silencio. */
   const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
-  /* Extrae el NIT que traía el informe de referencia. El marcado conserva el
-     texto original y solo lo envuelve, así que el contenido de la primera
-     marca `data-campo="nit"` es literalmente el NIT del cliente anterior. Si
-     el documento no llegó a marcar ese campo, devuelve null y la guarda de
-     "plantilla de otro contribuyente" simplemente no opina, que es lo
-     correcto: sin NIT de referencia no hay con qué comparar. */
-  const extraerNitDeReferencia = (htmlMarcado) => {
-    const m = /<span data-campo="nit">([\s\S]*?)<\/span>/.exec(htmlMarcado || '');
-    return m ? m[1] : null;
+  /* Aviso de la ruta de respaldo (mammoth y plantillas sin marcar). Se calcula
+     con `faltaSustitucion` y se pinta como banner, no con `alert`: al recargar
+     el estudio el efecto corre en cada montaje y un alert bloqueante cada vez
+     sería más molesto que informativo. */
+  const revisarHidratacion = (hydrated) => {
+    setAvisoHidratacion(faltaSustitucion(hydrated)
+      ? 'No se encontró el NIT del estudio (' + study.nit + ') en el documento hidratado. ' +
+        'Esta plantilla no está marcada por campos, así que la sustitución va por valor ' +
+        'literal: revisa el documento entero antes de radicarlo, porque puede conservar ' +
+        'datos del contribuyente del informe de referencia.'
+      : '');
   };
 
   /* Renderiza la plantilla marcada contra el estudio activo y calcula los
      avisos previos a generar. Se centraliza aquí porque son tres las rutas
      que renderizan por campo —al subir un PDF cuya plantilla ya estaba
      marcada, al confirmar marcas recién revisadas, y al abrir un estudio con
-     plantilla marcada— y las tres deben avisar exactamente igual. */
-  const renderizarYAvisar = (htmlMarcado, recursos) => {
+     plantilla marcada— y las tres deben avisar exactamente igual.
+
+     `huecos` es cuántos huecos de anexo dejó el extractor en esta plantilla. */
+  const renderizarYAvisar = (htmlMarcado, recursos, huecos = 0) => {
     const r = renderizar(htmlMarcado, study, recursos);
+    /* Los valores que traía el informe de referencia salen del propio HTML
+       marcado: el marcado envuelve el texto original sin alterarlo, así que el
+       contenido de una marca `data-campo="nit"` es literalmente el NIT del
+       cliente anterior. Con eso se revisa la SALIDA, que es lo único que
+       comprueba de verdad el objetivo de todo este trabajo. */
+    const valores = valoresDeReferencia(htmlMarcado);
+    const nitRef = valores.find((v) => v.campo === 'nit');
     setHtmlContent(r.html);
+    setAvisoHidratacion('');
     setAvisos(revisarAntesDeGenerar({
       estudio: study,
-      nitDeReferencia: extraerNitDeReferencia(htmlMarcado),
+      /* Sin NIT de referencia la guarda no opina, que es lo correcto: no hay
+         con qué comparar. */
+      nitDeReferencia: nitRef ? nitRef.valor : null,
       vacios: r.vacios,
-      /* El almacén 'anexos' ya existe en plantillaStore.js pero nadie lo usa
-         todavía: falta la pantalla de subida del anexo de estados
-         financieros, fuera del alcance de esta tarea. Se deja fijo en true
-         para no disparar un aviso de "falta el anexo" que sería
-         permanentemente falso —y por tanto ignorable— hasta que esa pantalla
-         exista. */
-      tieneAnexo: true,
+      /* El almacén 'anexos' existe pero todavía no hay pantalla de subida del
+         anexo (fuera de alcance), así que un hueco es por definición un hueco
+         sin rellenar. Antes esto iba fijo en `true` y la guarda del anexo, que
+         está escrita y probada, nunca llegaba a opinar: las 16 páginas del
+         anexo de estados financieros firmados se convertían en huecos y nadie
+         avisaba. */
+      tieneAnexo: huecos === 0,
       recursosFaltantes: r.recursosFaltantes,
+      htmlRenderizado: r.html,
+      valores,
     }));
     setCustomTemplateLoaded(true);
   };
@@ -87,11 +110,13 @@ export default function ReporteGenerador({ study, estudioId }) {
          así que esto no se puede provocar en la práctica, pero el
          invariante vive fuera de este componente y no conviene depender
          de él en silencio. */
-      if (vivo) { setMarcasPropuestas(null); setPlantillaPendiente(null); }
+      if (vivo) {
+        setMarcasPropuestas(null); setPlantillaPendiente(null); setAvisoMarcado('');
+      }
       if (!estudioId) return;
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los avisos del anterior. */
-      if (vivo) setAvisos([]);
+      if (vivo) { setAvisos([]); setAvisoHidratacion(''); }
       const recursos = await leerRecursos(estudioId);
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los recursos del anterior. */
@@ -106,8 +131,12 @@ export default function ReporteGenerador({ study, estudioId }) {
          plantillas antiguas. Se resuelve al leer y no al guardar porque el
          estudio puede cambiar después de haber subido la plantilla. */
       const marcado = await leerMarcado(idPlantilla);
+      /* La cuenta de huecos se guardó con la plantilla al subir el PDF: sin
+         leerla aquí, al recargar el estudio no habría forma de saber que el
+         documento tiene páginas de anexo sin rellenar. */
+      const huecos = await leerHuecos(idPlantilla);
       if (vivo && marcado) {
-        renderizarYAvisar(marcado, recursos);
+        renderizarYAvisar(marcado, recursos, huecos);
       } else if (vivo && html) {
         /* Se guarda el HTML crudo del extractor y se hidrata al leerlo, no al
            guardarlo: el estudio puede cambiar después de haber subido la
@@ -117,7 +146,9 @@ export default function ReporteGenerador({ study, estudioId }) {
         /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
            setState de arriba no ha surtido efecto todavía dentro de este mismo
            efecto, y las imágenes saldrían rotas en la primera pintada. */
-        setHtmlContent(conImagenes(hydrateExactWordTemplate(html, study), recursos));
+        const hidratado = hydrateExactWordTemplate(html, study);
+        setHtmlContent(conImagenes(hidratado, recursos));
+        revisarHidratacion(hidratado);
         /* Evita que el efecto de la plantilla maestra sobrescriba lo
            recuperado. Es lo que hacía fallar la recarga. */
         setCustomTemplateLoaded(true);
@@ -130,6 +161,10 @@ export default function ReporteGenerador({ study, estudioId }) {
   const loadExactMasterTemplate = () => {
     const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study);
     setHtmlContent(hydrated);
+    /* Esta es la ruta por defecto de todo estudio que no haya subido plantilla,
+       es decir la de casi todo el mundo hoy, y va por valor literal. Si el NIT
+       del estudio no aparece en la salida, la sustitución no ocurrió. */
+    revisarHidratacion(hydrated);
   };
 
   useEffect(() => {
@@ -169,6 +204,12 @@ export default function ReporteGenerador({ study, estudioId }) {
           /* El marcado se paga una vez por plantilla. Si este PDF ya se marcó
              antes —otro estudio del mismo cliente, o un reintento— se
              reutiliza sin volver a llamar a la IA. */
+          /* La cuenta de huecos se conserva con la plantilla, no solo en
+             memoria: es lo que permite que la guarda del anexo siga opinando
+             después de recargar la página. */
+          const huecos = ref.huecos ? ref.huecos.length : 0;
+          await guardarHuecos(idPlantilla, huecos);
+
           const marcadoPrevio = await leerMarcado(idPlantilla);
           if (!marcadoPrevio) {
             /* Los avisos visibles corresponden a la plantilla anterior (u
@@ -176,11 +217,13 @@ export default function ReporteGenerador({ study, estudioId }) {
                todavía un render del que calcularlos, y dejarlos puestos
                enseñaría al usuario a ignorar el banner. */
             setAvisos([]);
+            setAvisoHidratacion('');
             const propuestas = await proponerMarcas(ref.html);
-            setPlantillaPendiente({ id: idPlantilla, html: ref.html });
-            setMarcasPropuestas(propuestas);
+            setPlantillaPendiente({ id: idPlantilla, html: ref.html, huecos });
+            setMarcasPropuestas(propuestas.marcas);
+            setAvisoMarcado(resumirMarcado(propuestas));
           } else {
-            renderizarYAvisar(marcadoPrevio, recursos);
+            renderizarYAvisar(marcadoPrevio, recursos, huecos);
           }
         } else {
           const result = await mammoth.convertToHtml({ arrayBuffer });
@@ -194,6 +237,10 @@ export default function ReporteGenerador({ study, estudioId }) {
           setAvisos([]);
           const hydrated = hydrateExactWordTemplate(html, study);
           setHtmlContent(conImagenes(hydrated, []));
+          /* Detección de fuga de la ruta legado. Estaba escrita y no se
+             invocaba desde ningún sitio: la ruta aparentaba tenerla y no la
+             tenía. */
+          revisarHidratacion(hydrated);
           setCustomTemplateLoaded(true);
         }
       } catch (err) {
@@ -205,32 +252,63 @@ export default function ReporteGenerador({ study, estudioId }) {
     };
   };
 
-  /* Resume las descartadas agrupándolas por motivo. Los dos motivos que
-     produce aplicarMarcas significan cosas muy distintas: un solape es
-     benigno (el modelo marcó de más sobre texto que una marca anterior ya
-     cubría); que el fragmento no aparezca es la señal real de que el modelo
-     reescribió el texto al proponerlo. Anunciar ambos como "no aparece" -el
-     mensaje genérico que tenía esto antes- alarma de más en el primer caso y
-     esconde la señal real en el segundo. */
+  /* Resume el marcado en sí: trozos enviados, trozos perdidos y propuestas que
+     el vocabulario rechazó. Un marcado parcial silencioso es exactamente el
+     fallo que este proyecto ya sufrió dos veces con las imágenes: un PDF de 112
+     páginas son unas 25 llamadas y basta un 429 para que un tramo entero quede
+     sin marcar. Devuelve '' cuando todo salió bien, para no poner un banner que
+     no dice nada. */
+  const resumirMarcado = ({ trozosEnviados, trozosFallidos, rechazadasPorVocabulario }) => {
+    const lineas = [];
+    if (trozosFallidos) {
+      lineas.push(trozosFallidos + ' de ' + trozosEnviados + ' tramos del documento no se ' +
+                  'pudieron marcar (falló la llamada o la respuesta no traía JSON). Ese texto ' +
+                  'queda SIN MARCAR: los datos del contribuyente anterior que hubiera ahí van a ' +
+                  'sobrevivir. Vuelve a subir el PDF para reintentarlo antes de radicar.');
+    }
+    if (rechazadasPorVocabulario) {
+      lineas.push(rechazadasPorVocabulario + ' propuesta(s) se rechazaron porque el campo no está ' +
+                  'en el vocabulario. El modelo estaba señalando un dato del informe de ' +
+                  'referencia que ningún campo puede sustituir: revísalo a mano.');
+    }
+    return lineas.join('\n');
+  };
+
+  /* Resume las descartadas agrupándolas por motivo. Los tres motivos que
+     produce aplicarMarcas significan cosas muy distintas, y solo uno es
+     benigno: un solape (el modelo marcó de más sobre texto que una marca
+     anterior ya cubría). Que el fragmento no aparezca es la señal de que el
+     modelo reescribió el texto al proponerlo; que no quede una aparición libre
+     significa que la marca se quedó sin sitio y el dato del cliente anterior
+     sobrevive en el documento. Anunciar los tres como benignos —o los tres como
+     "no aparece"— esconde la señal real. */
   const resumirDescartes = (descartadas) => {
     const porMotivo = new Map();
     for (const d of descartadas) porMotivo.set(d.motivo, (porMotivo.get(d.motivo) || 0) + 1);
 
     const lineas = [];
-    const noAparece = porMotivo.get('el fragmento no aparece en el documento');
-    const solapada = porMotivo.get('se solapa con una marca ya aplicada');
+    const noAparece = porMotivo.get(MOTIVO_NO_APARECE);
+    const solapada = porMotivo.get(MOTIVO_SOLAPE);
+    const sinLibre = porMotivo.get(MOTIVO_SIN_APARICION_LIBRE);
     if (noAparece) {
       lineas.push(noAparece + ' se descartaron porque su texto no aparece literalmente en el ' +
                   'documento: revisa si el modelo reescribió ese fragmento.');
+    }
+    if (sinLibre) {
+      lineas.push(sinLibre + ' se descartaron porque el documento no tiene tantas apariciones de ' +
+                  'ese texto como decía la marca. ATENCIÓN: esas apariciones se quedan SIN ' +
+                  'SUSTITUIR y el dato del contribuyente anterior sobrevive ahí. Revísalas a mano ' +
+                  'en el documento antes de radicar.');
     }
     if (solapada) {
       lineas.push(solapada + ' se descartaron por solaparse con una marca ya aplicada, lo cual es ' +
                   'normal y no es señal de un problema.');
     }
-    /* Motivo distinto de los dos conocidos hoy: se reporta genérico en vez de
+    /* Motivo distinto de los tres conocidos hoy: se reporta genérico en vez de
        omitirlo, por si aplicarMarcas agrega alguno nuevo más adelante. */
     for (const [motivo, n] of porMotivo) {
-      if (motivo !== 'el fragmento no aparece en el documento' && motivo !== 'se solapa con una marca ya aplicada') {
+      if (motivo !== MOTIVO_NO_APARECE && motivo !== MOTIVO_SOLAPE &&
+          motivo !== MOTIVO_SIN_APARICION_LIBRE) {
         lineas.push(n + ' se descartaron: ' + motivo + '.');
       }
     }
@@ -241,12 +319,13 @@ export default function ReporteGenerador({ study, estudioId }) {
   const confirmarMarcas = async (marcas) => {
     const { html, aplicadas, descartadas } = aplicarMarcas(plantillaPendiente.html, marcas);
     await guardarMarcado(plantillaPendiente.id, html);
-    renderizarYAvisar(html, recursosCargados);
+    renderizarYAvisar(html, recursosCargados, plantillaPendiente.huecos || 0);
     setMarcasPropuestas(null);
     setPlantillaPendiente(null);
-    if (descartadas.length) {
-      alert('Se aplicaron ' + aplicadas + ' marcas.\n' + resumirDescartes(descartadas));
-    }
+    const resumen = [avisoMarcado, descartadas.length ? resumirDescartes(descartadas) : '']
+      .filter(Boolean).join('\n');
+    setAvisoMarcado('');
+    if (resumen) alert('Se aplicaron ' + aplicadas + ' marcas.\n' + resumen);
   };
 
   /* Resuelve las marcas que dejó el extractor contra el catálogo de recursos.
@@ -336,9 +415,21 @@ export default function ReporteGenerador({ study, estudioId }) {
       {marcasPropuestas && (
         <RevisorDeMarcas
           marcas={marcasPropuestas}
+          aviso={avisoMarcado}
           onConfirmar={confirmarMarcas}
-          onCancelar={() => { setMarcasPropuestas(null); setPlantillaPendiente(null); }}
+          onCancelar={() => {
+            setMarcasPropuestas(null); setPlantillaPendiente(null); setAvisoMarcado('');
+          }}
         />
+      )}
+
+      {/* Aviso de la ruta de respaldo: la sustitución por valor literal no se
+          pudo confirmar. Va aparte de `avisos` porque esa lista la produce la
+          ruta de campos marcados, que en este caso no corrió. */}
+      {avisoHidratacion && (
+        <div className="border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-xl p-4">
+          <p className="text-xs text-amber-900 dark:text-amber-200">{avisoHidratacion}</p>
+        </div>
       )}
 
       {avisos.length > 0 && (

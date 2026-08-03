@@ -121,3 +121,74 @@ test('reemplazo dinámico de la tabla de PIB Mundial y PIB de Colombia para el a
   assert.ok(salidaColombia.includes('3.0'), 'Falta valor 3.0 de PIB Colombia');
   assert.ok(salidaColombia.includes('3.2'), 'Falta valor 3.2 de PIB Colombia');
 });
+
+/* --- Higiene de la ruta de respaldo. Es la que toma TODO estudio que no haya
+   subido y marcado un PDF, así que hoy es la ruta real de casi todo el mundo.
+   Con un estudio recién creado salían 25 rastros del cliente anterior. --- */
+
+test('sin dato en el estudio sale hueco, nunca el literal de End Game', () => {
+  const html =
+    '<p>Monto de la operación: 3.435.357.400</p>' +
+    '<p>Tipo: Otros servicios (07)</p>' +
+    '<p>Vinculado END GAME INTERACTIVE INC de ESTADOS UNIDOS, id 604477955</p>';
+  const salida = hydrateExactWordTemplate(html, { anio: 2025 });
+  for (const rastro of ['3.435.357.400', 'Otros servicios (07)', 'END GAME INTERACTIVE INC',
+                        'ESTADOS UNIDOS', '604477955']) {
+    assert.ok(!salida.includes(rastro), 'sobrevivió el valor por defecto de End Game: ' + rastro);
+  }
+  assert.ok(salida.includes('—'), 'debía quedar el marcador de hueco');
+});
+
+test('la tabla de EEFF sale en huecos y no con las cifras de End Game', () => {
+  const html =
+    '<td>87.957.645</td><td>179.720.372</td><td>268.433.497</td>' +
+    '<td>1.783.558.970</td><td>117.624.200</td><td>1.989.688.200</td>';
+  const salida = hydrateExactWordTemplate(html, { anio: 2025 });
+  for (const cifra of ['87.957.645', '179.720.372', '268.433.497', '1.783.558.970',
+                       '117.624.200', '1.989.688.200']) {
+    assert.ok(!salida.includes(cifra), 'sobrevivió la cifra de End Game ' + cifra);
+  }
+});
+
+test('la tabla de EEFF también se limpia en un año distinto de 2025', () => {
+  /* La condición anterior solo entraba con año 2025 o con cifras ingeridas: un
+     estudio de 2024 sin EEFF dejaba las seis cifras de End Game intactas. */
+  const html = '<td>87.957.645</td><td>1.989.688.200</td>';
+  const salida = hydrateExactWordTemplate(html, { anio: 2024 });
+  assert.ok(!salida.includes('87.957.645'), 'sobrevivió el efectivo de End Game');
+  assert.ok(!salida.includes('1.989.688.200'), 'sobrevivió el total de activos de End Game');
+});
+
+test('un total no se calcula sumando huecos como si fueran cero', () => {
+  const html = '<td>1.783.558.970</td>';
+  const salida = hydrateExactWordTemplate(html, { anio: 2025, t_cash: 1000, t_ar: 2000 });
+  /* Falta t_tax: el total corriente no se puede calcular y tiene que salir hueco,
+     no como 3.000, que parecería un total real. */
+  assert.ok(!salida.includes('3.000'), 'inventó un total sumando un hueco como cero');
+  assert.ok(salida.includes('—'), 'el total incalculable debía salir como hueco');
+});
+
+test('las formas cortas de la razón social tampoco pasan', () => {
+  const casos = [
+    '<p>La compañía END GAME es residente</p>',
+    '<p>La compañía END GAME INTERACTIVE es residente</p>',
+    '<p>La compañía End Game Colombia SAS es residente</p>',
+    '<p>La compañía END GAME INTERACTIVE COLOMBIA SA es residente</p>',
+  ];
+  for (const html of casos) {
+    const salida = hydrateExactWordTemplate(html, otroCliente);
+    assert.ok(!/END\s+GAME/i.test(salida), 'sobrevivió la razón social en: ' + html);
+    assert.ok(salida.includes('ACME COLOMBIA S.A.S'), 'no se insertó la razón social del estudio en: ' + html);
+  }
+});
+
+test('la regla de la razón social no se come el nombre del vinculado', () => {
+  /* "END GAME INTERACTIVE INC" es el VINCULADO. Si la regla del contribuyente
+     muerde su prefijo, la regla del vinculado ya no encuentra nada y queda un
+     " INC" colgando pegado al nombre del contribuyente. */
+  const html = '<p>Operaciones con END GAME INTERACTIVE INC durante el año</p>';
+  const salida = hydrateExactWordTemplate(html, { ...otroCliente, vinc: 'PARTNER GAMES LLC' });
+  assert.ok(salida.includes('PARTNER GAMES LLC'), 'el vinculado no se sustituyó');
+  assert.ok(!/\bINC\b/.test(salida), 'quedó " INC" colgando: ' + salida);
+  assert.ok(!salida.includes('ACME COLOMBIA S.A.S'), 'el contribuyente se colocó donde iba el vinculado');
+});
