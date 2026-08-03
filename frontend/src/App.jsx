@@ -17,6 +17,7 @@ import {
   guardarCliente, migrarDesdeLocalStorage,
 } from './services/firestoreRepo';
 import { separarEstudio } from './services/firestoreModelo';
+import { guardarAnexoEeff, leerAnexoEeff, borrarAnexoEeff } from './services/plantillaStore';
 
 /* Retardo del autoguardado. El estudio cambia con cada tecla y cada escritura en
    Firestore se factura y cuenta contra el límite de escrituras por documento, así que
@@ -74,7 +75,11 @@ export default function App() {
     let vigente = true;
     (async () => {
       try {
-        const resultado = await migrarDesdeLocalStorage(usuario);
+        const resultado = await migrarDesdeLocalStorage(usuario, {
+          guardarLocales: async (id, local) => {
+            if (local.eeffImages && local.eeffImages.length) await guardarAnexoEeff(id, local.eeffImages);
+          },
+        });
         if (vigente && !resultado.yaHecha && resultado.total) setMigracion(resultado);
       } catch (err) {
         console.error('[migración] falló', err);
@@ -96,15 +101,24 @@ export default function App() {
       try {
         const { local } = separarEstudio(study);
         if (local.iaMatch) guardarJSON(claveIaMatch(activeStudyId), local.iaMatch);
+        /* Las páginas del PDF de estados financieros van a IndexedDB: son data URLs de
+           varias páginas y no caben ni en el documento de Firestore ni en localStorage. */
+        if (local.eeffImages && local.eeffImages.length) {
+          await guardarAnexoEeff(activeStudyId, local.eeffImages);
+        }
         await guardarEstudio(activeStudyId, study, usuario);
         await guardarCliente(study, usuario);
         setEstadoGuardado('guardado');
+        setAvisoSesion('');
         setIndice(prev => prev.map(e => e.id === activeStudyId
           ? { ...e, ent: study.ent || e.ent, nit: study.nit || e.nit, anio: study.anio || e.anio, updated: Date.now() }
           : e));
       } catch (err) {
         console.error('[estudios] no se pudo guardar', err);
         setEstadoGuardado('error');
+        /* El motivo va a la vista: un fallo de guardado que solo aparece en la consola
+           es lo mismo que un fallo silencioso, y ese era el problema de partida. */
+        setAvisoSesion((err && err.message) || 'No se pudo guardar el estudio en la nube.');
       }
     }, RETARDO_GUARDADO);
 
@@ -120,7 +134,19 @@ export default function App() {
          nube, así que el estudio llega sin él y hay que volver a pegarlo aquí. */
       const crudo = localStorage.getItem(claveIaMatch(id));
       const iaMatch = crudo ? JSON.parse(crudo) : null;
-      setStudy({ ...(datos || {}), ...(iaMatch ? { iaMatch } : {}) });
+      /* Y las páginas del ANEXO A desde IndexedDB: sin esto el informe saldría sin los
+         estados financieros adjuntos, que es lo que consume exactTemplateMapper. */
+      let eeffImages = [];
+      try {
+        eeffImages = await leerAnexoEeff(id);
+      } catch (err) {
+        console.error('[anexo EEFF] no se pudieron leer las páginas guardadas', err);
+      }
+      setStudy({
+        ...(datos || {}),
+        ...(iaMatch ? { iaMatch } : {}),
+        ...(eeffImages && eeffImages.length ? { eeffImages } : {}),
+      });
       setActiveTab('contribuyente');
     } catch (err) {
       console.error('[estudios] no se pudo abrir', err);
@@ -171,6 +197,9 @@ export default function App() {
     try {
       await borrarEstudio(id);
       localStorage.removeItem(claveIaMatch(id));
+      /* Los recursos locales del estudio se van con él: si no, quedan megabytes de
+         páginas de PDF en IndexedDB sin dueño y sin forma de llegar a ellos. */
+      try { await borrarAnexoEeff(id); } catch { /* el estudio ya se borró: no bloquea */ }
       if (activeStudyId === id) {
         setActiveStudyId(null);
         setStudy({});

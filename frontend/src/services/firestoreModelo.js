@@ -49,12 +49,80 @@ export function anioValido(valor) {
   return Number.isInteger(n) && n >= 2000 && n <= 2100 ? n : null;
 }
 
-/* Campos del estudio que NO viajan a la nube. Decisión del usuario: el universo de
-   Capital IQ y el veredicto de la curación se quedan en el navegador. Son también los
-   dos más pesados —el universo son miles de filas con descripción de negocio y el
-   veredicto un dictamen por candidata—, así que dejarlos fuera es lo que mantiene el
-   documento del estudio lejos del techo de 1 MiB de Firestore. */
-export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch'];
+/* Campos del estudio que NO viajan a la nube, porque son grandes y no se comparten:
+
+   - `universo`: el Excel de Capital IQ completo, miles de filas con descripción de
+     negocio. Nunca se persistió.
+   - `iaMatch`: el veredicto de la curación, un dictamen por candidata. Se guarda en
+     localStorage por decisión del usuario.
+   - `eeffImages`: las páginas del PDF de estados financieros rasterizadas a PNG para
+     el ANEXO A. Un caso real pesó 3,4 MB —más del triple del máximo de 1 MiB por
+     documento— y hacía que el estudio entero dejara de guardarse con un
+     `FirebaseError` en consola. Van a IndexedDB, que es donde ya viven los demás
+     recursos binarios del informe.
+
+   Dejarlos fuera es lo que mantiene el documento del estudio lejos del techo. */
+export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages'];
+
+/** Máximo que admite un documento de Firestore. */
+export const TOPE_DOCUMENTO = 1048576;
+
+/**
+ * Peso aproximado en bytes de lo que se va a escribir. Aproximado porque Firestore
+ * cuenta además el nombre de cada campo y algo de sobrecarga por tipo, así que se
+ * compara contra un umbral con margen y no contra el techo exacto.
+ */
+export function pesoAproximado(valor) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(valor === undefined ? null : valor)).length;
+  } catch {
+    /* referencias circulares u objetos no serializables: no se puede medir, y decir
+       cero es menos dañino que romper el guardado */
+    return 0;
+  }
+}
+
+/** Campos ordenados por lo que ocupan, para poder señalar al culpable. */
+export function camposMasPesados(datos, cuantos = 5) {
+  return Object.entries(datos || {})
+    .map(([campo, valor]) => ({ campo, bytes: pesoAproximado(valor) }))
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, cuantos);
+}
+
+/**
+ * Error con el diagnóstico ya hecho. El mensaje de Firestore dice cuánto pesa el
+ * documento pero no qué lo hace pesar, y en un estudio con decenas de campos eso deja
+ * al usuario sin nada que hacer. Aquí se nombran los tres campos más grandes.
+ */
+export class ErrorEstudioDemasiadoGrande extends Error {
+  constructor(bytes, culpables) {
+    const detalle = (culpables || [])
+      .map(c => `${c.campo} (${Math.round(c.bytes / 1024)} KB)`)
+      .join(', ');
+    super(
+      `El estudio pesa ${Math.round(bytes / 1024)} KB y el máximo por documento es ` +
+      `${Math.round(TOPE_DOCUMENTO / 1024)} KB, así que no se guardó en la nube. ` +
+      `Lo que más ocupa: ${detalle || 'no se pudo determinar'}. ` +
+      'Si es un documento adjunto o una imagen, tiene que guardarse fuera del estudio.'
+    );
+    this.name = 'ErrorEstudioDemasiadoGrande';
+    this.bytes = bytes;
+    this.culpables = culpables || [];
+  }
+}
+
+/**
+ * Comprueba el tamaño antes de intentar la escritura. Se deja un 5 % de margen porque
+ * la cuenta de Firestore incluye sobrecarga que aquí no se mide.
+ */
+export function verificarTamano(documento) {
+  const bytes = pesoAproximado(documento);
+  if (bytes > TOPE_DOCUMENTO * 0.95) {
+    throw new ErrorEstudioDemasiadoGrande(bytes, camposMasPesados(documento && documento.datos, 3));
+  }
+  return bytes;
+}
 
 /**
  * Parte el estudio en lo que va a Firestore y lo que se queda en localStorage.

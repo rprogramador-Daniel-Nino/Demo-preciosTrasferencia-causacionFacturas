@@ -20,6 +20,7 @@ import { db } from './firebase';
 import {
   docEstudio, docCliente, docEeff, idEeff, normalizarNit, anioValido, aNumero,
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
+  verificarTamano,
 } from './firestoreModelo';
 
 const ESTUDIOS = 'estudios';
@@ -65,6 +66,10 @@ export function usuarioDeSesion(user) {
 export async function guardarEstudio(id, study, usuario) {
   const previo = await metaPrevia(ESTUDIOS, id);
   const documento = docEstudio({ study, usuario, previo, marcaDeTiempo: serverTimestamp() });
+  /* Antes de gastar la escritura: si excede el máximo, el error explica qué campo lo
+     hace pesar. Firestore solo dice cuánto pesa, y con decenas de campos eso no basta
+     para saber qué sacar. */
+  verificarTamano(documento);
   await setDoc(doc(db, ESTUDIOS, id), documento);
   /* Se recuerda con lo que ya había: `serverTimestamp()` es un centinela, no una
      fecha, y guardarlo en el caché haría fallar la comparación de inmutabilidad en
@@ -262,7 +267,7 @@ const MARCA_MIGRACION = 'pt:migracion:firestore';
  * navegador —queda una marca— y no borra nada del almacenamiento local: si algo sale
  * mal, el original sigue ahí.
  */
-export async function migrarDesdeLocalStorage(usuario) {
+export async function migrarDesdeLocalStorage(usuario, { guardarLocales } = {}) {
   if (localStorage.getItem(MARCA_MIGRACION)) return { yaHecha: true, subidos: 0, fallidos: 0 };
 
   const crudo = localStorage.getItem('pt:study:index');
@@ -275,10 +280,13 @@ export async function migrarDesdeLocalStorage(usuario) {
     if (!detalle) continue;
     try {
       const study = JSON.parse(detalle);
-      /* El veredicto de la curación y el universo se quedan en el navegador: se
-         separan aquí para que el documento de la nube no los lleve. */
+      /* Los campos que se quedan en el navegador se separan aquí para que el documento
+         de la nube no los lleve. El veredicto de la curación va a localStorage y el
+         resto —las páginas del ANEXO A— lo coloca quien llame, que es el que sabe de
+         IndexedDB; así este módulo no necesita conocer ese almacén. */
       const { local } = separarEstudio(study);
       if (local.iaMatch) localStorage.setItem(`pt:iaMatch:${id}`, JSON.stringify(local.iaMatch));
+      if (typeof guardarLocales === 'function') await guardarLocales(id, local);
       await guardarEstudio(id, study, usuario);
       await guardarCliente(study, usuario);
       resultado.subidos++;

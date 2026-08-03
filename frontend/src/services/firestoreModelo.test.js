@@ -7,6 +7,7 @@ import {
   estudiosPorMigrar, aNumero, CAMPOS_SOLO_LOCALES, TOPE_APARICIONES,
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila,
   aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
+  pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -65,15 +66,21 @@ test('idEeff identifica una empresa por año gravable', () => {
 
 /* ══════ separación nube / navegador ══════ */
 
-test('separarEstudio deja el universo y el veredicto de la IA fuera de la nube', () => {
-  /* Decisión del usuario, y además son los dos campos más pesados: el universo son
-     miles de filas con descripción de negocio y el veredicto un dictamen por
-     candidata. Juntos acercarían el documento al techo de 1 MiB de Firestore. */
-  const study = { ent: 'Acme', universo: [{ id: 1 }, { id: 2 }], iaMatch: { porId: { A: {} } }, comparables: [] };
+test('separarEstudio deja fuera de la nube los campos pesados', () => {
+  /* Los tres son grandes y no se comparten: el universo son miles de filas con
+     descripción de negocio, el veredicto un dictamen por candidata, y eeffImages las
+     páginas del PDF de estados financieros en base64 —3,4 MB en un caso real, más del
+     triple del techo de 1 MiB por documento. */
+  const study = {
+    ent: 'Acme', comparables: [],
+    universo: [{ id: 1 }, { id: 2 }],
+    iaMatch: { porId: { A: {} } },
+    eeffImages: ['data:image/png;base64,AAAA'],
+  };
   const { nube, local } = separarEstudio(study);
   assert.deepStrictEqual(Object.keys(nube).sort(), ['comparables', 'ent']);
-  assert.deepStrictEqual(Object.keys(local).sort(), ['iaMatch', 'universo']);
-  assert.deepStrictEqual(CAMPOS_SOLO_LOCALES, ['universo', 'iaMatch']);
+  assert.deepStrictEqual(Object.keys(local).sort(), ['eeffImages', 'iaMatch', 'universo']);
+  assert.deepStrictEqual(CAMPOS_SOLO_LOCALES, ['universo', 'iaMatch', 'eeffImages']);
 });
 
 test('separarEstudio no inventa campos locales que el estudio no traía', () => {
@@ -128,6 +135,66 @@ test('docEstudio no manda a la nube el universo ni el veredicto de la IA', () =>
 test('docEstudio sin año usable cae en el año en curso en lugar de escribir basura', () => {
   const doc = docEstudio({ study: { ent: 'Acme', anio: 'sin año' }, usuario: USUARIO, marcaDeTiempo: AHORA });
   assert.strictEqual(doc.anio, new Date().getFullYear());
+});
+
+/* ══════ tope de tamaño del documento ══════
+   Un caso real fallo con 3,4 MB: las paginas del PDF de estados financieros se
+   guardaban como PNG en base64 dentro del estudio. Firestore rechazaba la escritura
+   entera y el mensaje solo decia cuanto pesaba, no que campo lo hacia pesar. */
+
+test('eeffImages no viaja a la nube', () => {
+  const study = { ent: 'Acme', eeffImages: ['data:image/png;base64,AAAA', 'data:image/png;base64,BBBB'] };
+  const { nube, local } = separarEstudio(study);
+  assert.ok(!('eeffImages' in nube), 'las páginas del ANEXO A van a IndexedDB, no a Firestore');
+  assert.strictEqual(local.eeffImages.length, 2);
+});
+
+test('docEstudio deja fuera las imágenes del anexo', () => {
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024, eeffImages: ['data:image/png;base64,' + 'A'.repeat(5000)] },
+    usuario: USUARIO, marcaDeTiempo: AHORA,
+  });
+  assert.ok(!('eeffImages' in doc.datos));
+});
+
+test('pesoAproximado mide en bytes y no se rompe con lo no serializable', () => {
+  assert.strictEqual(pesoAproximado({ a: 1 }), JSON.stringify({ a: 1 }).length);
+  assert.ok(pesoAproximado('ñ') > 1, 'un carácter multibyte pesa más de un byte');
+  const circular = {}; circular.yo = circular;
+  assert.strictEqual(pesoAproximado(circular), 0, 'no puede tumbar el guardado');
+});
+
+test('camposMasPesados señala al culpable, de mayor a menor', () => {
+  const datos = { chico: 'x', enorme: 'A'.repeat(5000), mediano: 'B'.repeat(100) };
+  const ranking = camposMasPesados(datos, 2);
+  assert.deepStrictEqual(ranking.map(c => c.campo), ['enorme', 'mediano']);
+  assert.ok(ranking[0].bytes > 5000);
+});
+
+test('verificarTamano deja pasar un estudio normal', () => {
+  const doc = docEstudio({ study: { ent: 'Acme', anio: 2024, comparables: [{ name: 'X' }] }, usuario: USUARIO, marcaDeTiempo: AHORA });
+  assert.doesNotThrow(() => verificarTamano(doc));
+});
+
+test('verificarTamano falla antes de escribir y nombra el campo que sobra', () => {
+  /* El aviso tiene que ser accionable: decir «pesa demasiado» sin decir qué campo deja
+     al usuario sin nada que hacer. */
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024, adjuntoGigante: 'A'.repeat(1_100_000) },
+    usuario: USUARIO, marcaDeTiempo: AHORA,
+  });
+  assert.throws(() => verificarTamano(doc), (err) => {
+    assert.strictEqual(err.name, 'ErrorEstudioDemasiadoGrande');
+    assert.match(err.message, /adjuntoGigante/);
+    assert.match(err.message, /KB/);
+    assert.ok(err.bytes > TOPE_DOCUMENTO);
+    return true;
+  });
+});
+
+test('verificarTamano devuelve el peso cuando cabe, para poder vigilarlo', () => {
+  const bytes = verificarTamano({ datos: { ent: 'Acme' } });
+  assert.ok(bytes > 0 && bytes < TOPE_DOCUMENTO);
 });
 
 /* ══════ documento de cliente ══════ */

@@ -71,6 +71,23 @@ export const guardarPlantilla = (plantillaId, html) =>
 export const leerPlantilla = (plantillaId) =>
   operar('plantillas', 'readonly', (s) => s.get(plantillaId)).then((r) => r || null);
 
+/* Páginas del PDF de estados financieros de la parte examinada, rasterizadas a PNG
+   para el ANEXO A. Van en el almacén `anexos`, que ya estaba declarado en el esquema
+   y sin usar.
+
+   No pueden ir en el documento del estudio: son data URLs de varias páginas y un caso
+   real pesó 3,4 MB, más del triple del máximo de 1 MiB que admite un documento de
+   Firestore, así que el estudio entero dejaba de guardarse. Tampoco caben en
+   localStorage, cuyo tope ronda los 5 MB para todo el origen. */
+export const guardarAnexoEeff = (estudioId, imagenes) =>
+  operar('anexos', 'readwrite', (s) => s.put(imagenes, esc(estudioId)));
+
+export const leerAnexoEeff = (estudioId) =>
+  operar('anexos', 'readonly', (s) => s.get(esc(estudioId))).then((r) => r || []);
+
+export const borrarAnexoEeff = (estudioId) =>
+  operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId)));
+
 /* Vínculo estudio -> plantilla. Sin esto, al recargar no hay forma de saber qué
    plantilla corresponde al estudio abierto, y la vista previa vuelve a la
    maestra genérica: las imágenes guardadas se quedan sin sitio donde ir.
