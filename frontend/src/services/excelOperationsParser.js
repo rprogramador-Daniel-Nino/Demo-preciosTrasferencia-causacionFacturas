@@ -131,6 +131,8 @@ export async function parseExcelOperations(file) {
       vinc_id: mainVinculadoId || null,
       pais_vinc: paisNombre || null,
       vinc_tipo: mainTipo || 'Otros servicios (07)',
+      monto: totalMonto || null,
+      monto_operacion: totalMonto || null,
       t_s: totalMonto || null,
       rows: rowsParsed
     };

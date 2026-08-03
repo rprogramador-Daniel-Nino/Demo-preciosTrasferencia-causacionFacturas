@@ -217,7 +217,7 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     return `<span style="font-weight:600;color:#0B7C7A;border-bottom:1px dashed #0FA3A1;background-color:#F0FDF4;padding:0 4px;border-radius:3px;">${val}</span>`;
   };
 
-  const formattedMonto = study.t_s ? fmt(study.t_s) : '3.435.357.400';
+  const formattedMonto = study.monto ? fmt(study.monto) : (study.monto_operacion ? fmt(study.monto_operacion) : '3.435.357.400');
   const formattedTipo = study.vinc_tipo || 'Otros servicios (07)';
 
   /* ─── Apartado sectorial (III.C) ───
