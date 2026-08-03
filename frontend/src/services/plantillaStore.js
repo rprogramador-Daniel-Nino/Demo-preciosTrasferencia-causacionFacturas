@@ -111,6 +111,14 @@ export const guardarMarcado = (plantillaId, html) =>
 
 export const leerMarcado = (plantillaId) => leerPlantilla(claveMarcado(plantillaId));
 
+/* Descarta el marcado de una plantilla para poder volver a marcarla.
+   Hacía falta una salida: el marcado se guarda por hash del PDF, así que volver a
+   subir el mismo documento encontraba el marcado viejo y no se podía repetir. Si
+   el marcado salió incompleto —tramos caídos, o el modelo dejó apariciones sin
+   marcar— la única alternativa era revisar cien páginas a mano. */
+export const borrarMarcado = (plantillaId) =>
+  operar('plantillas', 'readwrite', (s) => s.delete(claveMarcado(plantillaId)));
+
 /* Cuántos huecos de anexo dejó el extractor en esta plantilla. Sin conservarla
    no hay forma de saber, al recargar el estudio, que el documento tiene 16
    páginas de anexo sin rellenar: `ref.huecos` solo existe en el momento de

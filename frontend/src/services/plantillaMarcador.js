@@ -424,5 +424,60 @@ export async function proponerMarcas(html, opciones = {}) {
 
   for (const lote of porTrozo) if (lote) marcas.push(...lote);
 
-  return { marcas, trozosEnviados, trozosFallidos, rechazadasPorVocabulario };
+  /* Extensión a todas las apariciones del mismo texto.
+
+     El modelo ve un trozo a la vez y marca lo que ahí le parece relevante, así
+     que de un texto que se repite cuarenta veces —la razón social, el NIT, el
+     objeto social— marca unas cuantas y deja el resto. Medido con el informe
+     real: la razón social sobrevivía treinta y una veces sin marcar, y esas
+     apariciones se radican con el nombre del contribuyente anterior.
+
+     Si el modelo dijo que un texto corresponde a un campo, todas sus apariciones
+     literales corresponden al mismo campo: es el mismo texto. Completar la serie
+     es determinista, no cuesta otra llamada, y convierte una cobertura parcial en
+     total.
+
+     Se extiende sólo cuando el texto tiene un único campo asignado. Si el modelo
+     le dio dos campos distintos en dos trozos, no hay forma de saber cuál vale
+     para las apariciones que nadie miró: se deja como está y se cuenta, para que
+     la revisión humana lo vea en vez de que el código elija a ciegas. */
+  const campoPorFragmento = new Map();
+  const ambiguos = new Set();
+  for (const m of marcas) {
+    const previo = campoPorFragmento.get(m.fragmento);
+    if (previo === undefined) campoPorFragmento.set(m.fragmento, m.campo);
+    else if (previo !== m.campo) ambiguos.add(m.fragmento);
+  }
+
+  let extendidas = 0;
+  for (const [fragmento, campo] of campoPorFragmento) {
+    if (ambiguos.has(fragmento)) continue;
+    const yaMarcadas = new Set(
+      marcas.filter((m) => m.fragmento === fragmento).map((m) => m.ocurrencia)
+    );
+    const todas = apariciones(fragmento);
+    for (let i = 1; i <= todas.length; i++) {
+      if (yaMarcadas.has(i)) continue;
+      const donde = todas[i - 1];
+      marcas.push({
+        fragmento,
+        campo,
+        ocurrencia: i,
+        contexto: contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60),
+        /* Para que el revisor humano distinga lo que propuso el modelo de lo que
+           completó el código: son decisiones con distinto respaldo. */
+        extendida: true,
+      });
+      extendidas++;
+    }
+  }
+
+  return {
+    marcas,
+    trozosEnviados,
+    trozosFallidos,
+    rechazadasPorVocabulario,
+    extendidas,
+    fragmentosAmbiguos: [...ambiguos],
+  };
 }
