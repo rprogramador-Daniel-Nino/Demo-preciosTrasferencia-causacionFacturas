@@ -6,7 +6,7 @@ import { fmt } from '../utils/calculations';
    comparte el equipo, así que el tablero ya no lo arma leyendo localStorage. La
    recarga después de crear, borrar o duplicar también la hace App, que es quien
    conoce el resultado de la escritura remota. */
-export default function Dashboard({ indice = [], selectStudy, newStudy, deleteStudy, duplicateStudy }) {
+export default function Dashboard({ indice = [], compartidos = [], abrirCompartido, selectStudy, newStudy, deleteStudy, duplicateStudy }) {
   const [search, setSearch] = useState('');
   const [pendingDelete, setPendingDelete] = useState(null);
 
@@ -159,6 +159,49 @@ export default function Dashboard({ indice = [], selectStudy, newStudy, deleteSt
           </table>
         </div>
       </div>
+
+      {/* Estudios que otras personas compartieron. Van en su propia tabla y no
+          mezclados con los propios: no se pueden editar ni borrar, y confundirlos
+          llevaría a intentar trabajar en uno ajeno. */}
+      {compartidos.length > 0 && (
+        <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Compartidos conmigo</h3>
+            <p className="text-[11px] text-zinc-500">
+              Estudios de otros consultores a los que le dieron acceso. Se abren en solo lectura.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-zinc-50 dark:bg-[#0f0f13] text-zinc-500 dark:text-zinc-400 text-xs font-semibold uppercase tracking-wider">
+                  <th className="py-3 px-4">Empresa (Contribuyente)</th>
+                  <th className="py-3 px-4">NIT</th>
+                  <th className="py-3 px-4">Año Fiscal</th>
+                  <th className="py-3 px-4">Compartido por</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-sm">
+                {compartidos.map((c) => (
+                  <tr
+                    key={c.duenoUid + '/' + c.id}
+                    onClick={() => abrirCompartido(c)}
+                    className="hover:bg-zinc-50 dark:hover:bg-zinc-800/40 cursor-pointer transition-colors"
+                  >
+                    <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-100">
+                      {c.ent}
+                      <span className="block font-mono text-[10px] text-zinc-400 dark:text-zinc-500 select-all">{c.id}</span>
+                    </td>
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 font-mono text-xs">{c.nit}</td>
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{c.anio}</td>
+                    <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 text-xs">{c.duenoNombre || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Confirm Delete Modal */}
       {pendingDelete && (

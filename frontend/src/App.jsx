@@ -12,9 +12,11 @@ import Clientes from './components/Clientes';
 import CatalogoHistorico from './components/CatalogoHistorico';
 import { guardarJSON } from './services/persistenciaLocal';
 import { observarSesion, cerrarSesion } from './services/sesion';
+import CompartirEstudio from './components/CompartirEstudio';
 import {
   usuarioDeSesion, guardarEstudio, leerEstudio, listarEstudios, borrarEstudio,
-  guardarCliente, migrarDesdeLocalStorage,
+  guardarCliente, migrarDesdeLocalStorage, migrarDesdeRaiz,
+  listarEstudiosCompartidosConmigo, leerEstudioCompartido,
 } from './services/firestoreRepo';
 import { separarEstudio } from './services/firestoreModelo';
 import { guardarAnexoEeff, leerAnexoEeff, borrarRecursosDelEstudio } from './services/plantillaStore';
@@ -43,6 +45,12 @@ export default function App() {
   const [avisoSesion, setAvisoSesion] = useState('');
 
   const [indice, setIndice] = useState([]);
+  /* Estudios que otros compartieron conmigo: se abren en solo lectura. */
+  const [compartidos, setCompartidos] = useState([]);
+  /* Cuando el estudio abierto es de otra persona: { duenoUid, duenoNombre }. Mientras
+     esté puesto, el autoguardado no escribe —las reglas lo rechazarían— y la barra lo
+     advierte. */
+  const [estudioAjeno, setEstudioAjeno] = useState(null);
   const [migracion, setMigracion] = useState(null);
   /* 'guardado' | 'guardando' | 'error': con la base remota una escritura puede
      fallar, y el problema que traíamos era justamente perder cambios sin avisar. */
@@ -63,15 +71,27 @@ export default function App() {
   }, []);
 
   const refrescarIndice = useCallback(async () => {
+    if (!usuario) return;
     try {
-      setIndice(await listarEstudios());
+      setIndice(await listarEstudios(usuario));
     } catch (err) {
       console.error('[estudios] no se pudo leer el índice', err);
       setAvisoSesion('No se pudo leer la lista de estudios: ' + (err && err.message ? err.message : 'error desconocido'));
     }
-  }, []);
+    try {
+      setCompartidos(await listarEstudiosCompartidosConmigo(usuario));
+    } catch (err) {
+      console.error('[compartidos] no se pudieron leer', err);
+      /* A la vista y con el motivo: los dos fallos posibles —reglas o índice— se
+         arreglan con despliegues distintos, y en consola nadie los ve. */
+      setAvisoSesion('Estudios compartidos: ' + (err && err.message ? err.message : 'no se pudieron leer.'));
+    }
+  }, [usuario]);
 
-  /* ── al entrar: migrar lo que hubiera en el navegador y leer el índice ── */
+  /* ── al entrar: recuperar lo propio y leer el índice ──
+     Dos migraciones, ambas idempotentes: la del navegador sube lo que quedó en
+     localStorage, y la de la raíz recoge lo que este consultor creó cuando las
+     colecciones eran comunes al equipo. Ninguna toca lo de otra persona. */
   useEffect(() => {
     if (!usuario) return;
     let vigente = true;
@@ -86,6 +106,14 @@ export default function App() {
       } catch (err) {
         console.error('[migración] falló', err);
       }
+      try {
+        const privada = await migrarDesdeRaiz(usuario);
+        if (vigente && privada.movidos) {
+          setMigracion(prev => ({ ...(prev || {}), movidosARaizPrivada: privada.movidos }));
+        }
+      } catch (err) {
+        console.error('[migración privada] falló', err);
+      }
       if (vigente) await refrescarIndice();
     })();
     return () => { vigente = false; };
@@ -96,6 +124,9 @@ export default function App() {
     if (!usuario || !activeStudyId || !study || Object.keys(study).length === 0) return;
     /* No guardar lo que se acaba de leer: abrir un estudio no es modificarlo. */
     if (cargando.current) { cargando.current = false; return; }
+    /* Un estudio ajeno se consulta, no se edita: intentar guardarlo daría un error de
+       permisos por cada tecla. La barra ya avisa de que es de solo lectura. */
+    if (estudioAjeno) return;
 
     setEstadoGuardado('guardando');
     if (temporizador.current) clearTimeout(temporizador.current);
@@ -125,12 +156,13 @@ export default function App() {
     }, RETARDO_GUARDADO);
 
     return () => { if (temporizador.current) clearTimeout(temporizador.current); };
-  }, [study, activeStudyId, usuario]);
+  }, [study, activeStudyId, usuario, estudioAjeno]);
 
   const selectStudy = async (id) => {
     try {
-      const datos = await leerEstudio(id);
+      const datos = await leerEstudio(id, usuario);
       cargando.current = true;
+      setEstudioAjeno(null);
       setActiveStudyId(id);
       /* El veredicto de la curación se reincorpora desde el navegador: no viaja a la
          nube, así que el estudio llega sin él y hay que volver a pegarlo aquí. */
@@ -156,6 +188,27 @@ export default function App() {
     }
   };
 
+  /* Abre un estudio que otra persona compartió. Se carga en solo lectura y sin tocar
+     los recursos locales: las imágenes de su ANEXO A están en el navegador del dueño,
+     así que aquí no hay nada que leer de IndexedDB. */
+  const abrirCompartido = async (compartido) => {
+    try {
+      const datos = await leerEstudioCompartido(compartido.duenoUid, compartido.id);
+      if (!datos) {
+        setAvisoSesion('Ese estudio ya no está disponible: puede que su dueño le haya retirado el acceso.');
+        return;
+      }
+      cargando.current = true;
+      setEstudioAjeno({ duenoUid: compartido.duenoUid, duenoNombre: compartido.duenoNombre || 'otro consultor' });
+      setActiveStudyId(compartido.id);
+      setStudy(datos);
+      setActiveTab('contribuyente');
+    } catch (err) {
+      console.error('[compartidos] no se pudo abrir', err);
+      setAvisoSesion('No se pudo abrir el estudio compartido: ' + (err && err.message ? err.message : 'error desconocido'));
+    }
+  };
+
   /* Campos con los que nace un estudio. Se extrajo a función porque ahora hay dos
      puntos de creación: en blanco y a partir de un cliente del catálogo. */
   const estudioEnBlanco = () => ({
@@ -170,6 +223,7 @@ export default function App() {
     try {
       await guardarEstudio(newId, datos, usuario);
       cargando.current = true;
+      setEstudioAjeno(null);
       setActiveStudyId(newId);
       setStudy(datos);
       setActiveTab('contribuyente');
@@ -197,7 +251,7 @@ export default function App() {
 
   const deleteStudy = async (id) => {
     try {
-      await borrarEstudio(id);
+      await borrarEstudio(id, usuario);
       localStorage.removeItem(claveIaMatch(id));
       /* Los recursos locales del estudio se van con él: las imágenes de su plantilla,
          las páginas de su ANEXO A y su vínculo con la plantilla. Si no, quedan
@@ -218,7 +272,7 @@ export default function App() {
 
   const duplicateStudy = async (id) => {
     try {
-      const original = await leerEstudio(id);
+      const original = await leerEstudio(id, usuario);
       if (!original) return;
       const newId = 'study_' + Date.now();
       await guardarEstudio(newId, { ...original, ent: (original.ent || '') + ' (Copia)' }, usuario);
@@ -280,7 +334,17 @@ export default function App() {
           </button>
         )}
 
-        {activeStudyId && (
+        {/* Acceso del estudio: privado por omisión, compartible uno a uno. Solo del
+            propio: en uno ajeno no hay nada que gestionar. */}
+        {activeStudyId && !estudioAjeno && (
+          <CompartirEstudio estudioId={activeStudyId} usuario={usuario} />
+        )}
+
+        {activeStudyId && estudioAjeno ? (
+          <span className="text-amber-600 dark:text-amber-400 font-semibold">
+            solo lectura · compartido por {estudioAjeno.duenoNombre}
+          </span>
+        ) : activeStudyId && (
           <span className={
             estadoGuardado === 'error' ? 'text-amber-600 dark:text-amber-400 font-semibold'
               : estadoGuardado === 'guardando' ? 'text-zinc-400' : 'text-emerald-600 dark:text-emerald-500'
@@ -316,6 +380,8 @@ export default function App() {
       {activeTab === 'dashboard' && (
         <Dashboard
           indice={indice}
+          compartidos={compartidos}
+          abrirCompartido={abrirCompartido}
           selectStudy={selectStudy}
           newStudy={newStudy}
           deleteStudy={deleteStudy}
@@ -325,10 +391,10 @@ export default function App() {
 
       {/* Vistas de la base compartida: no dependen de tener un estudio abierto. */}
       {activeTab === 'clientes' && (
-        <Clientes nuevoEstudioDesdeCliente={nuevoEstudioDesdeCliente} selectStudy={selectStudy} />
+        <Clientes usuario={usuario} nuevoEstudioDesdeCliente={nuevoEstudioDesdeCliente} selectStudy={selectStudy} />
       )}
 
-      {activeTab === 'catalogo' && <CatalogoHistorico />}
+      {activeTab === 'catalogo' && <CatalogoHistorico usuario={usuario} />}
 
       {activeStudyId ? (
         <>

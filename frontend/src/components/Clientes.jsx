@@ -5,7 +5,7 @@ import { listarClientes, estudiosDelCliente } from '../services/firestoreRepo';
 /* Catálogo de contribuyentes. La colección se llena sola —cada guardado de estudio
    escribe su cliente—, pero hasta ahora no había dónde verla, así que crear el estudio
    del año siguiente obligaba a volver a digitar los datos o a recargar el RUT. */
-export default function Clientes({ nuevoEstudioDesdeCliente, selectStudy }) {
+export default function Clientes({ usuario, nuevoEstudioDesdeCliente, selectStudy }) {
   const [clientes, setClientes] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
@@ -16,17 +16,18 @@ export default function Clientes({ nuevoEstudioDesdeCliente, selectStudy }) {
   const [estudios, setEstudios] = useState({});
 
   const cargar = useCallback(async () => {
+    if (!usuario) return;
     setCargando(true);
     setError('');
     try {
-      setClientes(await listarClientes());
+      setClientes(await listarClientes(usuario));
     } catch (err) {
       console.error('[clientes] no se pudo leer el catálogo', err);
       setError((err && err.message) || 'No se pudo leer el catálogo de clientes.');
     } finally {
       setCargando(false);
     }
-  }, []);
+  }, [usuario]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -37,7 +38,7 @@ export default function Clientes({ nuevoEstudioDesdeCliente, selectStudy }) {
     try {
       /* El await va fuera del actualizador de estado: dentro no se puede esperar, y
          React invoca ese callback de forma sincrónica. */
-      const lista = await estudiosDelCliente(nit);
+      const lista = await estudiosDelCliente(nit, usuario);
       setEstudios(prev => ({ ...prev, [nit]: lista }));
     } catch (err) {
       console.error('[clientes] no se pudieron leer los estudios de ' + nit, err);
@@ -57,7 +58,7 @@ export default function Clientes({ nuevoEstudioDesdeCliente, selectStudy }) {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">Clientes</h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Contribuyentes del equipo, reutilizables entre años gravables. Se alimentan solos al guardar cada estudio.
+            Sus contribuyentes, reutilizables entre años gravables. Se alimentan solos al guardar cada estudio.
           </p>
         </div>
         <button
