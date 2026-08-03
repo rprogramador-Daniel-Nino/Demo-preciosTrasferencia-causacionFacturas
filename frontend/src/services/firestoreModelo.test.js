@@ -205,30 +205,43 @@ test('verificarTamano devuelve el peso cuando cabe, para poder vigilarlo', () =>
    porque no hay directorio del equipo: nadie puede averiguar el uid de un compañero. */
 
 const DOM = 'crconsultorescolombia.com';
-const OPCIONES = { dominio: DOM, correoPropio: 'antonio@' + DOM };
+const OPCIONES = { correoPropio: 'antonio@' + DOM };
 
 test('normalizarCorreo deja el correo como lo comparan las reglas', () => {
   assert.strictEqual(normalizarCorreo('  Juan.Mendez@CRConsultoresColombia.COM '), 'juan.mendez@crconsultorescolombia.com');
   assert.strictEqual(normalizarCorreo(null), '');
 });
 
-test('esCorreoCompartible admite solo cuentas del dominio', () => {
-  assert.ok(esCorreoCompartible('juan@' + DOM, DOM));
-  assert.ok(esCorreoCompartible('  JUAN@' + DOM.toUpperCase() + ' ', DOM));
-  assert.ok(!esCorreoCompartible('juan@gmail.com', DOM));
-  assert.ok(!esCorreoCompartible('no-es-un-correo', DOM));
-  assert.ok(!esCorreoCompartible('', DOM));
+test('esCorreoCompartible acepta cualquier correo con forma válida', () => {
+  /* Ya no se exige el dominio corporativo: entra cualquier cuenta de Google, así que
+     restringir a quién se comparte dejaría fuera a gente que sí puede iniciar sesión. */
+  assert.ok(esCorreoCompartible('juan@' + DOM));
+  assert.ok(esCorreoCompartible('  JUAN@' + DOM.toUpperCase() + ' '));
+  assert.ok(esCorreoCompartible('alguien@gmail.com'));
 });
 
-test('agregarCompartido habilita a un companero del dominio', () => {
+test('esCorreoCompartible rechaza lo que no tiene forma de correo', () => {
+  /* Solo ataja el error de tecleo: guardar un acceso que nunca serviría es peor que
+     avisar al momento. */
+  assert.ok(!esCorreoCompartible('no-es-un-correo'));
+  assert.ok(!esCorreoCompartible('falta@dominio'), 'un dominio sin punto no sirve');
+  assert.ok(!esCorreoCompartible('@solo-dominio.com'));
+  assert.ok(!esCorreoCompartible(''));
+});
+
+test('agregarCompartido habilita a cualquier cuenta de Google', () => {
   const { lista, error } = agregarCompartido([], 'Juan@' + DOM, OPCIONES);
   assert.strictEqual(error, null);
   assert.deepStrictEqual(lista, ['juan@' + DOM], 'se guarda normalizado');
+
+  const externo = agregarCompartido([], 'Revisor@Gmail.com', OPCIONES);
+  assert.strictEqual(externo.error, null);
+  assert.deepStrictEqual(externo.lista, ['revisor@gmail.com']);
 });
 
-test('agregarCompartido rechaza fuera del dominio, con motivo', () => {
-  const { lista, error } = agregarCompartido([], 'ajeno@gmail.com', OPCIONES);
-  assert.match(error, /@crconsultorescolombia\.com/);
+test('agregarCompartido rechaza un correo mal escrito, con motivo', () => {
+  const { lista, error } = agregarCompartido([], 'juan(arroba)algo', OPCIONES);
+  assert.match(error, /correo válido/);
   assert.deepStrictEqual(lista, [], 'y no toca la lista');
 });
 

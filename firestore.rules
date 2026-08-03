@@ -4,8 +4,8 @@ rules_version = '2';
 // Sistema PT — reglas de seguridad de Firestore
 // ===============================================================
 //
-// Modelo de acceso: cada consultor trabaja con sus propios datos. Nadie ve ni
-// escribe lo de otro, ni siquiera dentro del dominio corporativo.
+// Modelo de acceso: entra cualquier cuenta de Google con el correo verificado, y cada
+// persona trabaja con sus propios datos. Nadie ve ni escribe lo de otro.
 //
 // El aislamiento es estructural, no solo por campo: todo vive bajo
 // `usuarios/{uid}/…` y las reglas comparan ese `uid` con el de quien pide. Dos
@@ -18,8 +18,9 @@ rules_version = '2';
 //   2. Una consulta sobre una colección común tiene que filtrar por el dueño o
 //      Firestore la rechaza entera. Bajo la ruta del usuario eso ya no hace falta.
 //
-// Entrar sigue exigiendo cuenta @crconsultorescolombia.com con el correo verificado:
-// la privacidad por usuario no sustituye el control de quién puede usar la base.
+// El acceso abierto es una decisión explícita del usuario. Consecuencia a tener presente:
+// quien encuentre la URL puede crear su espacio y consumir cuota de Firestore y de las
+// API de IA, que no piden autenticación. Los datos existentes siguen inaccesibles.
 //
 // ===============================================================
 // Modelo de datos asumido
@@ -54,14 +55,20 @@ service cloud.firestore {
     // Funciones de apoyo
     // =============================================================
 
+    /* Cualquier cuenta de Google puede entrar, por decisión del usuario: ya no se exige
+       el dominio corporativo. Lo que protege los datos es el aislamiento por usuario
+       —todo vive bajo `usuarios/{uid}/…` y estas reglas comparan ese uid con el de quien
+       pide—, así que alguien de fuera solo alcanza su propio espacio vacío.
+
+       El correo verificado sí se sigue exigiendo: es lo que impide reclamar una dirección
+       ajena, y de ello depende la compartición, que se concede por correo. */
     function esMiembro() {
       return request.auth != null
         && request.auth.token.email is string
-        && request.auth.token.email.lower().matches('^[a-z0-9._%+-]+@crconsultorescolombia[.]com$')
         && request.auth.token.email_verified == true;
     }
 
-    // Miembro del dominio y dueño del espacio al que se está entrando.
+    // Sesión válida y dueño del espacio al que se está entrando.
     function esDueno(uid) {
       return esMiembro() && request.auth.uid == uid;
     }
@@ -288,6 +295,23 @@ service cloud.firestore {
           && modificacionCoherente(request.resource.data);
         allow delete: if esDueno(uid);
       }
+    }
+
+    /* ── «Compartidos conmigo» ──
+       La lista de estudios que otros me compartieron se consulta por grupo de
+       colecciones: están dentro del espacio de cada dueño y quien pregunta no sabe de
+       quién, así que la consulta recorre todas las subcolecciones `estudios` a la vez.
+
+       Esta regla existe porque una consulta de grupo NO la autoriza la regla anclada a
+       `usuarios/{uid}/estudios/{id}`: al no estar atada a un padre concreto, el motor
+       necesita un patrón con comodín recursivo que coincida con ella. Sin esto la
+       consulta se rechaza entera con «Missing or insufficient permissions», aunque cada
+       documento por separado sí fuera legible.
+
+       Solo concede lectura de los documentos que me nombran, y nada más: no permite
+       enumerar los estudios de nadie. */
+    match /{ruta=**}/estudios/{estudioId} {
+      allow read: if estudioCompartidoConmigo();
     }
 
     // =============================================================

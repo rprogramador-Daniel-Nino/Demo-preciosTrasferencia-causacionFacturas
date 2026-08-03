@@ -162,7 +162,7 @@ export async function leerCompartidoCon(id, usuario) {
  * del informe, y un autoguardado disparado a la vez no debe poder pisar la lista de
  * accesos ni al contrario.
  */
-export async function cambiarCompartido(id, correo, usuario, { quitar = false, dominio } = {}) {
+export async function cambiarCompartido(id, correo, usuario, { quitar = false } = {}) {
   const referencia = documento(usuario, ESTUDIOS, id);
   try {
     return await runTransaction(db, async (tx) => {
@@ -175,7 +175,7 @@ export async function cambiarCompartido(id, correo, usuario, { quitar = false, d
       if (quitar) {
         lista = quitarCompartido(actuales, correo);
       } else {
-        const resultado = agregarCompartido(actuales, correo, { dominio, correoPropio: usuario.correo });
+        const resultado = agregarCompartido(actuales, correo, { correoPropio: usuario.correo });
         lista = resultado.lista;
         error = resultado.error;
       }
@@ -211,9 +211,14 @@ export async function listarEstudiosCompartidosConmigo(usuario, tope = 100) {
   const correo = String((usuario && usuario.correo) || '').toLowerCase();
   if (!correo) return [];
   try {
+    /* El `orderBy` no es solo presentación: junto con `array-contains` es lo que hace
+       que la consulta use el índice de grupo declarado en firestore.indexes.json. Sin
+       ordenar haría falta además un índice de campo único con ámbito de grupo, que es
+       otro despliegue. Y de paso los más recientes quedan arriba. */
     const consulta = query(
       collectionGroup(db, ESTUDIOS),
       where('compartidoCon', 'array-contains', correo),
+      orderBy('actualizadoEn', 'desc'),
       limit(tope)
     );
     const instantanea = await getDocs(consulta);
@@ -232,10 +237,22 @@ export async function listarEstudiosCompartidosConmigo(usuario, tope = 100) {
       };
     });
   } catch (err) {
-    /* Si falta el índice del grupo de colecciones, Firestore lo dice con un enlace para
-       crearlo. Se avisa y se sigue: no tener compartidos no debe impedir trabajar. */
-    console.error('[compartidos] no se pudieron leer', err);
-    return [];
+    /* Se relanza con el motivo traducido para que la pantalla lo diga: los dos fallos
+       posibles se arreglan con un despliegue distinto, y «no se pudieron leer» a secas
+       obliga a abrir la consola para averiguar cuál. */
+    if (esSinPermiso(err)) {
+      throw new Error(
+        'Las reglas todavía no permiten la consulta de estudios compartidos. ' +
+        'Hay que desplegar firestore.rules.'
+      );
+    }
+    if (err && err.code === 'failed-precondition') {
+      throw new Error(
+        'Falta el índice de grupo de colecciones para los estudios compartidos. ' +
+        'Hay que desplegar firestore.indexes.json.'
+      );
+    }
+    throw err;
   }
 }
 

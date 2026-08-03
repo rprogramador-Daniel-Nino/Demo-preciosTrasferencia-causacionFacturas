@@ -155,22 +155,27 @@ export function normalizarCorreo(correo) {
   return String(correo || '').trim().toLowerCase();
 }
 
-/** ¿Es un correo del dominio corporativo? Fuera de él no hay a quién compartir. */
-export function esCorreoCompartible(correo, dominio) {
+/**
+ * ¿Tiene forma de correo? Ya no se exige un dominio concreto: entra cualquier cuenta de
+ * Google, así que restringir a quién se comparte dejaría fuera a personas que sí pueden
+ * iniciar sesión. Se valida solo la forma, con un dominio de al menos dos partes, para
+ * atajar el error de tecleo antes de guardar un acceso que nunca serviría.
+ */
+export function esCorreoCompartible(correo) {
   const limpio = normalizarCorreo(correo);
-  return /^[a-z0-9._%+-]+@[a-z0-9.-]+$/.test(limpio) && limpio.endsWith('@' + dominio);
+  return /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(limpio);
 }
 
 /**
  * Añade un correo a la lista de habilitados, sin repetir y respetando el tope.
  * Devuelve la lista nueva y por qué, si no se pudo.
  */
-export function agregarCompartido(lista, correo, { dominio, correoPropio }) {
+export function agregarCompartido(lista, correo, { correoPropio } = {}) {
   const actual = (lista || []).map(normalizarCorreo).filter(Boolean);
   const limpio = normalizarCorreo(correo);
   if (!limpio) return { lista: actual, error: 'Escriba el correo de la persona.' };
-  if (!esCorreoCompartible(limpio, dominio)) {
-    return { lista: actual, error: `Solo se puede compartir con cuentas @${dominio}.` };
+  if (!esCorreoCompartible(limpio)) {
+    return { lista: actual, error: 'Ese no parece un correo válido.' };
   }
   if (limpio === normalizarCorreo(correoPropio)) {
     return { lista: actual, error: 'El estudio ya es suyo: no hace falta compartirlo consigo mismo.' };
