@@ -47,6 +47,8 @@ export default function App() {
   /* 'guardado' | 'guardando' | 'error': con la base remota una escritura puede
      fallar, y el problema que traíamos era justamente perder cambios sin avisar. */
   const [estadoGuardado, setEstadoGuardado] = useState('guardado');
+  /* Identificador recién copiado, para confirmarlo en el botón un instante. */
+  const [idCopiado, setIdCopiado] = useState(null);
 
   const temporizador = useRef(null);
   const cargando = useRef(false);
@@ -229,6 +231,19 @@ export default function App() {
     setStudy(prev => ({ ...prev, ...fields }));
   };
 
+  /* Copia el identificador al portapapeles. `navigator.clipboard` no existe en
+     contextos sin HTTPS ni con el permiso denegado, y ahí se deja el texto
+     seleccionable en lugar de romper: el botón muestra el id de todas formas. */
+  const copiarId = async (id) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      setIdCopiado(id);
+      setTimeout(() => setIdCopiado(null), 1500);
+    } catch (err) {
+      console.warn('[estudios] no se pudo copiar el identificador', err);
+    }
+  };
+
   if (cargandoSesion) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-[#09090b]">
@@ -248,6 +263,21 @@ export default function App() {
           {usuario.nombre || usuario.correo}
           {usuario.nombre ? <span className="text-zinc-400"> · {usuario.correo}</span> : null}
         </span>
+        {/* Identificador del estudio abierto. Los mensajes de error de la base lo
+            nombran —«no se pudo guardar … estudios/study_1785772970844»— y hasta ahora
+            no aparecía en ninguna pantalla, así que no había manera de saber a qué
+            estudio se referían. Un clic lo copia, para pegarlo en la consola de
+            Firestore o al reportar un problema. */}
+        {activeStudyId && (
+          <button
+            onClick={() => copiarId(activeStudyId)}
+            className="font-mono text-[10.5px] px-1.5 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500"
+            title="Identificador del estudio en la base de datos · clic para copiarlo"
+          >
+            {idCopiado === activeStudyId ? '✓ copiado' : activeStudyId}
+          </button>
+        )}
+
         {activeStudyId && (
           <span className={
             estadoGuardado === 'error' ? 'text-amber-600 dark:text-amber-400 font-semibold'

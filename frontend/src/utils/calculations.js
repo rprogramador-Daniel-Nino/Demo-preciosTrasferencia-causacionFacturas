@@ -101,6 +101,29 @@ export function fmt(v) {
   return Math.round(v).toLocaleString('es-CO');
 }
 
+/**
+ * Monto total de las operaciones con vinculados del estudio.
+ *
+ * Existe porque este dato se guarda en más de un campo y cada pantalla leía uno
+ * distinto: la ingesta de operaciones escribe `monto` y `monto_operacion`, y la
+ * tarjeta de resumen leía `t_s`, que ahí ya no se llena —mostraba «COP $ 0» junto a un
+ * mensaje de éxito que sí traía la cifra. `t_s` son los ingresos operacionales de la
+ * compañía, que vienen del estado financiero, y por eso el paso de operaciones dejó de
+ * escribirlo: el paso de estados financieros lo sobrescribía después.
+ *
+ * `t_s` queda como último recurso solo para los estudios anteriores a esa separación,
+ * donde era el único sitio donde el monto llegó a guardarse. No es equivalente: si hay
+ * `monto_operacion` o `monto`, esos mandan.
+ */
+export function montoOperacion(study) {
+  const s = study || {};
+  for (const candidato of [s.monto_operacion, s.monto, s.t_s]) {
+    const valor = num(candidato);
+    if (valor !== null && valor !== 0) return valor;
+  }
+  return null;
+}
+
 export function pliOf(o, kind) {
   if (!o) return null;
   const s = num(o.s);
