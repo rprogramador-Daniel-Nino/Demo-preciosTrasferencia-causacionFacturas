@@ -156,3 +156,44 @@ test('recursosFaltantes null no lanza', () => {
   const avisos = revisarAntesDeGenerar({ ...base, recursosFaltantes: null });
   assert.strictEqual(avisos.length, 0);
 });
+
+// Tests para casos fallidos que la normalización anterior dejaba pasar
+test('NIT con dígitos duplicados por error de OCR debe avisar', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800123456-7' },
+    nitDeReferencia: '8001234560007',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /8001234560007/);
+});
+
+test('NIT contra referencia con solo letras debe avisar', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '900123456-7' },
+    nitDeReferencia: 'ABCDEFGHI',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /ABCDEFGHI/);
+});
+
+test('NIT contra referencia con solo espacios y guiones debe avisar', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '900123456-7' },
+    nitDeReferencia: '   -  ',
+  });
+  assert.strictEqual(avisos.length, 1);
+});
+
+test('NIT que difiere solo en dígito de verificación debe avisar (es error de digitación)', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800123456-7' },
+    nitDeReferencia: '800123456-1',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /800123456-1/);
+  assert.match(avisos[0].texto, /800123456-7/);
+});
