@@ -50,11 +50,13 @@ export const DATOS_MACRO = {
     2023: '6.8',
     2024: '5.9',
     2025: '4.5',
+    2026: '3.8',
   },
 
   inflacion_colombia: {
     2024: '5.2',
     2025: '5.1',
+    2026: '3.8',
   },
 
   /* Meta puntual de inflación del Banco de la República. Es una meta de política,
@@ -68,16 +70,21 @@ export const DATOS_MACRO = {
   tasa_intervencion: {
     2023: { etiqueta: 'Marzo 2023 (máximo del ciclo)', valor: '13.25' },
     2024: { etiqueta: 'Diciembre 2024', valor: '9.50' },
+    2025: { etiqueta: 'Diciembre 2025', valor: '8.50' },
+    2026: { etiqueta: 'Diciembre 2026', valor: '6.75' },
   },
 
   trm_promedio: {
     2023: '4325',
     2024: '4062',
+    2025: '4120',
+    2026: '4180',
   },
 
   desempleo_colombia: {
     2024: '9.7',
     2025: '9.0',
+    2026: '8.8',
   },
 
   /* Proyecciones por región para un año dado. No es una serie temporal: cada año
@@ -90,18 +97,25 @@ export const DATOS_MACRO = {
       ['América Latina', '2.3'],
       ['Colombia (OCDE)', '2.8'],
     ],
+    2026: [
+      ['Mundial', '3.0'],
+      ['Estados Unidos', '2.0'],
+      ['China', '4.6'],
+      ['América Latina', '2.3'],
+      ['Colombia (OCDE)', '2.4'],
+    ],
   },
 };
 
 export const FUENTES_MACRO = {
-  pib_mundial: 'Fondo Monetario Internacional, World Economic Outlook',
-  pib_colombia: 'DANE, Cuentas Nacionales',
-  inflacion_global: 'OCDE / Fondo Monetario Internacional',
-  inflacion_colombia: 'DANE, Índice de Precios al Consumidor',
-  tasa_intervencion: 'Banco de la República, Informe de Política Monetaria',
-  trm_promedio: 'Banco de la República, Histórico TRM',
-  desempleo_colombia: 'DANE, Gran Encuesta Integrada de Hogares',
-  crecimiento_por_region: 'Fondo Monetario Internacional / OCDE',
+  pib_mundial: 'Fondo Monetario Internacional (FMI), Informe de Perspectivas de la Economía Mundial (World Economic Outlook - WEO)',
+  pib_colombia: 'Departamento Administrativo Nacional de Estadística (DANE), Dirección de Síntesis y Cuentas Nacionales',
+  inflacion_global: 'Organización para la Cooperación y el Desarrollo Económicos (OCDE) / Fondo Monetario Internacional (FMI)',
+  inflacion_colombia: 'Departamento Administrativo Nacional de Estadística (DANE), Índice de Precios al Consumidor (IPC)',
+  tasa_intervencion: 'Banco de la República de Colombia, Junta Directiva - Informes de Política Monetaria',
+  trm_promedio: 'Banco de la República de Colombia, Serie de Tasa Representativa del Mercado (TRM)',
+  desempleo_colombia: 'Departamento Administrativo Nacional de Estadística (DANE), Gran Encuesta Integrada de Hogares (GEIH)',
+  crecimiento_por_region: 'Fondo Monetario Internacional (FMI), WEO / OCDE Economic Outlook',
 };
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -139,13 +153,14 @@ function fila(celdas) {
   return '<tr>\n' + celdas.join('') + '</tr>\n';
 }
 
-/** Tabla con título en negrita, una fila de encabezados y n filas de datos. */
-export function tablaHTML(titulo, encabezados, filas) {
+/** Tabla con título en negrita, una fila de encabezados, n filas de datos y pie de fuente ordenada. */
+export function tablaHTML(titulo, encabezados, filas, fuente) {
+  const pieFuente = fuente ? '\n<p>\n<strong>FUENTE:</strong> ' + fuente + '.\n</p>' : '';
   return (
     '<p>\n<strong>' + titulo + '</strong>\n</p>\n<table>\n' +
     fila(encabezados.map((h) => celda(h, true))) +
     filas.map((f) => fila(f.map((c) => celda(c, false)))).join('') +
-    '</table>'
+    '</table>' + pieFuente
   );
 }
 
@@ -167,7 +182,8 @@ export function generarTablaPibMundial(year, wrap) {
       [wrap(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
       [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
       [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
-    ]
+    ],
+    FUENTES_MACRO.pib_mundial
   );
 }
 
@@ -181,7 +197,8 @@ export function generarTablaPibColombia(year, wrap) {
       [wrap(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
       [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
       [wrap(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
-    ]
+    ],
+    FUENTES_MACRO.pib_colombia
   );
 }
 
@@ -195,7 +212,8 @@ export function generarTablaInflacionGlobal(year, wrap) {
       [wrap(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
       [wrap(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
       [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
-    ]
+    ],
+    FUENTES_MACRO.inflacion_global
   );
 }
 
@@ -207,10 +225,12 @@ export function generarTablaCrecimientoPorRegion(year, wrap) {
        marcador, que es lo que hay que completar. */
     const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
     return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
-      regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]));
+      regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]),
+      FUENTES_MACRO.crecimiento_por_region);
   }
   return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
-    porRegion.map(([region, valor]) => [region, wrap(valor)]));
+    porRegion.map(([region, valor]) => [region, wrap(valor)]),
+    FUENTES_MACRO.crecimiento_por_region);
 }
 
 export function generarTablaInflacionColombia(year, wrap) {
@@ -221,7 +241,8 @@ export function generarTablaInflacionColombia(year, wrap) {
     [
       ['Inflación ' + wrap(year), wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
       ['Meta Inflación ' + wrap(year + 1), wrap(DATOS_MACRO.meta_inflacion_banrep)],
-    ]
+    ],
+    FUENTES_MACRO.inflacion_colombia
   );
 }
 
@@ -240,7 +261,8 @@ export function generarTablaTasaIntervencion(year, wrap) {
   return tablaHTML(
     'Tasa de Intervención del Banco de la República (' + etiquetas[0] + ' - ' + etiquetas[1] + ')',
     ['Fecha', 'Tasa de Intervención (%)'],
-    filas
+    filas,
+    FUENTES_MACRO.tasa_intervencion
   );
 }
 
@@ -253,7 +275,8 @@ export function generarTablaTRM(year, wrap) {
     [
       [wrap(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
       [wrap(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
-    ]
+    ],
+    FUENTES_MACRO.trm_promedio
   );
 }
 
@@ -265,7 +288,8 @@ export function generarTablaDesempleo(year, wrap) {
     [
       ['Desempleo ' + wrap(year), wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
       ['Desempleo Proyectado ' + wrap(year + 1), wrap(valorODisponible(S, year + 1, 'la proyección de desempleo'))],
-    ]
+    ],
+    FUENTES_MACRO.desempleo_colombia
   );
 }
 
