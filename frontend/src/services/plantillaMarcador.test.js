@@ -22,8 +22,10 @@ test('descarta el fragmento que no existe y dice por qué', () => {
 });
 
 test('descarta el campo que no está en el vocabulario', () => {
-  const html = '<p>Carrera 7</p>';
-  const r = aplicarMarcas(html, [{ fragmento: 'Carrera 7', campo: 'direccion', ocurrencia: 1 }]);
+  const html = '<p>3001234567</p>';
+  /* `telefono` no está en el vocabulario; `direccion` sí lo está desde que se
+     corrigió ese hueco, así que ya no sirve como campo inválido de ejemplo. */
+  const r = aplicarMarcas(html, [{ fragmento: '3001234567', campo: 'telefono', ocurrencia: 1 }]);
   assert.strictEqual(r.aplicadas, 0);
   assert.match(r.descartadas[0].motivo, /vocabulario/i);
 });
@@ -145,7 +147,10 @@ test('remover los spans con múltiples marcas recupera el original', () => {
   assert.strictEqual(sinSpans, original);
 });
 
-import { trocear, proponerMarcas } from './plantillaMarcador.js';
+import {
+  trocear, proponerMarcas, contarApariciones, contextoDeMarca,
+  MOTIVO_SOLAPE, MOTIVO_SIN_APARICION_LIBRE,
+} from './plantillaMarcador.js';
 
 test('trocear no parte por la mitad una etiqueta', () => {
   const html = '<p>' + 'a'.repeat(50) + '</p><p>' + 'b'.repeat(50) + '</p>';
@@ -159,22 +164,29 @@ test('trocear no parte por la mitad una etiqueta', () => {
   }
 });
 
-test('proponerMarcas acepta solo campos del vocabulario', async () => {
+test('proponerMarcas acepta solo campos del vocabulario y cuenta lo rechazado', async () => {
   const respuesta = JSON.stringify({
     marcas: [
       { fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 },
-      { fragmento: 'Carrera 7', campo: 'direccion', ocurrencia: 1 },
+      { fragmento: '3001234567', campo: 'telefono', ocurrencia: 1 },
     ],
   });
-  const marcas = await proponerMarcas('<p>ACME S.A.S en Carrera 7</p>', {
+  const r = await proponerMarcas('<p>ACME S.A.S, tel 3001234567</p>', {
     pedir: async () => 'Aquí van las marcas:\n```json\n' + respuesta + '\n```\nEso es todo.',
   });
-  assert.deepStrictEqual(marcas, [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }]);
+  assert.strictEqual(r.marcas.length, 1);
+  assert.strictEqual(r.marcas[0].fragmento, 'ACME S.A.S');
+  assert.strictEqual(r.marcas[0].campo, 'ent');
+  assert.strictEqual(r.marcas[0].ocurrencia, 1);
+  /* Que el modelo señale un dato con un nombre inexistente no es ruido: estaba
+     diciendo "aquí hay un dato del cliente anterior". Se cuenta. */
+  assert.strictEqual(r.rechazadasPorVocabulario, 1);
+  assert.strictEqual(r.trozosFallidos, 0);
 });
 
-test('un trozo que falla no tumba los demás', async () => {
+test('un trozo que falla no tumba los demás, pero se cuenta', async () => {
   let llamada = 0;
-  const marcas = await proponerMarcas('<p>' + 'a'.repeat(80) + '</p><p>ACME S.A.S</p>', {
+  const r = await proponerMarcas('<p>' + 'a'.repeat(80) + '</p><p>ACME S.A.S</p>', {
     maxCaracteres: 60,
     pedir: async () => {
       llamada++;
@@ -182,10 +194,160 @@ test('un trozo que falla no tumba los demás', async () => {
       return JSON.stringify({ marcas: [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }] });
     },
   });
-  assert.strictEqual(marcas.length, 1, 'debería conservar lo que sí salió');
+  assert.strictEqual(r.marcas.length, 1, 'debería conservar lo que sí salió');
+  assert.strictEqual(r.trozosFallidos, 1, 'el trozo perdido tiene que quedar contado');
+  assert.ok(r.trozosEnviados >= 2, 'debe reportar cuántos trozos se enviaron');
 });
 
-test('una respuesta que no trae JSON no rompe', async () => {
-  const marcas = await proponerMarcas('<p>ACME</p>', { pedir: async () => 'No encontré nada.' });
-  assert.deepStrictEqual(marcas, []);
+test('una respuesta que no trae JSON no rompe y cuenta como trozo fallido', async () => {
+  const r = await proponerMarcas('<p>ACME</p>', { pedir: async () => 'No encontré nada.' });
+  assert.deepStrictEqual(r.marcas, []);
+  assert.strictEqual(r.trozosEnviados, 1);
+  assert.strictEqual(r.trozosFallidos, 1);
+});
+
+/* --- Bloqueante 1: la ocurrencia se numeraba por trozo y se contaba por
+   documento. El caso reproducido: tres apariciones de la misma razón social,
+   una en el trozo 1 y dos en el trozo 2. El modelo, que solo ve su trozo,
+   devuelve ocurrencias [1, 1, 2]; sin traducir a global se aplicaban 2 marcas,
+   una caía en la posición equivocada y una aparición del cliente anterior
+   sobrevivía. --- */
+test('la ocurrencia local de cada trozo se traduce a ocurrencia global', async () => {
+  const relleno = '<p>' + 'x'.repeat(70) + '</p>';
+  const html =
+    '<p>Informe de END GAME COLOMBIA S.A.S para el año</p>' + relleno +
+    '<p>END GAME COLOMBIA S.A.S declara</p><p>y END GAME COLOMBIA S.A.S concluye</p>';
+
+  const porTrozo = [
+    { marcas: [{ fragmento: 'END GAME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 }] },
+    { marcas: [] },
+    {
+      marcas: [
+        { fragmento: 'END GAME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 1 },
+        { fragmento: 'END GAME COLOMBIA S.A.S', campo: 'ent', ocurrencia: 2 },
+      ],
+    },
+  ];
+  let i = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 80,
+    pedir: async () => JSON.stringify(porTrozo[i++] || { marcas: [] }),
+  });
+
+  assert.deepStrictEqual(
+    r.marcas.map((m) => m.ocurrencia), [1, 2, 3],
+    'las ocurrencias locales debían salir traducidas a 1, 2 y 3 del documento'
+  );
+
+  const aplicado = aplicarMarcas(html, r.marcas);
+  assert.strictEqual(aplicado.aplicadas, 3, 'las tres apariciones debían marcarse');
+  assert.strictEqual(aplicado.descartadas.length, 0);
+  /* Lo que de verdad importa: ninguna aparición del cliente anterior queda
+     fuera de una marca, así que ninguna sobrevive al renderizar. */
+  const sinMarcar = aplicado.html.replace(
+    /<span data-campo="ent">END GAME COLOMBIA S\.A\.S<\/span>/g, ''
+  );
+  assert.ok(
+    !sinMarcar.includes('END GAME COLOMBIA S.A.S'),
+    'sobrevivió una aparición sin marcar del dato del cliente anterior'
+  );
+  /* Y el documento no se alteró: quitar los spans devuelve el original. */
+  assert.strictEqual(
+    aplicado.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, ''), html
+  );
+});
+
+test('las marcas del mismo fragmento se aplican cada una en su propia aparición', () => {
+  const html = '<p>2024 y 2024 y 2024</p>';
+  const r = aplicarMarcas(html, [
+    { fragmento: '2024', campo: 'anio', ocurrencia: 1 },
+    { fragmento: '2024', campo: 'anio', ocurrencia: 2 },
+    { fragmento: '2024', campo: 'anio', ocurrencia: 3 },
+  ]);
+  assert.strictEqual(r.aplicadas, 3);
+  assert.strictEqual(
+    r.html,
+    '<p><span data-campo="anio">2024</span> y <span data-campo="anio">2024</span>' +
+    ' y <span data-campo="anio">2024</span></p>'
+  );
+});
+
+test('contarApariciones cuenta igual que aplicarMarcas: ni atributos ni cruces de etiqueta', () => {
+  assert.strictEqual(contarApariciones('<p title="ent">ent y ent</p>', 'ent'), 2,
+    'el valor del atributo no debe contarse');
+  assert.strictEqual(contarApariciones('<p>ACME</p><p>COLOMBIA</p>', 'MECOLOM'), 0,
+    'un fragmento partido por una etiqueta original no existe');
+  assert.strictEqual(contarApariciones('<p>2024 y 2024</p>', '2024'), 2);
+});
+
+test('una ocurrencia que el documento no tiene se descarta con motivo propio, no como solape', () => {
+  const r = aplicarMarcas('<p>2024</p>', [{ fragmento: '2024', campo: 'anio', ocurrencia: 3 }]);
+  assert.strictEqual(r.aplicadas, 0);
+  assert.strictEqual(r.descartadas[0].motivo, MOTIVO_SIN_APARICION_LIBRE);
+  assert.notStrictEqual(r.descartadas[0].motivo, MOTIVO_SOLAPE,
+    'este caso no es benigno y no debe anunciarse como un solape');
+});
+
+/* --- Hueco del spec §4: el revisor necesita contexto para poder decidir --- */
+test('contextoDeMarca da texto a los dos lados de la aparición pedida', () => {
+  const html =
+    '<p>El contribuyente con NIT 900111222-3 celebró operaciones</p>' +
+    '<p>con el vinculado cuyo NIT 900111222-3 figura en el anexo</p>';
+  const primera = contextoDeMarca(html, '900111222-3', 1);
+  const segunda = contextoDeMarca(html, '900111222-3', 2);
+  assert.ok(primera.antes.includes('contribuyente'), 'la 1.ª debe verse como la del contribuyente');
+  assert.ok(segunda.antes.includes('vinculado'), 'la 2.ª debe verse como la del vinculado');
+  assert.ok(segunda.despues.includes('figura'), 'debe traer también el texto de la derecha');
+  assert.ok(primera.antes.length <= 60 && primera.despues.length <= 60, 'el contexto va acotado');
+});
+
+test('contextoDeMarca cruza la frontera del párrafo sin pegar palabras', () => {
+  const html = '<p>ACME</p><p>COLOMBIA declara</p>';
+  const c = contextoDeMarca(html, 'COLOMBIA', 1);
+  assert.ok(!c.antes.endsWith('ACME') || c.antes.endsWith('ACME '), 'debe separar los párrafos');
+  assert.match(c.antes, /ACME\s$/);
+});
+
+test('contextoDeMarca devuelve null si la aparición no existe', () => {
+  assert.strictEqual(contextoDeMarca('<p>ACME</p>', 'ACME', 2), null);
+  assert.strictEqual(contextoDeMarca('<p>ACME</p>', 'NO ESTÁ', 1), null);
+});
+
+test('las marcas propuestas llegan al revisor con su contexto', async () => {
+  const html =
+    '<p>El contribuyente con NIT 900111222-3 celebró operaciones</p>' +
+    '<p>con el vinculado cuyo NIT 900111222-3 figura en el anexo</p>';
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [
+        { fragmento: '900111222-3', campo: 'nit', ocurrencia: 1 },
+        { fragmento: '900111222-3', campo: 'vinc_id', ocurrencia: 2 },
+      ],
+    }),
+  });
+  assert.ok(r.marcas[0].contexto.antes.includes('contribuyente'));
+  assert.ok(r.marcas[1].contexto.antes.includes('vinculado'),
+    'el contexto debe corresponder a la aparición que se va a marcar, no a la primera');
+});
+
+test('el contexto de una marca traducida corresponde a su aparición global', async () => {
+  /* El fragmento aparece en el trozo 1 y en el trozo 2. La marca del trozo 2
+     llega con ocurrencia local 1 y su contexto debe ser el del trozo 2. */
+  const html =
+    '<p>Ingresos del contribuyente 1.234.567 en el año</p>' +
+    '<p>' + 'y'.repeat(70) + '</p>' +
+    '<p>Ingresos del vinculado 1.234.567 en el año</p>';
+  let i = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 70,
+    pedir: async () => {
+      i++;
+      return JSON.stringify(i === 1 || i === 3
+        ? { marcas: [{ fragmento: '1.234.567', campo: 'eeff.t_s', ocurrencia: 1 }] }
+        : { marcas: [] });
+    },
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia), [1, 2]);
+  assert.ok(r.marcas[0].contexto.antes.includes('contribuyente'));
+  assert.ok(r.marcas[1].contexto.antes.includes('vinculado'));
 });

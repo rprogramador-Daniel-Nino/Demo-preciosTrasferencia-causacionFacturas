@@ -6,7 +6,7 @@ import { VOCABULARIO } from '../services/plantillaVocabulario.js';
    que el repositorio ya usa en la curación de comparables: la IA propone, la
    persona decide. Sin esta pantalla, una marca mal asignada se propagaría a
    todos los informes que usen esta plantilla. */
-export default function RevisorDeMarcas({ marcas, onConfirmar, onCancelar }) {
+export default function RevisorDeMarcas({ marcas, aviso, onConfirmar, onCancelar }) {
   /* Identidad sintética asignada una sola vez al inicializar.
      Permite editar marcas sin remontarlas, y evita colisiones entre fragmentos
      que se repiten en diferentes trozos del documento. */
@@ -22,10 +22,11 @@ export default function RevisorDeMarcas({ marcas, onConfirmar, onCancelar }) {
 
   const quitar = (id) => setLista(prevLista => prevLista.filter(m => m._id !== id));
 
-  /* Remover identificadores sintéticos antes de confirmar */
+  /* Remover el identificador sintético y el contexto —que es material de
+     pantalla— antes de confirmar. */
   const confirmar = () => {
-    const listaSinId = lista.map(({ _id, ...m }) => m);
-    onConfirmar(listaSinId);
+    const listaLimpia = lista.map(({ _id, contexto: _contexto, ...m }) => m);
+    onConfirmar(listaLimpia);
   };
 
   /* Truncar solo cuando sea necesario */
@@ -41,6 +42,15 @@ export default function RevisorDeMarcas({ marcas, onConfirmar, onCancelar }) {
         correspondan. Nada se guarda hasta que confirmes.
       </p>
 
+      {/* Aviso del propio marcado: trozos que fallaron o propuestas rechazadas.
+          Va aquí y no en un `alert` porque tiene que seguir a la vista mientras
+          se revisan las marcas: es el momento en que sirve de algo. */}
+      {aviso && (
+        <div className="border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3 mb-4">
+          <p className="text-xs text-amber-900 dark:text-amber-200 whitespace-pre-wrap">{aviso}</p>
+        </div>
+      )}
+
       <div className="max-h-[420px] overflow-y-auto space-y-2">
         {lista.map((m) => {
           const ocurrencia = m.ocurrencia || 1;
@@ -48,11 +58,23 @@ export default function RevisorDeMarcas({ marcas, onConfirmar, onCancelar }) {
           return (
             <div key={m._id} className="flex items-start gap-3 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
               <div className="flex-1 min-w-0">
+                {/* El fragmento dentro de su contexto. Sin esto, ante una "2.ª
+                    aparición" de un NIT no hay forma de saber si es la del
+                    contribuyente o la del vinculado, y esta pantalla es la
+                    única defensa contra una marca mal asignada. */}
                 <span
-                  className="text-xs font-mono text-zinc-700 dark:text-zinc-300 block max-h-[100px] overflow-y-auto whitespace-pre-wrap"
+                  className="text-xs text-zinc-700 dark:text-zinc-300 block max-h-[100px] overflow-y-auto whitespace-pre-wrap"
                   title={m.fragmento}
                 >
-                  {m.fragmento}
+                  {m.contexto && (
+                    <span className="text-zinc-400 dark:text-zinc-500">…{m.contexto.antes}</span>
+                  )}
+                  <span className="font-mono font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 rounded px-1">
+                    {m.fragmento}
+                  </span>
+                  {m.contexto && (
+                    <span className="text-zinc-400 dark:text-zinc-500">{m.contexto.despues}…</span>
+                  )}
                 </span>
                 {etiquetaOcurrencia && (
                   <span className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 block">
