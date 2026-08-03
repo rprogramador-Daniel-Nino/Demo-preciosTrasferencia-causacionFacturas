@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { extraerReferencia, estiloBaseDe } from './pdfReferenceExtractor.js';
+import {
+  extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
+} from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
 
@@ -226,4 +228,84 @@ test('sólo se declara el tamaño cuando se desvía de verdad del cuerpo', async
   );
   /* La letra pequeña de verdad —notas y fuentes de tabla— sí se conserva. */
   assert.ok(tamanos.some((t) => t <= 9), 'se perdió la letra pequeña');
+});
+
+test('la plantilla queda sellada con la versión del lector', async () => {
+  const r = await extraer();
+  assert.strictEqual(versionDe(r.html), VERSION_EXTRACTOR);
+  assert.deepStrictEqual(loQueFaltaPorVersion(VERSION_EXTRACTOR), [], 'la actual no debe faltar nada');
+});
+
+test('una plantilla sin sello se trata como la más antigua y se dice qué le falta', () => {
+  /* Las guardadas antes de que existiera el sello no lo traen. Devolver 1 y no
+     null es lo que permite enumerar lo que les falta en vez de callar. */
+  assert.strictEqual(versionDe('<p>plantilla vieja</p>'), 1);
+  const falta = loQueFaltaPorVersion(1);
+  assert.ok(falta.length >= 2, 'debería enumerar imágenes y tipografía');
+  assert.ok(falta.some((f) => /tipograf/i.test(f)));
+  assert.ok(falta.some((f) => /im[áa]genes/i.test(f)));
+
+  /* Cuanto más nueva la plantilla, menos le falta, y a la actual nada. Se afirma
+     la relación y no un número exacto: así el test sigue valiendo cuando se suba
+     la versión otra vez, en vez de fallar por una cuenta que ya cambió una vez. */
+  for (let v = 1; v < VERSION_EXTRACTOR; v++) {
+    assert.ok(
+      loQueFaltaPorVersion(v).length > loQueFaltaPorVersion(v + 1).length,
+      'a la versión ' + v + ' debería faltarle más que a la ' + (v + 1)
+    );
+  }
+  assert.ok(
+    loQueFaltaPorVersion(2).some((f) => /tipograf/i.test(f)),
+    'a la 2 le falta la tipografía, que llegó en la 3'
+  );
+});
+
+test('cada entrada del índice va en su propio bloque', async () => {
+  const r = await extraer();
+  /* Las 89 entradas salían concatenadas en una sola línea corrida —título, puntos
+     y número de página de una pegados a los de la siguiente— porque el rol TOCI no
+     estaba en el mapa de etiquetas y sus hijos se emitían sin envolver. */
+  const i = r.html.indexOf('INTRODUCCIÓN');
+  const tramo = r.html.slice(i, i + 1200);
+  const entradas = [...tramo.matchAll(/<p>(?:(?!<\/p>)[\s\S])*?\.{10,}[\s\S]*?<\/p>/g)];
+  assert.ok(
+    entradas.length >= 3,
+    'las entradas del índice no están en bloques propios: ' + entradas.length
+  );
+  /* Y en cada bloque, un solo número de página al final: si hubiera dos, dos
+     entradas se habrían fundido. */
+  for (const e of entradas.slice(0, 5)) {
+    const numeros = (e[0].match(/\.{10,}\s*\d+/g) || []).length;
+    assert.strictEqual(numeros, 1, 'un bloque del índice trae dos entradas: ' + e[0].slice(0, 120));
+  }
+});
+
+test('el logo queda marcado como encabezado, no como imagen del cuerpo', async () => {
+  const r = await extraer();
+  /* El logo del informe se repite en casi cien páginas: su sitio es el encabezado
+     de página, no la primera imagen del documento. Va marcado en el HTML para que
+     la exportación lo saque del cuerpo y lo declare como tal. */
+  const m = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(r.html);
+  assert.ok(m, 'no se marcó el encabezado');
+  assert.ok(/<img data-recurso=/.test(m[1]), 'el encabezado no lleva el logo');
+  /* Y va antes que el contenido: es lo primero del documento. */
+  assert.ok(m.index < r.html.indexOf('INTRODUCCIÓN'), 'el encabezado no está al principio');
+});
+
+test('cada página del original queda envuelta y numerada', async () => {
+  const r = await extraer();
+  /* Es lo que permite poner el salto donde el informe cambia de página. Sin esto la
+     portada se fundía con el índice y la primera página no se parecía a la del
+     original. */
+  const envueltas = (r.html.match(/<div class="pagina" data-pagina="\d+">/g) || []).length;
+  assert.strictEqual(envueltas, r.paginas, 'faltan páginas por envolver');
+  /* Y la portada es la primera, con su título dentro. */
+  const m = /<div class="pagina" data-pagina="1">([\s\S]*?)<div class="pagina" data-pagina="2">/
+    .exec(r.html);
+  assert.ok(m, 'no se pudo aislar la portada');
+  const texto = m[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.match(texto, /INFORME LOCAL DE PRECIOS DE TRANSFERENCIA/);
+  assert.match(texto, /PERÍODO FISCAL/);
+  /* El índice no debe estar en la portada: si aparece aquí, el salto no separa. */
+  assert.ok(!/RESUMEN EJECUTIVO/.test(texto), 'el índice se colvió a la portada');
 });

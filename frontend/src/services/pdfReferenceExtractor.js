@@ -23,9 +23,28 @@ if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
    por una sola imagen. */
 const TIEMPO_LIMITE_IMAGEN = 5000;
 
+/* Versión de lo que este lector produce. Se sube cuando el HTML extraído gana algo
+   que las plantillas ya guardadas no tienen, para que se pueda avisar de que están
+   viejas:
+     1 — texto, estructura e imágenes al final de cada página
+     2 — imágenes en su posición del flujo y logo una sola vez
+     3 — tipografía del informe: negrita, cursiva, familias y cuerpo
+     4 — cada entrada del índice y cada nota en su propio bloque
+     5 — cada página del original envuelta, para que el salto caiga donde debe */
+export const VERSION_EXTRACTOR = 5;
+
 const MAPA_ETIQUETAS = {
   H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6',
   P: 'p', L: 'ul', LI: 'li', Table: 'table', TR: 'tr', TD: 'td', TH: 'th',
+  /* Cada entrada del índice es un bloque. Sin esto sus hijos se concatenaban con
+     los de la siguiente y las ochenta y nueve entradas salían en una sola línea
+     corrida: el título, los puntos y el número de página de una pegados a los de
+     la otra. Es lo que hacía que el índice se viera desordenado.
+     `TOC` no se mapea: envolverlo añadiría un bloque sin efecto visible. */
+  TOCI: 'p',
+  /* Las notas también son bloque. Si no, la nota al pie se fundía con el párrafo
+     que la precede y parecía parte del texto. */
+  Note: 'p',
 };
 
 const escapar = (s) =>
@@ -264,16 +283,44 @@ export async function extraerReferencia(datos) {
      propio es el encabezado del documento de Word, que necesita OOXML y es de la
      otra fase; repetirlo cien veces dentro del texto —que es lo que se hacía— era
      peor que ponerlo una vez arriba. */
-  const cabecera = artefactos.map((a) => a.marca).join('');
+  /* El logo va marcado como encabezado, no como primera imagen del cuerpo. Word
+     entiende un encabezado repetido desde HTML —`mso-element:header` sobre un div
+     al que apunta `@page`—, así que no hace falta OOXML para esto: quien exporta
+     lo saca del cuerpo y lo declara. Se queda dentro del HTML y no en un campo
+     aparte para que sobreviva al marcado y al guardado, igual que el cuerpo de
+     letra. */
+  const cabecera = artefactos.length
+    ? '<div data-encabezado="1">' + artefactos.map((a) => a.marca).join('') + '</div>'
+    : '';
 
   /* El cuerpo del documento viaja dentro del propio HTML. Es lo que permite que
      la exportación a Word use la tipografía del informe de referencia —Arial 12
      en este— en vez de una elegida a dedo, y sigue ahí después de marcar, guardar
-     y recargar, sin necesidad de otra clave en el almacén. */
-  const marcaEstilo =
-    '<div data-estilo-base="' + base.familia + '|' + base.tamano + '"></div>';
+     y recargar, sin necesidad de otra clave en el almacén.
 
-  const html = marcaEstilo + cabecera + bloques.map((b) => conFiguras(b.html)).join('\n');
+     La versión va al lado por una razón concreta: las plantillas se guardan y se
+     reutilizan, así que una extraída con un lector anterior sigue viva en
+     IndexedDB y produce un documento sin lo que el lector nuevo sí saca —pasó con
+     la tipografía—. Sin este número, el usuario no tiene forma de saber que le
+     falta algo y que la solución es volver a subir el PDF. */
+  const marcaEstilo =
+    '<div data-extractor="' + VERSION_EXTRACTOR + '"' +
+    ' data-estilo-base="' + base.familia + '|' + base.tamano + '"></div>';
+
+  /* Cada página del original queda envuelta y numerada. Es lo que permite que la
+     exportación ponga un salto donde el informe cambia de página, empezando por la
+     portada: sin esto el título y el logo de la portada se fundían con el índice y
+     la primera página no se parecía a la del original.
+
+     El salto es duro y por página, así que si el contenido de una no cabe —las
+     fuentes no miden exactamente igual— Word desborda a una extra; pero la
+     siguiente vuelve a empezar donde debe, en vez de arrastrar el desfase hasta el
+     final. Es lo máximo alcanzable sin fijar alturas, que dejaría el documento
+     imposible de editar. */
+  const html = marcaEstilo + cabecera + bloques
+    .map((b) => '<div class="pagina" data-pagina="' + b.pagina + '">' +
+                conFiguras(b.html) + '</div>')
+    .join('\n');
 
   if (figurasSinDibujo.length) {
     console.warn('[extractor] figuras sin imagen que las resuelva:', figurasSinDibujo);
@@ -292,6 +339,38 @@ export async function extraerReferencia(datos) {
 export function estiloBaseDe(html) {
   const m = /data-estilo-base="([^"|]+)\|(\d+)"/.exec(String(html || ''));
   return m ? { familia: m[1], tamano: Number(m[2]) } : null;
+}
+
+/* Con qué versión del lector se extrajo una plantilla guardada. Devuelve 1 para las
+   que no traen la marca: son de antes de que existiera. */
+export function versionDe(html) {
+  const m = /data-extractor="(\d+)"/.exec(String(html || ''));
+  return m ? Number(m[1]) : 1;
+}
+
+/* Qué le falta a una plantilla extraída con un lector anterior, en palabras que
+   sirvan para decidir si vale la pena volver a subir el PDF. Vacío si está al día
+   o si no viene de un PDF (un .docx vía mammoth no lleva marca y tampoco tiene por
+   qué: su ruta es otra). */
+export function loQueFaltaPorVersion(version) {
+  const falta = [];
+  if (version < 2) {
+    falta.push('las imágenes quedaron amontonadas al final de cada página y el logo ' +
+               'del encabezado se repite en todas');
+  }
+  if (version < 3) {
+    falta.push('el documento sale sin la tipografía del informe: sin negritas, sin ' +
+               'cursivas y con el cuerpo de letra por defecto');
+  }
+  if (version < 4) {
+    falta.push('las entradas del índice salen corridas en una sola línea en vez de ' +
+               'una por renglón');
+  }
+  if (version < 5) {
+    falta.push('no hay saltos de página donde el informe cambia de página, así que la ' +
+               'portada se funde con el índice');
+  }
+  return falta;
 }
 
 /* Convierte el objeto de imagen de pdf.js en un data URL PNG. pdf.js entrega
