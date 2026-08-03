@@ -3,7 +3,7 @@ import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'luc
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
-import { extraerReferencia } from '../services/pdfReferenceExtractor';
+import { extraerReferencia, estiloBaseDe } from '../services/pdfReferenceExtractor';
 import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
@@ -493,7 +493,32 @@ export default function ReporteGenerador({ study, estudioId }) {
 
   const handleDownload = () => {
     // Estilos compatibles con Word (.doc)
-    const exportStyle = `body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:0 24px;color:#222;line-height:1.7}h1{font-size:22px;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px}h2{border-bottom:1px solid #E2E8F0;padding-bottom:4px;margin-top:26px;font-size:16px;color:#0E1726}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}th{background:#0E1726;color:#fff;text-align:left;padding:8px 12px}td{padding:8px 12px;border-bottom:1px solid #E2E8F0}`;
+    /* La tipografía sale del informe de referencia, no de un gusto propio: el
+       extractor la anotó en el HTML al leer las fuentes del PDF. Con Georgia
+       —lo que había aquí— el Word generado no se parecía al original ni de lejos,
+       porque el informe está en Arial 12. Sin la marca (un .docx vía mammoth, o
+       una plantilla anterior a este cambio) se cae a Arial, que es lo más común en
+       estos documentos y desde luego más cerca que una serif de pantalla. */
+    const base = estiloBaseDe(htmlContent) || { familia: 'Arial', tamano: 12 };
+    const cuerpo = "font-family:'" + base.familia + "',Arial,sans-serif;font-size:" +
+      base.tamano + 'pt';
+
+    /* Los encabezados van en escala sobre el cuerpo y no en píxeles fijos, para que
+       acompañen a la tipografía del documento en vez de imponer otra. Se conserva
+       la línea de color de la casa, que es identidad y no formato heredado. */
+    const exportStyle =
+      'body{' + cuerpo + ';max-width:800px;margin:40px auto;padding:0 24px;color:#222;' +
+      'line-height:1.5}' +
+      'h1{font-size:1.5em;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px}' +
+      'h2{font-size:1.2em;color:#0E1726;border-bottom:1px solid #E2E8F0;padding-bottom:4px;' +
+      'margin-top:26px}' +
+      'h3{font-size:1.05em;color:#0E1726}' +
+      'table{width:100%;border-collapse:collapse;margin:16px 0;font-size:0.9em}' +
+      'th{background:#0E1726;color:#fff;text-align:left;padding:8px 12px}' +
+      'td{padding:8px 12px;border-bottom:1px solid #E2E8F0}' +
+      /* Word ignora `<strong>` anidado en un `<span>` con estilo si no se le dice
+         que el peso se hereda; con esto la negrita del informe llega intacta. */
+      'strong{font-weight:bold}em{font-style:italic}';
     const wordCSS = 'body{counter-reset:secpt}h2::before{content:""}p,li,td{text-align:justify}';
 
     // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable

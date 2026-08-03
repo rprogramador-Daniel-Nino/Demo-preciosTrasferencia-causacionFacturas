@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { extraerReferencia } from './pdfReferenceExtractor.js';
+import { extraerReferencia, estiloBaseDe } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
 
@@ -47,7 +47,11 @@ test('el texto queda dentro de la etiqueta que le corresponde', async () => {
   /* Si el texto se asignara por orden de aparición en vez de por el id del
      contenido marcado, encajaría en las etiquetas equivocadas y ningún
      encabezado traería su propio título. */
-  const encabezados = [...r.html.matchAll(/<h[1-6]>([^<]*)<\/h[1-6]>/g)].map((m) => m[1].trim());
+  /* El contenido de un encabezado ya no es texto plano: lleva dentro el formato
+     del original —casi siempre negrita—, así que hay que quitar las etiquetas de
+     línea antes de comparar. */
+  const encabezados = [...r.html.matchAll(/<h[1-6]>([\s\S]*?)<\/h[1-6]>/g)]
+    .map((m) => m[1].replace(/<[^>]*>/g, '').trim());
   assert.ok(
     encabezados.some((t) => t.toUpperCase().includes('INTRODUCCIÓN')),
     'ningún encabezado contiene "INTRODUCCIÓN": ' + JSON.stringify(encabezados.slice(0, 10))
@@ -161,7 +165,7 @@ test('el hueco del anexo queda en su sitio del documento', async () => {
   /* El encabezado de la sección, no su entrada del índice: «ANEXO A. Estados
      financieros» aparece primero en la tabla de contenido, noventa mil
      caracteres antes, y medir desde ahí no dice nada de dónde quedó el hueco. */
-  const m = /<h1>[^<]*ANEXO A\. Estados financieros[^<]*<\/h1>/.exec(r.html);
+  const m = /<h1>(?:(?!<\/h1>)[\s\S])*ANEXO A\. Estados financieros[\s\S]*?<\/h1>/.exec(r.html);
   assert.ok(m, 'no se encontró el encabezado del ANEXO A');
   const iTitulo = m.index + m[0].length;
   const iHueco = r.html.indexOf('data-hueco="anexo_eeff"');
@@ -171,4 +175,55 @@ test('el hueco del anexo queda en su sitio del documento', async () => {
     iHueco - iTitulo < 300,
     'el hueco quedó lejos de su encabezado: ' + (iHueco - iTitulo) + ' caracteres'
   );
+});
+
+/* --- Tipografía del informe --- */
+
+test('el formato del original llega al HTML: negrita, cursiva y familias', async () => {
+  const r = await extraer();
+  /* El documento salía sin una sola negrita ni cursiva: la información estaba en
+     los objetos de fuente y no se leía, así que el Word generado no se parecía al
+     PDF. `styles` de getTextContent sólo da "sans-serif"/"serif", que no distingue
+     una negrita de una redonda; el nombre real vive en commonObjs. */
+  const negritas = r.html.split('<strong>').length - 1;
+  const cursivas = r.html.split('<em>').length - 1;
+  assert.ok(negritas > 100, 'apenas hay negritas: ' + negritas);
+  assert.ok(cursivas > 10, 'apenas hay cursivas: ' + cursivas);
+  /* «Arm's Length» va en cursiva en el informe: es el término técnico. */
+  assert.ok(/<em>[^<]*Arm/i.test(r.html), 'no se detectó la cursiva del término técnico');
+});
+
+test('el cuerpo del documento se deduce y se anota en el HTML', async () => {
+  const r = await extraer();
+  /* El informe de referencia está en Arial 12. Antes la exportación imponía
+     Georgia, elegida a dedo, y de ahí que no se pareciera al original. */
+  assert.strictEqual(r.estiloBase.familia, 'Arial');
+  assert.strictEqual(r.estiloBase.tamano, 12);
+  assert.deepStrictEqual(estiloBaseDe(r.html), r.estiloBase, 'la marca no sobrevive en el HTML');
+});
+
+test('el nombre de la fuente llega sin el prefijo de subconjunto', async () => {
+  const r = await extraer();
+  /* Los nombres del PDF traen un prefijo de seis letras y un '+'
+     (VXFCPX+BritannicBold). Si se emitiera tal cual, Word buscaría una fuente que
+     no existe y caería a la que le pareciera. */
+  assert.ok(!/font-family:'[A-Z]{6}\+/.test(r.html), 'quedó un prefijo de subconjunto');
+  /* Y las variantes no son familias: la negrita y la cursiva viajan como tales. */
+  assert.ok(!/font-family:'[^']*Bold/i.test(r.html), 'una variante se emitió como familia');
+  assert.ok(!/font-family:'[^']*Italic/i.test(r.html), 'una variante se emitió como familia');
+});
+
+test('sólo se declara el tamaño cuando se desvía de verdad del cuerpo', async () => {
+  const r = await extraer();
+  /* `height` es el alto de los glifos y no el cuerpo de la fuente, así que un
+     renglón sin ascendentes mide un punto menos que el de al lado. Emitir esa
+     diferencia eran mil setecientas declaraciones invisibles a la vista. */
+  const tamanos = [...r.html.matchAll(/font-size:(\d+)pt/g)].map((m) => Number(m[1]));
+  assert.ok(tamanos.length > 0, 'no se conservó ningún tamaño, ni el de la letra pequeña');
+  assert.ok(
+    tamanos.every((t) => Math.abs(t - r.estiloBase.tamano) > 1),
+    'se emitió un tamaño a un punto del cuerpo: ' + JSON.stringify([...new Set(tamanos)])
+  );
+  /* La letra pequeña de verdad —notas y fuentes de tabla— sí se conserva. */
+  assert.ok(tamanos.some((t) => t <= 9), 'se perdió la letra pequeña');
 });
