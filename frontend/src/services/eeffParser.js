@@ -55,10 +55,16 @@ Devuelve SOLO este JSON estricto sin marcas markdown:
 /**
  * Prompt especializado para la Ingesta Asistida de EEFF de Empresas Comparables
  */
+/* «nombre» e «identificador_fuente» son obligatorios para poder cruzar el
+   documento con la comparable a la que pertenece. Sin ellos el sistema no sabe de
+   qué empresa es el PDF que acaba de leer, y las cifras entraban en la fila donde
+   se hubiera soltado el archivo, fuera o no la correcta. */
 const EEFF_COMPARABLE_PROMPT = `Eres un analista senior de Precios de Transferencia. Lee los Estados Financieros de la empresa comparable y extrae la matriz contable completa.
 
 Devuelve SOLO un JSON estricto con esta estructura:
 {
+  "nombre": "Razón social EXACTA de la empresa a la que pertenecen estos estados financieros, tal como aparece en el documento. Si no aparece, cadena vacía: no la inventes ni la deduzcas.",
+  "identificador_fuente": "Identificador de la empresa si figura (Company ID de Capital IQ, NIT, tax ID). Cadena vacía si no aparece.",
   "periodo": "Año o rango del ejercicio (ej: 2025 o 2024)",
   "moneda": "USD, COP, EUR, etc.",
   "unidad_origen": "unidades|miles|millones",
@@ -172,6 +178,93 @@ export async function parseEeffWithGeminiOCR(file) {
 /**
  * Extrae y verifica los EEFF de una Empresa Comparable específica conservando escala/unidad original.
  */
+/* Un mismo PDF suele traer los estados financieros de todas las comparables
+   seleccionadas, uno tras otro. Este prompt los separa por empresa en vez de
+   devolver una sola matriz mezclando cifras de varias. */
+const EEFF_COMPARABLES_LOTE_PROMPT = `Eres un analista senior de Precios de Transferencia. Este documento contiene los Estados Financieros de VARIAS empresas comparables, una tras otra.
+
+Identifica CADA empresa presente y extrae su matriz contable por separado. No mezcles cifras de empresas distintas y no promedies nada.
+
+Devuelve SOLO un JSON estricto con esta estructura:
+{
+  "empresas": [
+    {
+      "nombre": "Razón social EXACTA de la empresa, tal como aparece en el documento",
+      "identificador_fuente": "Company ID de Capital IQ, NIT o tax ID si figura; cadena vacía si no",
+      "periodo": "Año o rango del ejercicio",
+      "moneda": "USD, COP, EUR, etc.",
+      "unidad_origen": "unidades|miles|millones",
+      "ingresos_operacionales": 0,
+      "costo_ventas": 0,
+      "utilidad_bruta": 0,
+      "gastos_operacionales": 0,
+      "utilidad_operacional": 0,
+      "cuentas_por_cobrar": 0,
+      "inventarios": 0,
+      "cuentas_por_pagar": 0,
+      "total_activos": 0,
+      "total_pasivos": 0,
+      "patrimonio": 0
+    }
+  ]
+}
+
+Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, ponlo en 0. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
+
+/** Lee un PDF (o imagen) que contiene los EEFF de varias comparables y devuelve
+ *  una entrada por empresa, cada una con su verificación contable.
+ *  Devuelve [] si el documento no permite separar ninguna empresa. */
+export async function parseEEFFComparablesLote(file, studyYear) {
+  const base64Data = await leerBase64(file);
+  const mimeType = mimeDe(file);
+
+  const payload = {
+    model: 'gemini-3-flash-preview',
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: mimeType, data: base64Data } },
+        { text: EEFF_COMPARABLES_LOTE_PROMPT },
+      ],
+    }],
+  };
+
+  const response = await postGeminiWithRetry(payload);
+  const text = response.data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text) throw new Error('La IA no devolvió nada al leer el documento de comparables.');
+
+  const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  const parsed = JSON.parse(cleanJson);
+  const empresas = Array.isArray(parsed.empresas) ? parsed.empresas : [];
+
+  return empresas
+    /* Sin razón social no hay forma de cruzar la entrada con una comparable, y
+       aplicarla a ciegas es justo lo que se quiere evitar. */
+    .filter((e) => e && (String(e.nombre || '').trim() || String(e.identificador_fuente || '').trim()))
+    .map((datos) => ({
+      datos,
+      verificacion: verifyAccountingEqualities(datos, studyYear),
+      archivo: file.name,
+    }));
+}
+
+/* Extraídos para que la lectura individual y la de lote no dupliquen el manejo
+   del archivo. */
+function leerBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = (e) => reject(e);
+  });
+}
+
+function mimeDe(file) {
+  if (file.type?.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
+    return file.type || 'image/jpeg';
+  }
+  return 'application/pdf';
+}
+
 export async function parseEEFFComparableOCR(file, studyYear) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

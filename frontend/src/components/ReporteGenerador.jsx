@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
-import { hydrateExactWordTemplate } from '../services/exactTemplateMapper';
+import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
 import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
@@ -48,17 +48,50 @@ export default function ReporteGenerador({ study, estudioId }) {
      nombre; esto solo evita que la ruta de respaldo falle en silencio. */
   const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
-  /* Aviso de la ruta de respaldo (mammoth y plantillas sin marcar). Se calcula
-     con `faltaSustitucion` y se pinta como banner, no con `alert`: al recargar
-     el estudio el efecto corre en cada montaje y un alert bloqueante cada vez
-     sería más molesto que informativo. */
-  const revisarHidratacion = (hydrated) => {
-    setAvisoHidratacion(faltaSustitucion(hydrated)
-      ? 'No se encontró el NIT del estudio (' + study.nit + ') en el documento hidratado. ' +
+  /* Qué quedó sin cubrir en la sección III (TENDENCIAS DE LA ECONOMÍA). Se informa
+     en concreto —qué serie y de qué año— porque un aviso genérico se ignora, y
+     estas son las cifras que el Decreto 1625 de 2016 obliga a respaldar con fuente
+     y fecha de consulta antes de radicar. */
+  const avisosDeMercado = (htmlBase) => {
+    const d = diagnosticarCobertura(htmlBase, study);
+    const avisos = [];
+    if (!d.sectorialCubierto) {
+      avisos.push(
+        'esta plantilla no trae la sección del análisis del sector, así que no se ' +
+        'reemplazó por la actividad de la compañía: revísala a mano'
+      );
+    }
+    if (d.seriesFaltantes.length) {
+      avisos.push(
+        'no hay datos de ' + d.year + ' para ' + d.seriesFaltantes.join(', ') +
+        '; esas tablas quedaron con un marcador que hay que completar'
+      );
+    }
+    return avisos;
+  };
+
+  /* Aviso de la ruta de respaldo (mammoth y plantillas sin marcar). Reúne el
+     testigo del NIT y los avisos de la sección III, y se pinta como banner, no
+     con `alert`: al recargar el estudio el efecto corre en cada montaje y un
+     alert bloqueante cada vez sería más molesto que informativo.
+
+     Recibe el HTML sin hidratar además del hidratado porque el diagnóstico de la
+     sección III se hace sobre la plantilla original: es ahí donde se ve si trae
+     el apartado sectorial y qué series le faltan. */
+  const revisarHidratacion = (htmlBase, hydrated) => {
+    const partes = [];
+    if (faltaSustitucion(hydrated)) {
+      partes.push(
+        'no se encontró el NIT del estudio (' + study.nit + ') en el documento hidratado. ' +
         'Esta plantilla no está marcada por campos, así que la sustitución va por valor ' +
         'literal: revisa el documento entero antes de radicarlo, porque puede conservar ' +
-        'datos del contribuyente del informe de referencia.'
-      : '');
+        'datos del contribuyente del informe de referencia'
+      );
+    }
+    partes.push(...avisosDeMercado(htmlBase));
+    setAvisoHidratacion(
+      partes.length ? 'Revisa antes de radicar — ' + partes.join('. ') + '.' : ''
+    );
   };
 
   /* Renderiza la plantilla marcada contra el estudio activo y calcula los
@@ -85,13 +118,17 @@ export default function ReporteGenerador({ study, estudioId }) {
          con qué comparar. */
       nitDeReferencia: nitRef ? nitRef.valor : null,
       vacios: r.vacios,
-      /* El almacén 'anexos' existe pero todavía no hay pantalla de subida del
-         anexo (fuera de alcance), así que un hueco es por definición un hueco
-         sin rellenar. Antes esto iba fijo en `true` y la guarda del anexo, que
-         está escrita y probada, nunca llegaba a opinar: las 16 páginas del
-         anexo de estados financieros firmados se convertían en huecos y nadie
-         avisaba. */
-      tieneAnexo: huecos === 0,
+      /* Hay anexo si la plantilla no dejó huecos —no hay nada que rellenar— o si
+         el estudio ya trae las páginas del ANEXO A. `study.eeffImages` es de fiar
+         aquí: aunque se persista aparte en IndexedDB porque no cabe en Firestore,
+         App.jsx lo rehidrata al abrir el estudio.
+
+         Este era el punto donde el trabajo del equipo y el nuestro se cruzaban
+         sin que git lo marcara: nosotros escribimos la guarda dando por sentado
+         que la subida del anexo estaba fuera de alcance, y mientras tanto se
+         implementó. Contar solo los huecos habría avisado de un anexo que falta
+         cuando ya está subido. */
+      tieneAnexo: huecos === 0 || (study.eeffImages || []).length > 0,
       recursosFaltantes: r.recursosFaltantes,
       htmlRenderizado: r.html,
       valores,
@@ -145,12 +182,12 @@ export default function ReporteGenerador({ study, estudioId }) {
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
            esta línea, tras recargar se ven las cifras del informe de
            referencia en vez de las del estudio actual. */
+        const hidratado = hydrateExactWordTemplate(html, study);
         /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
            setState de arriba no ha surtido efecto todavía dentro de este mismo
            efecto, y las imágenes saldrían rotas en la primera pintada. */
-        const hidratado = hydrateExactWordTemplate(html, study);
         setHtmlContent(conImagenes(hidratado, recursos));
-        revisarHidratacion(hidratado);
+        revisarHidratacion(html, hidratado);
         /* Evita que el efecto de la plantilla maestra sobrescriba lo
            recuperado. Es lo que hacía fallar la recarga. */
         setCustomTemplateLoaded(true);
@@ -166,7 +203,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     /* Esta es la ruta por defecto de todo estudio que no haya subido plantilla,
        es decir la de casi todo el mundo hoy, y va por valor literal. Si el NIT
        del estudio no aparece en la salida, la sustitución no ocurrió. */
-    revisarHidratacion(hydrated);
+    revisarHidratacion(MASTER_WORD_TEMPLATE, hydrated);
   };
 
   useEffect(() => {
@@ -242,7 +279,7 @@ export default function ReporteGenerador({ study, estudioId }) {
           /* Detección de fuga de la ruta legado. Estaba escrita y no se
              invocaba desde ningún sitio: la ruta aparentaba tenerla y no la
              tenía. */
-          revisarHidratacion(hydrated);
+          revisarHidratacion(html, hydrated);
           setCustomTemplateLoaded(true);
         }
       } catch (err) {
@@ -463,17 +500,19 @@ export default function ReporteGenerador({ study, estudioId }) {
 
       {/* Aviso de la ruta de respaldo: la sustitución por valor literal no se
           pudo confirmar. Va aparte de `avisos` porque esa lista la produce la
-          ruta de campos marcados, que en este caso no corrió. */}
+          ruta de campos marcados, que en este caso no corrió. No es un alert
+          porque el componente se monta cada vez que se abre el estudio y un
+          modal bloqueante en cada apertura molestaría más de lo que informa. */}
       {avisoHidratacion && (
-        <div className="border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-xl p-4">
-          <p className="text-xs text-amber-900 dark:text-amber-200">{avisoHidratacion}</p>
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 rounded-xl px-5 py-4 text-xs leading-relaxed">
+          <strong className="font-semibold">⚠ {avisoHidratacion}</strong>
         </div>
       )}
 
       {avisos.length > 0 && (
-        <div className="border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-xl p-4">
-          <ul className="text-xs text-amber-900 dark:text-amber-200 space-y-1">
-            {avisos.map((a, i) => <li key={i}>{a.texto}</li>)}
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-xl px-5 py-4">
+          <ul className="text-xs text-amber-800 dark:text-amber-300 space-y-1 leading-relaxed">
+            {avisos.map((a, i) => <li key={i}>⚠ {a.texto}</li>)}
           </ul>
         </div>
       )}

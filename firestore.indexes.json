@@ -1,0 +1,58 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "estudios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clienteNit", "order": "ASCENDING" },
+        { "fieldPath": "anio", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "estudios",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "nit", "order": "ASCENDING" },
+        { "fieldPath": "anio", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "comparablesHistoricas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "anios", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "nombre", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "eeffComparables",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "nameKey", "order": "ASCENDING" },
+        { "fieldPath": "anio", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "estudios",
+      "fieldPath": "datos",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "comparablesHistoricas",
+      "fieldPath": "actividad",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "comparablesHistoricas",
+      "fieldPath": "apariciones",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "clientes",
+      "fieldPath": "objeto",
+      "indexes": []
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import { Sparkles, BarChart, Settings, Calculator, Upload, FileSpreadsheet, Chec
 import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseExcelOperations } from '../services/excelOperationsParser';
 import { parseEeffWithGeminiOCR } from '../services/eeffParser';
+import { convertPdfToImages } from '../services/pdfRenderer';
 
 export default function IngestaCifras({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
@@ -54,10 +55,15 @@ export default function IngestaCifras({ study, updateStudy }) {
     setEeffMsg('🤖 Leyendo Estados Financieros con Gemini Vision OCR…');
 
     try {
+      const eeffImages = await convertPdfToImages(file);
       const res = await parseEeffWithGeminiOCR(file);
 
+      const updates = {};
+      if (eeffImages && eeffImages.length > 0) {
+        updates.eeffImages = eeffImages;
+      }
+
       if (res) {
-        const updates = {};
         if (res.t_s !== null && res.t_s !== undefined) updates.t_s = res.t_s;
         if (res.t_c !== null && res.t_c !== undefined) updates.t_c = res.t_c;
         if (res.t_op !== null && res.t_op !== undefined) updates.t_op = res.t_op;
@@ -73,13 +79,13 @@ export default function IngestaCifras({ study, updateStudy }) {
         if (res.t_dif !== null && res.t_dif !== undefined) updates.t_dif = res.t_dif;
         if (res.t_act_nocurr !== null && res.t_act_nocurr !== undefined) updates.t_act_nocurr = res.t_act_nocurr;
         if (res.t_act_tot !== null && res.t_act_tot !== undefined) updates.t_act_tot = res.t_act_tot;
-
-        updateStudy(updates);
-        setEeffMsg('✅ EEFF y Matriz de Activos leídos y verificados con Gemini Vision OCR.');
       }
+
+      updateStudy(updates);
+      setEeffMsg('✅ EEFF leídos y páginas del PDF adjuntadas para el ANEXO A.');
     } catch (err) {
       console.error("Error procesando EEFF con OCR:", err);
-      setEeffMsg('⚠ No se pudo procesar con OCR. Puede ingresar las cifras manualmente.');
+      setEeffMsg('⚠ No se pudo procesar el archivo. Puede ingresar las cifras manualmente.');
     } finally {
       setLoadingEeff(false);
     }

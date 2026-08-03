@@ -16,15 +16,17 @@ export default function IngestaOperaciones({ study, updateStudy }) {
     
     try {
       const res = await parseExcelOperations(file);
-      if (res && res.vinc && res.t_s) {
+      if (res && res.vinc && (res.monto || res.t_s)) {
+        const valMonto = res.monto || res.t_s;
         updateStudy({
           vinc: res.vinc,
           vinc_id: res.vinc_id,
           pais_vinc: res.pais_vinc,
           vinc_tipo: res.vinc_tipo,
-          t_s: res.t_s
+          monto: valMonto,
+          monto_operacion: valMonto
         });
-        setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(res.t_s)}`);
+        setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(valMonto)}`);
       } else {
         setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
       }

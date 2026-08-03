@@ -1,0 +1,322 @@
+rules_version = '2';
+
+// ===============================================================
+// Sistema PT — reglas de seguridad de Firestore
+// ===============================================================
+//
+// Modelo de acceso: la base la comparte el equipo de CR Consultores. Solo entran
+// cuentas del dominio corporativo con el correo verificado, y entre ellas todos
+// leen y escriben todo: es una consultoría donde varios trabajan sobre los mismos
+// clientes y el catálogo de comparables solo sirve si es común. No hay separación
+// por dueño; sí hay rastro de quién creó y quién modificó cada documento, y ese
+// rastro es inmutable.
+//
+// ===============================================================
+// Modelo de datos asumido
+// ===============================================================
+//
+// Colección: clientes
+// ID del documento: NIT sin puntos ni guion de verificación (solo dígitos)
+// Campos:
+//   - nit: string (requerido, 5..30) — el mismo valor que el ID
+//   - razonSocial: string (requerido, 1..200)
+//   - ciiu: string (opcional, <=20)
+//   - objeto: string (opcional, <=4000) — objeto social
+//   - representante: string (opcional, <=200)
+//   - actividadEspecifica: string (opcional, <=4000) — actividad real detectada
+//   - creadoPor: string uid (requerido, inmutable)
+//   - creadoPorNombre: string (opcional, <=120)
+//   - creadoEn: timestamp (requerido, inmutable)
+//   - actualizadoPor: string uid (opcional)
+//   - actualizadoEn: timestamp (requerido)
+//
+// Colección: estudios
+// ID del documento: study_<epoch> (el que ya usa el gestor, para migrar sin romper)
+// Campos:
+//   - ent: string (requerido, 1..200) — razón social del contribuyente
+//   - nit: string (opcional, <=30)
+//   - anio: number (requerido, 2000..2100) — año gravable
+//   - clienteNit: string (opcional, <=30) — vínculo con clientes/{nit}
+//   - datos: map (requerido) — el estudio completo tal como lo maneja el gestor
+//   - creadoPor / creadoPorNombre / creadoEn: igual que arriba (inmutables los dos primeros)
+//   - actualizadoPor: string uid (opcional), actualizadoPorNombre: string (opcional)
+//   - actualizadoEn: timestamp (requerido)
+//
+// Colección: comparablesHistoricas
+// ID del documento: nameKey (razón social normalizada por nameKey() del motor)
+// Campos:
+//   - nombre: string (requerido, 1..200)
+//   - nameKey: string (requerido, 1..200) — igual al ID del documento
+//   - pais: string (opcional, <=80)
+//   - actividad: string (opcional, <=4000)
+//   - pli: string (opcional, <=40) — indicador de rentabilidad con el que se aceptó
+//   - margen: number|null (opcional, -100..100) — margen aceptado, en tanto por uno o %
+//   - anios: list de number (opcional, <=40 elementos) — años gravables en que se usó
+//   - apariciones: list de map (requerido, <=200) — rastro documental de cada carga
+//   - creadoPor / creadoEn: inmutables; actualizadoPor / actualizadoEn
+//
+// Colección: eeffComparables
+// ID del documento: <nameKey>_<anio>
+// Campos:
+//   - nameKey: string (requerido, 1..200), nombre: string (requerido, 1..200)
+//   - anio: number (requerido, 1990..2100)
+//   - ingresos / costos / utilidadOperacional / cartera / inventarios / proveedores:
+//     number|null (opcional) — cifras leídas del estado financiero
+//   - fuente: string (opcional, <=300) — archivo del que se extrajeron
+//   - hallazgos: list (opcional, <=50) — verificaciones contables anotadas
+//   - creadoPor / creadoEn: inmutables; actualizadoPor / actualizadoEn
+//
+// ===============================================================
+// Limitaciones conocidas (no son descuidos, son techos del lenguaje de reglas)
+// ===============================================================
+//
+// 1. Las reglas no pueden iterar listas, así que de `apariciones`, `anios` y
+//    `hallazgos` se valida el tipo y el tamaño máximo, no cada elemento.
+// 2. `estudios.datos` es un map libre: es el estudio completo del gestor y su forma
+//    cambia con la aplicación. Se valida que sea un map; su contenido no. Un miembro
+//    del dominio puede por tanto escribir cualquier estructura ahí, hasta el techo
+//    de 1 MiB por documento que impone Firestore.
+// 3. Cualquier miembro del dominio puede borrar documentos. Si eso resulta
+//    demasiado, el paso siguiente es un campo de rol y limitar `delete` a quien lo
+//    tenga; hoy no existe esa distinción en el equipo.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =============================================================
+    // Funciones de apoyo
+    // =============================================================
+
+    // Autenticado con cuenta del dominio corporativo y correo verificado. La
+    // verificación importa: sin ella, un proveedor de identidad mal configurado
+    // permitiría reclamar un correo del dominio sin controlarlo.
+    function esMiembro() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.lower().matches('^[a-z0-9._%+-]+@crconsultorescolombia[.]com$')
+        && request.auth.token.email_verified == true;
+    }
+
+    function tieneTodos(campos) {
+      return request.resource.data.keys().hasAll(campos);
+    }
+
+    function soloEstosCampos(campos) {
+      return request.resource.data.keys().hasOnly(campos);
+    }
+
+    // Texto obligatorio dentro de un rango de longitud. El tope existe en todos los
+    // campos de texto: sin él, un solo documento puede inflarse hasta 1 MiB.
+    function texto(valor, minimo, maximo) {
+      return valor is string && valor.size() >= minimo && valor.size() <= maximo;
+    }
+
+    // Texto opcional: si viene, tiene que ser string y respetar el tope.
+    function textoOpcional(datos, campo, maximo) {
+      return !(campo in datos) || datos[campo] == null
+        || (datos[campo] is string && datos[campo].size() <= maximo);
+    }
+
+    function numeroOpcional(datos, campo, minimo, maximo) {
+      return !(campo in datos) || datos[campo] == null
+        || (datos[campo] is number && datos[campo] >= minimo && datos[campo] <= maximo);
+    }
+
+    function listaOpcional(datos, campo, maximo) {
+      return !(campo in datos) || (datos[campo] is list && datos[campo].size() <= maximo);
+    }
+
+    // Nombre propio denormalizado: no puede ser el de otra persona. Si el proveedor
+    // de identidad trae `name` en el token —Google sí lo trae—, el valor guardado
+    // tiene que coincidir con él, así que nadie firma un cambio con nombre ajeno.
+    // Si el token no lo trae, queda el tope de tamaño para que no sirva de relleno.
+    function nombrePropio(datos, campo) {
+      return !(campo in datos) || datos[campo] == null
+        || (datos[campo] is string && datos[campo].size() <= 120
+            && (!('name' in request.auth.token) || datos[campo] == request.auth.token.name));
+    }
+
+    // El rastro de creación lo pone quien crea, con la hora del servidor, y no se
+    // puede falsificar a nombre de otro ni fechar en el pasado.
+    function creacionCoherente(datos) {
+      return datos.creadoPor == request.auth.uid
+        && datos.creadoEn is timestamp
+        && datos.creadoEn <= request.time
+        && datos.creadoEn > request.time - duration.value(5, 'm')
+        && datos.actualizadoEn is timestamp
+        && datos.actualizadoEn <= request.time
+        && nombrePropio(datos, 'creadoPorNombre')
+        && nombrePropio(datos, 'actualizadoPorNombre');
+    }
+
+    // En una modificación, el rastro de creación queda intacto —incluido el nombre
+    // de quien creó, que es de otra persona y por eso aquí solo se compara con lo
+    // que ya había— y quien modifica se identifica con su propio uid y su nombre.
+    function modificacionCoherente(datos) {
+      return datos.creadoPor == resource.data.creadoPor
+        && datos.creadoEn == resource.data.creadoEn
+        && (('creadoPorNombre' in datos) == ('creadoPorNombre' in resource.data))
+        && (!('creadoPorNombre' in datos) || datos.creadoPorNombre == resource.data.creadoPorNombre)
+        && datos.actualizadoEn is timestamp
+        && datos.actualizadoEn <= request.time
+        && datos.actualizadoEn > request.time - duration.value(5, 'm')
+        && (!('actualizadoPor' in datos) || datos.actualizadoPor == request.auth.uid)
+        && nombrePropio(datos, 'actualizadoPorNombre');
+    }
+
+    // Tipo y tope de un nombre cuyo dueño no es necesariamente quien escribe: se
+    // usa dentro de los validadores de dominio, donde solo importa la forma. La
+    // identidad la comprueban creacionCoherente y modificacionCoherente.
+    function nombreCoherente(datos, campo) {
+      return !(campo in datos) || datos[campo] == null
+        || (datos[campo] is string && datos[campo].size() <= 120);
+    }
+
+    // =============================================================
+    // clientes — contribuyentes reutilizables entre años
+    // =============================================================
+
+    function clienteValido(d) {
+      return soloEstosCampos(['nit', 'razonSocial', 'ciiu', 'objeto', 'representante',
+                              'actividadEspecifica', 'creadoPor', 'creadoPorNombre',
+                              'creadoEn', 'actualizadoPor', 'actualizadoPorNombre',
+                              'actualizadoEn'])
+        && tieneTodos(['nit', 'razonSocial', 'creadoPor', 'creadoEn', 'actualizadoEn'])
+        && texto(d.nit, 5, 30)
+        && d.nit.matches('^[0-9]+$')
+        && texto(d.razonSocial, 1, 200)
+        && textoOpcional(d, 'ciiu', 20)
+        && textoOpcional(d, 'objeto', 4000)
+        && textoOpcional(d, 'representante', 200)
+        && textoOpcional(d, 'actividadEspecifica', 4000)
+        && texto(d.creadoPor, 1, 128)
+        && nombreCoherente(d, 'creadoPorNombre')
+        && nombreCoherente(d, 'actualizadoPorNombre');
+    }
+
+    match /clientes/{nit} {
+      allow read: if esMiembro();
+      allow create: if esMiembro()
+        && clienteValido(request.resource.data)
+        && request.resource.data.nit == nit
+        && creacionCoherente(request.resource.data);
+      allow update: if esMiembro()
+        && clienteValido(request.resource.data)
+        && request.resource.data.nit == nit
+        && modificacionCoherente(request.resource.data);
+      allow delete: if esMiembro();
+    }
+
+    // =============================================================
+    // estudios — el estudio completo del gestor
+    // =============================================================
+
+    function estudioValido(d) {
+      return soloEstosCampos(['ent', 'nit', 'anio', 'clienteNit', 'datos',
+                              'creadoPor', 'creadoPorNombre', 'creadoEn',
+                              'actualizadoPor', 'actualizadoPorNombre', 'actualizadoEn'])
+        && tieneTodos(['ent', 'anio', 'datos', 'creadoPor', 'creadoEn', 'actualizadoEn'])
+        && texto(d.ent, 1, 200)
+        && textoOpcional(d, 'nit', 30)
+        && textoOpcional(d, 'clienteNit', 30)
+        && d.anio is number && d.anio >= 2000 && d.anio <= 2100
+        && d.datos is map
+        && texto(d.creadoPor, 1, 128)
+        && nombreCoherente(d, 'creadoPorNombre')
+        && nombreCoherente(d, 'actualizadoPorNombre');
+    }
+
+    match /estudios/{estudioId} {
+      allow read: if esMiembro();
+      allow create: if esMiembro()
+        && estudioValido(request.resource.data)
+        && creacionCoherente(request.resource.data);
+      allow update: if esMiembro()
+        && estudioValido(request.resource.data)
+        && modificacionCoherente(request.resource.data);
+      allow delete: if esMiembro();
+    }
+
+    // =============================================================
+    // comparablesHistoricas — empresas extraídas de la documentación
+    // comprobatoria de años anteriores
+    // =============================================================
+
+    function comparableValida(d) {
+      return soloEstosCampos(['nombre', 'nameKey', 'pais', 'actividad', 'pli', 'margen',
+                              'anios', 'apariciones', 'creadoPor', 'creadoPorNombre',
+                              'creadoEn', 'actualizadoPor', 'actualizadoPorNombre',
+                              'actualizadoEn'])
+        && tieneTodos(['nombre', 'nameKey', 'apariciones', 'creadoPor', 'creadoEn', 'actualizadoEn'])
+        && texto(d.nombre, 1, 200)
+        && texto(d.nameKey, 1, 200)
+        && textoOpcional(d, 'pais', 80)
+        && textoOpcional(d, 'actividad', 4000)
+        && textoOpcional(d, 'pli', 40)
+        && numeroOpcional(d, 'margen', -100, 100)
+        && listaOpcional(d, 'anios', 40)
+        && d.apariciones is list && d.apariciones.size() <= 200
+        && texto(d.creadoPor, 1, 128)
+        && nombreCoherente(d, 'creadoPorNombre')
+        && nombreCoherente(d, 'actualizadoPorNombre');
+    }
+
+    match /comparablesHistoricas/{nameKey} {
+      allow read: if esMiembro();
+      allow create: if esMiembro()
+        && comparableValida(request.resource.data)
+        && request.resource.data.nameKey == nameKey
+        && creacionCoherente(request.resource.data);
+      allow update: if esMiembro()
+        && comparableValida(request.resource.data)
+        && request.resource.data.nameKey == nameKey
+        && modificacionCoherente(request.resource.data);
+      allow delete: if esMiembro();
+    }
+
+    // =============================================================
+    // eeffComparables — cifras ya leídas de un estado financiero, por empresa y año
+    // =============================================================
+
+    function eeffValido(d) {
+      return soloEstosCampos(['nameKey', 'nombre', 'anio', 'ingresos', 'costos',
+                              'utilidadOperacional', 'cartera', 'inventarios',
+                              'proveedores', 'fuente', 'hallazgos', 'creadoPor',
+                              'creadoPorNombre', 'creadoEn', 'actualizadoPor',
+                              'actualizadoPorNombre', 'actualizadoEn'])
+        && tieneTodos(['nameKey', 'nombre', 'anio', 'creadoPor', 'creadoEn', 'actualizadoEn'])
+        && texto(d.nameKey, 1, 200)
+        && texto(d.nombre, 1, 200)
+        && d.anio is number && d.anio >= 1990 && d.anio <= 2100
+        // Las cifras vienen de estados financieros reales: el tope evita que un
+        // error de lectura escriba un número absurdo, sin descartar grupos grandes.
+        && numeroOpcional(d, 'ingresos', -1000000000000, 1000000000000)
+        && numeroOpcional(d, 'costos', -1000000000000, 1000000000000)
+        && numeroOpcional(d, 'utilidadOperacional', -1000000000000, 1000000000000)
+        && numeroOpcional(d, 'cartera', -1000000000000, 1000000000000)
+        && numeroOpcional(d, 'inventarios', -1000000000000, 1000000000000)
+        && numeroOpcional(d, 'proveedores', -1000000000000, 1000000000000)
+        && textoOpcional(d, 'fuente', 300)
+        && listaOpcional(d, 'hallazgos', 50)
+        && texto(d.creadoPor, 1, 128)
+        && nombreCoherente(d, 'creadoPorNombre')
+        && nombreCoherente(d, 'actualizadoPorNombre');
+    }
+
+    match /eeffComparables/{registroId} {
+      allow read: if esMiembro();
+      allow create: if esMiembro()
+        && eeffValido(request.resource.data)
+        && creacionCoherente(request.resource.data);
+      allow update: if esMiembro()
+        && eeffValido(request.resource.data)
+        && modificacionCoherente(request.resource.data);
+      allow delete: if esMiembro();
+    }
+
+    // Nada más existe. Cualquier ruta no declarada arriba queda negada.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

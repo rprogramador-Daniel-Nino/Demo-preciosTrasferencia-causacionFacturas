@@ -25,28 +25,68 @@ if (!GEMINI_API_KEY) {
 // functions/, y por encima de esa cifra el límite de aquí deja de importar.
 app.use(express.json({ limit: '50mb' }));
 
-// Sirve el HTML y cualquier asset estático desde public/ (misma carpeta que despliega Firebase Hosting)
-app.use(express.static(path.join(__dirname, 'public')));
+/* El HTML nunca se cachea; los assets con hash en el nombre, para siempre.
+   Sin esto el navegador reutiliza el index.html anterior, que nombra un bundle que el
+   build siguiente ya borró del disco: la aplicación sigue ejecutando código viejo y
+   los arreglos parecen no surtir efecto, incluso tras recargar. Pasó de verdad —un
+   error ya corregido seguía apareciendo desde index-BGY9AcVI.js, un archivo que no
+   existía— y con tres personas desplegando builds se repetiría en cada cambio.
 
-// Servir los archivos estáticos de la aplicación React (public/gestor-reportes)
-app.use('/gestor-reportes/assets', express.static(path.join(__dirname, 'public/gestor-reportes/assets')));
-app.use('/assets', express.static(path.join(__dirname, 'public/gestor-reportes/assets')));
+   Los assets sí pueden cachearse indefinidamente porque Vite les pone el hash del
+   contenido en el nombre: si cambian, cambia la URL. */
+const SIN_CACHE = {
+  etag: false,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  },
+};
+
+const htmlSinCache = (res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+};
+
+// Los assets con hash van primero y con caché larga, antes del estático general.
+const assets = express.static(path.join(__dirname, 'public/gestor-reportes/assets'), {
+  immutable: true,
+  maxAge: '1y',
+});
+app.use('/gestor-reportes/assets', assets);
+app.use('/assets', assets);
+
+// Sirve el HTML y cualquier otro estático desde public/ (misma carpeta que despliega Firebase Hosting)
+app.use(express.static(path.join(__dirname, 'public'), SIN_CACHE));
 
 // Ruta explícita para el HTML antiguo
 app.get('/index', (req, res) => {
+  htmlSinCache(res);
   res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 app.get('/index.html', (req, res) => {
+  htmlSinCache(res);
   res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 // Ruta de la aplicación React (Gestor de Reportes)
 app.get('/gestor-reportes-inicio', (req, res) => {
+  htmlSinCache(res);
   res.sendFile(path.join(__dirname, 'public/gestor-reportes/index.html'));
 });
 
-// Cualquier ruta que empiece con /gestor-reportes sirve la app de React (para soportar React Router)
-app.get('/gestor-reportes*', (req, res) => {
+/* Cualquier ruta que empiece con /gestor-reportes sirve la app de React (para soportar
+   React Router), EXCEPTO las que piden un archivo concreto.
+
+   Un asset que falta tiene que dar 404, no el index.html con 200: si el catch-all
+   responde HTML a la petición de un .js, el navegador intenta ejecutar HTML como
+   módulo y el error que sale ni menciona el archivo que falta. Con builds que renombran
+   los bundles por hash, pedir uno que ya no existe es justo lo que ocurre cuando queda
+   un index.html viejo en caché. */
+app.get('/gestor-reportes*', (req, res, next) => {
+  if (/\.[a-z0-9]+$/i.test(req.path)) return next();
+  htmlSinCache(res);
   res.sendFile(path.join(__dirname, 'public/gestor-reportes/index.html'));
 });
 

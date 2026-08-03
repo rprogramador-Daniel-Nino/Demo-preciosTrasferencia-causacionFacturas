@@ -1,18 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator, 
+import {
+  Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini } from '../services/comparablesEngine';
-import { parseEEFFComparableOCR } from '../services/eeffParser';
+import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey } from '../services/comparablesEngine';
+import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
+import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
+import {
+  registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
+  comparablesHistoricasDelAnio,
+} from '../services/firestoreRepo';
+import {
+  comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila, catalogoAComparablesPrevias,
+} from '../services/firestoreModelo';
 
-export default function MotorComparables({ study, updateStudy }) {
+export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
   const [priorStudyMsg, setPriorStudyMsg] = useState('');
   const [estudioAnteriorInfo, setEstudioAnteriorInfo] = useState(study.estudioAnterior || null);
+  /* Resultado de haber llevado las empresas del informe anterior al catálogo
+     compartido: { guardadas, nuevas, actualizadas, descartadas, fallidas } */
+  const [catalogo, setCatalogo] = useState(null);
 
   // State for Extracted Company Activity
   const [actividad, setActividad] = useState(study.actividad_especifica || 'Prestación de servicios interactivos, diseño digital y soluciones de tecnología.');
@@ -43,8 +54,22 @@ export default function MotorComparables({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   const [selectionFunnel, setSelectionFunnel] = useState(null);
+  /* Estado visible de la carga de EEFF. `uploadingEEFF` y `eeffLog` ya existían
+     pero nadie los leía en el JSX, así que al cargar un EEFF no se veía nada:
+     ni que estaba trabajando, ni los hallazgos contables, ni los errores, que
+     solo iban a la consola. */
   const [uploadingEEFF, setUploadingEEFF] = useState(false);
-  const [eeffLog, setEeffLog] = useState({});
+  /* No hay un `eeffLog` aparte: los hallazgos contables viven en la propia fila
+     (comp.eeffHallazgos), que es lo que se guarda con el estudio. El estado
+     paralelo que había antes duplicaba esa información, se perdía al recargar y
+     tampoco se leía en ninguna parte. */
+  const [cargaEeff, setCargaEeff] = useState(null);          // { etapa, hechas, total }
+  const [resultadoCarga, setResultadoCarga] = useState(null); // { aplicadas, rechazadas }
+  /* Qué se subió al repositorio compartido de estados financieros tras una carga. */
+  const [eeffCompartido, setEeffCompartido] = useState(null);
+  /* Cifras que otro estudio del equipo ya cargó para estas mismas comparables:
+     { buscando } | { propuestas: [...], anio } | { error } */
+  const [eeffGuardados, setEeffGuardados] = useState(null);
 
   // Visibilidad de la importación de Capital IQ: progreso, diagnóstico y registro.
   const [importProgreso, setImportProgreso] = useState(null);
@@ -68,8 +93,11 @@ export default function MotorComparables({ study, updateStudy }) {
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
-      /* el veredicto de la curación viaja con el estudio: es la constancia de por
-         qué se aceptó o rechazó cada candidata, y evita volver a pagar la consulta */
+      /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
+         cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
+         App, que lo separa antes de subirlo: se guarda en localStorage y no en
+         Firestore, por decisión del usuario y porque un dictamen por cada una de
+         miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
   }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch]);
@@ -78,7 +106,7 @@ export default function MotorComparables({ study, updateStudy }) {
   const handlePriorStudyUpload = async (file) => {
     if (!file) return;
     setLoadingPriorStudy(true);
-    setPriorStudyMsg('🤖 Leyendo informe del año anterior con Gemini AI…');
+    setPriorStudyMsg('🤖 Leyendo informe del año anterior ');
     try {
       const result = await parsePriorStudyFile(file);
       if (result) {
@@ -89,16 +117,56 @@ export default function MotorComparables({ study, updateStudy }) {
         const info = {
           fuente: result.filename,
           actividad: result.actividad_especifica,
+          anio: result.anio_gravable || null,
           comparables: result.comparables || []
         };
         setEstudioAnteriorInfo(info);
         setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad y ${result.comparables.length} comparables de la tabla anterior.`);
+
+        /* Las empresas del informe se llevan al catálogo compartido del equipo. Antes
+           se quedaban dentro de este estudio y solo servían para reconocer
+           continuidad aquí; ahora quedan disponibles para cualquier otro estudio y
+           con el rastro del documento del que salieron.
+
+           Si falla, el informe ya está leído y el estudio sigue su curso: guardar el
+           catálogo es un extra, no un requisito para trabajar. */
+        await registrarEnCatalogo(info, result);
       }
     } catch (err) {
       console.error("Error al leer informe del año anterior:", err);
-      setPriorStudyMsg('⚠️ No se pudo procesar el informe anterior con IA.');
+      setPriorStudyMsg('⚠️ No se pudo procesar el informe .');
     } finally {
       setLoadingPriorStudy(false);
+    }
+  };
+
+  /* Registra en `comparablesHistoricas` las empresas leídas del informe anterior. El
+     año de la aparición es el que declara el propio informe; si no lo trae, se usa el
+     del estudio menos uno, que es lo que significa «año anterior». */
+  const registrarEnCatalogo = async (info, result) => {
+    if (!usuario) { setCatalogo({ sinSesion: true }); return; }
+    const comparables = (result && result.comparables) || [];
+    if (!comparables.length) return;
+
+    const anioEstudio = Number(study.anio) || new Date().getFullYear();
+    const anio = Number(result.anio_gravable) || (anioEstudio - 1);
+    setCatalogo({ enCurso: true });
+    try {
+      const resumen = await registrarComparablesHistoricas({
+        comparables,
+        aparicion: {
+          estudioId: estudioId || '',
+          clienteNit: String(study.nit || ''),
+          anio,
+          archivo: String(info.fuente || ''),
+          cargadoEn: new Date().toISOString(),
+        },
+        usuario,
+      });
+      setCatalogo({ ...resumen, anio });
+    } catch (err) {
+      console.error('[catálogo histórico] no se pudo registrar', err);
+      setCatalogo({ error: (err && err.message) || 'error desconocido' });
     }
   };
 
@@ -112,12 +180,17 @@ export default function MotorComparables({ study, updateStudy }) {
     else console.log('[Capital IQ] ' + texto);
   };
 
-  /* Cura el universo contra la actividad detectada. El veredicto se guarda por
-     identificador y se persiste con el estudio: si el navegador se recarga, lo ya
-     curado no se pierde. Mientras corre, la selección del paso 3 queda bloqueada,
-     porque ejecutarla a medias produciría un conjunto con criterios distintos
-     según qué lotes hubieran terminado. */
-  const curarUniverso = async (candidatas) => {
+  /* Cura contra la actividad detectada las candidatas que ya pasaron los filtros
+     duros del paso 2 —no el universo entero—: curar lo que el motor iba a descartar
+     igual era casi la mitad del gasto en Gemini de cada corrida, y dejaba el panel de
+     curación hablando de un conjunto distinto al del embudo.
+
+     El veredicto se guarda por identificador y se persiste con el estudio: si el
+     navegador se recarga, lo ya curado no se pierde, y al reejecutar solo se consulta
+     lo que falte. Mientras corre, la selección del paso 3 queda bloqueada, porque
+     ejecutarla a medias produciría un conjunto con criterios distintos según qué
+     lotes hubieran terminado. */
+  const curarUniverso = async (candidatas, { forzar = false } = {}) => {
     const act = String(actividad || '').trim();
     if (!act) {
       anotar('Sin actividad detectada: se omite la curación por IA y el motor usará las palabras clave. Cargue el informe del año anterior para detectarla.', 'aviso');
@@ -130,6 +203,7 @@ export default function MotorComparables({ study, updateStudy }) {
       const veredicto = await curateCandidatesWithGemini(candidatas, act, {
         priorComps,
         fuente: (importMeta && importMeta.archivo) || '',
+        veredictoPrevio: forzar ? null : iaMatch,
         onProgress: (info) => {
           setCuracionProgreso(info);
           if (info.etapa === 'inicio' || info.etapa === 'omitida') anotar(info.mensaje, info.etapa === 'omitida' ? 'aviso' : 'info');
@@ -153,6 +227,32 @@ export default function MotorComparables({ study, updateStudy }) {
       setCurando(false);
       setCuracionProgreso(null);
     }
+  };
+
+  /* Cura solo lo que sobrevive a los filtros duros de la configuración actual. Es el
+     único punto de entrada a la curación: así el paso 2 y el paso 3 juzgan siempre el
+     mismo conjunto, que es lo que antes no ocurría. */
+  const curarValidas = async ({ forzar = false } = {}) => {
+    const { validas, rechazadas } = prefiltrar(universo, engineConfig);
+    if (rechazadas.length) {
+      anotar(`${rechazadas.length} de ${universo.length} quedan fuera por los filtros del paso 2 antes de curar; ` +
+        `se consultan ${validas.length}.`);
+    }
+    if (!validas.length) {
+      anotar('Los filtros del paso 2 no dejan ninguna candidata que curar. Amplíe los criterios.', 'aviso');
+      return null;
+    }
+    return curarUniverso(validas, { forzar });
+  };
+
+  /* Cambiar un filtro invalida el embudo: describía la corrida anterior y se quedaba
+     en pantalla como si describiera la configuración nueva —mostrando «6 de 6» con el
+     objetivo ya puesto en 8—, que es parte de por qué los dos pasos parecían
+     contradecirse. Se actualiza con la forma funcional para no perder cambios
+     seguidos sobre dos selectores distintos. */
+  const cambiarConfig = (campo, valor) => {
+    setEngineConfig(prev => ({ ...prev, [campo]: valor }));
+    setSelectionFunnel(null);
   };
 
   // Handle Capital IQ File Upload
@@ -191,12 +291,19 @@ export default function MotorComparables({ study, updateStudy }) {
       }
       setImportProgreso(null);
 
-      /* La curación se hace aquí, sobre el UNIVERSO recién importado, no después
-         de seleccionar: su veredicto es uno de los filtros del motor, así que
-         tiene que existir antes de puntuar. Curar después obligaba a quedarse
-         corto de comparables cuando la IA rechazaba parte de las elegidas. */
-      await curarUniverso(rows);
-      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3.', 'ok');
+      /* La curación NO se dispara aquí. Corría sobre el universo recién importado,
+         antes de que existieran los filtros del paso 2, así que por construcción no
+         podía respetarlos: evaluaba miles de compañías que el motor descartaba
+         después por holding, saldos negativos o pérdida operativa. Ahora la lanza el
+         paso 3 sobre las que ya pasaron esos filtros, y sigue ocurriendo antes de
+         puntuar —su veredicto es uno de los filtros del motor—, así que no se vuelve
+         al problema de quedarse corto de comparables por curar al final.
+
+         El veredicto se guarda por identificador: reejecutar el paso 3 con otros
+         filtros solo consulta las candidatas que aún no tengan dictamen. */
+      setIaMatch(null);
+      setSelectionFunnel(null);
+      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
       // saber qué encabezados había es lo que permite corregir el export.
@@ -229,13 +336,17 @@ export default function MotorComparables({ study, updateStudy }) {
       anotar(`Evaluando ${universo.length} candidatas del universo…`);
 
       /* El veredicto de la curación entra como uno de los filtros del motor, junto
-         con holding, saldos negativos y pérdida operativa. Si no se curó —sin
-         actividad detectada o sin descripciones— el motor sigue con las palabras
-         clave, no descarta a nadie por omisión. */
+         con holding, saldos negativos, pérdida operativa y rigor funcional. Si no se
+         curó —sin actividad detectada o sin descripciones— el motor sigue con las
+         palabras clave, no descarta a nadie por omisión.
+
+         Se cura siempre aquí, pero `curarValidas` reutiliza por identificador lo ya
+         dictaminado para esta misma actividad: reejecutar tras cambiar un filtro no
+         vuelve a pagar el universo, solo consulta las candidatas que quedaron sin
+         veredicto porque el filtro anterior las excluía. */
       let veredicto = iaMatch;
-      if (!veredicto && String(actividad || '').trim()) {
-        anotar('El universo no estaba curado; curando ahora antes de puntuar…', 'aviso');
-        veredicto = await curarUniverso(universo);
+      if (String(actividad || '').trim()) {
+        veredicto = (await curarValidas()) || veredicto;
       }
 
       const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
@@ -243,9 +354,11 @@ export default function MotorComparables({ study, updateStudy }) {
         iaMatch: veredicto,
       });
 
-      const porIA = result.rechazadas.filter(c => /Curación IA|Sin descripción del negocio/.test(c.motivoRechazo || '')).length;
-      anotar(`${result.totalValidas} pasaron los filtros; ${result.rechazadas.length} descartadas` +
-        (porIA ? ` (${porIA} por la curación con IA)` : ''));
+      /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
+         una expresión regular sobre `motivoRechazo` y el embudo mezclaba etapas. */
+      const cat = result.rechazadasPorCategoria;
+      anotar(`${result.totalValidas} pasaron todos los criterios; ${result.rechazadas.length} descartadas ` +
+        `(${cat.filtro} por los filtros del paso 2, ${cat.ia} por la curación con IA, ${cat.rigor} por el rigor funcional)`);
       if (!result.ventasParteExaminada) {
         anotar('Sin ventas de la parte examinada: el factor de tamaño queda neutro. Diligéncielas en la tarjeta de cifras.', 'aviso');
       }
@@ -259,9 +372,12 @@ export default function MotorComparables({ study, updateStudy }) {
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
-        rechazadasFiltros: result.rechazadas.length - porIA,
+        rechazadasFiltros: cat.filtro,
         curadas: veredicto ? veredicto.total : 0,
-        rechazadasIA: porIA,
+        reutilizadas: veredicto ? (veredicto.reutilizadas || 0) : 0,
+        rechazadasIA: cat.ia,
+        rechazadasRigor: cat.rigor,
+        rigor: engineConfig.rigor,
         seleccionadas: finales.length,
         objetivo: nTarget,
         reserva: result.reserva.length,
@@ -280,41 +396,218 @@ export default function MotorComparables({ study, updateStudy }) {
     }
   };
 
-  // Handle EEFF Ingestion for a Selected Comparable
+  /* Vuelca en una fila las cifras leídas de un documento. Devuelve el arreglo
+     nuevo; no toca el estado, para poder aplicar varias de una sola vez. */
+  const aplicarEeffEnFila = (filas, indice, datos, verificacion, archivo, cruce) => {
+    const copia = [...filas];
+    copia[indice] = {
+      ...copia[indice],
+      s: datos.ingresos_operacionales || copia[indice].s,
+      c: datos.costo_ventas || copia[indice].c,
+      op: datos.utilidad_operacional || copia[indice].op,
+      ar: datos.cuentas_por_cobrar || copia[indice].ar,
+      inv: datos.inventarios || copia[indice].inv,
+      ap: datos.cuentas_por_pagar || copia[indice].ap,
+      eeffVerificado: verificacion.esValido,
+      eeffHallazgos: verificacion.hallazgos,
+      eeffArchivo: archivo,
+      /* Se guarda cómo cruzó: un cruce por solapamiento de palabras hay que
+         confirmarlo a ojo, y sin dejar rastro nadie lo haría. */
+      eeffCruce: cruce ? { modo: cruce.modo, punt: cruce.punt, nombreLeido: datos.nombre || '' } : null,
+      eeffPorConfirmar: cruce ? !esCruceFirme(cruce) : false,
+    };
+    return copia;
+  };
+
+  /* Sube al repositorio compartido las cifras que acaban de entrar en unas filas.
+     Así el mismo estado financiero no se vuelve a leer —ni a pagar— cuando esa
+     comparable reaparece en el estudio de otro año o de otro cliente.
+
+     Es deliberadamente un extra: si falla, la carga que el usuario acaba de hacer
+     sigue aplicada en su estudio y solo se avisa de que no se compartió. */
+  const publicarEeff = async (filas, indices) => {
+    if (!usuario) return;
+    const seleccion = [...new Set(indices)].map(i => filas[i]).filter(Boolean);
+    if (!seleccion.length) return;
+    try {
+      const resumen = await guardarEeffComparables({ comparables: seleccion, anio: study.anio, usuario });
+      setEeffCompartido({ ...resumen, anio: Number(study.anio) || null });
+    } catch (err) {
+      console.error('[EEFF compartidos] no se pudieron subir', err);
+      setEeffCompartido({ error: (err && err.message) || 'error desconocido' });
+    }
+  };
+
+  /* Busca en la base compartida cifras ya cargadas para las comparables de este
+     estudio. Solo propone las filas que están vacías: una cifra puesta aquí puede
+     venir de un documento más reciente o de una corrección a mano. */
+  const buscarEeffGuardados = async () => {
+    if (!usuario) { setEeffGuardados({ error: 'Sin sesión activa.' }); return; }
+    const anio = Number(study.anio) || null;
+    if (!anio) { setEeffGuardados({ error: 'El estudio no tiene año gravable definido.' }); return; }
+    setEeffGuardados({ buscando: true });
+    try {
+      const claves = comparables.map(c => c.nameKey || nameKey(c.name || '')).filter(Boolean);
+      const guardados = await leerEeffDeComparables(claves, anio);
+      setEeffGuardados({ propuestas: comparablesConEeffReutilizable(comparables, guardados), anio });
+    } catch (err) {
+      console.error('[EEFF compartidos] no se pudo consultar', err);
+      setEeffGuardados({ error: (err && err.message) || 'error desconocido' });
+    }
+  };
+
+  /* Vuelca las cifras propuestas. Quedan marcadas por confirmar a propósito: no se
+     leyeron en este estudio y quien firma el informe tiene que darlas por buenas. */
+  const aplicarEeffGuardados = () => {
+    const propuestas = (eeffGuardados && eeffGuardados.propuestas) || [];
+    if (!propuestas.length) return;
+    let filas = comparables;
+    propuestas.forEach(p => { filas = aplicarEeffGuardadoEnFila(filas, p.indice, p.doc); });
+    setComparables(filas);
+    setEeffGuardados({ aplicadas: propuestas.length, anio: eeffGuardados.anio });
+  };
+
+  /* Trae del catálogo compartido las comparables que el equipo usó el año anterior y
+     las toma como referencia de continuidad. Sirve cuando no se tiene a mano el
+     informe del año pasado: hasta ahora la continuidad dependía de cargar ese PDF. */
+  const traerContinuidadDelCatalogo = async () => {
+    if (!usuario) { setCatalogo({ sinSesion: true }); return; }
+    const anioEstudio = Number(study.anio) || new Date().getFullYear();
+    const anio = anioEstudio - 1;
+    setCatalogo({ enCurso: true });
+    try {
+      const items = await comparablesHistoricasDelAnio(anio);
+      if (!items.length) {
+        setCatalogo({ traidas: 0, anio });
+        return;
+      }
+      setEstudioAnteriorInfo({
+        fuente: `catálogo compartido (año ${anio})`,
+        actividad,
+        anio,
+        comparables: catalogoAComparablesPrevias(items),
+      });
+      setCatalogo({ traidas: items.length, anio });
+    } catch (err) {
+      console.error('[catálogo histórico] no se pudo consultar', err);
+      setCatalogo({ error: (err && err.message) || 'error desconocido' });
+    }
+  };
+
+  /* Carga de EEFF sobre una fila concreta. Ahora comprueba que el documento sea
+     de esa empresa: antes las cifras entraban en la fila donde se soltaba el
+     archivo, fuera o no la correcta, y de ahí pasaban al rango intercuartil. */
   const handleComparableEEFFUpload = async (compIndex, file) => {
     if (!file) return;
     setUploadingEEFF(true);
+    setCargaEeff({ etapa: 'Leyendo ' + file.name + '…', hechas: 0, total: 1 });
+    setResultadoCarga(null);
     try {
       const studyYear = study.anio || 2025;
       const result = await parseEEFFComparableOCR(file, studyYear);
+      if (!result || !result.data) throw new Error('El documento no devolvió cifras legibles.');
 
-      if (result && result.data) {
-        const next = [...comparables];
-        const data = result.data;
+      const destino = comparables[compIndex];
+      const cruce = cruzar(result.data, file.name, comparables);
 
-        next[compIndex] = {
-          ...next[compIndex],
-          s: data.ingresos_operacionales || next[compIndex].s,
-          c: data.costo_ventas || next[compIndex].c,
-          op: data.utilidad_operacional || next[compIndex].op,
-          ar: data.cuentas_por_cobrar || next[compIndex].ar,
-          inv: data.inventarios || next[compIndex].inv,
-          ap: data.cuentas_por_pagar || next[compIndex].ap,
-          eeffVerificado: result.verificacion.esValido,
-          eeffHallazgos: result.verificacion.hallazgos,
-          eeffArchivo: result.filename
-        };
-
-        setComparables(next);
-        setEeffLog(prev => ({
-          ...prev,
-          [next[compIndex].name]: result.verificacion
-        }));
+      /* Cruzó con OTRA fila, o no cruzó con ninguna: no se aplica nada y se
+         explica por qué. Si el documento no trae razón social no hay nada que
+         contrastar, así que se acepta pero queda marcado por confirmar. */
+      const traeNombre = String(result.data.nombre || '').trim() || String(result.data.identificador_fuente || '').trim();
+      if (traeNombre && cruce.indice !== compIndex) {
+        setResultadoCarga({
+          aplicadas: [],
+          rechazadas: [{
+            archivo: file.name,
+            datos: result.data,
+            motivo: motivoRechazoEnFila(result.data, destino, file.name),
+          }],
+        });
+        return;
       }
+
+      const cruceEfectivo = traeNombre
+        ? cruce
+        : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
+      const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
+      setComparables(filas);
+      /* Al repositorio compartido, para que otro estudio no vuelva a leer este mismo
+         documento. Va después de aplicar: lo del usuario primero. */
+      await publicarEeff(filas, [compIndex]);
+      setResultadoCarga({
+        aplicadas: [{
+          archivo: file.name,
+          datos: result.data,
+          motivo: traeNombre
+            ? motivoCruce(cruce, result.data, file.name)
+            : 'El documento no trae razón social, así que se aplicó a «' + destino.name +
+              '» sin poder verificar que le corresponde: confírmalo.',
+          firme: traeNombre && esCruceFirme(cruce),
+          verificacion: result.verificacion,
+        }],
+        rechazadas: [],
+      });
     } catch (err) {
-      console.error("Error al procesar EEFF de comparable:", err);
+      console.error('Error al procesar EEFF de comparable:', err);
+      setResultadoCarga({
+        aplicadas: [],
+        rechazadas: [{ archivo: file.name, motivo: 'No se pudo leer el documento: ' + (err?.message || err) }],
+      });
     } finally {
       setUploadingEEFF(false);
+      setCargaEeff(null);
+    }
+  };
+
+  /* Carga masiva: uno o varios archivos, y cada archivo puede traer los EEFF de
+     varias comparables. Se lee todo, se reparte por cruce de razón social y se
+     informa qué entró, con qué confianza, y qué se rechazó y por qué. */
+  const handleCargaMasivaEEFF = async (files) => {
+    const lista = Array.from(files || []);
+    if (!lista.length) return;
+
+    setUploadingEEFF(true);
+    setResultadoCarga(null);
+    const entradas = [];
+    const fallosLectura = [];
+
+    try {
+      const studyYear = study.anio || 2025;
+      for (let i = 0; i < lista.length; i++) {
+        const file = lista[i];
+        setCargaEeff({ etapa: 'Leyendo ' + file.name + '…', hechas: i, total: lista.length });
+        try {
+          const leidas = await parseEEFFComparablesLote(file, studyYear);
+          if (!leidas.length) {
+            fallosLectura.push({
+              archivo: file.name,
+              motivo: 'No se pudo identificar ninguna empresa con razón social en el documento. ' +
+                'Si es el estado financiero de una sola comparable, cárgalo desde su fila.',
+            });
+          }
+          entradas.push(...leidas);
+        } catch (err) {
+          fallosLectura.push({ archivo: file.name, motivo: 'No se pudo leer: ' + (err?.message || err) });
+        }
+      }
+
+      setCargaEeff({ etapa: 'Cruzando ' + entradas.length + ' empresa(s) con las comparables…', hechas: lista.length, total: lista.length });
+      const { aplicadas, rechazadas } = repartir(entradas, comparables);
+
+      /* Se acumulan todas las filas antes de un único setComparables: un set por
+         empresa se sobrescribiría entre iteraciones y solo entraría la última. */
+      let filas = comparables;
+      aplicadas.forEach((a) => {
+        filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
+      });
+      if (aplicadas.length) {
+        setComparables(filas);
+        await publicarEeff(filas, aplicadas.map(a => a.indice));
+      }
+      setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
+    } finally {
+      setUploadingEEFF(false);
+      setCargaEeff(null);
     }
   };
 
@@ -338,7 +631,7 @@ export default function MotorComparables({ study, updateStudy }) {
   const kind = study.pli || 'MO';
   const useAdj = study.useadj || false;
   const interestRate = (num(study.prime) || 0) / 100;
-  
+
   const T = {
     s: num(study.t_s),
     c: num(study.t_c),
@@ -347,7 +640,7 @@ export default function MotorComparables({ study, updateStudy }) {
     inv: num(study.t_inv),
     ap: num(study.t_ap)
   };
-  
+
   const tPLI = pliOf(T, kind);
   const tR = ratios(T);
 
@@ -360,7 +653,7 @@ export default function MotorComparables({ study, updateStudy }) {
       inv: num(c.inv),
       ap: num(c.ap)
     };
-    
+
     let pliVal = pliOf(rawVal, kind);
     let adj = 0;
     const cR = ratios(rawVal);
@@ -428,12 +721,75 @@ export default function MotorComparables({ study, updateStudy }) {
               className="hidden"
             />
           </label>
+          {/* Continuidad sin tener el PDF a mano: si el equipo ya cargó el informe del
+              año anterior en otro estudio, sus comparables están en el catálogo. */}
+          <button
+            type="button"
+            onClick={traerContinuidadDelCatalogo}
+            disabled={loadingPriorStudy}
+            className="flex items-center gap-2 text-xs font-semibold px-3 py-2.5 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+            title="Toma como referencia de continuidad las comparables que el equipo ya registró para el año anterior"
+          >
+            <Layers className="w-4 h-4" />
+            Traer del catálogo del año anterior
+          </button>
+
           {priorStudyMsg && (
             <span className="text-xs font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 px-3 py-1.5 rounded-lg">
               {priorStudyMsg}
             </span>
           )}
         </div>
+
+        {/* Qué pasó con esas empresas en el catálogo compartido. Se informa aparte del
+            mensaje de lectura porque son dos cosas distintas: una es haber entendido
+            el documento y otra haber dejado registro reutilizable de sus comparables. */}
+        {catalogo && (
+          <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1">
+            <div className="font-semibold text-zinc-700 dark:text-zinc-200">Catálogo histórico compartido</div>
+            {catalogo.enCurso && <div className="text-zinc-500">Consultando el catálogo compartido…</div>}
+            {typeof catalogo.traidas === 'number' && (
+              catalogo.traidas
+                ? <div className="text-zinc-600 dark:text-zinc-300">
+                    {catalogo.traidas} comparables del año {catalogo.anio} traídas del catálogo como referencia de continuidad.
+                    El motor las tratará como del estudio anterior.
+                  </div>
+                : <div className="text-amber-600 dark:text-amber-400">
+                    El catálogo no tiene comparables registradas del año {catalogo.anio}. Cargue la documentación
+                    comprobatoria de ese año para alimentarlo.
+                  </div>
+            )}
+            {catalogo.sinSesion && (
+              <div className="text-amber-600 dark:text-amber-400">
+                Sin sesión activa: las empresas no se guardaron en el catálogo. Vuelva a entrar y cargue el informe otra vez.
+              </div>
+            )}
+            {catalogo.error && (
+              <div className="text-amber-600 dark:text-amber-400">
+                No se pudo guardar en el catálogo: {catalogo.error}. El informe sí quedó leído y el estudio puede continuar.
+              </div>
+            )}
+            {typeof catalogo.guardadas === 'number' && (
+              <>
+                <div className="text-zinc-600 dark:text-zinc-300">
+                  {catalogo.guardadas} empresas registradas del año {catalogo.anio}
+                  {catalogo.nuevas ? ` · ${catalogo.nuevas} nuevas en el catálogo` : ''}
+                  {catalogo.actualizadas ? ` · ${catalogo.actualizadas} ya estaban y se completaron` : ''}
+                </div>
+                {catalogo.descartadas ? (
+                  <div className="text-amber-600 dark:text-amber-400">
+                    {catalogo.descartadas} filas se descartaron por no traer razón social legible.
+                  </div>
+                ) : null}
+                {catalogo.fallidas ? (
+                  <div className="text-amber-600 dark:text-amber-400">
+                    {catalogo.fallidas} no se pudieron guardar; revise la consola para el detalle.
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ══════ BANNER: ACTIVIDAD DE LA EMPRESA ══════ */}
@@ -464,7 +820,8 @@ export default function MotorComparables({ study, updateStudy }) {
             />
             <div className="flex gap-2">
               <button
-                onClick={() => { setActividad(actInput); setEditingAct(false); }}
+                /* el embudo describía una corrida contra la actividad anterior */
+                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); }}
                 className="bg-[#0FA3A1] text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
               >
                 Guardar Actividad
@@ -511,12 +868,12 @@ export default function MotorComparables({ study, updateStudy }) {
             <label className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors shadow-sm">
               <Upload className="w-4 h-4" />
               <span>{loadingExcel ? 'Importando...' : '📥 Importar Excel (Capital IQ)'}</span>
-              <input 
-                type="file" 
-                accept=".xlsx,.xls,.csv" 
-                disabled={loadingExcel} 
-                onChange={(e) => e.target.files[0] && handleImportExcel(e.target.files[0])} 
-                className="hidden" 
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                disabled={loadingExcel}
+                onChange={(e) => e.target.files[0] && handleImportExcel(e.target.files[0])}
+                className="hidden"
               />
             </label>
             {universo.length > 0 && (
@@ -583,9 +940,10 @@ export default function MotorComparables({ study, updateStudy }) {
             </div>
           )}
 
-          {/* Curación por IA del universo: corre al importar, porque su veredicto
-              es uno de los filtros del motor. Con miles de candidatas son varios
-              lotes y varios minutos, así que hay que decir cuánto falta. */}
+          {/* Curación por IA: la dispara el paso 3 sobre las candidatas que pasaron los
+              filtros del paso 2, antes de puntuar, porque su veredicto es uno de los
+              filtros del motor. Son varios lotes y varios minutos, así que hay que
+              decir cuánto falta. */}
           {curacionProgreso && (
             <div className="bg-[#0FA3A1]/5 border border-[#0FA3A1]/30 rounded-lg p-3">
               <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
@@ -616,17 +974,18 @@ export default function MotorComparables({ study, updateStudy }) {
             <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
               <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-200">
                 <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
-                <span className="font-semibold">Universo curado con IA</span>
+                <span className="font-semibold">Candidatas curadas con IA</span>
                 <span className="text-zinc-500">
                   · {iaMatch.coinciden} de {iaMatch.total} coinciden con la actividad
+                  {iaMatch.reutilizadas ? ` · ${iaMatch.reutilizadas} reutilizadas de una corrida anterior` : ''}
                   {iaMatch.fallidas ? ` · ${iaMatch.fallidas} sin evaluar` : ''}
                 </span>
                 <button
                   type="button"
-                  onClick={() => curarUniverso(universo)}
+                  onClick={() => curarValidas({ forzar: true })}
                   disabled={curando || !universo.length}
                   className="ml-auto text-[10.5px] px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                  title="Volver a curar el universo, por ejemplo si corrigió la actividad detectada"
+                  title="Descarta el veredicto guardado y vuelve a curar desde cero las candidatas que pasan los filtros del paso 2"
                 >
                   ↻ Volver a curar
                 </button>
@@ -674,6 +1033,14 @@ export default function MotorComparables({ study, updateStudy }) {
             <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Definir los Filtros del Motor</span>
           </div>
 
+          {/* Decir en qué orden se aplican: el reclamo era que la curación y los
+              filtros parecían juzgar conjuntos distintos, y así era. */}
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1">
+            Holding, saldos negativos y pérdidas operativas se aplican <b>antes</b> de curar con IA, así que
+            la curación solo evalúa —y solo se paga por— lo que pasa estos filtros. El rigor funcional se
+            aplica <b>después</b>, sobre el perfil que dictamina la propia curación.
+          </p>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">N Objetivo (Tope 30)</label>
@@ -682,7 +1049,7 @@ export default function MotorComparables({ study, updateStudy }) {
                 min="4"
                 max="30"
                 value={engineConfig.nTarget}
-                onChange={(e) => setEngineConfig({ ...engineConfig, nTarget: Number(e.target.value) })}
+                onChange={(e) => cambiarConfig('nTarget', Number(e.target.value))}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               />
             </div>
@@ -691,7 +1058,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Pérdidas Operativas</label>
               <select
                 value={engineConfig.perdidaOp}
-                onChange={(e) => setEngineConfig({ ...engineConfig, perdidaOp: e.target.value })}
+                onChange={(e) => cambiarConfig('perdidaOp', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="excluir">Excluir (criterio conservador DIAN)</option>
@@ -703,7 +1070,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Sociedades Holding</label>
               <select
                 value={engineConfig.holding}
-                onChange={(e) => setEngineConfig({ ...engineConfig, holding: e.target.value })}
+                onChange={(e) => cambiarConfig('holding', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="excluir">Excluir (sin actividad propia)</option>
@@ -715,7 +1082,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Saldos Negativos</label>
               <select
                 value={engineConfig.saldoNegativo}
-                onChange={(e) => setEngineConfig({ ...engineConfig, saldoNegativo: e.target.value })}
+                onChange={(e) => cambiarConfig('saldoNegativo', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="excluir">Excluir (datos no verosímiles)</option>
@@ -727,7 +1094,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Prioridad Geográfica</label>
               <select
                 value={engineConfig.geo}
-                onChange={(e) => setEngineConfig({ ...engineConfig, geo: e.target.value })}
+                onChange={(e) => cambiarConfig('geo', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="ninguna">Global</option>
@@ -740,7 +1107,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Rigor Funcional</label>
               <select
                 value={engineConfig.rigor}
-                onChange={(e) => setEngineConfig({ ...engineConfig, rigor: e.target.value })}
+                onChange={(e) => cambiarConfig('rigor', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="estandar">Estándar (servicios+mixtos)</option>
@@ -770,7 +1137,7 @@ export default function MotorComparables({ study, updateStudy }) {
             >
               <Sparkles className="w-4 h-4" />
               <span>
-                {curando ? 'Curando el universo con IA…'
+                {curando ? 'Curando las candidatas con IA…'
                   : loadingSelection ? 'Puntuando y seleccionando…'
                     : 'Ejecutar Selección Automática'}
               </span>
@@ -784,12 +1151,29 @@ export default function MotorComparables({ study, updateStudy }) {
           {selectionFunnel && (
             <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1.5">
               <div className="font-semibold text-zinc-700 dark:text-zinc-200">Embudo de depuración</div>
+              {/* En orden de embudo: cada etapa cuenta solo lo que ella descartó, y las
+                  tres cifras de rechazo más las válidas suman el universo. Antes
+                  «rechazadas por la IA» se deducía con una expresión regular sobre el
+                  motivo y «descartadas por los filtros» se calculaba por resta, así que
+                  un descarte cabía en las dos casillas o en ninguna. */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-zinc-600 dark:text-zinc-300">
                 <div>Universo evaluado <b className="tabular-nums">{selectionFunnel.evaluadas.toLocaleString('es-CO')}</b></div>
                 <div>Descartadas por los filtros <b className="tabular-nums text-amber-600 dark:text-amber-400">{(selectionFunnel.rechazadasFiltros ?? 0).toLocaleString('es-CO')}</b></div>
+                <div>
+                  Curadas con IA <b className="tabular-nums">{(selectionFunnel.curadas ?? 0).toLocaleString('es-CO')}</b>
+                  {selectionFunnel.reutilizadas ? (
+                    <span className="text-zinc-400"> ({selectionFunnel.reutilizadas.toLocaleString('es-CO')} reutilizadas)</span>
+                  ) : null}
+                </div>
+                <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{(selectionFunnel.rechazadasIA ?? 0).toLocaleString('es-CO')}</b></div>
+                <div>
+                  Rechazadas por el rigor{' '}
+                  <b className={'tabular-nums ' + ((selectionFunnel.rechazadasRigor ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
+                    {(selectionFunnel.rechazadasRigor ?? 0).toLocaleString('es-CO')}
+                  </b>
+                  {selectionFunnel.rigor ? <span className="text-zinc-400"> ({selectionFunnel.rigor})</span> : null}
+                </div>
                 <div>Válidas <b className="tabular-nums">{selectionFunnel.validas.toLocaleString('es-CO')}</b></div>
-                <div>Curadas con IA <b className="tabular-nums">{selectionFunnel.curadas ?? '—'}</b></div>
-                <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{selectionFunnel.rechazadasIA ?? 0}</b></div>
                 <div>
                   Seleccionadas{' '}
                   <b className={'tabular-nums ' + (selectionFunnel.objetivo && selectionFunnel.seleccionadas < selectionFunnel.objetivo ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')}>
@@ -815,8 +1199,167 @@ export default function MotorComparables({ study, updateStudy }) {
           </div>
 
           <p className="text-xs text-zinc-500">
-            Elija a continuación la empresa comparable a la que desea cargarle sus Estados Financieros (PDF o Imagen). El sistema verificará automáticamente las identidades contables antes de incorporar los datos.
+            Cargue un solo PDF con los estados financieros de todas las comparables y el sistema los reparte por razón social,
+            o cárguelos uno por uno desde su fila. En ambos casos se comprueba a qué empresa pertenece cada documento antes de
+            incorporar las cifras, y se verifican las identidades contables.
           </p>
+
+          {/* Carga masiva: varios archivos, y cada archivo puede traer varias empresas */}
+          <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-xl px-4 py-5 text-xs font-semibold transition-colors ${
+            uploadingEEFF
+              ? 'border-zinc-200 dark:border-zinc-800 text-zinc-400 cursor-not-allowed'
+              : 'border-[#0FA3A1]/40 text-[#0B7C7A] dark:text-[#0FA3A1] hover:bg-[#0FA3A1]/5 cursor-pointer'
+          }`}>
+            {uploadingEEFF ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
+            <span>
+              {uploadingEEFF
+                ? 'Procesando…'
+                : 'Cargar EEFF de todas las comparables (uno o varios PDF)'}
+            </span>
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              multiple
+              disabled={uploadingEEFF}
+              className="hidden"
+              onChange={(e) => { handleCargaMasivaEEFF(e.target.files); e.target.value = null; }}
+            />
+          </label>
+
+          {/* Reutilización de cifras que otro estudio del equipo ya cargó. Es lo que
+              evita volver a leer —y volver a pagar— el mismo estado financiero cuando
+              una comparable reaparece en otro estudio del mismo año gravable. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={buscarEeffGuardados}
+              disabled={uploadingEEFF || !comparables.length || (eeffGuardados && eeffGuardados.buscando)}
+              className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Consulta en la base compartida si alguna de estas comparables ya tiene cifras cargadas para el mismo año"
+            >
+              <Layers className="w-4 h-4" />
+              {eeffGuardados && eeffGuardados.buscando ? 'Consultando la base…' : 'Buscar cifras ya cargadas por el equipo'}
+            </button>
+
+            {eeffGuardados && eeffGuardados.error && (
+              <span className="text-[11px] text-amber-600 dark:text-amber-400">{eeffGuardados.error}</span>
+            )}
+
+            {eeffGuardados && typeof eeffGuardados.aplicadas === 'number' && (
+              <span className="text-[11px] text-emerald-600 dark:text-emerald-500">
+                {eeffGuardados.aplicadas} fila(s) completadas con cifras del año {eeffGuardados.anio}. Quedan marcadas por confirmar.
+              </span>
+            )}
+
+            {eeffGuardados && eeffGuardados.propuestas && (
+              eeffGuardados.propuestas.length ? (
+                <>
+                  <span className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                    {eeffGuardados.propuestas.length} de {comparables.length} tienen cifras del año {eeffGuardados.anio} guardadas
+                    por otro estudio: {eeffGuardados.propuestas.map(p => p.nombre).join(', ')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={aplicarEeffGuardados}
+                    className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white"
+                  >
+                    Aplicarlas a las filas vacías
+                  </button>
+                </>
+              ) : (
+                <span className="text-[11px] text-zinc-500">
+                  Ninguna comparable con la fila vacía tiene cifras guardadas del año {eeffGuardados.anio}.
+                </span>
+              )
+            )}
+          </div>
+
+          {/* Qué se subió a la base tras una carga */}
+          {eeffCompartido && (
+            <div className="text-[11px] text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
+              {eeffCompartido.error
+                ? <span className="text-amber-600 dark:text-amber-400">
+                    Las cifras quedaron en el estudio, pero no se pudieron compartir con el equipo: {eeffCompartido.error}
+                  </span>
+                : <>
+                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para el resto del equipo
+                    {eeffCompartido.anio ? ` (año ${eeffCompartido.anio})` : ''}
+                    {eeffCompartido.omitidas ? ` · ${eeffCompartido.omitidas} sin ingresos, no se compartieron` : ''}
+                    {eeffCompartido.fallidas ? ` · ${eeffCompartido.fallidas} fallaron` : ''}
+                  </>}
+            </div>
+          )}
+
+          {/* Progreso: qué archivo va y cuántos faltan */}
+          {cargaEeff && (
+            <div className="bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#0FA3A1]" />
+                <span>{cargaEeff.etapa}</span>
+                {cargaEeff.total > 1 && (
+                  <span className="ml-auto font-mono text-[11px] text-zinc-500">
+                    {cargaEeff.hechas}/{cargaEeff.total}
+                  </span>
+                )}
+              </div>
+              {cargaEeff.total > 1 && (
+                <div className="mt-2 h-1 bg-zinc-200 dark:bg-zinc-800 rounded overflow-hidden">
+                  <div
+                    className="h-full bg-[#0FA3A1] transition-all"
+                    style={{ width: Math.round((cargaEeff.hechas / cargaEeff.total) * 100) + '%' }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Resultado: qué entró, con qué confianza, y qué se rechazó y por qué */}
+          {resultadoCarga && (
+            <div className="space-y-2">
+              {resultadoCarga.aplicadas.map((a, i) => (
+                <div
+                  key={'ok' + i}
+                  className={`rounded-lg px-4 py-3 text-xs border ${
+                    a.firme
+                      ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300'
+                      : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    {a.firme ? <CheckCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+                    <div>
+                      <div className="font-semibold">{a.archivo}</div>
+                      <div className="mt-0.5 leading-relaxed">{a.motivo}</div>
+                      {a.verificacion && a.verificacion.hallazgos && a.verificacion.hallazgos.length > 0 && (
+                        <ul className="mt-1.5 space-y-0.5 list-disc list-inside">
+                          {a.verificacion.hallazgos.map((h, j) => <li key={j}>{h}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {resultadoCarga.rechazadas.map((r, i) => (
+                <div
+                  key={'no' + i}
+                  className="rounded-lg px-4 py-3 text-xs border bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900 text-red-800 dark:text-red-300"
+                >
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-semibold">Rechazado: {r.archivo}</div>
+                      <div className="mt-0.5 leading-relaxed">{r.motivo}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {!resultadoCarga.aplicadas.length && !resultadoCarga.rechazadas.length && (
+                <div className="text-xs text-zinc-500">No se encontró ningún estado financiero en los documentos.</div>
+              )}
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
@@ -844,8 +1387,27 @@ export default function MotorComparables({ study, updateStudy }) {
                       ) : (
                         <span className="text-zinc-400 text-[11px]">Sin EEFF cargados</span>
                       )}
+                      {/* Los hallazgos contables ya se calculaban y se guardaban en
+                          eeffLog, pero no se mostraban en ninguna parte. */}
+                      {comp.eeffHallazgos && comp.eeffHallazgos.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-[10px] text-amber-700 dark:text-amber-400 list-disc list-inside">
+                          {comp.eeffHallazgos.map((h, j) => <li key={j}>{h}</li>)}
+                        </ul>
+                      )}
                     </td>
-                    <td className="py-2.5 px-3 text-zinc-500 text-[11px]">{comp.eeffArchivo || '—'}</td>
+                    <td className="py-2.5 px-3 text-zinc-500 text-[11px]">
+                      {comp.eeffArchivo || '—'}
+                      {/* Un cruce por solapamiento de palabras hay que confirmarlo:
+                          se deja a la vista el nombre que se leyó y el porcentaje. */}
+                      {comp.eeffPorConfirmar && comp.eeffCruce && (
+                        <div className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                          Por confirmar: se leyó «{comp.eeffCruce.nombreLeido || '(sin razón social)'}»
+                          {comp.eeffCruce.modo === 'manual'
+                            ? ' y el documento no permitía verificarlo'
+                            : ' · ' + Math.round((comp.eeffCruce.punt || 0) * 100) + '% de coincidencia'}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2.5 px-3 text-right">
                       <label className="cursor-pointer bg-zinc-100 dark:bg-zinc-800 hover:bg-[#0FA3A1] hover:text-white px-3 py-1 rounded text-[11px] font-semibold transition-colors inline-flex items-center gap-1">
                         <Upload className="w-3 h-3" />
@@ -961,13 +1523,12 @@ export default function MotorComparables({ study, updateStudy }) {
             </thead>
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-xs">
               {calculatedRows.map((row, idx) => (
-                <tr 
+                <tr
                   key={row.id || idx}
-                  className={`transition-colors ${
-                    row.isIncluded 
-                      ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40' 
+                  className={`transition-colors ${row.isIncluded
+                      ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
                       : 'opacity-35 bg-zinc-100/50 dark:bg-zinc-950/20'
-                  }`}
+                    }`}
                 >
                   <td className="py-2 px-3">
                     <input
