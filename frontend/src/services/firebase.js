@@ -6,7 +6,7 @@
 
    La configuración de abajo NO es secreta. En Firebase Web es pública por diseño:
    viaja en el bundle de cualquier app y lo que protege los datos son las reglas de
-   `firestore.rules` (solo cuentas @crconsultorescolombia.com con correo verificado),
+   `firestore.rules` —cada persona solo alcanza su propio espacio, `usuarios/{uid}/…`—,
    no el ocultamiento de estas claves. Conviene además restringir la clave por
    dominio HTTP en la consola de Google Cloud, que es la defensa contra su uso desde
    otro sitio. */
@@ -24,22 +24,17 @@ const firebaseConfig = {
   appId: '1:503680823868:web:5e0d75b3c1df3b83918939',
 };
 
-/** Dominio corporativo. Las reglas de Firestore exigen lo mismo del lado del
-    servidor: esta constante solo evita el viaje inútil y da un mensaje claro. */
-export const DOMINIO = 'crconsultorescolombia.com';
+/* No hay restricción de dominio: por decisión del usuario entra cualquier cuenta de
+   Google. Lo que protege los datos es que cada persona trabaja en su propio espacio
+   (`usuarios/{uid}/…`), de modo que quien llegue de fuera ve su base vacía y nunca la de
+   otro. */
 
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 
-/* `hd` le pide a Google que muestre solo cuentas del dominio en el selector. Es
-   comodidad, no seguridad: la restricción de verdad está en las reglas y se vuelve a
-   comprobar al recibir la sesión. */
+/* Sin `hd`: ese parámetro limitaba el selector de Google a las cuentas del dominio, y
+   ahora cualquier cuenta sirve. Se conserva `select_account` para que quien tenga varias
+   sesiones abiertas pueda elegir con cuál entra, en vez de que Google decida por él. */
 export const proveedorGoogle = new GoogleAuthProvider();
-proveedorGoogle.setCustomParameters({ hd: DOMINIO, prompt: 'select_account' });
-
-/** ¿El correo pertenece al dominio corporativo? */
-export function esCorreoDelDominio(correo) {
-  return typeof correo === 'string' &&
-    correo.trim().toLowerCase().endsWith('@' + DOMINIO);
-}
+proveedorGoogle.setCustomParameters({ prompt: 'select_account' });

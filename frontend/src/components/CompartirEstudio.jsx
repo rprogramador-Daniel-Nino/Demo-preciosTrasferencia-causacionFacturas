@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Users, X, Plus, Lock } from 'lucide-react';
 import { leerCompartidoCon, cambiarCompartido } from '../services/firestoreRepo';
-import { DOMINIO } from '../services/firebase';
 
 /* Acceso de un estudio. Privado mientras nadie más esté en la lista: compartir es una
    decisión explícita por estudio, no el estado por omisión.
@@ -31,7 +30,7 @@ export default function CompartirEstudio({ estudioId, usuario }) {
     setCargando(true);
     setError('');
     try {
-      const resultado = await cambiarCompartido(estudioId, valor, usuario, { quitar, dominio: DOMINIO });
+      const resultado = await cambiarCompartido(estudioId, valor, usuario, { quitar });
       if (resultado.error) setError(resultado.error);
       else {
         setLista(resultado.lista);
@@ -76,7 +75,7 @@ export default function CompartirEstudio({ estudioId, usuario }) {
               value={correo}
               onChange={(e) => setCorreo(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && correo.trim()) aplicar(correo, false); }}
-              placeholder={`nombre@${DOMINIO}`}
+              placeholder="correo de Google de la persona"
               className="flex-1 bg-white dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1 text-[11px] text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-[#0FA3A1]/50"
             />
             <button

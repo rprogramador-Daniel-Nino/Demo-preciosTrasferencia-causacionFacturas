@@ -82,6 +82,9 @@ export default function App() {
       setCompartidos(await listarEstudiosCompartidosConmigo(usuario));
     } catch (err) {
       console.error('[compartidos] no se pudieron leer', err);
+      /* A la vista y con el motivo: los dos fallos posibles —reglas o índice— se
+         arreglan con despliegues distintos, y en consola nadie los ve. */
+      setAvisoSesion('Estudios compartidos: ' + (err && err.message ? err.message : 'no se pudieron leer.'));
     }
   }, [usuario]);
 
