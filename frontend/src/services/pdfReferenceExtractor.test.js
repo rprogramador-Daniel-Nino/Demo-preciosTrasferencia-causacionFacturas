@@ -309,3 +309,25 @@ test('cada página del original queda envuelta y numerada', async () => {
   /* El índice no debe estar en la portada: si aparece aquí, el salto no separa. */
   assert.ok(!/RESUMEN EJECUTIVO/.test(texto), 'el índice se colvió a la portada');
 });
+
+test('las páginas del anexo llegan todas al documento, no solo una', async () => {
+  const r = await extraer();
+  /* Regresión: el marcador de figura también desaparece al quitar las etiquetas para
+     medir si la página tiene texto, así que una página cuyo contenido es sólo una
+     imagen —las quince del anexo escaneado— parecía vacía. Se descartaba su
+     estructura y con ella el hueco: de quince calculados llegaba uno al documento y
+     las otras catorce páginas se perdían sin dejar rastro. */
+  const enHtml = (r.html.match(/data-hueco=/g) || []).length;
+  assert.strictEqual(
+    enHtml, r.huecos.length,
+    'los huecos calculados no llegan todos al HTML: ' + enHtml + ' de ' + r.huecos.length
+  );
+  assert.strictEqual(r.huecos.length, 15, 'el anexo del informe son quince páginas');
+  /* Y cada uno nombra su página, para que el documento diga qué falta y dónde. */
+  for (const p of [44, 51, 58]) {
+    assert.ok(
+      r.html.includes('data-id="hueco_' + p + '"'),
+      'falta el hueco de la página ' + p
+    );
+  }
+});

@@ -176,7 +176,15 @@ export async function extraerReferencia(datos) {
          forma de saber a cuál pertenece cada trozo y termina en la equivocada
          —encabezados que dicen "1" o media frase de otro párrafo—, que es peor
          que un párrafo corrido, porque parece correcto. */
-      if (htmlStruct.replace(/<[^>]*>/g, '').trim()) return { pagina: n, html: htmlStruct };
+      /* Una página cuyo contenido es sólo una imagen —las dieciséis del anexo de
+         estados financieros escaneado— no está vacía: no tiene texto. Al quitar las
+         etiquetas para medirlo desaparece también el marcador de figura, así que sin
+         esta comprobación esas páginas parecían vacías, se descartaba su estructura
+         y con ella el hueco del anexo: de quince huecos calculados llegaba uno al
+         documento y las otras catorce páginas se perdían sin dejar rastro. */
+      const tieneTexto = !!htmlStruct.replace(/<[^>]*>/g, '').trim();
+      const tieneFigura = htmlStruct.includes('<!--FIG:');
+      if (tieneTexto || tieneFigura) return { pagina: n, html: htmlStruct };
       return { pagina: n, html: textoPlano ? '<p>' + escapar(textoPlano) + '</p>' : '' };
     }
     return { pagina: n, html: '<p>' + escapar(textoPlano) + '</p>' };
