@@ -157,7 +157,15 @@ export async function extraerReferencia(datos) {
       if (!huecos.some((h) => h.pagina === d.pagina)) {
         const id = 'hueco_' + d.pagina;
         huecos.push({ id, pagina: d.pagina });
-        marcas.push('<div data-hueco="anexo_eeff" data-id="' + id + '"></div>');
+        /* El hueco lleva texto visible dentro. Un `<div>` vacío no se ve ni en
+           la vista previa ni en el Word: las 16 páginas del anexo de estados
+           financieros firmados desaparecían sin dejar rastro. Que el documento
+           diga qué falta es lo mínimo para que alguien lo note al revisarlo. */
+        marcas.push(
+          '<div data-hueco="anexo_eeff" data-id="' + id + '">' +
+          '<p>[Falta el anexo de estados financieros firmados — corresponde a la página ' +
+          d.pagina + ' del informe de referencia. Adjúntelo antes de radicar.]</p></div>'
+        );
       }
       continue;
     }
