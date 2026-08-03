@@ -4,7 +4,14 @@ import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate } from '../services/exactTemplateMapper';
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
-import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla, guardarVinculo, leerVinculo } from '../services/plantillaStore';
+import {
+  guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
+  guardarVinculo, leerVinculo, guardarMarcado, leerMarcado,
+} from '../services/plantillaStore';
+import RevisorDeMarcas from './RevisorDeMarcas.jsx';
+import { proponerMarcas, aplicarMarcas } from '../services/plantillaMarcador.js';
+import { renderizar } from '../services/plantillaRenderer.js';
+import { revisarAntesDeGenerar } from '../services/plantillaGuardas.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
@@ -18,6 +25,12 @@ export default function ReporteGenerador({ study, estudioId }) {
      acción que el usuario acaba de hacer. */
   const [avisoHidratacion, setAvisoHidratacion] = useState('');
 
+  /* Marcas propuestas a la espera de revisión humana, y el id de la plantilla a la
+     que pertenecen. Mientras esto no sea null, la pantalla muestra el revisor. */
+  const [marcasPropuestas, setMarcasPropuestas] = useState(null);
+  const [plantillaPendiente, setPlantillaPendiente] = useState(null);
+  const [avisos, setAvisos] = useState([]);
+
   /* La hidratación sustituye por literales del informe de End Game 2024. Con
      el PDF de otro cliente no coincide ninguno y el documento sale con los
      datos del PDF subido, sin ninguna señal. Se usa el NIT del estudio como
@@ -25,6 +38,41 @@ export default function ReporteGenerador({ study, estudioId }) {
      sustitución no ocurrió. El arreglo de fondo —marcado por campos con
      nombre— es del plan 2; esto solo evita que pase desapercibido. */
   const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
+
+  /* Extrae el NIT que traía el informe de referencia. El marcado conserva el
+     texto original y solo lo envuelve, así que el contenido de la primera
+     marca `data-campo="nit"` es literalmente el NIT del cliente anterior. Si
+     el documento no llegó a marcar ese campo, devuelve null y la guarda de
+     "plantilla de otro contribuyente" simplemente no opina, que es lo
+     correcto: sin NIT de referencia no hay con qué comparar. */
+  const extraerNitDeReferencia = (htmlMarcado) => {
+    const m = /<span data-campo="nit">([\s\S]*?)<\/span>/.exec(htmlMarcado || '');
+    return m ? m[1] : null;
+  };
+
+  /* Renderiza la plantilla marcada contra el estudio activo y calcula los
+     avisos previos a generar. Se centraliza aquí porque son tres las rutas
+     que renderizan por campo —al subir un PDF cuya plantilla ya estaba
+     marcada, al confirmar marcas recién revisadas, y al abrir un estudio con
+     plantilla marcada— y las tres deben avisar exactamente igual. */
+  const renderizarYAvisar = (htmlMarcado, recursos) => {
+    const r = renderizar(htmlMarcado, study, recursos);
+    setHtmlContent(r.html);
+    setAvisos(revisarAntesDeGenerar({
+      estudio: study,
+      nitDeReferencia: extraerNitDeReferencia(htmlMarcado),
+      vacios: r.vacios,
+      /* El almacén 'anexos' ya existe en plantillaStore.js pero nadie lo usa
+         todavía: falta la pantalla de subida del anexo de estados
+         financieros, fuera del alcance de esta tarea. Se deja fijo en true
+         para no disparar un aviso de "falta el anexo" que sería
+         permanentemente falso —y por tanto ignorable— hasta que esa pantalla
+         exista. */
+      tieneAnexo: true,
+      recursosFaltantes: r.recursosFaltantes,
+    }));
+    setCustomTemplateLoaded(true);
+  };
 
   /* Rehidratación: sin esto las imágenes del informe de referencia se pierden
      al recargar la página, que es el fallo que motivó este trabajo. La bandera
@@ -34,6 +82,9 @@ export default function ReporteGenerador({ study, estudioId }) {
     let vivo = true;
     (async () => {
       if (!estudioId) return;
+      /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
+         estudio quedarían los avisos del anterior. */
+      if (vivo) setAvisos([]);
       const recursos = await leerRecursos(estudioId);
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los recursos del anterior. */
@@ -42,7 +93,15 @@ export default function ReporteGenerador({ study, estudioId }) {
       const idPlantilla = await leerVinculo(estudioId);
       if (!idPlantilla) return;
       const html = await leerPlantilla(idPlantilla);
-      if (vivo && html) {
+
+      /* Si la plantilla está marcada se renderiza por campo; si no, se cae a
+         la sustitución por literales, que sigue siendo la ruta de las
+         plantillas antiguas. Se resuelve al leer y no al guardar porque el
+         estudio puede cambiar después de haber subido la plantilla. */
+      const marcado = await leerMarcado(idPlantilla);
+      if (vivo && marcado) {
+        renderizarYAvisar(marcado, recursos);
+      } else if (vivo && html) {
         /* Se guarda el HTML crudo del extractor y se hidrata al leerlo, no al
            guardarlo: el estudio puede cambiar después de haber subido la
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
@@ -81,10 +140,6 @@ export default function ReporteGenerador({ study, estudioId }) {
       try {
         const arrayBuffer = e.target.result;
         const esPdf = /\.pdf$/i.test(file.name);
-        let html;
-        /* Los recursos del PDF recién leído. En la rama .docx queda vacío
-           porque mammoth ya incrusta las imágenes en el propio HTML. */
-        let recursos = [];
         if (esPdf) {
           const datos = new Uint8Array(arrayBuffer);
           /* El hash va antes de extraer: pdf.js transfiere el buffer al worker
@@ -92,11 +147,10 @@ export default function ReporteGenerador({ study, estudioId }) {
              no falla, hashea cero bytes. Todos los PDF darían el mismo id. */
           const idPlantilla = await hashPlantilla(datos);
           const ref = await extraerReferencia(datos);
-          html = ref.html;
           /* Sin esto las imágenes recién extraídas sólo aparecerían tras
              recargar la página: el efecto de arranque es el único otro sitio
              donde se pueblan, y el HTML nuevo trae marcas sin base64. */
-          recursos = ref.imagenes;
+          const recursos = ref.imagenes;
           setRecursosCargados(ref.imagenes);
           await guardarPlantilla(idPlantilla, ref.html);
           if (estudioId) await guardarRecursos(estudioId, ref.imagenes);
@@ -104,15 +158,28 @@ export default function ReporteGenerador({ study, estudioId }) {
           if (!ref.etiquetado) {
             alert('El PDF no trae estructura interna: la plantilla saldrá sin secciones.');
           }
+
+          /* El marcado se paga una vez por plantilla. Si este PDF ya se marcó
+             antes —otro estudio del mismo cliente, o un reintento— se
+             reutiliza sin volver a llamar a la IA. */
+          const marcadoPrevio = await leerMarcado(idPlantilla);
+          if (!marcadoPrevio) {
+            const propuestas = await proponerMarcas(ref.html);
+            setPlantillaPendiente({ id: idPlantilla, html: ref.html });
+            setMarcasPropuestas(propuestas);
+          } else {
+            renderizarYAvisar(marcadoPrevio, recursos);
+          }
         } else {
           const result = await mammoth.convertToHtml({ arrayBuffer });
-          html = result.value;
-        }
+          const html = result.value;
 
-        // Aplicar reemplazo de variables sobre la nueva plantilla subida
-        const hydrated = hydrateExactWordTemplate(html, study);
-        setHtmlContent(conImagenes(hydrated, recursos));
-        setCustomTemplateLoaded(true);
+          /* Ruta de respaldo, sin marcado: mammoth ya incrusta las imágenes
+             en el propio HTML, así que no hay recursos que resolver aparte. */
+          const hydrated = hydrateExactWordTemplate(html, study);
+          setHtmlContent(conImagenes(hydrated, []));
+          setCustomTemplateLoaded(true);
+        }
       } catch (err) {
         console.error("Error al analizar la plantilla personalizada:", err);
         alert("No se pudo analizar la plantilla seleccionada.");
@@ -120,6 +187,21 @@ export default function ReporteGenerador({ study, estudioId }) {
         setLoading(false);
       }
     };
+  };
+
+  /* Aplica las marcas que la persona confirmó y guarda el resultado. Las
+     descartadas se informan: una marca que el modelo propuso sobre texto que
+     no existe indica que reescribió el fragmento, y eso conviene saberlo. */
+  const confirmarMarcas = async (marcas) => {
+    const { html, aplicadas, descartadas } = aplicarMarcas(plantillaPendiente.html, marcas);
+    await guardarMarcado(plantillaPendiente.id, html);
+    renderizarYAvisar(html, recursosCargados);
+    setMarcasPropuestas(null);
+    setPlantillaPendiente(null);
+    if (descartadas.length) {
+      alert('Se aplicaron ' + aplicadas + ' marcas. ' + descartadas.length +
+            ' se descartaron porque su texto no aparece literalmente en el documento.');
+    }
   };
 
   /* Resuelve las marcas que dejó el extractor contra el catálogo de recursos.
@@ -205,6 +287,22 @@ export default function ReporteGenerador({ study, estudioId }) {
           </button>
         </div>
       </div>
+
+      {marcasPropuestas && (
+        <RevisorDeMarcas
+          marcas={marcasPropuestas}
+          onConfirmar={confirmarMarcas}
+          onCancelar={() => { setMarcasPropuestas(null); setPlantillaPendiente(null); }}
+        />
+      )}
+
+      {avisos.length > 0 && (
+        <div className="border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-xl p-4">
+          <ul className="text-xs text-amber-900 dark:text-amber-200 space-y-1">
+            {avisos.map((a, i) => <li key={i}>{a.texto}</li>)}
+          </ul>
+        </div>
+      )}
 
       {/* Contenedor del Editor de HTML Renderizado */}
       <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-8 shadow-sm overflow-x-auto min-h-[600px]">
