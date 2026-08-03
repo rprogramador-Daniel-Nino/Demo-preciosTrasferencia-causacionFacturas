@@ -5,12 +5,18 @@ import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
 import { guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla, guardarVinculo, leerVinculo } from '../services/plantillaStore';
+import { leerAnalisisMercado } from '../services/firestoreRepo';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
   const [recursosCargados, setRecursosCargados] = useState([]);
+  /* Cifras y narrativa de la Sección III, refrescadas mensualmente por
+     `actualizarAnalisisMercadoScheduled`. null mientras carga o si Firestore no
+     responde — los generadores de analisisMercado.js caen al respaldo local
+     embebido en el código cuando reciben null. */
+  const [analisisMercado, setAnalisisMercado] = useState(null);
   /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
      aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
      que se abre el estudio sería más molesto que informativo. El alert sí se
@@ -26,12 +32,26 @@ export default function ReporteGenerador({ study, estudioId }) {
      nombre— es del plan 2; esto solo evita que pase desapercibido. */
   const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
+  /* Documento global (no depende de estudioId): una lectura por sesión basta,
+     el cron que lo refresca corre una vez al mes. Si falla, se deja null: los
+     generadores de la Sección III ya saben caer al respaldo local. */
+  useEffect(() => {
+    let vivo = true;
+    leerAnalisisMercado()
+      .then((datos) => { if (vivo) setAnalisisMercado(datos); })
+      .catch((err) => {
+        console.error('No se pudo leer el análisis de mercado de Firestore:', err);
+        if (vivo) setAnalisisMercado(null);
+      });
+    return () => { vivo = false; };
+  }, []);
+
   /* Qué quedó sin cubrir en la sección III (TENDENCIAS DE LA ECONOMÍA). Se informa
      en concreto —qué serie y de qué año— porque un aviso genérico se ignora, y
      estas son las cifras que el Decreto 1625 de 2016 obliga a respaldar con fuente
      y fecha de consulta antes de radicar. */
   const avisosDeMercado = (htmlBase) => {
-    const d = diagnosticarCobertura(htmlBase, study);
+    const d = diagnosticarCobertura(htmlBase, study, analisisMercado);
     const avisos = [];
     if (!d.sectorialCubierto) {
       avisos.push(
@@ -44,6 +64,19 @@ export default function ReporteGenerador({ study, estudioId }) {
         'no hay datos de ' + d.year + ' para ' + d.seriesFaltantes.join(', ') +
         '; esas tablas quedaron con un marcador que hay que completar'
       );
+    }
+    if (!analisisMercado) {
+      avisos.push(
+        'no se pudo leer el análisis de mercado actualizado; se está usando el respaldo local del código'
+      );
+    } else if (analisisMercado.actualizadoEn) {
+      const dias = (Date.now() - analisisMercado.actualizadoEn.toMillis()) / 86400000;
+      if (dias > 62) {
+        avisos.push(
+          'los datos macro de la Sección III no se han refrescado en más de dos meses (última ' +
+          'actualización: ' + new Date(analisisMercado.actualizadoEn.toMillis()).toLocaleDateString('es-CO') + ')'
+        );
+      }
     }
     return avisos;
   };
@@ -86,7 +119,7 @@ export default function ReporteGenerador({ study, estudioId }) {
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
            esta línea, tras recargar se ven las cifras del informe de
            referencia en vez de las del estudio actual. */
-        const hidratado = hydrateExactWordTemplate(html, study);
+        const hidratado = hydrateExactWordTemplate(html, study, analisisMercado);
         /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
            setState de arriba no ha surtido efecto todavía dentro de este mismo
            efecto, y las imágenes saldrían rotas en la primera pintada. */
@@ -98,11 +131,11 @@ export default function ReporteGenerador({ study, estudioId }) {
       }
     })();
     return () => { vivo = false; };
-  }, [estudioId]);
+  }, [estudioId, analisisMercado]);
 
   // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
   const loadExactMasterTemplate = () => {
-    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study);
+    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study, analisisMercado);
     setHtmlContent(hydrated);
     setAvisoHidratacion(componerAviso(MASTER_WORD_TEMPLATE, hydrated));
   };
@@ -111,7 +144,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     if (!customTemplateLoaded) {
       loadExactMasterTemplate();
     }
-  }, [study, customTemplateLoaded]);
+  }, [study, customTemplateLoaded, analisisMercado]);
 
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
@@ -151,7 +184,7 @@ export default function ReporteGenerador({ study, estudioId }) {
         }
 
         // Aplicar reemplazo de variables sobre la nueva plantilla subida
-        const hydrated = hydrateExactWordTemplate(html, study);
+        const hydrated = hydrateExactWordTemplate(html, study, analisisMercado);
         setHtmlContent(conImagenes(hydrated, recursos));
         setAvisoHidratacion(componerAviso(html, hydrated));
         setCustomTemplateLoaded(true);
