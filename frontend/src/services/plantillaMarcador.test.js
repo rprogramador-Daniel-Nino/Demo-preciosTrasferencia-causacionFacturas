@@ -351,3 +351,69 @@ test('el contexto de una marca traducida corresponde a su aparición global', as
   assert.ok(r.marcas[0].contexto.antes.includes('contribuyente'));
   assert.ok(r.marcas[1].contexto.antes.includes('vinculado'));
 });
+
+/* --- Avance y concurrencia del marcado --- */
+
+test('avisa del avance en cada trozo terminado', async () => {
+  const avances = [];
+  const html = '<p>' + 'a'.repeat(80) + '</p><p>' + 'b'.repeat(80) + '</p><p>' + 'c'.repeat(80) + '</p>';
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 60,
+    pedir: async () => JSON.stringify({ marcas: [] }),
+    avisar: (p) => avances.push({ ...p }),
+  });
+  assert.strictEqual(avances.length, r.trozosEnviados, 'un aviso por trozo');
+  assert.ok(avances.every((a) => a.total === r.trozosEnviados), 'el total debe ser estable');
+  /* Con concurrencia los avisos pueden intercalarse, pero la cuenta de
+     terminados tiene que crecer de uno en uno hasta el total. */
+  assert.deepStrictEqual(
+    avances.map((a) => a.terminados),
+    Array.from({ length: avances.length }, (_, i) => i + 1)
+  );
+  assert.strictEqual(avances[avances.length - 1].terminados, r.trozosEnviados);
+});
+
+test('el orden de las marcas no depende de cuál respondió primero', async () => {
+  /* El primer trozo tarda más que el segundo: si el orden dependiera de la
+     respuesta, las marcas saldrían invertidas y las ocurrencias con ellas. */
+  const html = '<p>PRIMERO ' + 'x'.repeat(70) + '</p><p>SEGUNDO ' + 'y'.repeat(70) + '</p>';
+  let llamada = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 60,
+    concurrencia: 4,
+    pedir: async (prompt) => {
+      const mio = ++llamada;
+      await new Promise((res) => setTimeout(res, mio === 1 ? 30 : 1));
+      const frag = prompt.includes('PRIMERO') ? 'PRIMERO' : (prompt.includes('SEGUNDO') ? 'SEGUNDO' : null);
+      return JSON.stringify({ marcas: frag ? [{ fragmento: frag, campo: 'ent', ocurrencia: 1 }] : [] });
+    },
+  });
+  const frags = r.marcas.map((m) => m.fragmento);
+  assert.deepStrictEqual(frags, ['PRIMERO', 'SEGUNDO'], 'salieron en el orden de respuesta');
+});
+
+test('la concurrencia no pierde trozos ni marcas', async () => {
+  const html = Array.from({ length: 12 }, (_, i) => '<p>ACME ' + i + ' ' + 'z'.repeat(60) + '</p>').join('');
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 70,
+    concurrencia: 4,
+    pedir: async () => JSON.stringify({ marcas: [] }),
+  });
+  assert.strictEqual(r.trozosEnviados, trocear(html, 70).length, 'faltaron trozos por enviar');
+  assert.strictEqual(r.trozosFallidos, 0);
+});
+
+test('un trozo que falla se cuenta y no impide los demás, con concurrencia', async () => {
+  const html = Array.from({ length: 6 }, (_, i) => '<p>ACME S.A.S ' + i + ' ' + 'w'.repeat(60) + '</p>').join('');
+  let llamada = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 70,
+    concurrencia: 3,
+    pedir: async () => {
+      if (++llamada === 2) throw new Error('429 del proxy');
+      return JSON.stringify({ marcas: [] });
+    },
+  });
+  assert.strictEqual(r.trozosFallidos, 1);
+  assert.ok(r.trozosEnviados > 1, 'los demás trozos deben haberse enviado igual');
+});

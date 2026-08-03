@@ -39,6 +39,9 @@ export default function ReporteGenerador({ study, estudioId }) {
      cuenta distinto antes y después de confirmar: antes se puede reintentar,
      después ya no. */
   const [telemetriaMarcado, setTelemetriaMarcado] = useState(null);
+  /* Avance del marcado por IA: `{ terminados, total, fallidos }` mientras corre,
+     null cuando no hay marcado en curso. */
+  const [progresoMarcado, setProgresoMarcado] = useState(null);
 
   /* La hidratación sustituye por literales del informe de End Game 2024. Con
      el PDF de otro cliente no coincide ninguno y el documento sale con los
@@ -150,7 +153,7 @@ export default function ReporteGenerador({ study, estudioId }) {
          invariante vive fuera de este componente y no conviene depender
          de él en silencio. */
       if (vivo) {
-        setMarcasPropuestas(null); setPlantillaPendiente(null); setAvisoMarcado('');
+        setMarcasPropuestas(null); setPlantillaPendiente(null); setTelemetriaMarcado(null);
       }
       if (!estudioId) return;
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
@@ -257,7 +260,15 @@ export default function ReporteGenerador({ study, estudioId }) {
                enseñaría al usuario a ignorar el banner. */
             setAvisos([]);
             setAvisoHidratacion('');
-            const propuestas = await proponerMarcas(ref.html);
+            /* El marcado de un informe de 112 páginas son unos veinte viajes al
+               modelo. Sin este avance el spinner se queda quieto minutos y no hay
+               forma de distinguirlo de un cuelgue. */
+            const propuestas = await proponerMarcas(ref.html, {
+              avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
+                terminados, total, fallidos,
+              }),
+            });
+            setProgresoMarcado(null);
             setPlantillaPendiente({ id: idPlantilla, html: ref.html, huecos });
             setMarcasPropuestas(propuestas.marcas);
             setTelemetriaMarcado(propuestas);
@@ -522,7 +533,36 @@ export default function ReporteGenerador({ study, estudioId }) {
         {loading ? (
           <div className="flex flex-col items-center justify-center min-h-[400px] text-zinc-500">
             <Loader2 className="w-8 h-8 text-[#0FA3A1] animate-spin mb-2" />
-            <span>Cargando plantilla...</span>
+            {progresoMarcado ? (
+              <>
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                  Marcando la plantilla con IA: {progresoMarcado.terminados} de{' '}
+                  {progresoMarcado.total} tramos
+                </span>
+                <div className="w-64 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-3 overflow-hidden">
+                  <div
+                    className="h-full bg-[#0FA3A1] transition-all duration-300"
+                    style={{
+                      width: Math.round(
+                        (progresoMarcado.terminados / progresoMarcado.total) * 100
+                      ) + '%',
+                    }}
+                  />
+                </div>
+                <span className="text-xs mt-3 max-w-sm text-center">
+                  Un informe largo son varios viajes al modelo y puede tardar un par de
+                  minutos. Se paga una sola vez por documento: la próxima vez que se
+                  suba este mismo PDF, la plantilla ya estará marcada.
+                </span>
+                {progresoMarcado.fallidos > 0 && (
+                  <span className="text-xs mt-2 text-amber-600 dark:text-amber-400">
+                    {progresoMarcado.fallidos} tramo(s) no se pudieron marcar
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>Cargando plantilla...</span>
+            )}
           </div>
         ) : (
           <div

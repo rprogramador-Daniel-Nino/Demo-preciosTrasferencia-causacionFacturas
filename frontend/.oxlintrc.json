@@ -1,8 +1,16 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["react", "oxc"],
+  /* `no-undef` cazó un renombrado incompleto que el build no ve: Vite no resuelve
+     identificadores, así que `setAlgoQueYaNoExiste(...)` compila y estalla al
+     ejecutar. Para que la regla sirva hay que declarar el entorno, o marca como
+     no definidos `console`, `document` y compañía. */
+  /* `node` además de `browser` porque los servicios se prueban con `node --test` y
+     algunos traen un camino para Node: `png.js` usa `Buffer` y los tests `global`. */
+  "env": { "browser": true, "node": true, "es2024": true },
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    "no-undef": "error"
   }
 }

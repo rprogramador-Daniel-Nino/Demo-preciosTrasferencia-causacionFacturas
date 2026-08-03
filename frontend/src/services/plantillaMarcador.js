@@ -336,60 +336,93 @@ export async function proponerMarcas(html, opciones = {}) {
   };
   const textos = corridas.map((c) => c.texto);
 
-  /* Desplazamiento en el HTML donde empieza el trozo actual. `trocear` conserva
-     el texto carácter a carácter y corta siempre en un '<', así que basta
-     acumular longitudes: ninguna aparición queda partida por el corte. */
+  const trozos = trocear(completo, opciones.maxCaracteres);
+
+  /* Desplazamiento en el HTML donde empieza cada trozo. `trocear` conserva el
+     texto carácter a carácter y corta siempre en un '<', así que basta acumular
+     longitudes: ninguna aparición queda partida por el corte. Se precalculan
+     todos porque los trozos ya no se recorren en orden. */
+  const inicios = [];
   let desplazamiento = 0;
-
-  for (const trozo of trocear(completo, opciones.maxCaracteres)) {
-    trozosEnviados++;
-    const inicioDelTrozo = desplazamiento;
-    desplazamiento += trozo.length;
-    const previas = (fragmento) =>
-      apariciones(fragmento).filter((a) => a.offset < inicioDelTrozo).length;
-
-    let texto;
-    try {
-      texto = await pedir(promptDe(trozo));
-    } catch (err) {
-      /* Un trozo que falla no debe tumbar el marcado entero: son decenas de
-         llamadas y perder todo por una es inaceptable. Pero se cuenta. */
-      trozosFallidos++;
-      console.error('[marcado] un trozo falló:', err);
-      continue;
-    }
-    let json;
-    try {
-      json = extraerJSON(texto);
-    } catch {
-      trozosFallidos++;
-      console.error('[marcado] respuesta sin JSON utilizable');
-      continue;
-    }
-    for (const m of (json && json.marcas) || []) {
-      if (!m || !m.fragmento) continue;
-      if (!esCampoValido(m.campo)) {
-        /* El modelo estaba diciendo "aquí hay un dato del cliente anterior" con
-           un nombre que no existe. Descartarlo sin contarlo pierde el aviso. */
-        rechazadasPorVocabulario++;
-        continue;
-      }
-      const fragmento = String(m.fragmento);
-      const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
-      const ocurrencia = previas(fragmento) + local;
-      const donde = apariciones(fragmento)[ocurrencia - 1];
-      marcas.push({
-        fragmento,
-        campo: m.campo,
-        ocurrencia,
-        /* Contexto para el revisor humano. Sale del mismo índice, así que
-           corresponde exactamente a la aparición que se va a marcar. Es null si
-           la ocurrencia traducida no existe —el modelo devolvió un fragmento
-           que reescribió—, y entonces el revisor muestra solo el fragmento. */
-        contexto: donde ? contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60) : null,
-      });
-    }
+  for (const t of trozos) {
+    inicios.push(desplazamiento);
+    desplazamiento += t.length;
   }
+
+  const avisar = typeof opciones.avisar === 'function' ? opciones.avisar : () => {};
+  /* Un informe de 112 páginas son unos veinte trozos, y en serie eran cinco
+     minutos de reloj con un spinner que no decía nada: indistinguible de un
+     cuelgue. De cuatro en cuatro baja a poco más de un minuto. No se sube más
+     porque al otro lado hay un límite de peticiones por minuto y un 429 no
+     acelera nada: convierte un trozo en texto sin marcar. */
+  const concurrencia = Math.max(1, opciones.concurrencia || 4);
+
+  /* Los resultados se depositan por índice y se aplanan al final, así que el
+     orden de las marcas no depende de cuál respondió primero: con las mismas
+     respuestas sale el mismo documento. */
+  const porTrozo = new Array(trozos.length);
+  let siguiente = 0;
+  let terminados = 0;
+
+  const trabajar = async () => {
+    for (;;) {
+      const i = siguiente++;
+      if (i >= trozos.length) return;
+
+      const inicioDelTrozo = inicios[i];
+      const previas = (fragmento) =>
+        apariciones(fragmento).filter((a) => a.offset < inicioDelTrozo).length;
+
+      const delTrozo = [];
+      try {
+        const texto = await pedir(promptDe(trozos[i]));
+        const json = extraerJSON(texto);
+        for (const m of (json && json.marcas) || []) {
+          if (!m || !m.fragmento) continue;
+          if (!esCampoValido(m.campo)) {
+            /* El modelo estaba diciendo "aquí hay un dato del cliente anterior"
+               con un nombre que no existe. Descartarlo sin contarlo pierde el
+               aviso. */
+            rechazadasPorVocabulario++;
+            continue;
+          }
+          const fragmento = String(m.fragmento);
+          const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
+          const ocurrencia = previas(fragmento) + local;
+          const donde = apariciones(fragmento)[ocurrencia - 1];
+          delTrozo.push({
+            fragmento,
+            campo: m.campo,
+            ocurrencia,
+            /* Contexto para el revisor humano. Sale del mismo índice, así que
+               corresponde exactamente a la aparición que se va a marcar. Es null
+               si la ocurrencia traducida no existe —el modelo devolvió un
+               fragmento que reescribió—, y entonces el revisor muestra solo el
+               fragmento. */
+            contexto: donde
+              ? contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60)
+              : null,
+          });
+        }
+      } catch (err) {
+        /* Un trozo que falla no debe tumbar el marcado entero: son decenas de
+           llamadas y perder todo por una es inaceptable. Pero se cuenta, y aquí
+           caen tanto el fallo de la llamada como la respuesta sin JSON. */
+        trozosFallidos++;
+        console.error('[marcado] trozo ' + (i + 1) + ' de ' + trozos.length + ':', err);
+      }
+
+      porTrozo[i] = delTrozo;
+      trozosEnviados++;
+      avisar({ terminados: ++terminados, total: trozos.length, fallidos: trozosFallidos });
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrencia, trozos.length) }, () => trabajar())
+  );
+
+  for (const lote of porTrozo) if (lote) marcas.push(...lote);
 
   return { marcas, trozosEnviados, trozosFallidos, rechazadasPorVocabulario };
 }
