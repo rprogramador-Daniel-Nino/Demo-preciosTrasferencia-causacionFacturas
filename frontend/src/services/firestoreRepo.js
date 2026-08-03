@@ -2,6 +2,16 @@
    `firestoreModelo.js`; aquí no hay reglas de negocio, para que lo que sí las tiene
    quede cubierto por `npm test`.
 
+   Todo vive bajo `usuarios/{uid}/…`: cada consultor tiene sus estudios, sus clientes,
+   su catálogo y sus estados financieros, y nadie ve lo de otro. Antes eran colecciones
+   comunes y el equipo se pisaba —un estudio creado por una persona aparecía modificado
+   por otra—, además de que los identificadores derivados del dato (el NIT en
+   `clientes`, la razón social normalizada en `comparablesHistoricas`) hacían que dos
+   personas pelearan por el mismo documento.
+
+   Por eso cada función necesita saber de quién es el espacio: el `usuario` no es
+   opcional en ninguna, y sin él se lanza en lugar de escribir en una ruta a medias.
+
    Cuidado con el costo: cada `getDoc` y cada `setDoc` se factura. Dos medidas
    deliberadas contra eso:
 
@@ -13,15 +23,15 @@
       social letra por letra serían veinte escrituras del mismo documento. */
 
 import {
-  doc, getDoc, getDocs, setDoc, deleteDoc, collection, query, orderBy, where,
-  limit, serverTimestamp, runTransaction,
+  doc, getDoc, getDocs, setDoc, deleteDoc, collection, collectionGroup, query,
+  orderBy, where, limit, serverTimestamp, runTransaction,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { montoOperacion } from '../utils/calculations';
 import {
   docEstudio, docCliente, docEeff, idEeff, normalizarNit, anioValido, aNumero,
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
-  verificarTamano,
+  verificarTamano, agregarCompartido, quitarCompartido,
 } from './firestoreModelo';
 
 const ESTUDIOS = 'estudios';
@@ -29,14 +39,30 @@ const CLIENTES = 'clientes';
 const COMPARABLES = 'comparablesHistoricas';
 const EEFF = 'eeffComparables';
 
-/* Rastro de creación por documento ya visto en esta sesión: { 'estudios/x': {...} } */
+/* Colecciones del modelo compartido anterior, para la migración. */
+const COLECCIONES_MIGRABLES = [ESTUDIOS, CLIENTES, COMPARABLES, EEFF];
+
+/** Identificador del dueño del espacio, exigido de forma explícita. */
+function uidDe(usuario) {
+  const uid = usuario && usuario.uid;
+  if (!uid) {
+    throw new Error('Falta la sesión: no se puede acceder a los datos sin saber de quién son.');
+  }
+  return uid;
+}
+
+const coleccion = (usuario, nombre) => collection(db, 'usuarios', uidDe(usuario), nombre);
+const documento = (usuario, nombre, id) => doc(db, 'usuarios', uidDe(usuario), nombre, id);
+
+/* Rastro de creación por documento ya visto en esta sesión. La clave incluye el uid
+   porque dos consultores pueden tener un estudio con el mismo identificador. */
 const cacheMeta = new Map();
 
-const claveCache = (coleccion, id) => `${coleccion}/${id}`;
+const claveCache = (uid, nombre, id) => `${uid}/${nombre}/${id}`;
 
-function recordarMeta(coleccion, id, datos) {
+function recordarMeta(uid, nombre, id, datos) {
   if (!datos) return;
-  cacheMeta.set(claveCache(coleccion, id), {
+  cacheMeta.set(claveCache(uid, nombre, id), {
     creadoPor: datos.creadoPor,
     creadoEn: datos.creadoEn,
     creadoPorNombre: datos.creadoPorNombre,
@@ -47,13 +73,14 @@ function recordarMeta(coleccion, id, datos) {
  * Rastro de creación conocido, o el que traiga la nube si es la primera vez. Devuelve
  * null cuando el documento no existe todavía.
  */
-async function metaPrevia(coleccion, id) {
-  const enCache = cacheMeta.get(claveCache(coleccion, id));
+async function metaPrevia(usuario, nombre, id) {
+  const uid = uidDe(usuario);
+  const enCache = cacheMeta.get(claveCache(uid, nombre, id));
   if (enCache) return enCache;
-  const instantanea = await getDoc(doc(db, coleccion, id));
+  const instantanea = await getDoc(documento(usuario, nombre, id));
   if (!instantanea.exists()) return null;
-  recordarMeta(coleccion, id, instantanea.data());
-  return cacheMeta.get(claveCache(coleccion, id));
+  recordarMeta(uid, nombre, id, instantanea.data());
+  return cacheMeta.get(claveCache(uid, nombre, id));
 }
 
 /** Datos del usuario que las reglas esperan ver en los documentos. */
@@ -65,36 +92,36 @@ export function usuarioDeSesion(user) {
 /* ══════════════════════ estudios ══════════════════════ */
 
 export async function guardarEstudio(id, study, usuario) {
-  const previo = await metaPrevia(ESTUDIOS, id);
-  const documento = docEstudio({ study, usuario, previo, marcaDeTiempo: serverTimestamp() });
+  const previo = await metaPrevia(usuario, ESTUDIOS, id);
+  const documentoNuevo = docEstudio({ study, usuario, previo, marcaDeTiempo: serverTimestamp() });
   /* Antes de gastar la escritura: si excede el máximo, el error explica qué campo lo
      hace pesar. Firestore solo dice cuánto pesa, y con decenas de campos eso no basta
      para saber qué sacar. */
-  verificarTamano(documento);
-  await setDoc(doc(db, ESTUDIOS, id), documento);
+  verificarTamano(documentoNuevo);
+  await setDoc(documento(usuario, ESTUDIOS, id), documentoNuevo);
   /* Se recuerda con lo que ya había: `serverTimestamp()` es un centinela, no una
      fecha, y guardarlo en el caché haría fallar la comparación de inmutabilidad en
-     el guardado siguiente. Si el documento es nuevo, la fecha real se leerá cuando
-     alguien lo abra. */
-  if (previo) recordarMeta(ESTUDIOS, id, { ...previo });
+     el guardado siguiente. */
+  if (previo) recordarMeta(uidDe(usuario), ESTUDIOS, id, { ...previo });
   return id;
 }
 
-export async function leerEstudio(id) {
-  const instantanea = await getDoc(doc(db, ESTUDIOS, id));
+export async function leerEstudio(id, usuario) {
+  const instantanea = await getDoc(documento(usuario, ESTUDIOS, id));
   if (!instantanea.exists()) return null;
   const datos = instantanea.data();
-  recordarMeta(ESTUDIOS, id, datos);
+  recordarMeta(uidDe(usuario), ESTUDIOS, id, datos);
   return datos.datos || {};
 }
 
-/** Índice para el tablero: lo mínimo para listar, sin traer los estudios completos. */
-export async function listarEstudios(tope = 200) {
-  const consulta = query(collection(db, ESTUDIOS), orderBy('actualizadoEn', 'desc'), limit(tope));
+/** Índice para el tablero: solo los estudios del consultor en sesión. */
+export async function listarEstudios(usuario, tope = 200) {
+  const consulta = query(coleccion(usuario, ESTUDIOS), orderBy('actualizadoEn', 'desc'), limit(tope));
   const instantanea = await getDocs(consulta);
+  const uid = uidDe(usuario);
   return instantanea.docs.map(d => {
     const datos = d.data();
-    recordarMeta(ESTUDIOS, d.id, datos);
+    recordarMeta(uid, ESTUDIOS, d.id, datos);
     return {
       id: d.id,
       ent: datos.ent || 'Sin razón social',
@@ -102,11 +129,8 @@ export async function listarEstudios(tope = 200) {
       anio: datos.anio || '—',
       actualizadoPorNombre: datos.actualizadoPorNombre || '',
       /* El monto de operaciones con vinculados, que es lo que anuncia la columna del
-         tablero. Antes se tomaba de `t_s`, que son los ingresos operacionales de la
-         compañía: desde que la ingesta de operaciones dejó de escribir ese campo, la
-         columna mostraba una cifra que no era la anunciada o un cero.
-         Se lee de `datos`, que ya viene en la respuesta —Firestore cobra por documento
-         leído, no por campo—, en vez de duplicar la cifra en un campo propio. */
+         tablero. Se lee de `datos`, que ya viene en la respuesta —Firestore cobra por
+         documento leído, no por campo—, en vez de duplicar la cifra en un campo propio. */
       monto: montoOperacion(datos.datos) || 0,
       /* Timestamp de Firestore -> milisegundos, que es lo que ya consumía el tablero.
          Puede venir null si se lee justo después de escribir, antes de que el
@@ -116,9 +140,111 @@ export async function listarEstudios(tope = 200) {
   });
 }
 
-export async function borrarEstudio(id) {
-  await deleteDoc(doc(db, ESTUDIOS, id));
-  cacheMeta.delete(claveCache(ESTUDIOS, id));
+export async function borrarEstudio(id, usuario) {
+  await deleteDoc(documento(usuario, ESTUDIOS, id));
+  cacheMeta.delete(claveCache(uidDe(usuario), ESTUDIOS, id));
+}
+
+/* ══════════════════════ compartir un estudio ══════════════════════ */
+
+/** Con quiénes está compartido hoy este estudio. Lista de correos, o vacía. */
+export async function leerCompartidoCon(id, usuario) {
+  const instantanea = await getDoc(documento(usuario, ESTUDIOS, id));
+  if (!instantanea.exists()) return [];
+  return instantanea.data().compartidoCon || [];
+}
+
+/**
+ * Habilita o retira a una persona en un estudio. Devuelve la lista resultante, o el
+ * motivo por el que no se pudo.
+ *
+ * Se escribe con transacción y no con el estudio en memoria: el permiso no es un dato
+ * del informe, y un autoguardado disparado a la vez no debe poder pisar la lista de
+ * accesos ni al contrario.
+ */
+export async function cambiarCompartido(id, correo, usuario, { quitar = false, dominio } = {}) {
+  const referencia = documento(usuario, ESTUDIOS, id);
+  try {
+    return await runTransaction(db, async (tx) => {
+      const instantanea = await tx.get(referencia);
+      if (!instantanea.exists()) return { error: 'El estudio no existe en la nube todavía.' };
+      const datos = instantanea.data();
+      const actuales = datos.compartidoCon || [];
+
+      let lista, error = null;
+      if (quitar) {
+        lista = quitarCompartido(actuales, correo);
+      } else {
+        const resultado = agregarCompartido(actuales, correo, { dominio, correoPropio: usuario.correo });
+        lista = resultado.lista;
+        error = resultado.error;
+      }
+      if (error) return { error, lista: actuales };
+
+      const documentoNuevo = docEstudio({
+        /* `datos.datos` es el estudio tal como está en la nube: se reescribe igual, y
+           solo cambia la lista. Tomarlo de la memoria del navegador podría subir una
+           versión distinta de la que hay guardada. */
+        study: datos.datos || {},
+        usuario,
+        previo: datos,
+        marcaDeTiempo: serverTimestamp(),
+        compartidoCon: lista,
+      });
+      tx.set(referencia, documentoNuevo);
+      return { lista, error: null };
+    });
+  } catch (err) {
+    console.error('[compartir] no se pudo cambiar el acceso de ' + id, err);
+    return { error: (err && err.message) || 'No se pudo cambiar el acceso.' };
+  }
+}
+
+/**
+ * Estudios que otras personas compartieron con quien está en sesión.
+ *
+ * Va por grupo de colecciones porque están dentro del espacio de cada dueño y aquí no
+ * se sabe de quién: la consulta recorre todas las subcolecciones `estudios` y las
+ * reglas solo devuelven aquellas cuya lista incluye el correo del solicitante.
+ */
+export async function listarEstudiosCompartidosConmigo(usuario, tope = 100) {
+  const correo = String((usuario && usuario.correo) || '').toLowerCase();
+  if (!correo) return [];
+  try {
+    const consulta = query(
+      collectionGroup(db, ESTUDIOS),
+      where('compartidoCon', 'array-contains', correo),
+      limit(tope)
+    );
+    const instantanea = await getDocs(consulta);
+    return instantanea.docs.map(d => {
+      const datos = d.data();
+      return {
+        id: d.id,
+        /* El uid del dueño sale de la ruta: usuarios/{uid}/estudios/{id} */
+        duenoUid: d.ref.parent.parent ? d.ref.parent.parent.id : '',
+        ent: datos.ent || 'Sin razón social',
+        nit: datos.nit || '—',
+        anio: datos.anio || '—',
+        duenoNombre: datos.creadoPorNombre || '',
+        monto: montoOperacion(datos.datos) || 0,
+        updated: datos.actualizadoEn ? datos.actualizadoEn.toMillis() : 0,
+      };
+    });
+  } catch (err) {
+    /* Si falta el índice del grupo de colecciones, Firestore lo dice con un enlace para
+       crearlo. Se avisa y se sigue: no tener compartidos no debe impedir trabajar. */
+    console.error('[compartidos] no se pudieron leer', err);
+    return [];
+  }
+}
+
+/** Lee un estudio que otra persona compartió. Solo lectura: no se cachea su rastro. */
+export async function leerEstudioCompartido(duenoUid, id) {
+  if (!duenoUid || !id) return null;
+  const instantanea = await getDoc(doc(db, 'usuarios', duenoUid, ESTUDIOS, id));
+  if (!instantanea.exists()) return null;
+  return instantanea.data().datos || {};
 }
 
 /* ══════════════════════ clientes ══════════════════════ */
@@ -127,33 +253,33 @@ export async function borrarEstudio(id) {
 export async function guardarCliente(study, usuario) {
   const nit = normalizarNit(study && study.nit);
   if (!nit || nit.length < 5) return null;
-  const instantanea = await getDoc(doc(db, CLIENTES, nit));
+  const instantanea = await getDoc(documento(usuario, CLIENTES, nit));
   const previo = instantanea.exists() ? instantanea.data() : null;
-  const documento = docCliente({ study, usuario, previo, marcaDeTiempo: serverTimestamp() });
-  if (!documento) return null;
-  await setDoc(doc(db, CLIENTES, nit), documento);
+  const documentoNuevo = docCliente({ study, usuario, previo, marcaDeTiempo: serverTimestamp() });
+  if (!documentoNuevo) return null;
+  await setDoc(documento(usuario, CLIENTES, nit), documentoNuevo);
   return nit;
 }
 
-export async function listarClientes(tope = 500) {
-  const consulta = query(collection(db, CLIENTES), orderBy('razonSocial'), limit(tope));
+export async function listarClientes(usuario, tope = 500) {
+  const consulta = query(coleccion(usuario, CLIENTES), orderBy('razonSocial'), limit(tope));
   const instantanea = await getDocs(consulta);
   return instantanea.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-export async function leerCliente(nit) {
+export async function leerCliente(nit, usuario) {
   const clave = normalizarNit(nit);
   if (!clave) return null;
-  const instantanea = await getDoc(doc(db, CLIENTES, clave));
+  const instantanea = await getDoc(documento(usuario, CLIENTES, clave));
   return instantanea.exists() ? { id: instantanea.id, ...instantanea.data() } : null;
 }
 
 /** Estudios de un mismo contribuyente, del más reciente al más antiguo. */
-export async function estudiosDelCliente(nit, tope = 20) {
+export async function estudiosDelCliente(nit, usuario, tope = 20) {
   const clave = normalizarNit(nit);
   if (!clave) return [];
   const consulta = query(
-    collection(db, ESTUDIOS), where('clienteNit', '==', clave), orderBy('anio', 'desc'), limit(tope)
+    coleccion(usuario, ESTUDIOS), where('clienteNit', '==', clave), orderBy('anio', 'desc'), limit(tope)
   );
   const instantanea = await getDocs(consulta);
   return instantanea.docs.map(d => ({ id: d.id, ent: d.data().ent, anio: d.data().anio }));
@@ -162,13 +288,13 @@ export async function estudiosDelCliente(nit, tope = 20) {
 /* ══════════════ comparables históricas (el catálogo) ══════════════ */
 
 /**
- * Registra en el catálogo las empresas leídas de la documentación comprobatoria de un
- * año anterior. Cada una se fusiona con lo que ya hubiera: la misma empresa vista en
- * varios estudios es un solo documento, con el rastro de todas sus apariciones.
+ * Registra en el catálogo del consultor las empresas leídas de la documentación
+ * comprobatoria de un año anterior. Cada una se fusiona con lo que ya hubiera: la
+ * misma empresa vista en varios de sus estudios es un solo documento, con el rastro de
+ * todas sus apariciones.
  *
- * Va en transacción por documento porque la fusión necesita leer antes de escribir y
- * dos consultores pueden cargar informes distintos a la vez. Devuelve un resumen para
- * poder decir en pantalla qué se guardó y qué se descartó.
+ * Va en transacción por documento porque la fusión necesita leer antes de escribir.
+ * Devuelve un resumen para poder decir en pantalla qué se guardó y qué se descartó.
  */
 export async function registrarComparablesHistoricas({ comparables, aparicion, usuario }) {
   const normalizadas = (comparables || [])
@@ -183,15 +309,15 @@ export async function registrarComparablesHistoricas({ comparables, aparicion, u
   const resumen = { guardadas: 0, nuevas: 0, actualizadas: 0, descartadas: (comparables || []).length - normalizadas.length, fallidas: 0 };
 
   for (const entrante of porClave.values()) {
-    const referencia = doc(db, COMPARABLES, entrante.nameKey);
+    const referencia = documento(usuario, COMPARABLES, entrante.nameKey);
     try {
       const eraNueva = await runTransaction(db, async (tx) => {
         const instantanea = await tx.get(referencia);
         const existente = instantanea.exists() ? instantanea.data() : null;
-        const documento = fusionarComparableHistorica({
+        const documentoNuevo = fusionarComparableHistorica({
           existente, entrante, aparicion, usuario, marcaDeTiempo: serverTimestamp(),
         });
-        tx.set(referencia, documento);
+        tx.set(referencia, documentoNuevo);
         return !existente;
       });
       resumen.guardadas++;
@@ -204,18 +330,18 @@ export async function registrarComparablesHistoricas({ comparables, aparicion, u
   return resumen;
 }
 
-export async function listarComparablesHistoricas(tope = 500) {
-  const consulta = query(collection(db, COMPARABLES), orderBy('nombre'), limit(tope));
+export async function listarComparablesHistoricas(usuario, tope = 500) {
+  const consulta = query(coleccion(usuario, COMPARABLES), orderBy('nombre'), limit(tope));
   const instantanea = await getDocs(consulta);
   return instantanea.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 /** Las que se usaron en un año gravable concreto. */
-export async function comparablesHistoricasDelAnio(anio, tope = 500) {
+export async function comparablesHistoricasDelAnio(anio, usuario, tope = 500) {
   const n = anioValido(anio);
   if (!n) return [];
   const consulta = query(
-    collection(db, COMPARABLES), where('anios', 'array-contains', n), orderBy('nombre'), limit(tope)
+    coleccion(usuario, COMPARABLES), where('anios', 'array-contains', n), orderBy('nombre'), limit(tope)
   );
   const instantanea = await getDocs(consulta);
   return instantanea.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -235,11 +361,11 @@ export async function guardarEeffComparables({ comparables, anio, usuario }) {
     const anioNum = anioValido(anio);
     const id = idEeff(clave || comparable.name, anioNum);
     try {
-      const instantanea = await getDoc(doc(db, EEFF, id));
+      const instantanea = await getDoc(documento(usuario, EEFF, id));
       const previo = instantanea.exists() ? instantanea.data() : null;
-      const documento = docEeff({ comparable, anio: anioNum, usuario, previo, marcaDeTiempo: serverTimestamp() });
-      if (!documento) { resumen.omitidas++; continue; }
-      await setDoc(doc(db, EEFF, id), documento);
+      const documentoNuevo = docEeff({ comparable, anio: anioNum, usuario, previo, marcaDeTiempo: serverTimestamp() });
+      if (!documentoNuevo) { resumen.omitidas++; continue; }
+      await setDoc(documento(usuario, EEFF, id), documentoNuevo);
       resumen.guardadas++;
     } catch (err) {
       resumen.fallidas++;
@@ -250,26 +376,26 @@ export async function guardarEeffComparables({ comparables, anio, usuario }) {
 }
 
 /** Cifras ya cargadas de una empresa, por año. Devuelve un mapa clave -> documento. */
-export async function leerEeffDeComparables(claves, anio) {
+export async function leerEeffDeComparables(claves, anio, usuario) {
   const anioNum = anioValido(anio);
   const encontrados = {};
   if (!anioNum) return encontrados;
   for (const clave of claves || []) {
     if (!clave) continue;
-    const instantanea = await getDoc(doc(db, EEFF, idEeff(clave, anioNum)));
+    const instantanea = await getDoc(documento(usuario, EEFF, idEeff(clave, anioNum)));
     if (instantanea.exists()) encontrados[clave] = instantanea.data();
   }
   return encontrados;
 }
 
-/* ══════════════════════ migración ══════════════════════ */
+/* ══════════════════════ migraciones ══════════════════════ */
 
 const MARCA_MIGRACION = 'pt:migracion:firestore';
 
 /**
- * Sube a la nube los estudios que ya estaban en localStorage. Se ejecuta una vez por
- * navegador —queda una marca— y no borra nada del almacenamiento local: si algo sale
- * mal, el original sigue ahí.
+ * Sube al espacio del consultor los estudios que ya estaban en localStorage. Se
+ * ejecuta una vez por navegador —queda una marca— y no borra nada del almacenamiento
+ * local: si algo sale mal, el original sigue ahí.
  */
 export async function migrarDesdeLocalStorage(usuario, { guardarLocales } = {}) {
   if (localStorage.getItem(MARCA_MIGRACION)) return { yaHecha: true, subidos: 0, fallidos: 0 };
@@ -306,4 +432,47 @@ export async function migrarDesdeLocalStorage(usuario, { guardarLocales } = {}) 
      incompleta. Volver a subir un estudio ya subido es inofensivo. */
   if (!resultado.fallidos) localStorage.setItem(MARCA_MIGRACION, new Date().toISOString());
   return resultado;
+}
+
+/**
+ * Traslada al espacio privado del consultor lo que él mismo creó cuando las
+ * colecciones eran comunes al equipo.
+ *
+ * Solo alcanza a sus propios documentos: la consulta filtra por `creadoPor` y las
+ * reglas, además, no le dejarían leer los de otro. Cada consultor recupera lo suyo la
+ * primera vez que entra, y lo que otro creó lo recupera esa otra persona.
+ *
+ * El documento se copia y solo entonces se borra del sitio viejo: si la copia falla, no
+ * se pierde nada y el siguiente arranque vuelve a intentarlo.
+ */
+export async function migrarDesdeRaiz(usuario) {
+  const uid = uidDe(usuario);
+  const resumen = { movidos: 0, fallidos: 0, porColeccion: {} };
+
+  for (const nombre of COLECCIONES_MIGRABLES) {
+    const cuenta = { movidos: 0, fallidos: 0 };
+    try {
+      const consulta = query(collection(db, nombre), where('creadoPor', '==', uid), limit(500));
+      const instantanea = await getDocs(consulta);
+      for (const d of instantanea.docs) {
+        try {
+          await setDoc(doc(db, 'usuarios', uid, nombre, d.id), d.data());
+          await deleteDoc(d.ref);
+          cuenta.movidos++;
+        } catch (err) {
+          cuenta.fallidos++;
+          console.error(`[migración privada] no se pudo mover ${nombre}/${d.id}`, err);
+        }
+      }
+    } catch (err) {
+      /* Sin permiso de lectura o sin la colección: no hay nada que mover y no es un
+         fallo que deba impedir entrar a la aplicación. */
+      console.warn(`[migración privada] no se pudo revisar ${nombre}`, err);
+    }
+    resumen.porColeccion[nombre] = cuenta;
+    resumen.movidos += cuenta.movidos;
+    resumen.fallidos += cuenta.fallidos;
+  }
+
+  return resumen;
 }
