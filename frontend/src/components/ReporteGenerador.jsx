@@ -81,6 +81,13 @@ export default function ReporteGenerador({ study, estudioId }) {
   useEffect(() => {
     let vivo = true;
     (async () => {
+      /* Defensivo: si estudioId cambia mientras hay marcas propuestas
+         pendientes de revisión de otro estudio, se descartan. Hoy App.jsx
+         desmonta este componente al cambiar de estudio (cambia de pestaña),
+         así que esto no se puede provocar en la práctica, pero el
+         invariante vive fuera de este componente y no conviene depender
+         de él en silencio. */
+      if (vivo) { setMarcasPropuestas(null); setPlantillaPendiente(null); }
       if (!estudioId) return;
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los avisos del anterior. */
@@ -164,6 +171,11 @@ export default function ReporteGenerador({ study, estudioId }) {
              reutiliza sin volver a llamar a la IA. */
           const marcadoPrevio = await leerMarcado(idPlantilla);
           if (!marcadoPrevio) {
+            /* Los avisos visibles corresponden a la plantilla anterior (u
+               otro estudio): mientras se revisan las marcas nuevas no hay
+               todavía un render del que calcularlos, y dejarlos puestos
+               enseñaría al usuario a ignorar el banner. */
+            setAvisos([]);
             const propuestas = await proponerMarcas(ref.html);
             setPlantillaPendiente({ id: idPlantilla, html: ref.html });
             setMarcasPropuestas(propuestas);
@@ -175,7 +187,11 @@ export default function ReporteGenerador({ study, estudioId }) {
           const html = result.value;
 
           /* Ruta de respaldo, sin marcado: mammoth ya incrusta las imágenes
-             en el propio HTML, así que no hay recursos que resolver aparte. */
+             en el propio HTML, así que no hay recursos que resolver aparte.
+             Se limpian los avisos porque, sin marcado, no hay de dónde
+             recalcularlos, y los de la plantilla anterior ya no corresponden
+             a este documento. */
+          setAvisos([]);
           const hydrated = hydrateExactWordTemplate(html, study);
           setHtmlContent(conImagenes(hydrated, []));
           setCustomTemplateLoaded(true);
@@ -189,9 +205,39 @@ export default function ReporteGenerador({ study, estudioId }) {
     };
   };
 
-  /* Aplica las marcas que la persona confirmó y guarda el resultado. Las
-     descartadas se informan: una marca que el modelo propuso sobre texto que
-     no existe indica que reescribió el fragmento, y eso conviene saberlo. */
+  /* Resume las descartadas agrupándolas por motivo. Los dos motivos que
+     produce aplicarMarcas significan cosas muy distintas: un solape es
+     benigno (el modelo marcó de más sobre texto que una marca anterior ya
+     cubría); que el fragmento no aparezca es la señal real de que el modelo
+     reescribió el texto al proponerlo. Anunciar ambos como "no aparece" -el
+     mensaje genérico que tenía esto antes- alarma de más en el primer caso y
+     esconde la señal real en el segundo. */
+  const resumirDescartes = (descartadas) => {
+    const porMotivo = new Map();
+    for (const d of descartadas) porMotivo.set(d.motivo, (porMotivo.get(d.motivo) || 0) + 1);
+
+    const lineas = [];
+    const noAparece = porMotivo.get('el fragmento no aparece en el documento');
+    const solapada = porMotivo.get('se solapa con una marca ya aplicada');
+    if (noAparece) {
+      lineas.push(noAparece + ' se descartaron porque su texto no aparece literalmente en el ' +
+                  'documento: revisa si el modelo reescribió ese fragmento.');
+    }
+    if (solapada) {
+      lineas.push(solapada + ' se descartaron por solaparse con una marca ya aplicada, lo cual es ' +
+                  'normal y no es señal de un problema.');
+    }
+    /* Motivo distinto de los dos conocidos hoy: se reporta genérico en vez de
+       omitirlo, por si aplicarMarcas agrega alguno nuevo más adelante. */
+    for (const [motivo, n] of porMotivo) {
+      if (motivo !== 'el fragmento no aparece en el documento' && motivo !== 'se solapa con una marca ya aplicada') {
+        lineas.push(n + ' se descartaron: ' + motivo + '.');
+      }
+    }
+    return lineas.join('\n');
+  };
+
+  /* Aplica las marcas que la persona confirmó y guarda el resultado. */
   const confirmarMarcas = async (marcas) => {
     const { html, aplicadas, descartadas } = aplicarMarcas(plantillaPendiente.html, marcas);
     await guardarMarcado(plantillaPendiente.id, html);
@@ -199,8 +245,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     setMarcasPropuestas(null);
     setPlantillaPendiente(null);
     if (descartadas.length) {
-      alert('Se aplicaron ' + aplicadas + ' marcas. ' + descartadas.length +
-            ' se descartaron porque su texto no aparece literalmente en el documento.');
+      alert('Se aplicaron ' + aplicadas + ' marcas.\n' + resumirDescartes(descartadas));
     }
   };
 
