@@ -67,6 +67,9 @@ export async function extraerReferencia(datos) {
   /* --- Primera pasada: estructura y censo de dibujos --- */
   const bloques = [];
   const dibujos = [];
+  /* Figuras declaradas por el árbol, por página y en orden de documento. Cada una
+     dejó un marcador en el HTML que se resuelve al final. */
+  const figurasPorPagina = new Map();
   let etiquetado = false;
 
   for (let n = 1; n <= doc.numPages; n++) {
@@ -91,7 +94,9 @@ export async function extraerReferencia(datos) {
 
     if (arbol) {
       etiquetado = true;
-      const htmlStruct = aHTML(arbol, porId);
+      const figuras = [];
+      const htmlStruct = aHTML(arbol, porId, figuras, n);
+      figurasPorPagina.set(n, figuras);
 
       /* Respaldo por página: si el árbol no rindió texto (documento etiquetado
          pero con el contenido fuera de los ámbitos marcados) se prefiere el
@@ -133,6 +138,12 @@ export async function extraerReferencia(datos) {
           orden: ++orden,
           clave: args[0],
           fraccion: fraccionDePagina(render, dimPagina),
+          /* Rectángulo donde se dibuja, en coordenadas de la página. Es lo que
+             permite emparejarlo con la figura del árbol que lo reclama, y por
+             tanto colocarlo en su sitio dentro del texto en vez de al final de
+             la página. Medido contra el PDF real, el bbox de la figura y este
+             rectángulo coinciden al punto. */
+          rect: [ctm[4], ctm[5], ctm[4] + render.ancho, ctm[5] + render.alto],
         });
       }
     }
@@ -144,20 +155,50 @@ export async function extraerReferencia(datos) {
   /* --- Segunda pasada: decodificar solo lo que se conserva, una vez por clave --- */
   const imagenes = [];
   const huecos = [];
-  const marcasPorPagina = new Map();
   const yaDecodificada = new Map();
 
+  /* Qué dibujo reclama cada figura, por página. Los dibujos que no aparecen aquí
+     son artefactos —el logo del encabezado, que se repite en casi cien páginas y
+     no cuelga del árbol— y no se emiten dentro del texto. */
+  const dibujoDeFigura = new Map();
+  const reclamados = new Set();
+  for (const [n, figuras] of figurasPorPagina) {
+    const pares = emparejar(figuras, dibujos.filter((d) => d.pagina === n));
+    pares.forEach((d, i) => {
+      dibujoDeFigura.set(n + ':' + i, d);
+      if (d) reclamados.add(d);
+    });
+  }
+
+  /* Marca con la que se resuelve cada figura, por 'pagina:indice'. */
+  const marcaDeFigura = new Map();
+  const claveDeFigura = new Map();
+  for (const [k, d] of dibujoDeFigura) if (d) claveDeFigura.set(d, k);
+
+  /* Artefactos: dibujos que ninguna figura reclama. Son el logo del encabezado.
+     Se conservan las claves distintas, no las cien repeticiones. */
+  const artefactos = [];
+
   for (const d of dibujos) {
-    const marcas = marcasPorPagina.get(d.pagina) || [];
-    marcasPorPagina.set(d.pagina, marcas);
+    const figura = claveDeFigura.get(d);
 
     if (paginasDeAnexo.has(d.pagina)) {
       /* Un hueco por página, no por dibujo: el logo de encabezado también cae
          dentro de una página de anexo y no debe generar su propio hueco. */
+      if (!figura) continue;
       if (!huecos.some((h) => h.pagina === d.pagina)) {
         const id = 'hueco_' + d.pagina;
         huecos.push({ id, pagina: d.pagina });
-        marcas.push('<div data-hueco="anexo_eeff" data-id="' + id + '"></div>');
+        /* El hueco lleva texto visible dentro. Un `<div>` vacío no se ve ni en
+           la vista previa ni en el Word: las 16 páginas del anexo de estados
+           financieros firmados desaparecían sin dejar rastro. Que el documento
+           diga qué falta es lo mínimo para que alguien lo note al revisarlo. */
+        marcaDeFigura.set(
+          figura,
+          '<div data-hueco="anexo_eeff" data-id="' + id + '">' +
+          '<p>[Falta el anexo de estados financieros firmados — corresponde a la página ' +
+          d.pagina + ' del informe de referencia. Adjúntelo antes de radicar.]</p></div>'
+        );
       }
       continue;
     }
@@ -179,14 +220,48 @@ export async function extraerReferencia(datos) {
        se guarda pesa kilobytes en vez de megabytes, y una imagen que se repite
        en noventa páginas se almacena una sola vez. Quien muestre o exporte el
        documento la resuelve contra el catálogo de recursos. */
-    marcas.push('<img data-recurso="' + d.clave + '" />');
+    const marca = '<img data-recurso="' + d.clave + '" />';
+
+    if (figura) {
+      marcaDeFigura.set(figura, marca);
+    } else if (!artefactos.some((a) => a.dataUrl === yaDecodificada.get(d.clave))) {
+      /* Se deduplica por contenido y no por clave: pdf.js promueve a objeto
+         global una imagen que se repite, así que el mismo logo llega con dos
+         claves distintas —la local de la primera página y la global— y por clave
+         saldría dos veces seguidas al abrir el documento. */
+      artefactos.push({ clave: d.clave, marca, dataUrl: yaDecodificada.get(d.clave) });
+    }
   }
 
-  const html = bloques
-    .map((b) => b.html + (marcasPorPagina.get(b.pagina) || []).join('\n'))
-    .join('\n');
+  /* Cada figura se resuelve donde el árbol la declaró. Una figura sin dibujo que
+     la reclame —el emparejamiento falló, o el objeto no se pudo decodificar— se
+     reporta en vez de desaparecer: en esta ruta el silencio ya costó dos fallos
+     invisibles que los tests en verde no delataron. */
+  const figurasSinDibujo = [];
+  const conFiguras = (htmlPagina) =>
+    htmlPagina.replace(/<!--FIG:(\d+):(\d+)-->/g, (_, pag, idx) => {
+      const k = pag + ':' + idx;
+      if (marcaDeFigura.has(k)) return marcaDeFigura.get(k);
+      figurasSinDibujo.push({ pagina: Number(pag), indice: Number(idx) });
+      return '';
+    });
 
-  return { html, imagenes, huecos, paginas: doc.numPages, etiquetado };
+  /* El logo del encabezado va una vez al principio y no en cada página. Su sitio
+     propio es el encabezado del documento de Word, que necesita OOXML y es de la
+     otra fase; repetirlo cien veces dentro del texto —que es lo que se hacía— era
+     peor que ponerlo una vez arriba. */
+  const cabecera = artefactos.map((a) => a.marca).join('');
+
+  const html = cabecera + bloques.map((b) => conFiguras(b.html)).join('\n');
+
+  if (figurasSinDibujo.length) {
+    console.warn('[extractor] figuras sin imagen que las resuelva:', figurasSinDibujo);
+  }
+
+  return {
+    html, imagenes, huecos, paginas: doc.numPages, etiquetado,
+    figurasSinDibujo: figurasSinDibujo.length,
+  };
 }
 
 /* Convierte el objeto de imagen de pdf.js en un data URL PNG. pdf.js entrega
@@ -282,11 +357,46 @@ function textoPorId(items) {
   return porId;
 }
 
-/* Recorre el árbol de estructura y emite HTML con la jerarquía del documento. */
-function aHTML(nodo, porId) {
+/* Recorre el árbol de estructura y emite HTML con la jerarquía del documento.
+
+   `figuras` recoge, en orden de documento, el bbox de cada nodo `Figure`, y en su
+   lugar queda un marcador. Así la imagen acaba donde el informe la puso —entre
+   los párrafos que la rodean— y no amontonada al final de la página, que es lo
+   que hacía que el Word generado no se pareciera al PDF de origen. */
+function aHTML(nodo, porId, figuras, pagina) {
   if (!nodo) return '';
   if (nodo.type === 'content') return escapar(porId.get(nodo.id) || '');
-  const hijos = (nodo.children || []).map((h) => aHTML(h, porId)).join('');
+
+  if (nodo.role === 'Figure') {
+    const indice = figuras.length;
+    figuras.push({ bbox: nodo.bbox || null, alt: nodo.alt || '' });
+    return '<!--FIG:' + pagina + ':' + indice + '-->';
+  }
+
+  const hijos = (nodo.children || []).map((h) => aHTML(h, porId, figuras, pagina)).join('');
   const etiqueta = MAPA_ETIQUETAS[nodo.role];
   return etiqueta ? '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>' : hijos;
+}
+
+/* Empareja cada figura del árbol con el dibujo cuyo rectángulo ocupa. Medido
+   contra el PDF de referencia, la coincidencia es exacta; la tolerancia está por
+   si otro generador redondea. Se empareja por solapamiento y no por orden porque
+   en una página con logo de encabezado hay más dibujos que figuras, y el orden
+   no dice cuál es cuál. */
+function emparejar(figuras, dibujosDePagina, tolerancia = 2) {
+  const usados = new Set();
+  return figuras.map((f) => {
+    if (!f.bbox) return null;
+    const [x0, y0, x1, y1] = f.bbox;
+    for (const d of dibujosDePagina) {
+      if (usados.has(d) || !d.rect) continue;
+      const [dx0, dy0, dx1, dy1] = d.rect;
+      if (Math.abs(dx0 - x0) <= tolerancia && Math.abs(dy0 - y0) <= tolerancia &&
+          Math.abs(dx1 - x1) <= tolerancia && Math.abs(dy1 - y1) <= tolerancia) {
+        usados.add(d);
+        return d;
+      }
+    }
+    return null;
+  });
 }

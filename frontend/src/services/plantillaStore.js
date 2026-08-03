@@ -97,3 +97,65 @@ export const guardarVinculo = (estudioId, plantillaId) =>
   guardarPlantilla('vinculo:' + esc(estudioId), plantillaId);
 
 export const leerVinculo = (estudioId) => leerPlantilla('vinculo:' + esc(estudioId));
+
+/* HTML ya marcado con <span data-campo="...">. Va con prefijo dentro del
+   almacén de plantillas, igual que el vínculo, para no subir VERSION del
+   esquema. Se guarda por plantilla y no por estudio: el marcado se paga una
+   vez y dos estudios que carguen el mismo PDF lo comparten.
+   La derivación de la clave se exporta aparte porque es lo único de esto que
+   se puede probar sin navegador. */
+export const claveMarcado = (plantillaId) => 'marcado:' + plantillaId;
+
+export const guardarMarcado = (plantillaId, html) =>
+  guardarPlantilla(claveMarcado(plantillaId), html);
+
+export const leerMarcado = (plantillaId) => leerPlantilla(claveMarcado(plantillaId));
+
+/* Cuántos huecos de anexo dejó el extractor en esta plantilla. Sin conservarla
+   no hay forma de saber, al recargar el estudio, que el documento tiene 16
+   páginas de anexo sin rellenar: `ref.huecos` solo existe en el momento de
+   subir el PDF, y la guarda del anexo se quedaba sin nada que mirar.
+   Va con prefijo en el almacén de plantillas, igual que el vínculo y el
+   marcado, para no subir VERSION del esquema. */
+export const claveHuecos = (plantillaId) => 'huecos:' + plantillaId;
+
+export const guardarHuecos = (plantillaId, cuantos) =>
+  guardarPlantilla(claveHuecos(plantillaId), Number(cuantos) || 0);
+
+/* Devuelve 0 y no null cuando no hay nada guardado: una plantilla anterior a
+   este cambio, o un .docx sin huecos, no debe disparar el aviso del anexo. */
+export const leerHuecos = (plantillaId) =>
+  leerPlantilla(claveHuecos(plantillaId)).then((v) => Number(v) || 0);
+
+export const borrarVinculo = (estudioId) =>
+  operar('plantillas', 'readwrite', (s) => s.delete('vinculo:' + esc(estudioId)));
+
+/**
+ * Borra todo lo que este estudio tenía guardado en el navegador: las imágenes de su
+ * plantilla, las páginas de su ANEXO A y su vínculo con la plantilla.
+ *
+ * La plantilla en sí NO se borra, y es a propósito: su clave es el hash del contenido
+ * del PDF, así que la comparten todos los estudios que subieron el mismo documento.
+ * Borrarla al eliminar un estudio dejaría a los demás sin plantilla.
+ *
+ * Por el mismo motivo tampoco se borran su marcado (`marcado:`) ni su cuenta de huecos
+ * (`huecos:`): las dos van por plantilla, no por estudio, así que borrarlas obligaría a
+ * volver a pagar el marcado por IA a todos los demás estudios que usan ese PDF.
+ *
+ * Cada borrado va por separado y los fallos no se propagan: el estudio ya se eliminó
+ * de la base, y dejar un recurso suelto es menos grave que romper la operación a
+ * medias.
+ */
+export async function borrarRecursosDelEstudio(estudioId) {
+  const resultados = await Promise.allSettled([
+    borrarRecursos(estudioId),
+    borrarAnexoEeff(estudioId),
+    borrarVinculo(estudioId),
+  ]);
+  const fallidos = resultados.filter((r) => r.status === 'rejected');
+  if (fallidos.length) {
+    console.warn('[plantillaStore] no se pudo limpiar todo del estudio ' + estudioId,
+      fallidos.map((f) => f.reason));
+  }
+  return { borrados: resultados.length - fallidos.length, fallidos: fallidos.length };
+}

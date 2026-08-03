@@ -217,8 +217,22 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     return `<span style="font-weight:600;color:#0B7C7A;border-bottom:1px dashed #0FA3A1;background-color:#F0FDF4;padding:0 4px;border-radius:3px;">${val}</span>`;
   };
 
-  const formattedMonto = study.monto ? fmt(study.monto) : (study.monto_operacion ? fmt(study.monto_operacion) : '3.435.357.400');
-  const formattedTipo = study.vinc_tipo || 'Otros servicios (07)';
+  /* Cifra formateada, o hueco visible si el estudio no la trae. Los valores por
+     defecto que había aquí eran los literales de End Game: un estudio recién
+     creado salía con el monto, el tipo de operación, la razón social, el NIT del
+     vinculado y las cifras de balance del cliente anterior. El principio del
+     spec es el contrario —antes un hueco evidente que el dato del año
+     anterior—, porque este documento se radica ante la DIAN. */
+  const cifra = (v) => wrap(v === null || v === undefined ? null : fmt(v));
+
+  /* El monto sale de `monto`/`monto_operacion`, que es lo que escribe la ingesta
+     de operaciones con vinculados, y no de `t_s`: ese es el total de ingresos del
+     estado de resultados, otra cosa. Poner los ingresos donde va el monto de la
+     operación daría una cifra plausible y equivocada, que es peor que el hueco.
+     Sin ingesta de operaciones no hay monto, y sale hueco. */
+  const montoOperacion = study.monto || study.monto_operacion || null;
+  const formattedMonto = montoOperacion ? fmt(montoOperacion) : null;
+  const formattedTipo = study.vinc_tipo || null;
 
   /* ─── Apartado sectorial (III.C) ───
      Va antes que todo lo demás porque se delimita con las anclas <a id="_Toc…">, y
@@ -243,30 +257,44 @@ export function hydrateExactWordTemplate(rawHtml, study) {
      fila exacta: si corriera después del reemplazo genérico del vinculado
      (global, sin acotar), ya no quedaría texto literal que sustituir aquí y
      la fila de accionistas se congelaría con los datos de End Game. */
-  if (study.accionistas && study.accionistas.length > 0) {
-    const mainAcc = study.accionistas[0];
+  /* Corre aunque el estudio no traiga accionistas: sin esto las 200.000 acciones
+     y los 200.000.000 de capital de End Game se quedaban en la tabla de
+     composición accionaria del informe nuevo. El patrón está anclado a esa fila
+     exacta, así que poner huecos aquí no puede tocar otras cifras. */
+  {
+    const mainAcc = (study.accionistas && study.accionistas[0]) || {};
     const rxFilaAccionista = /<tr>\n<td>\n<p>\nEND GAME INTERACTIVE INC\.\n<\/p>\n<\/td>\n<td>\n<p>\nESTADOS UNIDOS\n<\/p>\n<\/td>\n<td>\n<p>\n200\.000\n<\/p>\n<\/td>\n<td>\n<p>\n200\.000\.000\n<\/p>\n<\/td>\n<td>\n<p>\n100%\n<\/p>\n<\/td>\n<\/tr>/;
     html = html.replace(rxFilaAccionista, (fila) => {
       let out = fila;
-      if (mainAcc.nombre) out = out.replace(/END GAME INTERACTIVE INC\./, wrap(mainAcc.nombre));
-      if (mainAcc.pais) out = out.replace(/ESTADOS UNIDOS/, wrap(mainAcc.pais));
-      if (mainAcc.acciones) out = out.replace(/200\.000\n/, wrap(fmt(mainAcc.acciones)) + '\n');
-      if (mainAcc.valor_capital) out = out.replace(/200\.000\.000/, wrap(fmt(mainAcc.valor_capital)));
+      out = out.replace(/END GAME INTERACTIVE INC\./, wrap(mainAcc.nombre));
+      out = out.replace(/ESTADOS UNIDOS/, wrap(mainAcc.pais));
+      out = out.replace(/200\.000\n/, cifra(mainAcc.acciones ? num(mainAcc.acciones) : null) + '\n');
+      out = out.replace(/200\.000\.000/, cifra(mainAcc.valor_capital ? num(mainAcc.valor_capital) : null));
       return out;
     });
   }
 
   // Reemplazos de las variables del cliente
   const replacements = [
-    /* Una sola regla para las tres formas en que el informe de referencia
-       escribe la razón social —"S.A.S", "SAS" y "SA"—: con una regla por forma
-       se olvidó la última y el nombre del cliente anterior se quedaba dentro
-       del informe nuevo. El `(?!\w)` evita que "SA" muerda el arranque de una
-       palabra que siga. */
-    { target: /END GAME INTERACTIVE COLOMBIA\s+S\.?A\.?S?\.?(?!\w)/gi, val: wrap(study.ent || 'END GAME INTERACTIVE COLOMBIA S.A.S') },
-    { target: /END GAME INTERACTIVE INC/gi, val: wrap(study.vinc || 'END GAME INTERACTIVE INC') },
-    { target: /ESTADOS UNIDOS/gi, val: wrap(study.pais_vinc || 'ESTADOS UNIDOS') },
-    { target: /604477955/g, val: wrap(study.vinc_id || '604477955') },
+    /* Una sola regla para todas las formas en que el informe de referencia
+       escribe la razón social del contribuyente. La regla anterior exigía la
+       forma larga completa ("END GAME INTERACTIVE COLOMBIA" + S.A.S/SAS/SA), así
+       que "END GAME" a secas, "END GAME INTERACTIVE" suelto y "End Game Colombia
+       SAS" pasaban intactos al informe nuevo. Ahora "INTERACTIVE", "COLOMBIA" y
+       el sufijo societario son opcionales.
+
+       Los dos anclajes del final no son cosméticos:
+       - `(?!\w)` evita que "SA" muerda el arranque de la palabra que siga.
+       - `(?!\s+INTERACTIVE\s+INC)` justo después de "END GAME" es lo que impide
+         que esta regla se coma el prefijo de "END GAME INTERACTIVE INC", que es
+         el VINCULADO y lo sustituye la regla siguiente. Va como lookahead
+         inmediato y no al final de la expresión a propósito: puesto al final, el
+         motor haría backtracking y acabaría casando solo "END GAME", dejando
+         " INTERACTIVE INC" colgando y sin sustituir. */
+    { target: /END\s+GAME(?!\s+INTERACTIVE\s+INC)(?:\s+INTERACTIVE)?(?:\s+COLOMBIA)?(?:\s+S\.?A\.?S?\.?)?(?!\w)/gi, val: wrap(study.ent) },
+    { target: /END GAME INTERACTIVE INC/gi, val: wrap(study.vinc) },
+    { target: /ESTADOS UNIDOS/gi, val: wrap(study.pais_vinc) },
+    { target: /604477955/g, val: wrap(study.vinc_id) },
     { target: /Otros servicios \(\s*07\s*\)/gi, val: wrap(formattedTipo) },
     { target: /3\.435\.357\.400/g, val: wrap(formattedMonto) },
     
@@ -310,31 +338,49 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     html = html.replace(rx, wrap(year));
   });
 
-  // Reemplazo dinámico de la tasa Prime Rate y el año gravable en el Anexo D (Ajustes de capital)
-  const primeVal = study.prime ? (String(study.prime).includes('%') ? String(study.prime) : `${study.prime}%`) : '8.31%';
+  /* Tasa Prime Rate y año gravable en el Anexo D (ajustes de capital). Sin tasa
+     ingresada queda hueco: la tasa por defecto que había aquí era la del informe
+     de referencia, y un ajuste de plena competencia calculado con la tasa de otro
+     año es una cifra que se radica y no se sostiene. */
+  const primeVal = study.prime
+    ? (String(study.prime).includes('%') ? String(study.prime) : `${study.prime}%`)
+    : null;
   html = html.replace(
     /Esta tasa durante el año \d{4} fue de [\d\.\,]+%\s*EA\./gi,
-    () => `Esta tasa durante el año ${wrap(year)} fue de ${wrap(primeVal + ' EA.')}`
+    () => `Esta tasa durante el año ${wrap(year)} fue de ${wrap(primeVal ? primeVal + ' EA.' : null)}`
   );
 
-  // Reemplazo dinámico de la Tabla de EEFF (Activos / Balance General) si el año es 2025 o si se ingirieron las cifras de EEFF
-  if (String(year) === '2025' || study.t_ar || study.t_s || study.t_cash) {
-    const eeff2025 = {
-      efectivo: study.t_cash ? num(study.t_cash) : 1031832388,
-      cxc: study.t_ar ? num(study.t_ar) : 578289605,
-      impuestos: study.t_tax ? num(study.t_tax) : 388909218,
-      ppe: study.t_ppe ? num(study.t_ppe) : 168030721
+  /* Tabla de EEFF (Activos / Balance General). Corre siempre, no solo cuando el
+     año es 2025 o se ingirieron cifras: con los valores por defecto puestos en
+     hueco ya no hay nada que perder por entrar aquí, y con la condición anterior
+     un estudio de otro año sin cifras dejaba las seis cifras de End Game
+     intactas en el documento.
+
+     Los totales solo se calculan si están todos sus sumandos: sumar un hueco
+     como si fuera cero produce un total plausible y falso, que es peor que un
+     hueco. */
+  {
+    const eeffActual = {
+      efectivo: study.t_cash ? num(study.t_cash) : null,
+      cxc: study.t_ar ? num(study.t_ar) : null,
+      impuestos: study.t_tax ? num(study.t_tax) : null,
+      ppe: study.t_ppe ? num(study.t_ppe) : null
     };
 
-    const totalActivoCorriente = study.t_act_curr ? num(study.t_act_curr) : (eeff2025.efectivo + eeff2025.cxc + eeff2025.impuestos);
-    const totalActivos = study.t_act_tot ? num(study.t_act_tot) : (totalActivoCorriente + eeff2025.ppe);
+    const sumandosCorriente = [eeffActual.efectivo, eeffActual.cxc, eeffActual.impuestos];
+    const totalActivoCorriente = study.t_act_curr
+      ? num(study.t_act_curr)
+      : (sumandosCorriente.every((v) => v !== null) ? sumandosCorriente.reduce((a, b) => a + b, 0) : null);
+    const totalActivos = study.t_act_tot
+      ? num(study.t_act_tot)
+      : (totalActivoCorriente !== null && eeffActual.ppe !== null ? totalActivoCorriente + eeffActual.ppe : null);
 
-    html = html.replace(/87\.957\.645/g, wrap(fmt(eeff2025.efectivo)));
-    html = html.replace(/179\.720\.372/g, wrap(fmt(eeff2025.cxc)));
-    html = html.replace(/268\.433\.497/g, wrap(fmt(eeff2025.impuestos)));
-    html = html.replace(/1\.783\.558\.970/g, wrap(fmt(totalActivoCorriente)));
-    html = html.replace(/117\.624\.200/g, wrap(fmt(eeff2025.ppe)));
-    html = html.replace(/1\.989\.688\.200/g, wrap(fmt(totalActivos)));
+    html = html.replace(/87\.957\.645/g, cifra(eeffActual.efectivo));
+    html = html.replace(/179\.720\.372/g, cifra(eeffActual.cxc));
+    html = html.replace(/268\.433\.497/g, cifra(eeffActual.impuestos));
+    html = html.replace(/1\.783\.558\.970/g, cifra(totalActivoCorriente));
+    html = html.replace(/117\.624\.200/g, cifra(eeffActual.ppe));
+    html = html.replace(/1\.989\.688\.200/g, cifra(totalActivos));
   }
 
   /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ─── */

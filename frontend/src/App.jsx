@@ -17,7 +17,7 @@ import {
   guardarCliente, migrarDesdeLocalStorage,
 } from './services/firestoreRepo';
 import { separarEstudio } from './services/firestoreModelo';
-import { guardarAnexoEeff, leerAnexoEeff, borrarAnexoEeff } from './services/plantillaStore';
+import { guardarAnexoEeff, leerAnexoEeff, borrarRecursosDelEstudio } from './services/plantillaStore';
 
 /* Retardo del autoguardado. El estudio cambia con cada tecla y cada escritura en
    Firestore se factura y cuenta contra el límite de escrituras por documento, así que
@@ -199,9 +199,11 @@ export default function App() {
     try {
       await borrarEstudio(id);
       localStorage.removeItem(claveIaMatch(id));
-      /* Los recursos locales del estudio se van con él: si no, quedan megabytes de
-         páginas de PDF en IndexedDB sin dueño y sin forma de llegar a ellos. */
-      try { await borrarAnexoEeff(id); } catch { /* el estudio ya se borró: no bloquea */ }
+      /* Los recursos locales del estudio se van con él: las imágenes de su plantilla,
+         las páginas de su ANEXO A y su vínculo con la plantilla. Si no, quedan
+         megabytes en IndexedDB sin dueño y sin forma de llegar a ellos —un PDF de
+         referencia ronda los 5 MB en base64. La plantilla compartida no se toca. */
+      try { await borrarRecursosDelEstudio(id); } catch { /* el estudio ya se borró: no bloquea */ }
       if (activeStudyId === id) {
         setActiveStudyId(null);
         setStudy({});
