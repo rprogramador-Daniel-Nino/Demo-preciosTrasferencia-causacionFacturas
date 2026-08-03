@@ -28,12 +28,22 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
    viejas:
      1 — texto, estructura e imágenes al final de cada página
      2 — imágenes en su posición del flujo y logo una sola vez
-     3 — tipografía del informe: negrita, cursiva, familias y cuerpo */
-export const VERSION_EXTRACTOR = 3;
+     3 — tipografía del informe: negrita, cursiva, familias y cuerpo
+     4 — cada entrada del índice y cada nota en su propio bloque */
+export const VERSION_EXTRACTOR = 4;
 
 const MAPA_ETIQUETAS = {
   H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6',
   P: 'p', L: 'ul', LI: 'li', Table: 'table', TR: 'tr', TD: 'td', TH: 'th',
+  /* Cada entrada del índice es un bloque. Sin esto sus hijos se concatenaban con
+     los de la siguiente y las ochenta y nueve entradas salían en una sola línea
+     corrida: el título, los puntos y el número de página de una pegados a los de
+     la otra. Es lo que hacía que el índice se viera desordenado.
+     `TOC` no se mapea: envolverlo añadiría un bloque sin efecto visible. */
+  TOCI: 'p',
+  /* Las notas también son bloque. Si no, la nota al pie se fundía con el párrafo
+     que la precede y parecía parte del texto. */
+  Note: 'p',
 };
 
 const escapar = (s) =>
@@ -272,7 +282,15 @@ export async function extraerReferencia(datos) {
      propio es el encabezado del documento de Word, que necesita OOXML y es de la
      otra fase; repetirlo cien veces dentro del texto —que es lo que se hacía— era
      peor que ponerlo una vez arriba. */
-  const cabecera = artefactos.map((a) => a.marca).join('');
+  /* El logo va marcado como encabezado, no como primera imagen del cuerpo. Word
+     entiende un encabezado repetido desde HTML —`mso-element:header` sobre un div
+     al que apunta `@page`—, así que no hace falta OOXML para esto: quien exporta
+     lo saca del cuerpo y lo declara. Se queda dentro del HTML y no en un campo
+     aparte para que sobreviva al marcado y al guardado, igual que el cuerpo de
+     letra. */
+  const cabecera = artefactos.length
+    ? '<div data-encabezado="1">' + artefactos.map((a) => a.marca).join('') + '</div>'
+    : '';
 
   /* El cuerpo del documento viaja dentro del propio HTML. Es lo que permite que
      la exportación a Word use la tipografía del informe de referencia —Arial 12
@@ -329,6 +347,10 @@ export function loQueFaltaPorVersion(version) {
   if (version < 3) {
     falta.push('el documento sale sin la tipografía del informe: sin negritas, sin ' +
                'cursivas y con el cuerpo de letra por defecto');
+  }
+  if (version < 4) {
+    falta.push('las entradas del índice salen corridas en una sola línea en vez de ' +
+               'una por renglón');
   }
   return falta;
 }

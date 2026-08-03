@@ -244,8 +244,50 @@ test('una plantilla sin sello se trata como la más antigua y se dice qué le fa
   assert.ok(falta.length >= 2, 'debería enumerar imágenes y tipografía');
   assert.ok(falta.some((f) => /tipograf/i.test(f)));
   assert.ok(falta.some((f) => /im[áa]genes/i.test(f)));
-  /* Y la versión intermedia sólo le falta lo suyo. */
-  const falta2 = loQueFaltaPorVersion(2);
-  assert.strictEqual(falta2.length, 1);
-  assert.ok(/tipograf/i.test(falta2[0]));
+
+  /* Cuanto más nueva la plantilla, menos le falta, y a la actual nada. Se afirma
+     la relación y no un número exacto: así el test sigue valiendo cuando se suba
+     la versión otra vez, en vez de fallar por una cuenta que ya cambió una vez. */
+  for (let v = 1; v < VERSION_EXTRACTOR; v++) {
+    assert.ok(
+      loQueFaltaPorVersion(v).length > loQueFaltaPorVersion(v + 1).length,
+      'a la versión ' + v + ' debería faltarle más que a la ' + (v + 1)
+    );
+  }
+  assert.ok(
+    loQueFaltaPorVersion(2).some((f) => /tipograf/i.test(f)),
+    'a la 2 le falta la tipografía, que llegó en la 3'
+  );
+});
+
+test('cada entrada del índice va en su propio bloque', async () => {
+  const r = await extraer();
+  /* Las 89 entradas salían concatenadas en una sola línea corrida —título, puntos
+     y número de página de una pegados a los de la siguiente— porque el rol TOCI no
+     estaba en el mapa de etiquetas y sus hijos se emitían sin envolver. */
+  const i = r.html.indexOf('INTRODUCCIÓN');
+  const tramo = r.html.slice(i, i + 1200);
+  const entradas = [...tramo.matchAll(/<p>(?:(?!<\/p>)[\s\S])*?\.{10,}[\s\S]*?<\/p>/g)];
+  assert.ok(
+    entradas.length >= 3,
+    'las entradas del índice no están en bloques propios: ' + entradas.length
+  );
+  /* Y en cada bloque, un solo número de página al final: si hubiera dos, dos
+     entradas se habrían fundido. */
+  for (const e of entradas.slice(0, 5)) {
+    const numeros = (e[0].match(/\.{10,}\s*\d+/g) || []).length;
+    assert.strictEqual(numeros, 1, 'un bloque del índice trae dos entradas: ' + e[0].slice(0, 120));
+  }
+});
+
+test('el logo queda marcado como encabezado, no como imagen del cuerpo', async () => {
+  const r = await extraer();
+  /* El logo del informe se repite en casi cien páginas: su sitio es el encabezado
+     de página, no la primera imagen del documento. Va marcado en el HTML para que
+     la exportación lo saque del cuerpo y lo declare como tal. */
+  const m = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(r.html);
+  assert.ok(m, 'no se marcó el encabezado');
+  assert.ok(/<img data-recurso=/.test(m[1]), 'el encabezado no lleva el logo');
+  /* Y va antes que el contenido: es lo primero del documento. */
+  assert.ok(m.index < r.html.indexOf('INTRODUCCIÓN'), 'el encabezado no está al principio');
 });

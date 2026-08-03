@@ -4,7 +4,7 @@ import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
 import {
-  extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion,
+  extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
 } from '../services/pdfReferenceExtractor';
 import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
@@ -264,7 +264,19 @@ export default function ReporteGenerador({ study, estudioId }) {
           const huecos = ref.huecos ? ref.huecos.length : 0;
           await guardarHuecos(idPlantilla, huecos);
 
-          const marcadoPrevio = await leerMarcado(idPlantilla);
+          /* El marcado guardado sólo sirve si se hizo sobre lo que este lector
+             produce hoy. Si es de una versión anterior hay que descartarlo: el
+             HTML crudo que se acaba de guardar arriba ya trae lo nuevo —la
+             tipografía, las imágenes en su sitio— y reutilizar el marcado viejo
+             lo tira, que es exactamente lo que hacía que volver a subir el PDF
+             no cambiara nada y no hubiera forma de entender por qué. */
+          const guardado = await leerMarcado(idPlantilla);
+          let marcadoPrevio = guardado;
+          if (guardado && versionDe(guardado) < VERSION_EXTRACTOR) {
+            await borrarMarcado(idPlantilla);
+            marcadoPrevio = null;
+          }
+
           setPlantillaActiva({
             id: idPlantilla, html: ref.html, huecos, marcada: !!marcadoPrevio,
           });
@@ -402,6 +414,21 @@ export default function ReporteGenerador({ study, estudioId }) {
      volver a leer el PDF ni pedírselo otra vez al usuario. */
   const volverAMarcar = async () => {
     if (!plantillaActiva) return;
+
+    /* Si el HTML crudo guardado es de un lector anterior, volver a marcar no
+       recupera lo que ese lector no leyó: hay que releer el PDF. Decirlo aquí
+       evita el viaje al modelo y la decepción de que el documento salga igual. */
+    if (versionDe(plantillaActiva.html) < VERSION_EXTRACTOR) {
+      alert(
+        'Esta plantilla se leyó con una versión anterior del lector de PDF. Volver a ' +
+        'marcarla no recuperaría ' +
+        loQueFaltaPorVersion(versionDe(plantillaActiva.html)).join('; ni ') +
+        ', porque el marcado se hace sobre lo que ya está guardado. Sube otra vez el ' +
+        'mismo PDF de referencia: al hacerlo se relee y el marcado viejo se descarta solo.'
+      );
+      return;
+    }
+
     if (!window.confirm(
       'Se va a descartar el marcado guardado de esta plantilla y a marcarla de nuevo ' +
       'con IA. Son varios viajes al modelo y tarda un par de minutos. ¿Continuar?'
@@ -527,15 +554,44 @@ export default function ReporteGenerador({ study, estudioId }) {
       /* Word ignora `<strong>` anidado en un `<span>` con estilo si no se le dice
          que el peso se hereda; con esto la negrita del informe llega intacta. */
       'strong{font-weight:bold}em{font-style:italic}';
-    const wordCSS = 'body{counter-reset:secpt}h2::before{content:""}p,li,td{text-align:justify}';
+
+    /* El logo del informe se saca del cuerpo y se declara como encabezado de
+       p\u00e1gina. Word lo entiende desde HTML \u2014un div con `mso-element:header` al que
+       apunta `@page` por su id\u2014, as\u00ed que se repite solo en todas las p\u00e1ginas sin
+       necesidad de generar OOXML. Antes sal\u00eda como primera imagen del documento y
+       no como encabezado, que es lo que se ve\u00eda distinto del original. */
+    const conEncabezado = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(htmlContent);
+    const encabezado = conEncabezado ? conEncabezado[1] : '';
+    const cuerpoSinEncabezado = conEncabezado
+      ? htmlContent.replace(conEncabezado[0], '')
+      : htmlContent;
+
+    /* Carta con los m\u00e1rgenes del informe. El pie lleva el campo PAGE de Word y no
+       el n\u00famero que tra\u00eda el PDF: al repaginar, un n\u00famero literal mentir\u00eda. */
+    const wordCSS =
+      'body{counter-reset:secpt}h2::before{content:""}p,li,td{text-align:justify}' +
+      '@page{size:21.6cm 27.9cm;margin:2.5cm 2.5cm 2cm 2.5cm;' +
+      (encabezado ? 'mso-header:h1;' : '') + 'mso-footer:f1}' +
+      'div.mso-element-header{mso-element:header}' +
+      'div.mso-element-footer{mso-element:footer}' +
+      'p.pie{text-align:center;font-size:0.8em;color:#666}';
 
     // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable
-    const cleanHtml = htmlContent
+    const cleanHtml = cuerpoSinEncabezado
       .replace(/background-color:\s*#F0FDF4;\s*/g, '')
       .replace(/border-bottom:\s*1px\s*dashed\s*#0FA3A1;\s*/g, '')
       .replace(/color:\s*#0B7C7A;\s*/g, '');
 
-    const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${conImagenes(cleanHtml)}</body></html>`;
+    /* Los bloques de encabezado y pie van al final del body y fuera del flujo:
+       Word los recoge por su id y los repite en cada p\u00e1gina. */
+    const bloquesMso =
+      (encabezado
+        ? '<div style="mso-element:header" id="h1"><p>' + conImagenes(encabezado) + '</p></div>'
+        : '') +
+      '<div style="mso-element:footer" id="f1"><p class=pie>' +
+      '<span style="mso-field-code:PAGE"></span></p></div>';
+
+    const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${conImagenes(cleanHtml)}${bloquesMso}</body></html>`;
 
     const blob = new Blob([content], { type: 'application/msword' });
     const a = document.createElement('a');
