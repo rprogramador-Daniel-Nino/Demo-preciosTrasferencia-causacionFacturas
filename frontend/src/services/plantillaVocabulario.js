@@ -30,6 +30,12 @@ export const VOCABULARIO = [
   { campo: 'ent', etiqueta: 'Razón social', grupo: 'Contribuyente' },
   { campo: 'nit', etiqueta: 'NIT', grupo: 'Contribuyente' },
   { campo: 'ciiu', etiqueta: 'Código CIIU', grupo: 'Contribuyente' },
+  /* La escribe `DatosContribuyente.jsx` desde la extracción del RUT
+     (`updates.direccion`) y el spec la lista en el vocabulario cerrado. Sin
+     entrada aquí el domicilio del contribuyente anterior viajaba al informe
+     nuevo: la plantilla de referencia lo trae por escrito y no había campo con
+     el que marcarlo. La rama genérica de `valorDeCampo` la resuelve sola. */
+  { campo: 'direccion', etiqueta: 'Dirección', grupo: 'Contribuyente' },
   { campo: 'objeto', etiqueta: 'Objeto social', grupo: 'Contribuyente' },
   { campo: 'representante', etiqueta: 'Representante legal', grupo: 'Contribuyente' },
   { campo: 'anio', etiqueta: 'Año gravable', grupo: 'Contribuyente' },

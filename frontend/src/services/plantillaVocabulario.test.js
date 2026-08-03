@@ -26,8 +26,21 @@ const estudio = {
 test('el vocabulario es cerrado y no admite nombres inventados', () => {
   assert.ok(esCampoValido('ent'), 'ent debería ser válido');
   assert.ok(esCampoValido('eeff.t_inv_assoc'), 'los campos de EEFF llevan prefijo');
-  assert.ok(!esCampoValido('direccion'), 'direccion no existe en la ingesta');
+  /* `direccion` SÍ existe en la ingesta: `DatosContribuyente.jsx:39` escribe
+     `updates.direccion` desde la extracción del RUT. La aserción anterior
+     afirmaba lo contrario y con eso justificaba dejar el campo fuera del
+     vocabulario, así que el domicilio del contribuyente anterior se quedaba
+     sin marcar y viajaba al informe nuevo. */
+  assert.ok(esCampoValido('direccion'), 'direccion la escribe DatosContribuyente.jsx desde el RUT');
   assert.ok(!esCampoValido('lo_que_sea'), 'no se aceptan campos inventados');
+});
+
+test('la dirección del RUT se resuelve contra el estudio', () => {
+  assert.strictEqual(
+    valorDeCampo({ direccion: 'CL 100 # 11-20 OF 301' }, 'direccion'),
+    'CL 100 # 11-20 OF 301'
+  );
+  assert.strictEqual(valorDeCampo({}, 'direccion'), null, 'sin dirección -> hueco, no valor viejo');
 });
 
 test('cada campo del vocabulario tiene etiqueta y grupo', () => {
@@ -55,7 +68,9 @@ test('los valores salen formateados y los ausentes salen nulos', () => {
 });
 
 test('un campo fuera del vocabulario nunca devuelve valor', () => {
-  assert.strictEqual(valorDeCampo(estudio, 'direccion'), null);
+  /* Se usa un nombre que de verdad no está en el vocabulario: `direccion` sí
+     está desde que se corrigió el hueco del vocabulario cerrado. */
+  assert.strictEqual(valorDeCampo({ ...estudio, telefono: '3001234567' }, 'telefono'), null);
 });
 
 /* Los topes UVT son de lo que más muta: cambian cada año gravable y hoy
