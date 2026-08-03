@@ -91,3 +91,6 @@ Desktop.ini
 
 # Scratch de ejecución de planes (superpowers). Efímero, no se comparte.
 .superpowers/
+
+.vscode
+*.vs
