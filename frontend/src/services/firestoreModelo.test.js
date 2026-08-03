@@ -9,7 +9,7 @@ import {
   aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
   pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
   normalizarCorreo, esCorreoCompartible, agregarCompartido, quitarCompartido,
-  TOPE_COMPARTIDO,
+  TOPE_COMPARTIDO, rastroPropio,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -535,6 +535,55 @@ test('catalogoAComparablesPrevias entrega la forma que espera el motor', () => {
   const previas = catalogoAComparablesPrevias(CATALOGO);
   assert.deepStrictEqual(previas[0], { name: 'Acme Corp', pais: 'Estados Unidos', actividad: 'desarrollo de software' });
   assert.strictEqual(catalogoAComparablesPrevias([{ pais: 'X' }]).length, 0, 'sin razón social no sirve para continuidad');
+});
+
+/* ══════ migración al espacio privado ══════
+   Un documento del modelo compartido puede traer el nombre de otra persona en
+   `actualizadoPorNombre`: alguien creaba el estudio y otro lo modificaba. Copiarlo tal
+   cual hacía que las reglas rechazaran la escritura entera con permission-denied, sin
+   decir qué campo sobraba. Ocurrió de verdad con un estudio creado por una persona y
+   modificado por otra. */
+
+test('rastroPropio pone la modificación a nombre de quien migra', () => {
+  const ajeno = {
+    ent: 'Acme', creadoPor: USUARIO.uid, creadoEn: 'F',
+    actualizadoPor: 'uid-juan', actualizadoPorNombre: 'JUAN CAMILO MENDEZ HINESTROZA',
+  };
+  const doc = rastroPropio(ajeno, USUARIO);
+  assert.strictEqual(doc.actualizadoPor, USUARIO.uid);
+  assert.strictEqual(doc.actualizadoPorNombre, 'Antonio Barreto');
+});
+
+test('rastroPropio conserva la fecha y el autor de creación', () => {
+  /* Es el dato que importa mantener: falsearlo perdería cuándo se hizo el estudio. */
+  const doc = rastroPropio({ creadoPor: USUARIO.uid, creadoEn: 'FECHA_ORIGINAL' }, USUARIO);
+  assert.strictEqual(doc.creadoPor, USUARIO.uid);
+  assert.strictEqual(doc.creadoEn, 'FECHA_ORIGINAL');
+});
+
+test('rastroPropio retira un nombre de creación que no es el propio', () => {
+  /* Las reglas lo comparan con el token: dejarlo distinto rechaza la escritura. El uid
+     de creadoPor sigue siendo el dato de verdad. */
+  const doc = rastroPropio({ creadoPor: USUARIO.uid, creadoEn: 'F', creadoPorNombre: 'Otra Persona' }, USUARIO);
+  assert.ok(!('creadoPorNombre' in doc));
+});
+
+test('rastroPropio mantiene el nombre de creación cuando sí coincide', () => {
+  const doc = rastroPropio({ creadoPor: USUARIO.uid, creadoEn: 'F', creadoPorNombre: 'Antonio Barreto' }, USUARIO);
+  assert.strictEqual(doc.creadoPorNombre, 'Antonio Barreto');
+});
+
+test('rastroPropio omite el nombre si el proveedor no lo entrega', () => {
+  const sinNombre = { uid: 'u1', nombre: '', correo: 'x@y.com' };
+  const doc = rastroPropio({ creadoPor: 'u1', creadoEn: 'F', actualizadoPorNombre: 'Alguien' }, sinNombre);
+  assert.ok(!('actualizadoPorNombre' in doc), 'un nombre inventado hace fallar la escritura');
+  assert.strictEqual(doc.actualizadoPor, 'u1');
+});
+
+test('rastroPropio no muta el documento original', () => {
+  const original = { creadoPor: USUARIO.uid, actualizadoPorNombre: 'Ajeno' };
+  rastroPropio(original, USUARIO);
+  assert.strictEqual(original.actualizadoPorNombre, 'Ajeno');
 });
 
 /* ══════ migración ══════ */
