@@ -97,3 +97,32 @@ export const guardarVinculo = (estudioId, plantillaId) =>
   guardarPlantilla('vinculo:' + esc(estudioId), plantillaId);
 
 export const leerVinculo = (estudioId) => leerPlantilla('vinculo:' + esc(estudioId));
+
+export const borrarVinculo = (estudioId) =>
+  operar('plantillas', 'readwrite', (s) => s.delete('vinculo:' + esc(estudioId)));
+
+/**
+ * Borra todo lo que este estudio tenía guardado en el navegador: las imágenes de su
+ * plantilla, las páginas de su ANEXO A y su vínculo con la plantilla.
+ *
+ * La plantilla en sí NO se borra, y es a propósito: su clave es el hash del contenido
+ * del PDF, así que la comparten todos los estudios que subieron el mismo documento.
+ * Borrarla al eliminar un estudio dejaría a los demás sin plantilla.
+ *
+ * Cada borrado va por separado y los fallos no se propagan: el estudio ya se eliminó
+ * de la base, y dejar un recurso suelto es menos grave que romper la operación a
+ * medias.
+ */
+export async function borrarRecursosDelEstudio(estudioId) {
+  const resultados = await Promise.allSettled([
+    borrarRecursos(estudioId),
+    borrarAnexoEeff(estudioId),
+    borrarVinculo(estudioId),
+  ]);
+  const fallidos = resultados.filter((r) => r.status === 'rejected');
+  if (fallidos.length) {
+    console.warn('[plantillaStore] no se pudo limpiar todo del estudio ' + estudioId,
+      fallidos.map((f) => f.reason));
+  }
+  return { borrados: resultados.length - fallidos.length, fallidos: fallidos.length };
+}
