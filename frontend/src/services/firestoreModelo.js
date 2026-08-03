@@ -22,9 +22,9 @@
 // ID del documento: "YYYY-MM" — una copia congelada de cada corrida, para poder responder
 // con qué cifra y fuente se radicó un informe de una fecha dada.
 //
-// No hay funciones en este archivo para `analisisMercado`: el gestor nunca escribe esta
-// colección (solo la Cloud Function, vía Admin SDK) y por ahora tampoco la lee; el consumo
-// desde el frontend, cuando exista, irá directo por `firestoreRepo.js`.
+// No hay funciones de validación en este archivo para `analisisMercado`: el gestor nunca
+// escribe esta colección (solo la Cloud Function, vía Admin SDK). La lectura desde el
+// frontend va por `leerAnalisisMercado()` en `firestoreRepo.js`.
 
 import { nameKey } from './comparablesEngine.js';
 

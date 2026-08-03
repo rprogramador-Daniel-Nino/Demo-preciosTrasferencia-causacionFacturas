@@ -28,6 +28,7 @@ const ESTUDIOS = 'estudios';
 const CLIENTES = 'clientes';
 const COMPARABLES = 'comparablesHistoricas';
 const EEFF = 'eeffComparables';
+const ANALISIS_MERCADO = 'analisisMercado';
 
 /* Rastro de creación por documento ya visto en esta sesión: { 'estudios/x': {...} } */
 const cacheMeta = new Map();
@@ -260,6 +261,15 @@ export async function leerEeffDeComparables(claves, anio) {
     if (instantanea.exists()) encontrados[clave] = instantanea.data();
   }
   return encontrados;
+}
+
+/* ══════════════════════ análisis de mercado (Sección III) ══════════════════════ */
+
+/** Cifras y narrativa vigentes de la Sección III (III.A/III.B), o null si el cron
+ *  programado (`actualizarAnalisisMercadoScheduled`) todavía no ha corrido. */
+export async function leerAnalisisMercado() {
+  const instantanea = await getDoc(doc(db, ANALISIS_MERCADO, 'actual'));
+  return instantanea.exists() ? instantanea.data() : null;
 }
 
 /* ══════════════════════ migración ══════════════════════ */
