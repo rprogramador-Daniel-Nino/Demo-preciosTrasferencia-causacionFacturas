@@ -314,6 +314,23 @@ service cloud.firestore {
       allow delete: if esMiembro();
     }
 
+    // =============================================================
+    // analisisMercado — cifras y narrativa de la Sección III (Tendencias
+    // de la Economía), refrescadas mensualmente por una Cloud Function.
+    // Solo la Cloud Function escribe (Admin SDK, no pasa por estas reglas);
+    // los miembros del dominio solo leen.
+    // =============================================================
+
+    match /analisisMercado/{docId} {
+      allow read: if esMiembro();
+      allow write: if false;
+    }
+
+    match /analisisMercado/{docId}/historial/{mes} {
+      allow read: if esMiembro();
+      allow write: if false;
+    }
+
     // Nada más existe. Cualquier ruta no declarada arriba queda negada.
     match /{document=**} {
       allow read, write: if false;
