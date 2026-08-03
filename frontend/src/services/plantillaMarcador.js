@@ -336,60 +336,148 @@ export async function proponerMarcas(html, opciones = {}) {
   };
   const textos = corridas.map((c) => c.texto);
 
-  /* Desplazamiento en el HTML donde empieza el trozo actual. `trocear` conserva
-     el texto carácter a carácter y corta siempre en un '<', así que basta
-     acumular longitudes: ninguna aparición queda partida por el corte. */
+  const trozos = trocear(completo, opciones.maxCaracteres);
+
+  /* Desplazamiento en el HTML donde empieza cada trozo. `trocear` conserva el
+     texto carácter a carácter y corta siempre en un '<', así que basta acumular
+     longitudes: ninguna aparición queda partida por el corte. Se precalculan
+     todos porque los trozos ya no se recorren en orden. */
+  const inicios = [];
   let desplazamiento = 0;
+  for (const t of trozos) {
+    inicios.push(desplazamiento);
+    desplazamiento += t.length;
+  }
 
-  for (const trozo of trocear(completo, opciones.maxCaracteres)) {
-    trozosEnviados++;
-    const inicioDelTrozo = desplazamiento;
-    desplazamiento += trozo.length;
-    const previas = (fragmento) =>
-      apariciones(fragmento).filter((a) => a.offset < inicioDelTrozo).length;
+  const avisar = typeof opciones.avisar === 'function' ? opciones.avisar : () => {};
+  /* Un informe de 112 páginas son unos veinte trozos, y en serie eran cinco
+     minutos de reloj con un spinner que no decía nada: indistinguible de un
+     cuelgue. De cuatro en cuatro baja a poco más de un minuto. No se sube más
+     porque al otro lado hay un límite de peticiones por minuto y un 429 no
+     acelera nada: convierte un trozo en texto sin marcar. */
+  const concurrencia = Math.max(1, opciones.concurrencia || 4);
 
-    let texto;
-    try {
-      texto = await pedir(promptDe(trozo));
-    } catch (err) {
-      /* Un trozo que falla no debe tumbar el marcado entero: son decenas de
-         llamadas y perder todo por una es inaceptable. Pero se cuenta. */
-      trozosFallidos++;
-      console.error('[marcado] un trozo falló:', err);
-      continue;
-    }
-    let json;
-    try {
-      json = extraerJSON(texto);
-    } catch {
-      trozosFallidos++;
-      console.error('[marcado] respuesta sin JSON utilizable');
-      continue;
-    }
-    for (const m of (json && json.marcas) || []) {
-      if (!m || !m.fragmento) continue;
-      if (!esCampoValido(m.campo)) {
-        /* El modelo estaba diciendo "aquí hay un dato del cliente anterior" con
-           un nombre que no existe. Descartarlo sin contarlo pierde el aviso. */
-        rechazadasPorVocabulario++;
-        continue;
+  /* Los resultados se depositan por índice y se aplanan al final, así que el
+     orden de las marcas no depende de cuál respondió primero: con las mismas
+     respuestas sale el mismo documento. */
+  const porTrozo = new Array(trozos.length);
+  let siguiente = 0;
+  let terminados = 0;
+
+  const trabajar = async () => {
+    for (;;) {
+      const i = siguiente++;
+      if (i >= trozos.length) return;
+
+      const inicioDelTrozo = inicios[i];
+      const previas = (fragmento) =>
+        apariciones(fragmento).filter((a) => a.offset < inicioDelTrozo).length;
+
+      const delTrozo = [];
+      try {
+        const texto = await pedir(promptDe(trozos[i]));
+        const json = extraerJSON(texto);
+        for (const m of (json && json.marcas) || []) {
+          if (!m || !m.fragmento) continue;
+          if (!esCampoValido(m.campo)) {
+            /* El modelo estaba diciendo "aquí hay un dato del cliente anterior"
+               con un nombre que no existe. Descartarlo sin contarlo pierde el
+               aviso. */
+            rechazadasPorVocabulario++;
+            continue;
+          }
+          const fragmento = String(m.fragmento);
+          const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
+          const ocurrencia = previas(fragmento) + local;
+          const donde = apariciones(fragmento)[ocurrencia - 1];
+          delTrozo.push({
+            fragmento,
+            campo: m.campo,
+            ocurrencia,
+            /* Contexto para el revisor humano. Sale del mismo índice, así que
+               corresponde exactamente a la aparición que se va a marcar. Es null
+               si la ocurrencia traducida no existe —el modelo devolvió un
+               fragmento que reescribió—, y entonces el revisor muestra solo el
+               fragmento. */
+            contexto: donde
+              ? contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60)
+              : null,
+          });
+        }
+      } catch (err) {
+        /* Un trozo que falla no debe tumbar el marcado entero: son decenas de
+           llamadas y perder todo por una es inaceptable. Pero se cuenta, y aquí
+           caen tanto el fallo de la llamada como la respuesta sin JSON. */
+        trozosFallidos++;
+        console.error('[marcado] trozo ' + (i + 1) + ' de ' + trozos.length + ':', err);
       }
-      const fragmento = String(m.fragmento);
-      const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
-      const ocurrencia = previas(fragmento) + local;
-      const donde = apariciones(fragmento)[ocurrencia - 1];
+
+      porTrozo[i] = delTrozo;
+      trozosEnviados++;
+      avisar({ terminados: ++terminados, total: trozos.length, fallidos: trozosFallidos });
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrencia, trozos.length) }, () => trabajar())
+  );
+
+  for (const lote of porTrozo) if (lote) marcas.push(...lote);
+
+  /* Extensión a todas las apariciones del mismo texto.
+
+     El modelo ve un trozo a la vez y marca lo que ahí le parece relevante, así
+     que de un texto que se repite cuarenta veces —la razón social, el NIT, el
+     objeto social— marca unas cuantas y deja el resto. Medido con el informe
+     real: la razón social sobrevivía treinta y una veces sin marcar, y esas
+     apariciones se radican con el nombre del contribuyente anterior.
+
+     Si el modelo dijo que un texto corresponde a un campo, todas sus apariciones
+     literales corresponden al mismo campo: es el mismo texto. Completar la serie
+     es determinista, no cuesta otra llamada, y convierte una cobertura parcial en
+     total.
+
+     Se extiende sólo cuando el texto tiene un único campo asignado. Si el modelo
+     le dio dos campos distintos en dos trozos, no hay forma de saber cuál vale
+     para las apariciones que nadie miró: se deja como está y se cuenta, para que
+     la revisión humana lo vea en vez de que el código elija a ciegas. */
+  const campoPorFragmento = new Map();
+  const ambiguos = new Set();
+  for (const m of marcas) {
+    const previo = campoPorFragmento.get(m.fragmento);
+    if (previo === undefined) campoPorFragmento.set(m.fragmento, m.campo);
+    else if (previo !== m.campo) ambiguos.add(m.fragmento);
+  }
+
+  let extendidas = 0;
+  for (const [fragmento, campo] of campoPorFragmento) {
+    if (ambiguos.has(fragmento)) continue;
+    const yaMarcadas = new Set(
+      marcas.filter((m) => m.fragmento === fragmento).map((m) => m.ocurrencia)
+    );
+    const todas = apariciones(fragmento);
+    for (let i = 1; i <= todas.length; i++) {
+      if (yaMarcadas.has(i)) continue;
+      const donde = todas[i - 1];
       marcas.push({
         fragmento,
-        campo: m.campo,
-        ocurrencia,
-        /* Contexto para el revisor humano. Sale del mismo índice, así que
-           corresponde exactamente a la aparición que se va a marcar. Es null si
-           la ocurrencia traducida no existe —el modelo devolvió un fragmento
-           que reescribió—, y entonces el revisor muestra solo el fragmento. */
-        contexto: donde ? contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60) : null,
+        campo,
+        ocurrencia: i,
+        contexto: contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60),
+        /* Para que el revisor humano distinga lo que propuso el modelo de lo que
+           completó el código: son decisiones con distinto respaldo. */
+        extendida: true,
       });
+      extendidas++;
     }
   }
 
-  return { marcas, trozosEnviados, trozosFallidos, rechazadasPorVocabulario };
+  return {
+    marcas,
+    trozosEnviados,
+    trozosFallidos,
+    rechazadasPorVocabulario,
+    extendidas,
+    fragmentosAmbiguos: [...ambiguos],
+  };
 }

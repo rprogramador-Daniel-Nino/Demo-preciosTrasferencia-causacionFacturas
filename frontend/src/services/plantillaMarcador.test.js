@@ -351,3 +351,134 @@ test('el contexto de una marca traducida corresponde a su aparición global', as
   assert.ok(r.marcas[0].contexto.antes.includes('contribuyente'));
   assert.ok(r.marcas[1].contexto.antes.includes('vinculado'));
 });
+
+/* --- Avance y concurrencia del marcado --- */
+
+test('avisa del avance en cada trozo terminado', async () => {
+  const avances = [];
+  const html = '<p>' + 'a'.repeat(80) + '</p><p>' + 'b'.repeat(80) + '</p><p>' + 'c'.repeat(80) + '</p>';
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 60,
+    pedir: async () => JSON.stringify({ marcas: [] }),
+    avisar: (p) => avances.push({ ...p }),
+  });
+  assert.strictEqual(avances.length, r.trozosEnviados, 'un aviso por trozo');
+  assert.ok(avances.every((a) => a.total === r.trozosEnviados), 'el total debe ser estable');
+  /* Con concurrencia los avisos pueden intercalarse, pero la cuenta de
+     terminados tiene que crecer de uno en uno hasta el total. */
+  assert.deepStrictEqual(
+    avances.map((a) => a.terminados),
+    Array.from({ length: avances.length }, (_, i) => i + 1)
+  );
+  assert.strictEqual(avances[avances.length - 1].terminados, r.trozosEnviados);
+});
+
+test('el orden de las marcas no depende de cuál respondió primero', async () => {
+  /* El primer trozo tarda más que el segundo: si el orden dependiera de la
+     respuesta, las marcas saldrían invertidas y las ocurrencias con ellas. */
+  const html = '<p>PRIMERO ' + 'x'.repeat(70) + '</p><p>SEGUNDO ' + 'y'.repeat(70) + '</p>';
+  let llamada = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 60,
+    concurrencia: 4,
+    pedir: async (prompt) => {
+      const mio = ++llamada;
+      await new Promise((res) => setTimeout(res, mio === 1 ? 30 : 1));
+      const frag = prompt.includes('PRIMERO') ? 'PRIMERO' : (prompt.includes('SEGUNDO') ? 'SEGUNDO' : null);
+      return JSON.stringify({ marcas: frag ? [{ fragmento: frag, campo: 'ent', ocurrencia: 1 }] : [] });
+    },
+  });
+  const frags = r.marcas.map((m) => m.fragmento);
+  assert.deepStrictEqual(frags, ['PRIMERO', 'SEGUNDO'], 'salieron en el orden de respuesta');
+});
+
+test('la concurrencia no pierde trozos ni marcas', async () => {
+  const html = Array.from({ length: 12 }, (_, i) => '<p>ACME ' + i + ' ' + 'z'.repeat(60) + '</p>').join('');
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 70,
+    concurrencia: 4,
+    pedir: async () => JSON.stringify({ marcas: [] }),
+  });
+  assert.strictEqual(r.trozosEnviados, trocear(html, 70).length, 'faltaron trozos por enviar');
+  assert.strictEqual(r.trozosFallidos, 0);
+});
+
+test('un trozo que falla se cuenta y no impide los demás, con concurrencia', async () => {
+  const html = Array.from({ length: 6 }, (_, i) => '<p>ACME S.A.S ' + i + ' ' + 'w'.repeat(60) + '</p>').join('');
+  let llamada = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 70,
+    concurrencia: 3,
+    pedir: async () => {
+      if (++llamada === 2) throw new Error('429 del proxy');
+      return JSON.stringify({ marcas: [] });
+    },
+  });
+  assert.strictEqual(r.trozosFallidos, 1);
+  assert.ok(r.trozosEnviados > 1, 'los demás trozos deben haberse enviado igual');
+});
+
+/* --- Extensión a todas las apariciones del mismo texto --- */
+
+test('una marca se extiende a las apariciones que el modelo no miró', async () => {
+  /* El modelo ve un trozo a la vez: de un texto que se repite marca lo que ve y
+     deja el resto. Sin extender, esas apariciones se radican con el dato del
+     contribuyente anterior. */
+  const html = '<p>ACME S.A.S uno</p><p>ACME S.A.S dos</p><p>ACME S.A.S tres</p>';
+  const r = await proponerMarcas(html, {
+    /* Sólo propone la primera, como si el resto hubiera caído en otro trozo. */
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }],
+    }),
+  });
+  const ocurrencias = r.marcas.filter((m) => m.fragmento === 'ACME S.A.S')
+    .map((m) => m.ocurrencia).sort((a, b) => a - b);
+  assert.deepStrictEqual(ocurrencias, [1, 2, 3], 'faltaron apariciones por marcar');
+  assert.strictEqual(r.extendidas, 2);
+
+  const ap = aplicarMarcas(html, r.marcas);
+  assert.strictEqual(ap.aplicadas, 3);
+  assert.ok(!ap.html.includes('ACME S.A.S uno</p>'), 'la primera quedó sin marcar');
+});
+
+test('lo extendido se distingue de lo que propuso el modelo', async () => {
+  const html = '<p>ACME uno</p><p>ACME dos</p>';
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'ACME', campo: 'ent', ocurrencia: 1 }],
+    }),
+  });
+  const propuesta = r.marcas.find((m) => m.ocurrencia === 1);
+  const extendida = r.marcas.find((m) => m.ocurrencia === 2);
+  assert.ok(!propuesta.extendida, 'la del modelo no debe marcarse como extendida');
+  assert.strictEqual(extendida.extendida, true, 'la completada debe distinguirse');
+});
+
+test('no se extiende un texto al que el modelo dio dos campos distintos', async () => {
+  /* Sin saber cuál de los dos vale, elegir a ciegas pondría el dato equivocado en
+     las apariciones que nadie revisó. Se deja y se reporta. */
+  const html = '<p>800123456 uno</p><p>800123456 dos</p><p>800123456 tres</p>';
+  let n = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 30,
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '800123456', campo: ++n === 1 ? 'nit' : 'vinc_id', ocurrencia: 1 }],
+    }),
+  });
+  assert.ok(r.fragmentosAmbiguos.includes('800123456'), 'no se reportó la ambigüedad');
+  assert.strictEqual(r.extendidas, 0, 'no debió extender un fragmento ambiguo');
+});
+
+test('extender no duplica lo que el modelo ya marcó', async () => {
+  const html = '<p>ACME uno</p><p>ACME dos</p>';
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [
+        { fragmento: 'ACME', campo: 'ent', ocurrencia: 1 },
+        { fragmento: 'ACME', campo: 'ent', ocurrencia: 2 },
+      ],
+    }),
+  });
+  assert.strictEqual(r.marcas.length, 2, 'se duplicaron marcas: ' + JSON.stringify(r.marcas));
+  assert.strictEqual(r.extendidas, 0);
+});

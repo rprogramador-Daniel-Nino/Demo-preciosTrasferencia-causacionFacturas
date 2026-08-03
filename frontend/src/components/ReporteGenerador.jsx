@@ -6,7 +6,7 @@ import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exa
 import { extraerReferencia } from '../services/pdfReferenceExtractor';
 import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
-  guardarVinculo, leerVinculo, guardarMarcado, leerMarcado,
+  guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
   guardarHuecos, leerHuecos,
 } from '../services/plantillaStore';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
@@ -39,6 +39,12 @@ export default function ReporteGenerador({ study, estudioId }) {
      cuenta distinto antes y después de confirmar: antes se puede reintentar,
      después ya no. */
   const [telemetriaMarcado, setTelemetriaMarcado] = useState(null);
+  /* Avance del marcado por IA: `{ terminados, total, fallidos }` mientras corre,
+     null cuando no hay marcado en curso. */
+  const [progresoMarcado, setProgresoMarcado] = useState(null);
+  /* Plantilla vinculada al estudio: `{ id, html, huecos, marcada }`. Se guarda para
+     poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
+  const [plantillaActiva, setPlantillaActiva] = useState(null);
 
   /* La hidratación sustituye por literales del informe de End Game 2024. Con
      el PDF de otro cliente no coincide ninguno y el documento sale con los
@@ -165,7 +171,7 @@ export default function ReporteGenerador({ study, estudioId }) {
          invariante vive fuera de este componente y no conviene depender
          de él en silencio. */
       if (vivo) {
-        setMarcasPropuestas(null); setPlantillaPendiente(null); setAvisoMarcado('');
+        setMarcasPropuestas(null); setPlantillaPendiente(null); setTelemetriaMarcado(null);
       }
       if (!estudioId) return;
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
@@ -189,6 +195,7 @@ export default function ReporteGenerador({ study, estudioId }) {
          leerla aquí, al recargar el estudio no habría forma de saber que el
          documento tiene páginas de anexo sin rellenar. */
       const huecos = await leerHuecos(idPlantilla);
+      if (vivo) setPlantillaActiva({ id: idPlantilla, html, huecos, marcada: !!marcado });
       if (vivo && marcado) {
         renderizarYAvisar(marcado, recursos, huecos);
       } else if (vivo && html) {
@@ -265,6 +272,9 @@ export default function ReporteGenerador({ study, estudioId }) {
           await guardarHuecos(idPlantilla, huecos);
 
           const marcadoPrevio = await leerMarcado(idPlantilla);
+          setPlantillaActiva({
+            id: idPlantilla, html: ref.html, huecos, marcada: !!marcadoPrevio,
+          });
           if (!marcadoPrevio) {
             /* Los avisos visibles corresponden a la plantilla anterior (u
                otro estudio): mientras se revisan las marcas nuevas no hay
@@ -272,7 +282,15 @@ export default function ReporteGenerador({ study, estudioId }) {
                enseñaría al usuario a ignorar el banner. */
             setAvisos([]);
             setAvisoHidratacion('');
-            const propuestas = await proponerMarcas(ref.html);
+            /* El marcado de un informe de 112 páginas son unos veinte viajes al
+               modelo. Sin este avance el spinner se queda quieto minutos y no hay
+               forma de distinguirlo de un cuelgue. */
+            const propuestas = await proponerMarcas(ref.html, {
+              avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
+                terminados, total, fallidos,
+              }),
+            });
+            setProgresoMarcado(null);
             setPlantillaPendiente({ id: idPlantilla, html: ref.html, huecos });
             setMarcasPropuestas(propuestas.marcas);
             setTelemetriaMarcado(propuestas);
@@ -379,6 +397,50 @@ export default function ReporteGenerador({ study, estudioId }) {
     return lineas.join('\n');
   };
 
+  /* Descarta el marcado guardado y vuelve a marcar la plantilla.
+
+     Sin esto no había salida: el marcado se guarda por hash del PDF, así que
+     volver a subir el mismo documento encontraba el marcado viejo y se saltaba la
+     IA. Si el marcado salió incompleto —tramos caídos, o el modelo dejó
+     apariciones del cliente anterior sin marcar, que es lo que avisa la revisión
+     de la salida— la única alternativa era corregir cien páginas a mano.
+
+     Se reusa el HTML crudo que ya está guardado con la plantilla: no hace falta
+     volver a leer el PDF ni pedírselo otra vez al usuario. */
+  const volverAMarcar = async () => {
+    if (!plantillaActiva) return;
+    if (!window.confirm(
+      'Se va a descartar el marcado guardado de esta plantilla y a marcarla de nuevo ' +
+      'con IA. Son varios viajes al modelo y tarda un par de minutos. ¿Continuar?'
+    )) return;
+
+    setLoading(true);
+    try {
+      await borrarMarcado(plantillaActiva.id);
+      setAvisos([]);
+      setAvisoHidratacion('');
+      const propuestas = await proponerMarcas(plantillaActiva.html, {
+        avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
+          terminados, total, fallidos,
+        }),
+      });
+      setProgresoMarcado(null);
+      setPlantillaPendiente({
+        id: plantillaActiva.id,
+        html: plantillaActiva.html,
+        huecos: plantillaActiva.huecos,
+      });
+      setMarcasPropuestas(propuestas.marcas);
+      setTelemetriaMarcado(propuestas);
+    } catch (err) {
+      console.error('[marcado] no se pudo volver a marcar:', err);
+      alert('No se pudo volver a marcar la plantilla: ' + err.message);
+    } finally {
+      setLoading(false);
+      setProgresoMarcado(null);
+    }
+  };
+
   /* Aplica las marcas que la persona confirmó y guarda el resultado.
 
      Un marcado sin ninguna marca aplicada NO se guarda. Guardarlo era el peor
@@ -411,6 +473,14 @@ export default function ReporteGenerador({ study, estudioId }) {
     }
 
     await guardarMarcado(plantillaPendiente.id, html);
+    /* Desde aquí la plantilla ya está marcada, así que aparece el botón de volver
+       a marcar: es la salida si este marcado resultó incompleto. */
+    setPlantillaActiva({
+      id: plantillaPendiente.id,
+      html: plantillaPendiente.html,
+      huecos: plantillaPendiente.huecos || 0,
+      marcada: true,
+    });
     renderizarYAvisar(html, recursosCargados, plantillaPendiente.huecos || 0);
     setMarcasPropuestas(null);
     setPlantillaPendiente(null);
@@ -492,6 +562,21 @@ export default function ReporteGenerador({ study, estudioId }) {
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
           </div>
+          {/* Sólo con plantilla marcada: en la ruta por literales no hay marcado
+              que descartar. Es la salida cuando el marcado quedó incompleto y la
+              revisión de la salida avisa de datos del cliente anterior que
+              sobreviven. */}
+          {plantillaActiva && plantillaActiva.marcada && (
+            <button
+              onClick={volverAMarcar}
+              disabled={loading}
+              title="Descarta el marcado guardado y vuelve a marcar la plantilla con IA"
+              className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Volver a marcar
+            </button>
+          )}
           <button
             onClick={handleDownload}
             className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer"
@@ -537,7 +622,36 @@ export default function ReporteGenerador({ study, estudioId }) {
         {loading ? (
           <div className="flex flex-col items-center justify-center min-h-[400px] text-zinc-500">
             <Loader2 className="w-8 h-8 text-[#0FA3A1] animate-spin mb-2" />
-            <span>Cargando plantilla...</span>
+            {progresoMarcado ? (
+              <>
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                  Marcando la plantilla con IA: {progresoMarcado.terminados} de{' '}
+                  {progresoMarcado.total} tramos
+                </span>
+                <div className="w-64 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-3 overflow-hidden">
+                  <div
+                    className="h-full bg-[#0FA3A1] transition-all duration-300"
+                    style={{
+                      width: Math.round(
+                        (progresoMarcado.terminados / progresoMarcado.total) * 100
+                      ) + '%',
+                    }}
+                  />
+                </div>
+                <span className="text-xs mt-3 max-w-sm text-center">
+                  Un informe largo son varios viajes al modelo y puede tardar un par de
+                  minutos. Se paga una sola vez por documento: la próxima vez que se
+                  suba este mismo PDF, la plantilla ya estará marcada.
+                </span>
+                {progresoMarcado.fallidos > 0 && (
+                  <span className="text-xs mt-2 text-amber-600 dark:text-amber-400">
+                    {progresoMarcado.fallidos} tramo(s) no se pudieron marcar
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>Cargando plantilla...</span>
+            )}
           </div>
         ) : (
           <div
