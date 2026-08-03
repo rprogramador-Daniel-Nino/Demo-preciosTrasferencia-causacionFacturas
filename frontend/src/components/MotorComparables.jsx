@@ -8,12 +8,16 @@ import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, pref
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
+import { registrarComparablesHistoricas } from '../services/firestoreRepo';
 
-export default function MotorComparables({ study, updateStudy }) {
+export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
   const [priorStudyMsg, setPriorStudyMsg] = useState('');
   const [estudioAnteriorInfo, setEstudioAnteriorInfo] = useState(study.estudioAnterior || null);
+  /* Resultado de haber llevado las empresas del informe anterior al catálogo
+     compartido: { guardadas, nuevas, actualizadas, descartadas, fallidas } */
+  const [catalogo, setCatalogo] = useState(null);
 
   // State for Extracted Company Activity
   const [actividad, setActividad] = useState(study.actividad_especifica || 'Prestación de servicios interactivos, diseño digital y soluciones de tecnología.');
@@ -78,8 +82,11 @@ export default function MotorComparables({ study, updateStudy }) {
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
-      /* el veredicto de la curación viaja con el estudio: es la constancia de por
-         qué se aceptó o rechazó cada candidata, y evita volver a pagar la consulta */
+      /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
+         cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
+         App, que lo separa antes de subirlo: se guarda en localStorage y no en
+         Firestore, por decisión del usuario y porque un dictamen por cada una de
+         miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
   }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch]);
@@ -99,16 +106,56 @@ export default function MotorComparables({ study, updateStudy }) {
         const info = {
           fuente: result.filename,
           actividad: result.actividad_especifica,
+          anio: result.anio_gravable || null,
           comparables: result.comparables || []
         };
         setEstudioAnteriorInfo(info);
         setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad y ${result.comparables.length} comparables de la tabla anterior.`);
+
+        /* Las empresas del informe se llevan al catálogo compartido del equipo. Antes
+           se quedaban dentro de este estudio y solo servían para reconocer
+           continuidad aquí; ahora quedan disponibles para cualquier otro estudio y
+           con el rastro del documento del que salieron.
+
+           Si falla, el informe ya está leído y el estudio sigue su curso: guardar el
+           catálogo es un extra, no un requisito para trabajar. */
+        await registrarEnCatalogo(info, result);
       }
     } catch (err) {
       console.error("Error al leer informe del año anterior:", err);
       setPriorStudyMsg('⚠️ No se pudo procesar el informe .');
     } finally {
       setLoadingPriorStudy(false);
+    }
+  };
+
+  /* Registra en `comparablesHistoricas` las empresas leídas del informe anterior. El
+     año de la aparición es el que declara el propio informe; si no lo trae, se usa el
+     del estudio menos uno, que es lo que significa «año anterior». */
+  const registrarEnCatalogo = async (info, result) => {
+    if (!usuario) { setCatalogo({ sinSesion: true }); return; }
+    const comparables = (result && result.comparables) || [];
+    if (!comparables.length) return;
+
+    const anioEstudio = Number(study.anio) || new Date().getFullYear();
+    const anio = Number(result.anio_gravable) || (anioEstudio - 1);
+    setCatalogo({ enCurso: true });
+    try {
+      const resumen = await registrarComparablesHistoricas({
+        comparables,
+        aparicion: {
+          estudioId: estudioId || '',
+          clienteNit: String(study.nit || ''),
+          anio,
+          archivo: String(info.fuente || ''),
+          cargadoEn: new Date().toISOString(),
+        },
+        usuario,
+      });
+      setCatalogo({ ...resumen, anio });
+    } catch (err) {
+      console.error('[catálogo histórico] no se pudo registrar', err);
+      setCatalogo({ error: (err && err.message) || 'error desconocido' });
     }
   };
 
@@ -587,6 +634,45 @@ export default function MotorComparables({ study, updateStudy }) {
             </span>
           )}
         </div>
+
+        {/* Qué pasó con esas empresas en el catálogo compartido. Se informa aparte del
+            mensaje de lectura porque son dos cosas distintas: una es haber entendido
+            el documento y otra haber dejado registro reutilizable de sus comparables. */}
+        {catalogo && (
+          <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1">
+            <div className="font-semibold text-zinc-700 dark:text-zinc-200">Catálogo histórico compartido</div>
+            {catalogo.enCurso && <div className="text-zinc-500">Registrando las empresas del informe…</div>}
+            {catalogo.sinSesion && (
+              <div className="text-amber-600 dark:text-amber-400">
+                Sin sesión activa: las empresas no se guardaron en el catálogo. Vuelva a entrar y cargue el informe otra vez.
+              </div>
+            )}
+            {catalogo.error && (
+              <div className="text-amber-600 dark:text-amber-400">
+                No se pudo guardar en el catálogo: {catalogo.error}. El informe sí quedó leído y el estudio puede continuar.
+              </div>
+            )}
+            {typeof catalogo.guardadas === 'number' && (
+              <>
+                <div className="text-zinc-600 dark:text-zinc-300">
+                  {catalogo.guardadas} empresas registradas del año {catalogo.anio}
+                  {catalogo.nuevas ? ` · ${catalogo.nuevas} nuevas en el catálogo` : ''}
+                  {catalogo.actualizadas ? ` · ${catalogo.actualizadas} ya estaban y se completaron` : ''}
+                </div>
+                {catalogo.descartadas ? (
+                  <div className="text-amber-600 dark:text-amber-400">
+                    {catalogo.descartadas} filas se descartaron por no traer razón social legible.
+                  </div>
+                ) : null}
+                {catalogo.fallidas ? (
+                  <div className="text-amber-600 dark:text-amber-400">
+                    {catalogo.fallidas} no se pudieron guardar; revise la consola para el detalle.
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ══════ BANNER: ACTIVIDAD DE LA EMPRESA ══════ */}
