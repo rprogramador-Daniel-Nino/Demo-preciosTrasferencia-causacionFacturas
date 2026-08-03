@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { nameKey } from './comparablesEngine.js';
 import {
   normalizarNit, anioValido, separarEstudio, docEstudio, docCliente,
   normalizarComparableHistorica, fusionarComparableHistorica, docEeff, idEeff,
   estudiosPorMigrar, aNumero, CAMPOS_SOLO_LOCALES, TOPE_APARICIONES,
+  comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila,
+  aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -277,6 +280,112 @@ test('docEeff acota los hallazgos contables al tope de las reglas', () => {
     anio: 2024, usuario: USUARIO, marcaDeTiempo: AHORA,
   });
   assert.strictEqual(doc.hallazgos.length, 50);
+});
+
+/* ══════ reutilización de estados financieros ══════ */
+
+/* La clave se calcula con la función real: `nameKey` quita los sufijos societarios y
+   pasa a mayúsculas, así que «Acme Corp» se guarda bajo «ACME». Inventar la clave en
+   el test lo haría pasar o fallar por una razón que no es la que se quiere probar. */
+const CLAVE_ACME = nameKey('Acme Corp');
+
+const EEFF_GUARDADO = {
+  [CLAVE_ACME]: { nameKey: CLAVE_ACME, nombre: 'Acme Corp', anio: 2024, ingresos: 5000, costos: 3000, utilidadOperacional: 700, fuente: 'eeff-acme.pdf', hallazgos: ['cuadra el estado de resultados'] },
+};
+
+test('comparablesConEeffReutilizable no propone pisar una cifra ya cargada', () => {
+  /* La cifra que está en la fila pudo corregirse a mano o venir de un documento más
+     reciente: el catálogo completa huecos, no reemplaza trabajo hecho. */
+  const comparables = [{ name: 'Acme Corp', nameKey: CLAVE_ACME, s: 9999 }];
+  assert.deepStrictEqual(comparablesConEeffReutilizable(comparables, EEFF_GUARDADO), []);
+});
+
+test('comparablesConEeffReutilizable propone las filas vacías que sí tienen cifras guardadas', () => {
+  const comparables = [
+    { name: 'Otra Compañía', nameKey: nameKey('Otra Compañía'), s: '' },
+    { name: 'Acme Corp', nameKey: CLAVE_ACME, s: '' },
+  ];
+  const propuestas = comparablesConEeffReutilizable(comparables, EEFF_GUARDADO);
+  assert.strictEqual(propuestas.length, 1);
+  assert.strictEqual(propuestas[0].indice, 1, 'y dice en qué fila va');
+  assert.strictEqual(propuestas[0].clave, CLAVE_ACME);
+});
+
+test('comparablesConEeffReutilizable ignora un registro guardado sin ingresos', () => {
+  const guardados = { [CLAVE_ACME]: { nameKey: CLAVE_ACME, anio: 2024, costos: 3000 } };
+  const comparables = [{ name: 'Acme Corp', nameKey: CLAVE_ACME, s: '' }];
+  assert.deepStrictEqual(comparablesConEeffReutilizable(comparables, guardados), [],
+    'sin ingresos no hay nada aprovechable para el rango');
+});
+
+test('comparablesConEeffReutilizable deriva la clave cuando la fila no la trae', () => {
+  const comparables = [{ name: 'Acme Corp', s: '' }];
+  const propuestas = comparablesConEeffReutilizable(comparables, EEFF_GUARDADO);
+  assert.strictEqual(propuestas.length, 1, 'una comparable agregada a mano no tiene nameKey');
+});
+
+test('aplicarEeffGuardadoEnFila vuelca las cifras y deja el rastro de su origen', () => {
+  const filas = [{ name: 'Acme Corp', nameKey: CLAVE_ACME, s: '', c: '', op: '' }];
+  const nuevas = aplicarEeffGuardadoEnFila(filas, 0, EEFF_GUARDADO[CLAVE_ACME]);
+  assert.strictEqual(nuevas[0].s, 5000);
+  assert.strictEqual(nuevas[0].c, 3000);
+  assert.strictEqual(nuevas[0].op, 700);
+  assert.strictEqual(nuevas[0].eeffArchivo, 'eeff-acme.pdf');
+  assert.deepStrictEqual(nuevas[0].eeffReutilizado, { anio: 2024, fuente: 'eeff-acme.pdf', nombre: 'Acme Corp' });
+  assert.strictEqual(nuevas[0].eeffPorConfirmar, true,
+    'la cifra no se leyó en este estudio: quien firma el informe debe darla por buena');
+  assert.strictEqual(filas[0].s, '', 'no muta el arreglo original');
+});
+
+test('aplicarEeffGuardadoEnFila conserva las cifras que el registro no trae', () => {
+  const filas = [{ name: 'Acme', nameKey: CLAVE_ACME, s: '', ar: 123 }];
+  const nuevas = aplicarEeffGuardadoEnFila(filas, 0, EEFF_GUARDADO[CLAVE_ACME]);
+  assert.strictEqual(nuevas[0].ar, 123, 'el registro no trae cartera y la de la fila se mantiene');
+});
+
+/* ══════ consulta del catálogo ══════ */
+
+const CATALOGO = [
+  { nombre: 'Acme Corp', pais: 'Estados Unidos', actividad: 'desarrollo de software', pli: 'Margen Operacional', anios: [2024, 2023] },
+  { nombre: 'Beta SA', pais: 'México', actividad: 'manufactura por encargo', pli: 'Berry', anios: [2023] },
+  { nombre: 'Gamma Ltd', pais: 'Canadá', actividad: 'servicios de tecnología', pli: '', anios: [2024] },
+];
+
+test('aniosDelCatalogo devuelve los años sin repetir y del más reciente al más antiguo', () => {
+  assert.deepStrictEqual(aniosDelCatalogo(CATALOGO), [2024, 2023]);
+  assert.deepStrictEqual(aniosDelCatalogo([]), []);
+});
+
+test('filtrarCatalogo busca sin acentos y sin distinguir mayúsculas', () => {
+  /* Quien escribe «mexico» en el buscador tiene que encontrar «México». */
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { texto: 'mexico' }).map(i => i.nombre), ['Beta SA']);
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { texto: 'ACME' }).map(i => i.nombre), ['Acme Corp']);
+});
+
+test('filtrarCatalogo busca también en la actividad y en el indicador', () => {
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { texto: 'encargo' }).map(i => i.nombre), ['Beta SA']);
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { texto: 'berry' }).map(i => i.nombre), ['Beta SA']);
+});
+
+test('filtrarCatalogo por año deja solo las usadas ese año gravable', () => {
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { anio: 2024 }).map(i => i.nombre), ['Acme Corp', 'Gamma Ltd']);
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { anio: 2023 }).map(i => i.nombre), ['Acme Corp', 'Beta SA']);
+});
+
+test('filtrarCatalogo combina texto y año', () => {
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { texto: 'software', anio: 2023 }).map(i => i.nombre), ['Acme Corp']);
+  assert.deepStrictEqual(filtrarCatalogo(CATALOGO, { texto: 'software', anio: 2020 }), []);
+});
+
+test('filtrarCatalogo sin criterios devuelve todo', () => {
+  assert.strictEqual(filtrarCatalogo(CATALOGO, {}).length, 3);
+  assert.strictEqual(filtrarCatalogo(CATALOGO).length, 3);
+});
+
+test('catalogoAComparablesPrevias entrega la forma que espera el motor', () => {
+  const previas = catalogoAComparablesPrevias(CATALOGO);
+  assert.deepStrictEqual(previas[0], { name: 'Acme Corp', pais: 'Estados Unidos', actividad: 'desarrollo de software' });
+  assert.strictEqual(catalogoAComparablesPrevias([{ pais: 'X' }]).length, 0, 'sin razón social no sirve para continuidad');
 });
 
 /* ══════ migración ══════ */

@@ -272,6 +272,107 @@ export function docEeff({ comparable, anio, usuario, previo = null, marcaDeTiemp
   return doc;
 }
 
+/* ══════════════ reutilización de estados financieros ══════════════ */
+
+/**
+ * Comparables del estudio que podrían completarse con cifras ya guardadas por otro
+ * estudio del equipo.
+ *
+ * Solo propone las que NO tienen ingresos: una cifra ya cargada aquí manda sobre la
+ * del catálogo, porque puede haberse corregido a mano o venir de un documento más
+ * reciente. Nunca sobrescribe en silencio.
+ */
+export function comparablesConEeffReutilizable(comparables, guardados) {
+  const disponibles = guardados || {};
+  return (comparables || []).reduce((acum, fila, indice) => {
+    if (!fila) return acum;
+    const clave = fila.nameKey || nameKey(fila.name || '');
+    if (!clave) return acum;
+    const doc = disponibles[clave];
+    if (!doc) return acum;
+    if (aNumero(fila.s) !== null) return acum;
+    if (aNumero(doc.ingresos) === null) return acum;
+    acum.push({ indice, clave, nombre: fila.name || doc.nombre || '', doc });
+    return acum;
+  }, []);
+}
+
+/**
+ * Vuelca en una fila las cifras guardadas de un año anterior. Devuelve el arreglo
+ * nuevo, sin tocar el original, igual que hace la carga por documento.
+ *
+ * Queda marcada como reutilizada y con el archivo del que salió originalmente: en el
+ * informe hay que poder sustentar de dónde viene cada cifra, y una traída del catálogo
+ * no es lo mismo que una leída de un PDF cargado en este estudio.
+ */
+export function aplicarEeffGuardadoEnFila(filas, indice, doc) {
+  const copia = [...(filas || [])];
+  const fila = copia[indice];
+  if (!fila || !doc) return copia;
+  const cifra = (valor, actual) => (aNumero(valor) !== null ? aNumero(valor) : actual);
+  copia[indice] = {
+    ...fila,
+    s: cifra(doc.ingresos, fila.s),
+    c: cifra(doc.costos, fila.c),
+    op: cifra(doc.utilidadOperacional, fila.op),
+    ar: cifra(doc.cartera, fila.ar),
+    inv: cifra(doc.inventarios, fila.inv),
+    ap: cifra(doc.proveedores, fila.ap),
+    eeffHallazgos: Array.isArray(doc.hallazgos) ? doc.hallazgos : (fila.eeffHallazgos || []),
+    eeffArchivo: doc.fuente || fila.eeffArchivo || '',
+    eeffReutilizado: { anio: doc.anio, fuente: doc.fuente || '', nombre: doc.nombre || '' },
+    /* Se marca por confirmar a propósito: la cifra no se leyó en este estudio y quien
+       firma el informe debe darla por buena antes de que entre al rango. */
+    eeffPorConfirmar: true,
+  };
+  return copia;
+}
+
+/* ══════════════ consulta del catálogo histórico ══════════════ */
+
+/** Años presentes en el catálogo, del más reciente al más antiguo, sin repetir. */
+export function aniosDelCatalogo(items) {
+  const vistos = new Set();
+  (items || []).forEach(item => {
+    (item && item.anios ? item.anios : []).forEach(a => {
+      const n = anioValido(a);
+      if (n) vistos.add(n);
+    });
+  });
+  return [...vistos].sort((a, b) => b - a);
+}
+
+/**
+ * Filtra el catálogo por texto libre y por año gravable. El texto busca en razón
+ * social, país, actividad e indicador, sin acentos y sin distinguir mayúsculas: quien
+ * busca «mexico» tiene que encontrar «México».
+ */
+export function filtrarCatalogo(items, { texto = '', anio = null } = {}) {
+  const aguja = String(texto || '')
+    .trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const anioNum = anioValido(anio);
+
+  return (items || []).filter(item => {
+    if (!item) return false;
+    if (anioNum && !(item.anios || []).includes(anioNum)) return false;
+    if (!aguja) return true;
+    const pajar = [item.nombre, item.pais, item.actividad, item.pli]
+      .map(v => String(v || '')).join(' ')
+      .toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return pajar.includes(aguja);
+  });
+}
+
+/**
+ * Convierte entradas del catálogo en la forma que espera el motor para las
+ * comparables del estudio anterior, que es lo que alimenta la continuidad.
+ */
+export function catalogoAComparablesPrevias(items) {
+  return (items || [])
+    .filter(item => item && item.nombre)
+    .map(item => ({ name: item.nombre, pais: item.pais || '', actividad: item.actividad || '' }));
+}
+
 /**
  * Lee el índice de estudios de localStorage y devuelve lo que hay que subir.
  * Se usa una sola vez por navegador, para que nadie pierda lo que tenía guardado

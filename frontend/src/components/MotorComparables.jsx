@@ -4,11 +4,17 @@ import {
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar } from '../services/comparablesEngine';
+import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey } from '../services/comparablesEngine';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
-import { registrarComparablesHistoricas } from '../services/firestoreRepo';
+import {
+  registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
+  comparablesHistoricasDelAnio,
+} from '../services/firestoreRepo';
+import {
+  comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila, catalogoAComparablesPrevias,
+} from '../services/firestoreModelo';
 
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
@@ -59,6 +65,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      tampoco se leía en ninguna parte. */
   const [cargaEeff, setCargaEeff] = useState(null);          // { etapa, hechas, total }
   const [resultadoCarga, setResultadoCarga] = useState(null); // { aplicadas, rechazadas }
+  /* Qué se subió al repositorio compartido de estados financieros tras una carga. */
+  const [eeffCompartido, setEeffCompartido] = useState(null);
+  /* Cifras que otro estudio del equipo ya cargó para estas mismas comparables:
+     { buscando } | { propuestas: [...], anio } | { error } */
+  const [eeffGuardados, setEeffGuardados] = useState(null);
 
   // Visibilidad de la importación de Capital IQ: progreso, diagnóstico y registro.
   const [importProgreso, setImportProgreso] = useState(null);
@@ -408,6 +419,81 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return copia;
   };
 
+  /* Sube al repositorio compartido las cifras que acaban de entrar en unas filas.
+     Así el mismo estado financiero no se vuelve a leer —ni a pagar— cuando esa
+     comparable reaparece en el estudio de otro año o de otro cliente.
+
+     Es deliberadamente un extra: si falla, la carga que el usuario acaba de hacer
+     sigue aplicada en su estudio y solo se avisa de que no se compartió. */
+  const publicarEeff = async (filas, indices) => {
+    if (!usuario) return;
+    const seleccion = [...new Set(indices)].map(i => filas[i]).filter(Boolean);
+    if (!seleccion.length) return;
+    try {
+      const resumen = await guardarEeffComparables({ comparables: seleccion, anio: study.anio, usuario });
+      setEeffCompartido({ ...resumen, anio: Number(study.anio) || null });
+    } catch (err) {
+      console.error('[EEFF compartidos] no se pudieron subir', err);
+      setEeffCompartido({ error: (err && err.message) || 'error desconocido' });
+    }
+  };
+
+  /* Busca en la base compartida cifras ya cargadas para las comparables de este
+     estudio. Solo propone las filas que están vacías: una cifra puesta aquí puede
+     venir de un documento más reciente o de una corrección a mano. */
+  const buscarEeffGuardados = async () => {
+    if (!usuario) { setEeffGuardados({ error: 'Sin sesión activa.' }); return; }
+    const anio = Number(study.anio) || null;
+    if (!anio) { setEeffGuardados({ error: 'El estudio no tiene año gravable definido.' }); return; }
+    setEeffGuardados({ buscando: true });
+    try {
+      const claves = comparables.map(c => c.nameKey || nameKey(c.name || '')).filter(Boolean);
+      const guardados = await leerEeffDeComparables(claves, anio);
+      setEeffGuardados({ propuestas: comparablesConEeffReutilizable(comparables, guardados), anio });
+    } catch (err) {
+      console.error('[EEFF compartidos] no se pudo consultar', err);
+      setEeffGuardados({ error: (err && err.message) || 'error desconocido' });
+    }
+  };
+
+  /* Vuelca las cifras propuestas. Quedan marcadas por confirmar a propósito: no se
+     leyeron en este estudio y quien firma el informe tiene que darlas por buenas. */
+  const aplicarEeffGuardados = () => {
+    const propuestas = (eeffGuardados && eeffGuardados.propuestas) || [];
+    if (!propuestas.length) return;
+    let filas = comparables;
+    propuestas.forEach(p => { filas = aplicarEeffGuardadoEnFila(filas, p.indice, p.doc); });
+    setComparables(filas);
+    setEeffGuardados({ aplicadas: propuestas.length, anio: eeffGuardados.anio });
+  };
+
+  /* Trae del catálogo compartido las comparables que el equipo usó el año anterior y
+     las toma como referencia de continuidad. Sirve cuando no se tiene a mano el
+     informe del año pasado: hasta ahora la continuidad dependía de cargar ese PDF. */
+  const traerContinuidadDelCatalogo = async () => {
+    if (!usuario) { setCatalogo({ sinSesion: true }); return; }
+    const anioEstudio = Number(study.anio) || new Date().getFullYear();
+    const anio = anioEstudio - 1;
+    setCatalogo({ enCurso: true });
+    try {
+      const items = await comparablesHistoricasDelAnio(anio);
+      if (!items.length) {
+        setCatalogo({ traidas: 0, anio });
+        return;
+      }
+      setEstudioAnteriorInfo({
+        fuente: `catálogo compartido (año ${anio})`,
+        actividad,
+        anio,
+        comparables: catalogoAComparablesPrevias(items),
+      });
+      setCatalogo({ traidas: items.length, anio });
+    } catch (err) {
+      console.error('[catálogo histórico] no se pudo consultar', err);
+      setCatalogo({ error: (err && err.message) || 'error desconocido' });
+    }
+  };
+
   /* Carga de EEFF sobre una fila concreta. Ahora comprueba que el documento sea
      de esa empresa: antes las cifras entraban en la fila donde se soltaba el
      archivo, fuera o no la correcta, y de ahí pasaban al rango intercuartil. */
@@ -443,7 +529,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const cruceEfectivo = traeNombre
         ? cruce
         : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
-      setComparables(aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo));
+      const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
+      setComparables(filas);
+      /* Al repositorio compartido, para que otro estudio no vuelva a leer este mismo
+         documento. Va después de aplicar: lo del usuario primero. */
+      await publicarEeff(filas, [compIndex]);
       setResultadoCarga({
         aplicadas: [{
           archivo: file.name,
@@ -510,7 +600,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       aplicadas.forEach((a) => {
         filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
       });
-      if (aplicadas.length) setComparables(filas);
+      if (aplicadas.length) {
+        setComparables(filas);
+        await publicarEeff(filas, aplicadas.map(a => a.indice));
+      }
       setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
     } finally {
       setUploadingEEFF(false);
@@ -628,6 +721,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               className="hidden"
             />
           </label>
+          {/* Continuidad sin tener el PDF a mano: si el equipo ya cargó el informe del
+              año anterior en otro estudio, sus comparables están en el catálogo. */}
+          <button
+            type="button"
+            onClick={traerContinuidadDelCatalogo}
+            disabled={loadingPriorStudy}
+            className="flex items-center gap-2 text-xs font-semibold px-3 py-2.5 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+            title="Toma como referencia de continuidad las comparables que el equipo ya registró para el año anterior"
+          >
+            <Layers className="w-4 h-4" />
+            Traer del catálogo del año anterior
+          </button>
+
           {priorStudyMsg && (
             <span className="text-xs font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 px-3 py-1.5 rounded-lg">
               {priorStudyMsg}
@@ -641,7 +747,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         {catalogo && (
           <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1">
             <div className="font-semibold text-zinc-700 dark:text-zinc-200">Catálogo histórico compartido</div>
-            {catalogo.enCurso && <div className="text-zinc-500">Registrando las empresas del informe…</div>}
+            {catalogo.enCurso && <div className="text-zinc-500">Consultando el catálogo compartido…</div>}
+            {typeof catalogo.traidas === 'number' && (
+              catalogo.traidas
+                ? <div className="text-zinc-600 dark:text-zinc-300">
+                    {catalogo.traidas} comparables del año {catalogo.anio} traídas del catálogo como referencia de continuidad.
+                    El motor las tratará como del estudio anterior.
+                  </div>
+                : <div className="text-amber-600 dark:text-amber-400">
+                    El catálogo no tiene comparables registradas del año {catalogo.anio}. Cargue la documentación
+                    comprobatoria de ese año para alimentarlo.
+                  </div>
+            )}
             {catalogo.sinSesion && (
               <div className="text-amber-600 dark:text-amber-400">
                 Sin sesión activa: las empresas no se guardaron en el catálogo. Vuelva a entrar y cargue el informe otra vez.
@@ -1108,6 +1225,70 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               onChange={(e) => { handleCargaMasivaEEFF(e.target.files); e.target.value = null; }}
             />
           </label>
+
+          {/* Reutilización de cifras que otro estudio del equipo ya cargó. Es lo que
+              evita volver a leer —y volver a pagar— el mismo estado financiero cuando
+              una comparable reaparece en otro estudio del mismo año gravable. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={buscarEeffGuardados}
+              disabled={uploadingEEFF || !comparables.length || (eeffGuardados && eeffGuardados.buscando)}
+              className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Consulta en la base compartida si alguna de estas comparables ya tiene cifras cargadas para el mismo año"
+            >
+              <Layers className="w-4 h-4" />
+              {eeffGuardados && eeffGuardados.buscando ? 'Consultando la base…' : 'Buscar cifras ya cargadas por el equipo'}
+            </button>
+
+            {eeffGuardados && eeffGuardados.error && (
+              <span className="text-[11px] text-amber-600 dark:text-amber-400">{eeffGuardados.error}</span>
+            )}
+
+            {eeffGuardados && typeof eeffGuardados.aplicadas === 'number' && (
+              <span className="text-[11px] text-emerald-600 dark:text-emerald-500">
+                {eeffGuardados.aplicadas} fila(s) completadas con cifras del año {eeffGuardados.anio}. Quedan marcadas por confirmar.
+              </span>
+            )}
+
+            {eeffGuardados && eeffGuardados.propuestas && (
+              eeffGuardados.propuestas.length ? (
+                <>
+                  <span className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                    {eeffGuardados.propuestas.length} de {comparables.length} tienen cifras del año {eeffGuardados.anio} guardadas
+                    por otro estudio: {eeffGuardados.propuestas.map(p => p.nombre).join(', ')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={aplicarEeffGuardados}
+                    className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white"
+                  >
+                    Aplicarlas a las filas vacías
+                  </button>
+                </>
+              ) : (
+                <span className="text-[11px] text-zinc-500">
+                  Ninguna comparable con la fila vacía tiene cifras guardadas del año {eeffGuardados.anio}.
+                </span>
+              )
+            )}
+          </div>
+
+          {/* Qué se subió a la base tras una carga */}
+          {eeffCompartido && (
+            <div className="text-[11px] text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
+              {eeffCompartido.error
+                ? <span className="text-amber-600 dark:text-amber-400">
+                    Las cifras quedaron en el estudio, pero no se pudieron compartir con el equipo: {eeffCompartido.error}
+                  </span>
+                : <>
+                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para el resto del equipo
+                    {eeffCompartido.anio ? ` (año ${eeffCompartido.anio})` : ''}
+                    {eeffCompartido.omitidas ? ` · ${eeffCompartido.omitidas} sin ingresos, no se compartieron` : ''}
+                    {eeffCompartido.fallidas ? ` · ${eeffCompartido.fallidas} fallaron` : ''}
+                  </>}
+            </div>
+          )}
 
           {/* Progreso: qué archivo va y cuántos faltan */}
           {cargaEeff && (

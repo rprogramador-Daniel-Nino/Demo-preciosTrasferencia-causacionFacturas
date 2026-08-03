@@ -8,6 +8,8 @@ import MotorComparables from './components/MotorComparables';
 import AuditoriaNorma from './components/AuditoriaNorma';
 import ReporteGenerador from './components/ReporteGenerador';
 import Acceso from './components/Acceso';
+import Clientes from './components/Clientes';
+import CatalogoHistorico from './components/CatalogoHistorico';
 import { guardarJSON } from './services/persistenciaLocal';
 import { observarSesion, cerrarSesion } from './services/sesion';
 import {
@@ -25,6 +27,10 @@ const RETARDO_GUARDADO = 1500;
    del usuario, y además es lo más pesado del estudio: un dictamen por candidata sobre
    más de mil empresas no cabe cómodo en un documento de Firestore. */
 const claveIaMatch = (id) => `pt:iaMatch:${id}`;
+
+/* Pestañas que no necesitan un estudio abierto: el tablero y las dos vistas de la
+   base compartida. */
+const VISTAS_SIN_ESTUDIO = ['dashboard', 'clientes', 'catalogo'];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -122,19 +128,22 @@ export default function App() {
     }
   };
 
-  const newStudy = async () => {
+  /* Campos con los que nace un estudio. Se extrajo a función porque ahora hay dos
+     puntos de creación: en blanco y a partir de un cliente del catálogo. */
+  const estudioEnBlanco = () => ({
+    ent: 'Nueva Empresa S.A.S', nit: '', anio: new Date().getFullYear(),
+    ciiu: '', objeto: '', representante: '', vinc: '', pais_vinc: '', vinc_id: '',
+    vinc_tipo: '', t_s: '', t_c: '', t_op: '', t_ar: '', t_inv: '', t_ap: '',
+    pli: 'MO', useadj: false, prime: '', comparables: [], cmode: 'all',
+  });
+
+  const crearEstudio = async (datos) => {
     const newId = 'study_' + Date.now();
-    const blank = {
-      ent: 'Nueva Empresa S.A.S', nit: '', anio: new Date().getFullYear(),
-      ciiu: '', objeto: '', representante: '', vinc: '', pais_vinc: '', vinc_id: '',
-      vinc_tipo: '', t_s: '', t_c: '', t_op: '', t_ar: '', t_inv: '', t_ap: '',
-      pli: 'MO', useadj: false, prime: '', comparables: [], cmode: 'all',
-    };
     try {
-      await guardarEstudio(newId, blank, usuario);
+      await guardarEstudio(newId, datos, usuario);
       cargando.current = true;
       setActiveStudyId(newId);
-      setStudy(blank);
+      setStudy(datos);
       setActiveTab('contribuyente');
       await refrescarIndice();
     } catch (err) {
@@ -142,6 +151,21 @@ export default function App() {
       setAvisoSesion('No se pudo crear el estudio: ' + (err && err.message ? err.message : 'error desconocido'));
     }
   };
+
+  const newStudy = () => crearEstudio(estudioEnBlanco());
+
+  /* Estudio nuevo con los datos del contribuyente ya diligenciados. El año arranca en
+     el actual: lo habitual es que el estudio que falta sea el del año siguiente al
+     último que se hizo, y de todas formas se edita en el paso 1. */
+  const nuevoEstudioDesdeCliente = (cliente) => crearEstudio({
+    ...estudioEnBlanco(),
+    ent: cliente.razonSocial || '',
+    nit: cliente.nit || '',
+    ciiu: cliente.ciiu || '',
+    objeto: cliente.objeto || '',
+    representante: cliente.representante || '',
+    actividad_especifica: cliente.actividadEspecifica || '',
+  });
 
   const deleteStudy = async (id) => {
     try {
@@ -238,6 +262,13 @@ export default function App() {
         />
       )}
 
+      {/* Vistas de la base compartida: no dependen de tener un estudio abierto. */}
+      {activeTab === 'clientes' && (
+        <Clientes nuevoEstudioDesdeCliente={nuevoEstudioDesdeCliente} selectStudy={selectStudy} />
+      )}
+
+      {activeTab === 'catalogo' && <CatalogoHistorico />}
+
       {activeStudyId ? (
         <>
           {activeTab === 'contribuyente' && (
@@ -265,7 +296,9 @@ export default function App() {
           )}
         </>
       ) : (
-        activeTab !== 'dashboard' && (
+        /* El aviso solo vale para los pasos del estudio: el tablero, los clientes y el
+           catálogo se consultan sin tener ninguno abierto. */
+        !VISTAS_SIN_ESTUDIO.includes(activeTab) && (
           <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 text-amber-800 dark:text-amber-300 p-4 rounded-lg text-sm text-center">
             Por favor, seleccione o cree un estudio en la pestaña de <strong>Inicio</strong> antes de continuar.
           </div>
