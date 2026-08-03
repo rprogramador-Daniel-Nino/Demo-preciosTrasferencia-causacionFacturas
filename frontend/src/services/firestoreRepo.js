@@ -17,6 +17,7 @@ import {
   limit, serverTimestamp, runTransaction,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { montoOperacion } from '../utils/calculations';
 import {
   docEstudio, docCliente, docEeff, idEeff, normalizarNit, anioValido, aNumero,
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
@@ -100,10 +101,13 @@ export async function listarEstudios(tope = 200) {
       nit: datos.nit || '—',
       anio: datos.anio || '—',
       actualizadoPorNombre: datos.actualizadoPorNombre || '',
-      /* El tablero suma los ingresos de la parte examinada. Se toma de `datos`, que ya
-         viene en la respuesta —Firestore cobra por documento leído, no por campo—, en
-         vez de duplicar la cifra en un campo propio que habría que mantener al día. */
-      monto: Number((datos.datos && datos.datos.t_s) || 0) || 0,
+      /* El monto de operaciones con vinculados, que es lo que anuncia la columna del
+         tablero. Antes se tomaba de `t_s`, que son los ingresos operacionales de la
+         compañía: desde que la ingesta de operaciones dejó de escribir ese campo, la
+         columna mostraba una cifra que no era la anunciada o un cero.
+         Se lee de `datos`, que ya viene en la respuesta —Firestore cobra por documento
+         leído, no por campo—, en vez de duplicar la cifra en un campo propio. */
+      monto: montoOperacion(datos.datos) || 0,
       /* Timestamp de Firestore -> milisegundos, que es lo que ya consumía el tablero.
          Puede venir null si se lee justo después de escribir, antes de que el
          servidor resuelva el centinela. */

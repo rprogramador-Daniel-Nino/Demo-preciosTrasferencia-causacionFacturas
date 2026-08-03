@@ -115,7 +115,20 @@ export default function Dashboard({ indice = [], selectStudy, newStudy, deleteSt
                     onClick={() => selectStudy(study.id)}
                     className="hover:bg-zinc-50 dark:hover:bg-zinc-800/40 cursor-pointer transition-colors"
                   >
-                    <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-100">{study.ent}</td>
+                    <td className="py-3 px-4 font-medium text-zinc-900 dark:text-zinc-100">
+                      {study.ent}
+                      {/* El identificador del documento, visible: los errores de la base
+                          lo nombran («no se pudo guardar … estudios/study_1785772970844»)
+                          y sin verlo en ninguna parte no hay forma de saber de qué
+                          estudio hablan. También sirve para buscarlo en la consola de
+                          Firestore. */}
+                      <span
+                        className="block font-mono text-[10px] text-zinc-400 dark:text-zinc-500 select-all"
+                        title="Identificador del estudio en la base de datos"
+                      >
+                        {study.id}
+                      </span>
+                    </td>
                     <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 font-mono text-xs">{study.nit}</td>
                     <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{study.anio}</td>
                     <td className="py-3 px-4 text-right font-mono text-xs text-zinc-700 dark:text-zinc-300">

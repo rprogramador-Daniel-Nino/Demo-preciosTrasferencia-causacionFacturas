@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, ArrowRight, Building2, Globe, DollarSign } from 'lucide-react';
-import { fmt } from '../utils/calculations';
+import { fmt, montoOperacion } from '../utils/calculations';
 import { parseExcelOperations } from '../services/excelOperationsParser';
 
 export default function IngestaOperaciones({ study, updateStudy }) {
@@ -113,7 +113,13 @@ export default function IngestaOperaciones({ study, updateStudy }) {
 
             <div className="p-4 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/10 border border-emerald-200 dark:border-emerald-900/30 space-y-1">
               <span className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold uppercase tracking-wider block">Monto Total Transaccionado</span>
-              <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400 font-mono">COP $ {fmt(study.t_s)}</span>
+              {/* El monto de la operación, no `t_s`: este paso escribe `monto` y
+                  `monto_operacion`, y `t_s` son los ingresos operacionales que llegan
+                  del estado financiero. Leer t_s aquí mostraba «COP $ 0» justo al lado
+                  del mensaje de éxito que sí traía la cifra. */}
+              <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400 font-mono">
+                {montoOperacion(study) === null ? '—' : 'COP $ ' + fmt(montoOperacion(study))}
+              </span>
             </div>
 
             <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 space-y-1">
