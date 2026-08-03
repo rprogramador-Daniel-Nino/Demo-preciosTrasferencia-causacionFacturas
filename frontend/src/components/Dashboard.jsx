@@ -1,48 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Search, Plus, Trash2, Copy, FileText, Calendar, Sparkles, AlertTriangle } from 'lucide-react';
 import { fmt } from '../utils/calculations';
 
-export default function Dashboard({ selectStudy, newStudy, deleteStudy, duplicateStudy }) {
-  const [studies, setStudies] = useState([]);
+/* El índice de estudios llega por props desde App: ahora vive en Firestore y lo
+   comparte el equipo, así que el tablero ya no lo arma leyendo localStorage. La
+   recarga después de crear, borrar o duplicar también la hace App, que es quien
+   conoce el resultado de la escritura remota. */
+export default function Dashboard({ indice = [], selectStudy, newStudy, deleteStudy, duplicateStudy }) {
   const [search, setSearch] = useState('');
   const [pendingDelete, setPendingDelete] = useState(null);
 
-  useEffect(() => {
-    loadStudies();
-  }, []);
+  const studies = [...indice].sort((a, b) => (b.updated || 0) - (a.updated || 0));
 
-  const loadStudies = () => {
-    try {
-      const idxKey = 'pt:study:index';
-      const raw = localStorage.getItem(idxKey);
-      const ix = raw ? JSON.parse(raw) : {};
-
-      const arr = Object.keys(ix).map(k => {
-        const detailRaw = localStorage.getItem(`pt:study:${k}`);
-        let parsedDetail = {};
-        if (detailRaw) {
-          try { parsedDetail = JSON.parse(detailRaw); } catch(e) {}
-        }
-        return {
-          id: k,
-          ent: ix[k].ent || parsedDetail.ent || 'Sin Razón Social',
-          nit: ix[k].nit || parsedDetail.nit || '—',
-          anio: ix[k].anio || parsedDetail.anio || '—',
-          updated: ix[k].updated || Date.now(),
-          monto: parsedDetail.t_s || ix[k].monto || 0
-        };
-      });
-      
-      setStudies(arr.sort((a, b) => b.updated - a.updated));
-    } catch (e) {
-      console.error("Error loading studies index:", e);
-    }
-  };
-
-  const filteredStudies = studies.filter(s => 
-    s.ent.toLowerCase().includes(search.toLowerCase()) ||
-    s.nit.toLowerCase().includes(search.toLowerCase()) ||
-    s.anio.toString().includes(search)
+  const filteredStudies = studies.filter(s =>
+    String(s.ent || '').toLowerCase().includes(search.toLowerCase()) ||
+    String(s.nit || '').toLowerCase().includes(search.toLowerCase()) ||
+    String(s.anio || '').includes(search)
   );
 
   const totalMonto = studies.reduce((acc, curr) => acc + (curr.monto || 0), 0);
@@ -56,10 +29,7 @@ export default function Dashboard({ selectStudy, newStudy, deleteStudy, duplicat
           <p className="text-sm text-zinc-500 dark:text-zinc-400">Seleccione un estudio existente o cree uno nuevo para comenzar.</p>
         </div>
         <button
-          onClick={() => {
-            newStudy();
-            loadStudies();
-          }}
+          onClick={() => newStudy()}
           className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white rounded-lg px-4 py-2 text-sm font-semibold transition-colors shadow-sm cursor-pointer"
         >
           <Plus className="w-4 h-4" />
@@ -154,10 +124,7 @@ export default function Dashboard({ selectStudy, newStudy, deleteStudy, duplicat
                     <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
                         <button
-                          onClick={() => {
-                            duplicateStudy(study.id);
-                            loadStudies();
-                          }}
+                          onClick={() => duplicateStudy(study.id)}
                           title="Duplicar"
                           className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-500 hover:text-zinc-700 transition-colors"
                         >
@@ -205,7 +172,6 @@ export default function Dashboard({ selectStudy, newStudy, deleteStudy, duplicat
               <button
                 onClick={() => {
                   deleteStudy(pendingDelete.id);
-                  loadStudies();
                   setPendingDelete(null);
                 }}
                 className="px-4 py-2 text-sm font-semibold rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"

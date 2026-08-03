@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Sun, Moon, LayoutDashboard, FileText, BarChart3, ShieldAlert, FileDown, Menu, X, BookOpen
+  Sun, Moon, LayoutDashboard, FileText, BarChart3, ShieldAlert, FileDown, Menu, X, BookOpen,
+  Users, Library
 } from 'lucide-react';
 
 export default function Layout({ children, activeTab, setActiveTab }) {
@@ -24,6 +25,10 @@ export default function Layout({ children, activeTab, setActiveTab }) {
     { id: 'comparables', label: '4. Motor Comparables', icon: BarChart3 },
     { id: 'auditoria', label: '5. Auditoría Norma', icon: ShieldAlert },
     { id: 'informe', label: '6. Generador Word', icon: FileDown },
+    /* Vistas transversales de la base compartida: no son pasos del estudio, así que
+       van sin número y separadas de la secuencia 1-6. */
+    { id: 'clientes', label: 'Clientes', icon: Users, aparte: true },
+    { id: 'catalogo', label: 'Catálogo de comparables', icon: Library },
   ];
 
   return (
@@ -62,6 +67,9 @@ export default function Layout({ children, activeTab, setActiveTab }) {
             return (
               <button
                 key={item.id}
+                /* `aparte` abre la sección transversal: separa visualmente lo que no
+                   es un paso del estudio. */
+                style={item.aparte ? { marginTop: '0.75rem', borderTop: '1px solid rgb(228 228 231 / 0.6)', paddingTop: '0.75rem' } : undefined}
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
                     ? 'bg-[#0FA3A1]/15 text-[#0FA3A1] dark:bg-[#0FA3A1]/10'
