@@ -44,3 +44,61 @@ test('el HTML sin marcas sale igual que entró', () => {
   const html = '<p>Texto fijo del informe</p>';
   assert.strictEqual(renderizar(html, estudio).html, html);
 });
+
+test('un recurso ausente se reporta en recursosFaltantes sin duplicarse', () => {
+  const marcado = '<img data-recurso="logo" /><p>x</p><img data-recurso="logo" />';
+  const r = renderizar(marcado, estudio, []);
+  assert.ok(!r.html.includes('src='), 'la imagen no debe tener src');
+  assert.deepStrictEqual(r.recursosFaltantes, ['logo']);
+  assert.deepStrictEqual(r.vacios, []);
+});
+
+test('múltiples recursos ausentes se reportan sin duplicarse', () => {
+  const marcado = '<img data-recurso="logo" /><img data-recurso="ico" /><img data-recurso="logo" />';
+  const r = renderizar(marcado, estudio, []);
+  assert.ok(r.recursosFaltantes.includes('logo'));
+  assert.ok(r.recursosFaltantes.includes('ico'));
+  assert.strictEqual(r.recursosFaltantes.length, 2);
+});
+
+test('un id de recurso con caracteres especiales de expresión regular no tumba el render', () => {
+  const recursos = [{ id: 'logo[abc]', dataUrl: 'data:image/png;base64,DATA' }];
+  const marcado = '<img data-recurso="logo[abc]" />';
+  const r = renderizar(marcado, estudio, recursos);
+  assert.ok(r.html.includes('src="data:image/png;base64,DATA"'));
+});
+
+test('un dataUrl con caracteres de reemplazo especial no se corrompe', () => {
+  const recursos = [{ id: 'img', dataUrl: 'data:image/png;base64,$&$1' }];
+  const marcado = '<img data-recurso="img" />';
+  const r = renderizar(marcado, estudio, recursos);
+  assert.ok(r.html.includes('src="data:image/png;base64,$&$1"'));
+});
+
+test('un valor de campo con < se escapa a &lt;', () => {
+  const est = { ent: '<script>alert("xss")</script>', nit: '800123456-7', anio: 2025 };
+  const r = renderizar('<p><span data-campo="ent">OLD</span></p>', est);
+  assert.ok(r.html.includes('&lt;script&gt;'));
+  assert.ok(!r.html.includes('<script>'));
+});
+
+test('un valor de campo con & se escapa a &amp;', () => {
+  const est = { ent: 'ACME & CO', nit: '800123456-7', anio: 2025 };
+  const r = renderizar('<p><span data-campo="ent">OLD</span></p>', est);
+  assert.ok(r.html.includes('&amp;'));
+  assert.ok(!r.html.includes(' & '));
+});
+
+test('un valor de campo con " se escapa a &quot;', () => {
+  const est = { ent: 'Empresa "Premium"', nit: '800123456-7', anio: 2025 };
+  const r = renderizar('<p><span data-campo="ent">OLD</span></p>', est);
+  assert.ok(r.html.includes('&quot;'));
+  assert.ok(!r.html.includes('"Premium"'));
+});
+
+test('los estilos del resaltado no se escapan, solo el valor', () => {
+  const estudio = { ent: 'SAFE & CO', nit: '800123456-7', anio: 2025 };
+  const r = renderizar('<p><span data-campo="ent">OLD</span></p>', estudio);
+  assert.ok(r.html.includes('style='), 'los estilos deben estar presentes sin escapar');
+  assert.ok(r.html.includes('&amp;'), 'el ampersand del valor debe estar escapado');
+});

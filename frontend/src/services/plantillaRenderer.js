@@ -5,6 +5,21 @@
 
 import { valorDeCampo } from './plantillaVocabulario.js';
 
+/* Escapa caracteres especiales para usar en una expresión regular. */
+const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/* Escapa caracteres HTML para evitar inyección. */
+const escaparHTML = (texto) => {
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return String(texto).replace(/[&<>"']/g, (c) => map[c]);
+};
+
 /* Resalta el valor sustituido en la vista previa. Los estilos se limpian al
    exportar, igual que hoy hace ReporteGenerador. */
 const resaltar = (valor) =>
@@ -15,6 +30,7 @@ const RX_MARCA = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
 
 export function renderizar(htmlMarcado, estudio, recursos = []) {
   const vacios = new Set();
+  const recursosFaltantes = new Set();
 
   let html = String(htmlMarcado || '').replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
@@ -22,15 +38,38 @@ export function renderizar(htmlMarcado, estudio, recursos = []) {
       vacios.add(campo);
       return resaltar('—');
     }
-    return resaltar(valor);
+    return resaltar(escaparHTML(valor));
   });
 
-  for (const r of recursos) {
-    html = html.replace(
-      new RegExp('<img data-recurso="' + r.id + '"[^>]*>', 'g'),
-      '<img data-recurso="' + r.id + '" src="' + r.dataUrl + '" />'
-    );
+  /* Rastrea qué recursos están presentes en el HTML. */
+  const recursosEnHTML = new Set();
+  const rxRecurso = /data-recurso="([^"]+)"/g;
+  let m;
+  while ((m = rxRecurso.exec(html)) !== null) {
+    recursosEnHTML.add(m[1]);
   }
 
-  return { html, vacios: [...vacios] };
+  /* Resuelve los recursos contra el catálogo. */
+  const recursoMap = new Map(recursos.map((r) => [r.id, r.dataUrl]));
+
+  for (const id of recursosEnHTML) {
+    if (recursoMap.has(id)) {
+      const dataUrl = recursoMap.get(id);
+      html = html.replace(
+        new RegExp('<img data-recurso="' + escaparParaRegex(id) + '"[^>]*>', 'g'),
+        (_) => {
+          /* Usa callback para evitar que caracteres especiales en dataUrl se interpreten. */
+          return '<img data-recurso="' + id + '" src="' + dataUrl + '" />';
+        }
+      );
+    } else {
+      recursosFaltantes.add(id);
+    }
+  }
+
+  if (recursosFaltantes.size > 0) {
+    console.warn('[plantillaRenderer] Recursos faltantes: ' + [...recursosFaltantes].join(', '));
+  }
+
+  return { html, vacios: [...vacios], recursosFaltantes: [...recursosFaltantes] };
 }
