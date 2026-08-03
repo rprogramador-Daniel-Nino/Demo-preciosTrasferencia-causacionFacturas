@@ -67,6 +67,21 @@ export default function ReporteGenerador({ study, estudioId }) {
         '; esas tablas quedaron con un marcador que hay que completar'
       );
     }
+    /* Sin el embudo del motor, la tabla 16 sale con los números del informe de
+       referencia. Es el tipo de dato ajeno que no puede llegar a un documento que se
+       radica, así que se nombra la tabla y qué hacer. */
+    if (!d.razonesRechazoCubiertas) {
+      avisos.push(
+        'la tabla 16 de razones de rechazo conserva las cifras del informe de referencia: ' +
+        'ejecuta la selección del motor de comparables para que se calculen con este estudio'
+      );
+    }
+    if (d.razonesRechazoDescuadradas) {
+      avisos.push(
+        'los conteos de la tabla 16 no suman el universo evaluado, así que el estudio ' +
+        'cambió después de la última selección: vuelve a ejecutarla antes de radicar'
+      );
+    }
     return avisos;
   };
 

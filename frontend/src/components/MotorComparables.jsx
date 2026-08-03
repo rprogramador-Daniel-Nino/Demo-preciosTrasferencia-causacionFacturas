@@ -53,7 +53,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [cmode, setCmode] = useState(study.cmode || 'all');
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
-  const [selectionFunnel, setSelectionFunnel] = useState(null);
+  /* El embudo se guarda con el estudio: la tabla de razones de rechazo del informe se
+     arma con estos conteos, y si vivieran solo en memoria habría que volver a ejecutar
+     la selección cada vez que se recarga para poder generar el Word. */
+  const [selectionFunnel, setSelectionFunnel] = useState(study.embudoSeleccion || null);
   /* Estado visible de la carga de EEFF. `uploadingEEFF` y `eeffLog` ya existían
      pero nadie los leía en el JSX, así que al cargar un EEFF no se veía nada:
      ni que estaba trabajando, ni los hallazgos contables, ni los errores, que
@@ -93,6 +96,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
+      /* Conteos de la última selección: alimentan la tabla 16 del informe. */
+      embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
          cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
          App, que lo separa antes de subirlo: se guarda en localStorage y no en
@@ -100,7 +105,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch, selectionFunnel]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -372,6 +377,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
+        /* Desglose por criterio, para la tabla de razones de rechazo del informe. */
+        porMotivo: result.rechazadasPorMotivo,
         rechazadasFiltros: cat.filtro,
         curadas: veredicto ? veredicto.total : 0,
         reutilizadas: veredicto ? (veredicto.reutilizadas || 0) : 0,
