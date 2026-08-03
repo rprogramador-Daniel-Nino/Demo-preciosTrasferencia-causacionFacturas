@@ -11,8 +11,18 @@ import { valorDeCampo } from './plantillaVocabulario.js';
    No se usan todos los campos del vocabulario a propósito: `anio` vale "2024" y
    aparece legítimamente en columnas comparativas y en tablas macroeconómicas,
    así que revisarlo produciría decenas de avisos falsos y enseñaría a ignorar
-   el banner. Estos cuatro son largos y específicos: si sobreviven, sobran. */
-const CAMPOS_TESTIGO = ['nit', 'ent', 'vinc', 'vinc_id'];
+   el banner. Por lo mismo quedan fuera `ciiu`, los topes UVT y el rango: son
+   cortos o se repiten por diseño.
+
+   Los de esta lista son largos, específicos y no se repiten en tablas
+   comparativas: si sobreviven, sobran. `direccion` está aquí porque el domicilio
+   del contribuyente anterior viajaba al informe nuevo —es la razón por la que se
+   agregó al vocabulario—, y dejarlo fuera de esta revisión dejaba el arreglo a
+   medias. */
+const CAMPOS_TESTIGO = [
+  'nit', 'ent', 'vinc', 'vinc_id', 'vinc_tipo',
+  'direccion', 'representante', 'objeto', 'accionista.nombre',
+];
 
 /* Solo el texto visible: los `data:image/png;base64,...` de las imágenes son
    megabytes de dígitos donde cualquier NIT aparece por casualidad, y los
@@ -189,6 +199,22 @@ export function revisarAntesDeGenerar({
   /* Va al final porque es la más grave: si algo sobrevive aquí, el documento
      que se va a radicar lleva datos de otro contribuyente. */
   if (htmlRenderizado) {
+    /* Una plantilla marcada de la que no sale ni un valor de referencia no es
+       una plantilla limpia: es una plantilla sin marcas útiles. Pasaba cuando
+       todas las llamadas del marcado fallaban y se confirmaba igual, y era el
+       peor caso posible —la revisión de la salida se queda sin nada que
+       comparar, así que callaba justo cuando el informe entero salía con los
+       datos del cliente anterior—. Avisar de la ceguera es lo que impide que se
+       confunda con un visto bueno. */
+    if (!valores || !valores.length) {
+      avisos.push({
+        nivel: 'aviso',
+        texto:
+          'La plantilla no tiene ninguna marca de los campos que identifican al contribuyente, ' +
+          'así que no se puede comprobar si el documento salió con datos del cliente anterior. ' +
+          'Vuelve a marcar la plantilla o revisa el informe entero a mano antes de radicar.',
+      });
+    }
     avisos.push(...revisarSalidaRenderizada({ estudio, htmlRenderizado, valores }));
   }
 

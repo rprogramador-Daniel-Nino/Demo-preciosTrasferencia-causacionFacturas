@@ -357,3 +357,70 @@ test('sin htmlRenderizado la guarda de salida no opina', () => {
     revisarSalidaRenderizada({ estudio: estudioNuevo, htmlRenderizado: '', valores: [] }), []
   );
 });
+
+/* --- Residuales cerrados tras la revisión de rama --- */
+
+/* R3: el domicilio y el representante son de la misma clase que la razón
+   social —largos, específicos, sin repetirse en tablas comparativas— y antes
+   quedaban fuera de la revisión de la salida. `direccion` es el caso que
+   motivó agregarla al vocabulario, así que dejarla sin vigilar dejaba el
+   arreglo a medias. */
+test('la revisión de la salida vigila también domicilio, representante y objeto', () => {
+  const marcado =
+    '<p><span data-campo="direccion">carrera 48 No 20-34 Medellín</span></p>' +
+    '<p><span data-campo="representante">Juan Pérez</span></p>' +
+    '<p><span data-campo="objeto">Desarrollo de videojuegos</span></p>' +
+    '<p><span data-campo="accionista.nombre">END GAME INTERACTIVE INC</span></p>' +
+    '<p><span data-campo="vinc_tipo">Otros servicios (07)</span></p>';
+  const campos = valoresDeReferencia(marcado).map((v) => v.campo);
+  for (const c of ['direccion', 'representante', 'objeto', 'accionista.nombre', 'vinc_tipo']) {
+    assert.ok(campos.includes(c), 'no se vigila el campo ' + c);
+  }
+});
+
+test('un domicilio del cliente anterior que sobrevive sin marcar se reporta', () => {
+  const estudio = { nit: '800123456-7', direccion: 'calle 10 No 5-20 Bogotá' };
+  const marcado = '<p><span data-campo="direccion">carrera 48 No 20-34 Medellín</span></p>';
+  const avisos = revisarAntesDeGenerar({
+    estudio,
+    vacios: [],
+    tieneAnexo: true,
+    recursosFaltantes: [],
+    /* La salida trae el domicilio viejo en un párrafo que nadie marcó. */
+    htmlRenderizado: '<p>El domicilio es carrera 48 No 20-34 Medellín</p>',
+    valores: valoresDeReferencia(marcado),
+  });
+  assert.strictEqual(avisos.length, 1, JSON.stringify(avisos));
+  assert.match(avisos[0].texto, /carrera 48 No 20-34 Medellín/);
+  assert.strictEqual(avisos[0].campo, 'direccion');
+});
+
+/* R2: si el marcado no dejó ninguna marca de los campos testigo, la revisión de
+   la salida se queda sin nada que comparar. Callar en ese caso sería
+   indistinguible de un visto bueno, y es justo el peor caso: pasaba cuando
+   todas las llamadas del marcado fallaban. */
+test('una plantilla marcada sin ningún valor de referencia avisa de su propia ceguera', () => {
+  const avisos = revisarAntesDeGenerar({
+    estudio: estudioNuevo,
+    vacios: [],
+    tieneAnexo: true,
+    recursosFaltantes: [],
+    htmlRenderizado: '<p>END GAME INTERACTIVE COLOMBIA S.A.S con NIT 901.337.576-6</p>',
+    valores: [],
+  });
+  assert.strictEqual(avisos.length, 1, JSON.stringify(avisos));
+  assert.match(avisos[0].texto, /no se puede comprobar/i);
+});
+
+test('con valores de referencia presentes no se avisa de ceguera', () => {
+  const avisos = revisarAntesDeGenerar({
+    estudio: estudioNuevo,
+    vacios: [],
+    tieneAnexo: true,
+    recursosFaltantes: [],
+    /* El nombre viejo ya no está: la sustitución funcionó y no hay nada que decir. */
+    htmlRenderizado: '<p>ACME COLOMBIA S.A.S</p>',
+    valores: [{ campo: 'ent', valor: 'END GAME INTERACTIVE COLOMBIA S.A.S' }],
+  });
+  assert.deepStrictEqual(avisos, []);
+});

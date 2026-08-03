@@ -35,8 +35,10 @@ export default function ReporteGenerador({ study, estudioId }) {
   const [plantillaPendiente, setPlantillaPendiente] = useState(null);
   const [avisos, setAvisos] = useState([]);
   /* Resultado del marcado (trozos enviados, fallidos, propuestas rechazadas).
-     Se muestra dentro del revisor mientras se revisan las marcas. */
-  const [avisoMarcado, setAvisoMarcado] = useState('');
+     Se guarda el dato crudo y no el texto ya redactado porque el mismo hecho se
+     cuenta distinto antes y después de confirmar: antes se puede reintentar,
+     después ya no. */
+  const [telemetriaMarcado, setTelemetriaMarcado] = useState(null);
 
   /* La hidratación sustituye por literales del informe de End Game 2024. Con
      el PDF de otro cliente no coincide ninguno y el documento sale con los
@@ -221,7 +223,7 @@ export default function ReporteGenerador({ study, estudioId }) {
             const propuestas = await proponerMarcas(ref.html);
             setPlantillaPendiente({ id: idPlantilla, html: ref.html, huecos });
             setMarcasPropuestas(propuestas.marcas);
-            setAvisoMarcado(resumirMarcado(propuestas));
+            setTelemetriaMarcado(propuestas);
           } else {
             renderizarYAvisar(marcadoPrevio, recursos, huecos);
           }
@@ -258,13 +260,23 @@ export default function ReporteGenerador({ study, estudioId }) {
      páginas son unas 25 llamadas y basta un 429 para que un tramo entero quede
      sin marcar. Devuelve '' cuando todo salió bien, para no poner un banner que
      no dice nada. */
-  const resumirMarcado = ({ trozosEnviados, trozosFallidos, rechazadasPorVocabulario }) => {
+  const resumirMarcado = ({ trozosEnviados, trozosFallidos, rechazadasPorVocabulario },
+                          { reintentable = true } = {}) => {
     const lineas = [];
     if (trozosFallidos) {
+      /* El consejo de reintentar solo vale antes de confirmar. Después, el
+         marcado queda guardado y resubir el mismo PDF encuentra su hash y no
+         vuelve a llamar a la IA, así que prometer un reintento sería falso
+         —y un consejo falso sobre un documento que se radica es peor que
+         ninguno—. De ahí el `reintentable`. */
       lineas.push(trozosFallidos + ' de ' + trozosEnviados + ' tramos del documento no se ' +
                   'pudieron marcar (falló la llamada o la respuesta no traía JSON). Ese texto ' +
                   'queda SIN MARCAR: los datos del contribuyente anterior que hubiera ahí van a ' +
-                  'sobrevivir. Vuelve a subir el PDF para reintentarlo antes de radicar.');
+                  'sobrevivir. ' +
+                  (reintentable
+                    ? 'Puedes cancelar y volver a subir el PDF para marcarlo otra vez.'
+                    : 'El marcado ya quedó guardado: revisa a mano esos tramos del documento ' +
+                      'antes de radicar.'));
     }
     if (rechazadasPorVocabulario) {
       lineas.push(rechazadasPorVocabulario + ' propuesta(s) se rechazaron porque el campo no está ' +
@@ -315,16 +327,42 @@ export default function ReporteGenerador({ study, estudioId }) {
     return lineas.join('\n');
   };
 
-  /* Aplica las marcas que la persona confirmó y guarda el resultado. */
+  /* Aplica las marcas que la persona confirmó y guarda el resultado.
+
+     Un marcado sin ninguna marca aplicada NO se guarda. Guardarlo era el peor
+     fallo posible: la plantilla quedaba registrada como «marcada», así que en
+     cada apertura posterior se leía ese marcado vacío y ya no se volvía a
+     llamar a la IA, la revisión de la salida no tenía valores con los que
+     comparar, y el informe seguía saliendo con el nombre y el NIT del cliente
+     anterior sin un solo aviso. Al no guardarlo, la plantilla sigue disponible
+     para marcarse otra vez y la ruta de respaldo por literales toma el relevo
+     mientras tanto. */
   const confirmarMarcas = async (marcas) => {
     const { html, aplicadas, descartadas } = aplicarMarcas(plantillaPendiente.html, marcas);
+    const resumen = [
+      telemetriaMarcado ? resumirMarcado(telemetriaMarcado, { reintentable: aplicadas === 0 }) : '',
+      descartadas.length ? resumirDescartes(descartadas) : '',
+    ].filter(Boolean).join('\n');
+
+    if (aplicadas === 0) {
+      setMarcasPropuestas(null);
+      setPlantillaPendiente(null);
+      setTelemetriaMarcado(null);
+      alert(
+        'No se aplicó ninguna marca, así que la plantilla NO se guardó como marcada.\n' +
+        (resumen ? resumen + '\n' : '') +
+        'El informe se seguirá generando por la ruta antigua, que sustituye por valores ' +
+        'literales y puede dejar datos del contribuyente anterior. Vuelve a subir el PDF ' +
+        'para marcarlo de nuevo.'
+      );
+      return;
+    }
+
     await guardarMarcado(plantillaPendiente.id, html);
     renderizarYAvisar(html, recursosCargados, plantillaPendiente.huecos || 0);
     setMarcasPropuestas(null);
     setPlantillaPendiente(null);
-    const resumen = [avisoMarcado, descartadas.length ? resumirDescartes(descartadas) : '']
-      .filter(Boolean).join('\n');
-    setAvisoMarcado('');
+    setTelemetriaMarcado(null);
     if (resumen) alert('Se aplicaron ' + aplicadas + ' marcas.\n' + resumen);
   };
 
@@ -415,10 +453,10 @@ export default function ReporteGenerador({ study, estudioId }) {
       {marcasPropuestas && (
         <RevisorDeMarcas
           marcas={marcasPropuestas}
-          aviso={avisoMarcado}
+          aviso={telemetriaMarcado ? resumirMarcado(telemetriaMarcado) : ''}
           onConfirmar={confirmarMarcas}
           onCancelar={() => {
-            setMarcasPropuestas(null); setPlantillaPendiente(null); setAvisoMarcado('');
+            setMarcasPropuestas(null); setPlantillaPendiente(null); setTelemetriaMarcado(null);
           }}
         />
       )}
