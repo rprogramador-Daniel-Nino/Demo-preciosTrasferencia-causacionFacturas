@@ -6,7 +6,9 @@
    insertando etiquetas garantiza que altere texto por el camino —una tilde, una
    cifra, un párrafo resumido— y este documento se radica ante la DIAN. */
 
-import { esCampoValido } from './plantillaVocabulario.js';
+import axios from 'axios';
+import { VOCABULARIO, esCampoValido } from './plantillaVocabulario.js';
+import { extraerJSON } from './comparablesEngine.js';
 
 /* Trocea el HTML en segmentos de texto y de etiqueta. La búsqueda solo entra en
    los de texto: buscar sobre el HTML crudo permitiría marcar dentro de un
@@ -123,4 +125,80 @@ export function aplicarMarcas(html, marcas) {
   }
 
   return { html: segmentos.map((s) => s.valor).join(''), aplicadas, descartadas };
+}
+
+/* 112 páginas no caben en una petición. Se trocea por límites de etiqueta para
+   no partir el HTML por la mitad; las marcas se acumulan y cada fragmento se
+   verifica después contra el documento completo. */
+export function trocear(html, maxCaracteres = 12000) {
+  const trozos = [];
+  let actual = '';
+  for (const parte of html.split(/(?=<)/)) {
+    if (actual && actual.length + parte.length > maxCaracteres) {
+      trozos.push(actual);
+      actual = '';
+    }
+    actual += parte;
+  }
+  if (actual) trozos.push(actual);
+  return trozos;
+}
+
+const listaDeCampos = () =>
+  VOCABULARIO.map((v) => '- ' + v.campo + ': ' + v.etiqueta + ' (' + v.grupo + ')').join('\n');
+
+const promptDe = (trozo) =>
+  'Eres un asistente que prepara una plantilla de Informe Local de Precios de Transferencia.\n' +
+  'Recibes un fragmento del informe del año anterior. Debes señalar qué textos concretos son ' +
+  'datos del contribuyente que cambian de un informe a otro.\n\n' +
+  'Campos disponibles (elige SOLO de esta lista, no inventes nombres):\n' + listaDeCampos() +
+  '\n\nFragmento:\n' + trozo +
+  '\n\nResponde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
+  '{"marcas":[{"fragmento":"","campo":"","ocurrencia":1}]}\n' +
+  '"fragmento" debe ser el texto EXACTO tal y como aparece en el fragmento, sin reescribirlo, ' +
+  'sin corregir tildes y sin incluir etiquetas HTML. "ocurrencia" es 1 para la primera ' +
+  'aparición de ese texto, 2 para la segunda, y así. Si no hay nada que marcar, responde ' +
+  '{"marcas":[]}.';
+
+/* Llamada real al proxy. Se aísla aquí para que los tests inyecten la suya. */
+async function pedirAlModelo(prompt) {
+  const respuesta = await axios.post('/api/gemini', {
+    model: 'gemini-3-flash-preview',
+    contents: [{ parts: [{ text: prompt }] }],
+  });
+  /* Todas las partes, no solo la primera: los modelos parten la respuesta. */
+  return (respuesta.data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+}
+
+export async function proponerMarcas(html, opciones = {}) {
+  const pedir = opciones.pedir || pedirAlModelo;
+  const marcas = [];
+
+  for (const trozo of trocear(html, opciones.maxCaracteres)) {
+    let texto;
+    try {
+      texto = await pedir(promptDe(trozo));
+    } catch (err) {
+      /* Un trozo que falla no debe tumbar el marcado entero: son decenas de
+         llamadas y perder todo por una es inaceptable. */
+      console.error('[marcado] un trozo falló:', err);
+      continue;
+    }
+    let json;
+    try {
+      json = extraerJSON(texto);
+    } catch {
+      console.error('[marcado] respuesta sin JSON utilizable');
+      continue;
+    }
+    for (const m of (json && json.marcas) || []) {
+      if (!m || !m.fragmento || !esCampoValido(m.campo)) continue;
+      marcas.push({
+        fragmento: String(m.fragmento),
+        campo: m.campo,
+        ocurrencia: Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1,
+      });
+    }
+  }
+  return marcas;
 }

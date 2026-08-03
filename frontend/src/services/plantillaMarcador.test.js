@@ -144,3 +144,48 @@ test('remover los spans con múltiples marcas recupera el original', () => {
   const sinSpans = r.html.replace(/<span[^>]*>/g, '').replace(/<\/span>/g, '');
   assert.strictEqual(sinSpans, original);
 });
+
+import { trocear, proponerMarcas } from './plantillaMarcador.js';
+
+test('trocear no parte por la mitad una etiqueta', () => {
+  const html = '<p>' + 'a'.repeat(50) + '</p><p>' + 'b'.repeat(50) + '</p>';
+  const trozos = trocear(html, 60);
+  assert.ok(trozos.length > 1, 'debería trocearse');
+  assert.strictEqual(trozos.join(''), html, 'los trozos deben reconstruir el original');
+  for (const t of trozos) {
+    const abiertas = (t.match(/</g) || []).length;
+    const cerradas = (t.match(/>/g) || []).length;
+    assert.strictEqual(abiertas, cerradas, 'trozo con una etiqueta partida: ' + t);
+  }
+});
+
+test('proponerMarcas acepta solo campos del vocabulario', async () => {
+  const respuesta = JSON.stringify({
+    marcas: [
+      { fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 },
+      { fragmento: 'Carrera 7', campo: 'direccion', ocurrencia: 1 },
+    ],
+  });
+  const marcas = await proponerMarcas('<p>ACME S.A.S en Carrera 7</p>', {
+    pedir: async () => 'Aquí van las marcas:\n```json\n' + respuesta + '\n```\nEso es todo.',
+  });
+  assert.deepStrictEqual(marcas, [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }]);
+});
+
+test('un trozo que falla no tumba los demás', async () => {
+  let llamada = 0;
+  const marcas = await proponerMarcas('<p>' + 'a'.repeat(80) + '</p><p>ACME S.A.S</p>', {
+    maxCaracteres: 60,
+    pedir: async () => {
+      llamada++;
+      if (llamada === 1) throw new Error('502 del proxy');
+      return JSON.stringify({ marcas: [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }] });
+    },
+  });
+  assert.strictEqual(marcas.length, 1, 'debería conservar lo que sí salió');
+});
+
+test('una respuesta que no trae JSON no rompe', async () => {
+  const marcas = await proponerMarcas('<p>ACME</p>', { pedir: async () => 'No encontré nada.' });
+  assert.deepStrictEqual(marcas, []);
+});
