@@ -4,6 +4,8 @@ const { defineSecret } = require('firebase-functions/params');
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { actualizarAnalisisMercado } = require('./analisisMercadoActualizar');
 
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
@@ -230,6 +232,27 @@ exports.extraerCamara = onRequest(
       console.error('Error extrayendo Cámara de Comercio:', err);
       res.status(502).json({ error: 'Error procesando Cámara de Comercio con Gemini API', detail: err.message });
     }
+  }
+);
+
+// Refresca mensualmente las cifras y la narrativa de la Sección III (III.A/III.B)
+// en Firestore. No se ejecuta en cada informe: ver spec
+// docs/superpowers/specs/2026-08-03-analisis-mercado-ia-design.md.
+exports.actualizarAnalisisMercadoScheduled = onSchedule(
+  {
+    schedule: '0 6 1 * *',
+    timeZone: 'America/Bogota',
+    region: 'us-central1',
+    secrets: [GEMINI_API_KEY, ANTHROPIC_API_KEY],
+    timeoutSeconds: 300,
+  },
+  async () => {
+    const anioActual = new Date().getFullYear();
+    await actualizarAnalisisMercado({
+      geminiApiKey: GEMINI_API_KEY.value(),
+      claudeApiKey: ANTHROPIC_API_KEY.value(),
+      anioActual,
+    });
   }
 );
 
