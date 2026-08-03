@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { revisarAntesDeGenerar } from './plantillaGuardas.js';
+import {
+  revisarAntesDeGenerar, revisarSalidaRenderizada, valoresDeReferencia,
+} from './plantillaGuardas.js';
 
 const base = { estudio: { nit: '800123456-7' }, nitDeReferencia: '800123456-7', vacios: [], tieneAnexo: true, recursosFaltantes: [] };
 
@@ -256,4 +258,102 @@ test('NIT con bases distintas pero ambos con dígito de verificación debe avisa
   assert.strictEqual(avisos.length, 1);
   assert.match(avisos[0].texto, /90012345-6/);
   assert.match(avisos[0].texto, /900123456-7/);
+});
+
+/* --- Bloqueante 3: nadie miraba el HTML ya renderizado. Los fallos de
+   numeración de ocurrencias, de trozos perdidos y de campos fuera del
+   vocabulario son invisibles para las guardas de entrada: todas opinan sobre
+   los datos del estudio, no sobre el documento que se va a radicar. --- */
+
+const estudioNuevo = { nit: '800123456-7', ent: 'ACME COLOMBIA S.A.S' };
+
+test('los valores de referencia salen del contenido de las propias marcas', () => {
+  const marcado =
+    '<p>La sociedad <span data-campo="ent">END GAME INTERACTIVE COLOMBIA S.A.S</span> ' +
+    'con NIT <span data-campo="nit">901.337.576-6</span> declara</p>';
+  assert.deepStrictEqual(valoresDeReferencia(marcado), [
+    { campo: 'ent', valor: 'END GAME INTERACTIVE COLOMBIA S.A.S' },
+    { campo: 'nit', valor: '901.337.576-6' },
+  ]);
+});
+
+test('los valores de referencia no se repiten aunque la marca aparezca cien veces', () => {
+  const marcado = '<p><span data-campo="nit">901.337.576-6</span></p>'.repeat(5);
+  assert.strictEqual(valoresDeReferencia(marcado).length, 1);
+});
+
+test('solo se vigilan los campos testigo, no el año', () => {
+  const marcado = '<p><span data-campo="anio">2024</span></p>';
+  assert.deepStrictEqual(valoresDeReferencia(marcado), [],
+    'vigilar el año produciría avisos falsos en cada columna comparativa');
+});
+
+test('avisa con su cuenta si un dato de la referencia sobrevive en la salida', () => {
+  const avisos = revisarSalidaRenderizada({
+    estudio: estudioNuevo,
+    htmlRenderizado:
+      '<p>ACME COLOMBIA S.A.S declara</p><p>NIT 901.337.576-6</p><p>NIT 901.337.576-6</p>',
+    valores: [{ campo: 'nit', valor: '901.337.576-6' }],
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.strictEqual(avisos[0].cuenta, 2, 'debe decir cuántas veces sobrevivió');
+  assert.match(avisos[0].texto, /901\.337\.576-6/);
+  assert.match(avisos[0].texto, /800123456-7/, 'debe decir qué valor correspondía');
+});
+
+test('si nada de la referencia sobrevive no hay aviso', () => {
+  const avisos = revisarSalidaRenderizada({
+    estudio: estudioNuevo,
+    htmlRenderizado: '<p>ACME COLOMBIA S.A.S con NIT 800123456-7 declara</p>',
+    valores: [{ campo: 'nit', valor: '901.337.576-6' }, { campo: 'ent', valor: 'END GAME S.A.S' }],
+  });
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('no avisa cuando el estudio activo es el mismo contribuyente de la referencia', () => {
+  const avisos = revisarSalidaRenderizada({
+    estudio: estudioNuevo,
+    htmlRenderizado: '<p>NIT 800.123.456-7</p>',
+    valores: [{ campo: 'nit', valor: '800.123.456-7' }],
+  });
+  assert.deepStrictEqual(avisos, [], 'el informe del año siguiente del mismo cliente no es fuga');
+});
+
+test('sin dato en el estudio no se inventa un aviso: la marca ya salió como hueco', () => {
+  const avisos = revisarSalidaRenderizada({
+    estudio: {},
+    htmlRenderizado: '<p>NIT 901.337.576-6</p>',
+    valores: [{ campo: 'nit', valor: '901.337.576-6' }],
+  });
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('un base64 de imagen no dispara la guarda por casualidad', () => {
+  const avisos = revisarSalidaRenderizada({
+    estudio: estudioNuevo,
+    htmlRenderizado: '<img src="data:image/png;base64,901337576609013375766" />',
+    valores: [{ campo: 'nit', valor: '901337576609' }],
+  });
+  assert.deepStrictEqual(avisos, [], 'los atributos no se leen en el documento');
+});
+
+test('la guarda de salida se acumula con las demás dentro de revisarAntesDeGenerar', () => {
+  const avisos = revisarAntesDeGenerar({
+    estudio: estudioNuevo,
+    nitDeReferencia: '800123456-7',
+    vacios: [],
+    tieneAnexo: true,
+    recursosFaltantes: [],
+    htmlRenderizado: '<p>END GAME INTERACTIVE COLOMBIA S.A.S</p>',
+    valores: [{ campo: 'ent', valor: 'END GAME INTERACTIVE COLOMBIA S.A.S' }],
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /END GAME INTERACTIVE COLOMBIA S\.A\.S/);
+});
+
+test('sin htmlRenderizado la guarda de salida no opina', () => {
+  assert.deepStrictEqual(revisarAntesDeGenerar(base), []);
+  assert.deepStrictEqual(
+    revisarSalidaRenderizada({ estudio: estudioNuevo, htmlRenderizado: '', valores: [] }), []
+  );
 });

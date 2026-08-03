@@ -93,3 +93,19 @@ export const guardarMarcado = (plantillaId, html) =>
   guardarPlantilla(claveMarcado(plantillaId), html);
 
 export const leerMarcado = (plantillaId) => leerPlantilla(claveMarcado(plantillaId));
+
+/* Cuántos huecos de anexo dejó el extractor en esta plantilla. Sin conservarla
+   no hay forma de saber, al recargar el estudio, que el documento tiene 16
+   páginas de anexo sin rellenar: `ref.huecos` solo existe en el momento de
+   subir el PDF, y la guarda del anexo se quedaba sin nada que mirar.
+   Va con prefijo en el almacén de plantillas, igual que el vínculo y el
+   marcado, para no subir VERSION del esquema. */
+export const claveHuecos = (plantillaId) => 'huecos:' + plantillaId;
+
+export const guardarHuecos = (plantillaId, cuantos) =>
+  guardarPlantilla(claveHuecos(plantillaId), Number(cuantos) || 0);
+
+/* Devuelve 0 y no null cuando no hay nada guardado: una plantilla anterior a
+   este cambio, o un .docx sin huecos, no debe disparar el aviso del anexo. */
+export const leerHuecos = (plantillaId) =>
+  leerPlantilla(claveHuecos(plantillaId)).then((v) => Number(v) || 0);

@@ -2,6 +2,87 @@
    y dejar continuar, porque quien redacta el informe sabe cosas que la
    herramienta no. Lo que no se admite es que el problema pase inadvertido. */
 
+import { valorDeCampo } from './plantillaVocabulario.js';
+
+/* Campos testigo para la revisión de la salida. Son los que identifican a un
+   contribuyente y a su vinculada, es decir los que delatan de inmediato que el
+   informe salió con datos de otro cliente.
+
+   No se usan todos los campos del vocabulario a propósito: `anio` vale "2024" y
+   aparece legítimamente en columnas comparativas y en tablas macroeconómicas,
+   así que revisarlo produciría decenas de avisos falsos y enseñaría a ignorar
+   el banner. Estos cuatro son largos y específicos: si sobreviven, sobran. */
+const CAMPOS_TESTIGO = ['nit', 'ent', 'vinc', 'vinc_id'];
+
+/* Solo el texto visible: los `data:image/png;base64,...` de las imágenes son
+   megabytes de dígitos donde cualquier NIT aparece por casualidad, y los
+   atributos no se leen en el documento. */
+const soloTexto = (html) => String(html || '').replace(/<[^>]*>/g, ' ');
+
+const normalizar = (v) => String(v == null ? '' : v).replace(/[\s.]/g, '').toUpperCase();
+
+/* Extrae de la plantilla marcada los valores que traía el informe de
+   referencia. El marcado envuelve el texto original sin alterarlo, así que el
+   contenido de una marca `data-campo="nit"` es literalmente el NIT del cliente
+   anterior. Devuelve `[{ campo, valor }]` sin repetir. */
+export function valoresDeReferencia(htmlMarcado, campos = CAMPOS_TESTIGO) {
+  const permitidos = new Set(campos);
+  const vistos = new Set();
+  const salida = [];
+  const rx = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
+  let m;
+  while ((m = rx.exec(String(htmlMarcado || ''))) !== null) {
+    const campo = m[1];
+    const valor = m[2].trim();
+    if (!permitidos.has(campo) || !valor) continue;
+    const clave = campo + '|' + valor;
+    if (vistos.has(clave)) continue;
+    vistos.add(clave);
+    salida.push({ campo, valor });
+  }
+  return salida;
+}
+
+/* Única verificación automática del objetivo de toda la rama: mira la SALIDA.
+   Las guardas de campos vacíos, imágenes y NIT opinan sobre las entradas, así
+   que un dato del cliente anterior que sobrevive sin marcar les es invisible.
+
+   Solo avisa cuando el estudio activo trae un valor distinto para ese campo: si
+   coincide (el mismo contribuyente el año siguiente, o el mismo país de la
+   vinculada) no hay fuga, y si el estudio no lo trae la marca ya salió como
+   hueco y no hay con qué comparar. */
+export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } = {}) {
+  const avisos = [];
+  const texto = soloTexto(htmlRenderizado);
+  if (!texto.trim()) return avisos;
+
+  for (const { campo, valor } of valores || []) {
+    const nuevo = valorDeCampo(estudio, campo);
+    if (nuevo === null || normalizar(nuevo) === normalizar(valor)) continue;
+
+    let cuenta = 0;
+    let desde = 0;
+    for (;;) {
+      const pos = texto.indexOf(valor, desde);
+      if (pos === -1) break;
+      cuenta++;
+      desde = pos + valor.length;
+    }
+    if (!cuenta) continue;
+
+    avisos.push({
+      nivel: 'aviso',
+      campo,
+      cuenta,
+      texto:
+        'El dato del informe de referencia "' + valor + '" (' + campo + ') sobrevive ' +
+        cuenta + ' vez(ces) en el documento generado, sin marcar. Debía ser "' + nuevo +
+        '": esas apariciones se van a radicar con el dato del contribuyente anterior.',
+    });
+  }
+  return avisos;
+}
+
 /* Extrae la base (dígitos sin guión) y el dígito de verificación de un NIT normalizado.
    Retorna { base: string de dígitos, dv: string de 1 dígito, dvConocido: boolean } */
 function extraerBaseYDV(nit) {
@@ -60,6 +141,8 @@ export function revisarAntesDeGenerar({
   vacios,
   tieneAnexo = true,
   recursosFaltantes,
+  htmlRenderizado,
+  valores,
 } = {}) {
   const avisos = [];
   const nitEstudio = (estudio && estudio.nit) || '';
@@ -101,6 +184,12 @@ export function revisarAntesDeGenerar({
         'Hay ' + recursosFaltantes.length + ' imagen(s) faltante(s) en el catálogo: ' +
         recursosFaltantes.join(', ') + '. El informe saldrá con esos espacios en blanco.',
     });
+  }
+
+  /* Va al final porque es la más grave: si algo sobrevive aquí, el documento
+     que se va a radicar lleva datos de otro contribuyente. */
+  if (htmlRenderizado) {
+    avisos.push(...revisarSalidaRenderizada({ estudio, htmlRenderizado, valores }));
   }
 
   return avisos;

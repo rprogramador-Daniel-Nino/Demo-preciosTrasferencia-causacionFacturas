@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { hashPlantilla, claveMarcado } from './plantillaStore.js';
+import { hashPlantilla, claveMarcado, claveHuecos } from './plantillaStore.js';
 
 test('el hash no colisiona con el de cero bytes', async () => {
   /* Regresión: si se hashea un buffer ya desprendido por pdf.js, digest no
@@ -29,4 +29,11 @@ test('la clave del marcado no colisiona con el HTML crudo ni con el vínculo', (
 
 test('plantillas distintas dan claves de marcado distintas', () => {
   assert.notStrictEqual(claveMarcado('abc'), claveMarcado('abd'));
+});
+
+test('la clave de huecos no colisiona con ninguna de las otras tres', () => {
+  assert.strictEqual(claveHuecos('abc123'), 'huecos:abc123');
+  assert.notStrictEqual(claveHuecos('abc123'), 'abc123', 'colisiona con el HTML crudo');
+  assert.notStrictEqual(claveHuecos('abc123'), 'vinculo:abc123', 'colisiona con el vinculo');
+  assert.notStrictEqual(claveHuecos('abc123'), claveMarcado('abc123'), 'colisiona con el marcado');
 });
