@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { hydrateExactWordTemplate } from './exactTemplateMapper.js';
+import {
+  hydrateExactWordTemplate, filasRazonesRechazo, diagnosticarCobertura,
+} from './exactTemplateMapper.js';
 
 /* Estudio de un cliente que NO es End Game. Todo lo que salga con datos de
    End Game en la salida es una fuga. */
@@ -191,4 +193,114 @@ test('la regla de la razón social no se come el nombre del vinculado', () => {
   assert.ok(salida.includes('PARTNER GAMES LLC'), 'el vinculado no se sustituyó');
   assert.ok(!/\bINC\b/.test(salida), 'quedó " INC" colgando: ' + salida);
   assert.ok(!salida.includes('ACME COLOMBIA S.A.S'), 'el contribuyente se colocó donde iba el vinculado');
+});
+
+/* ══════ Tabla 16. Razones de rechazo ══════
+   La plantilla trae los números de End Game —442 candidatas, 327 por diferencias
+   funcionales, 13 aceptadas— y hay que sustituirlos por los del estudio. */
+
+const TABLA_16 = `<p>
+A partir del anterior criterio de búsqueda se identificó un total de 442 Compañías comparables potenciales.
+</p>
+<p>
+<strong>Tabla 16. Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)</strong>
+</p>
+<table>
+<thead>
+<tr>
+<th><p><strong>FILTRO APLICADO INTERNACIONALES</strong></p></th>
+<th><p><strong>FILTROS APLICADO</strong></p></th>
+<th><p><strong>N° POR FILTRO</strong></p></th>
+</tr>
+</thead>
+<tbody>
+<tr><td><p>Diferencias funcionales</p></td><td><p>A</p></td><td><p>327</p></td></tr>
+<tr><td><p>Compañías Holding o consideradas grupo multinacional</p></td><td><p>C</p></td><td><p>36</p></td></tr>
+<tr><td colspan="2"><p><strong>TOTAL, UNIVERSO</strong></p></td><td><p><strong>442</strong></p></td></tr>
+</tbody>
+</table>
+<p>
+De esta manera, después de aplicar dichos criterios, quedaron <strong>13</strong> compañías comparables.
+</p>`;
+
+const embudoReal = {
+  evaluadas: 100,
+  seleccionadas: 8,
+  reserva: 12,
+  porMotivo: {
+    holding: 30, saldoNegativo: 5, perdidaOperativa: 15,
+    sinDescripcion: 0, actividadDistinta: 25, rigorFuncional: 5,
+  },
+};
+
+test('filasRazonesRechazo omite los criterios que no descartaron a nadie', () => {
+  /* Un informe que declara «Pérdidas operativas: 0» cuando el criterio se puso en
+     «incluir» confunde a quien lo revisa. */
+  const { filas } = filasRazonesRechazo(embudoReal);
+  assert.ok(!filas.some(f => f.clave === 'sinDescripcion'), 'la fila con cero no aparece');
+  assert.ok(filas.some(f => f.clave === 'holding'));
+});
+
+test('filasRazonesRechazo asigna letras corridas sobre las filas que quedan', () => {
+  /* Cinco criterios con descartes (el de «sin descripción» quedó en cero y se omite),
+     más la reserva y las aceptadas: siete filas, letras A a G sin huecos. */
+  const { filas } = filasRazonesRechazo(embudoReal);
+  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+  assert.deepStrictEqual(filas.map(f => f.clave), [
+    'rigorFuncional', 'actividadDistinta', 'holding', 'perdidaOperativa', 'saldoNegativo',
+    'reserva', 'aceptadas',
+  ]);
+});
+
+test('filasRazonesRechazo cuadra la suma con el universo evaluado', () => {
+  /* 30+5+15+25+5 rechazos + 12 de reserva + 8 aceptadas = 100 */
+  const { cuadra, suma, total } = filasRazonesRechazo(embudoReal);
+  assert.strictEqual(suma, 100);
+  assert.strictEqual(total, 100);
+  assert.ok(cuadra);
+});
+
+test('filasRazonesRechazo avisa cuando los conteos no suman el universo', () => {
+  const desfasado = { ...embudoReal, evaluadas: 500 };
+  const { cuadra } = filasRazonesRechazo(desfasado);
+  assert.ok(!cuadra, 'un estudio cambiado tras la selección deja la tabla inconsistente');
+});
+
+test('filasRazonesRechazo sin selección ejecutada no inventa nada', () => {
+  assert.ok(filasRazonesRechazo(null).sinDatos);
+  assert.ok(filasRazonesRechazo({}).sinDatos);
+  assert.deepStrictEqual(filasRazonesRechazo(null).filas, []);
+});
+
+test('la tabla 16 se reemplaza con los datos del estudio', () => {
+  const salida = hydrateExactWordTemplate(TABLA_16, { ...otroCliente, embudoSeleccion: embudoReal });
+  assert.ok(!salida.includes('>327<'), 'la cifra de End Game sigue en la tabla');
+  assert.ok(!/>442</.test(salida), 'el total de End Game sigue en la tabla');
+  assert.ok(salida.includes('30'), 'debe aparecer el conteo real de holdings');
+  assert.ok(salida.includes('100'), 'y el universo real como total');
+  assert.ok(salida.includes('Compañías comparables aceptadas'));
+});
+
+test('el texto que rodea la tabla 16 queda con las cifras del estudio', () => {
+  /* Dejar la tabla al día y el párrafo con los números del cliente anterior produce un
+     documento que se contradice dentro de la misma página. */
+  const salida = hydrateExactWordTemplate(TABLA_16, { ...otroCliente, embudoSeleccion: embudoReal });
+  assert.ok(!salida.includes('total de 442 Compañías'), 'el universo de End Game sobrevivió en el texto');
+  assert.ok(/quedaron <strong>[\s\S]{0,200}?8[\s\S]{0,200}?<\/strong> compañías comparables/.test(salida),
+    'el número de comparables finales no se actualizó en el texto');
+});
+
+test('sin selección ejecutada la tabla 16 no se toca', () => {
+  /* Preferible que se vea que falta ejecutar el motor a que salgan cifras inventadas.
+     El aviso de cobertura es el que se encarga de decirlo. */
+  const salida = hydrateExactWordTemplate(TABLA_16, otroCliente);
+  assert.ok(salida.includes('327'), 'la tabla queda como estaba');
+  const d = diagnosticarCobertura(TABLA_16, otroCliente);
+  assert.strictEqual(d.razonesRechazoCubiertas, false);
+});
+
+test('el diagnóstico avisa cuando la tabla 16 quedó descuadrada', () => {
+  const d = diagnosticarCobertura(TABLA_16, { ...otroCliente, embudoSeleccion: { ...embudoReal, evaluadas: 500 } });
+  assert.strictEqual(d.razonesRechazoCubiertas, true);
+  assert.strictEqual(d.razonesRechazoDescuadradas, true);
 });

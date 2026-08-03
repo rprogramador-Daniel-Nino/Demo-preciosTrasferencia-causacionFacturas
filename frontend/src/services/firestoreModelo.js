@@ -504,6 +504,34 @@ export function catalogoAComparablesPrevias(items) {
 }
 
 /**
+ * Deja el rastro de modificación a nombre de quien migra un documento a su espacio.
+ *
+ * Hace falta porque las reglas exigen que el nombre escrito sea el del token de quien
+ * escribe, y un documento del modelo compartido puede traer el de otra persona: cuando
+ * la base era común, alguien creaba el estudio y otro lo modificaba, así que
+ * `actualizadoPorNombre` quedaba con un nombre ajeno. Copiarlo tal cual hacía que
+ * Firestore rechazara la escritura completa con `permission-denied`, sin decir qué campo
+ * sobraba.
+ *
+ * El rastro de creación se conserva: la migración solo alcanza documentos cuyo
+ * `creadoPor` es el propio uid, y su fecha original es justamente el dato a mantener.
+ */
+export function rastroPropio(datos, usuario) {
+  const copia = { ...(datos || {}) };
+  const nombre = (usuario && usuario.nombre) || '';
+  copia.actualizadoPor = (usuario && usuario.uid) || '';
+  if (nombre) copia.actualizadoPorNombre = nombre.slice(0, 120);
+  else delete copia.actualizadoPorNombre;
+  /* Si el nombre de creación no es el que hoy emite el proveedor —porque cambió, o
+     porque lo escribió otra persona— se retira en lugar de arriesgar el rechazo: es un
+     campo de conveniencia, y el uid de `creadoPor` es el dato de verdad. */
+  if (copia.creadoPorNombre && copia.creadoPorNombre !== nombre) {
+    delete copia.creadoPorNombre;
+  }
+  return copia;
+}
+
+/**
  * Lee el índice de estudios de localStorage y devuelve lo que hay que subir.
  * Se usa una sola vez por navegador, para que nadie pierda lo que tenía guardado
  * antes de que existiera la base.

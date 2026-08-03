@@ -31,7 +31,7 @@ import { montoOperacion } from '../utils/calculations';
 import {
   docEstudio, docCliente, docEeff, idEeff, normalizarNit, anioValido, aNumero,
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
-  verificarTamano, agregarCompartido, quitarCompartido,
+  verificarTamano, agregarCompartido, quitarCompartido, rastroPropio,
 } from './firestoreModelo';
 
 const ESTUDIOS = 'estudios';
@@ -445,9 +445,15 @@ export async function migrarDesdeLocalStorage(usuario, { guardarLocales } = {}) 
  * El documento se copia y solo entonces se borra del sitio viejo: si la copia falla, no
  * se pierde nada y el siguiente arranque vuelve a intentarlo.
  */
+/** `permission-denied` tal como lo emite el SDK web, y con el prefijo del servicio por
+    si alguna versión lo entrega así. Ver una sola vez cuál llega no basta: el código es
+    lo único que distingue «las reglas no lo permiten» de un fallo de red. */
+const esSinPermiso = (err) =>
+  !!err && (err.code === 'permission-denied' || err.code === 'firestore/permission-denied');
+
 export async function migrarDesdeRaiz(usuario) {
   const uid = uidDe(usuario);
-  const resumen = { movidos: 0, fallidos: 0, porColeccion: {} };
+  const resumen = { movidos: 0, fallidos: 0, sinPermiso: false, porColeccion: {} };
 
   for (const nombre of COLECCIONES_MIGRABLES) {
     const cuenta = { movidos: 0, fallidos: 0 };
@@ -456,18 +462,33 @@ export async function migrarDesdeRaiz(usuario) {
       const instantanea = await getDocs(consulta);
       for (const d of instantanea.docs) {
         try {
-          await setDoc(doc(db, 'usuarios', uid, nombre, d.id), d.data());
+          await setDoc(doc(db, 'usuarios', uid, nombre, d.id), rastroPropio(d.data(), usuario));
           await deleteDoc(d.ref);
           cuenta.movidos++;
         } catch (err) {
           cuenta.fallidos++;
+          /* `permission-denied` aquí no es cosa de este documento: significa que las
+             reglas del espacio privado no están desplegadas todavía, así que van a
+             fallar todos. Se corta y se informa una vez, en lugar de dejar un error por
+             documento en la consola —cientos de líneas para una única causa. */
+          if (esSinPermiso(err)) {
+            resumen.sinPermiso = true;
+            console.warn(
+              '[migración privada] las reglas del espacio privado no están desplegadas: ' +
+              'no se movió nada. Al desplegarlas, la migración se reintenta al abrir la aplicación.'
+            );
+            resumen.porColeccion[nombre] = cuenta;
+            resumen.fallidos += cuenta.fallidos;
+            return resumen;
+          }
           console.error(`[migración privada] no se pudo mover ${nombre}/${d.id}`, err);
         }
       }
     } catch (err) {
       /* Sin permiso de lectura o sin la colección: no hay nada que mover y no es un
          fallo que deba impedir entrar a la aplicación. */
-      console.warn(`[migración privada] no se pudo revisar ${nombre}`, err);
+      if (esSinPermiso(err)) resumen.sinPermiso = true;
+      console.warn(`[migración privada] no se pudo revisar ${nombre}`, err && err.code ? err.code : err);
     }
     resumen.porColeccion[nombre] = cuenta;
     resumen.movidos += cuenta.movidos;

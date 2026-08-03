@@ -147,11 +147,122 @@ export function diagnosticarCobertura(rawHtml, study) {
     if (!serie || serie[year] === undefined) seriesFaltantes.push(concepto);
   });
 
+  /* La tabla de razones de rechazo solo se puede armar si el motor dejó su embudo. Sin
+     él, esa tabla sale con los números del informe de referencia, que es exactamente lo
+     que no debe pasar en un documento que se radica: hay que avisarlo antes. */
+  const razones = filasRazonesRechazo(study && study.embudoSeleccion);
+
   return {
     year,
     sectorialCubierto: html.includes('id="' + ANCLA_SECTORIAL + '"'),
     seriesFaltantes,
+    razonesRechazoCubiertas: !razones.sinDatos,
+    /* Los conteos no suman el universo evaluado: algo cambió en el estudio después de
+       ejecutar la selección y la tabla quedaría inconsistente. */
+    razonesRechazoDescuadradas: !razones.sinDatos && !razones.cuadra,
   };
+}
+
+/* ══════════════ Tabla 16. Razones de rechazo ══════════════
+   La plantilla trae los números del informe de referencia —442 candidatas, 327 por
+   diferencias funcionales, 13 aceptadas— y hay que sustituirlos por los del estudio.
+   El insumo es `study.embudoSeleccion`, que guarda el motor al ejecutar la selección.
+
+   Cada fila es un criterio del motor. Se omiten las que no descartaron a nadie: un
+   informe que declara «Pérdidas operativas: 0» cuando el criterio se puso en «incluir»
+   confunde a quien lo revisa. Las letras se asignan sobre las filas que quedan, para
+   conservar el formato de la columna «FILTROS APLICADO» del documento original. */
+
+const RAZONES_RECHAZO = [
+  ['rigorFuncional', 'Diferencias funcionales: perfil no comparable con la parte examinada'],
+  ['actividadDistinta', 'Actividad económica distinta a la de la parte examinada'],
+  ['sinDescripcion', 'Sin descripción del negocio que permita verificar la actividad'],
+  ['holding', 'Compañías holding o sin actividad operativa propia'],
+  ['perdidaOperativa', 'Pérdidas operativas en el período analizado'],
+  ['saldoNegativo', 'Saldos negativos en balances: cifras no verosímiles'],
+];
+
+const LETRAS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/**
+ * Filas de la tabla de razones de rechazo, ya con su letra y su conteo.
+ *
+ * Devuelve también si los números cuadran: rechazos + aceptadas + reserva debe dar el
+ * universo evaluado. Si no cuadra, quien genera el informe tiene que saberlo antes de
+ * radicarlo, no después.
+ */
+export function filasRazonesRechazo(embudo) {
+  const e = embudo || null;
+  if (!e || !e.evaluadas) return { filas: [], total: 0, cuadra: false, sinDatos: true };
+
+  const porMotivo = e.porMotivo || {};
+  const filas = [];
+  RAZONES_RECHAZO.forEach(([clave, etiqueta]) => {
+    const cuantas = Number(porMotivo[clave]) || 0;
+    if (cuantas > 0) filas.push({ clave, etiqueta, cuantas });
+  });
+
+  /* Las válidas que no entraron al cupo no son rechazos ni comparables finales: sin
+     esta fila la columna no suma el universo y el informe se contradice solo. */
+  const reserva = Number(e.reserva) || 0;
+  if (reserva > 0) {
+    filas.push({
+      clave: 'reserva',
+      etiqueta: 'Compañías que superaron los filtros pero no entraron en la muestra final',
+      cuantas: reserva,
+    });
+  }
+
+  const aceptadas = Number(e.seleccionadas) || 0;
+  filas.push({ clave: 'aceptadas', etiqueta: 'Compañías comparables aceptadas', cuantas: aceptadas });
+
+  const filasConLetra = filas.map((f, i) => ({ ...f, letra: LETRAS[i] || '' }));
+  const suma = filas.reduce((acc, f) => acc + f.cuantas, 0);
+  const total = Number(e.evaluadas) || 0;
+
+  return { filas: filasConLetra, total, cuadra: suma === total, suma, sinDatos: false };
+}
+
+/**
+ * Cuerpo de la tabla 16 con los datos del estudio. Sin selección ejecutada devuelve
+ * null y quien llama deja la tabla como estaba: es preferible que el usuario vea que
+ * falta ejecutar el motor a que el informe salga con cifras inventadas —o peor, con las
+ * del cliente anterior, que es el error que este documento no puede cometer.
+ */
+export function generarTablaRazonesRechazo(study, wrap) {
+  const { filas, total, sinDatos } = filasRazonesRechazo(study && study.embudoSeleccion);
+  if (sinDatos) return null;
+
+  const celda = (contenido, negrita) => `<td>\n<p>\n${negrita ? `<strong>${contenido}</strong>` : contenido}\n</p>\n</td>`;
+
+  const cuerpo = filas.map(f =>
+    `<tr>\n${celda(f.etiqueta)}\n${celda(f.letra)}\n${celda(wrap(fmt(f.cuantas)))}\n</tr>`
+  ).join('\n');
+
+  return `<tbody>\n${cuerpo}\n<tr>\n<td colspan="2">\n<p>\n<strong>TOTAL, UNIVERSO</strong>\n</p>\n</td>\n` +
+    `${celda(wrap(fmt(total)), true)}\n</tr>\n</tbody>`;
+}
+
+/**
+ * Sustituye el cuerpo de la tabla de razones de rechazo dentro del HTML del informe.
+ *
+ * Se localiza por el texto del encabezado y no con una sola expresión regular sobre
+ * todo el documento: el informe trae más de veinte tablas con el mismo marcado, y una
+ * regex de `<tbody>` acabaría reemplazando la primera que encontrara.
+ */
+export function reemplazarTablaRazonesRechazo(html, study, wrap) {
+  const cuerpoNuevo = generarTablaRazonesRechazo(study, wrap);
+  if (!cuerpoNuevo) return html;
+
+  const ancla = html.search(/FILTRO\s+APLICADO\s+INTERNACIONALES/i);
+  if (ancla < 0) return html;
+
+  const inicio = html.indexOf('<tbody>', ancla);
+  if (inicio < 0) return html;
+  const fin = html.indexOf('</tbody>', inicio);
+  if (fin < 0) return html;
+
+  return html.slice(0, inicio) + cuerpoNuevo + html.slice(fin + '</tbody>'.length);
 }
 
 /**
@@ -386,6 +497,32 @@ export function hydrateExactWordTemplate(rawHtml, study) {
   /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ─── */
   const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
   html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
+
+  /* ─── Tabla 16 y las cifras que la rodean ───
+     La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
+     acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
+     «quedaron 13 compañías comparables», cifras de End Game. Dejar la tabla al día y el
+     párrafo con los números del cliente anterior deja un documento que se contradice
+     dentro de la misma página. */
+  html = reemplazarTablaRazonesRechazo(html, study, wrap);
+  const embudo = study.embudoSeleccion || null;
+  if (embudo && embudo.evaluadas) {
+    html = html.replace(
+      /total de\s*(?:<[^>]+>)*\s*442\s*(?:<\/[^>]+>)*\s*Compañías comparables potenciales/i,
+      `total de ${wrap(fmt(embudo.evaluadas))} Compañías comparables potenciales`
+    );
+    const finales = Number(embudo.seleccionadas) || 0;
+    if (finales) {
+      html = html.replace(
+        /quedaron\s*<strong>\s*13\s*<\/strong>\s*compañías comparables/i,
+        `quedaron <strong>${wrap(fmt(finales))}</strong> compañías comparables`
+      );
+      html = html.replace(
+        /(qued[óo] conformada por\s*)<strong>\s*13\s*<\/strong>(\s*compañías)/i,
+        (todo, antes, despues) => antes + '<strong>' + wrap(fmt(finales)) + '</strong>' + despues
+      );
+    }
+  }
 
 
   // Reemplazar Rango Intercuartil si se calculó

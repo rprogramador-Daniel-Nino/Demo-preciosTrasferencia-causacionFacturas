@@ -647,6 +647,48 @@ test('un perfil inventado por la IA se ignora en lugar de provocar un descarte',
   }
 });
 
+test('el desglose por motivo cuenta cada criterio por separado', () => {
+  /* La tabla 16 del informe no puede decir «descartadas por los filtros»: tiene que
+     decir cuántas por holding, cuántas por pérdidas y cuántas por actividad. */
+  const candidatas = [
+    { id: 'H1', name: 'Holding Uno', isHolding: true },
+    { id: 'H2', name: 'Holding Dos', isHolding: true },
+    { id: 'N1', name: 'Negativa', hasNegativeBalance: true },
+    { id: 'P1', name: 'Perdida', hasLoss: true, op: -5 },
+    { id: 'E1', name: 'Empresario', desc: 'publishes its own titles', s: 100, op: 10 },
+    { id: 'R1', name: 'Otra actividad', desc: 'iron ore mining', s: 100, op: 10 },
+    { id: 'S1', name: 'Sin desc', desc: '', s: 100, op: 10 },
+    { id: 'OK', name: 'Buena', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const veredicto = { porId: { R1: { coincide: false }, OK: { coincide: true }, E1: { coincide: true } } };
+  const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estandar' }, 'desarrollo de software', [], { iaMatch: veredicto });
+
+  assert.deepStrictEqual(r.rechazadasPorMotivo, {
+    holding: 2,
+    saldoNegativo: 1,
+    perdidaOperativa: 1,
+    sinDescripcion: 1,
+    actividadDistinta: 1,
+    rigorFuncional: 1,
+  });
+});
+
+test('el desglose por motivo suma lo mismo que las categorías', () => {
+  const candidatas = [
+    { id: 'H', name: 'Holding', isHolding: true },
+    { id: 'R', name: 'Otra', desc: 'iron ore mining', s: 100, op: 10 },
+    { id: 'E', name: 'Empresario', desc: 'publishes its own titles', s: 100, op: 10 },
+    { id: 'OK', name: 'Buena', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const veredicto = { porId: { R: { coincide: false }, OK: { coincide: true }, E: { coincide: true } } };
+  const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estandar' }, 'desarrollo de software', [], { iaMatch: veredicto });
+
+  const porMotivo = Object.values(r.rechazadasPorMotivo).reduce((a, b) => a + b, 0);
+  const porCategoria = Object.values(r.rechazadasPorCategoria).reduce((a, b) => a + b, 0);
+  assert.strictEqual(porMotivo, porCategoria, 'los dos desgloses cuentan los mismos descartes');
+  assert.strictEqual(porMotivo, r.rechazadas.length);
+});
+
 test('las categorías de rechazo cubren cada descarte una sola vez', () => {
   /* El embudo deducía «rechazadas por la IA» con una expresión regular sobre el
      motivo y las «descartadas por los filtros» por resta, así que un descarte podía
