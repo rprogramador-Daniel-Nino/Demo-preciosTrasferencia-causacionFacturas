@@ -121,3 +121,53 @@ test('reemplazo dinámico de la tabla de PIB Mundial y PIB de Colombia para el a
   assert.ok(salidaColombia.includes('3.0'), 'Falta valor 3.0 de PIB Colombia');
   assert.ok(salidaColombia.includes('3.2'), 'Falta valor 3.2 de PIB Colombia');
 });
+
+test('el apartado mundial (III.A) usa la narrativa de datosMacro cuando existe', () => {
+  const html =
+    '<ol>\n<li>\n<a id="_Toc208930977"></a><strong>Análisis del Panorama de la Economía Mundial</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game sobre 2023-2024 y Ucrania-Rusia.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930978"></a><strong>Análisis del panorama de la economía colombiana</strong>\n</li>\n</ol>';
+  const datosMacro = { narrativa: { mundial: '<p>Narrativa nueva de la economía mundial.</p>' } };
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 }, datosMacro);
+
+  assert.ok(salida.includes('Narrativa nueva de la economía mundial.'), 'no se insertó la narrativa nueva');
+  assert.ok(!salida.includes('Ucrania-Rusia'), 'quedó el texto viejo de End Game');
+  assert.ok(salida.includes('id="_Toc208930977"'), 'se borró el ancla de III.A');
+  assert.ok(salida.includes('id="_Toc208930978"'), 'el reemplazo se comió el ancla de III.B');
+});
+
+test('el apartado colombiano (III.B) usa la narrativa de datosMacro cuando existe', () => {
+  const html =
+    '<ol>\n<li>\n<a id="_Toc208930978"></a><strong>Análisis del panorama de la economía colombiana</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930979"></a><strong>Análisis del Sector</strong>\n</li>\n</ol>';
+  const datosMacro = { narrativa: { colombia: '<p>Narrativa nueva de Colombia.</p>' } };
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 }, datosMacro);
+
+  assert.ok(salida.includes('Narrativa nueva de Colombia.'), 'no se insertó la narrativa nueva');
+  assert.ok(!salida.includes('Texto original de End Game'), 'quedó el texto viejo');
+});
+
+test('sin datosMacro, III.A y III.B quedan con el marcador de pendiente, no con el texto de End Game', () => {
+  const html =
+    '<ol>\n<li>\n<a id="_Toc208930977"></a><strong>Análisis del Panorama de la Economía Mundial</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930978"></a><strong>Análisis del panorama de la economía colombiana</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930979"></a><strong>Análisis del Sector</strong>\n</li>\n</ol>';
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 });
+
+  assert.ok(!salida.includes('Texto original de End Game'), 'quedó el texto de End Game sin datosMacro');
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía mundial'), 'falta el marcador de III.A');
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía colombiana'), 'falta el marcador de III.B');
+});
+
+test('las 8 tablas macro usan las cifras de datosMacro cuando están disponibles', () => {
+  const html = '<p>\n<strong>Crecimiento del PIB Mundial (2023-2025)</strong>\n</p>\n<table>\n<tr>\n<td>\n<p>\n3.2\n</p>\n</td>\n</tr>\n</table>';
+  const datosMacro = {
+    series: { pib_mundial: { valores: { '2026': '9.9' }, fuente: 'Fuente de prueba' } },
+  };
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 }, datosMacro);
+  assert.ok(salida.includes('9.9'), 'la tabla no usó la cifra de datosMacro');
+  assert.ok(salida.includes('Fuente de prueba'), 'la tabla no citó la fuente de datosMacro');
+});
