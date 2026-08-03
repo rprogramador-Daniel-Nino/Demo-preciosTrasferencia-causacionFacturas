@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { extraerReferencia, estiloBaseDe } from './pdfReferenceExtractor.js';
+import {
+  extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
+} from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
 
@@ -226,4 +228,24 @@ test('sólo se declara el tamaño cuando se desvía de verdad del cuerpo', async
   );
   /* La letra pequeña de verdad —notas y fuentes de tabla— sí se conserva. */
   assert.ok(tamanos.some((t) => t <= 9), 'se perdió la letra pequeña');
+});
+
+test('la plantilla queda sellada con la versión del lector', async () => {
+  const r = await extraer();
+  assert.strictEqual(versionDe(r.html), VERSION_EXTRACTOR);
+  assert.deepStrictEqual(loQueFaltaPorVersion(VERSION_EXTRACTOR), [], 'la actual no debe faltar nada');
+});
+
+test('una plantilla sin sello se trata como la más antigua y se dice qué le falta', () => {
+  /* Las guardadas antes de que existiera el sello no lo traen. Devolver 1 y no
+     null es lo que permite enumerar lo que les falta en vez de callar. */
+  assert.strictEqual(versionDe('<p>plantilla vieja</p>'), 1);
+  const falta = loQueFaltaPorVersion(1);
+  assert.ok(falta.length >= 2, 'debería enumerar imágenes y tipografía');
+  assert.ok(falta.some((f) => /tipograf/i.test(f)));
+  assert.ok(falta.some((f) => /im[áa]genes/i.test(f)));
+  /* Y la versión intermedia sólo le falta lo suyo. */
+  const falta2 = loQueFaltaPorVersion(2);
+  assert.strictEqual(falta2.length, 1);
+  assert.ok(/tipograf/i.test(falta2[0]));
 });

@@ -3,7 +3,9 @@ import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'luc
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
-import { extraerReferencia, estiloBaseDe } from '../services/pdfReferenceExtractor';
+import {
+  extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion,
+} from '../services/pdfReferenceExtractor';
 import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
@@ -138,6 +140,12 @@ export default function ReporteGenerador({ study, estudioId }) {
       recursosFaltantes: r.recursosFaltantes,
       htmlRenderizado: r.html,
       valores,
+      /* Qué le falta a esta plantilla por venir de un lector de PDF anterior. Las
+         plantillas se guardan y se reutilizan, así que una extraída hace dos
+         versiones sigue produciendo el documento de entonces —sin la tipografía
+         del informe, por ejemplo— y sin este aviso no hay forma de saberlo ni de
+         saber que la solución es volver a subir el PDF. */
+      faltaPorVersion: loQueFaltaPorVersion(versionDe(htmlMarcado)),
     }));
     setCustomTemplateLoaded(true);
   };

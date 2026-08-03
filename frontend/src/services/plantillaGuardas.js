@@ -153,6 +153,7 @@ export function revisarAntesDeGenerar({
   recursosFaltantes,
   htmlRenderizado,
   valores,
+  faltaPorVersion,
 } = {}) {
   const avisos = [];
   const nitEstudio = (estudio && estudio.nit) || '';
@@ -184,6 +185,20 @@ export function revisarAntesDeGenerar({
       texto:
         'Hay ' + vacios.length + ' campo(s) marcados sin dato en el estudio, que saldrán ' +
         'como "—": ' + vacios.join(', ') + '.',
+    });
+  }
+
+  /* Plantilla extraída con un lector anterior. Va antes de la revisión de la salida
+     porque explica por qué el documento no se parece al original, y la acción no es
+     revisar nada: es volver a subir el PDF. Volver a marcar no sirve, porque reusa
+     el mismo HTML guardado. */
+  if (faltaPorVersion && faltaPorVersion.length) {
+    avisos.push({
+      nivel: 'aviso',
+      texto:
+        'Esta plantilla se leyó con una versión anterior del lector de PDF, así que ' +
+        faltaPorVersion.join('; y ') + '. Vuelve a subir el mismo PDF de referencia ' +
+        'para recuperarlo (volver a marcar no basta: reutiliza lo ya guardado).',
     });
   }
 
