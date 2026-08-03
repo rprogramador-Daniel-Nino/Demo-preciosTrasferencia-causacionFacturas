@@ -8,6 +8,8 @@ import {
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila,
   aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
   pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
+  normalizarCorreo, esCorreoCompartible, agregarCompartido, quitarCompartido,
+  TOPE_COMPARTIDO,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -195,6 +197,86 @@ test('verificarTamano falla antes de escribir y nombra el campo que sobra', () =
 test('verificarTamano devuelve el peso cuando cabe, para poder vigilarlo', () => {
   const bytes = verificarTamano({ datos: { ent: 'Acme' } });
   assert.ok(bytes > 0 && bytes < TOPE_DOCUMENTO);
+});
+
+/* ══════ compartir un estudio ══════
+   Los estudios son privados de cada consultor —antes eran comunes y el equipo se
+   pisaba— y compartir es una decisión explícita por estudio. Se comparte por correo
+   porque no hay directorio del equipo: nadie puede averiguar el uid de un compañero. */
+
+const DOM = 'crconsultorescolombia.com';
+const OPCIONES = { dominio: DOM, correoPropio: 'antonio@' + DOM };
+
+test('normalizarCorreo deja el correo como lo comparan las reglas', () => {
+  assert.strictEqual(normalizarCorreo('  Juan.Mendez@CRConsultoresColombia.COM '), 'juan.mendez@crconsultorescolombia.com');
+  assert.strictEqual(normalizarCorreo(null), '');
+});
+
+test('esCorreoCompartible admite solo cuentas del dominio', () => {
+  assert.ok(esCorreoCompartible('juan@' + DOM, DOM));
+  assert.ok(esCorreoCompartible('  JUAN@' + DOM.toUpperCase() + ' ', DOM));
+  assert.ok(!esCorreoCompartible('juan@gmail.com', DOM));
+  assert.ok(!esCorreoCompartible('no-es-un-correo', DOM));
+  assert.ok(!esCorreoCompartible('', DOM));
+});
+
+test('agregarCompartido habilita a un companero del dominio', () => {
+  const { lista, error } = agregarCompartido([], 'Juan@' + DOM, OPCIONES);
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(lista, ['juan@' + DOM], 'se guarda normalizado');
+});
+
+test('agregarCompartido rechaza fuera del dominio, con motivo', () => {
+  const { lista, error } = agregarCompartido([], 'ajeno@gmail.com', OPCIONES);
+  assert.match(error, /@crconsultorescolombia\.com/);
+  assert.deepStrictEqual(lista, [], 'y no toca la lista');
+});
+
+test('agregarCompartido no deja compartir consigo mismo ni repetir', () => {
+  assert.match(agregarCompartido([], 'antonio@' + DOM, OPCIONES).error, /ya es suyo/);
+  assert.match(agregarCompartido(['juan@' + DOM], 'JUAN@' + DOM, OPCIONES).error, /Ya tiene acceso/,
+    'la comparación es insensible a mayúsculas');
+});
+
+test('agregarCompartido respeta el tope que verifican las reglas', () => {
+  const llena = Array.from({ length: TOPE_COMPARTIDO }, (_, i) => `p${i}@${DOM}`);
+  const { error } = agregarCompartido(llena, 'otro@' + DOM, OPCIONES);
+  assert.match(error, new RegExp(String(TOPE_COMPARTIDO)));
+});
+
+test('quitarCompartido retira el acceso sin tocar a los demás', () => {
+  const lista = quitarCompartido(['juan@' + DOM, 'daniel@' + DOM], 'JUAN@' + DOM);
+  assert.deepStrictEqual(lista, ['daniel@' + DOM]);
+});
+
+test('docEstudio no comparte con nadie por omisión', () => {
+  const doc = docEstudio({ study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA });
+  assert.ok(!('compartidoCon' in doc), 'sin el campo, el documento es privado y no queda un array vacío');
+});
+
+test('docEstudio conserva los accesos concedidos cuando el guardado no los menciona', () => {
+  /* Un autoguardado normal no debe retirar permisos: el estudio se guarda muchas veces
+     y la lista de accesos solo la toca la pantalla de compartir. */
+  const previo = { creadoPor: 'uid-antonio', creadoEn: 'F', compartidoCon: ['juan@' + DOM] };
+  const doc = docEstudio({ study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, previo, marcaDeTiempo: AHORA });
+  assert.deepStrictEqual(doc.compartidoCon, ['juan@' + DOM]);
+});
+
+test('docEstudio aplica la lista nueva cuando se pasa explícitamente', () => {
+  const previo = { creadoPor: 'uid-antonio', creadoEn: 'F', compartidoCon: ['juan@' + DOM] };
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, previo, marcaDeTiempo: AHORA,
+    compartidoCon: [],
+  });
+  assert.ok(!('compartidoCon' in doc), 'retirar al último deja el estudio privado otra vez');
+});
+
+test('docEstudio normaliza y deduplica la lista antes de escribirla', () => {
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA,
+    compartidoCon: ['JUAN@' + DOM, 'juan@' + DOM, '  daniel@' + DOM + ' ', ''],
+  });
+  assert.deepStrictEqual(doc.compartidoCon, ['juan@' + DOM, 'daniel@' + DOM]);
 });
 
 /* ══════ documento de cliente ══════ */

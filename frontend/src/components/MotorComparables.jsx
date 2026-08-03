@@ -448,7 +448,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setEeffGuardados({ buscando: true });
     try {
       const claves = comparables.map(c => c.nameKey || nameKey(c.name || '')).filter(Boolean);
-      const guardados = await leerEeffDeComparables(claves, anio);
+      const guardados = await leerEeffDeComparables(claves, anio, usuario);
       setEeffGuardados({ propuestas: comparablesConEeffReutilizable(comparables, guardados), anio });
     } catch (err) {
       console.error('[EEFF compartidos] no se pudo consultar', err);
@@ -476,7 +476,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const anio = anioEstudio - 1;
     setCatalogo({ enCurso: true });
     try {
-      const items = await comparablesHistoricasDelAnio(anio);
+      const items = await comparablesHistoricasDelAnio(anio, usuario);
       if (!items.length) {
         setCatalogo({ traidas: 0, anio });
         return;
@@ -1279,10 +1279,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="text-[11px] text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
               {eeffCompartido.error
                 ? <span className="text-amber-600 dark:text-amber-400">
-                    Las cifras quedaron en el estudio, pero no se pudieron compartir con el equipo: {eeffCompartido.error}
+                    Las cifras quedaron en el estudio, pero no se pudieron guardar para reutilizarlas: {eeffCompartido.error}
                   </span>
                 : <>
-                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para el resto del equipo
+                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para sus otros estudios
                     {eeffCompartido.anio ? ` (año ${eeffCompartido.anio})` : ''}
                     {eeffCompartido.omitidas ? ` · ${eeffCompartido.omitidas} sin ingresos, no se compartieron` : ''}
                     {eeffCompartido.fallidas ? ` · ${eeffCompartido.fallidas} fallaron` : ''}

@@ -139,12 +139,67 @@ export function separarEstudio(study) {
   return { nube, local };
 }
 
+/* Máximo de personas con las que se puede compartir un mismo estudio. Las reglas
+   comprueban el tope: sin él, la lista sería un campo de crecimiento libre. */
+export const TOPE_COMPARTIDO = 25;
+
+/**
+ * Correo corporativo normalizado, tal como se compara en las reglas.
+ *
+ * La compartición se hace por correo y no por identificador de usuario a propósito: no
+ * existe un directorio del equipo, así que nadie puede averiguar el uid de un
+ * compañero, mientras que su correo se conoce. Las reglas contrastan este valor con
+ * `request.auth.token.email`, que Google emite en minúsculas y verificado.
+ */
+export function normalizarCorreo(correo) {
+  return String(correo || '').trim().toLowerCase();
+}
+
+/** ¿Es un correo del dominio corporativo? Fuera de él no hay a quién compartir. */
+export function esCorreoCompartible(correo, dominio) {
+  const limpio = normalizarCorreo(correo);
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+$/.test(limpio) && limpio.endsWith('@' + dominio);
+}
+
+/**
+ * Añade un correo a la lista de habilitados, sin repetir y respetando el tope.
+ * Devuelve la lista nueva y por qué, si no se pudo.
+ */
+export function agregarCompartido(lista, correo, { dominio, correoPropio }) {
+  const actual = (lista || []).map(normalizarCorreo).filter(Boolean);
+  const limpio = normalizarCorreo(correo);
+  if (!limpio) return { lista: actual, error: 'Escriba el correo de la persona.' };
+  if (!esCorreoCompartible(limpio, dominio)) {
+    return { lista: actual, error: `Solo se puede compartir con cuentas @${dominio}.` };
+  }
+  if (limpio === normalizarCorreo(correoPropio)) {
+    return { lista: actual, error: 'El estudio ya es suyo: no hace falta compartirlo consigo mismo.' };
+  }
+  if (actual.includes(limpio)) {
+    return { lista: actual, error: 'Ya tiene acceso a este estudio.' };
+  }
+  if (actual.length >= TOPE_COMPARTIDO) {
+    return { lista: actual, error: `No se puede compartir con más de ${TOPE_COMPARTIDO} personas.` };
+  }
+  return { lista: [...actual, limpio], error: null };
+}
+
+/** Retira un correo de la lista de habilitados. */
+export function quitarCompartido(lista, correo) {
+  const limpio = normalizarCorreo(correo);
+  return (lista || []).map(normalizarCorreo).filter(c => c && c !== limpio);
+}
+
 /**
  * Documento de `estudios`. `previo` es el documento que ya estaba en la nube: si
- * existe, se conserva su rastro de creación, porque las reglas lo exigen inmutable y
- * porque el estudio pudo crearlo otra persona.
+ * existe, se conserva su rastro de creación, porque las reglas lo exigen inmutable.
+ *
+ * `compartidoCon` viaja aparte del resto del estudio, en `opciones`: no es un dato del
+ * informe sino un permiso, y quien edita el estudio no debería poder alterarlo sin
+ * querer. Si no se pasa, se conserva el que ya tuviera el documento —así un guardado
+ * normal no retira accesos concedidos antes.
  */
-export function docEstudio({ study, usuario, previo = null, marcaDeTiempo }) {
+export function docEstudio({ study, usuario, previo = null, marcaDeTiempo, compartidoCon }) {
   const { nube } = separarEstudio(study);
   const nit = String(nube.nit || '').trim();
   const doc = {
@@ -159,6 +214,13 @@ export function docEstudio({ study, usuario, previo = null, marcaDeTiempo }) {
   if (nit) doc.nit = nit.slice(0, 30);
   const clienteNit = normalizarNit(nube.nit);
   if (clienteNit) doc.clienteNit = clienteNit.slice(0, 30);
+
+  /* Lista de habilitados: la que se pase, o la que ya tenía el documento. Solo se
+     escribe el campo si hay alguien, para no dejar arrays vacíos en documentos que
+     nunca se compartieron. */
+  const habilitados = (compartidoCon !== undefined ? compartidoCon : (previo && previo.compartidoCon)) || [];
+  const limpios = [...new Set(habilitados.map(normalizarCorreo).filter(Boolean))].slice(0, TOPE_COMPARTIDO);
+  if (limpios.length) doc.compartidoCon = limpios;
   /* El nombre solo se escribe si el proveedor lo entregó: las reglas lo comparan con
      el del token, y un valor inventado hace fallar la escritura entera. */
   if (usuario.nombre) doc.actualizadoPorNombre = usuario.nombre.slice(0, 120);

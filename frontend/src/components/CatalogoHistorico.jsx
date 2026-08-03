@@ -7,7 +7,7 @@ import { filtrarCatalogo, aniosDelCatalogo } from '../services/firestoreModelo';
    anteriores. Lo alimenta el paso de fuente histórica del motor; esta vista es para
    consultarlo: saber si una empresa ya se usó, en qué años, con qué indicador y de qué
    informe salió el dato. */
-export default function CatalogoHistorico() {
+export default function CatalogoHistorico({ usuario }) {
   const [items, setItems] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
@@ -16,17 +16,18 @@ export default function CatalogoHistorico() {
   const [desplegado, setDesplegado] = useState(null);
 
   const cargar = useCallback(async () => {
+    if (!usuario) return;
     setCargando(true);
     setError('');
     try {
-      setItems(await listarComparablesHistoricas());
+      setItems(await listarComparablesHistoricas(usuario));
     } catch (err) {
       console.error('[catálogo] no se pudo leer', err);
       setError((err && err.message) || 'No se pudo leer el catálogo.');
     } finally {
       setCargando(false);
     }
-  }, []);
+  }, [usuario]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -51,7 +52,7 @@ export default function CatalogoHistorico() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">Catálogo de comparables</h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Empresas aceptadas como comparables en estudios anteriores del equipo, con el rastro del informe del que salieron.
+            Empresas aceptadas como comparables en sus estudios anteriores, con el rastro del informe del que salieron.
           </p>
         </div>
         <button
