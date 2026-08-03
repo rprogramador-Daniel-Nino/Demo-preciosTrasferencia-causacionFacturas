@@ -2,24 +2,40 @@
    y dejar continuar, porque quien redacta el informe sabe cosas que la
    herramienta no. Lo que no se admite es que el problema pase inadvertido. */
 
+/* Normaliza un NIT para comparación: extrae solo los 9 dígitos base,
+   ignorando puntos, espacios, guiones y dígito de verificación. */
+function normalizarNIT(nit) {
+  if (!nit) return '';
+  // Remover puntos, espacios, guiones
+  const limpio = String(nit).replace(/[-\s.]/g, '');
+  // Extraer solo los primeros 9 dígitos (ignorar dígito de verificación)
+  const digitos = limpio.replace(/\D/g, '');
+  return digitos.substring(0, 9);
+}
+
 export function revisarAntesDeGenerar({
   estudio,
   nitDeReferencia,
   vacios,
-  tieneAnexo,
+  tieneAnexo = true,
   recursosFaltantes,
-}) {
+} = {}) {
   const avisos = [];
   const nitEstudio = (estudio && estudio.nit) || '';
 
-  if (nitDeReferencia && nitEstudio && nitDeReferencia !== nitEstudio) {
-    avisos.push({
-      nivel: 'aviso',
-      texto:
-        'El informe de referencia es del NIT ' + nitDeReferencia +
-        ' y el estudio activo es del NIT ' + nitEstudio +
-        '. Revisa que la plantilla corresponda a este contribuyente.',
-    });
+  if (nitDeReferencia && nitEstudio) {
+    const nitRefNormalizado = normalizarNIT(nitDeReferencia);
+    const nitEstudioNormalizado = normalizarNIT(nitEstudio);
+
+    if (nitRefNormalizado && nitEstudioNormalizado && nitRefNormalizado !== nitEstudioNormalizado) {
+      avisos.push({
+        nivel: 'aviso',
+        texto:
+          'El informe de referencia es del NIT ' + nitDeReferencia +
+          ' y el estudio activo es del NIT ' + nitEstudio +
+          '. Revisa que la plantilla corresponda a este contribuyente.',
+      });
+    }
   }
 
   if (!tieneAnexo) {

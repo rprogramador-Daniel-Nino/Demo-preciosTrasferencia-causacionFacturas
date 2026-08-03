@@ -68,3 +68,91 @@ test('avisos se acumulan incluyendo recursosFaltantes', () => {
   });
   assert.strictEqual(avisos.length, 4);
 });
+
+// Tests para normalización de NIT
+test('NIT con puntos se normaliza y no dispara aviso si es igual', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800.123.456-7' },
+    nitDeReferencia: '800123456-7',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT con espacios se normaliza y no dispara aviso si es igual', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800 123 456-7' },
+    nitDeReferencia: '800123456-7',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT con puntos y espacios se normaliza correctamente', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800.123.456 - 7' },
+    nitDeReferencia: '800123456-7',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT sin dígito de verificación iguala a NIT con dígito de verificación si la base coincide', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800123456' },
+    nitDeReferencia: '800123456-7',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT con dígito de verificación iguala a NIT sin dígito si la base coincide', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800123456-7' },
+    nitDeReferencia: '800123456',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT verdaderamente distinto sigue disparando aviso a pesar de normalización', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800.123.456-7' },
+    nitDeReferencia: '901337576-6',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /901337576-6/);
+  assert.match(avisos[0].texto, /800\.123\.456-7/);
+});
+
+// Tests para entradas degeneradas
+test('sin argumento no lanza y devuelve aviso vacío', () => {
+  const avisos = revisarAntesDeGenerar();
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('argumento undefined no lanza y devuelve aviso vacío', () => {
+  const avisos = revisarAntesDeGenerar(undefined);
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('objeto vacío {} no lanza y devuelve aviso vacío', () => {
+  const avisos = revisarAntesDeGenerar({});
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('estudio null no lanza y devuelve aviso vacío', () => {
+  const avisos = revisarAntesDeGenerar({ ...base, estudio: null });
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('vacios null no lanza', () => {
+  const avisos = revisarAntesDeGenerar({ ...base, vacios: null });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('recursosFaltantes null no lanza', () => {
+  const avisos = revisarAntesDeGenerar({ ...base, recursosFaltantes: null });
+  assert.strictEqual(avisos.length, 0);
+});
