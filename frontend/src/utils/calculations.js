@@ -124,6 +124,31 @@ export function montoOperacion(study) {
   return null;
 }
 
+/**
+ * Compara el ingreso total del P&L (`t_s`) contra el monto de la operación con la
+ * vinculada (`montoOperacion`). Cuando la parte examinada también factura a terceros
+ * no vinculados (por ejemplo un proyecto tipo CoCrea), esos dos montos difieren y el
+ * margen no debe calcularse sobre el ingreso total sin depurar — de ahí `seg_excluido`
+ * en el modelo del estudio. Devuelve null si falta alguno de los dos montos.
+ */
+export function segmentacionDesajuste(study, umbral = 0.05) {
+  const s = study || {};
+  const ingresoPL = num(s.t_s);
+  const monto = montoOperacion(s);
+  if (ingresoPL === null || monto === null || ingresoPL === 0) return null;
+
+  const diferencia = ingresoPL - monto;
+  const diferenciaPct = Math.abs(diferencia) / Math.abs(ingresoPL);
+
+  return {
+    ingresoPL,
+    monto,
+    diferencia,
+    diferenciaPct,
+    desajuste: diferenciaPct > umbral
+  };
+}
+
 export function pliOf(o, kind) {
   if (!o) return null;
   const s = num(o.s);

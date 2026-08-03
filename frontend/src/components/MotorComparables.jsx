@@ -632,10 +632,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const useAdj = study.useadj || false;
   const interestRate = (num(study.prime) || 0) / 100;
 
+  // Ingreso/gasto de una operación no controlada (ej. proyecto CoCrea) ajeno a la
+  // vinculada: se resta de s y op para que el margen no se calcule sobre cifras mezcladas.
+  const segExcluido = num(study.seg_excluido) || 0;
+  const tsNum = num(study.t_s);
+  const tOpNum = num(study.t_op);
+
   const T = {
-    s: num(study.t_s),
+    s: tsNum !== null ? tsNum - segExcluido : null,
     c: num(study.t_c),
-    op: num(study.t_op),
+    op: tOpNum !== null ? tOpNum - segExcluido : null,
     ar: num(study.t_ar),
     inv: num(study.t_inv),
     ap: num(study.t_ap)
