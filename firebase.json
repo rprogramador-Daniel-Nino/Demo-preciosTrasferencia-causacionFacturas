@@ -19,6 +19,22 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "headers": [
+      {
+        "//": "El HTML nunca se cachea: si el navegador reutiliza un index.html viejo, pide un bundle que el build siguiente ya borró y la aplicación ejecuta código anterior sin que se note.",
+        "source": "**/*.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "//": "Los assets llevan el hash del contenido en el nombre, así que si cambian cambia la URL y se pueden cachear indefinidamente.",
+        "source": "/gestor-reportes/assets/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        ]
+      }
+    ],
     "rewrites": [
       {
         "source": "/api/claude",
