@@ -291,3 +291,21 @@ test('el logo queda marcado como encabezado, no como imagen del cuerpo', async (
   /* Y va antes que el contenido: es lo primero del documento. */
   assert.ok(m.index < r.html.indexOf('INTRODUCCIÓN'), 'el encabezado no está al principio');
 });
+
+test('cada página del original queda envuelta y numerada', async () => {
+  const r = await extraer();
+  /* Es lo que permite poner el salto donde el informe cambia de página. Sin esto la
+     portada se fundía con el índice y la primera página no se parecía a la del
+     original. */
+  const envueltas = (r.html.match(/<div class="pagina" data-pagina="\d+">/g) || []).length;
+  assert.strictEqual(envueltas, r.paginas, 'faltan páginas por envolver');
+  /* Y la portada es la primera, con su título dentro. */
+  const m = /<div class="pagina" data-pagina="1">([\s\S]*?)<div class="pagina" data-pagina="2">/
+    .exec(r.html);
+  assert.ok(m, 'no se pudo aislar la portada');
+  const texto = m[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.match(texto, /INFORME LOCAL DE PRECIOS DE TRANSFERENCIA/);
+  assert.match(texto, /PERÍODO FISCAL/);
+  /* El índice no debe estar en la portada: si aparece aquí, el salto no separa. */
+  assert.ok(!/RESUMEN EJECUTIVO/.test(texto), 'el índice se colvió a la portada');
+});
