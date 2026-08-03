@@ -4,7 +4,7 @@ import {
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini } from '../services/comparablesEngine';
+import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar } from '../services/comparablesEngine';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
@@ -122,12 +122,17 @@ export default function MotorComparables({ study, updateStudy }) {
     else console.log('[Capital IQ] ' + texto);
   };
 
-  /* Cura el universo contra la actividad detectada. El veredicto se guarda por
-     identificador y se persiste con el estudio: si el navegador se recarga, lo ya
-     curado no se pierde. Mientras corre, la selección del paso 3 queda bloqueada,
-     porque ejecutarla a medias produciría un conjunto con criterios distintos
-     según qué lotes hubieran terminado. */
-  const curarUniverso = async (candidatas) => {
+  /* Cura contra la actividad detectada las candidatas que ya pasaron los filtros
+     duros del paso 2 —no el universo entero—: curar lo que el motor iba a descartar
+     igual era casi la mitad del gasto en Gemini de cada corrida, y dejaba el panel de
+     curación hablando de un conjunto distinto al del embudo.
+
+     El veredicto se guarda por identificador y se persiste con el estudio: si el
+     navegador se recarga, lo ya curado no se pierde, y al reejecutar solo se consulta
+     lo que falte. Mientras corre, la selección del paso 3 queda bloqueada, porque
+     ejecutarla a medias produciría un conjunto con criterios distintos según qué
+     lotes hubieran terminado. */
+  const curarUniverso = async (candidatas, { forzar = false } = {}) => {
     const act = String(actividad || '').trim();
     if (!act) {
       anotar('Sin actividad detectada: se omite la curación por IA y el motor usará las palabras clave. Cargue el informe del año anterior para detectarla.', 'aviso');
@@ -140,6 +145,7 @@ export default function MotorComparables({ study, updateStudy }) {
       const veredicto = await curateCandidatesWithGemini(candidatas, act, {
         priorComps,
         fuente: (importMeta && importMeta.archivo) || '',
+        veredictoPrevio: forzar ? null : iaMatch,
         onProgress: (info) => {
           setCuracionProgreso(info);
           if (info.etapa === 'inicio' || info.etapa === 'omitida') anotar(info.mensaje, info.etapa === 'omitida' ? 'aviso' : 'info');
@@ -163,6 +169,32 @@ export default function MotorComparables({ study, updateStudy }) {
       setCurando(false);
       setCuracionProgreso(null);
     }
+  };
+
+  /* Cura solo lo que sobrevive a los filtros duros de la configuración actual. Es el
+     único punto de entrada a la curación: así el paso 2 y el paso 3 juzgan siempre el
+     mismo conjunto, que es lo que antes no ocurría. */
+  const curarValidas = async ({ forzar = false } = {}) => {
+    const { validas, rechazadas } = prefiltrar(universo, engineConfig);
+    if (rechazadas.length) {
+      anotar(`${rechazadas.length} de ${universo.length} quedan fuera por los filtros del paso 2 antes de curar; ` +
+        `se consultan ${validas.length}.`);
+    }
+    if (!validas.length) {
+      anotar('Los filtros del paso 2 no dejan ninguna candidata que curar. Amplíe los criterios.', 'aviso');
+      return null;
+    }
+    return curarUniverso(validas, { forzar });
+  };
+
+  /* Cambiar un filtro invalida el embudo: describía la corrida anterior y se quedaba
+     en pantalla como si describiera la configuración nueva —mostrando «6 de 6» con el
+     objetivo ya puesto en 8—, que es parte de por qué los dos pasos parecían
+     contradecirse. Se actualiza con la forma funcional para no perder cambios
+     seguidos sobre dos selectores distintos. */
+  const cambiarConfig = (campo, valor) => {
+    setEngineConfig(prev => ({ ...prev, [campo]: valor }));
+    setSelectionFunnel(null);
   };
 
   // Handle Capital IQ File Upload
@@ -201,12 +233,19 @@ export default function MotorComparables({ study, updateStudy }) {
       }
       setImportProgreso(null);
 
-      /* La curación se hace aquí, sobre el UNIVERSO recién importado, no después
-         de seleccionar: su veredicto es uno de los filtros del motor, así que
-         tiene que existir antes de puntuar. Curar después obligaba a quedarse
-         corto de comparables cuando la IA rechazaba parte de las elegidas. */
-      await curarUniverso(rows);
-      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3.', 'ok');
+      /* La curación NO se dispara aquí. Corría sobre el universo recién importado,
+         antes de que existieran los filtros del paso 2, así que por construcción no
+         podía respetarlos: evaluaba miles de compañías que el motor descartaba
+         después por holding, saldos negativos o pérdida operativa. Ahora la lanza el
+         paso 3 sobre las que ya pasaron esos filtros, y sigue ocurriendo antes de
+         puntuar —su veredicto es uno de los filtros del motor—, así que no se vuelve
+         al problema de quedarse corto de comparables por curar al final.
+
+         El veredicto se guarda por identificador: reejecutar el paso 3 con otros
+         filtros solo consulta las candidatas que aún no tengan dictamen. */
+      setIaMatch(null);
+      setSelectionFunnel(null);
+      anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
       // saber qué encabezados había es lo que permite corregir el export.
@@ -239,13 +278,17 @@ export default function MotorComparables({ study, updateStudy }) {
       anotar(`Evaluando ${universo.length} candidatas del universo…`);
 
       /* El veredicto de la curación entra como uno de los filtros del motor, junto
-         con holding, saldos negativos y pérdida operativa. Si no se curó —sin
-         actividad detectada o sin descripciones— el motor sigue con las palabras
-         clave, no descarta a nadie por omisión. */
+         con holding, saldos negativos, pérdida operativa y rigor funcional. Si no se
+         curó —sin actividad detectada o sin descripciones— el motor sigue con las
+         palabras clave, no descarta a nadie por omisión.
+
+         Se cura siempre aquí, pero `curarValidas` reutiliza por identificador lo ya
+         dictaminado para esta misma actividad: reejecutar tras cambiar un filtro no
+         vuelve a pagar el universo, solo consulta las candidatas que quedaron sin
+         veredicto porque el filtro anterior las excluía. */
       let veredicto = iaMatch;
-      if (!veredicto && String(actividad || '').trim()) {
-        anotar('El universo no estaba curado; curando ahora antes de puntuar…', 'aviso');
-        veredicto = await curarUniverso(universo);
+      if (String(actividad || '').trim()) {
+        veredicto = (await curarValidas()) || veredicto;
       }
 
       const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
@@ -253,9 +296,11 @@ export default function MotorComparables({ study, updateStudy }) {
         iaMatch: veredicto,
       });
 
-      const porIA = result.rechazadas.filter(c => /Curación IA|Sin descripción del negocio/.test(c.motivoRechazo || '')).length;
-      anotar(`${result.totalValidas} pasaron los filtros; ${result.rechazadas.length} descartadas` +
-        (porIA ? ` (${porIA} por la curación con IA)` : ''));
+      /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
+         una expresión regular sobre `motivoRechazo` y el embudo mezclaba etapas. */
+      const cat = result.rechazadasPorCategoria;
+      anotar(`${result.totalValidas} pasaron todos los criterios; ${result.rechazadas.length} descartadas ` +
+        `(${cat.filtro} por los filtros del paso 2, ${cat.ia} por la curación con IA, ${cat.rigor} por el rigor funcional)`);
       if (!result.ventasParteExaminada) {
         anotar('Sin ventas de la parte examinada: el factor de tamaño queda neutro. Diligéncielas en la tarjeta de cifras.', 'aviso');
       }
@@ -269,9 +314,12 @@ export default function MotorComparables({ study, updateStudy }) {
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
-        rechazadasFiltros: result.rechazadas.length - porIA,
+        rechazadasFiltros: cat.filtro,
         curadas: veredicto ? veredicto.total : 0,
-        rechazadasIA: porIA,
+        reutilizadas: veredicto ? (veredicto.reutilizadas || 0) : 0,
+        rechazadasIA: cat.ia,
+        rechazadasRigor: cat.rigor,
+        rigor: engineConfig.rigor,
         seleccionadas: finales.length,
         objetivo: nTarget,
         reserva: result.reserva.length,
@@ -569,7 +617,8 @@ export default function MotorComparables({ study, updateStudy }) {
             />
             <div className="flex gap-2">
               <button
-                onClick={() => { setActividad(actInput); setEditingAct(false); }}
+                /* el embudo describía una corrida contra la actividad anterior */
+                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); }}
                 className="bg-[#0FA3A1] text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
               >
                 Guardar Actividad
@@ -688,9 +737,10 @@ export default function MotorComparables({ study, updateStudy }) {
             </div>
           )}
 
-          {/* Curación por IA del universo: corre al importar, porque su veredicto
-              es uno de los filtros del motor. Con miles de candidatas son varios
-              lotes y varios minutos, así que hay que decir cuánto falta. */}
+          {/* Curación por IA: la dispara el paso 3 sobre las candidatas que pasaron los
+              filtros del paso 2, antes de puntuar, porque su veredicto es uno de los
+              filtros del motor. Son varios lotes y varios minutos, así que hay que
+              decir cuánto falta. */}
           {curacionProgreso && (
             <div className="bg-[#0FA3A1]/5 border border-[#0FA3A1]/30 rounded-lg p-3">
               <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
@@ -721,17 +771,18 @@ export default function MotorComparables({ study, updateStudy }) {
             <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3">
               <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-200">
                 <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
-                <span className="font-semibold">Universo curado con IA</span>
+                <span className="font-semibold">Candidatas curadas con IA</span>
                 <span className="text-zinc-500">
                   · {iaMatch.coinciden} de {iaMatch.total} coinciden con la actividad
+                  {iaMatch.reutilizadas ? ` · ${iaMatch.reutilizadas} reutilizadas de una corrida anterior` : ''}
                   {iaMatch.fallidas ? ` · ${iaMatch.fallidas} sin evaluar` : ''}
                 </span>
                 <button
                   type="button"
-                  onClick={() => curarUniverso(universo)}
+                  onClick={() => curarValidas({ forzar: true })}
                   disabled={curando || !universo.length}
                   className="ml-auto text-[10.5px] px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                  title="Volver a curar el universo, por ejemplo si corrigió la actividad detectada"
+                  title="Descarta el veredicto guardado y vuelve a curar desde cero las candidatas que pasan los filtros del paso 2"
                 >
                   ↻ Volver a curar
                 </button>
@@ -779,6 +830,14 @@ export default function MotorComparables({ study, updateStudy }) {
             <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Definir los Filtros del Motor</span>
           </div>
 
+          {/* Decir en qué orden se aplican: el reclamo era que la curación y los
+              filtros parecían juzgar conjuntos distintos, y así era. */}
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1">
+            Holding, saldos negativos y pérdidas operativas se aplican <b>antes</b> de curar con IA, así que
+            la curación solo evalúa —y solo se paga por— lo que pasa estos filtros. El rigor funcional se
+            aplica <b>después</b>, sobre el perfil que dictamina la propia curación.
+          </p>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">N Objetivo (Tope 30)</label>
@@ -787,7 +846,7 @@ export default function MotorComparables({ study, updateStudy }) {
                 min="4"
                 max="30"
                 value={engineConfig.nTarget}
-                onChange={(e) => setEngineConfig({ ...engineConfig, nTarget: Number(e.target.value) })}
+                onChange={(e) => cambiarConfig('nTarget', Number(e.target.value))}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               />
             </div>
@@ -796,7 +855,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Pérdidas Operativas</label>
               <select
                 value={engineConfig.perdidaOp}
-                onChange={(e) => setEngineConfig({ ...engineConfig, perdidaOp: e.target.value })}
+                onChange={(e) => cambiarConfig('perdidaOp', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="excluir">Excluir (criterio conservador DIAN)</option>
@@ -808,7 +867,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Sociedades Holding</label>
               <select
                 value={engineConfig.holding}
-                onChange={(e) => setEngineConfig({ ...engineConfig, holding: e.target.value })}
+                onChange={(e) => cambiarConfig('holding', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="excluir">Excluir (sin actividad propia)</option>
@@ -820,7 +879,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Saldos Negativos</label>
               <select
                 value={engineConfig.saldoNegativo}
-                onChange={(e) => setEngineConfig({ ...engineConfig, saldoNegativo: e.target.value })}
+                onChange={(e) => cambiarConfig('saldoNegativo', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="excluir">Excluir (datos no verosímiles)</option>
@@ -832,7 +891,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Prioridad Geográfica</label>
               <select
                 value={engineConfig.geo}
-                onChange={(e) => setEngineConfig({ ...engineConfig, geo: e.target.value })}
+                onChange={(e) => cambiarConfig('geo', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="ninguna">Global</option>
@@ -845,7 +904,7 @@ export default function MotorComparables({ study, updateStudy }) {
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Rigor Funcional</label>
               <select
                 value={engineConfig.rigor}
-                onChange={(e) => setEngineConfig({ ...engineConfig, rigor: e.target.value })}
+                onChange={(e) => cambiarConfig('rigor', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
               >
                 <option value="estandar">Estándar (servicios+mixtos)</option>
@@ -875,7 +934,7 @@ export default function MotorComparables({ study, updateStudy }) {
             >
               <Sparkles className="w-4 h-4" />
               <span>
-                {curando ? 'Curando el universo con IA…'
+                {curando ? 'Curando las candidatas con IA…'
                   : loadingSelection ? 'Puntuando y seleccionando…'
                     : 'Ejecutar Selección Automática'}
               </span>
@@ -889,12 +948,29 @@ export default function MotorComparables({ study, updateStudy }) {
           {selectionFunnel && (
             <div className="text-[11px] bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-1.5">
               <div className="font-semibold text-zinc-700 dark:text-zinc-200">Embudo de depuración</div>
+              {/* En orden de embudo: cada etapa cuenta solo lo que ella descartó, y las
+                  tres cifras de rechazo más las válidas suman el universo. Antes
+                  «rechazadas por la IA» se deducía con una expresión regular sobre el
+                  motivo y «descartadas por los filtros» se calculaba por resta, así que
+                  un descarte cabía en las dos casillas o en ninguna. */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-zinc-600 dark:text-zinc-300">
                 <div>Universo evaluado <b className="tabular-nums">{selectionFunnel.evaluadas.toLocaleString('es-CO')}</b></div>
                 <div>Descartadas por los filtros <b className="tabular-nums text-amber-600 dark:text-amber-400">{(selectionFunnel.rechazadasFiltros ?? 0).toLocaleString('es-CO')}</b></div>
+                <div>
+                  Curadas con IA <b className="tabular-nums">{(selectionFunnel.curadas ?? 0).toLocaleString('es-CO')}</b>
+                  {selectionFunnel.reutilizadas ? (
+                    <span className="text-zinc-400"> ({selectionFunnel.reutilizadas.toLocaleString('es-CO')} reutilizadas)</span>
+                  ) : null}
+                </div>
+                <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{(selectionFunnel.rechazadasIA ?? 0).toLocaleString('es-CO')}</b></div>
+                <div>
+                  Rechazadas por el rigor{' '}
+                  <b className={'tabular-nums ' + ((selectionFunnel.rechazadasRigor ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
+                    {(selectionFunnel.rechazadasRigor ?? 0).toLocaleString('es-CO')}
+                  </b>
+                  {selectionFunnel.rigor ? <span className="text-zinc-400"> ({selectionFunnel.rigor})</span> : null}
+                </div>
                 <div>Válidas <b className="tabular-nums">{selectionFunnel.validas.toLocaleString('es-CO')}</b></div>
-                <div>Curadas con IA <b className="tabular-nums">{selectionFunnel.curadas ?? '—'}</b></div>
-                <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{selectionFunnel.rechazadasIA ?? 0}</b></div>
                 <div>
                   Seleccionadas{' '}
                   <b className={'tabular-nums ' + (selectionFunnel.objetivo && selectionFunnel.seleccionadas < selectionFunnel.objetivo ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')}>

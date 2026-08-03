@@ -250,6 +250,35 @@ export function perfilDe(descripcion) {
   return 'INDEFINIDO';
 }
 
+/* Perfiles que sí afirman algo sobre las funciones asumidas. INDEFINIDO queda
+   fuera a propósito: es ausencia de información, no un perfil incompatible, y por
+   eso nunca descarta ni desplaza al veredicto de la IA. */
+export const PERFILES_DETERMINADOS = new Set(['SERVICIO', 'EMPRESARIO', 'MIXTO']);
+
+/**
+ * Filtros duros que no dependen de la descripción del negocio: holding, saldos
+ * negativos y pérdida operativa. Se aplican ANTES de curar para no pagarle a la IA
+ * por candidatas que el motor iba a descartar igual — en un cribado real de 2.987
+ * compañías eran ~1.359 evaluaciones tiradas, casi la mitad del gasto de la corrida.
+ *
+ * El rigor funcional NO se aplica aquí: depende del perfil, y el perfil lo dictamina
+ * la propia curación. Se evalúa después, en `scoreCandidates`.
+ *
+ * `scoreCandidates` vuelve a aplicar estos mismos filtros —es idempotente— para
+ * seguir siendo correcta cuando se la llama suelta con el universo completo.
+ */
+export function prefiltrar(candidates, config = {}) {
+  const { perdidaOp = 'excluir', holding = 'excluir', saldoNegativo = 'excluir' } = config;
+  const validas = [], rechazadas = [];
+  (candidates || []).forEach(cand => {
+    if (holding === 'excluir' && cand.isHolding) rechazadas.push(cand);
+    else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) rechazadas.push(cand);
+    else if (perdidaOp === 'excluir' && cand.hasLoss) rechazadas.push(cand);
+    else validas.push(cand);
+  });
+  return { validas, rechazadas };
+}
+
 const VACIAS = /^(de|del|la|el|los|las|y|o|para|con|por|the|and|for|with|its|del)$/i;
 
 /** Palabras con carga semántica de un texto: 4 letras o más, sin repetir. */
@@ -306,6 +335,11 @@ function medianaDe(valores) {
  *
  * `contexto.ventasParteExaminada` alimenta el factor de tamaño: sin él, ese
  * factor queda neutro en 0,5 para todas.
+ *
+ * Los descartes se clasifican en `categoriaRechazo` — 'filtro' (holding, saldos,
+ * pérdidas), 'ia' (la curación no reconoció la actividad) y 'rigor' (perfil
+ * funcional incompatible)—, para que el embudo pueda contar cada etapa sin
+ * adivinar el motivo con expresiones regulares sobre el texto.
  */
 export function scoreCandidates(candidates, config, companyActivity = '', priorComps = [], contexto = {}) {
   const {
@@ -314,6 +348,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     holding = 'excluir',
     saldoNegativo = 'excluir',
     geo = 'ninguna',
+    rigor = 'estandar',
   } = config;
 
   const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
@@ -332,17 +367,23 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const evaluated = (candidates || []).map(cand => {
     let descartada = false;
     let motivoRechazo = '';
+    let categoriaRechazo = '';
+    /* El primer motivo manda y los siguientes no lo sobrescriben: el orden en que
+       se evalúan las reglas es el orden de precedencia. */
+    const rechazar = (categoria, motivo) => {
+      if (descartada) return;
+      descartada = true;
+      categoriaRechazo = categoria;
+      motivoRechazo = motivo;
+    };
 
     // Filtros de exclusión
     if (holding === 'excluir' && cand.isHolding) {
-      descartada = true;
-      motivoRechazo = 'Sociedad holding sin actividad operativa directa.';
+      rechazar('filtro', 'Sociedad holding sin actividad operativa directa.');
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
-      descartada = true;
-      motivoRechazo = 'Saldo negativo en balances (dato no verosímil).';
+      rechazar('filtro', 'Saldo negativo en balances (dato no verosímil).');
     } else if (perdidaOp === 'excluir' && cand.hasLoss) {
-      descartada = true;
-      motivoRechazo = 'Pérdida operativa (criterio conservador DIAN).';
+      rechazar('filtro', 'Pérdida operativa (criterio conservador DIAN).');
     }
 
     const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
@@ -355,16 +396,39 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     const idIQ = cand.id ? String(cand.id).trim() : '';
     const ia = iaPorId && idIQ ? iaPorId[idIQ] : null;
     if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim() && !esContinuidad) {
-      descartada = true;
-      motivoRechazo = `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`;
+      rechazar('ia', `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`);
     } else if (!descartada && ia && ia.coincide === false && !esContinuidad) {
-      descartada = true;
-      motivoRechazo = `Curación IA: la descripción del negocio no coincide con la actividad${ia.motivo ? ' (' + ia.motivo + ')' : ''}.`;
+      rechazar('ia', `Curación IA: la descripción del negocio no coincide con la actividad${ia.motivo ? ' (' + ia.motivo + ')' : ''}.`);
     }
 
-    /* ── perfil funcional ── */
-    const perfil = cand.perfilFuncional || perfilDe(cand.desc);
+    /* ── perfil funcional ──
+       El dictamen de la IA manda cuando afirma algo: lee la Business Description
+       entera, mientras que `perfilDe` busca literales en inglés del nicho de software
+       y deja en INDEFINIDO casi todo lo demás. Antes el perfil por palabras clave
+       contradecía a la IA — una candidata que la IA aprobaba por actividad caía a
+       factor 0,35 de perfil y salía del TOP-N por puntaje, aunque nada la hubiera
+       descartado. Si la IA no logró decidirlo, se vuelve a la heurística. */
+    const perfilIA = ia && PERFILES_DETERMINADOS.has(ia.perfil) ? ia.perfil : null;
+    const perfil = perfilIA || cand.perfilFuncional || perfilDe(cand.desc);
+    const perfilOrigen = perfilIA ? 'ia' : 'heuristica';
     const fPerfil = perfil === 'SERVICIO' ? 1 : (perfil === 'MIXTO' ? 0.6 : 0.35);
+
+    /* ── rigor funcional ──
+       Antes `rigor` se guardaba en la configuración y se pintaba en el paso 2, pero
+       el motor no lo leía: elegir «Estricto» daba exactamente el mismo resultado que
+       «Amplio», porque el perfil solo pesaba en el puntaje. Ahora descarta.
+
+       Dos exenciones, las mismas que rigen para el veredicto de la IA: INDEFINIDO no
+       descarta (no hay perfil que juzgar, y así llegan las candidatas de otras
+       fuentes o agregadas a mano), y una comparable de continuidad no se retira
+       porque su inclusión ya se sustentó en el estudio anterior. */
+    if (!descartada && !esContinuidad && PERFILES_DETERMINADOS.has(perfil)) {
+      if (rigor === 'estricto' && perfil !== 'SERVICIO') {
+        rechazar('rigor', `Perfil ${perfil.toLowerCase()}: el rigor estricto admite solo prestadores de servicios.`);
+      } else if (rigor === 'estandar' && perfil === 'EMPRESARIO') {
+        rechazar('rigor', 'Empresario pleno, con propiedad intelectual y riesgo de mercado propios (art. 260-4 E.T.).');
+      }
+    }
 
     /* ── especialidad: coincidencia con la actividad del contribuyente ──
        Si la IA ya confirmó la coincidencia sobre la descripción real, se toma su
@@ -421,12 +485,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     return {
       ...cand,
       perfilFuncional: perfil,
+      perfilOrigen,
       score,
       factores: { perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano, rentabilidad: fRent },
       razones,
       esContinuidad,
       descartada,
       motivoRechazo,
+      categoriaRechazo,
     };
   });
 
@@ -445,6 +511,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     evaluadas: evaluated.length,
     seleccionadas,
     rechazadas,
+    /* Conteo por etapa, calculado aquí y no en la UI: son categorías del motor y
+       deducirlas del texto del motivo obligaba a mantener una expresión regular en
+       el componente, que se desincronizaba en cuanto cambiaba una redacción. */
+    rechazadasPorCategoria: {
+      filtro: rechazadas.filter(c => c.categoriaRechazo === 'filtro').length,
+      ia: rechazadas.filter(c => c.categoriaRechazo === 'ia').length,
+      rigor: rechazadas.filter(c => c.categoriaRechazo === 'rigor').length,
+    },
     totalValidas: validas.length,
     /* reserva: las válidas que no entraron al TOP-N, para poder reponer las que
        la curación por IA descarte sin quedarse corto de comparables */
@@ -540,9 +614,17 @@ const SEGUNDOS_POR_LOTE = 35;
  *
  * Los lotes que fallan NO descartan a sus candidatas: un problema de red no puede
  * traducirse en excluir comparables del estudio.
+ *
+ * De cada candidata se pide también el perfil funcional (prestador de servicios,
+ * empresario pleno o mixto), en la misma consulta y sin costo extra: es el criterio
+ * que después aplica el rigor funcional del paso 2, y la heurística de palabras
+ * clave solo reconoce los literales en inglés del nicho de software.
+ *
+ * `opciones.veredictoPrevio` permite reutilizar lo ya curado en lugar de volver a
+ * pagarlo. Solo se reutiliza si la actividad evaluada es la misma.
  */
 export async function curateCandidatesWithGemini(candidates, companyActivity, opciones = {}) {
-  const { onProgress, priorComps = [], fuente = '' } = opciones;
+  const { onProgress, priorComps = [], fuente = '', veredictoPrevio = null } = opciones;
   const avisar = (info) => {
     if (typeof onProgress === 'function') {
       try { onProgress(info); } catch (e) { /* la UI no debe romper la curación */ }
@@ -567,15 +649,49 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
     return veredicto;
   }
 
-  const evaluables = (candidates || []).filter(
+  const conDatos = (candidates || []).filter(
     c => c && c.id && String(c.id).trim() && c.desc && String(c.desc).trim()
   );
-  veredicto.total = evaluables.length;
+  veredicto.total = conDatos.length;
 
-  if (!evaluables.length) {
+  if (!conDatos.length) {
     veredicto.omitida = 'Ninguna candidata trae identificador y descripción del negocio para curar con IA; ' +
       'el motor usará el emparejamiento por palabras clave.';
     avisar({ etapa: 'omitida', mensaje: veredicto.omitida });
+    return veredicto;
+  }
+
+  /* ── reutilización de lo ya curado ──
+     La curación corre en el paso 3, después de los filtros, así que cambiar un
+     filtro y volver a ejecutar la traería otra vez completa. Se reutiliza solo si la
+     actividad es la misma —es el criterio contra el que se evaluó cada candidata— y
+     solo para los identificadores ya presentes: relajar un filtro admite candidatas
+     nuevas, y esas sí hay que curarlas. */
+  const previo = veredictoPrevio && veredictoPrevio.porId &&
+    String(veredictoPrevio.actividadUsada || '').trim() === actividad
+    ? veredictoPrevio.porId
+    : null;
+
+  const idsConsiderados = conDatos.map(c => String(c.id).trim());
+  const contarCoincidencias = () =>
+    idsConsiderados.filter(id => veredicto.porId[id] && veredicto.porId[id].coincide).length;
+
+  const evaluables = previo ? conDatos.filter(c => !previo[String(c.id).trim()]) : conDatos;
+  veredicto.reutilizadas = conDatos.length - evaluables.length;
+  if (previo) {
+    /* solo los del conjunto actual: arrastrar el veredicto entero dejaría en el
+       estudio dictámenes de candidatas que ya no están en el universo */
+    idsConsiderados.forEach(id => { if (previo[id]) veredicto.porId[id] = previo[id]; });
+  }
+
+  if (!evaluables.length) {
+    veredicto.coinciden = contarCoincidencias();
+    avisar({
+      etapa: 'fin', evaluadas: 0, total: conDatos.length, fallidas: 0,
+      reutilizadas: veredicto.reutilizadas, coinciden: veredicto.coinciden,
+      mensaje: `Sin consultas nuevas: las ${veredicto.reutilizadas} candidatas ya estaban curadas para esta actividad · ` +
+        `${veredicto.coinciden} coinciden`,
+    });
     return veredicto;
   }
 
@@ -585,7 +701,10 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
 
   avisar({
     etapa: 'inicio', evaluadas: 0, total: evaluables.length, lotes: lotes.length, etaMinutos,
-    mensaje: `Curando ${evaluables.length} candidatas en ${lotes.length} lote(s); estimado ~${etaMinutos} min. No cierre la pestaña.`,
+    reutilizadas: veredicto.reutilizadas,
+    mensaje: `Curando ${evaluables.length} candidatas en ${lotes.length} lote(s)` +
+      (veredicto.reutilizadas ? ` (${veredicto.reutilizadas} ya curadas se reutilizan)` : '') +
+      `; estimado ~${etaMinutos} min. No cierre la pestaña.`,
   });
 
   await conConcurrencia(lotes, async (lote) => {
@@ -604,9 +723,15 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, ' +
       'mismos productos o servicios, o función equivalente), sin importar el idioma en que esté escrita la descripción. ' +
       'No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
+      'Clasifica también el perfil funcional de cada candidata, según las funciones y los riesgos que asume:\n' +
+      '- "SERVICIO": presta servicios, fabrica o desarrolla por encargo de terceros; no explota propiedad ' +
+      'intelectual propia ni asume el riesgo de mercado del producto final.\n' +
+      '- "EMPRESARIO": explota su propia propiedad intelectual, marcas o productos y asume el riesgo de mercado.\n' +
+      '- "MIXTO": hace las dos cosas de forma relevante.\n' +
+      '- "INDEFINIDO": la descripción no alcanza para decidirlo. Úsalo en lugar de adivinar.\n\n' +
       'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
       'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
-      '{"resultados":[{"id":"","coincide":true,"motivo":""}]}\n' +
+      '{"resultados":[{"id":"","coincide":true,"perfil":"SERVICIO","motivo":""}]}\n' +
       '"motivo" debe ser brevísimo (máximo 12 palabras, sin explicaciones largas). ' +
       'Incluye una entrada por cada ID recibido, en el mismo orden.';
 
@@ -623,7 +748,14 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       const j = extraerJSON(texto);
       (j.resultados || j.evaluacion || []).forEach(r => {
         if (!r || !r.id) return;
-        veredicto.porId[String(r.id).trim()] = { coincide: !!r.coincide, motivo: r.motivo || '' };
+        /* El perfil se acepta solo si es uno de los cuatro valores pedidos: un texto
+           libre del modelo no puede acabar decidiendo un descarte por rigor. */
+        const perfil = String(r.perfil || '').trim().toUpperCase();
+        veredicto.porId[String(r.id).trim()] = {
+          coincide: !!r.coincide,
+          motivo: r.motivo || '',
+          perfil: (PERFILES_DETERMINADOS.has(perfil) || perfil === 'INDEFINIDO') ? perfil : '',
+        };
       });
       veredicto.evaluadas += lote.length;
     } catch (err) {
@@ -640,14 +772,18 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
     });
   }, CURACION_CONCURRENCIA);
 
-  const coinciden = Object.values(veredicto.porId).filter(v => v.coincide).length;
+  /* Solo las candidatas del conjunto actual: `porId` puede traer dictámenes
+     reutilizados de una corrida con más candidatas, y contarlos daría un total que
+     no cuadra con el embudo. */
+  const coinciden = contarCoincidencias();
   veredicto.coinciden = coinciden;
   avisar({
     etapa: 'fin',
-    evaluadas: veredicto.evaluadas, total: evaluables.length, fallidas: veredicto.fallidas, coinciden,
+    evaluadas: veredicto.evaluadas, total: conDatos.length, fallidas: veredicto.fallidas,
+    reutilizadas: veredicto.reutilizadas, coinciden,
     mensaje: veredicto.fallidas
-      ? `${coinciden} de ${evaluables.length} coinciden con la actividad · ${veredicto.fallidas} no se pudieron evaluar (se dejan pasar sin descartarlas)`
-      : `${coinciden} de ${evaluables.length} coinciden con la actividad`,
+      ? `${coinciden} de ${conDatos.length} coinciden con la actividad · ${veredicto.fallidas} no se pudieron evaluar (se dejan pasar sin descartarlas)`
+      : `${coinciden} de ${conDatos.length} coinciden con la actividad`,
   });
 
   return veredicto;
