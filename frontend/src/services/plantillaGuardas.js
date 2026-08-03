@@ -2,52 +2,56 @@
    y dejar continuar, porque quien redacta el informe sabe cosas que la
    herramienta no. Lo que no se admite es que el problema pase inadvertido. */
 
-/* Compara dos NITs después de normalizar. Retorna true si son equivalentes,
-   false si son claramente distintos. La comparación:
-   1. Normaliza quitando puntos, espacios, guiones
-   2. Si ambos tienen dígitos de igual longitud: compara exactamente
-   3. Si difieren por 1 dígito y el más corto es prefijo del más largo: son equivalentes
-   4. Cualquier otra diferencia: son distintos
-   5. Si alguno no tiene dígitos pero no estaba vacío: compara originales sin espacios */
+/* Extrae la base (dígitos sin guión) y el dígito de verificación de un NIT normalizado.
+   Retorna { base: string de dígitos, dv: string de 1 dígito, dvConocido: boolean } */
+function extraerBaseYDV(nit) {
+  // Patrón: base de dígitos seguida de guión y un único dígito
+  const match = nit.match(/^(\d+)-(\d)$/);
+
+  if (match) {
+    // Tiene formato explícito base-DV
+    const base = match[1];
+    const dv = match[2];
+    return { base, dv, dvConocido: true };
+  }
+
+  // No tiene formato explícito: toda la cadena de dígitos es la base
+  const soloDigitos = nit.replace(/\D/g, '');
+  return { base: soloDigitos, dv: '', dvConocido: false };
+}
+
+/* Compara dos NITs usando lógica de base y dígito de verificación.
+   Normaliza quitando puntos y espacios (pero mantiene guión).
+   Para cada lado determina si tiene formato base-DV o solo base.
+   Luego compara bases; si ambos tienen DV conocido, también compara dígito de verificación. */
 function sonNITsIguales(nit1, nit2) {
   if (!nit1 || !nit2) return nit1 === nit2;
 
-  // Normalizar: quitar puntos, espacios, guiones
-  const limpio1 = String(nit1).replace(/[-\s.]/g, '');
-  const limpio2 = String(nit2).replace(/[-\s.]/g, '');
+  // Normalizar: quitar puntos y espacios, mantener guión
+  const limpio1 = String(nit1).replace(/[\s.]/g, '');
+  const limpio2 = String(nit2).replace(/[\s.]/g, '');
 
-  // Extraer dígitos
-  const digitos1 = limpio1.replace(/\D/g, '');
-  const digitos2 = limpio2.replace(/\D/g, '');
+  // Extraer información de cada lado
+  const info1 = extraerBaseYDV(limpio1);
+  const info2 = extraerBaseYDV(limpio2);
 
-  // Si ambos tienen dígitos
-  if (digitos1 && digitos2) {
-    const len1 = digitos1.length;
-    const len2 = digitos2.length;
-
-    // Misma longitud: comparar exactamente
-    if (len1 === len2) {
-      return digitos1 === digitos2;
-    }
-
-    // Difieren por exactamente 1 dígito: verificar si el más corto es prefijo del más largo
-    if (Math.abs(len1 - len2) === 1) {
-      const corto = len1 < len2 ? digitos1 : digitos2;
-      const largo = len1 < len2 ? digitos2 : digitos1;
-      return largo.startsWith(corto);
-    }
-
-    // Cualquier otra diferencia de longitud
-    return false;
-  }
-
-  // Si alguno no tiene dígitos pero no estaba vacío: caer a comparación de originales sin espacios
-  if ((digitos1 === '' && limpio1 !== '') || (digitos2 === '' && limpio2 !== '')) {
+  // Si alguno no tiene dígitos pero el original no estaba vacío: caer a comparación de originales
+  if ((info1.base === '' && limpio1 !== '') || (info2.base === '' && limpio2 !== '')) {
     return limpio1 === limpio2;
   }
 
-  // Si ambos están vacíos
-  return digitos1 === digitos2;
+  // Las bases tienen que coincidir exactamente
+  if (info1.base !== info2.base) {
+    return false;
+  }
+
+  // Si ambos tienen dígito de verificación conocido, tiene que coincidir
+  if (info1.dvConocido && info2.dvConocido) {
+    return info1.dv === info2.dv;
+  }
+
+  // Si uno o ambos tienen DV desconocido, se ignora
+  return true;
 }
 
 export function revisarAntesDeGenerar({

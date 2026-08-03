@@ -157,7 +157,45 @@ test('recursosFaltantes null no lanza', () => {
   assert.strictEqual(avisos.length, 0);
 });
 
-// Tests para casos fallidos que la normalización anterior dejaba pasar
+// Tests para lógica de base y dígito de verificación según coordinador
+test('NIT con puntos se normaliza y no dispara aviso si es igual', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '900123456-7' },
+    nitDeReferencia: '900.123.456-7',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT sin dígito de verificación no dispara aviso si la base coincide', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '900123456-7' },
+    nitDeReferencia: '900123456',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT con espacios alrededor no dispara aviso si es igual', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: ' 900123456-7 ' },
+    nitDeReferencia: '900123456-7',
+  });
+  assert.strictEqual(avisos.length, 0);
+});
+
+test('NIT que difiere solo en dígito de verificación debe avisar (es error de digitación)', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '800123456-7' },
+    nitDeReferencia: '800123456-3',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /800123456-3/);
+  assert.match(avisos[0].texto, /800123456-7/);
+});
+
 test('NIT con dígitos duplicados por error de OCR debe avisar', () => {
   const avisos = revisarAntesDeGenerar({
     ...base,
@@ -187,13 +225,35 @@ test('NIT contra referencia con solo espacios y guiones debe avisar', () => {
   assert.strictEqual(avisos.length, 1);
 });
 
-test('NIT que difiere solo en dígito de verificación debe avisar (es error de digitación)', () => {
+test('dos NIT de 9 dígitos sin guión donde uno es prefijo del otro debe avisar', () => {
   const avisos = revisarAntesDeGenerar({
     ...base,
-    estudio: { nit: '800123456-7' },
-    nitDeReferencia: '800123456-1',
+    estudio: { nit: '123456789' },
+    nitDeReferencia: '12345678',
   });
   assert.strictEqual(avisos.length, 1);
-  assert.match(avisos[0].texto, /800123456-1/);
-  assert.match(avisos[0].texto, /800123456-7/);
+  assert.match(avisos[0].texto, /123456789/);
+  assert.match(avisos[0].texto, /12345678/);
+});
+
+test('dos NIT sin dígito de verificación donde uno es prefijo del otro debe avisar', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '900111222' },
+    nitDeReferencia: '90011122',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /900111222/);
+  assert.match(avisos[0].texto, /90011122/);
+});
+
+test('NIT con bases distintas pero ambos con dígito de verificación debe avisar', () => {
+  const avisos = revisarAntesDeGenerar({
+    ...base,
+    estudio: { nit: '900123456-7' },
+    nitDeReferencia: '90012345-6',
+  });
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0].texto, /90012345-6/);
+  assert.match(avisos[0].texto, /900123456-7/);
 });
