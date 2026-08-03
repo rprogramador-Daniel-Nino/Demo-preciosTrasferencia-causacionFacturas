@@ -155,6 +155,40 @@ export function diagnosticarCobertura(rawHtml, study) {
 }
 
 /**
+ * Genera el cuerpo dinámico del ANEXO A (Estados Financieros del Contribuyente),
+ * pegando las imágenes del PDF ingestadas de la compañía.
+ */
+export function generarAnexoAHtml(study, year, wrap) {
+  const entName = study.ent || 'LA COMPAÑÍA';
+  const images = study.eeffImages || [];
+
+  if (images && images.length > 0) {
+    return `<p>
+<a id="_Toc208931005"></a><strong>ANEXO A. Estados financieros ${wrap(entName)}</strong>
+</p>
+<p>
+A continuación se adjuntan las páginas originales de los Estados Financieros de <strong>${wrap(entName)}</strong> correspondientes al período fiscal finalizado a 31 de diciembre de <strong>${wrap(year)}</strong>:
+</p>
+${images.map((imgUrl, i) => `
+<p style="text-align:center;margin:16px 0;">
+  <img src="${imgUrl}" alt="Página ${i + 1} EEFF ${entName}" style="max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);" />
+</p>`).join('\n')}
+`;
+  }
+
+  // Si no hay imágenes ingestadas aún, conserva los marcadores de imagen originales de la plantilla
+  return `<p>
+<a id="_Toc208931005"></a><strong>ANEXO A. Estados financieros ${wrap(entName)}</strong>
+</p>
+<p>
+<img src="IMAGE_PLACEHOLDER" />
+</p>
+<p>
+<img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" />
+</p>`;
+}
+
+/**
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
  * y realiza el reemplazo quirúrgico de las variables del cliente activo.
  */
@@ -276,6 +310,13 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     html = html.replace(rx, wrap(year));
   });
 
+  // Reemplazo dinámico de la tasa Prime Rate y el año gravable en el Anexo D (Ajustes de capital)
+  const primeVal = study.prime ? (String(study.prime).includes('%') ? String(study.prime) : `${study.prime}%`) : '8.31%';
+  html = html.replace(
+    /Esta tasa durante el año \d{4} fue de [\d\.\,]+%\s*EA\./gi,
+    () => `Esta tasa durante el año ${wrap(year)} fue de ${wrap(primeVal + ' EA.')}`
+  );
+
   // Reemplazo dinámico de la Tabla de EEFF (Activos / Balance General) si el año es 2025 o si se ingirieron las cifras de EEFF
   if (String(year) === '2025' || study.t_ar || study.t_s || study.t_cash) {
     const eeff2025 = {
@@ -295,6 +336,11 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     html = html.replace(/117\.624\.200/g, wrap(fmt(eeff2025.ppe)));
     html = html.replace(/1\.989\.688\.200/g, wrap(fmt(totalActivos)));
   }
+
+  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ─── */
+  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
+  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
+
 
   // Reemplazar Rango Intercuartil si se calculó
   if (stats) {
