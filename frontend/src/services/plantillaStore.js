@@ -80,3 +80,16 @@ export const guardarVinculo = (estudioId, plantillaId) =>
   guardarPlantilla('vinculo:' + esc(estudioId), plantillaId);
 
 export const leerVinculo = (estudioId) => leerPlantilla('vinculo:' + esc(estudioId));
+
+/* HTML ya marcado con <span data-campo="...">. Va con prefijo dentro del
+   almacén de plantillas, igual que el vínculo, para no subir VERSION del
+   esquema. Se guarda por plantilla y no por estudio: el marcado se paga una
+   vez y dos estudios que carguen el mismo PDF lo comparten.
+   La derivación de la clave se exporta aparte porque es lo único de esto que
+   se puede probar sin navegador. */
+export const claveMarcado = (plantillaId) => 'marcado:' + plantillaId;
+
+export const guardarMarcado = (plantillaId, html) =>
+  guardarPlantilla(claveMarcado(plantillaId), html);
+
+export const leerMarcado = (plantillaId) => leerPlantilla(claveMarcado(plantillaId));
