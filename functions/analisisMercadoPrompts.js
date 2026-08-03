@@ -48,7 +48,7 @@ function construirPromptBusqueda(anioActual) {
     '{\n' +
     '  "pib_mundial": { "valores": { "2025": "3.2", "2026": "3.2" }, "fuente": "Fondo Monetario Internacional, WEO", "fuenteUrl": "https://..." },\n' +
     '  "tasa_intervencion": { "valores": { "2026": { "etiqueta": "Agosto 2026", "valor": "12.00" } }, "fuente": "...", "fuenteUrl": "..." },\n' +
-    '  "crecimiento_por_region": { "valores": { "2026": [["Mundial","3.0"],["Estados Unidos","2.0"]] }, "fuente": "...", "fuenteUrl": "..." }\n' +
+    '  "crecimiento_por_region": { "valores": { "2026": [{"region":"Mundial","valor":"3.0"},{"region":"Estados Unidos","valor":"2.0"}] }, "fuente": "...", "fuenteUrl": "..." }\n' +
     '}\n\n' +
     'Reglas estrictas:\n' +
     '1. Cada "valores" es un mapa de año (string) a la cifra encontrada. No inventes un año que no verificaste.\n' +
@@ -60,14 +60,17 @@ function construirPromptBusqueda(anioActual) {
   );
 }
 
-/** Solo se confía en la fuenteUrl que el propio grounding de Gemini reporta haber
- *  consultado — no en una URL que el modelo redacte de memoria dentro del JSON,
- *  que sí puede inventar o recordar mal. */
+/** La confianza depende de si esta llamada a Gemini trajo grounding real (al
+ *  menos un chunk), no de si la fuenteUrl que el modelo escribió coincide con
+ *  la URL exacta de algún chunk: los groundingChunks de Gemini son URLs de
+ *  redirección propias de Google (vertexaisearch.cloud.google.com/…), nunca la
+ *  URL del medio que el modelo cita en el JSON — compararlas byte a byte no
+ *  puede coincidir jamás. La fuenteUrl queda como cita del modelo (que sí
+ *  acaba de hacer una búsqueda real), no como algo verificado en esa URL
+ *  puntual. */
 function parsearRespuestaBusqueda(texto, groundingChunks) {
   const bruto = extraerJSON(texto);
-  const urlsVerificadas = new Set(
-    (groundingChunks || []).map((g) => g && g.web && g.web.uri).filter(Boolean)
-  );
+  const huboBusquedaReal = Array.isArray(groundingChunks) && groundingChunks.length > 0;
   const clavesValidas = new Set(SERIES_MACRO.map((s) => s.clave));
 
   const series = {};
@@ -76,12 +79,11 @@ function parsearRespuestaBusqueda(texto, groundingChunks) {
     const entrada = bruto[clave];
     if (!entrada || typeof entrada.valores !== 'object' || entrada.valores === null) return;
 
-    const urlConfiable = urlsVerificadas.has(entrada.fuenteUrl);
     series[clave] = {
       valores: entrada.valores,
       fuente: entrada.fuente || 'Fuente sin especificar',
-      fuenteUrl: urlConfiable ? entrada.fuenteUrl : null,
-      confiable: urlConfiable,
+      fuenteUrl: huboBusquedaReal ? (entrada.fuenteUrl || null) : null,
+      confiable: huboBusquedaReal,
     };
   });
   return series;
@@ -97,27 +99,54 @@ function construirPromptRedaccion(series, anioActual) {
     'Eres economista y redactas la Sección III ("TENDENCIAS DE LA ECONOMÍA") de un informe local de ' +
     'precios de transferencia para Colombia, año gravable ' + anioActual + '. Tienes ÚNICAMENTE estos ' +
     'datos ya verificados, con su fuente:\n\n' + resumen + '\n\n' +
-    'Redacta dos apartados extensos (mínimo 3 párrafos cada uno, tono técnico-formal, en español):\n' +
+    'Redacta dos apartados extensos (mínimo 3 párrafos cada uno, tono técnico-formal, en español) y ' +
+    'declara las fuentes que usaste:\n' +
     '1. "mundial": Análisis del Panorama de la Economía Mundial — crecimiento del PIB mundial, ' +
     'inflación global y su tendencia, riesgos y factores relevantes del período.\n' +
     '2. "colombia": Análisis del panorama de la economía colombiana — PIB, inflación, tasa de ' +
     'intervención del Banco de la República, TRM, desempleo, y su efecto sobre empresas que operan en ' +
-    'el país.\n\n' +
+    'el país.\n' +
+    '3. "fuentesCitadas": la lista de las fuentes que efectivamente usaste para redactar, tomadas de ' +
+    'los datos de arriba, cada una con su título y su URL.\n\n' +
     'Reglas estrictas:\n' +
     '- NO menciones ninguna cifra que no esté en los datos de arriba. Si te falta un dato para algo que ' +
     'quieras afirmar, no lo afirmes.\n' +
     '- Cada apartado en HTML, como una serie de párrafos <p>...</p>, sin encabezados ni tablas.\n' +
+    '- En "fuentesCitadas" no inventes ninguna fuente ni ninguna URL: usa únicamente las que aparecen ' +
+    'en los datos de arriba. Si una serie no trae URL, omítela de la lista.\n' +
     '- Responde ÚNICAMENTE con un objeto JSON (sin marcas markdown) con esta forma exacta:\n' +
-    '{ "mundial": "<p>...</p><p>...</p>", "colombia": "<p>...</p><p>...</p>" }'
+    '{ "mundial": "<p>...</p><p>...</p>", "colombia": "<p>...</p><p>...</p>", ' +
+    '"fuentesCitadas": [{"titulo":"...","url":"..."}] }'
   );
 }
+
+/** La narrativa es crítica: si "mundial" o "colombia" no llegan como texto, la
+ *  corrida entera se aborta y se conserva el documento del mes anterior.
+ *  "fuentesCitadas" no: es un campo de apoyo (la cita legal de respaldo, que el
+ *  informe muestra si está), así que una lista malformada se degrada a [] en vez
+ *  de tirar por la borda una redacción por lo demás usable. */
+/* Longitud mínima de cada apartado. El contrato pide tres párrafos extensos, así
+   que 20 caracteres es un piso deliberadamente bajo: no juzga la calidad, solo
+   descarta lo que no es una redacción («», «<p></p>», «N/A»). Sin este piso una
+   cadena vacía pasaba la validación de tipo y se guardaba como narrativa, y el
+   informe salía con III.A y III.B en blanco en vez de con el marcador que avisa
+   qué falta. */
+const MIN_LARGO_APARTADO = 20;
 
 function parsearRespuestaRedaccion(texto) {
   const bruto = extraerJSON(texto);
   if (typeof bruto.mundial !== 'string' || typeof bruto.colombia !== 'string') {
     throw new Error('La redacción no trajo "mundial" y "colombia" como texto.');
   }
-  return { mundial: bruto.mundial, colombia: bruto.colombia };
+  if (bruto.mundial.trim().length < MIN_LARGO_APARTADO || bruto.colombia.trim().length < MIN_LARGO_APARTADO) {
+    throw new Error('La redacción trajo "mundial" o "colombia" vacío o demasiado corto para ser un apartado.');
+  }
+  const fuentesCitadas = Array.isArray(bruto.fuentesCitadas)
+    ? bruto.fuentesCitadas.filter(
+        (f) => f && typeof f.titulo === 'string' && typeof f.url === 'string' && f.titulo && f.url
+      ).map((f) => ({ titulo: f.titulo, url: f.url }))
+    : [];
+  return { mundial: bruto.mundial, colombia: bruto.colombia, fuentesCitadas };
 }
 
 /** Documento final para `analisisMercado/actual`. No escribe nada por sí mismo —
@@ -138,7 +167,15 @@ function armarDocumentoFirestore({ series, narrativa, ahora }) {
   return {
     actualizadoEn: ahora,
     series: seriesConFecha,
-    narrativa: { mundial: narrativa.mundial, colombia: narrativa.colombia },
+    narrativa: {
+      mundial: narrativa.mundial,
+      colombia: narrativa.colombia,
+      /* Lista de respaldo que el informe muestra al cierre de III.B. Se guarda
+         siempre, aunque venga vacía: Firestore no tiene esquema y un campo
+         ausente obliga a cada lector a distinguir «sin fuentes» de «versión
+         vieja del documento». */
+      fuentesCitadas: narrativa.fuentesCitadas || [],
+    },
   };
 }
 

@@ -66,11 +66,11 @@ async function redactarNarrativa(claudeApiKey, series, anioActual) {
 async function actualizarAnalisisMercado({ geminiApiKey, claudeApiKey, anioActual }) {
   const series = await buscarCifras(geminiApiKey, anioActual);
 
-  // Solo se redacta y se guarda sobre series con fuenteUrl verificada contra el
-  // grounding real de Gemini. parsearRespuestaBusqueda (Task 1) conserva las series
-  // sin fuente confiable con confiable:false y fuenteUrl:null en vez de descartarlas
-  // -- ese objeto no puede llegar tal cual a construirPromptRedaccion, o una cifra
-  // sin fuente verificada terminaría en el prompt de redacción de Claude.
+  // Solo se redacta y se guarda sobre las series que vinieron de una búsqueda
+  // real (grounding no vacío). parsearRespuestaBusqueda conserva las demás con
+  // confiable:false y fuenteUrl:null en vez de descartarlas -- ese objeto no
+  // puede llegar tal cual a construirPromptRedaccion, o una cifra recordada de
+  // memoria terminaría en el prompt de redacción de Claude.
   const seriesConfiables = Object.fromEntries(
     Object.entries(series).filter(([, s]) => s.confiable)
   );

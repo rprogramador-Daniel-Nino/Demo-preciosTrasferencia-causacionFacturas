@@ -88,21 +88,27 @@ export const DATOS_MACRO = {
   },
 
   /* Proyecciones por región para un año dado. No es una serie temporal: cada año
-     trae su propio corte de regiones. */
+     trae su propio corte de regiones.
+
+     Arreglo de objetos planos y no de pares [region, valor]: Firestore prohíbe
+     que un elemento de un arreglo sea a su vez un arreglo, y esta misma forma
+     viaja desde functions/ (analisisMercadoActualizar.js la escribe en
+     analisisMercado/actual). Con pares anidados, el set() del cron fallaba y —
+     por ser una escritura atómica— se perdía el mes entero, no solo esta serie. */
   crecimiento_por_region: {
     2025: [
-      ['Mundial', '2.8'],
-      ['Estados Unidos', '1.8'],
-      ['China', '4.0'],
-      ['América Latina', '2.3'],
-      ['Colombia (OCDE)', '2.8'],
+      { region: 'Mundial', valor: '2.8' },
+      { region: 'Estados Unidos', valor: '1.8' },
+      { region: 'China', valor: '4.0' },
+      { region: 'América Latina', valor: '2.3' },
+      { region: 'Colombia (OCDE)', valor: '2.8' },
     ],
     2026: [
-      ['Mundial', '3.0'],
-      ['Estados Unidos', '2.0'],
-      ['China', '4.6'],
-      ['América Latina', '2.3'],
-      ['Colombia (OCDE)', '2.4'],
+      { region: 'Mundial', valor: '3.0' },
+      { region: 'Estados Unidos', valor: '2.0' },
+      { region: 'China', valor: '4.6' },
+      { region: 'América Latina', valor: '2.3' },
+      { region: 'Colombia (OCDE)', valor: '2.4' },
     ],
   },
 };
@@ -172,13 +178,28 @@ export function tablaHTML(titulo, encabezados, filas, fuente) {
    igual que hacían los dos generadores originales.
    ───────────────────────────────────────────────────────────────────────────── */
 
+/** Fecha de consulta legible, o cadena vacía si no hay ninguna o no se puede
+ *  interpretar. Acepta un Timestamp de Firestore (tiene .toDate()), un Date, o
+ *  un valor serializable a fecha. */
+function formatearFechaConsulta(fechaConsulta) {
+  if (!fechaConsulta) return '';
+  const fecha = typeof fechaConsulta.toDate === 'function' ? fechaConsulta.toDate() : new Date(fechaConsulta);
+  if (Number.isNaN(fecha.getTime())) return '';
+  return fecha.toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 /** Serie y fuente para una clave: prioriza datosMacro (de Firestore) sobre el
- *  respaldo local embebido en el código. */
+ *  respaldo local embebido en el código. La fecha de consulta se anota junto a
+ *  la fuente solo cuando la serie viene de Firestore: ahí sí se registró cuándo
+ *  se consultó, y el numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de
+ *  2016 la exige. Para el respaldo local no existe esa fecha y no se fabrica. */
 function resolverSerie(datosMacro, clave) {
   const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
   if (remota && remota.valores) {
     let fuenteTexto = remota.fuente || FUENTES_MACRO[clave];
     if (remota.fuenteUrl) fuenteTexto += ' (' + remota.fuenteUrl + ')';
+    const fecha = formatearFechaConsulta(remota.fechaConsulta);
+    if (fecha) fuenteTexto += ', consultado el ' + fecha;
     return { valores: remota.valores, fuente: fuenteTexto };
   }
   return { valores: DATOS_MACRO[clave], fuente: FUENTES_MACRO[clave] };
@@ -242,7 +263,7 @@ export function generarTablaCrecimientoPorRegion(datosMacro, year, wrap) {
       fuente);
   }
   return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
-    porRegion.map(([region, valor]) => [region, wrap(valor)]),
+    porRegion.map(({ region, valor }) => [region, wrap(valor)]),
     fuente);
 }
 
@@ -314,12 +335,19 @@ export function generarTablaDesempleo(datosMacro, year, wrap) {
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* El objeto social y la actividad vienen de OCR y pueden traer caracteres que
-   rompen el HTML del informe. */
+   rompen el HTML del informe.
+
+   La comilla doble se escapa además de &, < y >: esta misma función escapa las
+   URLs de narrativa.fuentesCitadas, que van dentro de un href="…" (ver
+   generarApartadoColombia). Sin ella, una URL con comilla —viene de la IA, no la
+   controlamos— se sale del atributo y puede inyectar HTML. En texto normal
+   &quot; se muestra igual que la comilla, así que no cambia nada visible. */
 function escaparHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Título de III.C. Neutro a propósito: el detalle de la actividad va en el
@@ -382,10 +410,24 @@ export function generarApartadoMundial(datosMacro, year, wrap) {
   ) + '\n</p>\n';
 }
 
+/** III.B. Además de la narrativa, cierra con las fuentes que la IA declaró haber
+ *  usado (narrativa.fuentesCitadas): el numeral 4 del artículo 1.2.2.2.1.5 del
+ *  Decreto 1625 de 2016 exige fuente y fecha de consulta, y la lista va aquí —al
+ *  final del segundo apartado— y no repetida en los dos. */
 export function generarApartadoColombia(datosMacro, year, wrap) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
   const narrativa = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
-  if (narrativa) return narrativa;
+  if (narrativa) {
+    /* escaparHtml aunque el título y la URL vengan de la IA vía Firestore: es
+       texto que no controlamos y termina dentro de un href y de un enlace. */
+    const fuentes = (datosMacro.narrativa.fuentesCitadas || []).filter((f) => f && f.titulo && f.url);
+    const listaFuentes = fuentes.length
+      ? '<p>\n<strong>Fuentes consultadas:</strong> ' +
+        fuentes.map((f) => '<a href="' + escaparHtml(f.url) + '">' + escaparHtml(f.titulo) + '</a>').join(', ') +
+        '\n</p>\n'
+      : '';
+    return narrativa + listaFuentes;
+  }
   return '<p>\n' + marca(
     '[Actualizar con el análisis del panorama de la economía colombiana del año gravable ' + year +
     ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'

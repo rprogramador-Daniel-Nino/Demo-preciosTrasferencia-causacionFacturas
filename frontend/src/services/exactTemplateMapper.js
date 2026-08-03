@@ -45,6 +45,14 @@ const ANCLA_SIGUIENTE = '_Toc208930980';
 const ANCLA_MUNDIAL = '_Toc208930977';
 const ANCLA_COLOMBIA = '_Toc208930978';
 
+/* Marcadores para sustituir III.A/III.B en dos fases: primero se reserva el
+   lugar (antes de apartarEnlaces, por la misma razón que el resto de anclas),
+   y la narrativa real se inserta al final, después de ANIOS_DEL_ESTUDIO y de
+   los reemplazos literales — si se insertara antes, esas reglas reescribirían
+   años y textos dentro de la prosa de Claude. Mismo patrón que MARCA_ENLACE. */
+const MARCA_APARTADO_MUNDIAL = '@@PT_APARTADO_MUNDIAL@@';
+const MARCA_APARTADO_COLOMBIA = '@@PT_APARTADO_COLOMBIA@@';
+
 /* Años del estudio: los contextos donde «2024» significa el año gravable y no un
    dato histórico. Es una lista blanca deliberada. La regla anterior —reemplazar
    toda aparición de 2024— falseaba las series macro («en 2024 la inflación
@@ -107,16 +115,34 @@ function reponerEnlaces(html, deposito) {
   });
 }
 
+/** Los bloques <p><strong>título (…)</strong></p><table>…</table> que reconozca
+ *  alguna entrada de TABLAS_MACRO dentro de un cuerpo dado. Se conservan tal
+ *  cual (con los valores viejos de End Game): TABLAS_MACRO.forEach los
+ *  regenerará más adelante con el año y los datos correctos. Si se
+ *  descartaran aquí, dejarían de existir en el documento y ese forEach no
+ *  tendría nada que reemplazar — es exactamente el bug que este cambio corrige. */
+function extraerTablasConocidas(contenido) {
+  return TABLAS_MACRO
+    .map(({ rx }) => contenido.match(rx) || [])
+    .flat()
+    .join('\n');
+}
+
 /** Sustituye el cuerpo de III.A o III.B entre su ancla y la del apartado
  *  siguiente, conservando el título original (a diferencia del sectorial, este
- *  título no depende del cliente y no hace falta tocarlo). Si el HTML no trae la
- *  ancla —una plantilla que el usuario subió— no toca nada. */
-function reemplazarCuerpoApartado(html, anclaInicio, anclaFin, contenidoNuevo) {
+ *  título no depende del cliente) y las tablas macro que ese cuerpo traiga
+ *  (ver extraerTablasConocidas). En el lugar de la narrativa deja `marcador`,
+ *  no el contenido final — ver MARCA_APARTADO_MUNDIAL/COLOMBIA arriba. Si el
+ *  HTML no trae la ancla —una plantilla que el usuario subió— no toca nada. */
+function reemplazarCuerpoApartado(html, anclaInicio, anclaFin, marcador) {
   const rx = new RegExp(
     '(<a id="' + anclaInicio + '"></a><strong>[\\s\\S]*?</strong>\\s*</li>\\s*</ol>)' +
-    '[\\s\\S]*?(?=<ol>\\s*<li>\\s*<a id="' + anclaFin + '">)'
+    '([\\s\\S]*?)(?=<ol>\\s*<li>\\s*<a id="' + anclaFin + '">)'
   );
-  return html.replace(rx, (completo, tituloCompleto) => tituloCompleto + '\n' + contenidoNuevo);
+  return html.replace(rx, (completo, tituloCompleto, cuerpoOriginal) => {
+    const tablasConservadas = extraerTablasConocidas(cuerpoOriginal);
+    return tituloCompleto + '\n' + marcador + (tablasConservadas ? '\n' + tablasConservadas : '');
+  });
 }
 
 /** Sustituye el apartado sectorial (III.C) y su título, en el cuerpo y en el
@@ -249,11 +275,13 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro) {
      índice— por uno construido con la actividad real del contribuyente. */
   html = reemplazarApartadoSectorial(html, study, year, wrap);
 
-  /* III.A y III.B, con la misma narrativa (o el mismo marcador) que use
-     datosMacro — van antes de apartarEnlaces por la misma razón que el
-     sectorial: se delimitan con las anclas <a id="_Toc…">. */
-  html = reemplazarCuerpoApartado(html, ANCLA_MUNDIAL, ANCLA_COLOMBIA, generarApartadoMundial(datosMacro, year, wrap));
-  html = reemplazarCuerpoApartado(html, ANCLA_COLOMBIA, ANCLA_SECTORIAL, generarApartadoColombia(datosMacro, year, wrap));
+  /* III.A y III.B: se reserva el lugar con un marcador (van antes de
+     apartarEnlaces por la misma razón que el sectorial, se delimitan con las
+     anclas <a id="_Toc…">) y se conservan las tablas macro que traiga cada
+     cuerpo. La narrativa real se inserta al final de esta función — ver el
+     comentario junto a MARCA_APARTADO_MUNDIAL. */
+  html = reemplazarCuerpoApartado(html, ANCLA_MUNDIAL, ANCLA_COLOMBIA, MARCA_APARTADO_MUNDIAL);
+  html = reemplazarCuerpoApartado(html, ANCLA_COLOMBIA, ANCLA_SECTORIAL, MARCA_APARTADO_COLOMBIA);
 
   /* ─── Guarda de enlaces ───
      Varias fuentes citadas en la sección III llevan el año en la URL
@@ -400,6 +428,14 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro) {
   TABLAS_MACRO.forEach(({ rx, gen }) => {
     html = html.replace(rx, () => gen(datosMacro, year, wrap));
   });
+
+  /* Sustitución tardía de III.A/III.B: si la narrativa se insertara donde se
+     reservó el lugar (arriba, antes de ANIOS_DEL_ESTUDIO y de los reemplazos
+     literales), esas reglas reescribirían años y textos dentro de la prosa de
+     Claude. Se sustituye aquí, después de todos los pases de texto, para que
+     la narrativa llegue intacta. */
+  html = html.replace(MARCA_APARTADO_MUNDIAL, () => generarApartadoMundial(datosMacro, year, wrap));
+  html = html.replace(MARCA_APARTADO_COLOMBIA, () => generarApartadoColombia(datosMacro, year, wrap));
 
   return reponerEnlaces(html, enlaces);
 }

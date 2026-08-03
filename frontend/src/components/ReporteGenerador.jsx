@@ -78,6 +78,17 @@ export default function ReporteGenerador({ study, estudioId }) {
         );
       }
     }
+    /* Aviso propio y no un `else` de los anteriores: Firestore puede responder,
+       estar al día y aun así no traer la narrativa (una corrida a medias, o un
+       documento de una versión anterior del esquema). Sin esto, III.A y III.B
+       salían con el marcador de pendiente y nada lo señalaba, porque el banner
+       solo miraba si `analisisMercado` era nulo. */
+    if (analisisMercado && !d.narrativaCubierta) {
+      avisos.push(
+        'el análisis de mercado no trae la narrativa de III.A/III.B; esos dos apartados ' +
+        'quedaron con un marcador que hay que redactar'
+      );
+    }
     return avisos;
   };
 

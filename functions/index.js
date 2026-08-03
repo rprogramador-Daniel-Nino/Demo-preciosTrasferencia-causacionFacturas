@@ -5,7 +5,6 @@ const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
 const { onSchedule } = require('firebase-functions/v2/scheduler');
-const { actualizarAnalisisMercado } = require('./analisisMercadoActualizar');
 
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
@@ -247,6 +246,12 @@ exports.actualizarAnalisisMercadoScheduled = onSchedule(
     timeoutSeconds: 300,
   },
   async () => {
+    /* require dentro del handler y no arriba del archivo: este módulo arrastra
+       firebase-admin (y su inicialización), y todas las funciones de este archivo
+       comparten el mismo index.js. Requerido arriba, cada cold start de claude,
+       gemini, extraerRut y extraerCamara —que nunca tocan Firestore— pagaba esa
+       carga. Este cron corre una vez al mes; la carga la paga él. */
+    const { actualizarAnalisisMercado } = require('./analisisMercadoActualizar');
     const anioActual = new Date().getFullYear();
     await actualizarAnalisisMercado({
       geminiApiKey: GEMINI_API_KEY.value(),
