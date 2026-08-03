@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { extraerReferencia } from './pdfReferenceExtractor.js';
+import {
+  extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
+} from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
 
@@ -47,7 +49,11 @@ test('el texto queda dentro de la etiqueta que le corresponde', async () => {
   /* Si el texto se asignara por orden de aparición en vez de por el id del
      contenido marcado, encajaría en las etiquetas equivocadas y ningún
      encabezado traería su propio título. */
-  const encabezados = [...r.html.matchAll(/<h[1-6]>([^<]*)<\/h[1-6]>/g)].map((m) => m[1].trim());
+  /* El contenido de un encabezado ya no es texto plano: lleva dentro el formato
+     del original —casi siempre negrita—, así que hay que quitar las etiquetas de
+     línea antes de comparar. */
+  const encabezados = [...r.html.matchAll(/<h[1-6]>([\s\S]*?)<\/h[1-6]>/g)]
+    .map((m) => m[1].replace(/<[^>]*>/g, '').trim());
   assert.ok(
     encabezados.some((t) => t.toUpperCase().includes('INTRODUCCIÓN')),
     'ningún encabezado contiene "INTRODUCCIÓN": ' + JSON.stringify(encabezados.slice(0, 10))
@@ -161,7 +167,7 @@ test('el hueco del anexo queda en su sitio del documento', async () => {
   /* El encabezado de la sección, no su entrada del índice: «ANEXO A. Estados
      financieros» aparece primero en la tabla de contenido, noventa mil
      caracteres antes, y medir desde ahí no dice nada de dónde quedó el hueco. */
-  const m = /<h1>[^<]*ANEXO A\. Estados financieros[^<]*<\/h1>/.exec(r.html);
+  const m = /<h1>(?:(?!<\/h1>)[\s\S])*ANEXO A\. Estados financieros[\s\S]*?<\/h1>/.exec(r.html);
   assert.ok(m, 'no se encontró el encabezado del ANEXO A');
   const iTitulo = m.index + m[0].length;
   const iHueco = r.html.indexOf('data-hueco="anexo_eeff"');
@@ -171,4 +177,117 @@ test('el hueco del anexo queda en su sitio del documento', async () => {
     iHueco - iTitulo < 300,
     'el hueco quedó lejos de su encabezado: ' + (iHueco - iTitulo) + ' caracteres'
   );
+});
+
+/* --- Tipografía del informe --- */
+
+test('el formato del original llega al HTML: negrita, cursiva y familias', async () => {
+  const r = await extraer();
+  /* El documento salía sin una sola negrita ni cursiva: la información estaba en
+     los objetos de fuente y no se leía, así que el Word generado no se parecía al
+     PDF. `styles` de getTextContent sólo da "sans-serif"/"serif", que no distingue
+     una negrita de una redonda; el nombre real vive en commonObjs. */
+  const negritas = r.html.split('<strong>').length - 1;
+  const cursivas = r.html.split('<em>').length - 1;
+  assert.ok(negritas > 100, 'apenas hay negritas: ' + negritas);
+  assert.ok(cursivas > 10, 'apenas hay cursivas: ' + cursivas);
+  /* «Arm's Length» va en cursiva en el informe: es el término técnico. */
+  assert.ok(/<em>[^<]*Arm/i.test(r.html), 'no se detectó la cursiva del término técnico');
+});
+
+test('el cuerpo del documento se deduce y se anota en el HTML', async () => {
+  const r = await extraer();
+  /* El informe de referencia está en Arial 12. Antes la exportación imponía
+     Georgia, elegida a dedo, y de ahí que no se pareciera al original. */
+  assert.strictEqual(r.estiloBase.familia, 'Arial');
+  assert.strictEqual(r.estiloBase.tamano, 12);
+  assert.deepStrictEqual(estiloBaseDe(r.html), r.estiloBase, 'la marca no sobrevive en el HTML');
+});
+
+test('el nombre de la fuente llega sin el prefijo de subconjunto', async () => {
+  const r = await extraer();
+  /* Los nombres del PDF traen un prefijo de seis letras y un '+'
+     (VXFCPX+BritannicBold). Si se emitiera tal cual, Word buscaría una fuente que
+     no existe y caería a la que le pareciera. */
+  assert.ok(!/font-family:'[A-Z]{6}\+/.test(r.html), 'quedó un prefijo de subconjunto');
+  /* Y las variantes no son familias: la negrita y la cursiva viajan como tales. */
+  assert.ok(!/font-family:'[^']*Bold/i.test(r.html), 'una variante se emitió como familia');
+  assert.ok(!/font-family:'[^']*Italic/i.test(r.html), 'una variante se emitió como familia');
+});
+
+test('sólo se declara el tamaño cuando se desvía de verdad del cuerpo', async () => {
+  const r = await extraer();
+  /* `height` es el alto de los glifos y no el cuerpo de la fuente, así que un
+     renglón sin ascendentes mide un punto menos que el de al lado. Emitir esa
+     diferencia eran mil setecientas declaraciones invisibles a la vista. */
+  const tamanos = [...r.html.matchAll(/font-size:(\d+)pt/g)].map((m) => Number(m[1]));
+  assert.ok(tamanos.length > 0, 'no se conservó ningún tamaño, ni el de la letra pequeña');
+  assert.ok(
+    tamanos.every((t) => Math.abs(t - r.estiloBase.tamano) > 1),
+    'se emitió un tamaño a un punto del cuerpo: ' + JSON.stringify([...new Set(tamanos)])
+  );
+  /* La letra pequeña de verdad —notas y fuentes de tabla— sí se conserva. */
+  assert.ok(tamanos.some((t) => t <= 9), 'se perdió la letra pequeña');
+});
+
+test('la plantilla queda sellada con la versión del lector', async () => {
+  const r = await extraer();
+  assert.strictEqual(versionDe(r.html), VERSION_EXTRACTOR);
+  assert.deepStrictEqual(loQueFaltaPorVersion(VERSION_EXTRACTOR), [], 'la actual no debe faltar nada');
+});
+
+test('una plantilla sin sello se trata como la más antigua y se dice qué le falta', () => {
+  /* Las guardadas antes de que existiera el sello no lo traen. Devolver 1 y no
+     null es lo que permite enumerar lo que les falta en vez de callar. */
+  assert.strictEqual(versionDe('<p>plantilla vieja</p>'), 1);
+  const falta = loQueFaltaPorVersion(1);
+  assert.ok(falta.length >= 2, 'debería enumerar imágenes y tipografía');
+  assert.ok(falta.some((f) => /tipograf/i.test(f)));
+  assert.ok(falta.some((f) => /im[áa]genes/i.test(f)));
+
+  /* Cuanto más nueva la plantilla, menos le falta, y a la actual nada. Se afirma
+     la relación y no un número exacto: así el test sigue valiendo cuando se suba
+     la versión otra vez, en vez de fallar por una cuenta que ya cambió una vez. */
+  for (let v = 1; v < VERSION_EXTRACTOR; v++) {
+    assert.ok(
+      loQueFaltaPorVersion(v).length > loQueFaltaPorVersion(v + 1).length,
+      'a la versión ' + v + ' debería faltarle más que a la ' + (v + 1)
+    );
+  }
+  assert.ok(
+    loQueFaltaPorVersion(2).some((f) => /tipograf/i.test(f)),
+    'a la 2 le falta la tipografía, que llegó en la 3'
+  );
+});
+
+test('cada entrada del índice va en su propio bloque', async () => {
+  const r = await extraer();
+  /* Las 89 entradas salían concatenadas en una sola línea corrida —título, puntos
+     y número de página de una pegados a los de la siguiente— porque el rol TOCI no
+     estaba en el mapa de etiquetas y sus hijos se emitían sin envolver. */
+  const i = r.html.indexOf('INTRODUCCIÓN');
+  const tramo = r.html.slice(i, i + 1200);
+  const entradas = [...tramo.matchAll(/<p>(?:(?!<\/p>)[\s\S])*?\.{10,}[\s\S]*?<\/p>/g)];
+  assert.ok(
+    entradas.length >= 3,
+    'las entradas del índice no están en bloques propios: ' + entradas.length
+  );
+  /* Y en cada bloque, un solo número de página al final: si hubiera dos, dos
+     entradas se habrían fundido. */
+  for (const e of entradas.slice(0, 5)) {
+    const numeros = (e[0].match(/\.{10,}\s*\d+/g) || []).length;
+    assert.strictEqual(numeros, 1, 'un bloque del índice trae dos entradas: ' + e[0].slice(0, 120));
+  }
+});
+
+test('el logo queda marcado como encabezado, no como imagen del cuerpo', async () => {
+  const r = await extraer();
+  /* El logo del informe se repite en casi cien páginas: su sitio es el encabezado
+     de página, no la primera imagen del documento. Va marcado en el HTML para que
+     la exportación lo saque del cuerpo y lo declare como tal. */
+  const m = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(r.html);
+  assert.ok(m, 'no se marcó el encabezado');
+  assert.ok(/<img data-recurso=/.test(m[1]), 'el encabezado no lleva el logo');
+  /* Y va antes que el contenido: es lo primero del documento. */
+  assert.ok(m.index < r.html.indexOf('INTRODUCCIÓN'), 'el encabezado no está al principio');
 });

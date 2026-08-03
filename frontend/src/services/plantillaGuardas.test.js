@@ -424,3 +424,38 @@ test('con valores de referencia presentes no se avisa de ceguera', () => {
   });
   assert.deepStrictEqual(avisos, []);
 });
+
+/* --- Plantilla extraída con un lector anterior --- */
+
+test('avisa cuando la plantilla viene de un lector de PDF anterior', () => {
+  /* Las plantillas se guardan y se reutilizan, así que una extraída hace dos
+     versiones sigue produciendo el documento de entonces. Pasó de verdad: un
+     informe salió sin negritas porque su plantilla se había marcado antes del
+     cambio de tipografía, y no había forma de saberlo. */
+  const avisos = revisarAntesDeGenerar({
+    estudio: estudioNuevo,
+    vacios: [],
+    tieneAnexo: true,
+    recursosFaltantes: [],
+    faltaPorVersion: ['el documento sale sin la tipografía del informe'],
+  });
+  assert.strictEqual(avisos.length, 1, JSON.stringify(avisos));
+  assert.match(avisos[0].texto, /tipografía/);
+  /* La acción tiene que quedar clara: volver a marcar no basta, porque reutiliza
+     el HTML ya guardado. */
+  assert.match(avisos[0].texto, /vuelve a subir/i);
+  assert.match(avisos[0].texto, /volver a marcar no basta/i);
+});
+
+test('una plantilla al día no dispara el aviso de versión', () => {
+  for (const v of [undefined, null, []]) {
+    assert.deepStrictEqual(
+      revisarAntesDeGenerar({
+        estudio: estudioNuevo, vacios: [], tieneAnexo: true, recursosFaltantes: [],
+        faltaPorVersion: v,
+      }),
+      [],
+      'avisó con faltaPorVersion = ' + JSON.stringify(v)
+    );
+  }
+});
