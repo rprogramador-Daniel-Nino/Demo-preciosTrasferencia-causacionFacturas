@@ -126,3 +126,36 @@ export const guardarHuecos = (plantillaId, cuantos) =>
    este cambio, o un .docx sin huecos, no debe disparar el aviso del anexo. */
 export const leerHuecos = (plantillaId) =>
   leerPlantilla(claveHuecos(plantillaId)).then((v) => Number(v) || 0);
+
+export const borrarVinculo = (estudioId) =>
+  operar('plantillas', 'readwrite', (s) => s.delete('vinculo:' + esc(estudioId)));
+
+/**
+ * Borra todo lo que este estudio tenía guardado en el navegador: las imágenes de su
+ * plantilla, las páginas de su ANEXO A y su vínculo con la plantilla.
+ *
+ * La plantilla en sí NO se borra, y es a propósito: su clave es el hash del contenido
+ * del PDF, así que la comparten todos los estudios que subieron el mismo documento.
+ * Borrarla al eliminar un estudio dejaría a los demás sin plantilla.
+ *
+ * Por el mismo motivo tampoco se borran su marcado (`marcado:`) ni su cuenta de huecos
+ * (`huecos:`): las dos van por plantilla, no por estudio, así que borrarlas obligaría a
+ * volver a pagar el marcado por IA a todos los demás estudios que usan ese PDF.
+ *
+ * Cada borrado va por separado y los fallos no se propagan: el estudio ya se eliminó
+ * de la base, y dejar un recurso suelto es menos grave que romper la operación a
+ * medias.
+ */
+export async function borrarRecursosDelEstudio(estudioId) {
+  const resultados = await Promise.allSettled([
+    borrarRecursos(estudioId),
+    borrarAnexoEeff(estudioId),
+    borrarVinculo(estudioId),
+  ]);
+  const fallidos = resultados.filter((r) => r.status === 'rejected');
+  if (fallidos.length) {
+    console.warn('[plantillaStore] no se pudo limpiar todo del estudio ' + estudioId,
+      fallidos.map((f) => f.reason));
+  }
+  return { borrados: resultados.length - fallidos.length, fallidos: fallidos.length };
+}
