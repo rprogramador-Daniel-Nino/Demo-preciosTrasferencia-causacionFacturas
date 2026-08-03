@@ -365,8 +365,11 @@ export function hydrateExactWordTemplate(rawHtml, study) {
      desempleo) salían con los valores de End Game. El título se reconoce con
      \([^<]*\) en vez del rango literal «(2023-2025)», para que la tabla siga
      siendo reconocible después de haberse regenerado una vez con otro año. */
+  /* datosMacro es null: hydrateExactWordTemplate todavía no recibe el documento de
+     Firestore (analisisMercado/actual). Cada generadora cae entonces a su respaldo
+     local DATOS_MACRO/FUENTES_MACRO, igual que antes de que ganaran este parámetro. */
   TABLAS_MACRO.forEach(({ rx, gen }) => {
-    html = html.replace(rx, () => gen(year, wrap));
+    html = html.replace(rx, () => gen(null, year, wrap));
   });
 
   return reponerEnlaces(html, enlaces);

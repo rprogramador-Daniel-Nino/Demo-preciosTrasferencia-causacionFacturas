@@ -5,6 +5,9 @@ import {
   DATOS_MACRO,
   FUENTES_MACRO,
   generarApartadoSectorial,
+  generarApartadoMundial,
+  generarApartadoColombia,
+  generarTablaPibMundial,
   generarTablaDesempleo,
   generarTablaTRM,
   tituloSectorial,
@@ -111,16 +114,61 @@ test('la tabla de tasa de intervención conserva la etiqueta original de cada ob
 });
 
 test('un año sin datos deja un marcador que exige la fuente, no un guion mudo', () => {
-  const salida = generarTablaTRM(2031, (v) => String(v));
+  const salida = generarTablaTRM(null, 2031, (v) => String(v));
   assert.ok(salida.includes('[Completar con la TRM promedio de 2031'), 'no se marcó el dato ausente');
   assert.ok(salida.includes('Decreto 1625 de 2016'), 'el marcador no invoca la obligación de citar la fuente');
   assert.ok(!salida.includes('>—<'), 'quedó un guion mudo en lugar del marcador');
 });
 
 test('el desempleo del año siguiente sale como proyección y no repite el del año en curso', () => {
-  const salida = generarTablaDesempleo(2024, (v) => String(v));
+  const salida = generarTablaDesempleo(null, 2024, (v) => String(v));
   assert.ok(salida.includes('9.7'), 'falta el desempleo de 2024');
   assert.ok(salida.includes('9.0'), 'falta la proyección de 2025');
+});
+
+test('un año sin datos deja el marcador aunque se le pase datosMacro vacío', () => {
+  const salida = generarTablaTRM({ series: {} }, 2031, (v) => String(v));
+  assert.ok(salida.includes('[Completar con la TRM promedio de 2031'), 'no se marcó el dato ausente');
+});
+
+test('con datosMacro de Firestore, la tabla usa esas cifras y esa fuente, no el respaldo local', () => {
+  const datosMacro = {
+    series: {
+      pib_mundial: { valores: { '2026': '9.9' }, fuente: 'Fuente de prueba', fuenteUrl: 'https://prueba.example' },
+    },
+  };
+  const salida = generarTablaPibMundial(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.includes('9.9'), 'no usó la cifra de Firestore');
+  assert.ok(!salida.includes('3.2'), 'usó la cifra del respaldo local en vez de la de Firestore');
+  assert.ok(salida.includes('Fuente de prueba'), 'no citó la fuente de Firestore');
+});
+
+test('sin datosMacro (null), la tabla cae al respaldo DATOS_MACRO embebido', () => {
+  const salida = generarTablaPibMundial(null, 2025, (v) => String(v));
+  assert.ok(salida.includes('3.2'), 'no cayó al valor del respaldo local para 2025');
+});
+
+test('generarApartadoMundial usa la narrativa de Firestore cuando existe', () => {
+  const datosMacro = { narrativa: { mundial: '<p>Texto redactado por IA sobre la economía mundial.</p>' } };
+  const salida = generarApartadoMundial(datosMacro, 2026, (v) => String(v));
+  assert.strictEqual(salida, '<p>Texto redactado por IA sobre la economía mundial.</p>');
+});
+
+test('generarApartadoMundial deja marcador si no hay narrativa todavía', () => {
+  const salida = generarApartadoMundial(null, 2026, (v) => String(v));
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía mundial'));
+  assert.ok(salida.includes('Decreto 1625 de 2016'));
+});
+
+test('generarApartadoColombia usa la narrativa de Firestore cuando existe', () => {
+  const datosMacro = { narrativa: { colombia: '<p>Texto redactado por IA sobre Colombia.</p>' } };
+  const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
+  assert.strictEqual(salida, '<p>Texto redactado por IA sobre Colombia.</p>');
+});
+
+test('generarApartadoColombia deja marcador si no hay narrativa todavía', () => {
+  const salida = generarApartadoColombia(undefined, 2025, (v) => String(v));
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía colombiana'));
 });
 
 /* ─── Hallazgos 5 y 6: el sector deja de ser el de End Game ─── */

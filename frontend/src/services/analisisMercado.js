@@ -172,9 +172,21 @@ export function tablaHTML(titulo, encabezados, filas, fuente) {
    igual que hacían los dos generadores originales.
    ───────────────────────────────────────────────────────────────────────────── */
 
-export function generarTablaPibMundial(year, wrap) {
+/** Serie y fuente para una clave: prioriza datosMacro (de Firestore) sobre el
+ *  respaldo local embebido en el código. */
+function resolverSerie(datosMacro, clave) {
+  const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
+  if (remota && remota.valores) {
+    let fuenteTexto = remota.fuente || FUENTES_MACRO[clave];
+    if (remota.fuenteUrl) fuenteTexto += ' (' + remota.fuenteUrl + ')';
+    return { valores: remota.valores, fuente: fuenteTexto };
+  }
+  return { valores: DATOS_MACRO[clave], fuente: FUENTES_MACRO[clave] };
+}
+
+export function generarTablaPibMundial(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
-  const S = DATOS_MACRO.pib_mundial;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
   return tablaHTML(
     'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
     ['Año', 'Crecimiento Mundial (%)'],
@@ -183,13 +195,13 @@ export function generarTablaPibMundial(year, wrap) {
       [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
       [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
     ],
-    FUENTES_MACRO.pib_mundial
+    fuente
   );
 }
 
-export function generarTablaPibColombia(year, wrap) {
+export function generarTablaPibColombia(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
-  const S = DATOS_MACRO.pib_colombia;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
   return tablaHTML(
     'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
     ['Año', 'Crecimiento del PIB (%)'],
@@ -198,13 +210,13 @@ export function generarTablaPibColombia(year, wrap) {
       [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
       [wrap(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
     ],
-    FUENTES_MACRO.pib_colombia
+    fuente
   );
 }
 
-export function generarTablaInflacionGlobal(year, wrap) {
+export function generarTablaInflacionGlobal(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
-  const S = DATOS_MACRO.inflacion_global;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
   return tablaHTML(
     'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
     ['Año', 'Tasa de Inflación (%)'],
@@ -213,12 +225,13 @@ export function generarTablaInflacionGlobal(year, wrap) {
       [wrap(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
       [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
     ],
-    FUENTES_MACRO.inflacion_global
+    fuente
   );
 }
 
-export function generarTablaCrecimientoPorRegion(year, wrap) {
-  const porRegion = DATOS_MACRO.crecimiento_por_region[year];
+export function generarTablaCrecimientoPorRegion(datosMacro, year, wrap) {
+  const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
+  const porRegion = porAnio[year];
   const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
   if (!porRegion || !porRegion.length) {
     /* Sin corte del año no se reutiliza el de otro: se listan las regiones con el
@@ -226,15 +239,15 @@ export function generarTablaCrecimientoPorRegion(year, wrap) {
     const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
     return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
       regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]),
-      FUENTES_MACRO.crecimiento_por_region);
+      fuente);
   }
   return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
     porRegion.map(([region, valor]) => [region, wrap(valor)]),
-    FUENTES_MACRO.crecimiento_por_region);
+    fuente);
 }
 
-export function generarTablaInflacionColombia(year, wrap) {
-  const S = DATOS_MACRO.inflacion_colombia;
+export function generarTablaInflacionColombia(datosMacro, year, wrap) {
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
   return tablaHTML(
     'Inflación en Colombia (' + year + ' vs. Meta ' + (year + 1) + ')',
     ['Indicador', 'Valor (%)'],
@@ -242,12 +255,12 @@ export function generarTablaInflacionColombia(year, wrap) {
       ['Inflación ' + wrap(year), wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
       ['Meta Inflación ' + wrap(year + 1), wrap(DATOS_MACRO.meta_inflacion_banrep)],
     ],
-    FUENTES_MACRO.inflacion_colombia
+    fuente
   );
 }
 
-export function generarTablaTasaIntervencion(year, wrap) {
-  const S = DATOS_MACRO.tasa_intervencion;
+export function generarTablaTasaIntervencion(datosMacro, year, wrap) {
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
   const y1 = year - 1, y2 = year;
   /* Se toman las observaciones de los dos años de la ventana con su etiqueta
      original; si falta alguna, esa fila lleva el marcador. */
@@ -262,13 +275,13 @@ export function generarTablaTasaIntervencion(year, wrap) {
     'Tasa de Intervención del Banco de la República (' + etiquetas[0] + ' - ' + etiquetas[1] + ')',
     ['Fecha', 'Tasa de Intervención (%)'],
     filas,
-    FUENTES_MACRO.tasa_intervencion
+    fuente
   );
 }
 
-export function generarTablaTRM(year, wrap) {
+export function generarTablaTRM(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year;
-  const S = DATOS_MACRO.trm_promedio;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
   return tablaHTML(
     'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
     ['Año', 'TRM Promedio ($)'],
@@ -276,12 +289,12 @@ export function generarTablaTRM(year, wrap) {
       [wrap(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
       [wrap(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
     ],
-    FUENTES_MACRO.trm_promedio
+    fuente
   );
 }
 
-export function generarTablaDesempleo(year, wrap) {
-  const S = DATOS_MACRO.desempleo_colombia;
+export function generarTablaDesempleo(datosMacro, year, wrap) {
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
   return tablaHTML(
     'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + (year + 1) + ')',
     ['Indicador', 'Valor (%)'],
@@ -289,7 +302,7 @@ export function generarTablaDesempleo(year, wrap) {
       ['Desempleo ' + wrap(year), wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
       ['Desempleo Proyectado ' + wrap(year + 1), wrap(valorODisponible(S, year + 1, 'la proyección de desempleo'))],
     ],
-    FUENTES_MACRO.desempleo_colombia
+    fuente
   );
 }
 
@@ -349,4 +362,32 @@ export function generarApartadoSectorial(study, year, wrap) {
     'numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]\n</p>\n';
 
   return html;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   6. APARTADOS III.A Y III.B
+   Narrativa ya redactada por functions/analisisMercadoActualizar.js (Gemini busca,
+   Claude redacta), o un marcador de pendiente si Firestore todavía no tiene una
+   corrida guardada. A diferencia del apartado sectorial, el título de estos dos
+   no depende del cliente, así que no hace falta una función de título aparte.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+export function generarApartadoMundial(datosMacro, year, wrap) {
+  const marca = typeof wrap === 'function' ? wrap : (v) => v;
+  const narrativa = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
+  if (narrativa) return narrativa;
+  return '<p>\n' + marca(
+    '[Actualizar con el análisis del panorama de la economía mundial del año gravable ' + year +
+    ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'
+  ) + '\n</p>\n';
+}
+
+export function generarApartadoColombia(datosMacro, year, wrap) {
+  const marca = typeof wrap === 'function' ? wrap : (v) => v;
+  const narrativa = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
+  if (narrativa) return narrativa;
+  return '<p>\n' + marca(
+    '[Actualizar con el análisis del panorama de la economía colombiana del año gravable ' + year +
+    ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'
+  ) + '\n</p>\n';
 }
