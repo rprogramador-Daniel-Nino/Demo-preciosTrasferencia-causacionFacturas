@@ -169,10 +169,7 @@ export default function AuditoriaNorma({ study }) {
           <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
             Hay una diferencia de COP {fmt(segCheck.diferencia)} ({pctf(segCheck.diferenciaPct)}) entre los ingresos totales
-            del estado de resultados y la operación reportada con la vinculada. Antes de continuar, pregúntele al cliente
-            si en este año gravable hubo algún proyecto, convenio o contrato con un tercero no vinculado (por ejemplo, un
-            proyecto tipo CoCrea) que generó ingresos o gastos ajenos a la operación con {study.vinc || 'la vinculada'}.
-            Si la respuesta es afirmativa, registre el monto y la descripción en la sección de Cifras del Estado de Resultados.
+            del estado de resultados y la operación reportada con {study.vinc || 'la vinculada'}.
           </p>
         </div>
       )}
