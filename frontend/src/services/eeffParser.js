@@ -59,7 +59,7 @@ Devuelve SOLO este JSON estricto sin marcas markdown:
    documento con la comparable a la que pertenece. Sin ellos el sistema no sabe de
    qué empresa es el PDF que acaba de leer, y las cifras entraban en la fila donde
    se hubiera soltado el archivo, fuera o no la correcta. */
-const EEFF_COMPARABLE_PROMPT = `Eres un analista senior de Precios de Transferencia. Lee los Estados Financieros de la empresa comparable y extrae la matriz contable completa.
+export const EEFF_COMPARABLE_PROMPT = `Eres un analista senior de Precios de Transferencia. Lee los Estados Financieros de la empresa comparable y extrae la matriz contable completa.
 
 Devuelve SOLO un JSON estricto con esta estructura:
 {
@@ -78,8 +78,14 @@ Devuelve SOLO un JSON estricto con esta estructura:
   "cuentas_por_pagar": 0,
   "total_activos": 0,
   "total_pasivos": 0,
-  "patrimonio": 0
-}`;
+  "patrimonio": 0,
+  "propiedad_planta_equipo": 0,
+  "efectivo_y_equivalentes": 0,
+  "gastos_investigacion_desarrollo": null,
+  "gastos_publicidad": null
+}
+
+Reglas para "gastos_investigacion_desarrollo" y "gastos_publicidad": son rubros OPCIONALES. Úsalos solo si la empresa los desglosa como línea propia en su estado de resultados. Si no aparecen desglosados, devuelve null — NO los deduzcas restando de gastos_operacionales, NO estimes.`;
 
 /**
  * Función auxiliar con reintento automático para manejar errores de límite de tasa 429
@@ -181,7 +187,7 @@ export async function parseEeffWithGeminiOCR(file) {
 /* Un mismo PDF suele traer los estados financieros de todas las comparables
    seleccionadas, uno tras otro. Este prompt los separa por empresa en vez de
    devolver una sola matriz mezclando cifras de varias. */
-const EEFF_COMPARABLES_LOTE_PROMPT = `Eres un analista senior de Precios de Transferencia. Este documento contiene los Estados Financieros de VARIAS empresas comparables, una tras otra.
+export const EEFF_COMPARABLES_LOTE_PROMPT = `Eres un analista senior de Precios de Transferencia. Este documento contiene los Estados Financieros de VARIAS empresas comparables, una tras otra.
 
 Identifica CADA empresa presente y extrae su matriz contable por separado. No mezcles cifras de empresas distintas y no promedies nada.
 
@@ -204,12 +210,16 @@ Devuelve SOLO un JSON estricto con esta estructura:
       "cuentas_por_pagar": 0,
       "total_activos": 0,
       "total_pasivos": 0,
-      "patrimonio": 0
+      "patrimonio": 0,
+      "propiedad_planta_equipo": 0,
+      "efectivo_y_equivalentes": 0,
+      "gastos_investigacion_desarrollo": null,
+      "gastos_publicidad": null
     }
   ]
 }
 
-Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, ponlo en 0. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
+Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, ponlo en 0 — EXCEPTO "gastos_investigacion_desarrollo" y "gastos_publicidad": esos dos son OPCIONALES, van en null si la empresa no los desglosa como línea propia (no los deduzcas ni los estimes). Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
 
 /** Lee un PDF (o imagen) que contiene los EEFF de varias comparables y devuelve
  *  una entrada por empresa, cada una con su verificación contable.
