@@ -30,8 +30,9 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      2 — imágenes en su posición del flujo y logo una sola vez
      3 — tipografía del informe: negrita, cursiva, familias y cuerpo
      4 — cada entrada del índice y cada nota en su propio bloque
-     5 — cada página del original envuelta, para que el salto caiga donde debe */
-export const VERSION_EXTRACTOR = 5;
+     5 — cada página del original envuelta, para que el salto caiga donde debe
+     6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo */
+export const VERSION_EXTRACTOR = 6;
 
 const MAPA_ETIQUETAS = {
   H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6',
@@ -176,7 +177,15 @@ export async function extraerReferencia(datos) {
          forma de saber a cuál pertenece cada trozo y termina en la equivocada
          —encabezados que dicen "1" o media frase de otro párrafo—, que es peor
          que un párrafo corrido, porque parece correcto. */
-      if (htmlStruct.replace(/<[^>]*>/g, '').trim()) return { pagina: n, html: htmlStruct };
+      /* Una página cuyo contenido es sólo una imagen —las dieciséis del anexo de
+         estados financieros escaneado— no está vacía: no tiene texto. Al quitar las
+         etiquetas para medirlo desaparece también el marcador de figura, así que sin
+         esta comprobación esas páginas parecían vacías, se descartaba su estructura
+         y con ella el hueco del anexo: de quince huecos calculados llegaba uno al
+         documento y las otras catorce páginas se perdían sin dejar rastro. */
+      const tieneTexto = !!htmlStruct.replace(/<[^>]*>/g, '').trim();
+      const tieneFigura = htmlStruct.includes('<!--FIG:');
+      if (tieneTexto || tieneFigura) return { pagina: n, html: htmlStruct };
       return { pagina: n, html: textoPlano ? '<p>' + escapar(textoPlano) + '</p>' : '' };
     }
     return { pagina: n, html: '<p>' + escapar(textoPlano) + '</p>' };
@@ -369,6 +378,11 @@ export function loQueFaltaPorVersion(version) {
   if (version < 5) {
     falta.push('no hay saltos de página donde el informe cambia de página, así que la ' +
                'portada se funde con el índice');
+  }
+  if (version < 6) {
+    falta.push('las filas de las tablas llevan párrafos sueltos que Word saca de la ' +
+               'tabla, y el documento se infla a cientos de hojas; además el anexo ' +
+               'llega con una sola página de las quince');
   }
   return falta;
 }
@@ -608,6 +622,32 @@ function aHTML(nodo, porId, figuras, pagina, base) {
     const indice = figuras.length;
     figuras.push({ bbox: nodo.bbox || null, alt: nodo.alt || '' });
     return '<!--FIG:' + pagina + ':' + indice + '-->';
+  }
+
+  /* Una fila sólo puede contener celdas. El PDF de referencia cuelga además un `P`
+     vacío de cada `TR` —889 de ellos, la marca de párrafo que Word deja al exportar
+     la tabla—, y emitirlo producía `<tr><p></p>`, que es HTML inválido: al no poder
+     ser hijo de una fila, Word lo saca de la tabla. Uno por fila, ochocientos ochenta
+     y nueve párrafos sueltos y otras tantas tablas partidas, y el documento pasaba de
+     poco más de cien hojas a cientos.
+
+     Los vacíos se descartan. Si otro documento trajera uno con texto, se envuelve en
+     su propia celda y se avisa: puede descuadrar esa fila, pero perder texto de un
+     informe que se radica es peor, y el aviso dice dónde mirar. */
+  if (nodo.role === 'TR') {
+    const celdas = [];
+    for (const h of nodo.children || []) {
+      const html = aHTML(h, porId, figuras, pagina, base);
+      if (h.role === 'TD' || h.role === 'TH') {
+        celdas.push(html);
+        continue;
+      }
+      if (!html || !html.replace(/<[^>]*>/g, '').trim()) continue;
+      console.warn('[extractor] contenido con texto fuera de una celda en la página ' +
+                   pagina + ', se envuelve en su propia celda:', html.slice(0, 80));
+      celdas.push('<td>' + html + '</td>');
+    }
+    return '<tr>' + celdas.join('') + '</tr>';
   }
 
   const hijos = (nodo.children || [])

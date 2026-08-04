@@ -72,11 +72,21 @@ export default function App() {
 
   const refrescarIndice = useCallback(async () => {
     if (!usuario) return;
+
+    /* Los dos avisos se acumulan y se publican juntos. Antes cada `catch` escribía en
+       el mismo estado y el segundo pisaba al primero, así que cuando fallaban las dos
+       consultas —lo que pasa si la sesión no está lista o las reglas niegan todo— solo
+       se veía «Estudios compartidos…» y parecía un problema del compartir, cuando el
+       propio índice también había fallado. El aviso mandaba a arreglar la pieza
+       equivocada. */
+    const problemas = [];
+
     try {
       setIndice(await listarEstudios(usuario));
     } catch (err) {
       console.error('[estudios] no se pudo leer el índice', err);
-      setAvisoSesion('No se pudo leer la lista de estudios: ' + (err && err.message ? err.message : 'error desconocido'));
+      problemas.push('No se pudo leer la lista de estudios: ' +
+        (err && err.message ? err.message : 'error desconocido'));
     }
     try {
       setCompartidos(await listarEstudiosCompartidosConmigo(usuario));
@@ -84,8 +94,17 @@ export default function App() {
       console.error('[compartidos] no se pudieron leer', err);
       /* A la vista y con el motivo: los dos fallos posibles —reglas o índice— se
          arreglan con despliegues distintos, y en consola nadie los ve. */
-      setAvisoSesion('Estudios compartidos: ' + (err && err.message ? err.message : 'no se pudieron leer.'));
+      problemas.push('Estudios compartidos: ' +
+        (err && err.message ? err.message : 'no se pudieron leer.'));
     }
+
+    /* Si fallan las dos, decirlo: es la señal de que el problema no está en ninguna de
+       las dos consultas sino en la sesión, y ahorra buscar en el sitio equivocado. */
+    if (problemas.length > 1) {
+      problemas.push('Fallaron las dos consultas, así que lo más probable es que el ' +
+        'problema esté en la sesión y no en el compartir: vuelve a entrar.');
+    }
+    setAvisoSesion(problemas.join(' · '));
   }, [usuario]);
 
   /* ── al entrar: recuperar lo propio y leer el índice ──

@@ -459,3 +459,16 @@ test('una plantilla al día no dispara el aviso de versión', () => {
     );
   }
 });
+
+test('el aviso de plantilla vieja no necesita nada más para salir', () => {
+  /* La ruta de una plantilla guardada y sin marcar no tiene render, ni valores de
+     referencia, ni estudio a mano cuando avisa. Antes esa ruta callaba, y el
+     documento salía como el lector de entonces lo dejaba sin que nadie lo supiera. */
+  const a = revisarAntesDeGenerar({ faltaPorVersion: ['le falta X'] });
+  assert.strictEqual(a.length, 1);
+  assert.match(a[0].texto, /Vuelve a subir el mismo PDF/);
+  assert.match(a[0].texto, /le falta X/);
+  /* Y sin nada que avisar no inventa avisos. */
+  assert.deepStrictEqual(revisarAntesDeGenerar({ faltaPorVersion: [] }), []);
+  assert.deepStrictEqual(revisarAntesDeGenerar({}), []);
+});

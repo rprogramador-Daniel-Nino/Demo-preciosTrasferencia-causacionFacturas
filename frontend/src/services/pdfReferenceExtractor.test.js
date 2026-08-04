@@ -309,3 +309,44 @@ test('cada página del original queda envuelta y numerada', async () => {
   /* El índice no debe estar en la portada: si aparece aquí, el salto no separa. */
   assert.ok(!/RESUMEN EJECUTIVO/.test(texto), 'el índice se colvió a la portada');
 });
+
+test('las páginas del anexo llegan todas al documento, no solo una', async () => {
+  const r = await extraer();
+  /* Regresión: el marcador de figura también desaparece al quitar las etiquetas para
+     medir si la página tiene texto, así que una página cuyo contenido es sólo una
+     imagen —las quince del anexo escaneado— parecía vacía. Se descartaba su
+     estructura y con ella el hueco: de quince calculados llegaba uno al documento y
+     las otras catorce páginas se perdían sin dejar rastro. */
+  const enHtml = (r.html.match(/data-hueco=/g) || []).length;
+  assert.strictEqual(
+    enHtml, r.huecos.length,
+    'los huecos calculados no llegan todos al HTML: ' + enHtml + ' de ' + r.huecos.length
+  );
+  assert.strictEqual(r.huecos.length, 15, 'el anexo del informe son quince páginas');
+  /* Y cada uno nombra su página, para que el documento diga qué falta y dónde. */
+  for (const p of [44, 51, 58]) {
+    assert.ok(
+      r.html.includes('data-id="hueco_' + p + '"'),
+      'falta el hueco de la página ' + p
+    );
+  }
+});
+
+test('las filas de tabla no llevan párrafos sueltos dentro', async () => {
+  const r = await extraer();
+  /* El PDF cuelga un `P` vacío de cada `TR` —la marca de párrafo que Word deja al
+     exportar la tabla— y emitirlo producía `<tr><p></p>`, que es HTML inválido: al no
+     poder ser hijo de una fila, Word lo saca de la tabla. Ochocientos ochenta y nueve
+     párrafos sueltos y otras tantas tablas partidas, y el documento pasaba de poco más
+     de cien hojas a cientos. */
+  assert.ok(!/<tr>\s*<p>/.test(r.html), 'hay párrafos colgando dentro de una fila');
+  assert.ok(!/<tr>\s*<(strong|em|span|div)/.test(r.html), 'hay contenido fuera de celda en una fila');
+  /* Y lo que sí debe haber: filas con sus celdas. */
+  const filas = (r.html.match(/<tr>/g) || []).length;
+  assert.ok(filas > 100, 'se perdieron filas de tabla: ' + filas);
+  /* Cada fila abre y cierra, y solo contiene celdas. */
+  for (const m of [...r.html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].slice(0, 40)) {
+    const fuera = m[1].replace(/<t[dh]>[\s\S]*?<\/t[dh]>/g, '').trim();
+    assert.strictEqual(fuera, '', 'contenido fuera de celda en una fila: ' + fuera.slice(0, 60));
+  }
+});
