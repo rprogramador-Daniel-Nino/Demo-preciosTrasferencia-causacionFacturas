@@ -15,6 +15,7 @@ import {
 import {
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila, catalogoAComparablesPrevias,
 } from '../services/firestoreModelo';
+import MemoriaRangoModal from './MemoriaRangoModal.jsx';
 
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
@@ -83,6 +84,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [iaMatch, setIaMatch] = useState(study.iaMatch || null);
   const [curando, setCurando] = useState(false);
   const [curacionProgreso, setCuracionProgreso] = useState(null);
+  /* Memoria de cálculo del rango intercuartil, abierta desde su tarjeta. */
+  const [memoriaAbierta, setMemoriaAbierta] = useState(false);
 
   useEffect(() => {
     updateStudy({
@@ -1453,7 +1456,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
       {/* ══════ KPIs & RESULTADOS DEL RANGO INTERCUARTIL ══════ */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
+        {/* La tarjeta abre la memoria de cálculo: este es el número que decide el
+            cumplimiento, y hasta ahora no había forma de ver de dónde salía. */}
+        <button
+          type="button"
+          onClick={() => setMemoriaAbierta(true)}
+          title="Ver cómo se calculó este rango y descargarlo en Excel"
+          className="text-left bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm hover:border-[#0FA3A1] focus:outline-none focus:ring-1 focus:ring-[#0FA3A1]/50 transition-colors"
+        >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Rango Intercuartil</span>
             <Calculator className="w-4 h-4 text-[#0FA3A1]" />
@@ -1463,8 +1473,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               {stats ? `${pctf(stats.p25)} - ${pctf(stats.p75)}` : 'N/A'}
             </span>
             <span className="text-xs text-zinc-500 block mt-1">Mediana: {stats ? pctf(stats.med) : '—'}</span>
+            <span className="text-[10.5px] text-[#0B7C7A] dark:text-[#0FA3A1] block mt-1.5 font-medium">
+              Ver memoria de cálculo →
+            </span>
           </div>
-        </div>
+        </button>
 
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between">
@@ -1502,6 +1515,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           </div>
         </div>
       </div>
+
+      {/* `comparables` y `cmode` van del estado local y no de `study`: el efecto que los
+          persiste corre después del render, y la memoria tiene que explicar el rango que
+          se está viendo en la tarjeta, no el del render anterior. */}
+      {memoriaAbierta && (
+        <MemoriaRangoModal
+          estudio={{ ...study, comparables, cmode }}
+          alCerrar={() => setMemoriaAbierta(false)}
+        />
+      )}
 
       {/* ══════ TABLA DE COMPARABLES CON PLI AJUSTADO ══════ */}
       <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm">
