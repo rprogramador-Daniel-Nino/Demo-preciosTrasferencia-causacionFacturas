@@ -27,7 +27,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [catalogo, setCatalogo] = useState(null);
 
   // State for Extracted Company Activity
-  const [actividad, setActividad] = useState(study.actividad_especifica || 'Prestación de servicios interactivos, diseño digital y soluciones de tecnología.');
+  const [actividad, setActividad] = useState(study.actividad_especifica || 'No extraido por favor validar adjuntos');
   const [editingAct, setEditingAct] = useState(false);
   const [actInput, setActInput] = useState(actividad);
 
@@ -563,7 +563,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           motivo: traeNombre
             ? motivoCruce(cruce, result.data, file.name)
             : 'El documento no trae razón social, así que se aplicó a «' + destino.name +
-              '» sin poder verificar que le corresponde: confírmalo.',
+            '» sin poder verificar que le corresponde: confírmalo.',
           firme: traeNombre && esCruceFirme(cruce),
           verificacion: result.verificacion,
         }],
@@ -654,10 +654,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const useAdj = study.useadj || false;
   const interestRate = (num(study.prime) || 0) / 100;
 
+  // Ingreso/gasto de una operación no controlada (ej. proyecto CoCrea) ajeno a la
+  // vinculada: se resta de s y op para que el margen no se calcule sobre cifras mezcladas.
+  const segExcluido = num(study.seg_excluido) || 0;
+  const tsNum = num(study.t_s);
+  const tOpNum = num(study.t_op);
+
   const T = {
-    s: num(study.t_s),
+    s: tsNum !== null ? tsNum - segExcluido : null,
     c: num(study.t_c),
-    op: num(study.t_op),
+    op: tOpNum !== null ? tOpNum - segExcluido : null,
     ar: num(study.t_ar),
     inv: num(study.t_inv),
     ap: num(study.t_ap)
@@ -773,13 +779,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             {typeof catalogo.traidas === 'number' && (
               catalogo.traidas
                 ? <div className="text-zinc-600 dark:text-zinc-300">
-                    {catalogo.traidas} comparables del año {catalogo.anio} traídas del catálogo como referencia de continuidad.
-                    El motor las tratará como del estudio anterior.
-                  </div>
+                  {catalogo.traidas} comparables del año {catalogo.anio} traídas del catálogo como referencia de continuidad.
+                  El motor las tratará como del estudio anterior.
+                </div>
                 : <div className="text-amber-600 dark:text-amber-400">
-                    El catálogo no tiene comparables registradas del año {catalogo.anio}. Cargue la documentación
-                    comprobatoria de ese año para alimentarlo.
-                  </div>
+                  El catálogo no tiene comparables registradas del año {catalogo.anio}. Cargue la documentación
+                  comprobatoria de ese año para alimentarlo.
+                </div>
             )}
             {catalogo.sinSesion && (
               <div className="text-amber-600 dark:text-amber-400">
@@ -1227,11 +1233,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           </p>
 
           {/* Carga masiva: varios archivos, y cada archivo puede traer varias empresas */}
-          <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-xl px-4 py-5 text-xs font-semibold transition-colors ${
-            uploadingEEFF
-              ? 'border-zinc-200 dark:border-zinc-800 text-zinc-400 cursor-not-allowed'
-              : 'border-[#0FA3A1]/40 text-[#0B7C7A] dark:text-[#0FA3A1] hover:bg-[#0FA3A1]/5 cursor-pointer'
-          }`}>
+          <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-xl px-4 py-5 text-xs font-semibold transition-colors ${uploadingEEFF
+            ? 'border-zinc-200 dark:border-zinc-800 text-zinc-400 cursor-not-allowed'
+            : 'border-[#0FA3A1]/40 text-[#0B7C7A] dark:text-[#0FA3A1] hover:bg-[#0FA3A1]/5 cursor-pointer'
+            }`}>
             {uploadingEEFF ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
             <span>
               {uploadingEEFF
@@ -1301,14 +1306,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="text-[11px] text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
               {eeffCompartido.error
                 ? <span className="text-amber-600 dark:text-amber-400">
-                    Las cifras quedaron en el estudio, pero no se pudieron guardar para reutilizarlas: {eeffCompartido.error}
-                  </span>
+                  Las cifras quedaron en el estudio, pero no se pudieron guardar para reutilizarlas: {eeffCompartido.error}
+                </span>
                 : <>
-                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para sus otros estudios
-                    {eeffCompartido.anio ? ` (año ${eeffCompartido.anio})` : ''}
-                    {eeffCompartido.omitidas ? ` · ${eeffCompartido.omitidas} sin ingresos, no se compartieron` : ''}
-                    {eeffCompartido.fallidas ? ` · ${eeffCompartido.fallidas} fallaron` : ''}
-                  </>}
+                  {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para sus otros estudios
+                  {eeffCompartido.anio ? ` (año ${eeffCompartido.anio})` : ''}
+                  {eeffCompartido.omitidas ? ` · ${eeffCompartido.omitidas} sin ingresos, no se compartieron` : ''}
+                  {eeffCompartido.fallidas ? ` · ${eeffCompartido.fallidas} fallaron` : ''}
+                </>}
             </div>
           )}
 
@@ -1341,11 +1346,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               {resultadoCarga.aplicadas.map((a, i) => (
                 <div
                   key={'ok' + i}
-                  className={`rounded-lg px-4 py-3 text-xs border ${
-                    a.firme
-                      ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300'
-                      : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300'
-                  }`}
+                  className={`rounded-lg px-4 py-3 text-xs border ${a.firme
+                    ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300'
+                    : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300'
+                    }`}
                 >
                   <div className="flex items-start gap-2">
                     {a.firme ? <CheckCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
@@ -1568,8 +1572,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <tr
                   key={row.id || idx}
                   className={`transition-colors ${row.isIncluded
-                      ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
-                      : 'opacity-35 bg-zinc-100/50 dark:bg-zinc-950/20'
+                    ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40'
+                    : 'opacity-35 bg-zinc-100/50 dark:bg-zinc-950/20'
                     }`}
                 >
                   <td className="py-2 px-3">

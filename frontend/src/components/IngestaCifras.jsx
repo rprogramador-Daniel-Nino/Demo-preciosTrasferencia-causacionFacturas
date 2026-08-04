@@ -1,50 +1,16 @@
 import React, { useState } from 'react';
 import { Sparkles, BarChart, Settings, Calculator, Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle } from 'lucide-react';
-import { pliOf, pctf, fmt } from '../utils/calculations';
-import { parseExcelOperations } from '../services/excelOperationsParser';
+import { pliOf, pctf } from '../utils/calculations';
 import { parseEeffWithGeminiOCR } from '../services/eeffParser';
 import { convertPdfToImages } from '../services/pdfRenderer';
 
 export default function IngestaCifras({ study, updateStudy }) {
-  const [loadingExcel, setLoadingExcel] = useState(false);
-  const [excelMsg, setExcelMsg] = useState('');
-  const [fileName, setFileName] = useState('');
-
   const [loadingEeff, setLoadingEeff] = useState(false);
   const [eeffMsg, setEeffMsg] = useState('');
   const [eeffFileName, setEeffFileName] = useState('');
 
   const handleFieldChange = (key, value) => {
     updateStudy({ [key]: value });
-  };
-
-  // Carga de Excel de Operaciones
-  const handleExcelUpload = async (file) => {
-    if (!file) return;
-    setLoadingExcel(true);
-    setFileName(file.name);
-    setExcelMsg('Analizando Excel de Operaciones...');
-    
-    try {
-      const res = await parseExcelOperations(file);
-      if (res && res.vinc && res.t_s) {
-        updateStudy({
-          vinc: res.vinc,
-          vinc_id: res.vinc_id,
-          pais_vinc: res.pais_vinc,
-          vinc_tipo: res.vinc_tipo,
-          t_s: res.t_s
-        });
-        setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(res.t_s)}`);
-      } else {
-        setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
-      }
-    } catch (err) {
-      console.error("Error al procesar el Excel de operaciones:", err);
-      setExcelMsg('⚠ No se pudo procesar el archivo Excel. Verifique la estructura de las hojas.');
-    } finally {
-      setLoadingExcel(false);
-    }
   };
 
   // Carga de Estados Financieros (EEFF) con Gemini Vision OCR
@@ -199,6 +165,30 @@ export default function IngestaCifras({ study, updateStudy }) {
                 onChange={(e) => handleFieldChange('t_op', e.target.value)}
                 placeholder="COP Utilidad Op."
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+            <div className="flex flex-col">
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Monto Excluido (Operación No Vinculada)</label>
+              <input
+                type="number"
+                value={study.seg_excluido || ''}
+                onChange={(e) => handleFieldChange('seg_excluido', e.target.value)}
+                placeholder="COP a excluir del ingreso/gasto"
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+              />
+            </div>
+
+            <div className="flex flex-col md:col-span-2">
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Motivo de la Exclusión (Segmentación)</label>
+              <textarea
+                value={study.seg_motivo || ''}
+                onChange={(e) => handleFieldChange('seg_motivo', e.target.value)}
+                placeholder="Ej: proyecto CoCrea con un tercero no vinculado, ajeno a la operación con la vinculada"
+                rows={2}
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100"
               />
             </div>
           </div>

@@ -5,6 +5,10 @@ import {
   DATOS_MACRO,
   FUENTES_MACRO,
   generarApartadoSectorial,
+  generarApartadoMundial,
+  generarApartadoColombia,
+  generarTablaPibMundial,
+  generarTablaCrecimientoPorRegion,
   generarTablaDesempleo,
   generarTablaTRM,
   tituloSectorial,
@@ -111,16 +115,227 @@ test('la tabla de tasa de intervención conserva la etiqueta original de cada ob
 });
 
 test('un año sin datos deja un marcador que exige la fuente, no un guion mudo', () => {
-  const salida = generarTablaTRM(2031, (v) => String(v));
+  const salida = generarTablaTRM(null, 2031, (v) => String(v));
   assert.ok(salida.includes('[Completar con la TRM promedio de 2031'), 'no se marcó el dato ausente');
   assert.ok(salida.includes('Decreto 1625 de 2016'), 'el marcador no invoca la obligación de citar la fuente');
   assert.ok(!salida.includes('>—<'), 'quedó un guion mudo en lugar del marcador');
 });
 
 test('el desempleo del año siguiente sale como proyección y no repite el del año en curso', () => {
-  const salida = generarTablaDesempleo(2024, (v) => String(v));
+  const salida = generarTablaDesempleo(null, 2024, (v) => String(v));
   assert.ok(salida.includes('9.7'), 'falta el desempleo de 2024');
   assert.ok(salida.includes('9.0'), 'falta la proyección de 2025');
+});
+
+test('un año sin datos deja el marcador aunque se le pase datosMacro vacío', () => {
+  const salida = generarTablaTRM({ series: {} }, 2031, (v) => String(v));
+  assert.ok(salida.includes('[Completar con la TRM promedio de 2031'), 'no se marcó el dato ausente');
+});
+
+test('con datosMacro de Firestore, la tabla usa esas cifras y esa fuente, no el respaldo local', () => {
+  const datosMacro = {
+    series: {
+      pib_mundial: { valores: { '2026': '9.9' }, fuente: 'Fuente de prueba', fuenteUrl: 'https://prueba.example' },
+    },
+  };
+  const salida = generarTablaPibMundial(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.includes('9.9'), 'no usó la cifra de Firestore');
+  assert.ok(!salida.includes('3.2'), 'usó la cifra del respaldo local en vez de la de Firestore');
+  assert.ok(salida.includes('Fuente de prueba'), 'no citó la fuente de Firestore');
+});
+
+test('sin datosMacro (null), la tabla cae al respaldo DATOS_MACRO embebido', () => {
+  const salida = generarTablaPibMundial(null, 2025, (v) => String(v));
+  assert.ok(salida.includes('3.2'), 'no cayó al valor del respaldo local para 2025');
+});
+
+test('generarApartadoMundial usa la narrativa de Firestore cuando existe, y le agrega las 3 tablas que la narrativa no trae incrustadas', () => {
+  const datosMacro = { narrativa: { mundial: '<p>Texto redactado por IA sobre la economía mundial.</p>' } };
+  const salida = generarApartadoMundial(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.startsWith('<p>Texto redactado por IA sobre la economía mundial.</p>'), 'no empieza con la narrativa');
+  assert.ok(salida.includes('Crecimiento del PIB Mundial ('), 'falta la tabla de PIB mundial');
+  assert.ok(salida.includes('Tasas de Inflación Global ('), 'falta la tabla de inflación global');
+  assert.ok(salida.includes('Proyecciones de Crecimiento del PIB por Región/País ('), 'falta la tabla de regiones');
+});
+
+test('generarApartadoMundial no duplica una tabla que la narrativa ya incrusta junto a su tema', () => {
+  const narrativaConTabla =
+    '<p><strong>CRECIMIENTO MUNDIAL</strong></p><p>Texto.</p>' +
+    generarTablaPibMundial(null, 2026, (v) => String(v));
+  const datosMacro = { narrativa: { mundial: narrativaConTabla } };
+  const salida = generarApartadoMundial(datosMacro, 2026, (v) => String(v));
+  const apariciones = salida.split('Crecimiento del PIB Mundial (').length - 1;
+  assert.strictEqual(apariciones, 1, 'la tabla de PIB mundial quedó duplicada');
+  assert.ok(salida.includes('Tasas de Inflación Global ('), 'la tabla de inflación (que la narrativa no traía) no se agregó');
+});
+
+test('generarApartadoMundial deja marcador si no hay narrativa todavía', () => {
+  const salida = generarApartadoMundial(null, 2026, (v) => String(v));
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía mundial'));
+  assert.ok(salida.includes('Decreto 1625 de 2016'));
+});
+
+test('generarApartadoColombia usa la narrativa de Firestore cuando existe, y le agrega las 5 tablas que la narrativa no trae incrustadas', () => {
+  const datosMacro = { narrativa: { colombia: '<p>Texto redactado por IA sobre Colombia.</p>' } };
+  const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.startsWith('<p>Texto redactado por IA sobre Colombia.</p>'), 'no empieza con la narrativa');
+  assert.ok(salida.includes('Crecimiento del PIB en Colombia ('), 'falta la tabla de PIB de Colombia');
+  assert.ok(salida.includes('Inflación en Colombia ('), 'falta la tabla de inflación de Colombia');
+  assert.ok(salida.includes('Tasa de Intervención del Banco de la República ('), 'falta la tabla de tasa de intervención');
+  assert.ok(salida.includes('Tasa Representativa del Mercado (TRM) Promedio ('), 'falta la tabla de TRM');
+  assert.ok(salida.includes('Tasa de Desempleo en Colombia ('), 'falta la tabla de desempleo');
+});
+
+test('generarApartadoColombia deja marcador si no hay narrativa todavía', () => {
+  const salida = generarApartadoColombia(undefined, 2025, (v) => String(v));
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía colombiana'));
+});
+
+/* ─── crecimiento_por_region: arreglo de objetos, no de pares anidados ───
+   Firestore prohíbe que un elemento de un arreglo sea a su vez un arreglo. Con
+   la forma vieja [['Mundial','3.0'], …], el set() del cron mensual fallaba y por
+   ser escritura atómica se perdía el mes completo, no solo esta serie. */
+
+test('crecimiento_por_region usa objetos planos, admisibles en Firestore', () => {
+  Object.values(DATOS_MACRO.crecimiento_por_region).forEach((corte) => {
+    assert.ok(Array.isArray(corte), 'el corte de un año debe ser un arreglo');
+    corte.forEach((entrada) => {
+      assert.ok(!Array.isArray(entrada), 'un elemento del arreglo es otro arreglo: Firestore lo rechaza');
+      assert.strictEqual(typeof entrada, 'object', 'cada entrada debe ser un objeto plano');
+      assert.strictEqual(typeof entrada.region, 'string', 'falta region');
+      assert.strictEqual(typeof entrada.valor, 'string', 'falta valor');
+    });
+  });
+});
+
+test('la tabla por región lee la forma de objetos y no deja celdas undefined', () => {
+  const salida = generarTablaCrecimientoPorRegion(null, 2026, (v) => String(v));
+  ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'].forEach((r) => {
+    assert.ok(salida.includes(r), 'falta la región ' + r);
+  });
+  assert.ok(salida.includes('3.0'), 'falta el valor de la región Mundial para 2026');
+  assert.ok(!salida.includes('undefined'), 'quedó una celda undefined: el .map no leyó la forma nueva');
+});
+
+test('la tabla por región acepta la misma forma viniendo de Firestore', () => {
+  const datosMacro = {
+    series: {
+      crecimiento_por_region: {
+        valores: { 2026: [{ region: 'Zona Euro', valor: '1.1' }] },
+        fuente: 'Fuente de prueba',
+      },
+    },
+  };
+  const salida = generarTablaCrecimientoPorRegion(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.includes('Zona Euro'), 'no usó el corte de Firestore');
+  assert.ok(salida.includes('1.1'), 'no usó el valor de Firestore');
+  assert.ok(!salida.includes('Mundial'), 'mezcló el respaldo local con el corte de Firestore');
+});
+
+/* ─── Fecha de consulta: la exige el numeral 4 del art. 1.2.2.2.1.5 del D. 1625/2016 ───
+   Se guardaba en Firestore desde la primera corrida pero ningún generador la
+   mostraba, así que el informe seguía saliendo con fuente y sin fecha. */
+
+test('con fechaConsulta, la tabla la cita junto a la fuente', () => {
+  const datosMacro = {
+    series: {
+      pib_mundial: {
+        valores: { 2026: '9.9' },
+        fuente: 'Fuente de prueba',
+        fuenteUrl: 'https://prueba.example',
+        fechaConsulta: new Date('2026-08-01'),
+      },
+    },
+  };
+  const salida = generarTablaPibMundial(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.includes('consultado el'), 'no se citó la fecha de consulta');
+  assert.ok(/consultado el[^<]*2026/.test(salida), 'la fecha citada no lleva el año');
+  assert.ok(salida.includes('Fuente de prueba'), 'se perdió la fuente al agregar la fecha');
+});
+
+test('un Timestamp de Firestore (con .toDate) también se formatea', () => {
+  const timestampFalso = { toDate: () => new Date('2026-08-01') };
+  const datosMacro = {
+    series: { pib_mundial: { valores: { 2026: '9.9' }, fuente: 'X', fechaConsulta: timestampFalso } },
+  };
+  const salida = generarTablaPibMundial(datosMacro, 2026, (v) => String(v));
+  assert.ok(/consultado el[^<]*2026/.test(salida), 'no se interpretó el Timestamp de Firestore');
+});
+
+test('una fechaConsulta ausente o ilegible no ensucia la fuente', () => {
+  const sinFecha = { series: { pib_mundial: { valores: { 2026: '9.9' }, fuente: 'X' } } };
+  assert.ok(
+    !generarTablaPibMundial(sinFecha, 2026, (v) => String(v)).includes('consultado el'),
+    'inventó una fecha de consulta que nadie registró'
+  );
+  const basura = { series: { pib_mundial: { valores: { 2026: '9.9' }, fuente: 'X', fechaConsulta: 'no es fecha' } } };
+  const salida = generarTablaPibMundial(basura, 2026, (v) => String(v));
+  assert.ok(!salida.includes('consultado el'), 'aceptó una fecha ilegible');
+  assert.ok(!salida.includes('Invalid Date'), 'filtró «Invalid Date» al informe');
+});
+
+test('el respaldo local no finge una fecha de consulta', () => {
+  /* Nadie registró cuándo se consultaron los valores embebidos en el código;
+     fabricar esa fecha es el vicio que la norma quiere evitar. */
+  const salida = generarTablaPibMundial(null, 2025, (v) => String(v));
+  assert.ok(!salida.includes('consultado el'), 'el respaldo local inventó una fecha de consulta');
+});
+
+/* ─── narrativa.fuentesCitadas: la lista de respaldo al cierre de III.B ─── */
+
+test('fuentesCitadas se renderiza como enlaces al final de III.B', () => {
+  const datosMacro = {
+    narrativa: {
+      colombia: '<p>Narrativa de Colombia.</p>',
+      fuentesCitadas: [
+        { titulo: 'DANE, IPC', url: 'https://dane.gov.co/ipc' },
+        { titulo: 'Banco de la República', url: 'https://banrep.gov.co/trm' },
+      ],
+    },
+  };
+  const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
+  assert.ok(salida.startsWith('<p>Narrativa de Colombia.</p>'), 'se alteró la narrativa');
+  assert.ok(salida.includes('Fuentes consultadas:'), 'falta el encabezado de la lista de fuentes');
+  assert.ok(salida.includes('<a href="https://dane.gov.co/ipc">DANE, IPC</a>'), 'falta la primera fuente como enlace');
+  assert.ok(salida.includes('<a href="https://banrep.gov.co/trm">Banco de la República</a>'), 'falta la segunda fuente');
+});
+
+test('fuentesCitadas ausente o vacía no agrega el párrafo', () => {
+  const sinCampo = { narrativa: { colombia: '<p>N.</p>' } };
+  assert.ok(!generarApartadoColombia(sinCampo, 2026, (v) => String(v)).includes('Fuentes consultadas'));
+  const vacia = { narrativa: { colombia: '<p>N.</p>', fuentesCitadas: [] } };
+  assert.ok(!generarApartadoColombia(vacia, 2026, (v) => String(v)).includes('Fuentes consultadas'));
+});
+
+test('una fuente incompleta se descarta en vez de dejar un enlace roto', () => {
+  const datosMacro = {
+    narrativa: {
+      colombia: '<p>N.</p>',
+      fuentesCitadas: [{ titulo: 'Sin URL' }, { url: 'https://sin-titulo.example' }, null],
+    },
+  };
+  const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
+  assert.ok(!salida.includes('Fuentes consultadas'), 'una fuente sin título o sin URL llegó al informe');
+});
+
+test('una fuente con HTML en el título o en la URL no rompe el documento', () => {
+  /* titulo y url vienen de la IA vía Firestore: no se confía en que estén
+     limpios. La URL va dentro de un href="…", así que la comilla doble también
+     tiene que escaparse o se sale del atributo. */
+  const datosMacro = {
+    narrativa: {
+      colombia: '<p>N.</p>',
+      fuentesCitadas: [
+        { titulo: 'DANE <script>alert(1)</script> & Co', url: 'https://x.example/a"onmouseover="alert(1)' },
+      ],
+    },
+  };
+  const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
+  assert.ok(!salida.includes('<script>'), 'se inyectó una etiqueta desde el título de la fuente');
+  assert.ok(salida.includes('&amp; Co'), 'no se escapó el ampersand del título');
+  assert.ok(!salida.includes('onmouseover="'), 'la URL se salió del atributo href');
+  const hrefs = salida.match(/href="[^"]*"/g) || [];
+  assert.strictEqual(hrefs.length, 1, 'el href quedó partido: la comilla de la URL rompió el atributo');
 });
 
 /* ─── Hallazgos 5 y 6: el sector deja de ser el de End Game ─── */

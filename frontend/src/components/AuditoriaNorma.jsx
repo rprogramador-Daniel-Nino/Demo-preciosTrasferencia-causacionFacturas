@@ -1,6 +1,6 @@
 import React from 'react';
 import { ShieldCheck, ShieldAlert, AlertCircle, FileText, CheckCircle2, XCircle } from 'lucide-react';
-import { num, pliOf, quart, adjustInfo, pctf, fmt } from '../utils/calculations';
+import { num, pliOf, quart, adjustInfo, pctf, fmt, segmentacionDesajuste } from '../utils/calculations';
 
 export default function AuditoriaNorma({ study }) {
   const auditPoints = [];
@@ -67,7 +67,15 @@ export default function AuditoriaNorma({ study }) {
   
   if (study.comparables && study.comparables.length >= 3 && study.t_s && study.t_op) {
     const kind = study.pli || 'MO';
-    const T = { s: num(study.t_s), c: num(study.t_c), op: num(study.t_op), ar: num(study.t_ar), inv: num(study.t_inv), ap: num(study.t_ap) };
+    const segExcluido = num(study.seg_excluido) || 0;
+    const T = {
+      s: num(study.t_s) - segExcluido,
+      c: num(study.t_c),
+      op: num(study.t_op) - segExcluido,
+      ar: num(study.t_ar),
+      inv: num(study.t_inv),
+      ap: num(study.t_ap)
+    };
     const tPLI = pliOf(T, kind);
     
     const activeSeries = study.comparables
@@ -104,6 +112,32 @@ export default function AuditoriaNorma({ study }) {
     warningOnly: !hasRange
   });
 
+  // Check 7: Conciliación entre el ingreso del P&L y el monto de la operación con la vinculada
+  const segCheck = segmentacionDesajuste(study);
+  let segStatus = true;
+  let segWarningOnly = false;
+  let segDetail = 'No hay datos suficientes para comparar el ingreso del P&L con el monto de la operación reportada.';
+
+  if (segCheck) {
+    if (!segCheck.desajuste) {
+      segDetail = `El ingreso del P&L (COP ${fmt(segCheck.ingresoPL)}) concilia con la operación reportada con la vinculada (COP ${fmt(segCheck.monto)}).`;
+    } else if (study.seg_excluido && study.seg_motivo) {
+      segDetail = `Diferencia de COP ${fmt(segCheck.diferencia)} (${pctf(segCheck.diferenciaPct)}) entre el ingreso del P&L y la operación reportada, explicada: ${study.seg_motivo}`;
+    } else {
+      segStatus = false;
+      segWarningOnly = true;
+      segDetail = `Hay una diferencia de COP ${fmt(segCheck.diferencia)} (${pctf(segCheck.diferenciaPct)}) entre el ingreso total del estado de resultados y la operación reportada con ${study.vinc || 'la vinculada'}. Verifique con el cliente si hubo una operación no controlada (por ejemplo, un proyecto tipo CoCrea) ajena a esa operación, y regístrela en Cifras del Estado de Resultados.`;
+    }
+  }
+
+  auditPoints.push({
+    type: 'Técnica',
+    title: 'Conciliación entre ingreso del P&L y operación con la vinculada',
+    status: segStatus,
+    detail: segDetail,
+    warningOnly: segWarningOnly
+  });
+
   const totalWarnings = auditPoints.filter(p => !p.status && p.warningOnly).length;
   const totalErrors = auditPoints.filter(p => !p.status && !p.warningOnly).length;
 
@@ -128,6 +162,20 @@ export default function AuditoriaNorma({ study }) {
           )}
         </div>
       </div>
+
+      {/* Aviso de desajuste de segmentación */}
+      {segCheck && segCheck.desajuste && !study.seg_motivo && (
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 rounded-xl p-5 shadow-sm flex gap-3 items-start">
+          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
+            Hay una diferencia de COP {fmt(segCheck.diferencia)} ({pctf(segCheck.diferenciaPct)}) entre los ingresos totales
+            del estado de resultados y la operación reportada con la vinculada. Antes de continuar, pregúntele al cliente
+            si en este año gravable hubo algún proyecto, convenio o contrato con un tercero no vinculado (por ejemplo, un
+            proyecto tipo CoCrea) que generó ingresos o gastos ajenos a la operación con {study.vinc || 'la vinculada'}.
+            Si la respuesta es afirmativa, registre el monto y la descripción en la sección de Cifras del Estado de Resultados.
+          </p>
+        </div>
+      )}
 
       {/* Tarjeta de Lista */}
       <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm">

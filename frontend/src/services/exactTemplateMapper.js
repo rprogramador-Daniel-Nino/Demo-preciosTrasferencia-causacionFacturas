@@ -11,6 +11,8 @@ import {
   generarTablaTRM,
   generarTablaDesempleo,
   generarApartadoSectorial,
+  generarApartadoMundial,
+  generarApartadoColombia,
   tituloSectorial,
 } from './analisisMercado.js';
 
@@ -37,6 +39,19 @@ const TABLAS_MACRO = [
    sobreviva a que cambie la redacción del apartado. */
 const ANCLA_SECTORIAL = '_Toc208930979';
 const ANCLA_SIGUIENTE = '_Toc208930980';
+/* III.A y III.B: mismo documento de Word, anclas ya presentes en la plantilla
+   (confirmadas en el índice de masterTemplate.js). El orden es
+   Mundial(977) -> Colombia(978) -> Sectorial(979) -> IV(980). */
+const ANCLA_MUNDIAL = '_Toc208930977';
+const ANCLA_COLOMBIA = '_Toc208930978';
+
+/* Marcadores para sustituir III.A/III.B en dos fases: primero se reserva el
+   lugar (antes de apartarEnlaces, por la misma razón que el resto de anclas),
+   y la narrativa real se inserta al final, después de ANIOS_DEL_ESTUDIO y de
+   los reemplazos literales — si se insertara antes, esas reglas reescribirían
+   años y textos dentro de la prosa de Claude. Mismo patrón que MARCA_ENLACE. */
+const MARCA_APARTADO_MUNDIAL = '@@PT_APARTADO_MUNDIAL@@';
+const MARCA_APARTADO_COLOMBIA = '@@PT_APARTADO_COLOMBIA@@';
 
 /* Años del estudio: los contextos donde «2024» significa el año gravable y no un
    dato histórico. Es una lista blanca deliberada. La regla anterior —reemplazar
@@ -104,6 +119,24 @@ function reponerEnlaces(html, deposito) {
   });
 }
 
+/** Sustituye el cuerpo de III.A o III.B entre su ancla y la del apartado
+ *  siguiente, conservando el título original (a diferencia del sectorial, este
+ *  título no depende del cliente) y descartando el resto del cuerpo original
+ *  (las tablas de End Game incluidas). En el lugar de la narrativa deja
+ *  `marcador`, no el contenido final — ver MARCA_APARTADO_MUNDIAL/COLOMBIA
+ *  arriba. Ya no se preservan las tablas del cuerpo original: desde que
+ *  generarApartadoMundial/Colombia incrustan sus propias tablas —junto al
+ *  párrafo del tema que comentan, no todas al final— conservar las de End
+ *  Game solo produciría duplicados. Si el HTML no trae la ancla —una
+ *  plantilla que el usuario subió— no toca nada. */
+function reemplazarCuerpoApartado(html, anclaInicio, anclaFin, marcador) {
+  const rx = new RegExp(
+    '(<a id="' + anclaInicio + '"></a><strong>[\\s\\S]*?</strong>\\s*</li>\\s*</ol>)' +
+    '[\\s\\S]*?(?=<ol>\\s*<li>\\s*<a id="' + anclaFin + '">)'
+  );
+  return html.replace(rx, (completo, tituloCompleto) => tituloCompleto + '\n' + marcador);
+}
+
 /** Sustituye el apartado sectorial (III.C) y su título, en el cuerpo y en el
  *  índice. Si el HTML no trae las anclas —una plantilla que el usuario subió— no
  *  toca nada: devuelve el mismo HTML y diagnosticarCobertura lo reporta. */
@@ -132,22 +165,24 @@ function reemplazarApartadoSectorial(html, study, year, wrap) {
 
 /** Qué quedó sin cubrir al hidratar. Alimenta el aviso de ReporteGenerador: un
  *  banner que dice qué falta sirve; uno que solo dice «revise el documento» no. */
-export function diagnosticarCobertura(rawHtml, study) {
+export function diagnosticarCobertura(rawHtml, study, datosMacro) {
   const year = Number(study && study.anio) || 2025;
   const html = String(rawHtml || '');
 
   const seriesFaltantes = [];
   const porAnio = [
-    ['el crecimiento del PIB mundial', DATOS_MACRO.pib_mundial],
-    ['el crecimiento del PIB de Colombia', DATOS_MACRO.pib_colombia],
-    ['la inflación global', DATOS_MACRO.inflacion_global],
-    ['la inflación de Colombia', DATOS_MACRO.inflacion_colombia],
-    ['la TRM promedio', DATOS_MACRO.trm_promedio],
-    ['la tasa de desempleo', DATOS_MACRO.desempleo_colombia],
-    ['la tasa de intervención del Banco de la República', DATOS_MACRO.tasa_intervencion],
-    ['las proyecciones de crecimiento por región', DATOS_MACRO.crecimiento_por_region],
+    ['el crecimiento del PIB mundial', 'pib_mundial'],
+    ['el crecimiento del PIB de Colombia', 'pib_colombia'],
+    ['la inflación global', 'inflacion_global'],
+    ['la inflación de Colombia', 'inflacion_colombia'],
+    ['la TRM promedio', 'trm_promedio'],
+    ['la tasa de desempleo', 'desempleo_colombia'],
+    ['la tasa de intervención del Banco de la República', 'tasa_intervencion'],
+    ['las proyecciones de crecimiento por región', 'crecimiento_por_region'],
   ];
-  porAnio.forEach(([concepto, serie]) => {
+  porAnio.forEach(([concepto, clave]) => {
+    const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
+    const serie = (remota && remota.valores) || DATOS_MACRO[clave];
     if (!serie || serie[year] === undefined) seriesFaltantes.push(concepto);
   });
 
@@ -165,6 +200,7 @@ export function diagnosticarCobertura(rawHtml, study) {
     year,
     sectorialCubierto: html.includes('id="' + ANCLA_SECTORIAL + '"'),
     seriesFaltantes,
+    narrativaCubierta: !!(datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial && datosMacro.narrativa.colombia),
     razonesRechazoCubiertas: !razones.sinDatos,
     /* Los conteos no suman el universo evaluado: algo cambió en el estudio después de
        ejecutar la selección y la tabla quedaría inconsistente. */
@@ -412,7 +448,7 @@ ${images.map((imgUrl, i) => `
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
  * y realiza el reemplazo quirúrgico de las variables del cliente activo.
  */
-export function hydrateExactWordTemplate(rawHtml, study) {
+export function hydrateExactWordTemplate(rawHtml, study, datosMacro) {
   if (!rawHtml) return '';
 
   let html = rawHtml;
@@ -460,6 +496,14 @@ export function hydrateExactWordTemplate(rawHtml, study) {
      del sector de videojuegos de End Game —título incluido, en el cuerpo y en el
      índice— por uno construido con la actividad real del contribuyente. */
   html = reemplazarApartadoSectorial(html, study, year, wrap);
+
+  /* III.A y III.B: se reserva el lugar con un marcador (van antes de
+     apartarEnlaces por la misma razón que el sectorial, se delimitan con las
+     anclas <a id="_Toc…">) y se conservan las tablas macro que traiga cada
+     cuerpo. La narrativa real se inserta al final de esta función — ver el
+     comentario junto a MARCA_APARTADO_MUNDIAL. */
+  html = reemplazarCuerpoApartado(html, ANCLA_MUNDIAL, ANCLA_COLOMBIA, MARCA_APARTADO_MUNDIAL);
+  html = reemplazarCuerpoApartado(html, ANCLA_COLOMBIA, ANCLA_SECTORIAL, MARCA_APARTADO_COLOMBIA);
 
   /* ─── Guarda de enlaces ───
      Varias fuentes citadas en la sección III llevan el año en la URL
@@ -664,9 +708,21 @@ export function hydrateExactWordTemplate(rawHtml, study) {
      desempleo) salían con los valores de End Game. El título se reconoce con
      \([^<]*\) en vez del rango literal «(2023-2025)», para que la tabla siga
      siendo reconocible después de haberse regenerado una vez con otro año. */
+  /* datosMacro es el documento de Firestore (analisisMercado/actual) que recibe
+     hydrateExactWordTemplate como tercer parámetro. Cuando no trae una serie —o
+     cuando el llamador no pasa datosMacro en absoluto— cada generadora cae a su
+     respaldo local DATOS_MACRO/FUENTES_MACRO. */
   TABLAS_MACRO.forEach(({ rx, gen }) => {
-    html = html.replace(rx, () => gen(year, wrap));
+    html = html.replace(rx, () => gen(datosMacro, year, wrap));
   });
+
+  /* Sustitución tardía de III.A/III.B: si la narrativa se insertara donde se
+     reservó el lugar (arriba, antes de ANIOS_DEL_ESTUDIO y de los reemplazos
+     literales), esas reglas reescribirían años y textos dentro de la prosa de
+     Claude. Se sustituye aquí, después de todos los pases de texto, para que
+     la narrativa llegue intacta. */
+  html = html.replace(MARCA_APARTADO_MUNDIAL, () => generarApartadoMundial(datosMacro, year, wrap));
+  html = html.replace(MARCA_APARTADO_COLOMBIA, () => generarApartadoColombia(datosMacro, year, wrap));
 
   return reponerEnlaces(html, enlaces);
 }

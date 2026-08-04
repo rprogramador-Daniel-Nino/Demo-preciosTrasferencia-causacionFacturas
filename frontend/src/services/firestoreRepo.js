@@ -38,6 +38,7 @@ const ESTUDIOS = 'estudios';
 const CLIENTES = 'clientes';
 const COMPARABLES = 'comparablesHistoricas';
 const EEFF = 'eeffComparables';
+const ANALISIS_MERCADO = 'analisisMercado';
 
 /* Colecciones del modelo compartido anterior, para la migración. */
 const COLECCIONES_MIGRABLES = [ESTUDIOS, CLIENTES, COMPARABLES, EEFF];
@@ -403,6 +404,16 @@ export async function leerEeffDeComparables(claves, anio, usuario) {
     if (instantanea.exists()) encontrados[clave] = instantanea.data();
   }
   return encontrados;
+}
+
+/* ══════════════════════ análisis de mercado (Sección III) ══════════════════════ */
+
+/** Cifras y narrativa vigentes de la Sección III (III.A/III.B), o null si el cron
+ *  programado (`actualizarAnalisisMercadoScheduled`) todavía no ha corrido. No pasa
+ *  por documento(usuario, …): es dato compartido, no por consultor. */
+export async function leerAnalisisMercado() {
+  const instantanea = await getDoc(doc(db, ANALISIS_MERCADO, 'actual'));
+  return instantanea.exists() ? instantanea.data() : null;
 }
 
 /* ══════════════════════ migraciones ══════════════════════ */
