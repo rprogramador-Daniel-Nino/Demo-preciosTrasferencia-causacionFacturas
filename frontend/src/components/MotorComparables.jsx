@@ -53,6 +53,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   ]);
 
   const [cmode, setCmode] = useState(study.cmode || 'all');
+  /* Criterios de la hoja "Screen Criteria" del export de Capital IQ (SIC, tipo
+     de compañía, ingresos, etc.), para reconstruir la Tabla 13 del informe con
+     la corrida real de este año en vez de la del informe anterior. */
+  const [criteriosScreening, setCriteriosScreening] = useState(study.criteriosScreening || []);
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   /* El embudo se guarda con el estudio: la tabla de razones de rechazo del informe se
@@ -103,7 +107,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
-      /* Conteos de la última selección: alimentan la tabla 16 del informe. */
+      criteriosScreening,
+      /* Conteos de la última selección: alimentan la tabla 14 del informe. */
       embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
          cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
@@ -112,7 +117,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch, selectionFunnel]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -281,6 +286,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       });
 
       setImportMeta(meta);
+      setCriteriosScreening(meta.criteriosScreening || []);
+      if (meta.criteriosScreening && meta.criteriosScreening.length) {
+        anotar(`${meta.criteriosScreening.length} criterios de búsqueda leídos de la hoja "Screen Criteria" (Tabla 13 del informe)`, 'ok');
+      } else {
+        anotar('No se encontró la hoja "Screen Criteria" en el archivo: la Tabla 13 del informe quedará pendiente.', 'aviso');
+      }
       anotar(`Hoja «${meta.hoja}» de ${meta.hojas.length} (${meta.hojas.join(', ')})`);
       anotar(`Encabezados detectados en la fila ${meta.filaEncabezados + 1}; ${meta.filas} filas en la hoja`);
       anotar(`Columnas reconocidas (${meta.reconocidas.length}): ${meta.reconocidas.map(r => r.etiqueta).join(', ')}`);
