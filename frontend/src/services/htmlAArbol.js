@@ -112,8 +112,17 @@ export function htmlAArbol(html) {
       const acierraA = CIERRA_IMPLICITA[etiqueta];
       if (acierraA) {
         const cierre = Array.isArray(acierraA) ? acierraA : [acierraA];
+        /* `tr`/`td`/`th` cierran la etiqueta del mismo tipo dentro de SU tabla, nunca
+           cruzando a una tabla exterior: sin este límite, la `tr` de una tabla anidada en una
+           celda encontraba la `tr` de la tabla de fuera y la cerraba, aplanando las dos
+           tablas en una sola. `p`/`li` no llevan límite: no anidan en un contenedor propio. */
+        const limite = (etiqueta === 'tr' || etiqueta === 'td' || etiqueta === 'th')
+          ? pila.map((n) => n.etiqueta).lastIndexOf('table') : -1;
         for (const e of cierre) {
-          const i = pila.map((n) => n.etiqueta).lastIndexOf(e);
+          let i = -1;
+          for (let k = pila.length - 1; k > limite; k--) {
+            if (pila[k].etiqueta === e) { i = k; break; }
+          }
           if (i > 0) pila.length = i;
         }
       }

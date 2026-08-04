@@ -215,3 +215,162 @@ test('un encabezado con puntos y número no se convierte en entrada de índice',
   assert.doesNotMatch(doc, /w:leader="dot"/, 'un encabezado no debe tener guía de puntos');
   assert.match(doc, /1\. Descripción de la Compañía/);
 });
+
+test('las tablas salen como tablas de Word, con anchos en DXA', async () => {
+  /* La skill de docx lo marca como trampa: hacen falta columnWidths en la tabla Y width en
+     cada celda, las dos en DXA. Con porcentajes, Google Docs rompe. */
+  const { doc } = await abrir(
+    '<table><tr><th>Concepto</th><th>Valor</th></tr>' +
+    '<tr><td>Activo</td><td>1.000</td></tr></table>');
+  assert.match(doc, /<w:tbl>/);
+  assert.match(doc, /<w:tblGrid>/);
+  assert.match(doc, /w:type="dxa"/);
+  assert.match(doc, /Concepto/);
+  assert.match(doc, /1\.000/);
+  assert.equal((doc.match(/<w:tr[ >]/g) || []).length, 2, 'deben ser dos filas');
+});
+
+test('los anchos de columna suman el ancho de la caja de texto', async () => {
+  /* Si no suman, Word recalcula y las columnas salen donde quiera. La caja del informe mide
+     21,6 − 2 × 2,5 = 16,6 cm. */
+  const { doc } = await abrir('<table><tr><td>a</td><td>b</td><td>c</td></tr></table>');
+  const grid = /<w:tblGrid>([\s\S]*?)<\/w:tblGrid>/.exec(doc)[1];
+  const anchos = [...grid.matchAll(/w:w="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.equal(anchos.length, 3);
+  const caja = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
+  assert.ok(Math.abs(anchos.reduce((a, b) => a + b, 0) - caja) <= 3,
+    'los anchos suman ' + anchos.reduce((a, b) => a + b, 0) + ' y la caja mide ' + caja);
+});
+
+test('una fila sin celdas no produce una tabla inválida', async () => {
+  /* El PDF cuelga un `P` vacío de cada `TR`. En el .doc eso fue un documento de 834 páginas
+     porque Word sacaba el párrafo de la tabla. Aquí una fila que se queda sin celdas
+     simplemente no se emite. */
+  const { doc } = await abrir('<table><tr><p></p></tr><tr><td>a</td></tr></table>');
+  assert.equal((doc.match(/<w:tr[ >]/g) || []).length, 1);
+  assert.match(doc, /<w:tbl>/);
+});
+
+test('una tabla sin ninguna fila válida no se emite', async () => {
+  const { doc } = await abrir('<table><tr><p></p></tr></table><p>después</p>');
+  assert.doesNotMatch(doc, /<w:tbl>/);
+  assert.match(doc, /después/);
+});
+
+test('la letra del encabezado de tabla sale blanca sobre el fondo oscuro', async () => {
+  /* Antes, el fallback que ponía `color: 'FFFFFF'` era código muerto: `bloquesDe` siempre
+     vuelca el texto suelto de una celda como párrafo (el `volcar()` final, fuera del `for`),
+     así que la rama que llevaba el color nunca se alcanzaba y los encabezados salían con
+     letra oscura sobre el fondo `#0E1726` — ilegibles. */
+  const { doc } = await abrir(
+    '<table><tr><th>Concepto</th><th>Valor</th></tr><tr><td>Activo</td></tr></table>');
+  assert.match(doc, /<w:color w:val="FFFFFF"\/>/);
+  assert.match(doc, /w:val="clear"/);
+  const blancos = (doc.match(/<w:color w:val="FFFFFF"\/>/g) || []).length;
+  assert.equal(blancos, 2, 'debe haber un <w:color w:val="FFFFFF"/> por cada th, ni uno más');
+  /* La celda de datos (`td`) no lleva el color del encabezado. */
+  const celdaActivo = /<w:tc>(?:(?!<w:tc>)[\s\S])*?Activo[\s\S]*?<\/w:tc>/.exec(doc)[0];
+  assert.doesNotMatch(celdaActivo, /w:color="FFFFFF"/);
+});
+
+test('una tabla dentro de una celda no se aplana en la de fuera', async () => {
+  /* Dos causas, no una: `recogerFilas` recorría todos los descendientes buscando `tr` (así que
+     las filas de una tabla anidada salían como filas hermanas de la exterior), y antes de eso
+     `htmlAArbol` ya aplanaba el árbol: el cierre implícito de `tr` buscaba la última `tr` en
+     toda la pila sin respetar el límite de una tabla anidada, y encontraba la del exterior. */
+  const { doc } = await abrir(
+    '<table><tr><td>fuera<table><tr><td>dentro</td></tr></table></td></tr></table>');
+  assert.equal((doc.match(/<w:tbl>/g) || []).length, 2, 'deben ser dos tablas');
+  const exterior = /<w:tbl>([\s\S]*)<\/w:tbl>/.exec(doc)[1];
+  const filasExterior = exterior.split('<w:tbl>')[0];
+  assert.equal((filasExterior.match(/<w:tr[ >]/g) || []).length, 1,
+    'la tabla exterior debe tener una sola fila');
+  assert.match(doc, /fuera/);
+  assert.match(doc, /dentro/);
+  assert.equal((doc.match(/fuera/g) || []).length, 1);
+  assert.equal((doc.match(/dentro/g) || []).length, 1);
+});
+
+/* PNG de 1×1 válido, para no depender del PDF real en los tests de unidad. */
+const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ' +
+  'AAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+
+test('las imágenes van como binario en word/media, no en base64', async () => {
+  /* En el .doc iban en base64 dentro del propio archivo y pesaba 3,3 MB. */
+  const { zip } = await abrir(
+    '<p><img data-recurso="logo" style="width:5.53cm;height:1.23cm" /></p>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  const media = Object.keys(zip.files).filter((f) => /^word\/media\/.+\./.test(f));
+  assert.equal(media.length, 1, 'debe haber un archivo por imagen');
+  assert.match(zip.file('word/_rels/document.xml.rels').asText(), /media\//);
+});
+
+test('la imagen sale con el tamaño que le da el PDF, no con el natural del PNG', async () => {
+  /* Este es el fallo que produjo "una página por cada separación entre párrafos": sin tamaño,
+     la figura de la página 11 medía 29,9 cm sobre papel de 21,6 y Word repartía el desborde
+     en hojas nuevas. 5,53 cm × 37,795 px/cm = 209 px, 1,23 cm × 37,795 px/cm = 46 px (redondeo
+     al entero más cercano, igual que `cmAPixeles` en `estiloDocumento.js`), y docx emite 9525
+     EMU por px. */
+  const { doc } = await abrir(
+    '<p><img data-recurso="logo" style="width:5.53cm;height:1.23cm" /></p>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  const m = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(doc);
+  assert.ok(m, 'la imagen no se emitió');
+  assert.equal(Number(m[1]), 209 * 9525);
+  assert.equal(Number(m[2]), 46 * 9525);
+});
+
+test('una imagen cuyo recurso no está en el catálogo no rompe el documento', async () => {
+  /* Pasa si el catálogo y la plantilla se desincronizan. Mejor un hueco que un throw que deja
+     al usuario sin documento y sin explicación. */
+  const { doc } = await abrir(
+    '<p>antes<img data-recurso="fantasma" style="width:1cm;height:1cm" />después</p>');
+  assert.match(doc, /antes/);
+  assert.match(doc, /después/);
+});
+
+test('las listas usan viñetas de Word, no un punto escrito a mano', async () => {
+  /* La skill lo marca: un `•` literal no es una lista y no se puede renumerar. */
+  const { doc } = await abrir('<ul><li>uno</li><li>dos</li></ul>');
+  assert.match(doc, /<w:numPr>/, 'no hay numeración de lista');
+  assert.match(doc, /uno/);
+  assert.match(doc, /dos/);
+  assert.doesNotMatch(doc, /•/);
+});
+
+test('una imagen suelta en una celda no se pierde', async () => {
+  /* `bloquesDe` trataba un fragmento en línea colgado directamente de un bloque —sin `<p>` de
+     por medio— llamando a `runsDe(h, heredado)`, y `runsDe` traduce los HIJOS de lo que recibe,
+     no al nodo mismo: la imagen se perdía en silencio, sin excepción ni aviso, con el texto de
+     alrededor intacto. Antes de la tarea 7 esto era invisible porque `runDeImagen` devolvía
+     siempre `[]`; ahora que traduce imágenes de verdad, el hueco se nota. */
+  const { doc } = await abrir(
+    '<table><tr><td>antes<img data-recurso="logo" style="width:2cm;height:1cm" />después' +
+    '</td></tr></table>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(doc, /<wp:extent/, 'la imagen no se emitió');
+  assert.equal((doc.match(/antes/g) || []).length, 1);
+  assert.equal((doc.match(/después/g) || []).length, 1);
+});
+
+test('un fragmento con estilo suelto en una celda conserva su estilo', async () => {
+  /* Mismo fallo que la imagen suelta, pero con un `<strong>`: se perdía la negrita porque
+     `runsDe(h, heredado)` iteraba los hijos de ese `<strong>` en vez de traducirlo a él. */
+  const { doc } = await abrir(
+    '<table><tr><td>antes<strong>medio</strong>después</td></tr></table>');
+  assert.match(doc, /<w:b\/>/, 'no hay negrita');
+  assert.equal((doc.match(/antes/g) || []).length, 1);
+  assert.equal((doc.match(/medio/g) || []).length, 1);
+  assert.equal((doc.match(/después/g) || []).length, 1);
+});
+
+test('una imagen suelta en un div tampoco se pierde', async () => {
+  /* El mismo fallo, pero en el otro contenedor que llega sin `<p>` de por medio: el `<div>` del
+     contentEditable. */
+  const { doc } = await abrir(
+    '<div>antes<img data-recurso="logo" style="width:2cm;height:1cm" />después</div>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(doc, /<wp:extent/, 'la imagen no se emitió');
+  assert.equal((doc.match(/antes/g) || []).length, 1);
+  assert.equal((doc.match(/después/g) || []).length, 1);
+});
