@@ -390,10 +390,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         reserva: result.reserva.length,
       });
 
-      if (finales.length < nTarget) {
-        anotar(`Solo ${finales.length} de las ${nTarget} buscadas: no quedan más candidatas válidas. Amplíe los criterios del paso 2.`, 'aviso');
+      /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
+         tamaño final, y las de continuidad ocupan parte de ese cupo. */
+      const deContinuidad = result.continuidad || 0;
+      const composicion = deContinuidad
+        ? ` (${deContinuidad} del estudio anterior + ${finales.length - deContinuidad} nuevas)`
+        : '';
+
+      if (result.continuidadExcedeObjetivo) {
+        anotar(`El estudio anterior aporta ${deContinuidad} comparables, más que las ${nTarget} pedidas: ` +
+          'no se descarta ninguna, porque retirar una comparable ya aceptada hay que justificarlo en el informe. ' +
+          'Suba el N objetivo o revise la matriz del año anterior.', 'aviso');
+      } else if (finales.length < nTarget) {
+        anotar(`Solo ${finales.length} de las ${nTarget} buscadas${composicion}: no quedan más candidatas válidas. ` +
+          'Amplíe los criterios del paso 2.', 'aviso');
       } else {
-        anotar(`${finales.length} comparables seleccionadas · ${result.reserva.length} en reserva`, 'ok');
+        anotar(`${finales.length} comparables seleccionadas${composicion} · ${result.reserva.length} en reserva`, 'ok');
       }
     } catch (err) {
       console.error("Error ejecutando selección del motor:", err);

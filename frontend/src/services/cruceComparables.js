@@ -19,8 +19,14 @@ import { nameKey } from './comparablesEngine.js';
 export const UMBRAL_TOKENS = 0.5;
 
 /* Palabras que no distinguen una empresa de otra: si «HOLDING» contara, dos
-   holdings sin relación se parecerían. Misma lista del monolito. */
-const VACIAS = /^(SOCIEDAD|LIMITED|COMPANY|GROUP|HOLDING|COLOMBIA|INTERNATIONAL|SERVICES|TECHNOLOGIES)$/;
+   holdings sin relación se parecerían. Misma lista del monolito, más el ruido que
+   traen los nombres de archivo de un estado financiero.
+
+   Ese ruido no es un detalle: los documentos reales se llaman «10 HYBRID TECHNOLOGIES
+   CO. LTD. Estado de resultados 2025 Ventas netas.pdf», y contar ESTADO, RESULTADOS,
+   VENTAS y NETAS como parte de la razón social hundía el parecido por debajo del
+   umbral. De 19 documentos cruzaban 12. */
+const VACIAS = /^(SOCIEDAD|LIMITED|COMPANY|GROUP|HOLDING|COLOMBIA|INTERNATIONAL|SERVICES|TECHNOLOGIES|ESTADO|ESTADOS|RESULTADO|RESULTADOS|RESULTAD|FINANCIERO|FINANCIEROS|BALANCE|SITUACION|VENTAS|NETAS|NETOS|INGRESOS|EEFF|20\d\d|19\d\d)$/;
 
 /* nameKey elimina los sufijos societarios con \b(…|SAS|S\.A\.|SA|…)\b, pero el \b
    final no coincide después de un punto: «GLOBANT S.A.» al final de la cadena
@@ -44,10 +50,37 @@ export function tokensNombre(s) {
     .toUpperCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    /* El sufijo de bolsa que agrega Capital IQ —«(TSE:4260)», «(KOSDAQ:A217270)»— se
+       quita antes de partir en palabras: si no, KOSDAQ y A217270 cuentan como parte de
+       la razón social y diluyen el parecido. `nameKey` ya lo hacía; aquí faltaba. */
+    .replace(/\([^)]*\)/g, ' ')
     .replace(/[^A-Z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((t) => t.length >= 4 && !VACIAS.test(t));
 }
+
+/**
+ * Qué parte de la razón social aparece en el texto candidato, de 0 a 1.
+ *
+ * Es asimétrica a propósito, y ahí está la diferencia con `parecido`: lo que importa no
+ * es que los dos textos se parezcan, sino que el documento mencione la razón social
+ * completa. Un archivo llamado «AERIA INC. Estado de resultados 2025 Ventas netas»
+ * contiene «Aeria» entera, pero al dividir por el lado más largo daba 0,20 y se
+ * rechazaba.
+ */
+export function cobertura(razonSocial, candidato) {
+  const tr = tokensNombre(razonSocial);
+  if (!tr.length) return 0;
+  const tc = tokensNombre(candidato);
+  if (!tc.length) return 0;
+  const hits = tr.filter((t) => tc.indexOf(t) >= 0).length;
+  return hits / tr.length;
+}
+
+/* Cobertura mínima para aceptar que el documento nombra a la comparable. Se exige la
+   razón social prácticamente entera: meter las cifras de otra empresa en el rango
+   intercuartil es peor que no cruzar. */
+export const UMBRAL_COBERTURA = 0.8;
 
 /** Proporción de palabras significativas en común, de 0 a 1. */
 export function parecido(a, b) {
@@ -96,13 +129,51 @@ export function cruzar(entrada, nombreArchivo, comparables) {
 
   let mejor = -1;
   let mejorPunt = 0;
+  let empatesTokens = 0;
   filas.forEach((f, i) => {
     const p = Math.max(parecido(nomDoc, f && f.name), parecido(nombreArchivo, f && f.name));
-    if (p > mejorPunt) { mejorPunt = p; mejor = i; }
+    if (p > mejorPunt) { mejorPunt = p; mejor = i; empatesTokens = 1; }
+    else if (p === mejorPunt && p > 0) empatesTokens++;
   });
 
-  if (mejor >= 0 && mejorPunt >= UMBRAL_TOKENS) {
+  /* Se exige que el mejor parecido sea único. Sin esto ganaba la primera fila del
+     arreglo, por orden y no por criterio: con «Neptune Company» y «Neptune» en la misma
+     muestra, un documento de una entraba en la otra y sus cifras acababan en el rango
+     intercuartil sin que nada lo delatara. */
+  if (mejor >= 0 && mejorPunt >= UMBRAL_TOKENS && empatesTokens === 1) {
     return { indice: mejor, comparable: filas[mejor], modo: 'tokens', punt: mejorPunt };
+  }
+  if (mejor >= 0 && mejorPunt >= UMBRAL_TOKENS && empatesTokens > 1) {
+    return {
+      indice: -1, comparable: null, modo: 'ambiguo', punt: mejorPunt,
+      masCercana: filas[mejor], empatados: empatesTokens,
+    };
+  }
+
+  /* Último criterio: que el documento nombre la razón social completa, aunque traiga
+     mucho texto más. Es el caso de los archivos titulados «AERIA INC. Estado de
+     resultados 2025 Ventas netas», que con la métrica simétrica se quedaban en 0,20.
+
+     Se exige que la mejor cobertura sea ÚNICA. Con dos comparables igual de cubiertas
+     —«Neptune Company» y «Neptune Games», por ejemplo— no hay forma de saber cuál es, y
+     aplicar las cifras a la equivocada las mete en el rango intercuartil sin que nadie
+     lo note. Ante la duda, se rechaza y se explica. */
+  const texto = String(nomDoc || '') + ' ' + String(nombreArchivo || '');
+  let mejorCob = 0, iCob = -1, empatados = 0;
+  filas.forEach((f, i) => {
+    const c = cobertura(f && f.name, texto);
+    if (c > mejorCob) { mejorCob = c; iCob = i; empatados = 1; }
+    else if (c === mejorCob && c > 0) empatados++;
+  });
+
+  if (iCob >= 0 && mejorCob >= UMBRAL_COBERTURA && empatados === 1) {
+    return { indice: iCob, comparable: filas[iCob], modo: 'contenido', punt: mejorCob };
+  }
+  if (mejorCob >= UMBRAL_COBERTURA && empatados > 1) {
+    return {
+      indice: -1, comparable: null, modo: 'ambiguo', punt: mejorCob,
+      masCercana: filas[iCob] || null, empatados,
+    };
   }
 
   /* Sin cruce: se devuelve de todos modos la candidata más cercana y su puntaje,
@@ -126,6 +197,7 @@ const NOMBRE_MODO = {
   nombre: 'la razón social coincide',
   archivo: 'el nombre del archivo coincide con la razón social',
   tokens: 'coinciden parte de las palabras de la razón social',
+  contenido: 'el documento nombra la razón social completa',
   manual: 'lo asignaste a mano',
 };
 
@@ -134,6 +206,12 @@ const NOMBRE_MODO = {
 export function motivoCruce(cruce, entrada, nombreArchivo) {
   const leido = String((entrada && entrada.nombre) || '').trim() || nombreArchivo || 'documento sin nombre';
   const pct = Math.round((cruce.punt || 0) * 100);
+
+  if (cruce.modo === 'ambiguo') {
+    return 'El documento de «' + leido + '» encaja igual de bien con ' + cruce.empatados +
+      ' comparables del estudio, así que no se aplicó a ninguna: cargarlo en la equivocada ' +
+      'metería sus cifras en el rango intercuartil. Súbelo desde la fila que corresponda.';
+  }
 
   if (cruce.modo === 'sin-cruce') {
     const cerca = cruce.masCercana && cruce.masCercana.name;

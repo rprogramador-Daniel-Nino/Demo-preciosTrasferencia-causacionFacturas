@@ -93,6 +93,21 @@ export default function ReporteGenerador({ study, estudioId }) {
         'cambió después de la última selección: vuelve a ejecutarla antes de radicar'
       );
     }
+    /* Sin comparables en el estudio, las tablas 17 y 19 salen con las trece compañías
+       del informe de referencia, nombre por nombre y margen por margen. Es la fuga más
+       fácil de ver de todo el documento. */
+    if (!d.comparablesCubiertas) {
+      avisos.push(
+        'las tablas 17 y 19 conservan la muestra de comparables del informe de referencia, ' +
+        'con sus nombres y sus márgenes: carga las comparables de este estudio en el motor'
+      );
+    }
+    if (d.comparablesSinCifras) {
+      avisos.push(
+        'hay ' + d.comparablesSinCifras + ' comparable(s) de la muestra sin estados ' +
+        'financieros cargados: salen con hueco en la tabla 19 y no entran al rango'
+      );
+    }
     return avisos;
   };
 

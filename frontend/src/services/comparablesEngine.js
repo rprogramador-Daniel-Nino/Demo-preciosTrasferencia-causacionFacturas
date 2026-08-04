@@ -506,12 +506,18 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const rechazadas = evaluated.filter(c => c.descartada);
 
   /* Las de continuidad ya pasaron los filtros duros (holding/saldo negativo/pérdida
-     operativa aplican igual para todas, arriba); a partir de aquí no compiten por el
-     cupo nTarget ni por puntaje — se agregan siempre, aparte. */
+     operativa aplican igual para todas, arriba) y entran primero, sin competir por
+     puntaje: su inclusión ya se sustentó en el estudio anterior.
+
+     Pero cuentan DENTRO del cupo, no aparte. Antes se sumaban al margen de `nTarget`,
+     así que pedir 12 con 7 de continuidad devolvía 19 comparables: el número que el
+     usuario escribe es el tamaño de la muestra final, no el de las candidatas nuevas.
+     El cupo se completa con las mejores del resto. */
   const continuidadIncluidas = validas.filter(c => c.esContinuidad);
   const otrasValidas = validas.filter(c => !c.esContinuidad);
 
-  const seleccionadas = [...continuidadIncluidas, ...otrasValidas.slice(0, nTarget)];
+  const cupoRestante = Math.max(0, nTarget - continuidadIncluidas.length);
+  const seleccionadas = [...continuidadIncluidas, ...otrasValidas.slice(0, cupoRestante)];
 
   return {
     evaluadas: evaluated.length,
@@ -538,8 +544,15 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     },
     totalValidas: validas.length,
     /* reserva: las válidas que no entraron al TOP-N, para poder reponer las que
-       la curación por IA descarte sin quedarse corto de comparables */
-    reserva: otrasValidas.slice(nTarget),
+       la curación por IA descarte sin quedarse corto de comparables. Se corta en el cupo
+       restante, no en `nTarget`, o las que la continuidad desplazó aparecerían a la vez
+       como seleccionadas y como reserva. */
+    reserva: otrasValidas.slice(cupoRestante),
+    /* Cuántas vienen del estudio anterior y si por sí solas ya pasan del objetivo: en
+       ese caso no se recorta ninguna —descartar una comparable aceptada el año pasado
+       exige justificarlo en el informe— y la muestra queda por encima de lo pedido. */
+    continuidad: continuidadIncluidas.length,
+    continuidadExcedeObjetivo: continuidadIncluidas.length > nTarget,
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,
