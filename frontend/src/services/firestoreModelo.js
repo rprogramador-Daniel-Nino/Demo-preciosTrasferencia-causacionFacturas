@@ -8,6 +8,24 @@
    aquí sin cambiarlo allá produce un `permission-denied` que no dice qué campo
    sobra, así que los dos archivos se leen juntos. */
 
+//
+// Colección: analisisMercado
+// ID del documento: "actual" (uno solo, más la subcolección "historial")
+// Escrito exclusivamente por la Cloud Function programada `actualizarAnalisisMercadoScheduled`
+// (Admin SDK); los miembros del dominio solo leen.
+// Campos:
+//   - actualizadoEn: timestamp
+//   - series: map de clave de serie -> { valores, fuente, fuenteUrl, fechaConsulta, confiable }
+//   - narrativa: { mundial: string (HTML), colombia: string (HTML) }
+//
+// Subcolección: analisisMercado/actual/historial
+// ID del documento: "YYYY-MM" — una copia congelada de cada corrida, para poder responder
+// con qué cifra y fuente se radicó un informe de una fecha dada.
+//
+// No hay funciones de validación en este archivo para `analisisMercado`: el gestor nunca
+// escribe esta colección (solo la Cloud Function, vía Admin SDK). La lectura desde el
+// frontend va por `leerAnalisisMercado()` en `firestoreRepo.js`.
+
 import { nameKey } from './comparablesEngine.js';
 
 /** Tope de `apariciones` en cada comparable histórica, el mismo que exigen las reglas. */

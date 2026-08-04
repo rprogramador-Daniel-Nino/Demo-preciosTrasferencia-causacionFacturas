@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
@@ -11,6 +11,7 @@ import {
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
   guardarHuecos, leerHuecos,
 } from '../services/plantillaStore';
+import { leerAnalisisMercado } from '../services/firestoreRepo';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
 import {
   proponerMarcas, aplicarMarcas,
@@ -18,12 +19,20 @@ import {
 } from '../services/plantillaMarcador.js';
 import { renderizar } from '../services/plantillaRenderer.js';
 import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
+import {
+  cssDeHojas, cssDeExportacion, cssDeWord,
+} from '../services/estiloDocumento.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
   const [recursosCargados, setRecursosCargados] = useState([]);
+  /* Cifras y narrativa de la Sección III, refrescadas mensualmente por
+     `actualizarAnalisisMercadoScheduled`. null mientras carga o si Firestore no
+     responde — los generadores de analisisMercado.js caen al respaldo local
+     embebido en el código cuando reciben null. */
+  const [analisisMercado, setAnalisisMercado] = useState(null);
   /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
      aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
      que se abre el estudio sería más molesto que informativo. El alert sí se
@@ -56,12 +65,26 @@ export default function ReporteGenerador({ study, estudioId }) {
      nombre; esto solo evita que la ruta de respaldo falle en silencio. */
   const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
+  /* Documento global (no depende de estudioId): una lectura por sesión basta,
+     el cron que lo refresca corre una vez al mes. Si falla, se deja null: los
+     generadores de la Sección III ya saben caer al respaldo local. */
+  useEffect(() => {
+    let vivo = true;
+    leerAnalisisMercado()
+      .then((datos) => { if (vivo) setAnalisisMercado(datos); })
+      .catch((err) => {
+        console.error('No se pudo leer el análisis de mercado de Firestore:', err);
+        if (vivo) setAnalisisMercado(null);
+      });
+    return () => { vivo = false; };
+  }, []);
+
   /* Qué quedó sin cubrir en la sección III (TENDENCIAS DE LA ECONOMÍA). Se informa
      en concreto —qué serie y de qué año— porque un aviso genérico se ignora, y
      estas son las cifras que el Decreto 1625 de 2016 obliga a respaldar con fuente
      y fecha de consulta antes de radicar. */
   const avisosDeMercado = (htmlBase) => {
-    const d = diagnosticarCobertura(htmlBase, study);
+    const d = diagnosticarCobertura(htmlBase, study, analisisMercado);
     const avisos = [];
     if (!d.sectorialCubierto) {
       avisos.push(
@@ -73,6 +96,30 @@ export default function ReporteGenerador({ study, estudioId }) {
       avisos.push(
         'no hay datos de ' + d.year + ' para ' + d.seriesFaltantes.join(', ') +
         '; esas tablas quedaron con un marcador que hay que completar'
+      );
+    }
+    if (!analisisMercado) {
+      avisos.push(
+        'no se pudo leer el análisis de mercado actualizado; se está usando el respaldo local del código'
+      );
+    } else if (analisisMercado.actualizadoEn) {
+      const dias = (Date.now() - analisisMercado.actualizadoEn.toMillis()) / 86400000;
+      if (dias > 62) {
+        avisos.push(
+          'los datos macro de la Sección III no se han refrescado en más de dos meses (última ' +
+          'actualización: ' + new Date(analisisMercado.actualizadoEn.toMillis()).toLocaleDateString('es-CO') + ')'
+        );
+      }
+    }
+    /* Aviso propio y no un `else` de los anteriores: Firestore puede responder,
+       estar al día y aun así no traer la narrativa (una corrida a medias, o un
+       documento de una versión anterior del esquema). Sin esto, III.A y III.B
+       salían con el marcador de pendiente y nada lo señalaba, porque el banner
+       solo miraba si `analisisMercado` era nulo. */
+    if (analisisMercado && !d.narrativaCubierta) {
+      avisos.push(
+        'el análisis de mercado no trae la narrativa de III.A/III.B; esos dos apartados ' +
+        'quedaron con un marcador que hay que redactar'
       );
     }
     /* Sin el embudo del motor, la tabla 16 sale con los números del informe de
@@ -227,23 +274,33 @@ export default function ReporteGenerador({ study, estudioId }) {
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
            esta línea, tras recargar se ven las cifras del informe de
            referencia en vez de las del estudio actual. */
-        const hidratado = hydrateExactWordTemplate(html, study);
+        const hidratado = hydrateExactWordTemplate(html, study, analisisMercado);
         /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
            setState de arriba no ha surtido efecto todavía dentro de este mismo
            efecto, y las imágenes saldrían rotas en la primera pintada. */
         setHtmlContent(conImagenes(hidratado, recursos));
         revisarHidratacion(html, hidratado);
+        /* El aviso de plantilla vieja vivía sólo en `renderizarYAvisar`, es decir
+           sólo en la ruta marcada. Una plantilla guardada y sin marcar —la ruta de
+           quien subió el PDF y no confirmó las marcas— se seguía sirviendo tal cual,
+           callada, y el documento salía como el lector de entonces lo dejaba. Con la
+           plantilla en IndexedDB y el PDF ya no, no hay forma de que el usuario
+           adivine que lo que tiene que hacer es volver a subirlo. */
+        const falta = loQueFaltaPorVersion(versionDe(html));
+        if (falta.length) {
+          setAvisos(revisarAntesDeGenerar({ faltaPorVersion: falta }));
+        }
         /* Evita que el efecto de la plantilla maestra sobrescriba lo
            recuperado. Es lo que hacía fallar la recarga. */
         setCustomTemplateLoaded(true);
       }
     })();
     return () => { vivo = false; };
-  }, [estudioId]);
+  }, [estudioId, analisisMercado]);
 
   // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
   const loadExactMasterTemplate = () => {
-    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study);
+    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study, analisisMercado);
     setHtmlContent(hydrated);
     /* Esta es la ruta por defecto de todo estudio que no haya subido plantilla,
        es decir la de casi todo el mundo hoy, y va por valor literal. Si el NIT
@@ -255,7 +312,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     if (!customTemplateLoaded) {
       loadExactMasterTemplate();
     }
-  }, [study, customTemplateLoaded]);
+  }, [study, customTemplateLoaded, analisisMercado]);
 
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
@@ -342,7 +399,7 @@ export default function ReporteGenerador({ study, estudioId }) {
              recalcularlos, y los de la plantilla anterior ya no corresponden
              a este documento. */
           setAvisos([]);
-          const hydrated = hydrateExactWordTemplate(html, study);
+          const hydrated = hydrateExactWordTemplate(html, study, analisisMercado);
           setHtmlContent(conImagenes(hydrated, []));
           /* Detección de fuga de la ruta legado. Estaba escrita y no se
              invocaba desde ningún sitio: la ruta aparentaba tenerla y no la
@@ -556,6 +613,33 @@ export default function ReporteGenerador({ study, estudioId }) {
       htmlBase
     );
 
+  /* El logo que el extractor apartó como encabezado de página. Lo necesitan las dos
+     salidas: Word para declararlo como encabezado, y la pantalla para repetirlo arriba
+     de cada hoja igual que hará Word. */
+  const encabezadoDelDocumento = () => {
+    const enc = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(htmlContent);
+    return enc ? { bloque: enc[0], contenido: enc[1] } : null;
+  };
+
+  /* Previsualización en hojas. Antes el previo era un bloque continuo con los estilos de
+     Tailwind: no había forma de ver dónde iba a caer un salto, ni de notar que la portada
+     se fundía con el índice, hasta descargar el .doc y abrirlo en Word. */
+  const cssPrevio = useMemo(() => {
+    /* El logo va como fondo de un pseudoelemento y no como `<img>`, para no meter nada
+       nuevo dentro del `contentEditable`. */
+    const enc = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(htmlContent);
+    const src = enc ? /src="(data:image\/[^"]+)"/.exec(enc[1]) : null;
+    return cssDeHojas({
+      base: estiloBaseDe(htmlContent),
+      logo: src ? src[1] : null,
+    });
+  }, [htmlContent]);
+
+  /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— no hay dónde
+     cortar, así que el documento entero se pinta como una hoja larga. Mejor eso que
+     fingir una paginación que Word no va a respetar. */
+  const tienePaginas = /class="pagina"|class=pagina/.test(htmlContent);
+
   const handleDownload = () => {
     // Estilos compatibles con Word (.doc)
     /* La tipografía sale del informe de referencia, no de un gusto propio: el
@@ -564,36 +648,24 @@ export default function ReporteGenerador({ study, estudioId }) {
        porque el informe está en Arial 12. Sin la marca (un .docx vía mammoth, o
        una plantilla anterior a este cambio) se cae a Arial, que es lo más común en
        estos documentos y desde luego más cerca que una serif de pantalla. */
-    const base = estiloBaseDe(htmlContent) || { familia: 'Arial', tamano: 12 };
-    const cuerpo = "font-family:'" + base.familia + "',Arial,sans-serif;font-size:" +
-      base.tamano + 'pt';
-
     /* Los encabezados van en escala sobre el cuerpo y no en píxeles fijos, para que
        acompañen a la tipografía del documento en vez de imponer otra. Se conserva
-       la línea de color de la casa, que es identidad y no formato heredado. */
-    const exportStyle =
-      'body{' + cuerpo + ';max-width:800px;margin:40px auto;padding:0 24px;color:#222;' +
-      'line-height:1.5}' +
-      'h1{font-size:1.5em;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px}' +
-      'h2{font-size:1.2em;color:#0E1726;border-bottom:1px solid #E2E8F0;padding-bottom:4px;' +
-      'margin-top:26px}' +
-      'h3{font-size:1.05em;color:#0E1726}' +
-      'table{width:100%;border-collapse:collapse;margin:16px 0;font-size:0.9em}' +
-      'th{background:#0E1726;color:#fff;text-align:left;padding:8px 12px}' +
-      'td{padding:8px 12px;border-bottom:1px solid #E2E8F0}' +
-      /* Word ignora `<strong>` anidado en un `<span>` con estilo si no se le dice
-         que el peso se hereda; con esto la negrita del informe llega intacta. */
-      'strong{font-weight:bold}em{font-style:italic}';
+       la línea de color de la casa, que es identidad y no formato heredado.
+
+       Las reglas son literalmente las mismas que pinta la previsualización: salen del
+       mismo módulo. Estaban duplicadas a mano, y cualquier ajuste en una cara dejaba
+       la otra mintiendo. */
+    const exportStyle = cssDeExportacion(estiloBaseDe(htmlContent));
 
     /* El logo del informe se saca del cuerpo y se declara como encabezado de
        p\u00e1gina. Word lo entiende desde HTML \u2014un div con `mso-element:header` al que
        apunta `@page` por su id\u2014, as\u00ed que se repite solo en todas las p\u00e1ginas sin
        necesidad de generar OOXML. Antes sal\u00eda como primera imagen del documento y
        no como encabezado, que es lo que se ve\u00eda distinto del original. */
-    const conEncabezado = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(htmlContent);
-    const encabezado = conEncabezado ? conEncabezado[1] : '';
+    const conEncabezado = encabezadoDelDocumento();
+    const encabezado = conEncabezado ? conEncabezado.contenido : '';
     const cuerpoSinEncabezado = conEncabezado
-      ? htmlContent.replace(conEncabezado[0], '')
+      ? htmlContent.replace(conEncabezado.bloque, '')
       : htmlContent;
 
     /* Carta con los m\u00e1rgenes del informe. El pie lleva el campo PAGE de Word y no
@@ -602,18 +674,7 @@ export default function ReporteGenerador({ study, estudioId }) {
        que Word exige: con un `@page` sin nombre ignora `mso-header` y el logo se
        queda como primera imagen del cuerpo en vez de repetirse arriba de cada
        página. Es la estructura que Word emite cuando uno guarda como página web. */
-    const wordCSS =
-      'body{counter-reset:secpt}h2::before{content:""}p,li,td{text-align:justify}' +
-      '@page Section1{size:21.6cm 27.9cm;margin:2.5cm 2.5cm 2cm 2.5cm;' +
-      'mso-header-margin:1.25cm;mso-footer-margin:1.25cm;mso-paper-source:0;' +
-      (encabezado ? 'mso-header:h1;' : '') + 'mso-footer:f1}' +
-      'div.Section1{page:Section1}' +
-      'p.pie{text-align:center;font-size:0.8em;color:#666;margin:0}' +
-      'p.enc{text-align:center;margin:0}' +
-      /* La portada es su propia página, como en el original. Sin esto el título y
-         el logo se funden con el índice, que es lo que hacía que no se pareciera. */
-      'div.pagina{page-break-before:always}' +
-      'div.pagina:first-of-type{page-break-before:auto}';
+    const wordCSS = cssDeWord({ conEncabezado: !!encabezado });
 
     // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable
     const cleanHtml = cuerpoSinEncabezado
@@ -774,12 +835,16 @@ export default function ReporteGenerador({ study, estudioId }) {
             )}
           </div>
         ) : (
-          <div
-            dangerouslySetInnerHTML={{ __html: htmlContent }}
-            className="prose dark:prose-invert max-w-none focus:outline-none"
-            contentEditable
-            onBlur={(e) => setHtmlContent(e.currentTarget.innerHTML)}
-          />
+          <div className="hojas">
+            <style>{cssPrevio}</style>
+            <div
+              dangerouslySetInnerHTML={{ __html: htmlContent }}
+              className={'focus:outline-none' + (tienePaginas ? '' : ' pagina')}
+              contentEditable
+              suppressContentEditableWarning
+              onBlur={(e) => setHtmlContent(e.currentTarget.innerHTML)}
+            />
+          </div>
         )}
       </div>
     </div>

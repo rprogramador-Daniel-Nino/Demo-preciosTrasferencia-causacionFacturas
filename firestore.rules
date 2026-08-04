@@ -297,6 +297,24 @@ service cloud.firestore {
       }
     }
 
+    // =============================================================
+    // analisisMercado — cifras y narrativa de la Sección III (Tendencias
+    // de la Economía), refrescadas mensualmente por una Cloud Function.
+    // Solo la Cloud Function escribe (Admin SDK, no pasa por estas reglas);
+    // es dato compartido (no depende del usuario), así que cualquier
+    // miembro lo lee igual que en el modelo por dominio.
+    // =============================================================
+
+    match /analisisMercado/{docId} {
+      allow read: if esMiembro();
+      allow write: if false;
+    }
+
+    match /analisisMercado/{docId}/historial/{mes} {
+      allow read: if esMiembro();
+      allow write: if false;
+    }
+
     /* ── «Compartidos conmigo» ──
        La lista de estudios que otros me compartieron se consulta por grupo de
        colecciones: están dentro del espacio de cada dueño y quien pregunta no sabe de
