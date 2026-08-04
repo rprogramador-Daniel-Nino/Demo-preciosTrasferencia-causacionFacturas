@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   hydrateExactWordTemplate, filasRazonesRechazo, diagnosticarCobertura,
+  filasComparablesInforme, reemplazarTablaMuestraComparables, reemplazarTablaMargenComparables,
 } from './exactTemplateMapper.js';
 
 /* Estudio de un cliente que NO es End Game. Todo lo que salga con datos de
@@ -242,18 +243,41 @@ test('filasRazonesRechazo omite los criterios que no descartaron a nadie', () =>
 });
 
 test('filasRazonesRechazo asigna letras corridas sobre las filas que quedan', () => {
-  /* Cinco criterios con descartes (el de «sin descripción» quedó en cero y se omite),
-     más la reserva y las aceptadas: siete filas, letras A a G sin huecos. */
+  /* Cinco criterios con descartes (el de «sin descripción» quedó en cero y se omite)
+     más las aceptadas: seis filas, letras A a F sin huecos. La reserva ya no es una
+     fila propia. */
   const { filas } = filasRazonesRechazo(embudoReal);
-  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F']);
   assert.deepStrictEqual(filas.map(f => f.clave), [
     'rigorFuncional', 'actividadDistinta', 'holding', 'perdidaOperativa', 'saldoNegativo',
-    'reserva', 'aceptadas',
+    'aceptadas',
   ]);
 });
 
+test('la reserva se cuenta dentro de las diferencias funcionales', () => {
+  /* Declarar en el informe que hubo compañías que superaron todos los criterios y aun
+     así quedaron fuera invita a una pregunta que el cupo de muestra no puede responder.
+     Van con las diferencias funcionales, que es lo que las apartó: el corte del cupo es
+     por puntaje de comparabilidad. */
+  const { filas } = filasRazonesRechazo(embudoReal);
+  assert.ok(!filas.some(f => f.clave === 'reserva'), 'la reserva no puede tener fila propia');
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.cuantas, 17, '5 por rigor + 12 de reserva');
+});
+
+test('la fila de diferencias funcionales aparece aunque solo la sostenga la reserva', () => {
+  /* Sin este caso la suma de la columna se rompe: la fila se omitiría por valer cero en
+     `porMotivo` y las 12 de reserva desaparecerían del universo. */
+  const soloReserva = { evaluadas: 20, seleccionadas: 8, reserva: 12, porMotivo: {} };
+  const { filas, cuadra } = filasRazonesRechazo(soloReserva);
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.ok(rigor, 'la fila tiene que aparecer');
+  assert.strictEqual(rigor.cuantas, 12);
+  assert.ok(cuadra, '12 + 8 = 20');
+});
+
 test('filasRazonesRechazo cuadra la suma con el universo evaluado', () => {
-  /* 30+5+15+25+5 rechazos + 12 de reserva + 8 aceptadas = 100 */
+  /* 30+5+15+25 rechazos + (5 de rigor + 12 de reserva) + 8 aceptadas = 100 */
   const { cuadra, suma, total } = filasRazonesRechazo(embudoReal);
   assert.strictEqual(suma, 100);
   assert.strictEqual(total, 100);
@@ -303,4 +327,130 @@ test('el diagnóstico avisa cuando la tabla 16 quedó descuadrada', () => {
   const d = diagnosticarCobertura(TABLA_16, { ...otroCliente, embudoSeleccion: { ...embudoReal, evaluadas: 500 } });
   assert.strictEqual(d.razonesRechazoCubiertas, true);
   assert.strictEqual(d.razonesRechazoDescuadradas, true);
+});
+
+/* ══════════════ Tablas 17 y 19: la muestra de comparables ══════════════ */
+
+/* Reproduce la estructura de la plantilla real: la 17 no tiene <thead> —su primera
+   <tr> es el encabezado y lleva las anclas de Word— y la 19 sí. */
+const TABLA_17 = `<p>
+<strong>Tabla 17. Muestra Compañías comparables</strong>
+</p>
+<table>
+<tr>
+<td><p><a id="RANGE!E11"></a><a id="_Hlk143111901"></a><strong>Número</strong></p></td>
+<td><p><strong>Nombre de la Compañía</strong></p></td>
+<td><p><strong>Ámbito</strong></p></td>
+</tr>
+<tr><td><p>1</p></td><td><p>AKATSUKI INC.</p></td><td><p>INTERNACIONAL</p></td></tr>
+<tr><td><p>2</p></td><td><p>COLOPL, INC.</p></td><td><p>INTERNACIONAL</p></td></tr>
+</table>`;
+
+const TABLA_19 = `<p><a id="_Hlk143112656"></a>Tabla 19. Margen Operacional Compañías Comparables</p>
+<table>
+<thead>
+<tr><th><p><strong>COMPARABLES</strong></p></th><th><p><strong>MO NO AJUSTADO </strong></p></th><th><p><strong>MO AJUSTADO</strong></p></th></tr>
+</thead>
+<tbody>
+<tr><td><p>AKATSUKI INC.</p></td><td><p>16.557%</p></td><td><p>16.132%</p></td></tr>
+<tr><td><p>COLOPL, INC.</p></td><td><p>-4.647%</p></td><td><p>-8.675%</p></td></tr>
+</tbody>
+</table>`;
+
+const conComparables = {
+  ...otroCliente,
+  pli: 'MO',
+  t_s: 4000, t_c: 3300, t_op: 300,
+  comparables: [
+    { name: 'DISTRIBUIDORA ANDINA S.A.', amb: 'Nac', s: 1000, c: 800, op: 100 },
+    { name: 'GULF FUEL TRADING CO', amb: 'Int', s: 2000, c: 1600, op: 260 },
+    { name: 'SIN CIFRAS S.A.', amb: 'Int', s: '', c: '', op: '' },
+  ],
+};
+
+test('la tabla 17 lista las comparables del estudio, no las de End Game', () => {
+  const salida = reemplazarTablaMuestraComparables(TABLA_17, conComparables, (v) => v);
+  assert.ok(!salida.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia');
+  assert.ok(!salida.includes('COLOPL'), 'sobrevivió una comparable del informe de referencia');
+  assert.ok(salida.includes('DISTRIBUIDORA ANDINA S.A.'));
+  assert.ok(salida.includes('GULF FUEL TRADING CO'));
+});
+
+test('la tabla 17 conserva su encabezado y las anclas de Word', () => {
+  /* «RANGE!E11» y «_Hlk143111901» son destino de referencias del documento:
+     reconstruir la fila del encabezado las dejaría rotas. */
+  const salida = reemplazarTablaMuestraComparables(TABLA_17, conComparables, (v) => v);
+  assert.ok(salida.includes('id="RANGE!E11"'), 'se perdió el ancla del encabezado');
+  assert.ok(salida.includes('id="_Hlk143111901"'), 'se perdió el ancla del encabezado');
+  assert.ok(salida.includes('<strong>Número</strong>'), 'se perdió el encabezado');
+});
+
+test('la tabla 17 numera correlativo y traduce el ámbito', () => {
+  const salida = reemplazarTablaMuestraComparables(TABLA_17, conComparables, (v) => v);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.ok(/1 DISTRIBUIDORA ANDINA S\.A\. NACIONAL/.test(texto), 'la nacional debe salir como NACIONAL');
+  assert.ok(/2 GULF FUEL TRADING CO INTERNACIONAL/.test(texto));
+  assert.ok(/3 SIN CIFRAS S\.A\./.test(texto), 'la comparable sin cifras también es parte de la muestra');
+});
+
+test('la tabla 19 sale con los márgenes del estudio', () => {
+  const salida = reemplazarTablaMargenComparables(TABLA_19, conComparables, (v) => v);
+  assert.ok(!salida.includes('16.557%'), 'sobrevivió un margen del informe de referencia');
+  assert.ok(!salida.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia');
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.ok(/DISTRIBUIDORA ANDINA S\.A\. 10\.00% 10\.00%/.test(texto), 'MO = 100 / 1000');
+  assert.ok(/GULF FUEL TRADING CO 13\.00% 13\.00%/.test(texto), 'MO = 260 / 2000');
+});
+
+test('la comparable sin estados financieros sale con hueco, no omitida', () => {
+  /* Omitirla dejaría la tabla 19 más corta que la 17 sin nada que lo explique, y el
+     hueco es lo que delata que falta cargarle las cifras. */
+  const salida = reemplazarTablaMargenComparables(TABLA_19, conComparables, (v) => v);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.ok(/SIN CIFRAS S\.A\. — —/.test(texto), 'la comparable sin cifras debe salir con dos huecos');
+});
+
+test('sin comparables las tablas 17 y 19 se quedan como estaban', () => {
+  /* Mismo criterio que la tabla 16: preferible que se vea que falta cargar la muestra
+     a que salgan filas inventadas. El aviso del generador es el que lo dice. */
+  assert.strictEqual(reemplazarTablaMuestraComparables(TABLA_17, otroCliente, (v) => v), TABLA_17);
+  assert.strictEqual(reemplazarTablaMargenComparables(TABLA_19, otroCliente, (v) => v), TABLA_19);
+});
+
+test('filasComparablesInforme descarta las filas sin razón social', () => {
+  /* La tabla del motor arranca con filas en blanco que el usuario va llenando: una fila
+     numerada y sin nombre en la muestra final no dice nada. */
+  const filas = filasComparablesInforme({
+    ...conComparables,
+    comparables: [...conComparables.comparables, { name: '   ', s: 500, c: 400, op: 50 }],
+  });
+  assert.strictEqual(filas.length, 3);
+  assert.ok(filas.every((f) => f.nombre), 'se coló una fila sin nombre');
+});
+
+test('la hidratación completa engancha las dos tablas', () => {
+  /* Sin esta llamada dentro de `hydrateExactWordTemplate` las funciones existirían y no
+     las usaría nadie, que es como estaba el documento hasta ahora. */
+  const salida = hydrateExactWordTemplate(TABLA_17 + TABLA_19, conComparables);
+  assert.ok(!salida.includes('AKATSUKI'), 'la tabla 17 no se enganchó en la hidratación');
+  assert.ok(!salida.includes('16.557%'), 'la tabla 19 no se enganchó en la hidratación');
+  assert.ok(salida.includes('DISTRIBUIDORA ANDINA S.A.'));
+});
+
+test('el diagnóstico avisa de la muestra sin cargar y de las comparables sin cifras', () => {
+  const sinMuestra = diagnosticarCobertura(TABLA_17, otroCliente);
+  assert.strictEqual(sinMuestra.comparablesCubiertas, false);
+
+  const con = diagnosticarCobertura(TABLA_17, conComparables);
+  assert.strictEqual(con.comparablesCubiertas, true);
+  assert.strictEqual(con.comparablesSinCifras, 1, 'la comparable sin estados financieros');
+});
+
+test('el año de la frase que introduce la tabla 19 se actualiza', () => {
+  /* «los estados financieros correspondientes al año 2024» fecha las cifras que ahora
+     se regeneran: dejarlo en el año del informe de referencia las fecharía mal. */
+  const html = '<p>para los estados financieros correspondientes al año 2024:</p>';
+  const salida = hydrateExactWordTemplate(html, conComparables);
+  assert.ok(!salida.includes('correspondientes al año 2024'), 'quedó el año del informe de referencia');
+  assert.ok(salida.includes('2025'), 'no se puso el año del estudio');
 });

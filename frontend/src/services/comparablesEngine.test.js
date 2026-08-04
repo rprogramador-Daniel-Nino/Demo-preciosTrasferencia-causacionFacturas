@@ -139,7 +139,12 @@ test('una candidata de continuidad ya no se descarta por falta de descripción',
   assert.strictEqual(r.seleccionadas[0].esContinuidad, true);
 });
 
-test('el cupo nTarget no limita a las candidatas de continuidad: se agregan aparte', () => {
+/* ══════ el cupo N objetivo es el tamaño de la muestra final ══════
+   Antes las de continuidad se sumaban al margen de `nTarget`, así que pedir 12 con 7 del
+   estudio anterior devolvía 19 comparables. El número que el usuario escribe es el
+   tamaño final: la continuidad entra primero y ocupa parte de ese cupo. */
+
+test('las candidatas de continuidad cuentan dentro del cupo, no aparte', () => {
   const candidatas = [
     { id: '1', name: 'Continuidad Uno', nameKey: nameKey('Continuidad Uno'), s: 100, op: 10 },
     { id: '2', name: 'Continuidad Dos', nameKey: nameKey('Continuidad Dos'), s: 100, op: 10 },
@@ -147,13 +152,76 @@ test('el cupo nTarget no limita a las candidatas de continuidad: se agregan apar
     { id: '4', name: 'Nueva Dos', nameKey: nameKey('Nueva Dos'), s: 100, op: 10 },
   ];
   const priorComps = [{ name: 'Continuidad Uno' }, { name: 'Continuidad Dos' }];
-  const r = scoreCandidates(candidatas, { nTarget: 1 }, '', priorComps);
-  assert.strictEqual(r.seleccionadas.length, 3, '2 de continuidad + 1 por cupo, aunque nTarget sea 1');
-  const continuidad = r.seleccionadas.filter(c => c.esContinuidad);
-  assert.strictEqual(continuidad.length, 2, 'las dos de continuidad entran completas');
-  const otras = r.seleccionadas.filter(c => !c.esContinuidad);
-  assert.strictEqual(otras.length, 1, 'solo una de las nuevas, por el cupo de 1');
-  assert.strictEqual(r.reserva.length, 1, 'la otra nueva queda en reserva, no la de continuidad');
+  const r = scoreCandidates(candidatas, { nTarget: 3 }, '', priorComps);
+
+  assert.strictEqual(r.seleccionadas.length, 3, 'pedidas 3, devueltas 3');
+  assert.strictEqual(r.continuidad, 2);
+  assert.strictEqual(r.seleccionadas.filter(c => c.esContinuidad).length, 2,
+    'las dos del estudio anterior entran primero');
+  assert.strictEqual(r.seleccionadas.filter(c => !c.esContinuidad).length, 1,
+    'y se completa con una nueva hasta llegar al cupo');
+  assert.strictEqual(r.reserva.length, 1, 'la nueva que no cupo queda en reserva');
+});
+
+test('el caso reportado: 12 pedidas con 7 de continuidad son 12, no 19', () => {
+  const continuidad = Array.from({ length: 7 }, (_, i) => ({
+    id: 'C' + i, name: 'Previa ' + i, nameKey: nameKey('Previa ' + i), s: 100, op: 10,
+  }));
+  const nuevas = Array.from({ length: 30 }, (_, i) => ({
+    id: 'N' + i, name: 'Nueva ' + i, nameKey: nameKey('Nueva ' + i), s: 100, op: 10,
+  }));
+  const priorComps = continuidad.map(c => ({ name: c.name }));
+  const r = scoreCandidates([...continuidad, ...nuevas], { nTarget: 12 }, '', priorComps);
+
+  assert.strictEqual(r.seleccionadas.length, 12);
+  assert.strictEqual(r.continuidad, 7);
+  assert.strictEqual(r.seleccionadas.filter(c => !c.esContinuidad).length, 5, '7 + 5 = 12');
+  assert.strictEqual(r.continuidadExcedeObjetivo, false);
+});
+
+test('la continuidad no se recorta cuando por sí sola pasa del objetivo', () => {
+  /* Retirar una comparable aceptada el año anterior hay que justificarlo en el informe,
+     así que se conservan todas y no se añade ninguna nueva: la muestra queda por encima
+     de lo pedido y se avisa. */
+  const candidatas = [
+    { id: '1', name: 'Previa Uno', nameKey: nameKey('Previa Uno'), s: 100, op: 10 },
+    { id: '2', name: 'Previa Dos', nameKey: nameKey('Previa Dos'), s: 100, op: 10 },
+    { id: '3', name: 'Previa Tres', nameKey: nameKey('Previa Tres'), s: 100, op: 10 },
+    { id: '4', name: 'Nueva', nameKey: nameKey('Nueva'), s: 100, op: 10 },
+  ];
+  const priorComps = [{ name: 'Previa Uno' }, { name: 'Previa Dos' }, { name: 'Previa Tres' }];
+  const r = scoreCandidates(candidatas, { nTarget: 2 }, '', priorComps);
+
+  assert.strictEqual(r.seleccionadas.length, 3, 'las tres de continuidad se conservan');
+  assert.strictEqual(r.seleccionadas.filter(c => !c.esContinuidad).length, 0,
+    'y no entra ninguna nueva: el cupo ya está pasado');
+  assert.strictEqual(r.continuidadExcedeObjetivo, true, 'y se puede avisar en pantalla');
+  assert.strictEqual(r.reserva.length, 1, 'la nueva queda disponible en reserva');
+});
+
+test('sin continuidad el cupo se comporta igual que antes', () => {
+  const candidatas = Array.from({ length: 10 }, (_, i) => ({
+    id: 'C' + i, name: 'Comp ' + i, nameKey: nameKey('Comp ' + i), s: 100, op: 10,
+  }));
+  const r = scoreCandidates(candidatas, { nTarget: 4 }, '', []);
+  assert.strictEqual(r.seleccionadas.length, 4);
+  assert.strictEqual(r.continuidad, 0);
+  assert.strictEqual(r.reserva.length, 6);
+});
+
+test('una comparable no aparece a la vez en la muestra y en la reserva', () => {
+  /* La reserva se corta en el cupo restante y no en nTarget: cortando en nTarget, las
+     que la continuidad desplazó salían en las dos listas. */
+  const candidatas = [
+    { id: '1', name: 'Previa', nameKey: nameKey('Previa'), s: 100, op: 10 },
+    { id: '2', name: 'Nueva Uno', nameKey: nameKey('Nueva Uno'), s: 100, op: 10 },
+    { id: '3', name: 'Nueva Dos', nameKey: nameKey('Nueva Dos'), s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 2 }, '', [{ name: 'Previa' }]);
+  const enMuestra = new Set(r.seleccionadas.map(c => c.id));
+  r.reserva.forEach(c => assert.ok(!enMuestra.has(c.id), c.name + ' está en la muestra y en la reserva'));
+  assert.strictEqual(r.seleccionadas.length, 2);
+  assert.strictEqual(r.reserva.length, 1);
 });
 
 test('nameKey ignora el sufijo de bolsa/ticker entre paréntesis de Capital IQ', () => {

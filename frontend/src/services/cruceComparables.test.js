@@ -9,6 +9,7 @@ import {
   repartir,
   tokensNombre,
   UMBRAL_TOKENS,
+  cobertura,
 } from './cruceComparables.js';
 
 const COMPARABLES = [
@@ -142,4 +143,105 @@ test('sin comparables cargadas no se aplica nada, en vez de fallar', () => {
   );
   assert.strictEqual(aplicadas.length, 0);
   assert.strictEqual(rechazadas.length, 1);
+});
+
+/* ══════ ruido en el nombre del archivo y ticker de Capital IQ ══════
+   Caso real: se cargaron 19 estados financieros y solo 10 se asociaron. Los archivos se
+   llaman «10 HYBRID TECHNOLOGIES CO. LTD. Estado de resultados 2025 Ventas netas.pdf» y
+   las razones sociales traen el sufijo de bolsa, «Hybrid Technologies Co., Ltd.
+   (TSE:4260)». Contar ESTADO, RESULTADOS, VENTAS, NETAS, KOSDAQ y el código del ticker
+   como parte del nombre hundía el parecido de 1,00 a 0,33, por debajo del umbral. */
+
+test('tokensNombre descarta el ruido de un titulo de estado financiero', () => {
+  assert.deepStrictEqual(
+    tokensNombre('17 AERIA INC. Estado de resultados 2025 Ventas netas'),
+    ['AERIA'],
+    'solo queda la razón social'
+  );
+});
+
+test('tokensNombre descarta el sufijo de bolsa de Capital IQ', () => {
+  assert.deepStrictEqual(tokensNombre('Neptune Company (KOSDAQ:A217270)'), ['NEPTUNE']);
+  assert.deepStrictEqual(tokensNombre('Aeria Inc. (TSE:3758)'), ['AERIA']);
+});
+
+test('un documento titulado como estado financiero cruza con su comparable', () => {
+  const filas = [
+    { id: '1', name: 'Aeria Inc. (TSE:3758)' },
+    { id: '2', name: 'KAYAC Inc. (TSE:3904)' },
+  ];
+  /* Caso peor: el OCR no devolvió razón social ni identificador, solo hay nombre de
+     archivo. Es lo habitual en un estado de resultados que empieza por la tabla. */
+  const c = cruzar({ nombre: '', identificador_fuente: '' },
+    '17 AERIA INC. Estado de resultados 2025 Ventas net.pdf', filas);
+  assert.strictEqual(c.indice, 0);
+  assert.strictEqual(c.comparable.name, 'Aeria Inc. (TSE:3758)');
+});
+
+test('los diecinueve documentos reales se reparten cada uno a su fila', () => {
+  const archivos = [
+    '1 QUBICGAMES S.A..pdf',
+    '10 HYBRID TECHNOLOGIES CO. LTD. Estado de resultad.pdf',
+    '11 STRING METAVERSE LIMITED Estado de resultados 2.pdf',
+    '12 EXTREME CO.LTD. Estado de resultados 2025 Venta.pdf',
+    '13 ZHEJIANG DAILY DIGITAL CULTURE GROUP CO.LTD Est.pdf',
+    '14 BEIJING ULTRAPOWER SOFTWARE CO. LTD. Estado de .pdf',
+    '15 KIDS STAR INC. Estado de resultados 2025 Ventas.pdf',
+    '16 T3 ENTERTAINMENT INC. Estado de resultados 2025.pdf',
+    '17 AERIA INC. Estado de resultados 2025 Ventas net.pdf',
+    '18 KAYAC INC. Estado de resultados 2025 Ventas net.pdf',
+    '19 GLOBAL MOFY AI LIMITED Estado de resultados 202.pdf',
+    '2 YOOZOO INTERACTIVE CO. LTD..pdf',
+    '3 NEPTUNE COMPANY.pdf',
+    '4 WEMADE PLAY CO. LTD..pdf',
+    '5 TOSE CO. LTD..pdf',
+    '6 AKATSUKI INC..pdf',
+    '7 FUN YOURS TECHNOLOGY CO.LTD..pdf',
+    '8 SILICON STUDIO CORPORATION.pdf',
+    '9 APPIRITS INC..pdf',
+  ];
+  const filas = [
+    'QubicGames S.A. (WSE:QUB)', 'Hybrid Technologies Co., Ltd. (TSE:4260)',
+    'String Metaverse Limited (BSE:539542)', 'Extreme Co., Ltd. (TSE:6033)',
+    'Zhejiang Daily Digital Culture Group Co., Ltd. (SHSE:600633)',
+    'Beijing Ultrapower Software Co., Ltd. (SZSE:300002)', 'Kids Star Inc. (TSE:248A)',
+    'T3 Entertainment Inc. (KOSDAQ:A204610)', 'Aeria Inc. (TSE:3758)', 'KAYAC Inc. (TSE:3904)',
+    'Global Mofy AI Limited (NasdaqCM:GMM)', 'Yoozoo Interactive Co., Ltd. (SHSE:002174)',
+    'Neptune Company (KOSDAQ:A217270)', 'Wemade Play Co., Ltd. (KOSDAQ:A123420)',
+    'TOSE CO., LTD. (TSE:4728)', 'Akatsuki Inc. (TSE:3932)',
+    'Fun Yours Technology Co., Ltd. (GTSM:6150)', 'Silicon Studio Corporation (TSE:3907)',
+    'Appirits Inc. (TSE:7075)',
+  ].map((name, i) => ({ id: String(i), name }));
+
+  const entradas = archivos.map((archivo) => ({
+    archivo, datos: { nombre: '', identificador_fuente: '' }, verificacion: { esValido: true, hallazgos: [] },
+  }));
+  const { aplicadas, rechazadas } = repartir(entradas, filas);
+
+  assert.strictEqual(rechazadas.length, 0, 'antes 7 se quedaban sin cruzar');
+  assert.strictEqual(aplicadas.length, 19);
+  assert.strictEqual(new Set(aplicadas.map((a) => a.indice)).size, 19,
+    'cada documento a una fila distinta');
+});
+
+test('con dos comparables igual de cubiertas no se aplica a ninguna', () => {
+  /* Aplicar las cifras a la equivocada las mete en el rango intercuartil sin que nadie
+     lo note, así que ante la duda se rechaza y se explica. */
+  const filas = [
+    { id: '1', name: 'Neptune Company (KOSDAQ:A217270)' },
+    { id: '2', name: 'Neptune (TSE:9999)' },
+  ];
+  const c = cruzar({ nombre: '', identificador_fuente: '' },
+    'Neptune Estado de resultados 2025.pdf', filas);
+  assert.strictEqual(c.indice, -1);
+  assert.strictEqual(c.modo, 'ambiguo');
+  assert.match(motivoCruce(c, { nombre: '' }, 'Neptune Estado de resultados 2025.pdf'),
+    /encaja igual de bien con 2 comparables/);
+});
+
+test('cobertura mide cuanto de la razon social aparece en el documento', () => {
+  assert.strictEqual(cobertura('Aeria Inc.', 'AERIA INC. Estado de resultados 2025'), 1,
+    'la razón social aparece completa, aunque el archivo traiga mucho más texto');
+  assert.strictEqual(cobertura('Hybrid Technologies Co., Ltd.', 'OTRA EMPRESA Estado de resultados'), 0);
+  assert.strictEqual(cobertura('', 'cualquier cosa'), 0, 'sin razón social no hay nada que cubrir');
 });

@@ -309,9 +309,19 @@ service cloud.firestore {
        documento por separado sí fuera legible.
 
        Solo concede lectura de los documentos que me nombran, y nada más: no permite
-       enumerar los estudios de nadie. */
+       enumerar los estudios de nadie.
+
+       La condición es deliberadamente mínima —una sola pertenencia sobre el campo que la
+       consulta filtra— y no reutiliza `estudioCompartidoConmigo()`. En una consulta,
+       Firestore no evalúa las reglas documento por documento: exige demostrar que los
+       filtros garantizan la condición. Comprobar además que el campo existe, que es una
+       lista, o normalizar el correo con `.lower()`, son condiciones que la consulta no
+       puede garantizar, y entonces se rechaza la consulta entera aunque cada documento
+       fuese legible. El correo se guarda ya en minúsculas y Google lo emite así, de modo
+       que la comparación directa basta. */
     match /{ruta=**}/estudios/{estudioId} {
-      allow read: if estudioCompartidoConmigo();
+      allow read: if request.auth != null
+        && request.auth.token.email in resource.data.compartidoCon;
     }
 
     // =============================================================
