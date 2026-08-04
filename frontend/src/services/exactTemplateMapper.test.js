@@ -762,10 +762,22 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
   const inicioAnexoC = salida.indexOf('id="_Toc208931007"', inicioAnexoB);
   const bloqueAnexoB = salida.slice(inicioAnexoB, inicioAnexoC);
 
+  /* El bloque estático de referencia trae trece compañías, no cuatro: si un futuro cambio
+     solo reemplaza parcialmente el bloque (p.ej. las primeras cuatro) y deja las otras nueve,
+     estas aserciones deben delatarlo — de ahí que se comprueben las trece por separado. */
   assert.ok(!bloqueAnexoB.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
   assert.ok(!bloqueAnexoB.includes('COLOPL'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
   assert.ok(!bloqueAnexoB.includes('FUN YOURS'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
   assert.ok(!bloqueAnexoB.includes('IGG INC'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('MAXIMUM ENTERTAINMENT'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('NEPTUNE COMPANY'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('OURPALM'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('PLAYSTUDIOS'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('QUBICGAMES'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('THE DUST'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('TOSE CO'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('WEMADE PLAY'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('YOOZOO'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
   assert.ok(bloqueAnexoB.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo en ANEXO B');
   assert.ok(bloqueAnexoB.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');

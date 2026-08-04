@@ -450,9 +450,10 @@ ${images.map((imgUrl, i) => `
 }
 
 /* ══════════════ ANEXO B. Descripciones de comparables y Estados Financieros ══════════════
-   La plantilla trae cuatro compañías de videojuegos del informe de referencia (Akatsuki,
-   Colopl, Fun Yours, IGG). Solo entran aquí las comparables con EEFF verificado: una fila
-   con cifras a medio cargar y sin confirmar es peor que no mostrarla. */
+   La plantilla trae las trece compañías de videojuegos del informe de referencia (Akatsuki,
+   Colopl, Fun Yours, IGG, Maximum Entertainment, Neptune Company, Ourpalm, Playstudios,
+   Qubicgames, The Dust, Tose, Wemade Play, Yoozoo). Solo entran aquí las comparables con
+   EEFF verificado: una fila con cifras a medio cargar y sin confirmar es peor que no mostrarla. */
 
 const ANEXO_B_ETIQUETAS_PL = [
   { etiqueta: 'Ventas netas', valor: (c) => c.s },
@@ -512,7 +513,7 @@ function generarBloqueComparableAnexoB(comp, year, wrap) {
 }
 
 /* Cuerpo dinámico del ANEXO B. Sin ninguna comparable verificada devuelve el aviso de
-   pendiente en vez de las cuatro compañías de videojuegos del informe de referencia. */
+   pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
 export function generarAnexoBHtml(study, year, wrap) {
   const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffVerificado);
   const titulo = '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n';
