@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HOJA, REGLAS_DOCUMENTO, reglasDocumento, cuerpoDe, cssDeHojas, cssDeExportacion, cssDeWord,
-  CLASE_VALOR, resaltarValor,
+  CLASE_VALOR, resaltarValor, cmATwips, cmAPixeles, medidaEnCm, HOJA_TWIPS,
 } from './estiloDocumento.js';
 
 test('la pantalla y el .doc llevan las mismas reglas de documento', () => {
@@ -193,4 +193,34 @@ test('el previo no señala la primera página con :first-of-type', () => {
   const css = cssDeHojas({ logo: 'data:image/png;base64,A', enLaPortada: false });
   assert.ok(!css.includes(':first-of-type'));
   assert.ok(css.includes('[data-pagina="1"]::before{content:none}'));
+});
+
+test('la hoja en twips describe la misma hoja que la del previo', () => {
+  /* El previo va en centímetros y OOXML en twips. Si las dos descripciones se separan, el
+     .docx sale con otra hoja que la que se revisó en pantalla, y los saltos caen donde no
+     van. Este test es el que lo impide. */
+  assert.equal(cmATwips(2.54), 1440, 'una pulgada son 1440 twips');
+  assert.equal(HOJA_TWIPS.ancho, 12240, 'carta: 8,5 pulgadas');
+  assert.equal(HOJA_TWIPS.alto, 15840, 'carta: 11 pulgadas');
+  /* Y salen de HOJA, no escritos a mano otra vez. */
+  assert.equal(HOJA_TWIPS.margen, cmATwips(medidaEnCm(HOJA.margen)));
+  assert.equal(HOJA_TWIPS.pie, cmATwips(medidaEnCm(HOJA.pie)));
+  assert.equal(HOJA_TWIPS.borde, cmATwips(medidaEnCm(HOJA.borde)));
+});
+
+test('el tamaño de imagen se convierte a píxeles de 96 ppp, que es lo que quiere docx', () => {
+  /* Comprobado contra docx 9.7.1: `transformation` produce 9525 EMU por unidad, es decir un
+     píxel a 96 ppp. Con puntos (12700 EMU) las imágenes saldrían un 33 % más grandes, que es
+     la clase de error que ya costó un documento de 834 páginas. */
+  assert.equal(cmAPixeles(2.54), 96);
+  assert.equal(cmAPixeles(5.53), 209, 'el logo del informe de referencia');
+});
+
+test('medidaEnCm lee las medidas del previo', () => {
+  assert.equal(medidaEnCm('2.5cm'), 2.5);
+  assert.equal(medidaEnCm('21.6cm'), 21.6);
+  /* Sin unidad o con basura devuelve 0 y no NaN: un NaN en un twip produce un .docx que Word
+     no abre, y el fallo aparecería lejos de aquí. */
+  assert.equal(medidaEnCm('abc'), 0);
+  assert.equal(medidaEnCm(undefined), 0);
 });

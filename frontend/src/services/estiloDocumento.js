@@ -13,8 +13,8 @@
    previsualización, que es lo que hace que una hoja en pantalla y una hoja en Word
    sean la misma hoja. Carta con los márgenes del informe. */
 export const HOJA = {
-  ancho: '21.6cm',
-  alto: '27.9cm',
+  ancho: '21.59cm',
+  alto: '27.94cm',
   margen: '2.5cm',
   pie: '2cm',
   /* Distancia del borde del papel al encabezado y al pie. */
@@ -22,6 +22,33 @@ export const HOJA = {
   /* Con encabezado la caja de texto arranca más abajo: el borde más el alto del logo. */
   altoEncabezado: '1.5cm',
   conEncabezado: '3.4cm',
+};
+
+/* OOXML mide en twips: 1/20 de punto, 1440 por pulgada, 566,929 por centímetro. La hoja del
+   previo y la del .docx tienen que ser la misma, así que las dos salen de `HOJA`. */
+const TWIPS_POR_CM = 1440 / 2.54;
+
+/* `docx` mide las imágenes en píxeles de 96 ppp: comprobado contra la versión 9.7.1, que
+   emite 9525 EMU por unidad, y 9525 × 96 = 914400 EMU = una pulgada. Con puntos las imágenes
+   saldrían un 33 % más grandes. */
+const PIXELES_POR_CM = 96 / 2.54;
+
+export const cmATwips = (cm) => Math.round((Number(cm) || 0) * TWIPS_POR_CM);
+export const cmAPixeles = (cm) => Math.round((Number(cm) || 0) * PIXELES_POR_CM);
+
+/* `'2.5cm'` → `2.5`. Devuelve 0 y no NaN ante cualquier cosa que no sepa leer: un NaN metido
+   en un twip produce un .docx que Word no abre, y el fallo aparecería muy lejos de aquí. */
+export const medidaEnCm = (valor) => {
+  const m = /^([\d.]+)\s*cm$/.exec(String(valor || '').trim());
+  return m ? Number(m[1]) : 0;
+};
+
+export const HOJA_TWIPS = {
+  ancho: cmATwips(medidaEnCm(HOJA.ancho)),
+  alto: cmATwips(medidaEnCm(HOJA.alto)),
+  margen: cmATwips(medidaEnCm(HOJA.margen)),
+  pie: cmATwips(medidaEnCm(HOJA.pie)),
+  borde: cmATwips(medidaEnCm(HOJA.borde)),
 };
 
 export const REGLAS_DOCUMENTO = [
