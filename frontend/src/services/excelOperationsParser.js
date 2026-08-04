@@ -71,6 +71,10 @@ export async function parseExcelOperations(file) {
       // retención, IVA) que no son la operación de ingreso en sí.
       const iCod = enc.findIndex(x => String(x).trim().toLowerCase() === 'cod');
 
+      /* Las operaciones de la hoja se acumulan aquí y no en `rowsParsed`, porque para
+         decidir si la columna 'Cod' sirve de filtro hay que haberlas visto todas. */
+      const candidatas = [];
+
       let currentTipo = '';
       // Las hojas 'Op. Vinculados Economicos' y 'Op. Paraisos Fiscales' listan
       // primero "1. OPERACIONES DE INGRESO" y luego "2. OPERACIONES DE
@@ -107,17 +111,31 @@ export async function parseExcelOperations(file) {
         if (nit && !mainVinculadoId) mainVinculadoId = nit;
         if (pais && !mainPais) mainPais = pais;
 
-        const tieneCod = iCod === -1 || cod !== '';
-        if (monto > 0 && currentSeccion === 'INGRESO' && tieneCod) {
-          rowsParsed.push({
+        if (monto > 0 && currentSeccion === 'INGRESO') {
+          candidatas.push({
             vinculado: nom,
             nit,
             pais,
             tipo: currentTipo || 'Otros servicios (07)',
-            monto
+            monto,
+            cod
           });
         }
       }
+
+      /* El filtro por 'Cod' solo se aplica si la columna está diligenciada en alguna
+         fila de esta hoja. Sirve para separar la operación real de los renglones
+         auxiliares del mismo formato —en el archivo de referencia, el concepto 4001
+         lleva código y el 4002 no—, pero es una columna opcional del formato: quien
+         escribe el tipo de operación en texto y no pone el código la deja vacía en
+         todas las filas.
+         Exigirla siempre descartaba la hoja entera de esos contribuyentes y el monto
+         salía vacío sin ninguna señal de por qué. Si nadie la diligenció no distingue
+         nada, así que no puede filtrar. */
+      const codEnUso = candidatas.some(c => c.cod !== '');
+      candidatas.forEach(({ cod, ...operacion }) => {
+        if (!codEnUso || cod !== '') rowsParsed.push(operacion);
+      });
     });
 
     // Calcular el monto total y el tipo de operación principal
@@ -144,6 +162,16 @@ export async function parseExcelOperations(file) {
     let paisNombre = mainPais;
     if (mainPais === '249') paisNombre = 'ESTADOS UNIDOS';
 
+    /* Contrapartes distintas del archivo. El estudio guarda un solo vinculado, así que
+       cuando hay varias el monto que se ingresa es la suma de todas y el informe las
+       atribuye a la primera. No se puede resolver aquí —el modelo del estudio tiene un
+       campo, no una lista—, pero quien carga el archivo tiene que enterarse: si no, el
+       documento declara ante la DIAN una operación con una contraparte que no es la
+       única. Se agrupa por NIT y se cae al nombre cuando el NIT falta. */
+    const contrapartes = new Set(
+      rowsParsed.map(r => (r.nit || r.vinculado || '').trim().toUpperCase()).filter(Boolean)
+    );
+
     return {
       vinc: mainVinculado || null,
       vinc_id: mainVinculadoId || null,
@@ -152,6 +180,7 @@ export async function parseExcelOperations(file) {
       monto: totalMonto || null,
       monto_operacion: totalMonto || null,
       t_s: totalMonto || null,
+      contrapartes: contrapartes.size,
       rows: rowsParsed
     };
   } catch (err) {
