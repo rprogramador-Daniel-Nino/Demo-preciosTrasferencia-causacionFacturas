@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   HOJA, REGLAS_DOCUMENTO, reglasDocumento, cuerpoDe, cssDeHojas, cssDeExportacion, cssDeWord,
   CLASE_VALOR, resaltarValor, cmATwips, cmAPixeles, medidaEnCm, HOJA_TWIPS,
-  conSaltosDePagina,
+  conSaltosDePagina, conTamanoDeImagen,
 } from './estiloDocumento.js';
 
 test('la pantalla y el .doc llevan las mismas reglas de documento', () => {
@@ -260,4 +260,43 @@ test('conSaltosDePagina aguanta un documento sin páginas y uno vacío', () => {
   /* Una sola página tampoco lleva salto. */
   assert.equal((conSaltosDePagina('<div class="pagina" data-pagina="1"></div>')
     .match(/page-break/g) || []).length, 0);
+});
+
+test('cada imagen lleva también su tamaño en atributos, que Word sí obedece', () => {
+  /* Word ignora buena parte del CSS —`max-width` y las pseudoclases de CSS 3 ya lo
+     demostraron en este mismo proyecto—, así que el `width` de una hoja de estilos sobre una
+     imagen no es de fiar. Los atributos `width`/`height` de HTML son de 1995 y los obedece
+     siempre. Conviven: el navegador da prioridad al CSS en centímetros, que es exacto. */
+  const r = conTamanoDeImagen(
+    '<img data-recurso="logo" style="width:5.53cm;height:1.23cm" src="data:image/png;base64,A" />');
+  /* 5,53 cm x 37,795 px/cm = 209; 1,23 cm = 46. */
+  assert.match(r, /width="209"/);
+  assert.match(r, /height="46"/);
+  /* Y no se pierde ni el estilo ni el resto de la etiqueta. */
+  assert.match(r, /style="width:5\.53cm;height:1\.23cm"/);
+  assert.match(r, /data-recurso="logo"/);
+  assert.match(r, /src="data:image\/png;base64,A"/);
+});
+
+test('una imagen sin tamaño declarado no recibe uno inventado', () => {
+  /* Es el caso de una plantilla anterior a la versión 7 del lector. Inventarle un tamaño sería
+     peor que dejarla salir al natural, porque parecería correcta. Para eso está el aviso de
+     versión, que dice que hay que volver a subir el PDF. */
+  const sin = '<img data-recurso="x" src="data:image/png;base64,A" />';
+  assert.equal(conTamanoDeImagen(sin), sin);
+  /* Y una con el estilo a medias tampoco. */
+  const media = '<img data-recurso="x" style="width:2cm" src="data:image/png;base64,A" />';
+  assert.equal(conTamanoDeImagen(media), media);
+});
+
+test('conTamanoDeImagen no pisa un tamaño que ya venga en atributos', () => {
+  /* Un .docx por mammoth puede traerlos ya puestos, y son los del documento original. */
+  const ya = '<img width="100" height="50" style="width:5cm;height:2cm" src="d" />';
+  assert.equal(conTamanoDeImagen(ya), ya);
+});
+
+test('conTamanoDeImagen aguanta un documento sin imágenes y uno vacío', () => {
+  assert.equal(conTamanoDeImagen('<p>hola</p>'), '<p>hola</p>');
+  assert.equal(conTamanoDeImagen(''), '');
+  assert.equal(conTamanoDeImagen(undefined), '');
 });

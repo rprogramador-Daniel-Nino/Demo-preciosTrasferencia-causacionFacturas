@@ -19,7 +19,7 @@ import {
 import { renderizar } from '../services/plantillaRenderer.js';
 import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
 import {
-  cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina,
+  cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
 } from '../services/estiloDocumento.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
@@ -682,7 +682,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     const bloquesMso =
       (encabezado
         ? '<div style="mso-element:header" id="h1"><p class=enc>' +
-          conImagenes(encabezado) + '</p></div>'
+          conTamanoDeImagen(conImagenes(encabezado)) + '</p></div>'
         : '') +
       '<div style="mso-element:footer" id="f1"><p class=pie>' +
       '<span style="mso-field-code:PAGE"></span></p></div>';
@@ -690,7 +690,11 @@ export default function ReporteGenerador({ study, estudioId }) {
     /* Todo el cuerpo dentro de la secci\u00f3n nombrada: es lo que hace que `@page
        Section1` \u2014y con ella el encabezado\u2014 se aplique de verdad. */
     const cuerpoDocumento =
-      '<div class=Section1>' + conImagenes(cleanHtml) + bloquesMso + '</div>';
+      /* `conTamanoDeImagen` va DESPUÉS de `conImagenes`, no antes: los atributos se calculan
+         sobre la etiqueta ya resuelta, y así una imagen sin recurso en el catálogo tampoco
+         recibe tamaño. */
+      '<div class=Section1>' + conTamanoDeImagen(conImagenes(cleanHtml)) +
+      bloquesMso + '</div>';
 
     const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${cuerpoDocumento}</body></html>`;
 

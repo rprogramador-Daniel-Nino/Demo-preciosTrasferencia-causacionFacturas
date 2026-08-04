@@ -188,6 +188,32 @@ export function cssDeExportacion(base) {
     'margin:0;padding:0}' + reglasDocumento();
 }
 
+/* Añade a cada imagen los atributos `width` y `height` en píxeles, deducidos del tamaño en
+   centímetros que el extractor le puso en el `style`.
+
+   Hace falta porque Word ignora buena parte del CSS: ya se comprobó con `max-width`, que no
+   respeta, y con las pseudoclases de CSS 3. El `width` de una hoja de estilos sobre una imagen
+   entra en la misma categoría de "puede que sí, puede que no". Los atributos `width` y
+   `height` de HTML son de 1995 y Word los obedece siempre.
+
+   Los dos conviven sin pelear, y cada uno gana donde debe: un navegador da prioridad al CSS en
+   centímetros, que es exacto; Word usa los atributos. Por eso el previo no cambia.
+
+   Una imagen sin tamaño en el `style` —una plantilla anterior a la versión 7 del lector— se
+   deja como está: inventarle un tamaño sería peor que dejar que salga al natural, porque
+   parecería correcto. Para eso está el aviso de versión. */
+export function conTamanoDeImagen(html) {
+  return String(html || '').replace(/<img\s[^>]*>/g, (etiqueta) => {
+    if (/\s(?:width|height)=/.test(etiqueta)) return etiqueta;
+    const estilo = (/style="([^"]*)"/.exec(etiqueta) || [])[1] || '';
+    const ancho = medidaEnCm((/width:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
+    const alto = medidaEnCm((/height:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
+    if (!ancho || !alto) return etiqueta;
+    return etiqueta.replace(/<img\s/,
+      '<img width="' + cmAPixeles(ancho) + '" height="' + cmAPixeles(alto) + '" ');
+  });
+}
+
 /* Un salto de página que Word obedece: un elemento, un salto.
 
    `clear="all"` es lo que hace que no se cuele junto a nada flotante que haya quedado
