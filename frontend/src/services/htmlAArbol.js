@@ -48,8 +48,9 @@ export function htmlAArbol(html) {
   const cima = () => pila[pila.length - 1];
 
   /* Un solo recorrido: etiqueta de cierre, comentario, CDATA, declaración,
-     instrucción de proceso, etiqueta de apertura. */
-  const rx = /<\/([a-zA-Z][-\w:]*)\s*>|<!--[\s\S]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>|<![^>]*>|<\?[\s\S]*?\?>|<([a-zA-Z][-\w:]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+     instrucción de proceso, etiqueta de apertura. Regla crítica: ninguna
+     alternativa puede consumir un <, que siempre empieza algo nuevo. */
+  const rx = /<\/([a-zA-Z][-\w:]*)\s*>|<!--[^<]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>|<![^<>]*>|<\?[^<]*?\?>|<([a-zA-Z][-\w:]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
   let ultimo = 0;
   let m;
 

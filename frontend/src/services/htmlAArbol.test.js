@@ -97,3 +97,57 @@ test('una declaración no es contenido', () => {
   assert.equal(r.hijos.length, 1);
   assert.equal(r.hijos[0].etiqueta, 'p');
 });
+
+test('un CDATA sin cerrar no se lleva lo que viene detrás', () => {
+  /* Cuando un CDATA no cierra con ]]>, la alternativa falla y el < del siguiente
+     elemento no debe ser consumido por otra alternativa: debe aparecer como texto.
+     Ante HTML mal formado, basura visible es mejor que pérdida silenciosa. */
+  const r = htmlAArbol('<p><![CDATA[a sin cerrar<p>b</p>');
+  assert(textoDe(r).includes('a sin cerrar'), 'Debe contener "a sin cerrar"');
+  assert(textoDe(r).includes('b'), 'Debe contener "b"');
+});
+
+test('una instrucción de proceso sin cerrar no se lleva lo que viene detrás', () => {
+  /* Una instrucción PHP o similar sin cierre con ?> no debe tragarse el siguiente
+     <. El contenido del HTML va después del <. */
+  const r = htmlAArbol('<p><?php echo 1<p>b</p>');
+  assert(textoDe(r).includes('1'), 'Debe contener "1"');
+  assert(textoDe(r).includes('b'), 'Debe contener "b"');
+});
+
+test('un comentario sin cerrar no se lleva el resto del documento', () => {
+  /* Un comentario sin cierre con --> no debe comerse el HTML posterior: el < del
+     siguiente elemento debe dejar de ser consumido y caer como texto. */
+  const r = htmlAArbol('<p>a<!-- sin cerrar<p>b</p>');
+  assert(textoDe(r).includes('a'), 'Debe contener "a"');
+  assert(textoDe(r).includes('b'), 'Debe contener "b"');
+});
+
+test('ninguna alternativa de la expresión regular consume un <', () => {
+  /* Este test existe porque el mismo fallo entró dos veces por dos alternativas
+     distintas: primero por |<[^>]*>, luego por <![^>]*>. La regla que cierra la
+     puerta es: ninguna alternativa puede consumir un <. Un < siempre empieza algo
+     nuevo, o es texto. Nunca es relleno. Aquí chequeamos que el texto de contenido
+     (no el de atributos) se preserva. */
+  const casos = [
+    '<p>a<',
+    '<p>2 < 3<p>b</p>',
+    '<style>.x{',
+    '<!DOCTYPE',
+    '<p><![CDATA[a sin cerrar<p>b</p>',
+    '<p><?php echo 1<p>b</p>',
+    '<p>a<!-- sin cerrar<p>b</p>',
+  ];
+
+  const contenidoEsperado = ['a', 'b', 'c', '3', '1'];
+
+  for (const entrada of casos) {
+    const texto = textoDe(htmlAArbol(entrada));
+    for (const car of contenidoEsperado) {
+      if (entrada.includes(car)) {
+        assert(texto.includes(car),
+          `Entrada "${entrada}" debe preservar "${car}", pero el resultado es "${texto}"`);
+      }
+    }
+  }
+});
