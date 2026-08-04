@@ -290,3 +290,50 @@ test('una tabla dentro de una celda no se aplana en la de fuera', async () => {
   assert.equal((doc.match(/fuera/g) || []).length, 1);
   assert.equal((doc.match(/dentro/g) || []).length, 1);
 });
+
+/* PNG de 1×1 válido, para no depender del PDF real en los tests de unidad. */
+const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ' +
+  'AAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+
+test('las imágenes van como binario en word/media, no en base64', async () => {
+  /* En el .doc iban en base64 dentro del propio archivo y pesaba 3,3 MB. */
+  const { zip } = await abrir(
+    '<p><img data-recurso="logo" style="width:5.53cm;height:1.23cm" /></p>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  const media = Object.keys(zip.files).filter((f) => /^word\/media\/.+\./.test(f));
+  assert.equal(media.length, 1, 'debe haber un archivo por imagen');
+  assert.match(zip.file('word/_rels/document.xml.rels').asText(), /media\//);
+});
+
+test('la imagen sale con el tamaño que le da el PDF, no con el natural del PNG', async () => {
+  /* Este es el fallo que produjo "una página por cada separación entre párrafos": sin tamaño,
+     la figura de la página 11 medía 29,9 cm sobre papel de 21,6 y Word repartía el desborde
+     en hojas nuevas. 5,53 cm × 37,795 px/cm = 209 px, 1,23 cm × 37,795 px/cm = 46 px (redondeo
+     al entero más cercano, igual que `cmAPixeles` en `estiloDocumento.js`), y docx emite 9525
+     EMU por px. */
+  const { doc } = await abrir(
+    '<p><img data-recurso="logo" style="width:5.53cm;height:1.23cm" /></p>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  const m = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(doc);
+  assert.ok(m, 'la imagen no se emitió');
+  assert.equal(Number(m[1]), 209 * 9525);
+  assert.equal(Number(m[2]), 46 * 9525);
+});
+
+test('una imagen cuyo recurso no está en el catálogo no rompe el documento', async () => {
+  /* Pasa si el catálogo y la plantilla se desincronizan. Mejor un hueco que un throw que deja
+     al usuario sin documento y sin explicación. */
+  const { doc } = await abrir(
+    '<p>antes<img data-recurso="fantasma" style="width:1cm;height:1cm" />después</p>');
+  assert.match(doc, /antes/);
+  assert.match(doc, /después/);
+});
+
+test('las listas usan viñetas de Word, no un punto escrito a mano', async () => {
+  /* La skill lo marca: un `•` literal no es una lista y no se puede renumerar. */
+  const { doc } = await abrir('<ul><li>uno</li><li>dos</li></ul>');
+  assert.match(doc, /<w:numPr>/, 'no hay numeración de lista');
+  assert.match(doc, /uno/);
+  assert.match(doc, /dos/);
+  assert.doesNotMatch(doc, /•/);
+});
