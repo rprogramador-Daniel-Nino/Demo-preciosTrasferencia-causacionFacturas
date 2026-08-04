@@ -352,15 +352,15 @@ test('un cliente que se llama igual que la plantilla no duplica su razón social
   assert.ok(!salida.includes('INTERACTIVE INC COLOMBIA'), 'quedó el nombre del vinculado pegado al del contribuyente: ' + salida);
 });
 
-/* ══════ Tabla 16. Razones de rechazo ══════
+/* ══════ Tabla 14. Razones de rechazo ══════
    La plantilla trae los números de End Game —442 candidatas, 327 por diferencias
    funcionales, 13 aceptadas— y hay que sustituirlos por los del estudio. */
 
-const TABLA_16 = `<p>
+const TABLA_14 = `<p>
 A partir del anterior criterio de búsqueda se identificó un total de 442 Compañías comparables potenciales.
 </p>
 <p>
-<strong>Tabla 16. Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)</strong>
+<strong>Tabla 14. Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)</strong>
 </p>
 <table>
 <thead>
@@ -452,8 +452,8 @@ test('filasRazonesRechazo sin selección ejecutada no inventa nada', () => {
   assert.deepStrictEqual(filasRazonesRechazo(null).filas, []);
 });
 
-test('la tabla 16 se reemplaza con los datos del estudio', () => {
-  const salida = hydrateExactWordTemplate(TABLA_16, { ...otroCliente, embudoSeleccion: embudoReal });
+test('la tabla 14 se reemplaza con los datos del estudio', () => {
+  const salida = hydrateExactWordTemplate(TABLA_14, { ...otroCliente, embudoSeleccion: embudoReal });
   assert.ok(!salida.includes('>327<'), 'la cifra de End Game sigue en la tabla');
   assert.ok(!/>442</.test(salida), 'el total de End Game sigue en la tabla');
   assert.ok(salida.includes('30'), 'debe aparecer el conteo real de holdings');
@@ -461,36 +461,36 @@ test('la tabla 16 se reemplaza con los datos del estudio', () => {
   assert.ok(salida.includes('Compañías comparables aceptadas'));
 });
 
-test('el texto que rodea la tabla 16 queda con las cifras del estudio', () => {
+test('el texto que rodea la tabla 14 queda con las cifras del estudio', () => {
   /* Dejar la tabla al día y el párrafo con los números del cliente anterior produce un
      documento que se contradice dentro de la misma página. */
-  const salida = hydrateExactWordTemplate(TABLA_16, { ...otroCliente, embudoSeleccion: embudoReal });
+  const salida = hydrateExactWordTemplate(TABLA_14, { ...otroCliente, embudoSeleccion: embudoReal });
   assert.ok(!salida.includes('total de 442 Compañías'), 'el universo de End Game sobrevivió en el texto');
   assert.ok(/quedaron <strong>[\s\S]{0,200}?8[\s\S]{0,200}?<\/strong> compañías comparables/.test(salida),
     'el número de comparables finales no se actualizó en el texto');
 });
 
-test('sin selección ejecutada la tabla 16 no se toca', () => {
+test('sin selección ejecutada la tabla 14 no se toca', () => {
   /* Preferible que se vea que falta ejecutar el motor a que salgan cifras inventadas.
      El aviso de cobertura es el que se encarga de decirlo. */
-  const salida = hydrateExactWordTemplate(TABLA_16, otroCliente);
+  const salida = hydrateExactWordTemplate(TABLA_14, otroCliente);
   assert.ok(salida.includes('327'), 'la tabla queda como estaba');
-  const d = diagnosticarCobertura(TABLA_16, otroCliente);
+  const d = diagnosticarCobertura(TABLA_14, otroCliente);
   assert.strictEqual(d.razonesRechazoCubiertas, false);
 });
 
-test('el diagnóstico avisa cuando la tabla 16 quedó descuadrada', () => {
-  const d = diagnosticarCobertura(TABLA_16, { ...otroCliente, embudoSeleccion: { ...embudoReal, evaluadas: 500 } });
+test('el diagnóstico avisa cuando la tabla 14 quedó descuadrada', () => {
+  const d = diagnosticarCobertura(TABLA_14, { ...otroCliente, embudoSeleccion: { ...embudoReal, evaluadas: 500 } });
   assert.strictEqual(d.razonesRechazoCubiertas, true);
   assert.strictEqual(d.razonesRechazoDescuadradas, true);
 });
 
-/* ══════════════ Tablas 17 y 19: la muestra de comparables ══════════════ */
+/* ══════════════ Tablas 15 y 17: la muestra de comparables ══════════════ */
 
-/* Reproduce la estructura de la plantilla real: la 17 no tiene <thead> —su primera
-   <tr> es el encabezado y lleva las anclas de Word— y la 19 sí. */
-const TABLA_17 = `<p>
-<strong>Tabla 17. Muestra Compañías comparables</strong>
+/* Reproduce la estructura de la plantilla real: la 15 no tiene <thead> —su primera
+   <tr> es el encabezado y lleva las anclas de Word— y la 17 sí. */
+const TABLA_15 = `<p>
+<strong>Tabla 15. Muestra Compañías comparables</strong>
 </p>
 <table>
 <tr>
@@ -502,7 +502,7 @@ const TABLA_17 = `<p>
 <tr><td><p>2</p></td><td><p>COLOPL, INC.</p></td><td><p>INTERNACIONAL</p></td></tr>
 </table>`;
 
-const TABLA_19 = `<p><a id="_Hlk143112656"></a>Tabla 19. Margen Operacional Compañías Comparables</p>
+const TABLA_17 = `<p><a id="_Hlk143112656"></a>Tabla 17. Margen Operacional Compañías Comparables</p>
 <table>
 <thead>
 <tr><th><p><strong>COMPARABLES</strong></p></th><th><p><strong>MO NO AJUSTADO </strong></p></th><th><p><strong>MO AJUSTADO</strong></p></th></tr>
@@ -524,33 +524,33 @@ const conComparables = {
   ],
 };
 
-test('la tabla 17 lista las comparables del estudio, no las de End Game', () => {
-  const salida = reemplazarTablaMuestraComparables(TABLA_17, conComparables, (v) => v);
+test('la tabla 15 lista las comparables del estudio, no las de End Game', () => {
+  const salida = reemplazarTablaMuestraComparables(TABLA_15, conComparables, (v) => v);
   assert.ok(!salida.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia');
   assert.ok(!salida.includes('COLOPL'), 'sobrevivió una comparable del informe de referencia');
   assert.ok(salida.includes('DISTRIBUIDORA ANDINA S.A.'));
   assert.ok(salida.includes('GULF FUEL TRADING CO'));
 });
 
-test('la tabla 17 conserva su encabezado y las anclas de Word', () => {
+test('la tabla 15 conserva su encabezado y las anclas de Word', () => {
   /* «RANGE!E11» y «_Hlk143111901» son destino de referencias del documento:
      reconstruir la fila del encabezado las dejaría rotas. */
-  const salida = reemplazarTablaMuestraComparables(TABLA_17, conComparables, (v) => v);
+  const salida = reemplazarTablaMuestraComparables(TABLA_15, conComparables, (v) => v);
   assert.ok(salida.includes('id="RANGE!E11"'), 'se perdió el ancla del encabezado');
   assert.ok(salida.includes('id="_Hlk143111901"'), 'se perdió el ancla del encabezado');
   assert.ok(salida.includes('<strong>Número</strong>'), 'se perdió el encabezado');
 });
 
-test('la tabla 17 numera correlativo y traduce el ámbito', () => {
-  const salida = reemplazarTablaMuestraComparables(TABLA_17, conComparables, (v) => v);
+test('la tabla 15 numera correlativo y traduce el ámbito', () => {
+  const salida = reemplazarTablaMuestraComparables(TABLA_15, conComparables, (v) => v);
   const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
   assert.ok(/1 DISTRIBUIDORA ANDINA S\.A\. NACIONAL/.test(texto), 'la nacional debe salir como NACIONAL');
   assert.ok(/2 GULF FUEL TRADING CO INTERNACIONAL/.test(texto));
   assert.ok(/3 SIN CIFRAS S\.A\./.test(texto), 'la comparable sin cifras también es parte de la muestra');
 });
 
-test('la tabla 19 sale con los márgenes del estudio', () => {
-  const salida = reemplazarTablaMargenComparables(TABLA_19, conComparables, (v) => v);
+test('la tabla 17 sale con los márgenes del estudio', () => {
+  const salida = reemplazarTablaMargenComparables(TABLA_17, conComparables, (v) => v);
   assert.ok(!salida.includes('16.557%'), 'sobrevivió un margen del informe de referencia');
   assert.ok(!salida.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia');
   const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
@@ -559,18 +559,18 @@ test('la tabla 19 sale con los márgenes del estudio', () => {
 });
 
 test('la comparable sin estados financieros sale con hueco, no omitida', () => {
-  /* Omitirla dejaría la tabla 19 más corta que la 17 sin nada que lo explique, y el
+  /* Omitirla dejaría la tabla 17 más corta que la 15 sin nada que lo explique, y el
      hueco es lo que delata que falta cargarle las cifras. */
-  const salida = reemplazarTablaMargenComparables(TABLA_19, conComparables, (v) => v);
+  const salida = reemplazarTablaMargenComparables(TABLA_17, conComparables, (v) => v);
   const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
   assert.ok(/SIN CIFRAS S\.A\. — —/.test(texto), 'la comparable sin cifras debe salir con dos huecos');
 });
 
-test('sin comparables las tablas 17 y 19 se quedan como estaban', () => {
-  /* Mismo criterio que la tabla 16: preferible que se vea que falta cargar la muestra
+test('sin comparables las tablas 15 y 17 se quedan como estaban', () => {
+  /* Mismo criterio que la tabla 14: preferible que se vea que falta cargar la muestra
      a que salgan filas inventadas. El aviso del generador es el que lo dice. */
-  assert.strictEqual(reemplazarTablaMuestraComparables(TABLA_17, otroCliente, (v) => v), TABLA_17);
-  assert.strictEqual(reemplazarTablaMargenComparables(TABLA_19, otroCliente, (v) => v), TABLA_19);
+  assert.strictEqual(reemplazarTablaMuestraComparables(TABLA_15, otroCliente, (v) => v), TABLA_15);
+  assert.strictEqual(reemplazarTablaMargenComparables(TABLA_17, otroCliente, (v) => v), TABLA_17);
 });
 
 test('filasComparablesInforme descarta las filas sin razón social', () => {
@@ -587,22 +587,22 @@ test('filasComparablesInforme descarta las filas sin razón social', () => {
 test('la hidratación completa engancha las dos tablas', () => {
   /* Sin esta llamada dentro de `hydrateExactWordTemplate` las funciones existirían y no
      las usaría nadie, que es como estaba el documento hasta ahora. */
-  const salida = hydrateExactWordTemplate(TABLA_17 + TABLA_19, conComparables);
-  assert.ok(!salida.includes('AKATSUKI'), 'la tabla 17 no se enganchó en la hidratación');
-  assert.ok(!salida.includes('16.557%'), 'la tabla 19 no se enganchó en la hidratación');
+  const salida = hydrateExactWordTemplate(TABLA_15 + TABLA_17, conComparables);
+  assert.ok(!salida.includes('AKATSUKI'), 'la tabla 15 no se enganchó en la hidratación');
+  assert.ok(!salida.includes('16.557%'), 'la tabla 17 no se enganchó en la hidratación');
   assert.ok(salida.includes('DISTRIBUIDORA ANDINA S.A.'));
 });
 
 test('el diagnóstico avisa de la muestra sin cargar y de las comparables sin cifras', () => {
-  const sinMuestra = diagnosticarCobertura(TABLA_17, otroCliente);
+  const sinMuestra = diagnosticarCobertura(TABLA_15, otroCliente);
   assert.strictEqual(sinMuestra.comparablesCubiertas, false);
 
-  const con = diagnosticarCobertura(TABLA_17, conComparables);
+  const con = diagnosticarCobertura(TABLA_15, conComparables);
   assert.strictEqual(con.comparablesCubiertas, true);
   assert.strictEqual(con.comparablesSinCifras, 1, 'la comparable sin estados financieros');
 });
 
-test('el año de la frase que introduce la tabla 19 se actualiza', () => {
+test('el año de la frase que introduce la tabla 17 se actualiza', () => {
   /* «los estados financieros correspondientes al año 2024» fecha las cifras que ahora
      se regeneran: dejarlo en el año del informe de referencia las fecharía mal. */
   const html = '<p>para los estados financieros correspondientes al año 2024:</p>';
@@ -754,7 +754,7 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
 
   const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
 
-  // Las tablas 17/19 y el ANEXO C son secciones ajenas a esta tarea: pueden seguir
+  // Las tablas 15/17 y el ANEXO C son secciones ajenas a esta tarea: pueden seguir
   // mostrando compañías del informe de referencia si el estudio de prueba no les
   // alcanza los datos que ellas necesitan (comportamiento ya cubierto por otros
   // tests de este archivo). Lo que este test verifica es solo el ANEXO B.
@@ -781,4 +781,57 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
   assert.ok(bloqueAnexoB.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo en ANEXO B');
   assert.ok(bloqueAnexoB.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');
+});
+
+/* ══════ Tabla 13. Códigos SIC utilizados ══════
+   A partir de `study.criteriosScreening`, que llena
+   comparablesEngine.js:parsearCriteriosScreening al leer la hoja "Screen
+   Criteria" del export de Capital IQ — no del texto fijo del informe de
+   referencia (SIC 7371/7372 y "games", una corrida que no es la de este
+   estudio). */
+
+test('la Tabla 13 se reconstruye con los criterios de búsqueda del estudio activo', () => {
+  const html = '<p>\nTabla 13. Códigos SIC utilizados\n</p>\n<table><tr><td>algo de End Game</td></tr></table>';
+  const estudio = {
+    ent: 'ACME COLOMBIA S.A.S', nit: '800123456-7', anio: 2025,
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Company Status', valor: 'Operating' },
+      { conector: 'O', etiqueta: 'SIC Codes', valor: '7372 Prepackaged Software' },
+    ],
+  };
+  const salida = hydrateExactWordTemplate(html, estudio);
+
+  assert.ok(!salida.includes('algo de End Game'), 'no sobrevivió la tabla estática');
+  assert.ok(salida.includes('Tabla 13. Códigos SIC utilizados'), 'se conservó el título de la tabla');
+  assert.ok(salida.includes('Company Status'), 'falta el primer criterio del estudio');
+  assert.ok(salida.includes('Operating'));
+  assert.ok(salida.includes('SIC Codes'), 'falta el segundo criterio del estudio');
+  assert.ok(salida.includes('7372 Prepackaged Software'));
+  assert.ok(/<strong>O<\/strong>/.test(salida), 'el conector "Or)" debe verse como O, no como Y');
+});
+
+test('sin criteriosScreening, la Tabla 13 queda con el aviso de pendiente y no con la corrida de End Game', () => {
+  const html = '<p>\nTabla 13. Códigos SIC utilizados\n</p>\n<table><tr><td>algo de End Game</td></tr></table>';
+  const salida = hydrateExactWordTemplate(html, { ent: 'ACME COLOMBIA S.A.S', nit: '800123456-7', anio: 2025 });
+
+  assert.ok(!salida.includes('algo de End Game'));
+  assert.ok(salida.includes('Pendiente: importe el archivo de Capital IQ'), 'falta el aviso de pendiente');
+});
+
+test('hydrateExactWordTemplate reemplaza la Tabla 13 completa de la plantilla real, sin dejar la corrida de End Game', () => {
+  const estudio = {
+    ent: 'ACME COLOMBIA S.A.S', nit: '800123456-7', anio: 2025,
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Company Type', valor: 'Public Company OR Private Company' },
+      { conector: 'Y', etiqueta: 'SIC Codes', valor: '5045 Computers, Peripherals and Software' },
+    ],
+  };
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
+
+  assert.ok(!salida.includes('7371 - Serv: Servicios de Programación de Computadoras'),
+    'sobrevivió el criterio SIC de End Game');
+  assert.ok(!salida.includes('La descripción del negocio contiene la palabra'),
+    'sobrevivió la palabra clave "games" del informe de referencia');
+  assert.ok(salida.includes('5045 Computers, Peripherals and Software'), 'falta el criterio del estudio activo');
+  assert.ok(salida.includes('Tabla 13. Códigos SIC utilizados'), 'se perdió el título de la tabla');
 });
