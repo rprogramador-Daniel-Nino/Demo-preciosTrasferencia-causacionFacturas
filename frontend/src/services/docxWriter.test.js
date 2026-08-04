@@ -183,9 +183,35 @@ test('las entradas del índice llevan la guía de puntos de Word, no puntos de t
   assert.doesNotMatch(doc, /\.{8}/);
 });
 
-test('un párrafo con puntos suspensivos normales no se confunde con el índice', async () => {
-  /* Hacen falta muchos puntos seguidos y un número al final para que sea una entrada. */
-  const { doc } = await abrir('<p>y así sucesivamente... hasta el final</p>');
-  assert.doesNotMatch(doc, /w:leader="dot"/);
-  assert.match(doc, /hasta el final/);
+test('una entrada con un solo punto también se alinea', async () => {
+  /* Es una entrada real del informe de referencia. Con la regla anterior, de cuatro puntos,
+     se quedaba fuera. */
+  const { doc } = await abrir(
+    '<p>1.5 Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos) . 33</p>');
+  assert.match(doc, /w:leader="dot"/, 'no hay guía de puntos');
+  assert.match(doc, /1\.5 Razones de rechazo \(Filtros Cuantitativos – Filtros Cualitativos\)/);
+  assert.match(doc, /33/);
+});
+
+test('un párrafo normal del informe no se convierte en entrada de índice', async () => {
+  /* Este test sostiene la relajación de la regla: si alguien la afloja más, aquí se nota.
+     Se comprueba que ninguno de estos produce w:leader="dot". */
+  const casos = [
+    '<p>y así sucesivamente... hasta el final</p>',
+    '<p>El margen fue de 3.5 puntos porcentuales en 2024</p>',
+    '<p>Ver anexo A ....... y también el B</p>',
+    '<p>Los topes en UVT para 2024 fueron 45.000 y 10.000</p>',
+    '<p>La utilidad operacional creció 2.3 veces</p>',
+  ];
+  for (const html of casos) {
+    const { doc } = await abrir(html);
+    assert.doesNotMatch(doc, /w:leader="dot"/, 'se detectó como entrada: ' + html);
+  }
+});
+
+test('un encabezado con puntos y número no se convierte en entrada de índice', async () => {
+  /* La detección solo corre cuando el bloque no es encabezado. */
+  const { doc } = await abrir('<h2>1. Descripción de la Compañía ........... 6</h2>');
+  assert.doesNotMatch(doc, /w:leader="dot"/, 'un encabezado no debe tener guía de puntos');
+  assert.match(doc, /1\. Descripción de la Compañía/);
 });

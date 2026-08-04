@@ -94,9 +94,22 @@ const familiaDeEstilo = (estilo) => {
 /* Se completa en la tarea 7. */
 function runDeImagen() { return []; }
 
-/* Una entrada del índice: título, una fila de al menos cuatro puntos, y el número de página.
-   Se exige el número al final para no confundirla con unos puntos suspensivos. */
-const RX_ENTRADA_INDICE = /^(.*?)\s*\.{4,}\s*(\d+)\s*$/;
+/* Una entrada del índice: título, un espacio, uno o más puntos, y el número de página al final
+   de la línea.
+
+   Basta UN punto, y esto es una decisión medida, no un descuido. Con cuatro —que es lo que se
+   pidió primero— la entrada «1.5 Razones de rechazo (Filtros Cuantitativos – Filtros
+   Cualitativos) . 33» del informe de referencia se quedaba sin detectar y salía sin alinear,
+   con el punto y el número pegados al texto.
+
+   Lo que impide el falso positivo no es la cantidad de puntos, es exigir espacio antes del
+   punto y sólo cifras hasta el final de la línea. Comprobado contra los casos reales del
+   informe: «El margen fue de 3.5 puntos porcentuales en 2024» no encaja porque no hay punto
+   justo antes del número; «Ver anexo A ....... y también el B» tampoco, porque no acaba en
+   cifra; y unos puntos suspensivos sin número al final tampoco. Queda un caso ambiguo de
+   verdad —una frase que acabe en punto seguido de una cifra, «según la norma. 2024»— que es
+   raro y se ve al revisar. */
+const RX_ENTRADA_INDICE = /^(.*?\S)\s+\.+\s*(\d+)\s*$/;
 
 /* El título y el número, con el tabulador de Word en medio. Es lo que mantiene la fila de
    puntos pegada al margen derecho cuando la métrica de la fuente cambia. */
