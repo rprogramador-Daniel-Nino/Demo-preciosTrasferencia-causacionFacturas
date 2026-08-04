@@ -498,7 +498,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setRedactandoDescripciones(true);
     try {
       const indices = comparables
-        .map((c, i) => (c.eeffVerificado && String(c.desc || '').trim() && !c.descActividad ? i : -1))
+        .map((c, i) => (c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad ? i : -1))
         .filter((i) => i >= 0);
       await redactarDescripcionesDeFilas(comparables, indices);
     } finally {
@@ -1376,9 +1376,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <button
               type="button"
               onClick={redactarDescripcionesPendientes}
-              disabled={redactandoDescripciones || !comparables.some((c) => c.eeffVerificado && c.desc && !c.descActividad)}
+              disabled={redactandoDescripciones || !comparables.some((c) => c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad)}
               className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Redacta en español, con IA, la descripción de actividad de las comparables verificadas que todavía no la tienen"
+              title="Redacta en español, con IA, la descripción de actividad de las comparables con EEFF cargado que todavía no la tienen"
             >
               <Sparkles className="w-4 h-4" />
               {redactandoDescripciones ? 'Redactando…' : 'Redactar descripciones pendientes'}

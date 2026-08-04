@@ -539,14 +539,20 @@ function generarBloqueComparableAnexoB(comp, year, wrap) {
   return tablaNombreDescripcion + '\n' + tablaCifras(filasPL) + '\n' + tablaCifras(filasBalance);
 }
 
-/* Cuerpo dinámico del ANEXO B. Sin ninguna comparable verificada devuelve el aviso de
-   pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
+/* Cuerpo dinámico del ANEXO B. Entra cualquier comparable con un EEFF cargado y cruzado a
+   su fila (`eeffArchivo`), tenga o no alertas contables: la verificación aritmética
+   (`eeffVerificado`) casi nunca sale limpia con comparables reales —el año de su EEFF rara
+   vez coincide con el del estudio porque el del mismo año aún no se ha publicado, y algunas
+   no desglosan patrimonio— así que exigirla dejaba el Anexo B en «Pendiente» aun con EEFF
+   real cargado para todas. Las alertas se siguen mostrando en el Paso 4 para que el analista
+   las revise; no bloquean el informe. Sin ninguna comparable con archivo cargado, sale el
+   aviso de pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
 export function generarAnexoBHtml(study, year, wrap) {
-  const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffVerificado);
+  const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
   const titulo = '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n';
 
   if (!comparables.length) {
-    return titulo + '<p>\nPendiente: cargue y verifique los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
+    return titulo + '<p>\nPendiente: cargue los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
   }
 
   return titulo + comparables.map((c) => generarBloqueComparableAnexoB(c, year, wrap)).join('\n') + '\n';
@@ -777,10 +783,6 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
     html = html.replace(/1\.989\.688\.200/g, cifra(totalActivos));
   }
 
-  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ─── */
-  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
-  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
-
   /* ─── Tabla 14 y las cifras que la rodean ───
      La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
      acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
@@ -864,12 +866,18 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
 
   html = reponerEnlaces(html, enlaces);
 
-  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ───
+  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ───
      Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: `apartarEnlaces`
      (arriba) reemplaza temporalmente TODAS las etiquetas <a id="..."> del documento —
-     incluidas las de ANEXO B y ANEXO C— por marcadores @@PT_ENLACE_N@@, y solo las repone
-     al final. Buscar `id="_Toc208931006"` antes de esa reposición nunca lo encuentra: el
-     texto literal no existe todavía en ese punto del documento. */
+     incluida la de ANEXO A— por marcadores @@PT_ENLACE_N@@, y solo las repone al final.
+     Buscar `id="_Toc208931005"` antes de esa reposición nunca lo encuentra: el texto
+     literal no existe todavía en ese punto del documento (mismo bug que tenía ANEXO B,
+     ver commit a638866). */
+  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
+  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
+
+  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ───
+     Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: mismo motivo. */
   html = reemplazarAnexoB(html, study, year, wrap);
 
   return html;
