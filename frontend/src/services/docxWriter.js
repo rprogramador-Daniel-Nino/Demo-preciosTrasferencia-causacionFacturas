@@ -54,7 +54,6 @@ const esBloque = (n) => !!n && n.etiqueta !== undefined && BLOQUES.has(n.etiquet
    cuando se desvía del cuerpo del documento. */
 const familiaDeEstilo = (estilo) => {
   const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
-  const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   return m ? m[1].trim() : null;
 };
 
