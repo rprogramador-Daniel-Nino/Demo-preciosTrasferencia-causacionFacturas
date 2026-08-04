@@ -37,6 +37,13 @@ export const REGLAS_DOCUMENTO = [
   ['strong', 'font-weight:bold'],
   ['em', 'font-style:italic'],
   ['p,li,td', 'text-align:justify'],
+  /* Red de seguridad de las imágenes. Cada una lleva ya el tamaño que le da el PDF,
+     pero esta regla es la que impide que una sin medida —una plantilla vieja, un .docx
+     por mammoth— desborde la hoja. No la había en el .doc, y como el previo sí la
+     recibe de Tailwind por su cuenta, en pantalla todo cuadraba mientras en Word la
+     figura de la página 11 medía 29,9 cm contra 21,6 de papel y el desborde se repartía
+     en páginas nuevas. `height:auto` va con ella para no deformar lo que se recorta. */
+  ['img', 'max-width:100%;height:auto'],
 ];
 
 /* Las mismas reglas, opcionalmente acotadas a un contenedor. La previsualización las
@@ -68,8 +75,13 @@ export function cuerpoDe(base) {
    alrededor del documento sin tocarlo.
 
    `logo` es la data URL del encabezado, o null si el documento no trae. */
-export function cssDeHojas({ base, logo } = {}) {
+export function cssDeHojas({ base, logo, lado = 'centro', enLaPortada = true, alto } = {}) {
   const arriba = logo ? HOJA.conEncabezado : HOJA.margen;
+  /* El logo se ancla al lado que el PDF le da, y con el alto que le da. Antes iba
+     siempre a la izquierda y a 1,5 cm fijos, y el del informe de referencia va a la
+     derecha y mide 1,23 cm. */
+  const anclaje = lado === 'derecha' ? 'right center' : lado === 'izquierda' ? 'left center' : 'center';
+  const altoLogo = alto || HOJA.altoEncabezado;
   return (
     /* Fondo gris de mesa de trabajo: es lo que hace que la hoja se lea como hoja.
        El alto va acotado y el scroll es interno: son 112 hojas de 27.9 cm, y sin esto
@@ -90,8 +102,14 @@ export function cssDeHojas({ base, logo } = {}) {
     'bottom:' + HOJA.borde + ';text-align:center;font-size:9pt;color:#71717a}' +
     (logo
       ? '.hojas .pagina::before{content:"";position:absolute;left:' + HOJA.margen +
-        ';right:' + HOJA.margen + ';top:' + HOJA.borde + ';height:' + HOJA.altoEncabezado +
-        ';background:url("' + logo + '") left center/contain no-repeat}'
+        ';right:' + HOJA.margen + ';top:' + HOJA.borde + ';height:' + altoLogo +
+        ';background:url("' + logo + '") ' + anclaje + '/contain no-repeat}' +
+        /* La portada del informe puede no llevar encabezado. Word sólo sabe distinguir
+           la primera página, así que el previo hace lo mismo: si se dibujara en la
+           portada, en pantalla saldría un logo que en el documento no va a estar —y
+           encima del logo grande de la portada, que sí va. */
+        (enLaPortada ? '' : '.hojas .pagina:first-of-type::before{content:none}' +
+          '.hojas .pagina:first-of-type{padding-top:' + HOJA.margen + '}')
       : '') +
     /* El logo se repite arriba de cada hoja, así que en el flujo del cuerpo no va: si
        no, sale dos veces en la portada, que es justo lo que se veía en pantalla. */
@@ -142,16 +160,28 @@ export function cssDeExportacion(base) {
    exige: con un `@page` sin nombre ignora `mso-header` y el logo se queda como primera
    imagen del cuerpo en vez de repetirse arriba de cada página. Es la estructura que
    Word emite cuando uno guarda como página web. */
-export function cssDeWord({ conEncabezado } = {}) {
+export function cssDeWord({ conEncabezado, lado = 'centro', enLaPortada = true } = {}) {
+  /* `mso-title-page:yes` activa la primera página distinta, y al no declarar
+     `mso-first-header` esa primera página se queda sin encabezado. Es lo que hace falta
+     cuando el informe no lo lleva en la portada: el del informe de referencia empieza en
+     la página 6, y ponerlo en la primera lo superponía con el logo grande de la portada.
+     Word sólo distingue la primera página de las demás, así que las páginas 2 a 5
+     seguirán llevándolo aunque el original no lo tenga; para eso harían falta varias
+     secciones de Word, y esto ya quita el solape que se veía. */
+  const primeraDistinta = conEncabezado && !enLaPortada;
+  const alineacion = lado === 'derecha' ? 'right' : lado === 'izquierda' ? 'left' : 'center';
   return (
     'body{counter-reset:secpt}h2::before{content:""}' +
     '@page Section1{size:' + HOJA.ancho + ' ' + HOJA.alto + ';margin:' + HOJA.margen +
     ' ' + HOJA.margen + ' ' + HOJA.pie + ' ' + HOJA.margen + ';' +
     'mso-header-margin:' + HOJA.borde + ';mso-footer-margin:' + HOJA.borde +
-    ';mso-paper-source:0;' + (conEncabezado ? 'mso-header:h1;' : '') + 'mso-footer:f1}' +
+    ';mso-paper-source:0;' + (primeraDistinta ? 'mso-title-page:yes;' : '') +
+    (conEncabezado ? 'mso-header:h1;' : '') + 'mso-footer:f1}' +
     'div.Section1{page:Section1}' +
     'p.pie{text-align:center;font-size:0.8em;color:#666;margin:0}' +
-    'p.enc{text-align:center;margin:0}' +
+    /* El lado sale del PDF: en el informe de referencia el logo va a la derecha —su
+       centro cae en 16,7 cm de una hoja de 21,6— y se exportaba centrado. */
+    'p.enc{text-align:' + alineacion + ';margin:0}' +
     /* La portada es su propia página, como en el original. Sin esto el título y el logo
        se funden con el índice, que es lo que hacía que no se pareciera. */
     'div.pagina{page-break-before:always}' +
