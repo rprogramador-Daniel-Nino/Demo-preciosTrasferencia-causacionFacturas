@@ -164,6 +164,9 @@ function tablaDe(nodo) {
     for (const h of n.hijos || []) {
       if (h.texto !== undefined) continue;
       if (h.etiqueta === 'tr') filas.push(h);
+      /* No se desciende en una tabla anidada: sus filas son suyas, no de la exterior. La celda
+         que la contiene la emite por su cuenta, porque `bloquesDe` sabe armar tablas. */
+      else if (h.etiqueta === 'table') continue;
       else recogerFilas(h);
     }
   };
@@ -185,17 +188,24 @@ function tablaDe(nodo) {
     columnWidths: anchos,
     width: { size: CAJA_TEXTO, type: WidthType.DXA },
     rows: conCeldas.map((f) => new TableRow({
-      children: celdasDe(f).map((c, i) => new TableCell({
-        width: { size: anchos[i] ?? ancho, type: WidthType.DXA },
-        /* CLEAR y no SOLID: la skill lo marca porque SOLID sale negro. */
-        ...(c.etiqueta === 'th'
-          ? { shading: { type: ShadingType.CLEAR, fill: '0E1726' } } : {}),
-        borders: { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE },
-        children: bloquesDe(c).length ? bloquesDe(c)
-          : [new Paragraph({
-            children: c.etiqueta === 'th' ? runsDe(c, { color: 'FFFFFF' }) : runsDe(c),
-          })],
-      })),
+      children: celdasDe(f).map((c, i) => {
+        /* El heredado tiene que llegar hasta los párrafos que arma `bloquesDe`, no quedarse
+           en un fallback que nunca se alcanza: `bloquesDe` siempre vuelca el texto suelto de
+           una celda como párrafo (el `volcar()` final, fuera del `for`), así que la rama de
+           abajo nunca estaba vacía y el color nunca llegaba a los runs. */
+        const heredadoCelda = c.etiqueta === 'th' ? { color: 'FFFFFF' } : {};
+        const contenido = bloquesDe(c, [], heredadoCelda);
+        return new TableCell({
+          width: { size: anchos[i] ?? ancho, type: WidthType.DXA },
+          /* CLEAR y no SOLID: la skill lo marca porque SOLID sale negro. */
+          ...(c.etiqueta === 'th'
+            ? { shading: { type: ShadingType.CLEAR, fill: '0E1726' } } : {}),
+          borders: { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE },
+          /* Una celda de OOXML necesita al menos un párrafo: una celda vacía sin ninguno da
+             un documento que Word tiene que reparar. */
+          children: contenido.length ? contenido : [new Paragraph({ children: [] })],
+        });
+      }),
     })),
   });
 }
@@ -207,7 +217,7 @@ function tablaDe(nodo) {
    vuelcan como un párrafo al toparse con el siguiente bloque. Así el orden del documento se
    conserva: si se emitieran al final, el texto de después de una tabla saldría antes que
    ella. */
-function bloquesDe(nodo, salida = []) {
+function bloquesDe(nodo, salida = [], heredado = {}) {
   let sueltos = [];
   const volcar = () => {
     if (!sueltos.length) return;
@@ -216,10 +226,10 @@ function bloquesDe(nodo, salida = []) {
   };
   for (const h of nodo.hijos || []) {
     if (h.texto !== undefined) {
-      if (h.texto.trim()) sueltos.push(new TextRun(h.texto));
+      if (h.texto.trim()) sueltos.push(new TextRun({ text: h.texto, ...heredado }));
       continue;
     }
-    if (!esBloque(h)) { sueltos.push(...runsDe(h)); continue; }
+    if (!esBloque(h)) { sueltos.push(...runsDe(h, heredado)); continue; }
     volcar();
     if (h.etiqueta === 'table') {
       const t = tablaDe(h);
@@ -227,16 +237,16 @@ function bloquesDe(nodo, salida = []) {
       continue;
     }
     if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) {
-      const runs = runsDe(h);
+      const runs = runsDe(h, heredado);
       const dentro = (h.hijos || []).filter(esBloque);
       /* Un párrafo vacío sigue siendo un párrafo: la portada del informe se centra con 35
          seguidos. Se emite también sin runs, salvo que sea sólo un envoltorio de otros
          bloques —ahí el párrafo vacío no existía en el original—. */
       if (runs.length || !dentro.length) salida.push(parrafoDe(h, runs));
-      for (const b of dentro) bloquesDe({ hijos: [b] }, salida);
+      for (const b of dentro) bloquesDe({ hijos: [b] }, salida, heredado);
       continue;
     }
-    bloquesDe(h, salida);
+    bloquesDe(h, salida, heredado);
   }
   volcar();
   return salida;

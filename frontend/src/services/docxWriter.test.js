@@ -256,3 +256,37 @@ test('una tabla sin ninguna fila válida no se emite', async () => {
   assert.doesNotMatch(doc, /<w:tbl>/);
   assert.match(doc, /después/);
 });
+
+test('la letra del encabezado de tabla sale blanca sobre el fondo oscuro', async () => {
+  /* Antes, el fallback que ponía `color: 'FFFFFF'` era código muerto: `bloquesDe` siempre
+     vuelca el texto suelto de una celda como párrafo (el `volcar()` final, fuera del `for`),
+     así que la rama que llevaba el color nunca se alcanzaba y los encabezados salían con
+     letra oscura sobre el fondo `#0E1726` — ilegibles. */
+  const { doc } = await abrir(
+    '<table><tr><th>Concepto</th><th>Valor</th></tr><tr><td>Activo</td></tr></table>');
+  assert.match(doc, /<w:color w:val="FFFFFF"\/>/);
+  assert.match(doc, /w:val="clear"/);
+  const blancos = (doc.match(/<w:color w:val="FFFFFF"\/>/g) || []).length;
+  assert.equal(blancos, 2, 'debe haber un <w:color w:val="FFFFFF"/> por cada th, ni uno más');
+  /* La celda de datos (`td`) no lleva el color del encabezado. */
+  const celdaActivo = /<w:tc>(?:(?!<w:tc>)[\s\S])*?Activo[\s\S]*?<\/w:tc>/.exec(doc)[0];
+  assert.doesNotMatch(celdaActivo, /w:color="FFFFFF"/);
+});
+
+test('una tabla dentro de una celda no se aplana en la de fuera', async () => {
+  /* Dos causas, no una: `recogerFilas` recorría todos los descendientes buscando `tr` (así que
+     las filas de una tabla anidada salían como filas hermanas de la exterior), y antes de eso
+     `htmlAArbol` ya aplanaba el árbol: el cierre implícito de `tr` buscaba la última `tr` en
+     toda la pila sin respetar el límite de una tabla anidada, y encontraba la del exterior. */
+  const { doc } = await abrir(
+    '<table><tr><td>fuera<table><tr><td>dentro</td></tr></table></td></tr></table>');
+  assert.equal((doc.match(/<w:tbl>/g) || []).length, 2, 'deben ser dos tablas');
+  const exterior = /<w:tbl>([\s\S]*)<\/w:tbl>/.exec(doc)[1];
+  const filasExterior = exterior.split('<w:tbl>')[0];
+  assert.equal((filasExterior.match(/<w:tr[ >]/g) || []).length, 1,
+    'la tabla exterior debe tener una sola fila');
+  assert.match(doc, /fuera/);
+  assert.match(doc, /dentro/);
+  assert.equal((doc.match(/fuera/g) || []).length, 1);
+  assert.equal((doc.match(/dentro/g) || []).length, 1);
+});
