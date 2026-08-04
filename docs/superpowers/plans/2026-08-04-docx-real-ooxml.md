@@ -63,7 +63,12 @@ pueda haber dos hojas distintas.
 - Test: `frontend/src/services/estiloDocumento.test.js`
 
 **Interfaces:**
-- Consume: `HOJA` (ya existe: `{ancho:'21.6cm', alto:'27.9cm', margen:'2.5cm', pie:'2cm', borde:'1.25cm', altoEncabezado:'1.5cm', conEncabezado:'3.4cm'}`)
+- Consume y **ajusta**: `HOJA` (ya existe: `{ancho:'21.6cm', alto:'27.9cm', margen:'2.5cm', pie:'2cm', borde:'1.25cm', altoEncabezado:'1.5cm', conEncabezado:'3.4cm'}`).
+  `ancho` pasa a `'21.59cm'` y `alto` a `'27.94cm'`, que es carta **exacta** (8,5 × 11 pulgadas).
+  Hace falta: con 21,6 cm los twips salen 12246 y la restricción global exige 12240. Los
+  valores que había eran un redondeo. El ajuste **se comenta en el código**, porque `HOJA` la
+  consumen también la vista previa y el `.doc`: leerla y no entender por qué son 21,59 y no
+  21,6 es exactamente lo que no debe pasar.
 - Produce:
   - `cmATwips(cm: number): number`
   - `cmAPixeles(cm: number): number`
