@@ -683,6 +683,36 @@ test('un rubro sin dato sale con celda vacía, no con guion ni con cero', () => 
   assert.ok(/<td>\s*<p>\s*<\/p>\s*<\/td>\s*<\/tr>$/.test(fila.trimEnd()), 'la celda del valor debería estar vacía: ' + fila);
 });
 
+test('un valor no numérico en la fila de la comparable sale con celda vacía, no con "NaN"', () => {
+  /* c.s/c.op/etc. vienen de columnas que el usuario puede escribir a mano en la tabla de
+     comparables; un texto suelto como "abc" no debe colarse a fmt() y aparecer como NaN. */
+  const conBasura = {
+    ...comparableCompleta,
+    s: 'abc',
+  };
+  const html = generarAnexoBHtml({ anio: 2025, comparables: [conBasura] }, 2025, (v) => v);
+  assert.ok(!html.includes('NaN'), 'se coló el literal NaN en la celda: revisar celdaCifra');
+  const inicioFila = html.indexOf('Ventas netas');
+  const finFila = html.indexOf('</tr>', inicioFila) + '</tr>'.length;
+  const fila = html.slice(inicioFila, finFila);
+  assert.ok(/<td>\s*<p>\s*<\/p>\s*<\/td>\s*<\/tr>$/.test(fila.trimEnd()), 'la celda debería quedar vacía ante un valor no numérico: ' + fila);
+});
+
+test('un valor con separador de miles en formato español se formatea, no se trunca', () => {
+  /* "1.000" tecleado a mano por un usuario significa mil, no uno: debe pasar por num()
+     (que interpreta el punto como separador de miles) antes de formatear. */
+  const conMiles = {
+    ...comparableCompleta,
+    s: '1.000',
+  };
+  const html = generarAnexoBHtml({ anio: 2025, comparables: [conMiles] }, 2025, (v) => v);
+  assert.ok(html.includes('1.000'), 'debería formatear "1.000" como mil, no truncarlo a "1": ' + html);
+  const inicioFila = html.indexOf('Ventas netas');
+  const finFila = html.indexOf('</tr>', inicioFila) + '</tr>'.length;
+  const fila = html.slice(inicioFila, finFila);
+  assert.ok(!/<p>\s*1\s*<\/p>/.test(fila), 'no debería truncar "1.000" a "1": ' + fila);
+});
+
 test('sin comparables con EEFF verificado, sale el aviso de pendiente y no el ejemplo estático', () => {
   const html = generarAnexoBHtml({ anio: 2025, comparables: [{ name: 'SIN VERIFICAR', eeffVerificado: false }] }, 2025, (v) => v);
   assert.ok(html.includes('Pendiente'));

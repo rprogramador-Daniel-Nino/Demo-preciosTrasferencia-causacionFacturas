@@ -487,7 +487,10 @@ function filasOpcionalesPL(c) {
    resto del informe, aquí no se marca con «—» porque el usuario lo pidió así para esta
    sección en particular. */
 function generarBloqueComparableAnexoB(comp, year, wrap) {
-  const celdaCifra = (v) => (v === null || v === undefined || v === '' ? '' : wrap(fmt(v)));
+  const celdaCifra = (v) => {
+    const n = num(v);
+    return n === null ? '' : wrap(fmt(n));
+  };
   const anioCol = (comp.eeffDatos && comp.eeffDatos.periodo) || year;
 
   const filaTabla = (etiqueta, valor) =>
