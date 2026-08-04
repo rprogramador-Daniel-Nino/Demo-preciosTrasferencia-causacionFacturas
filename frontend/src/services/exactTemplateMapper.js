@@ -449,6 +449,97 @@ ${images.map((imgUrl, i) => `
 </p>`;
 }
 
+/* ══════════════ ANEXO B. Descripciones de comparables y Estados Financieros ══════════════
+   La plantilla trae cuatro compañías de videojuegos del informe de referencia (Akatsuki,
+   Colopl, Fun Yours, IGG). Solo entran aquí las comparables con EEFF verificado: una fila
+   con cifras a medio cargar y sin confirmar es peor que no mostrarla. */
+
+const ANEXO_B_ETIQUETAS_PL = [
+  { etiqueta: 'Ventas netas', valor: (c) => c.s },
+  { etiqueta: 'Costo de los bienes vendidos', valor: (c) => c.c },
+  { etiqueta: 'Beneficio bruto', valor: (c) => c.eeffDatos && c.eeffDatos.utilidad_bruta },
+  { etiqueta: 'Gastos operativos', valor: (c) => c.eeffDatos && c.eeffDatos.gastos_operacionales },
+  { etiqueta: 'Utilidad de operación', valor: (c) => c.op },
+];
+
+const ANEXO_B_ETIQUETAS_BALANCE = [
+  { etiqueta: 'Activos totales promedio', valor: (c) => c.eeffDatos && c.eeffDatos.total_activos },
+  { etiqueta: 'Promedio de cuentas por pagar netas', valor: (c) => c.ap },
+  { etiqueta: 'Promedio de cuentas por cobrar netas', valor: (c) => c.ar },
+  { etiqueta: 'EPP neto promedio', valor: (c) => c.eeffDatos && c.eeffDatos.propiedad_planta_equipo },
+  { etiqueta: 'Inventario neto promedio', valor: (c) => c.inv },
+  { etiqueta: 'Efectivo promedio y equivalentes de efectivo', valor: (c) => c.eeffDatos && c.eeffDatos.efectivo_y_equivalentes },
+];
+
+/* Filas opcionales de la tabla de P&L: no todas las comparables desglosan I+D o
+   publicidad como línea propia (ver ejemplos reales: Akatsuki ninguna, Colopl solo
+   publicidad, Fun Yours solo I+D, IGG ambas). Solo se agregan si el dato no es nulo. */
+function filasOpcionalesPL(c) {
+  const filas = [];
+  const rd = c.eeffDatos && c.eeffDatos.gastos_investigacion_desarrollo;
+  const adv = c.eeffDatos && c.eeffDatos.gastos_publicidad;
+  if (rd !== null && rd !== undefined) filas.push({ etiqueta: 'Gastos de investigación y desarrollo', valor: () => rd });
+  if (adv !== null && adv !== undefined) filas.push({ etiqueta: 'Gastos de publicidad', valor: () => adv });
+  return filas;
+}
+
+/* Las tres tablas de una comparable. Celda vacía cuando falta el dato: a diferencia del
+   resto del informe, aquí no se marca con «—» porque el usuario lo pidió así para esta
+   sección en particular. */
+function generarBloqueComparableAnexoB(comp, year, wrap) {
+  const celdaCifra = (v) => (v === null || v === undefined || v === '' ? '' : wrap(fmt(v)));
+  const anioCol = (comp.eeffDatos && comp.eeffDatos.periodo) || year;
+
+  const filaTabla = (etiqueta, valor) =>
+    `<tr>\n${celdaTabla(etiqueta)}\n${celdaTabla(celdaCifra(valor))}\n</tr>`;
+
+  const tablaCifras = (filas) =>
+    `<table>\n<thead>\n<tr>\n<th>\n<p>\n<strong>Descripción</strong>\n</p>\n</th>\n<th>\n<p>\n<strong>${anioCol}</strong>\n</p>\n</th>\n</tr>\n</thead>\n<tbody>\n${filas.join('\n')}\n</tbody>\n</table>`;
+
+  const filasPL = [...ANEXO_B_ETIQUETAS_PL, ...filasOpcionalesPL(comp)]
+    .map((f) => filaTabla(f.etiqueta, f.valor(comp)));
+  const filasBalance = ANEXO_B_ETIQUETAS_BALANCE.map((f) => filaTabla(f.etiqueta, f.valor(comp)));
+
+  const descripcion = comp.descActividad || comp.desc || 'Descripción de actividad no disponible.';
+
+  const tablaNombreDescripcion =
+    `<table>\n<thead>\n<tr>\n<th>\n<p>\n<strong>NOMBRE DE LA COMPAÑÍA COMPARABLE</strong>\n</p>\n</th>\n<th>\n<p>\n<strong>DESCRIPCIÓN ACTIVIDAD</strong>\n</p>\n</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n${celdaTabla('<strong>' + comp.name + '</strong>')}\n${celdaTabla(descripcion)}\n</tr>\n</tbody>\n</table>`;
+
+  return tablaNombreDescripcion + '\n' + tablaCifras(filasPL) + '\n' + tablaCifras(filasBalance);
+}
+
+/* Cuerpo dinámico del ANEXO B. Sin ninguna comparable verificada devuelve el aviso de
+   pendiente en vez de las cuatro compañías de videojuegos del informe de referencia. */
+export function generarAnexoBHtml(study, year, wrap) {
+  const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffVerificado);
+  const titulo = '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n';
+
+  if (!comparables.length) {
+    return titulo + '<p>\nPendiente: cargue y verifique los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
+  }
+
+  return titulo + comparables.map((c) => generarBloqueComparableAnexoB(c, year, wrap)).join('\n') + '\n';
+}
+
+/* Sustituye todo el bloque de ANEXO B, desde su título hasta (sin incluirlo) el título de
+   ANEXO C. Se ubica por `indexOf` del id de cada uno y no con una sola regex de tramo largo:
+   el `<h1>` de ANEXO C trae varios id de Word apilados antes del suyo (anclas de referencias
+   cruzadas de versiones previas del documento), y anclar con una regex rígida sobre esa forma
+   se rompería si cambia cuántos id se apilan. */
+export function reemplazarAnexoB(html, study, year, wrap) {
+  const posIdB = html.indexOf('id="_Toc208931006"');
+  if (posIdB < 0) return html;
+  const inicioH1 = html.lastIndexOf('<h1>', posIdB);
+  if (inicioH1 < 0) return html;
+
+  const posIdC = html.indexOf('id="_Toc208931007"', posIdB);
+  if (posIdC < 0) return html;
+  const finH1 = html.lastIndexOf('<h1>', posIdC);
+  if (finH1 < 0 || finH1 <= inicioH1) return html;
+
+  return html.slice(0, inicioH1) + generarAnexoBHtml(study, year, wrap) + html.slice(finH1);
+}
+
 /**
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
  * y realiza el reemplazo quirúrgico de las variables del cliente activo.

@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   hydrateExactWordTemplate, filasRazonesRechazo, diagnosticarCobertura,
   filasComparablesInforme, reemplazarTablaMuestraComparables, reemplazarTablaMargenComparables,
+  generarAnexoBHtml, reemplazarAnexoB,
 } from './exactTemplateMapper.js';
 import { MASTER_WORD_TEMPLATE } from './masterTemplate.js';
 
@@ -608,4 +609,102 @@ test('el año de la frase que introduce la tabla 19 se actualiza', () => {
   const salida = hydrateExactWordTemplate(html, conComparables);
   assert.ok(!salida.includes('correspondientes al año 2024'), 'quedó el año del informe de referencia');
   assert.ok(salida.includes('2025'), 'no se puso el año del estudio');
+});
+
+const comparableCompleta = {
+  name: 'AKATSUKI INC.',
+  eeffVerificado: true,
+  desc: 'Akatsuki Inc. is engaged in the game, comic and other businesses.',
+  descActividad: 'Akatsuki Inc. se dedica al juego y cómic en Japón.',
+  s: 23652000000, c: 9954000000, op: 3916000000, ar: 4252000000, inv: 626000000, ap: 975500000,
+  eeffDatos: {
+    periodo: '2024',
+    utilidad_bruta: 13698000000,
+    gastos_operacionales: 9782000000,
+    total_activos: 53337500000,
+    propiedad_planta_equipo: 468500000,
+    efectivo_y_equivalentes: 29670500000,
+    gastos_investigacion_desarrollo: null,
+    gastos_publicidad: null,
+  },
+};
+
+test('genera las tres tablas de una comparable con EEFF verificado', () => {
+  const study = { anio: 2025, comparables: [comparableCompleta] };
+  const html = generarAnexoBHtml(study, 2025, (v) => v);
+
+  assert.ok(html.includes('<strong>AKATSUKI INC.</strong>'));
+  assert.ok(html.includes('Akatsuki Inc. se dedica al juego y cómic en Japón.'));
+  assert.ok(html.includes('Ventas netas'));
+  assert.ok(html.includes('23.652.000.000'));
+  assert.ok(html.includes('Beneficio bruto'));
+  assert.ok(html.includes('13.698.000.000'));
+  assert.ok(html.includes('EPP neto promedio'));
+  assert.ok(html.includes('468.500.000'));
+  assert.ok(html.includes('Efectivo promedio y equivalentes de efectivo'));
+  assert.ok(html.includes('29.670.500.000'));
+  // Encabezado de columna con el período leído por el OCR, no el año fijo del estudio
+  assert.ok(html.includes('<strong>2024</strong>'));
+});
+
+test('las filas de I+D y publicidad solo salen si la comparable las trae', () => {
+  const conAmbas = {
+    ...comparableCompleta,
+    name: 'IGG INC.',
+    eeffDatos: { ...comparableCompleta.eeffDatos, gastos_investigacion_desarrollo: 787408000, gastos_publicidad: 2754598000 },
+  };
+  const html = generarAnexoBHtml({ anio: 2025, comparables: [comparableCompleta, conAmbas] }, 2025, (v) => v);
+
+  const bloqueAkatsuki = html.slice(0, html.indexOf('IGG INC.'));
+  assert.ok(!bloqueAkatsuki.includes('Gastos de investigación y desarrollo'));
+  assert.ok(!bloqueAkatsuki.includes('Gastos de publicidad'));
+
+  assert.ok(html.includes('Gastos de investigación y desarrollo'));
+  assert.ok(html.includes('787.408.000'));
+  assert.ok(html.includes('Gastos de publicidad'));
+  assert.ok(html.includes('2.754.598.000'));
+});
+
+test('un rubro sin dato sale con celda vacía, no con guion ni con cero', () => {
+  const sinEfectivo = {
+    ...comparableCompleta,
+    eeffDatos: { ...comparableCompleta.eeffDatos, efectivo_y_equivalentes: null },
+  };
+  const html = generarAnexoBHtml({ anio: 2025, comparables: [sinEfectivo] }, 2025, (v) => v);
+  // La fila es <tr>\n<td>\n<p>\nEfectivo promedio y equivalentes de efectivo\n</p>\n</td>\n<td>\n<p>\nVALOR\n</p>\n</td>\n</tr>
+  // Con VALOR vacío, la segunda celda queda "<p>\n\n</p>" (sin guion ni cero entre las etiquetas).
+  const inicioFila = html.indexOf('Efectivo promedio y equivalentes de efectivo');
+  // finFila incluye el propio "</tr>" (no solo su posición inicial): el assert final
+  // valida que la fila termine en "</tr>", y slice() excluye el índice de corte.
+  const finFila = html.indexOf('</tr>', inicioFila) + '</tr>'.length;
+  const fila = html.slice(inicioFila, finFila);
+  assert.ok(!fila.includes('—'), 'la celda no debería traer guion: ' + fila);
+  assert.ok(!/<p>\s*0\s*<\/p>/.test(fila), 'la celda no debería traer un cero inventado: ' + fila);
+  assert.ok(/<td>\s*<p>\s*<\/p>\s*<\/td>\s*<\/tr>$/.test(fila.trimEnd()), 'la celda del valor debería estar vacía: ' + fila);
+});
+
+test('sin comparables con EEFF verificado, sale el aviso de pendiente y no el ejemplo estático', () => {
+  const html = generarAnexoBHtml({ anio: 2025, comparables: [{ name: 'SIN VERIFICAR', eeffVerificado: false }] }, 2025, (v) => v);
+  assert.ok(html.includes('Pendiente'));
+  assert.ok(!html.includes('AKATSUKI'));
+  assert.ok(!html.includes('COLOPL'));
+});
+
+test('reemplazarAnexoB sustituye el bloque estático completo, entre su título y el de ANEXO C', () => {
+  const fragmentoConEjemploEstatico =
+    '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n' +
+    '<table><thead><tr><th>NOMBRE</th></tr></thead><tbody><tr><td>AKATSUKI INC.</td></tr></tbody></table>\n' +
+    '<h1>\n<a id="_Toc456190765"></a><a id="_Toc208931007"></a>ANEXO C. Matriz de Rechazo\n</h1>\n<table>otra tabla</table>';
+
+  const study = { anio: 2025, comparables: [comparableCompleta] };
+  const salida = reemplazarAnexoB(fragmentoConEjemploEstatico, study, 2025, (v) => v);
+
+  // El fragmento estático de prueba tiene "AKATSUKI INC." en una tabla sin descripción;
+  // el reemplazo debe borrar esa tabla y dejar solo la comparable real (que en este test
+  // se llama distinto: comparableCompleta también es "AKATSUKI INC.", pero con descripción
+  // redactada) — la señal inequívoca es que la descripción redactada aparece.
+  assert.ok(salida.includes('Akatsuki Inc. se dedica al juego y cómic en Japón.'));
+  assert.ok(!salida.includes('<td>AKATSUKI INC.</td>'), 'sobrevivió la fila estática sin descripción');
+  assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C');
+  assert.ok(salida.includes('otra tabla'), 'se perdió contenido de ANEXO C');
 });
