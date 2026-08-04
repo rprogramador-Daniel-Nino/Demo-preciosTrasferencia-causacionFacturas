@@ -96,15 +96,44 @@ export function cssDeHojas({ base, logo } = {}) {
     /* El logo se repite arriba de cada hoja, así que en el flujo del cuerpo no va: si
        no, sale dos veces en la portada, que es justo lo que se veía en pantalla. */
     '.hojas [data-encabezado="1"]{display:none}' +
+    /* El resaltado del valor sustituido: sólo aquí, nunca en el archivo. */
+    '.hojas .pagina .' + CLASE_VALOR + '{font-weight:600;color:#0B7C7A;' +
+    'border-bottom:1px dashed #0FA3A1;background-color:#F0FDF4;padding:0 4px;' +
+    'border-radius:3px}' +
     reglasDocumento('.hojas .pagina ')
   );
 }
 
-/* CSS del .doc. Las reglas del documento son las mismas de arriba; lo propio de esta
-   salida es sólo la caja del `body`. */
+/* Clase del valor sustituido. El resaltado —fondo verde, subrayado de puntos— es cosa
+   de la pantalla, así que va por clase y lo pinta sólo el CSS del previo. Antes iba en
+   un `style=` de seis propiedades y la exportación limpiaba tres a mano: las otras tres
+   —`font-weight:600`, `padding:0 4px`, `border-radius:3px`— se colaban en el .doc, así
+   que en el documento que se radica cada dato sustituido salía más negrita y con cuatro
+   píxeles de aire a cada lado, cientos de veces a lo largo del informe. Por clase no
+   puede volver a pasar: en Word no hay ninguna regla que la mire. */
+export const CLASE_VALOR = 'pt-valor';
+
+/* Envuelve un valor sustituido para que la pantalla lo pueda señalar. Lo usan las dos
+   rutas de sustitución —la de campos marcados y la de literales— y por eso vive aquí. */
+export function resaltarValor(valor) {
+  return '<span class="' + CLASE_VALOR + '">' + valor + '</span>';
+}
+
+/* CSS del .doc.
+
+   Lo propio de esta salida es el `body`, y ahí ya no hay caja de página web. Tenía
+   `max-width:800px;margin:40px auto;padding:0 24px`, de cuando esto se pensaba para
+   mirar en un navegador, y peleaba con `@page`: el padding recortaba la caja de texto
+   a ~15,3 cm en vez de los 16,6 cm del informe, y el margen añadía un centímetro
+   arriba sobre el margen de la hoja. Con `@page` gobernando el papel, sobra: el texto
+   rompía línea en un sitio distinto que en el previo y que en el original, en las 112
+   páginas.
+
+   El fondo se declara explícito para que un visor en modo oscuro no invierta el
+   documento: el informe es papel blanco con letra negra en cualquier visor. */
 export function cssDeExportacion(base) {
-  return 'body{' + cuerpoDe(base) + ';max-width:800px;margin:40px auto;padding:0 24px;' +
-    'color:#222;line-height:1.5}' + reglasDocumento();
+  return 'body{' + cuerpoDe(base) + ';color:#222;background:#fff;line-height:1.5;' +
+    'margin:0;padding:0}' + reglasDocumento();
 }
 
 /* El bloque `@page` con nombre y los saltos de página que Word entiende desde HTML.

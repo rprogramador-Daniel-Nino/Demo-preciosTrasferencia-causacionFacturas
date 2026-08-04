@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HOJA, REGLAS_DOCUMENTO, reglasDocumento, cuerpoDe, cssDeHojas, cssDeExportacion, cssDeWord,
+  CLASE_VALOR, resaltarValor,
 } from './estiloDocumento.js';
 
 test('la pantalla y el .doc llevan las mismas reglas de documento', () => {
@@ -90,4 +91,32 @@ test('reglasDocumento acota cada selector de una lista, no sólo el primero', ()
   /* `p,li,td` acotado a medias dejaría `li` y `td` sueltos pintando la interfaz. */
   const r = reglasDocumento('.x ');
   assert.ok(r.includes('.x p,.x li,.x td{text-align:justify}'));
+});
+
+test('el resaltado de pantalla no puede llegar al documento', () => {
+  /* Iba en un `style=` de seis propiedades y la exportación quitaba tres a mano. Las
+     otras tres —font-weight:600, padding:0 4px, border-radius:3px— se colaban, así que
+     en el .doc cada dato sustituido salía más negrita y con aire a los lados, cientos de
+     veces en las 112 páginas. Por clase no hay nada que limpiar: en Word ninguna regla
+     la mira. */
+  const marcado = resaltarValor('900123456-7');
+  assert.equal(marcado, '<span class="pt-valor">900123456-7</span>');
+  assert.ok(!/style=/.test(marcado), 'el valor resaltado lleva estilo inline');
+  /* El estilo existe, pero sólo acotado al previo. */
+  assert.ok(cssDeHojas({}).includes('.hojas .pagina .pt-valor{'));
+  assert.ok(!cssDeExportacion(null).includes(CLASE_VALOR));
+  assert.ok(!cssDeExportacion(null).includes('F0FDF4'));
+});
+
+test('el .doc no lleva la caja de página web que peleaba con @page', () => {
+  /* `max-width:800px;margin:40px auto;padding:0 24px` recortaba la caja de texto a
+     ~15,3 cm en vez de los 16,6 cm del informe y añadía un centímetro arriba sobre el
+     margen de la hoja: el texto rompía línea en otro sitio que en el previo y que en el
+     original, en las 112 páginas. Con `@page` gobernando el papel, sobra. */
+  const css = cssDeExportacion({ familia: 'Arial', tamano: 12 });
+  assert.ok(!css.includes('max-width'), 'sigue la caja de 800px');
+  assert.ok(!css.includes('40px auto'), 'sigue el margen de página web');
+  assert.ok(css.includes('margin:0'));
+  /* Fondo explícito para que un visor en modo oscuro no invierta el informe. */
+  assert.ok(css.includes('background:#fff'));
 });

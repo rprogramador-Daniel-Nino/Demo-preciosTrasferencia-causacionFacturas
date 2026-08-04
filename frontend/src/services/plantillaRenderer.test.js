@@ -96,9 +96,16 @@ test('un valor de campo con " se escapa a &quot;', () => {
   assert.ok(!r.html.includes('"Premium"'));
 });
 
-test('los estilos del resaltado no se escapan, solo el valor', () => {
+test('la envoltura del resaltado no se escapa, solo el valor', () => {
   const estudio = { ent: 'SAFE & CO', nit: '800123456-7', anio: 2025 };
   const r = renderizar('<p><span data-campo="ent">OLD</span></p>', estudio);
-  assert.ok(r.html.includes('style='), 'los estilos deben estar presentes sin escapar');
+  /* Antes esto comprobaba `style=`, porque el resaltado iba en un `style=` inline. Ahora
+     va por clase y lo pinta sólo el CSS del previo: el inline se colaba en el .doc y cada
+     valor sustituido salía más negrita y con aire a los lados. Lo que el test fija sigue
+     siendo lo mismo —la envoltura llega como HTML y el valor llega escapado—, no la
+     forma concreta del estilo. */
+  assert.ok(r.html.includes('<span class="pt-valor">'),
+    'la envoltura debe llegar como HTML, sin escapar');
+  assert.ok(!r.html.includes('style='), 'el resaltado no debe llevar estilo inline');
   assert.ok(r.html.includes('&amp;'), 'el ampersand del valor debe estar escapado');
 });

@@ -632,11 +632,13 @@ export default function ReporteGenerador({ study, estudioId }) {
        página. Es la estructura que Word emite cuando uno guarda como página web. */
     const wordCSS = cssDeWord({ conEncabezado: !!encabezado });
 
-    // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable
-    const cleanHtml = cuerpoSinEncabezado
-      .replace(/background-color:\s*#F0FDF4;\s*/g, '')
-      .replace(/border-bottom:\s*1px\s*dashed\s*#0FA3A1;\s*/g, '')
-      .replace(/color:\s*#0B7C7A;\s*/g, '');
+    /* Ya no hace falta limpiar el resaltado de pantalla: va por clase y lo pinta sólo el
+       CSS del previo. Aquí se quitaban tres propiedades a mano de las seis que traía el
+       `style=` inline, así que `font-weight:600`, `padding:0 4px` y `border-radius:3px`
+       llegaban al documento: cada dato sustituido salía más negrita y con cuatro píxeles
+       de aire a cada lado, cientos de veces en las 112 páginas. Quitar propiedades
+       nombradas a mano era el problema, no la solución. */
+    const cleanHtml = cuerpoSinEncabezado;
 
     /* Encabezado y pie van dentro de la secci\u00f3n y fuera del flujo: Word los recoge
        por su id y los repite en cada p\u00e1gina. El pie lleva el campo PAGE, no el
