@@ -9,12 +9,19 @@
    La tipografía del cuerpo NO se decide aquí: la anota el extractor al leer las fuentes
    del PDF de referencia y entra siempre por `base`. */
 
-/* Medidas de la hoja. Las comparten `@page` —lo que Word va a imprimir— y la
-   previsualización, que es lo que hace que una hoja en pantalla y una hoja en Word
-   sean la misma hoja. Carta con los márgenes del informe. */
+/* Medidas de la hoja. Las comparten `@page` —lo que Word va a imprimir—, la
+   previsualización en pantalla, y OOXML (en twips). Que una hoja en pantalla, en Word
+   y en el .docx sean la misma hoja depende de que estas medidas sean exactas, no
+   redondeadas: son carta estándar, 8,5 × 11 pulgadas exactas. Los valores anteriores
+   (21,6 × 27,9 cm) eran un redondeo; aquí van en centímetros exactos porque al
+   convertirlos a twips (1440 por pulgada, 566,929 por cm) tienen que dar 12240 × 15840
+   exactos, no 12246 × 15857. Si esto se vuelve a cambiar, los twips que salen del
+   cálculo ya no van a coincidir con el estándar de página, y los saltos van a caer mal
+   tanto en pantalla como en el archivo. Márgenes del informe: superior/izquierdo/derecho
+   2,5 cm, inferior 2 cm. */
 export const HOJA = {
-  ancho: '21.6cm',
-  alto: '27.9cm',
+  ancho: '21.59cm',
+  alto: '27.94cm',
   margen: '2.5cm',
   pie: '2cm',
   /* Distancia del borde del papel al encabezado y al pie. */
@@ -22,6 +29,33 @@ export const HOJA = {
   /* Con encabezado la caja de texto arranca más abajo: el borde más el alto del logo. */
   altoEncabezado: '1.5cm',
   conEncabezado: '3.4cm',
+};
+
+/* OOXML mide en twips: 1/20 de punto, 1440 por pulgada, 566,929 por centímetro. La hoja del
+   previo y la del .docx tienen que ser la misma, así que las dos salen de `HOJA`. */
+const TWIPS_POR_CM = 1440 / 2.54;
+
+/* `docx` mide las imágenes en píxeles de 96 ppp: comprobado contra la versión 9.7.1, que
+   emite 9525 EMU por unidad, y 9525 × 96 = 914400 EMU = una pulgada. Con puntos las imágenes
+   saldrían un 33 % más grandes. */
+const PIXELES_POR_CM = 96 / 2.54;
+
+export const cmATwips = (cm) => Math.round((Number(cm) || 0) * TWIPS_POR_CM);
+export const cmAPixeles = (cm) => Math.round((Number(cm) || 0) * PIXELES_POR_CM);
+
+/* `'2.5cm'` → `2.5`. Devuelve 0 y no NaN ante cualquier cosa que no sepa leer: un NaN metido
+   en un twip produce un .docx que Word no abre, y el fallo aparecería muy lejos de aquí. */
+export const medidaEnCm = (valor) => {
+  const m = /^([\d.]+)\s*cm$/.exec(String(valor || '').trim());
+  return m ? Number(m[1]) : 0;
+};
+
+export const HOJA_TWIPS = {
+  ancho: cmATwips(medidaEnCm(HOJA.ancho)),
+  alto: cmATwips(medidaEnCm(HOJA.alto)),
+  margen: cmATwips(medidaEnCm(HOJA.margen)),
+  pie: cmATwips(medidaEnCm(HOJA.pie)),
+  borde: cmATwips(medidaEnCm(HOJA.borde)),
 };
 
 export const REGLAS_DOCUMENTO = [
@@ -108,8 +142,8 @@ export function cssDeHojas({ base, logo, lado = 'centro', enLaPortada = true, al
            la primera página, así que el previo hace lo mismo: si se dibujara en la
            portada, en pantalla saldría un logo que en el documento no va a estar —y
            encima del logo grande de la portada, que sí va. */
-        (enLaPortada ? '' : '.hojas .pagina:first-of-type::before{content:none}' +
-          '.hojas .pagina:first-of-type{padding-top:' + HOJA.margen + '}')
+        (enLaPortada ? '' : '.hojas [data-pagina="1"]::before{content:none}' +
+          '.hojas [data-pagina="1"]{padding-top:' + HOJA.margen + '}')
       : '') +
     /* El logo se repite arriba de cada hoja, así que en el flujo del cuerpo no va: si
        no, sale dos veces en la portada, que es justo lo que se veía en pantalla. */
@@ -154,6 +188,65 @@ export function cssDeExportacion(base) {
     'margin:0;padding:0}' + reglasDocumento();
 }
 
+/* Añade a cada imagen los atributos `width` y `height` en píxeles, deducidos del tamaño en
+   centímetros que el extractor le puso en el `style`.
+
+   Hace falta porque Word ignora buena parte del CSS: ya se comprobó con `max-width`, que no
+   respeta, y con las pseudoclases de CSS 3. El `width` de una hoja de estilos sobre una imagen
+   entra en la misma categoría de "puede que sí, puede que no". Los atributos `width` y
+   `height` de HTML son de 1995 y Word los obedece siempre.
+
+   Los dos conviven sin pelear, y cada uno gana donde debe: un navegador da prioridad al CSS en
+   centímetros, que es exacto; Word usa los atributos. Por eso el previo no cambia.
+
+   Una imagen sin tamaño en el `style` —una plantilla anterior a la versión 7 del lector— se
+   deja como está: inventarle un tamaño sería peor que dejar que salga al natural, porque
+   parecería correcto. Para eso está el aviso de versión. */
+export function conTamanoDeImagen(html) {
+  return String(html || '').replace(/<img\s[^>]*>/g, (etiqueta) => {
+    if (/\s(?:width|height)=/.test(etiqueta)) return etiqueta;
+    const estilo = (/style="([^"]*)"/.exec(etiqueta) || [])[1] || '';
+    const ancho = medidaEnCm((/width:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
+    const alto = medidaEnCm((/height:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
+    if (!ancho || !alto) return etiqueta;
+    return etiqueta.replace(/<img\s/,
+      '<img width="' + cmAPixeles(ancho) + '" height="' + cmAPixeles(alto) + '" ');
+  });
+}
+
+/* Un salto de página que Word obedece: un elemento, un salto.
+
+   `clear="all"` es lo que hace que no se cuele junto a nada flotante que haya quedado
+   arriba, y es la forma que emite Word cuando uno guarda un documento como página web. */
+const SALTO_DE_PAGINA = '<br clear="all" style="page-break-before:always" />';
+
+/* Mete un salto de página delante de cada página del original menos la primera.
+
+   Aquí está el fallo que produjo un documento de 834 hojas para 112 páginas, y que sobrevivió
+   a tres arreglos porque yo daba por causa otra cosa.
+
+   Lo que había era una regla `div.pagina{page-break-before:always}`. **Word no tiene `div`**:
+   su modelo de documento son párrafos, tablas y secciones. Cuando el importador de HTML
+   encuentra un `div` con propiedades de bloque no puede crear una caja —no existe— así que las
+   EMPUJA a cada párrafo que hay dentro. Y en Word el salto de página es una propiedad de
+   párrafo (`w:pageBreakBefore`). Resultado: un salto delante de casi cada párrafo suelto.
+
+   Medido sobre el documento generado: 810 párrafos fuera de tablas contando cada racha de
+   vacíos como una sola, contra las 834 hojas que marcaba Word. Los párrafos de dentro de las
+   tablas no cuentan porque acaban en celdas, y una celda no arrastra el salto. Por eso el
+   número seguía la cuenta de párrafos SUELTOS y no la de los 3972 del documento, y por eso
+   quitar las 889 filas roscadas no cambió ni una hoja.
+
+   Con el salto como elemento propio hay exactamente uno por página. La primera no lleva
+   ninguno delante: empieza en la hoja 1. */
+export function conSaltosDePagina(html) {
+  let primera = true;
+  return String(html || '').replace(/<div class="pagina"/g, (coincidencia) => {
+    if (primera) { primera = false; return coincidencia; }
+    return SALTO_DE_PAGINA + coincidencia;
+  });
+}
+
 /* El bloque `@page` con nombre y los saltos de página que Word entiende desde HTML.
 
    La página va **nombrada** y hay un div que la usa con `page:Section1`. Es lo que Word
@@ -182,9 +275,25 @@ export function cssDeWord({ conEncabezado, lado = 'centro', enLaPortada = true }
     /* El lado sale del PDF: en el informe de referencia el logo va a la derecha —su
        centro cae en 16,7 cm de una hoja de 21,6— y se exportaba centrado. */
     'p.enc{text-align:' + alineacion + ';margin:0}' +
-    /* La portada es su propia página, como en el original. Sin esto el título y el logo
-       se funden con el índice, que es lo que hacía que no se pareciera. */
-    'div.pagina{page-break-before:always}' +
-    'div.pagina:first-of-type{page-break-before:auto}'
+    /* Aquí NO va ninguna regla de salto de página, y es el hallazgo que costó más caro de
+       toda esta historia.
+
+       Lo que había era `div.pagina{page-break-before:always}`, y producía un documento de 834
+       hojas para 112 páginas. **Word no tiene `div`**: su modelo de documento son párrafos,
+       tablas y secciones. Cuando el importador de HTML encuentra un `div` con propiedades de
+       bloque, no puede crear una caja —no existe—, así que las EMPUJA a cada párrafo que hay
+       dentro. Y `page-break-before` es, en Word, una propiedad de párrafo
+       (`w:pageBreakBefore`). Resultado: salto de página delante de casi cada párrafo.
+
+       Medido sobre el documento generado: los párrafos que están fuera de tablas, contando
+       cada racha de vacíos como una sola, son 810. Word marcaba 834 hojas. Los de dentro de
+       las tablas no cuentan porque acaban en celdas, y una celda no arrastra el salto: por eso
+       el número seguía la cuenta de párrafos SUELTOS y no la de todos. Y por eso quitar las
+       889 filas roscadas no cambió ni una hoja, aunque yo diera esa por la causa.
+
+       El salto va como un elemento propio entre página y página —un `<br>` con el estilo en
+       línea, que lo pone `handleDownload`—: un elemento, un salto, sin nada que empujar hacia
+       abajo. La portada no lleva ninguno delante, que era el otro fallo. */
+    ''
   );
 }

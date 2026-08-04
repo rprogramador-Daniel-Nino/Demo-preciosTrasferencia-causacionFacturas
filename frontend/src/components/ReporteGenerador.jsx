@@ -22,7 +22,7 @@ import {
 import { renderizar } from '../services/plantillaRenderer.js';
 import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
 import {
-  cssDeHojas, cssDeExportacion, cssDeWord,
+  cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
 } from '../services/estiloDocumento.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
@@ -753,7 +753,18 @@ export default function ReporteGenerador({ study, estudioId }) {
        llegaban al documento: cada dato sustituido salía más negrita y con cuatro píxeles
        de aire a cada lado, cientos de veces en las 112 páginas. Quitar propiedades
        nombradas a mano era el problema, no la solución. */
-    const cleanHtml = cuerpoSinEncabezado;
+    /* Dos cosas que sí hay que hacerle al cuerpo antes de exportarlo.
+
+       Una: el div de metadatos del extractor (`data-extractor`, `data-estilo-base`) no tiene
+       nada que hacer en el documento. Además era el primer `div` del cuerpo, y por eso
+       `div.pagina:first-of-type` no emparejaba con ninguna página.
+
+       Dos: los saltos de página se meten como elementos propios entre página y página, en vez
+       de dejarlos en una regla sobre `div.pagina`. El motivo, medido, está en
+       `conSaltosDePagina`. */
+    const cleanHtml = conSaltosDePagina(
+      cuerpoSinEncabezado.replace(/<div data-extractor="\d+"[^>]*><\/div>/, '')
+    );
 
     /* Encabezado y pie van dentro de la secci\u00f3n y fuera del flujo: Word los recoge
        por su id y los repite en cada p\u00e1gina. El pie lleva el campo PAGE, no el
@@ -761,7 +772,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     const bloquesMso =
       (encabezado
         ? '<div style="mso-element:header" id="h1"><p class=enc>' +
-          conImagenes(encabezado) + '</p></div>'
+          conTamanoDeImagen(conImagenes(encabezado)) + '</p></div>'
         : '') +
       '<div style="mso-element:footer" id="f1"><p class=pie>' +
       '<span style="mso-field-code:PAGE"></span></p></div>';
@@ -769,7 +780,11 @@ export default function ReporteGenerador({ study, estudioId }) {
     /* Todo el cuerpo dentro de la secci\u00f3n nombrada: es lo que hace que `@page
        Section1` \u2014y con ella el encabezado\u2014 se aplique de verdad. */
     const cuerpoDocumento =
-      '<div class=Section1>' + conImagenes(cleanHtml) + bloquesMso + '</div>';
+      /* `conTamanoDeImagen` va DESPUÉS de `conImagenes`, no antes: los atributos se calculan
+         sobre la etiqueta ya resuelta, y así una imagen sin recurso en el catálogo tampoco
+         recibe tamaño. */
+      '<div class=Section1>' + conTamanoDeImagen(conImagenes(cleanHtml)) +
+      bloquesMso + '</div>';
 
     const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${cuerpoDocumento}</body></html>`;
 
