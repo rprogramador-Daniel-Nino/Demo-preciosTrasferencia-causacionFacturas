@@ -149,10 +149,24 @@ test('sin datosMacro (null), la tabla cae al respaldo DATOS_MACRO embebido', () 
   assert.ok(salida.includes('3.2'), 'no cayó al valor del respaldo local para 2025');
 });
 
-test('generarApartadoMundial usa la narrativa de Firestore cuando existe', () => {
+test('generarApartadoMundial usa la narrativa de Firestore cuando existe, y le agrega las 3 tablas que la narrativa no trae incrustadas', () => {
   const datosMacro = { narrativa: { mundial: '<p>Texto redactado por IA sobre la economía mundial.</p>' } };
   const salida = generarApartadoMundial(datosMacro, 2026, (v) => String(v));
-  assert.strictEqual(salida, '<p>Texto redactado por IA sobre la economía mundial.</p>');
+  assert.ok(salida.startsWith('<p>Texto redactado por IA sobre la economía mundial.</p>'), 'no empieza con la narrativa');
+  assert.ok(salida.includes('Crecimiento del PIB Mundial ('), 'falta la tabla de PIB mundial');
+  assert.ok(salida.includes('Tasas de Inflación Global ('), 'falta la tabla de inflación global');
+  assert.ok(salida.includes('Proyecciones de Crecimiento del PIB por Región/País ('), 'falta la tabla de regiones');
+});
+
+test('generarApartadoMundial no duplica una tabla que la narrativa ya incrusta junto a su tema', () => {
+  const narrativaConTabla =
+    '<p><strong>CRECIMIENTO MUNDIAL</strong></p><p>Texto.</p>' +
+    generarTablaPibMundial(null, 2026, (v) => String(v));
+  const datosMacro = { narrativa: { mundial: narrativaConTabla } };
+  const salida = generarApartadoMundial(datosMacro, 2026, (v) => String(v));
+  const apariciones = salida.split('Crecimiento del PIB Mundial (').length - 1;
+  assert.strictEqual(apariciones, 1, 'la tabla de PIB mundial quedó duplicada');
+  assert.ok(salida.includes('Tasas de Inflación Global ('), 'la tabla de inflación (que la narrativa no traía) no se agregó');
 });
 
 test('generarApartadoMundial deja marcador si no hay narrativa todavía', () => {
@@ -161,10 +175,15 @@ test('generarApartadoMundial deja marcador si no hay narrativa todavía', () => 
   assert.ok(salida.includes('Decreto 1625 de 2016'));
 });
 
-test('generarApartadoColombia usa la narrativa de Firestore cuando existe', () => {
+test('generarApartadoColombia usa la narrativa de Firestore cuando existe, y le agrega las 5 tablas que la narrativa no trae incrustadas', () => {
   const datosMacro = { narrativa: { colombia: '<p>Texto redactado por IA sobre Colombia.</p>' } };
   const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
-  assert.strictEqual(salida, '<p>Texto redactado por IA sobre Colombia.</p>');
+  assert.ok(salida.startsWith('<p>Texto redactado por IA sobre Colombia.</p>'), 'no empieza con la narrativa');
+  assert.ok(salida.includes('Crecimiento del PIB en Colombia ('), 'falta la tabla de PIB de Colombia');
+  assert.ok(salida.includes('Inflación en Colombia ('), 'falta la tabla de inflación de Colombia');
+  assert.ok(salida.includes('Tasa de Intervención del Banco de la República ('), 'falta la tabla de tasa de intervención');
+  assert.ok(salida.includes('Tasa Representativa del Mercado (TRM) Promedio ('), 'falta la tabla de TRM');
+  assert.ok(salida.includes('Tasa de Desempleo en Colombia ('), 'falta la tabla de desempleo');
 });
 
 test('generarApartadoColombia deja marcador si no hay narrativa todavía', () => {
@@ -283,9 +302,9 @@ test('fuentesCitadas se renderiza como enlaces al final de III.B', () => {
 
 test('fuentesCitadas ausente o vacía no agrega el párrafo', () => {
   const sinCampo = { narrativa: { colombia: '<p>N.</p>' } };
-  assert.strictEqual(generarApartadoColombia(sinCampo, 2026, (v) => String(v)), '<p>N.</p>');
+  assert.ok(!generarApartadoColombia(sinCampo, 2026, (v) => String(v)).includes('Fuentes consultadas'));
   const vacia = { narrativa: { colombia: '<p>N.</p>', fuentesCitadas: [] } };
-  assert.strictEqual(generarApartadoColombia(vacia, 2026, (v) => String(v)), '<p>N.</p>');
+  assert.ok(!generarApartadoColombia(vacia, 2026, (v) => String(v)).includes('Fuentes consultadas'));
 });
 
 test('una fuente incompleta se descarta en vez de dejar un enlace roto', () => {
@@ -296,7 +315,7 @@ test('una fuente incompleta se descarta en vez de dejar un enlace roto', () => {
     },
   };
   const salida = generarApartadoColombia(datosMacro, 2026, (v) => String(v));
-  assert.strictEqual(salida, '<p>N.</p>', 'una fuente sin título o sin URL llegó al informe');
+  assert.ok(!salida.includes('Fuentes consultadas'), 'una fuente sin título o sin URL llegó al informe');
 });
 
 test('una fuente con HTML en el título o en la URL no rompe el documento', () => {

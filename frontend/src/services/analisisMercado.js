@@ -400,14 +400,49 @@ export function generarApartadoSectorial(study, year, wrap) {
    no depende del cliente, así que no hace falta una función de título aparte.
    ───────────────────────────────────────────────────────────────────────────── */
 
+/** Agrega `html` solo si `narrativaTexto` no ya trae esa tabla incrustada
+ *  (detectado por el prefijo literal de su título, estable entre años porque
+ *  el rango entre paréntesis es lo único que cambia). Cubre los dos casos:
+ *  la narrativa que redacta Claude hoy no incrusta tablas (el prompt se lo
+ *  prohíbe explícitamente), así que esta función se las agrega; una
+ *  narrativa preparada a mano que ya las incrusta junto a su tema no las
+ *  recibe por segunda vez. */
+function tablaSiFalta(narrativaTexto, prefijoTitulo, html) {
+  return narrativaTexto.includes(prefijoTitulo) ? '' : html;
+}
+
+/** Tablas de III.A que la narrativa (de Claude o preparada a mano) todavía no
+ *  incruste junto a su tema. */
+function tablasMundial(datosMacro, year, wrap, narrativaTexto) {
+  const n = narrativaTexto || '';
+  return (
+    tablaSiFalta(n, 'Crecimiento del PIB Mundial (', generarTablaPibMundial(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasas de Inflación Global (', generarTablaInflacionGlobal(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Proyecciones de Crecimiento del PIB por Región/País (', generarTablaCrecimientoPorRegion(datosMacro, year, wrap))
+  );
+}
+
 export function generarApartadoMundial(datosMacro, year, wrap) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
   const narrativa = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
-  if (narrativa) return narrativa;
+  if (narrativa) return narrativa + tablasMundial(datosMacro, year, wrap, narrativa);
   return '<p>\n' + marca(
     '[Actualizar con el análisis del panorama de la economía mundial del año gravable ' + year +
     ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'
-  ) + '\n</p>\n';
+  ) + '\n</p>\n' + tablasMundial(datosMacro, year, wrap, '');
+}
+
+/** Tablas de III.B que la narrativa todavía no incruste junto a su tema.
+ *  Mismo papel que tablasMundial — ver su comentario. */
+function tablasColombia(datosMacro, year, wrap, narrativaTexto) {
+  const n = narrativaTexto || '';
+  return (
+    tablaSiFalta(n, 'Crecimiento del PIB en Colombia (', generarTablaPibColombia(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Inflación en Colombia (', generarTablaInflacionColombia(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasa de Intervención del Banco de la República (', generarTablaTasaIntervencion(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasa Representativa del Mercado (TRM) Promedio (', generarTablaTRM(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasa de Desempleo en Colombia (', generarTablaDesempleo(datosMacro, year, wrap))
+  );
 }
 
 /** III.B. Además de la narrativa, cierra con las fuentes que la IA declaró haber
@@ -426,10 +461,10 @@ export function generarApartadoColombia(datosMacro, year, wrap) {
         fuentes.map((f) => '<a href="' + escaparHtml(f.url) + '">' + escaparHtml(f.titulo) + '</a>').join(', ') +
         '\n</p>\n'
       : '';
-    return narrativa + listaFuentes;
+    return narrativa + tablasColombia(datosMacro, year, wrap, narrativa) + listaFuentes;
   }
   return '<p>\n' + marca(
     '[Actualizar con el análisis del panorama de la economía colombiana del año gravable ' + year +
     ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'
-  ) + '\n</p>\n';
+  ) + '\n</p>\n' + tablasColombia(datosMacro, year, wrap, '');
 }

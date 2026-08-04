@@ -115,34 +115,22 @@ function reponerEnlaces(html, deposito) {
   });
 }
 
-/** Los bloques <p><strong>título (…)</strong></p><table>…</table> que reconozca
- *  alguna entrada de TABLAS_MACRO dentro de un cuerpo dado. Se conservan tal
- *  cual (con los valores viejos de End Game): TABLAS_MACRO.forEach los
- *  regenerará más adelante con el año y los datos correctos. Si se
- *  descartaran aquí, dejarían de existir en el documento y ese forEach no
- *  tendría nada que reemplazar — es exactamente el bug que este cambio corrige. */
-function extraerTablasConocidas(contenido) {
-  return TABLAS_MACRO
-    .map(({ rx }) => contenido.match(rx) || [])
-    .flat()
-    .join('\n');
-}
-
 /** Sustituye el cuerpo de III.A o III.B entre su ancla y la del apartado
  *  siguiente, conservando el título original (a diferencia del sectorial, este
- *  título no depende del cliente) y las tablas macro que ese cuerpo traiga
- *  (ver extraerTablasConocidas). En el lugar de la narrativa deja `marcador`,
- *  no el contenido final — ver MARCA_APARTADO_MUNDIAL/COLOMBIA arriba. Si el
- *  HTML no trae la ancla —una plantilla que el usuario subió— no toca nada. */
+ *  título no depende del cliente) y descartando el resto del cuerpo original
+ *  (las tablas de End Game incluidas). En el lugar de la narrativa deja
+ *  `marcador`, no el contenido final — ver MARCA_APARTADO_MUNDIAL/COLOMBIA
+ *  arriba. Ya no se preservan las tablas del cuerpo original: desde que
+ *  generarApartadoMundial/Colombia incrustan sus propias tablas —junto al
+ *  párrafo del tema que comentan, no todas al final— conservar las de End
+ *  Game solo produciría duplicados. Si el HTML no trae la ancla —una
+ *  plantilla que el usuario subió— no toca nada. */
 function reemplazarCuerpoApartado(html, anclaInicio, anclaFin, marcador) {
   const rx = new RegExp(
     '(<a id="' + anclaInicio + '"></a><strong>[\\s\\S]*?</strong>\\s*</li>\\s*</ol>)' +
-    '([\\s\\S]*?)(?=<ol>\\s*<li>\\s*<a id="' + anclaFin + '">)'
+    '[\\s\\S]*?(?=<ol>\\s*<li>\\s*<a id="' + anclaFin + '">)'
   );
-  return html.replace(rx, (completo, tituloCompleto, cuerpoOriginal) => {
-    const tablasConservadas = extraerTablasConocidas(cuerpoOriginal);
-    return tituloCompleto + '\n' + marcador + (tablasConservadas ? '\n' + tablasConservadas : '');
-  });
+  return html.replace(rx, (completo, tituloCompleto) => tituloCompleto + '\n' + marcador);
 }
 
 /** Sustituye el apartado sectorial (III.C) y su título, en el cuerpo y en el
