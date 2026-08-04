@@ -12,6 +12,8 @@ import {
   generarTablaDesempleo,
   generarTablaTRM,
   tituloSectorial,
+  normalizarActividad,
+  claveActividad,
 } from './analisisMercado.js';
 
 /* Cliente que NO es End Game y NO es del sector de videojuegos: todo lo que salga
@@ -380,6 +382,86 @@ test('el objeto social con caracteres de HTML no rompe el documento', () => {
   const salida = generarApartadoSectorial(conHtml, 2025, (v) => String(v));
   assert.ok(salida.includes('&amp;'), 'no se escapó el ampersand');
   assert.ok(!salida.includes('<mayorista>'), 'se inyectó una etiqueta desde el objeto social');
+});
+
+/* ─── Análisis de sector (III.C) variable por actividad, con reutilización ─── */
+
+test('normalizarActividad y claveActividad coinciden entre estudios con la misma actividad', () => {
+  const a = claveActividad(normalizarActividad('Fabricación de Software y Videojuegos'));
+  const b = claveActividad(normalizarActividad('  fabricacion de software y videojuegos  '));
+  assert.strictEqual(a, b, 'dos textos equivalentes deberían dar la misma clave de reutilización');
+});
+
+const analisisSectorEjemplo = {
+  actividadOriginal: 'Fabricación de software y videojuegos',
+  actividadNormalizada: 'fabricacion de software y videojuegos',
+  porAnio: {
+    2025: {
+      actualizadoEn: new Date('2026-08-04'),
+      tituloSector: 'del software y los videojuegos',
+      datosClaveTabla: [
+        { indicador: 'Empleo del sector', valorAnterior: '250.000', valorActual: '260.000' },
+      ],
+      narrativa: {
+        comportamiento: '<p>El sector mostró un comportamiento sólido en 2025.</p>',
+        comercioExterior: '<p>Las exportaciones del sector crecieron en 2025.</p>',
+        proyeccion: '<p>Se proyecta una expansión moderada para 2026.</p>',
+        conclusiones: '<p>El sector es relevante para la comparabilidad del estudio.</p>',
+        fuentesCitadas: [{ titulo: 'DANE', url: 'https://dane.gov.co' }],
+      },
+    },
+  },
+};
+
+test('tituloSectorial usa el título de la corrida guardada cuando existe para ese año', () => {
+  const study = { ent: 'ACME SOFTWARE S.A.S', anio: 2025 };
+  const titulo = tituloSectorial(study, analisisSectorEjemplo, 2025);
+  assert.strictEqual(titulo, 'Análisis del Sector de la industria del software y los videojuegos');
+});
+
+test('tituloSectorial cae al respaldo si no hay corrida para ESE año, aunque exista para otro', () => {
+  const study = { ent: 'ACME SOFTWARE S.A.S', anio: 2024, ciiu: '6201' };
+  const titulo = tituloSectorial(study, analisisSectorEjemplo, 2024);
+  assert.strictEqual(titulo, 'Análisis del Sector económico de la Compañía (actividad CIIU 6201)');
+});
+
+test('generarApartadoSectorial arma los 6 títulos en orden con la narrativa guardada', () => {
+  const study = { ent: 'ACME SOFTWARE S.A.S', anio: 2025 };
+  const salida = generarApartadoSectorial(study, 2025, (v) => String(v), analisisSectorEjemplo);
+
+  const temas = [
+    'Comportamiento del Sector de la Industria del software y los videojuegos en 2025 y Comparación con 2024',
+    'El sector mostró un comportamiento sólido en 2025.',
+    'Datos Clave del Sector de la Industria del software y los videojuegos en Colombia (2024 vs. 2025)',
+    'Importaciones y exportaciones del sector de la industria del software y los videojuegos',
+    '¿Qué se proyecta para el sector de la industria del software y los videojuegos en 2026?',
+    'Conclusiones y Perspectivas',
+    'Fuentes consultadas',
+  ];
+  let ultimaPosicion = -1;
+  temas.forEach((t) => {
+    const pos = salida.indexOf(t);
+    assert.ok(pos !== -1, 'falta: ' + t);
+    assert.ok(pos > ultimaPosicion, 'fuera de orden: ' + t);
+    ultimaPosicion = pos;
+  });
+  assert.ok(salida.includes('250.000') && salida.includes('260.000'), 'faltan los valores de la tabla de datos clave');
+  assert.ok(salida.includes('href="https://dane.gov.co"'), 'falta el enlace de la fuente citada');
+});
+
+test('generarApartadoSectorial sin datosClaveTabla no deja una tabla vacía', () => {
+  const sinTabla = {
+    ...analisisSectorEjemplo,
+    porAnio: { 2025: { ...analisisSectorEjemplo.porAnio[2025], datosClaveTabla: [] } },
+  };
+  const salida = generarApartadoSectorial({ anio: 2025 }, 2025, (v) => String(v), sinTabla);
+  assert.ok(!salida.includes('<table>'), 'quedó una tabla sin filas');
+});
+
+test('generarApartadoSectorial sin analisisSector sigue usando el respaldo genérico (compatibilidad)', () => {
+  const study = { ent: 'EMPRESA SIN SECTOR S.A.S', anio: 2025 };
+  const salida = generarApartadoSectorial(study, 2025, (v) => String(v));
+  assert.ok(salida.includes('Actualizar con los indicadores sectoriales'), 'no cayó al respaldo esperado');
 });
 
 /* ─── El año como cadena (viene así del formulario) ─── */

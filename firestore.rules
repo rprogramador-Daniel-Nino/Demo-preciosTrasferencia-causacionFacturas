@@ -315,6 +315,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // =============================================================
+    // analisisSector — análisis de sector (III.C), uno por actividad
+    // económica (no por cliente ni por usuario), generado bajo demanda por
+    // una Cloud Function (generarAnalisisSector) la primera vez que aparece
+    // esa actividad. Mismo criterio que analisisMercado: dato compartido,
+    // solo la Cloud Function escribe.
+    // =============================================================
+
+    match /analisisSector/{clave} {
+      allow read: if esMiembro();
+      allow write: if false;
+    }
+
     /* ── «Compartidos conmigo» ──
        La lista de estudios que otros me compartieron se consulta por grupo de
        colecciones: están dentro del espacio de cada dueño y quien pregunta no sabe de

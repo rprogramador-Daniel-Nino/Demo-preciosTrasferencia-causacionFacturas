@@ -329,9 +329,13 @@ export function generarTablaDesempleo(datosMacro, year, wrap) {
 
 /* ─────────────────────────────────────────────────────────────────────────────
    5. APARTADO SECTORIAL (III.C)
-   Port de ptSectorAuto (index.html, Bloque 4). Construye el apartado con la
-   actividad real del contribuyente y no afirma ninguna cifra sectorial: exige
-   los indicadores del año con su fuente mediante un marcador explícito.
+   Variable por la actividad real del contribuyente (study.actividad_especifica),
+   redactado por functions/analisisSectorActualizar.js (Gemini busca, Claude
+   redacta) la primera vez que esa actividad aparece — ver
+   frontend/src/components/ReporteGenerador.jsx. Se reutiliza entre todos los
+   estudios que compartan la misma actividad: no vuelve a consumir IA para cada
+   cliente nuevo del mismo sector. Sin esa corrida todavía, cae al respaldo
+   genérico con marcador (comportamiento previo a esta funcionalidad).
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* El objeto social y la actividad vienen de OCR y pueden traer caracteres que
@@ -350,18 +354,91 @@ function escaparHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-/** Título de III.C. Neutro a propósito: el detalle de la actividad va en el
- *  cuerpo, donde hay espacio, y no en un encabezado que también aparece en el
- *  índice del informe. */
-export function tituloSectorial(study) {
+/* ── Clave de reutilización entre estudios ──
+   Copia idéntica de la que usa functions/analisisSectorPrompts.js: frontend
+   decide qué leer/pedir, backend decide dónde escribir, y tienen que coincidir
+   en la misma clave. No comparten código porque son entornos y formatos de
+   módulo distintos (ESM vs. CommonJS). */
+
+export function normalizarActividad(actividad) {
+  return String(actividad || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Hash FNV-1a de 32 bits, en base36 — ver el comentario gemelo en
+ *  functions/analisisSectorPrompts.js para el porqué de la forma. */
+export function claveActividad(actividadNormalizada) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < actividadNormalizada.length; i++) {
+    hash ^= actividadNormalizada.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return 'act_' + (hash >>> 0).toString(36);
+}
+
+/** La entrada de porAnio para el año pedido, o undefined si Firestore no
+ *  tiene todavía una corrida para esta actividad+año. */
+function entradaSector(analisisSector, year) {
+  return analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
+}
+
+/** Título de III.C. Con corrida disponible, nombra la industria real
+ *  (redactada por Claude, ver tituloSector); sin ella, cae al respaldo neutro
+ *  anterior a esta funcionalidad. */
+export function tituloSectorial(study, analisisSector, year) {
+  const entrada = entradaSector(analisisSector, year);
+  if (entrada && entrada.tituloSector) {
+    return 'Análisis del Sector de la industria ' + escaparHtml(entrada.tituloSector);
+  }
   const ciiu = escaparHtml((study && study.ciiu) || '').trim();
   return ciiu
     ? 'Análisis del Sector económico de la Compañía (actividad CIIU ' + ciiu + ')'
     : 'Análisis del Sector económico de la Compañía';
 }
 
-export function generarApartadoSectorial(study, year, wrap) {
+export function generarApartadoSectorial(study, year, wrap, analisisSector) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
+  const entrada = entradaSector(analisisSector, year);
+
+  if (entrada) {
+    const nombreSector = escaparHtml(entrada.tituloSector);
+    const filas = (entrada.datosClaveTabla || []).map((f) => [
+      escaparHtml(f.indicador), f.valorAnterior ? escaparHtml(f.valorAnterior) : '—', escaparHtml(f.valorActual),
+    ]);
+    const tabla = filas.length
+      ? tablaHTML(
+          'Datos Clave del Sector de la Industria ' + entrada.tituloSector + ' en Colombia (' + (year - 1) + ' vs. ' + year + ')',
+          ['Indicador Clave', String(year - 1), String(year)],
+          filas
+        )
+      : '';
+    const fuentes = ((entrada.narrativa && entrada.narrativa.fuentesCitadas) || []).filter((f) => f && f.titulo && f.url);
+    const listaFuentes = fuentes.length
+      ? '<p>\n<strong>Fuentes consultadas:</strong> ' +
+        fuentes.map((f) => '<a href="' + escaparHtml(f.url) + '">' + escaparHtml(f.titulo) + '</a>').join(', ') +
+        '\n</p>\n'
+      : '';
+
+    return (
+      '<p>\n<strong>Comportamiento del Sector de la Industria ' + nombreSector + ' en ' + year +
+      ' y Comparación con ' + (year - 1) + '</strong>\n</p>\n' +
+      entrada.narrativa.comportamiento +
+      tabla +
+      '<p>\n<strong>Importaciones y exportaciones del sector de la industria ' + nombreSector + '</strong>\n</p>\n' +
+      entrada.narrativa.comercioExterior +
+      '<p>\n<strong>¿Qué se proyecta para el sector de la industria ' + nombreSector + ' en ' + (year + 1) + '?</strong>\n</p>\n' +
+      entrada.narrativa.proyeccion +
+      '<p>\n<strong>Conclusiones y Perspectivas</strong>\n</p>\n' +
+      entrada.narrativa.conclusiones +
+      listaFuentes
+    );
+  }
+
+  // Respaldo: todavía no hay una corrida guardada para esta actividad+año.
   const ent = escaparHtml((study && study.ent) || '').trim();
   const ciiu = escaparHtml((study && study.ciiu) || '').trim();
   const actividad = escaparHtml(

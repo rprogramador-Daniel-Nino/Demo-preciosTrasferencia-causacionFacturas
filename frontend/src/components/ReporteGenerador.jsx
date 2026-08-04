@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import axios from 'axios';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
+import { normalizarActividad, claveActividad } from '../services/analisisMercado';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
 } from '../services/pdfReferenceExtractor';
@@ -11,7 +13,7 @@ import {
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
   guardarHuecos, leerHuecos,
 } from '../services/plantillaStore';
-import { leerAnalisisMercado } from '../services/firestoreRepo';
+import { leerAnalisisMercado, leerAnalisisSector } from '../services/firestoreRepo';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
 import {
   proponerMarcas, aplicarMarcas,
@@ -33,6 +35,12 @@ export default function ReporteGenerador({ study, estudioId }) {
      responde — los generadores de analisisMercado.js caen al respaldo local
      embebido en el código cuando reciben null. */
   const [analisisMercado, setAnalisisMercado] = useState(null);
+  /* Análisis de sector (III.C) para la actividad de este estudio. A diferencia
+     de analisisMercado (un solo documento global), este es por actividad+año
+     — ver el efecto más abajo, que lo lee o lo genera bajo demanda. null
+     mientras carga o si todavía no hay corrida: generarApartadoSectorial cae
+     al respaldo genérico con marcador. */
+  const [analisisSector, setAnalisisSector] = useState(null);
   /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
      aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
      que se abre el estudio sería más molesto que informativo. El alert sí se
@@ -79,17 +87,55 @@ export default function ReporteGenerador({ study, estudioId }) {
     return () => { vivo = false; };
   }, []);
 
+  /* Análisis de sector (III.C): depende de la actividad del estudio y del año
+     gravable, así que corre por estudio, no una sola vez por sesión. Primero
+     intenta leer una corrida ya guardada para esa actividad+año (reutilizable
+     entre todos los estudios de ese sector); si no existe, dispara la
+     generación bajo demanda y usa la respuesta directa —sin una segunda
+     lectura a Firestore— para no esperar dos viajes de red. */
+  useEffect(() => {
+    let vivo = true;
+    const actividadTexto = ((study && (study.actividad_especifica || study.objeto)) || '').trim();
+    const year = Number(study && study.anio) || null;
+    if (!actividadTexto || !year) {
+      setAnalisisSector(null);
+      return undefined;
+    }
+
+    const clave = claveActividad(normalizarActividad(actividadTexto));
+    (async () => {
+      try {
+        let doc = await leerAnalisisSector(clave);
+        const yaTieneEsteAnio = doc && doc.porAnio && doc.porAnio[String(year)];
+        if (!yaTieneEsteAnio) {
+          const resp = await axios.post('/api/generar-analisis-sector', { actividad: actividadTexto, year });
+          doc = { porAnio: { [String(year)]: resp.data.entrada } };
+        }
+        if (vivo) setAnalisisSector(doc);
+      } catch (err) {
+        console.error('No se pudo generar/leer el análisis de sector:', err);
+        if (vivo) setAnalisisSector(null);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [study?.actividad_especifica, study?.objeto, study?.anio]);
+
   /* Qué quedó sin cubrir en la sección III (TENDENCIAS DE LA ECONOMÍA). Se informa
      en concreto —qué serie y de qué año— porque un aviso genérico se ignora, y
      estas son las cifras que el Decreto 1625 de 2016 obliga a respaldar con fuente
      y fecha de consulta antes de radicar. */
   const avisosDeMercado = (htmlBase) => {
-    const d = diagnosticarCobertura(htmlBase, study, analisisMercado);
+    const d = diagnosticarCobertura(htmlBase, study, analisisMercado, analisisSector);
     const avisos = [];
     if (!d.sectorialCubierto) {
       avisos.push(
         'esta plantilla no trae la sección del análisis del sector, así que no se ' +
         'reemplazó por la actividad de la compañía: revísala a mano'
+      );
+    } else if (!d.sectorNarrativaCubierta) {
+      avisos.push(
+        'el análisis del sector (III.C) todavía no está generado para esta actividad y año: ' +
+        'quedó con el respaldo genérico y un marcador que hay que completar'
       );
     }
     if (d.seriesFaltantes.length) {
@@ -274,7 +320,7 @@ export default function ReporteGenerador({ study, estudioId }) {
            plantilla, y entonces los valores almacenados quedarían viejos. Sin
            esta línea, tras recargar se ven las cifras del informe de
            referencia en vez de las del estudio actual. */
-        const hidratado = hydrateExactWordTemplate(html, study, analisisMercado);
+        const hidratado = hydrateExactWordTemplate(html, study, analisisMercado, analisisSector);
         /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
            setState de arriba no ha surtido efecto todavía dentro de este mismo
            efecto, y las imágenes saldrían rotas en la primera pintada. */
@@ -296,11 +342,11 @@ export default function ReporteGenerador({ study, estudioId }) {
       }
     })();
     return () => { vivo = false; };
-  }, [estudioId, analisisMercado]);
+  }, [estudioId, analisisMercado, analisisSector]);
 
   // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
   const loadExactMasterTemplate = () => {
-    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study, analisisMercado);
+    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study, analisisMercado, analisisSector);
     setHtmlContent(hydrated);
     /* Esta es la ruta por defecto de todo estudio que no haya subido plantilla,
        es decir la de casi todo el mundo hoy, y va por valor literal. Si el NIT
@@ -312,7 +358,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     if (!customTemplateLoaded) {
       loadExactMasterTemplate();
     }
-  }, [study, customTemplateLoaded, analisisMercado]);
+  }, [study, customTemplateLoaded, analisisMercado, analisisSector]);
 
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
@@ -399,7 +445,7 @@ export default function ReporteGenerador({ study, estudioId }) {
              recalcularlos, y los de la plantilla anterior ya no corresponden
              a este documento. */
           setAvisos([]);
-          const hydrated = hydrateExactWordTemplate(html, study, analisisMercado);
+          const hydrated = hydrateExactWordTemplate(html, study, analisisMercado, analisisSector);
           setHtmlContent(conImagenes(hydrated, []));
           /* Detección de fuga de la ruta legado. Estaba escrita y no se
              invocaba desde ningún sitio: la ruta aparentaba tenerla y no la

@@ -53,6 +53,10 @@
         "function": "gemini"
       },
       {
+        "source": "/api/generar-analisis-sector",
+        "function": "generarAnalisisSector"
+      },
+      {
         "source": "/gestor-reportes-inicio",
         "destination": "/gestor-reportes/index.html"
       },

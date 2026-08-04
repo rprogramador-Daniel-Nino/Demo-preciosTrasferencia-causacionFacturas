@@ -332,6 +332,25 @@ test('la regla de la razón social no se come el nombre del vinculado', () => {
   assert.ok(!salida.includes('ACME COLOMBIA S.A.S'), 'el contribuyente se colocó donde iba el vinculado');
 });
 
+test('un cliente que se llama igual que la plantilla no duplica su razón social', () => {
+  /* Si el contribuyente real es el mismo "End Game" de un año anterior, la
+     razón social insertada (tomada del RUT) empieza otra vez por
+     "END GAME INTERACTIVE". Un barrido final que busque esa misma cadena
+     sobre el HTML ya hidratado la vuelve a capturar y la reemplaza sobre sí
+     misma, duplicando el nombre. */
+  const html = '<p>END GAME INTERACTIVE COLOMBIA S.A.S con NIT 901.337.576-6 es una empresa</p>';
+  const study = {
+    ent: 'END GAME INTERACTIVE COLOMBIA SOCIEDAD POR ACCIONES SIMPLIFICADA',
+    vinc: 'END GAME INTERACTIVE INC',
+    nit: '800123456-7',
+    anio: 2025,
+  };
+  const salida = hydrateExactWordTemplate(html, study);
+  const apariciones = salida.split('SOCIEDAD POR ACCIONES SIMPLIFICADA').length - 1;
+  assert.strictEqual(apariciones, 1, 'la razón social salió duplicada: ' + salida);
+  assert.ok(!salida.includes('INTERACTIVE INC COLOMBIA'), 'quedó el nombre del vinculado pegado al del contribuyente: ' + salida);
+});
+
 /* ══════ Tabla 16. Razones de rechazo ══════
    La plantilla trae los números de End Game —442 candidatas, 327 por diferencias
    funcionales, 13 aceptadas— y hay que sustituirlos por los del estudio. */
