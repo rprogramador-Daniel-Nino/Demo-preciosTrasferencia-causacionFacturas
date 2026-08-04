@@ -29,8 +29,9 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      1 — texto, estructura e imágenes al final de cada página
      2 — imágenes en su posición del flujo y logo una sola vez
      3 — tipografía del informe: negrita, cursiva, familias y cuerpo
-     4 — cada entrada del índice y cada nota en su propio bloque */
-export const VERSION_EXTRACTOR = 4;
+     4 — cada entrada del índice y cada nota en su propio bloque
+     5 — cada página del original envuelta, para que el salto caiga donde debe */
+export const VERSION_EXTRACTOR = 5;
 
 const MAPA_ETIQUETAS = {
   H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6',
@@ -306,7 +307,20 @@ export async function extraerReferencia(datos) {
     '<div data-extractor="' + VERSION_EXTRACTOR + '"' +
     ' data-estilo-base="' + base.familia + '|' + base.tamano + '"></div>';
 
-  const html = marcaEstilo + cabecera + bloques.map((b) => conFiguras(b.html)).join('\n');
+  /* Cada página del original queda envuelta y numerada. Es lo que permite que la
+     exportación ponga un salto donde el informe cambia de página, empezando por la
+     portada: sin esto el título y el logo de la portada se fundían con el índice y
+     la primera página no se parecía a la del original.
+
+     El salto es duro y por página, así que si el contenido de una no cabe —las
+     fuentes no miden exactamente igual— Word desborda a una extra; pero la
+     siguiente vuelve a empezar donde debe, en vez de arrastrar el desfase hasta el
+     final. Es lo máximo alcanzable sin fijar alturas, que dejaría el documento
+     imposible de editar. */
+  const html = marcaEstilo + cabecera + bloques
+    .map((b) => '<div class="pagina" data-pagina="' + b.pagina + '">' +
+                conFiguras(b.html) + '</div>')
+    .join('\n');
 
   if (figurasSinDibujo.length) {
     console.warn('[extractor] figuras sin imagen que las resuelva:', figurasSinDibujo);
@@ -351,6 +365,10 @@ export function loQueFaltaPorVersion(version) {
   if (version < 4) {
     falta.push('las entradas del índice salen corridas en una sola línea en vez de ' +
                'una por renglón');
+  }
+  if (version < 5) {
+    falta.push('no hay saltos de página donde el informe cambia de página, así que la ' +
+               'portada se funde con el índice');
   }
   return falta;
 }

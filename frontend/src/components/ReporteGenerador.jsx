@@ -583,13 +583,22 @@ export default function ReporteGenerador({ study, estudioId }) {
 
     /* Carta con los m\u00e1rgenes del informe. El pie lleva el campo PAGE de Word y no
        el n\u00famero que tra\u00eda el PDF: al repaginar, un n\u00famero literal mentir\u00eda. */
+    /* La página va **nombrada** y hay un div que la usa con `page:Section1`. Es lo
+       que Word exige: con un `@page` sin nombre ignora `mso-header` y el logo se
+       queda como primera imagen del cuerpo en vez de repetirse arriba de cada
+       página. Es la estructura que Word emite cuando uno guarda como página web. */
     const wordCSS =
       'body{counter-reset:secpt}h2::before{content:""}p,li,td{text-align:justify}' +
-      '@page{size:21.6cm 27.9cm;margin:2.5cm 2.5cm 2cm 2.5cm;' +
+      '@page Section1{size:21.6cm 27.9cm;margin:2.5cm 2.5cm 2cm 2.5cm;' +
+      'mso-header-margin:1.25cm;mso-footer-margin:1.25cm;mso-paper-source:0;' +
       (encabezado ? 'mso-header:h1;' : '') + 'mso-footer:f1}' +
-      'div.mso-element-header{mso-element:header}' +
-      'div.mso-element-footer{mso-element:footer}' +
-      'p.pie{text-align:center;font-size:0.8em;color:#666}';
+      'div.Section1{page:Section1}' +
+      'p.pie{text-align:center;font-size:0.8em;color:#666;margin:0}' +
+      'p.enc{text-align:center;margin:0}' +
+      /* La portada es su propia página, como en el original. Sin esto el título y
+         el logo se funden con el índice, que es lo que hacía que no se pareciera. */
+      'div.pagina{page-break-before:always}' +
+      'div.pagina:first-of-type{page-break-before:auto}';
 
     // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable
     const cleanHtml = cuerpoSinEncabezado
@@ -597,16 +606,23 @@ export default function ReporteGenerador({ study, estudioId }) {
       .replace(/border-bottom:\s*1px\s*dashed\s*#0FA3A1;\s*/g, '')
       .replace(/color:\s*#0B7C7A;\s*/g, '');
 
-    /* Los bloques de encabezado y pie van al final del body y fuera del flujo:
-       Word los recoge por su id y los repite en cada p\u00e1gina. */
+    /* Encabezado y pie van dentro de la secci\u00f3n y fuera del flujo: Word los recoge
+       por su id y los repite en cada p\u00e1gina. El pie lleva el campo PAGE, no el
+       n\u00famero que tra\u00eda el PDF: al repaginar, un n\u00famero literal mentir\u00eda. */
     const bloquesMso =
       (encabezado
-        ? '<div style="mso-element:header" id="h1"><p>' + conImagenes(encabezado) + '</p></div>'
+        ? '<div style="mso-element:header" id="h1"><p class=enc>' +
+          conImagenes(encabezado) + '</p></div>'
         : '') +
       '<div style="mso-element:footer" id="f1"><p class=pie>' +
       '<span style="mso-field-code:PAGE"></span></p></div>';
 
-    const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${conImagenes(cleanHtml)}${bloquesMso}</body></html>`;
+    /* Todo el cuerpo dentro de la secci\u00f3n nombrada: es lo que hace que `@page
+       Section1` \u2014y con ella el encabezado\u2014 se aplique de verdad. */
+    const cuerpoDocumento =
+      '<div class=Section1>' + conImagenes(cleanHtml) + bloquesMso + '</div>';
+
+    const content = `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Informe Local Precios de Transferencia</title><style>${exportStyle}${wordCSS}</style></head><body>${cuerpoDocumento}</body></html>`;
 
     const blob = new Blob([content], { type: 'application/msword' });
     const a = document.createElement('a');
