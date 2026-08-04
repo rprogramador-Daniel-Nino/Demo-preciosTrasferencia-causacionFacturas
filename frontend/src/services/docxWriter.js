@@ -11,6 +11,7 @@
 import {
   Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
+  Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
 } from 'docx';
 import { HOJA_TWIPS } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
@@ -143,6 +144,62 @@ function parrafoDe(nodo, runs = runsDe(nodo)) {
   });
 }
 
+/* Ancho de la caja de texto: la hoja menos los dos márgenes. Las tablas del informe la ocupan
+   entera. */
+const CAJA_TEXTO = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
+
+const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
+
+/* Celdas de una fila. Un hijo que no es celda se descarta: el PDF cuelga un `P` vacío de cada
+   `TR`, y en el .doc eso costó un documento de 834 páginas porque Word sacaba el párrafo de la
+   tabla y la partía. Aquí no hay importador que lo interprete, pero tampoco hay razón para
+   emitirlo. */
+const celdasDe = (fila) =>
+  (fila.hijos || []).filter((c) => c.etiqueta === 'td' || c.etiqueta === 'th');
+
+function tablaDe(nodo) {
+  const filas = [];
+  /* Las filas pueden venir envueltas en `<thead>`/`<tbody>` si el HTML pasó por el navegador. */
+  const recogerFilas = (n) => {
+    for (const h of n.hijos || []) {
+      if (h.texto !== undefined) continue;
+      if (h.etiqueta === 'tr') filas.push(h);
+      else recogerFilas(h);
+    }
+  };
+  recogerFilas(nodo);
+
+  const conCeldas = filas.filter((f) => celdasDe(f).length > 0);
+  if (!conCeldas.length) return null;
+
+  /* Los anchos tienen que sumar el ancho de la tabla o Word recalcula. Se reparte a partes
+     iguales sobre el número máximo de celdas: el árbol del PDF no expone ColSpan ni RowSpan
+     —está medido en el spec— así que no hay geometría de columna que respetar. El último
+     absorbe el resto de la división. */
+  const columnas = Math.max(...conCeldas.map((f) => celdasDe(f).length));
+  const ancho = Math.floor(CAJA_TEXTO / columnas);
+  const anchos = Array.from({ length: columnas }, (_, i) =>
+    (i === columnas - 1 ? CAJA_TEXTO - ancho * (columnas - 1) : ancho));
+
+  return new Table({
+    columnWidths: anchos,
+    width: { size: CAJA_TEXTO, type: WidthType.DXA },
+    rows: conCeldas.map((f) => new TableRow({
+      children: celdasDe(f).map((c, i) => new TableCell({
+        width: { size: anchos[i] ?? ancho, type: WidthType.DXA },
+        /* CLEAR y no SOLID: la skill lo marca porque SOLID sale negro. */
+        ...(c.etiqueta === 'th'
+          ? { shading: { type: ShadingType.CLEAR, fill: '0E1726' } } : {}),
+        borders: { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE },
+        children: bloquesDe(c).length ? bloquesDe(c)
+          : [new Paragraph({
+            children: c.etiqueta === 'th' ? runsDe(c, { color: 'FFFFFF' }) : runsDe(c),
+          })],
+      })),
+    })),
+  });
+}
+
 /* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
    que permite que un `<div>` del contentEditable no pierda su contenido.
 
@@ -164,6 +221,11 @@ function bloquesDe(nodo, salida = []) {
     }
     if (!esBloque(h)) { sueltos.push(...runsDe(h)); continue; }
     volcar();
+    if (h.etiqueta === 'table') {
+      const t = tablaDe(h);
+      if (t) salida.push(t);
+      continue;
+    }
     if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) {
       const runs = runsDe(h);
       const dentro = (h.hijos || []).filter(esBloque);

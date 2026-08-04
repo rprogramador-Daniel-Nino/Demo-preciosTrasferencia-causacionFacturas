@@ -215,3 +215,44 @@ test('un encabezado con puntos y número no se convierte en entrada de índice',
   assert.doesNotMatch(doc, /w:leader="dot"/, 'un encabezado no debe tener guía de puntos');
   assert.match(doc, /1\. Descripción de la Compañía/);
 });
+
+test('las tablas salen como tablas de Word, con anchos en DXA', async () => {
+  /* La skill de docx lo marca como trampa: hacen falta columnWidths en la tabla Y width en
+     cada celda, las dos en DXA. Con porcentajes, Google Docs rompe. */
+  const { doc } = await abrir(
+    '<table><tr><th>Concepto</th><th>Valor</th></tr>' +
+    '<tr><td>Activo</td><td>1.000</td></tr></table>');
+  assert.match(doc, /<w:tbl>/);
+  assert.match(doc, /<w:tblGrid>/);
+  assert.match(doc, /w:type="dxa"/);
+  assert.match(doc, /Concepto/);
+  assert.match(doc, /1\.000/);
+  assert.equal((doc.match(/<w:tr[ >]/g) || []).length, 2, 'deben ser dos filas');
+});
+
+test('los anchos de columna suman el ancho de la caja de texto', async () => {
+  /* Si no suman, Word recalcula y las columnas salen donde quiera. La caja del informe mide
+     21,6 − 2 × 2,5 = 16,6 cm. */
+  const { doc } = await abrir('<table><tr><td>a</td><td>b</td><td>c</td></tr></table>');
+  const grid = /<w:tblGrid>([\s\S]*?)<\/w:tblGrid>/.exec(doc)[1];
+  const anchos = [...grid.matchAll(/w:w="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.equal(anchos.length, 3);
+  const caja = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
+  assert.ok(Math.abs(anchos.reduce((a, b) => a + b, 0) - caja) <= 3,
+    'los anchos suman ' + anchos.reduce((a, b) => a + b, 0) + ' y la caja mide ' + caja);
+});
+
+test('una fila sin celdas no produce una tabla inválida', async () => {
+  /* El PDF cuelga un `P` vacío de cada `TR`. En el .doc eso fue un documento de 834 páginas
+     porque Word sacaba el párrafo de la tabla. Aquí una fila que se queda sin celdas
+     simplemente no se emite. */
+  const { doc } = await abrir('<table><tr><p></p></tr><tr><td>a</td></tr></table>');
+  assert.equal((doc.match(/<w:tr[ >]/g) || []).length, 1);
+  assert.match(doc, /<w:tbl>/);
+});
+
+test('una tabla sin ninguna fila válida no se emite', async () => {
+  const { doc } = await abrir('<table><tr><p></p></tr></table><p>después</p>');
+  assert.doesNotMatch(doc, /<w:tbl>/);
+  assert.match(doc, /después/);
+});
