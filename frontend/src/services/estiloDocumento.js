@@ -9,9 +9,16 @@
    La tipografía del cuerpo NO se decide aquí: la anota el extractor al leer las fuentes
    del PDF de referencia y entra siempre por `base`. */
 
-/* Medidas de la hoja. Las comparten `@page` —lo que Word va a imprimir— y la
-   previsualización, que es lo que hace que una hoja en pantalla y una hoja en Word
-   sean la misma hoja. Carta con los márgenes del informe. */
+/* Medidas de la hoja. Las comparten `@page` —lo que Word va a imprimir—, la
+   previsualización en pantalla, y OOXML (en twips). Que una hoja en pantalla, en Word
+   y en el .docx sean la misma hoja depende de que estas medidas sean exactas, no
+   redondeadas: son carta estándar, 8,5 × 11 pulgadas exactas. Los valores anteriores
+   (21,6 × 27,9 cm) eran un redondeo; aquí van en centímetros exactos porque al
+   convertirlos a twips (1440 por pulgada, 566,929 por cm) tienen que dar 12240 × 15840
+   exactos, no 12246 × 15857. Si esto se vuelve a cambiar, los twips que salen del
+   cálculo ya no van a coincidir con el estándar de página, y los saltos van a caer mal
+   tanto en pantalla como en el archivo. Márgenes del informe: superior/izquierdo/derecho
+   2,5 cm, inferior 2 cm. */
 export const HOJA = {
   ancho: '21.59cm',
   alto: '27.94cm',
