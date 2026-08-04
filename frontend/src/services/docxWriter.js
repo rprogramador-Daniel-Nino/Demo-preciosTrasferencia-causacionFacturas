@@ -45,7 +45,7 @@ const NIVELES = {
 /* La familia que declara un `<span style="font-family:'X'">`. El extractor sólo la declara
    cuando se desvía del cuerpo del documento. */
 const familiaDeEstilo = (estilo) => {
-  const m = /font-family:\s*'?([^;'"]+)'?/.exec(estilo || '');
+  const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   return m ? m[1].trim() : null;
 };
 
@@ -54,7 +54,11 @@ const familiaDeEstilo = (estilo) => {
    llega en el `style` de un `<span>`.
 
    `pt-valor` no se mira a propósito: el resaltado del valor sustituido es de pantalla. En el
-   .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados. */
+   .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados.
+
+   No desciende en bloques: cuando encuentra un `<p>` u otro bloque, se detiene. Eso permite
+   que un párrafo con párrafos anidados emita primero su propio contenido en línea, y luego
+   `bloquesDe` maneje los bloques anidados como bloques independientes. */
 function runsDe(nodo, heredado = {}) {
   const salida = [];
   for (const h of nodo.hijos || []) {
@@ -64,6 +68,8 @@ function runsDe(nodo, heredado = {}) {
     }
     if (h.etiqueta === 'img') { salida.push(...runDeImagen(h)); continue; }
     if (h.etiqueta === 'br') continue;
+    /* No descender en bloques. */
+    if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) continue;
     const propio = { ...heredado };
     if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
     if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
@@ -87,14 +93,32 @@ function parrafoDe(nodo) {
 }
 
 /* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
-   que permite que un `<div>` del contentEditable no pierda su contenido. */
+   que permite que un `<div>` del contentEditable no pierda su contenido.
+
+   Cuando un bloque tiene bloques anidados, emite primero el párrafo del padre (que no
+   desciende en bloques por el cambio en `runsDe`) y luego los bloques anidados como
+   párrafos independientes. Esto maneja el HTML del contentEditable, donde los bloques
+   pueden no estar cerrados. */
 function bloquesDe(nodo, salida = []) {
   for (const h of nodo.hijos || []) {
     if (h.texto !== undefined) {
       if (h.texto.trim()) salida.push(new Paragraph({ children: [new TextRun(h.texto)] }));
       continue;
     }
-    if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) { salida.push(parrafoDe(h)); continue; }
+    if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) {
+      salida.push(parrafoDe(h));
+      /* Emitir bloques anidados (aunque htmlAArbol los cierre implícitamente, el HTML del
+         contentEditable puede tenerlos). */
+      for (const nieto of h.hijos || []) {
+        if (nieto.texto === undefined && (nieto.etiqueta === 'p' || NIVELES[nieto.etiqueta])) {
+          salida.push(parrafoDe(nieto));
+          bloquesDe(nieto, salida);
+        } else if (nieto.texto === undefined) {
+          bloquesDe(nieto, salida);
+        }
+      }
+      continue;
+    }
     bloquesDe(h, salida);
   }
   return salida;

@@ -17,6 +17,13 @@ const VACIAS = new Set(['img', 'br', 'hr', 'meta', 'link', 'input', 'col']);
 /* Script y style llevan contenido crudo (JS y CSS), no HTML. */
 const CRUDAS = new Set(['script', 'style']);
 
+/* Etiquetas que cierran implícitamente la anterior del mismo tipo. Regla de HTML5.
+   Esto es lo que hace que `<p>a<p>b` produzca dos párrafos hermanos, no anidados.
+   Aplica cuando mammoth o el contentEditable emiten HTML sin cerrar. */
+const CIERRA_IMPLICITA = {
+  p: 'p', li: 'li', td: ['td', 'th'], th: ['td', 'th'], tr: 'tr',
+};
+
 const ENTIDADES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–',
 };
@@ -98,6 +105,17 @@ export function htmlAArbol(html) {
           rx.lastIndex = html.length;
         }
         continue;
+      }
+
+      /* Cierre implícito: una etiqueta de apertura cierra la anterior del mismo tipo.
+         Es la regla de HTML5, y es lo que produce mammoth y el contentEditable. */
+      const acierraA = CIERRA_IMPLICITA[etiqueta];
+      if (acierraA) {
+        const cierre = Array.isArray(acierraA) ? acierraA : [acierraA];
+        for (const e of cierre) {
+          const i = pila.map((n) => n.etiqueta).lastIndexOf(e);
+          if (i > 0) pila.length = i;
+        }
       }
 
       const nodo = { etiqueta, atributos: leerAtributos(m[4] || ''), hijos: [] };

@@ -102,3 +102,25 @@ test('un párrafo vacío sigue siendo un párrafo', async () => {
   const { doc } = await abrir('<p></p><p></p><p>algo</p>');
   assert.equal((doc.match(/<w:p[ >]/g) || []).length >= 3, true);
 });
+
+test('la familia tipográfica se lee con comillas simples, dobles o sin ellas', async () => {
+  const casos = [
+    ['<span style="font-family:\'Britannic\'">x</span>', 'Britannic'],
+    ['<span style=\'font-family:"Times New Roman"\'>x</span>', 'Times New Roman'],
+    ['<span style="font-family:Georgia">x</span>', 'Georgia'],
+  ];
+  for (const [html, familia] of casos) {
+    const { doc } = await abrir('<p>' + html + '</p>');
+    assert.match(doc, new RegExp('w:ascii="' + familia + '"'), 'falta ' + familia);
+  }
+});
+
+test('un párrafo anidado en otro no se funde con él', async () => {
+  /* El HTML del contentEditable puede tener párrafos sin cerrar, y `htmlAArbol` los cierra
+     implícitamente. Pero la función tiene que aguantar recibirlos anidados. */
+  const { doc } = await abrir('<p>fuera<p>dentro</p></p>');
+  const parrafos = (doc.match(/<w:p[ >]/g) || []).length;
+  assert.ok(parrafos >= 2, 'debería haber al menos 2 párrafos, tiene ' + parrafos);
+  assert.match(doc, /fuera/);
+  assert.match(doc, /dentro/);
+});
