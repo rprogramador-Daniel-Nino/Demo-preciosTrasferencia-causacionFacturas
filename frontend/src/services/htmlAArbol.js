@@ -14,8 +14,11 @@
    documento colgando dentro de la imagen. */
 const VACIAS = new Set(['img', 'br', 'hr', 'meta', 'link', 'input', 'col']);
 
+/* Script y style llevan contenido crudo (JS y CSS), no HTML. */
+const CRUDAS = new Set(['script', 'style']);
+
 const ENTIDADES = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–',
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–',
 };
 
 const desescapar = (s) =>
@@ -44,8 +47,9 @@ export function htmlAArbol(html) {
   const pila = [raiz];
   const cima = () => pila[pila.length - 1];
 
-  /* Un solo recorrido: etiqueta de cierre, comentario, etiqueta de apertura, o texto. */
-  const rx = /<\/([a-zA-Z][-\w:]*)\s*>|<!--[\s\S]*?-->|<([a-zA-Z][-\w:]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|<[^>]*>/g;
+  /* Un solo recorrido: etiqueta de cierre, comentario, CDATA, declaración,
+     instrucción de proceso, etiqueta de apertura. */
+  const rx = /<\/([a-zA-Z][-\w:]*)\s*>|<!--[\s\S]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>|<![^>]*>|<\?[\s\S]*?\?>|<([a-zA-Z][-\w:]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
   let ultimo = 0;
   let m;
 
@@ -68,14 +72,40 @@ export function htmlAArbol(html) {
       continue;
     }
     if (m[2]) {
-      const etiqueta = m[2].toLowerCase();
-      const nodo = { etiqueta, atributos: leerAtributos(m[3] || ''), hijos: [] };
+      /* CDATA: su contenido es texto. */
+      empujarTexto(m[2]);
+      continue;
+    }
+    if (m[3]) {
+      const etiqueta = m[3].toLowerCase();
+
+      /* Script y style llevan contenido crudo (JS y CSS), no HTML. */
+      if (CRUDAS.has(etiqueta)) {
+        const nodo = { etiqueta, atributos: leerAtributos(m[4] || ''), hijos: [] };
+        cima().hijos.push(nodo);
+
+        const cierre = new RegExp('</' + etiqueta + '\\s*>', 'i');
+        const resto = html.slice(rx.lastIndex);
+        const match = cierre.exec(resto);
+
+        if (match) {
+          ultimo = rx.lastIndex + match.index + match[0].length;
+          rx.lastIndex = ultimo;
+        } else {
+          /* Si no aparece el cierre, descarta hasta el final. */
+          ultimo = html.length;
+          rx.lastIndex = html.length;
+        }
+        continue;
+      }
+
+      const nodo = { etiqueta, atributos: leerAtributos(m[4] || ''), hijos: [] };
       cima().hijos.push(nodo);
-      const cierraSola = /\/\s*$/.test(m[3] || '');
+      const cierraSola = /\/\s*$/.test(m[4] || '');
       if (!VACIAS.has(etiqueta) && !cierraSola) pila.push(nodo);
       continue;
     }
-    /* Comentario o etiqueta ilegible: se descarta sin tocar la pila. */
+    /* Comentario, declaración, instrucción de proceso: se descartan sin tocar la pila. */
   }
   empujarTexto(html.slice(ultimo));
   return raiz;

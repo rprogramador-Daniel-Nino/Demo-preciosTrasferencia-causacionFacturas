@@ -59,3 +59,41 @@ test('cierra las etiquetas mal anidadas sin perder texto', () => {
   assert.equal(textoDe(r), 'ab');
   assert.equal(r.hijos.length, 2);
 });
+
+test('un < suelto es texto y no se traga lo que viene detrás', () => {
+  /* Un informe de precios de transferencia compara cifras con < y > de forma natural.
+     Un < que no abre una etiqueta es texto, no una orden de tragar. */
+  assert.equal(textoDe(htmlAArbol('<p>2 < 3 y 5 > 4</p>')), '2 < 3 y 5 > 4');
+  assert.equal(textoDe(htmlAArbol('<p>margen < 5% y > 2%</p>')), 'margen < 5% y > 2%');
+});
+
+test('el contenido de un CDATA es texto y no se pierde', () => {
+  /* CDATA es un mecanismo XML para incrustar contenido literal. Su contenido debe
+     aparecer como texto, no descartarse. */
+  assert.equal(textoDe(htmlAArbol('<p><![CDATA[a < b]]>texto</p>')), 'a < btexto');
+});
+
+test('el CSS y el JavaScript se descartan, pero no se llevan lo que sigue', () => {
+  /* El contenido de script y style es código, no contenido del informe, y se descarta.
+     Pero ese descarte no debe tragarse etiquetas posteriores ni el cierre incorrecto
+     debe dejar pendiente la etiqueta en la pila. */
+  const r1 = htmlAArbol('<style>.x { color: red; } /* a < b */</style><p>hola</p>');
+  assert.equal(textoDe(r1), 'hola');
+  assert.equal(r1.hijos.length, 2);
+  assert.equal(r1.hijos[0].etiqueta, 'style');
+  assert.equal(r1.hijos[1].etiqueta, 'p');
+
+  const r2 = htmlAArbol('<script>if (a < b) { x("<div>"); }</script><p>hola</p>');
+  assert.equal(textoDe(r2), 'hola');
+  assert.equal(r2.hijos.length, 2);
+  assert.equal(r2.hijos[0].etiqueta, 'script');
+  assert.equal(r2.hijos[1].etiqueta, 'p');
+});
+
+test('una declaración no es contenido', () => {
+  /* DOCTYPE, comentarios HTML de declaración, etc. son marcas de control, no contenido. */
+  assert.equal(textoDe(htmlAArbol('<!DOCTYPE html><p>a</p>')), 'a');
+  const r = htmlAArbol('<!DOCTYPE html><p>a</p>');
+  assert.equal(r.hijos.length, 1);
+  assert.equal(r.hijos[0].etiqueta, 'p');
+});
