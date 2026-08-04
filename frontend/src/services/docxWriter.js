@@ -14,7 +14,7 @@ import {
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
 } from 'docx';
-import { HOJA, HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
+import { HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
 
@@ -296,11 +296,13 @@ function traductor({ porId, anexo = [] }) {
     siguienteAnexo += 1;
     const datos = bytesDeDataUrl(pagina);
     if (!datos) return bloquesDe(nodo);
-    /* La página del anexo ocupa la caja de texto entera. Mantener su proporción real no se
-       puede saber sin decodificar el PNG: se usa el ancho de la caja y un alto proporcional a
-       una hoja carta (11/8,5), que es una SUPOSICIÓN razonable para estos escaneos, no una
-       medida tomada del archivo. */
-    const anchoPx = cmAPixeles(medidaEnCm(HOJA.ancho) - 2 * medidaEnCm(HOJA.margen));
+    /* La página del anexo ocupa la caja de texto entera: la misma `CAJA_TEXTO` que usan las
+       tablas, sólo que en píxeles y no en twips. 96/1440 es la conversión de twips (1440 por
+       pulgada) a píxeles de 96 ppp, la misma proporción que usa `cmAPixeles` para centímetros.
+       Mantener la proporción real de la página no se puede saber sin decodificar el PNG: se usa
+       el ancho de la caja y un alto proporcional a una hoja carta (11/8,5), que es una
+       SUPOSICIÓN razonable para estos escaneos, no una medida tomada del archivo. */
+    const anchoPx = Math.round(CAJA_TEXTO * 96 / 1440);
     return [new Paragraph({
       alignment: AlignmentType.CENTER,
       children: [new ImageRun({

@@ -477,3 +477,40 @@ test('con menos páginas de anexo que huecos, los que sobran siguen avisando', a
   assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
   assert.match(doc, /Falta el anexo/);
 });
+
+test('avisa cuando el anexo trae más páginas que huecos', async () => {
+  /* Perder páginas de un anexo de estados financieros firmados en un documento que se radica
+     ante la DIAN sería grave, y este aviso por consola es lo único que lo delata: nada en el
+     .docx generado —ni el `<w:drawing>`, ni el texto del hueco— refleja que algo quedó fuera;
+     sólo la consola lo dice. Se reemplaza `console.warn` mientras dura el test y se restaura
+     en un `finally`, para no dejarlo puesto y estropear otros tests. Se filtra por contenido
+     del mensaje y no se cuentan llamadas a ciegas: otro camino del writer dispara
+     `console.warn` por un motivo distinto (una imagen sin recurso, por ejemplo). */
+  const original = console.warn;
+  const llamadas = [];
+  console.warn = (...args) => llamadas.push(args.join(' '));
+  const avisoDeAnexo = () => llamadas.find((m) => m.includes('[docxWriter]') && m.includes('anexo'));
+  try {
+    /* 1. Un hueco, dos páginas: sobra una, y avisa mencionando cuántas. */
+    const { doc } = await abrir(HUECO, [], [PNG_1x1, PNG_1x1]);
+    const aviso = avisoDeAnexo();
+    assert.ok(aviso, 'no avisó de las páginas de anexo sobrantes');
+    assert.match(aviso, /sobran 1 página/);
+
+    /* 2. La primera página sí entra en el hueco: avisar de la que sobra no le cuesta la que
+       sí cabe. */
+    assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
+    assert.doesNotMatch(doc, /Falta el anexo/);
+
+    /* 3. Si la cuenta cuadra, o si sobran huecos en vez de páginas, no avisa: el aviso sólo
+       tiene sentido cuando de verdad se pierde algo, si no se vuelve ruido que la gente
+       aprende a ignorar. */
+    llamadas.length = 0;
+    const dos = HUECO + HUECO.replace(/98/g, '99');
+    await abrir(dos, [], [PNG_1x1, PNG_1x1]); /* dos huecos, dos páginas: cuenta exacta */
+    await abrir(dos, [], [PNG_1x1]); /* dos huecos, una página: sobra hueco, no página */
+    assert.equal(avisoDeAnexo(), undefined, 'avisó de páginas sobrantes sin que sobrara ninguna');
+  } finally {
+    console.warn = original;
+  }
+});
