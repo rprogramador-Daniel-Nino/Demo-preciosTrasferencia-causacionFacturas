@@ -188,6 +188,39 @@ export function cssDeExportacion(base) {
     'margin:0;padding:0}' + reglasDocumento();
 }
 
+/* Un salto de página que Word obedece: un elemento, un salto.
+
+   `clear="all"` es lo que hace que no se cuele junto a nada flotante que haya quedado
+   arriba, y es la forma que emite Word cuando uno guarda un documento como página web. */
+const SALTO_DE_PAGINA = '<br clear="all" style="page-break-before:always" />';
+
+/* Mete un salto de página delante de cada página del original menos la primera.
+
+   Aquí está el fallo que produjo un documento de 834 hojas para 112 páginas, y que sobrevivió
+   a tres arreglos porque yo daba por causa otra cosa.
+
+   Lo que había era una regla `div.pagina{page-break-before:always}`. **Word no tiene `div`**:
+   su modelo de documento son párrafos, tablas y secciones. Cuando el importador de HTML
+   encuentra un `div` con propiedades de bloque no puede crear una caja —no existe— así que las
+   EMPUJA a cada párrafo que hay dentro. Y en Word el salto de página es una propiedad de
+   párrafo (`w:pageBreakBefore`). Resultado: un salto delante de casi cada párrafo suelto.
+
+   Medido sobre el documento generado: 810 párrafos fuera de tablas contando cada racha de
+   vacíos como una sola, contra las 834 hojas que marcaba Word. Los párrafos de dentro de las
+   tablas no cuentan porque acaban en celdas, y una celda no arrastra el salto. Por eso el
+   número seguía la cuenta de párrafos SUELTOS y no la de los 3972 del documento, y por eso
+   quitar las 889 filas roscadas no cambió ni una hoja.
+
+   Con el salto como elemento propio hay exactamente uno por página. La primera no lleva
+   ninguno delante: empieza en la hoja 1. */
+export function conSaltosDePagina(html) {
+  let primera = true;
+  return String(html || '').replace(/<div class="pagina"/g, (coincidencia) => {
+    if (primera) { primera = false; return coincidencia; }
+    return SALTO_DE_PAGINA + coincidencia;
+  });
+}
+
 /* El bloque `@page` con nombre y los saltos de página que Word entiende desde HTML.
 
    La página va **nombrada** y hay un div que la usa con `page:Section1`. Es lo que Word
@@ -216,18 +249,25 @@ export function cssDeWord({ conEncabezado, lado = 'centro', enLaPortada = true }
     /* El lado sale del PDF: en el informe de referencia el logo va a la derecha —su
        centro cae en 16,7 cm de una hoja de 21,6— y se exportaba centrado. */
     'p.enc{text-align:' + alineacion + ';margin:0}' +
-    /* La portada es su propia página, como en el original. Sin esto el título y el logo
-       se funden con el índice, que es lo que hacía que no se pareciera.
+    /* Aquí NO va ninguna regla de salto de página, y es el hallazgo que costó más caro de
+       toda esta historia.
 
-       La primera página NO se exceptúa aquí con `:first-of-type`, que es lo que había y no
-       funcionaba por dos motivos a la vez: el motor HTML de Word es de la época de CSS 2 y no
-       entiende las pseudoclases estructurales de CSS 3, y además el selector era falso —el
-       primer `div` del documento es el de metadatos del extractor, no una página, así que
-       `div.pagina:first-of-type` no emparejaba con nada ni en un navegador—. Resultado: la
-       primera página también llevaba salto y Word abría el informe con una hoja en blanco.
+       Lo que había era `div.pagina{page-break-before:always}`, y producía un documento de 834
+       hojas para 112 páginas. **Word no tiene `div`**: su modelo de documento son párrafos,
+       tablas y secciones. Cuando el importador de HTML encuentra un `div` con propiedades de
+       bloque, no puede crear una caja —no existe—, así que las EMPUJA a cada párrafo que hay
+       dentro. Y `page-break-before` es, en Word, una propiedad de párrafo
+       (`w:pageBreakBefore`). Resultado: salto de página delante de casi cada párrafo.
 
-       La excepción va en un `style` en línea sobre la primera página, que Word sí respeta
-       siempre y no depende de ningún selector. La pone `handleDownload`. */
-    'div.pagina{page-break-before:always}'
+       Medido sobre el documento generado: los párrafos que están fuera de tablas, contando
+       cada racha de vacíos como una sola, son 810. Word marcaba 834 hojas. Los de dentro de
+       las tablas no cuentan porque acaban en celdas, y una celda no arrastra el salto: por eso
+       el número seguía la cuenta de párrafos SUELTOS y no la de todos. Y por eso quitar las
+       889 filas roscadas no cambió ni una hoja, aunque yo diera esa por la causa.
+
+       El salto va como un elemento propio entre página y página —un `<br>` con el estilo en
+       línea, que lo pone `handleDownload`—: un elemento, un salto, sin nada que empujar hacia
+       abajo. La portada no lleva ninguno delante, que era el otro fallo. */
+    ''
   );
 }

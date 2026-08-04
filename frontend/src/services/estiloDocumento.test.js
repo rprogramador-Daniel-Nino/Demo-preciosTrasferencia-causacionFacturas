@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   HOJA, REGLAS_DOCUMENTO, reglasDocumento, cuerpoDe, cssDeHojas, cssDeExportacion, cssDeWord,
   CLASE_VALOR, resaltarValor, cmATwips, cmAPixeles, medidaEnCm, HOJA_TWIPS,
+  conSaltosDePagina,
 } from './estiloDocumento.js';
 
 test('la pantalla y el .doc llevan las mismas reglas de documento', () => {
@@ -182,8 +183,10 @@ test('el CSS del .doc no usa pseudoclases que Word no entiende', () => {
     ':nth-of-type', ':not(', ':is(', ':where(']) {
     assert.ok(!css.includes(pseudo), 'Word no entiende ' + pseudo + ' y la regla se pierde');
   }
-  /* El salto de página sí está: la excepción de la portada va en línea, no por selector. */
-  assert.ok(css.includes('div.pagina{page-break-before:always}'));
+  /* Y el salto de página tampoco va por selector: ninguna regla lo menciona, porque Word
+     empujaría la propiedad a cada párrafo de dentro del div. Va como elemento, en
+     `conSaltosDePagina`. */
+  assert.ok(!css.includes('page-break'));
 });
 
 test('el previo no señala la primera página con :first-of-type', () => {
@@ -223,4 +226,38 @@ test('medidaEnCm lee las medidas del previo', () => {
      no abre, y el fallo aparecería lejos de aquí. */
   assert.equal(medidaEnCm('abc'), 0);
   assert.equal(medidaEnCm(undefined), 0);
+});
+
+test('el salto de página va como elemento, no como propiedad del div', () => {
+  /* Este es el fallo de las 834 hojas. Word no tiene `div`: su modelo son párrafos, tablas y
+     secciones. Al importar un `div` con `page-break-before` empuja la propiedad a cada párrafo
+     de dentro, y en Word el salto ES una propiedad de párrafo. Salían 810 párrafos sueltos
+     convertidos en 834 hojas. Un elemento, un salto. */
+  const css = cssDeWord({ conEncabezado: true });
+  assert.ok(!css.includes('page-break'), 'sigue habiendo una regla de salto sobre el div');
+});
+
+test('conSaltosDePagina pone un salto por página y ninguno delante de la portada', () => {
+  const html = '<div class="pagina" data-pagina="1"><p>a</p></div>' +
+    '<div class="pagina" data-pagina="2"><p>b</p></div>' +
+    '<div class="pagina" data-pagina="3"><p>c</p></div>';
+  const r = conSaltosDePagina(html);
+  /* Dos saltos para tres páginas. */
+  assert.equal((r.match(/page-break-before:always/g) || []).length, 2);
+  /* Y el primero NO va delante de la portada: si fuera, Word abriría con una hoja en blanco. */
+  assert.ok(r.startsWith('<div class="pagina" data-pagina="1"'), 'la portada lleva salto delante');
+  /* El salto cae justo antes de la página que abre, no en otro sitio. */
+  assert.ok(r.includes('<br clear="all" style="page-break-before:always" /><div class="pagina" data-pagina="2"'));
+  /* No se pierde contenido. */
+  assert.ok(r.includes('<p>a</p>') && r.includes('<p>b</p>') && r.includes('<p>c</p>'));
+});
+
+test('conSaltosDePagina aguanta un documento sin páginas y uno vacío', () => {
+  /* La plantilla maestra y un .docx por mammoth no traen páginas: sin saltos y sin romperse. */
+  assert.equal(conSaltosDePagina('<p>a</p>'), '<p>a</p>');
+  assert.equal(conSaltosDePagina(''), '');
+  assert.equal(conSaltosDePagina(undefined), '');
+  /* Una sola página tampoco lleva salto. */
+  assert.equal((conSaltosDePagina('<div class="pagina" data-pagina="1"></div>')
+    .match(/page-break/g) || []).length, 0);
 });

@@ -19,7 +19,7 @@ import {
 import { renderizar } from '../services/plantillaRenderer.js';
 import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
 import {
-  cssDeHojas, cssDeExportacion, cssDeWord,
+  cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina,
 } from '../services/estiloDocumento.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
@@ -669,13 +669,12 @@ export default function ReporteGenerador({ study, estudioId }) {
        nada que hacer en el documento. Además era el primer `div` del cuerpo, y por eso
        `div.pagina:first-of-type` no emparejaba con ninguna página.
 
-       Dos: la excepción del salto de la primera página va en línea. El motor HTML de Word es
-       de la época de CSS 2 y no entiende `:first-of-type`, así que con la regla en la hoja de
-       estilos la portada también llevaba salto y Word abría el informe con una hoja en blanco
-       delante. Un `style` en línea lo respeta siempre. */
-    const cleanHtml = cuerpoSinEncabezado
-      .replace(/<div data-extractor="\d+"[^>]*><\/div>/, '')
-      .replace(/<div class="pagina"/, '<div style="page-break-before:avoid" class="pagina"');
+       Dos: los saltos de página se meten como elementos propios entre página y página, en vez
+       de dejarlos en una regla sobre `div.pagina`. El motivo, medido, está en
+       `conSaltosDePagina`. */
+    const cleanHtml = conSaltosDePagina(
+      cuerpoSinEncabezado.replace(/<div data-extractor="\d+"[^>]*><\/div>/, '')
+    );
 
     /* Encabezado y pie van dentro de la secci\u00f3n y fuera del flujo: Word los recoge
        por su id y los repite en cada p\u00e1gina. El pie lleva el campo PAGE, no el
