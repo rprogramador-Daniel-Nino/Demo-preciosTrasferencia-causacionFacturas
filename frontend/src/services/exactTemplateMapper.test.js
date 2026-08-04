@@ -708,3 +708,27 @@ test('reemplazarAnexoB sustituye el bloque estático completo, entre su título 
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C');
   assert.ok(salida.includes('otra tabla'), 'se perdió contenido de ANEXO C');
 });
+
+test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables del estudio activo, no las de End Game', () => {
+  const estudio = {
+    ent: 'ACME COLOMBIA S.A.S', nit: '800123456-7', anio: 2025,
+    comparables: [{
+      name: 'DISTRIBUIDORA ANDINA S.A.',
+      eeffVerificado: true,
+      desc: 'Distributes consumer goods across the Andean region.',
+      descActividad: 'Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.',
+      s: 1000000, c: 400000, op: 100000, ar: 50000, inv: 30000, ap: 20000,
+      eeffDatos: { periodo: '2025', utilidad_bruta: 600000, gastos_operacionales: 500000, total_activos: 900000, propiedad_planta_equipo: 200000, efectivo_y_equivalentes: 150000, gastos_investigacion_desarrollo: null, gastos_publicidad: null },
+    }],
+  };
+
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
+
+  assert.ok(!salida.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia');
+  assert.ok(!salida.includes('COLOPL'), 'sobrevivió una comparable del informe de referencia');
+  assert.ok(!salida.includes('FUN YOURS'), 'sobrevivió una comparable del informe de referencia');
+  assert.ok(!salida.includes('IGG INC'), 'sobrevivió una comparable del informe de referencia');
+  assert.ok(salida.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo');
+  assert.ok(salida.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
+  assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');
+});

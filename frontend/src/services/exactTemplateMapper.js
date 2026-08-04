@@ -750,6 +750,9 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
   html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
 
+  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ─── */
+  html = reemplazarAnexoB(html, study, year, wrap);
+
   /* ─── Tabla 16 y las cifras que la rodean ───
      La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
      acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
