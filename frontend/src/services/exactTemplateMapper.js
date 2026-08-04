@@ -140,8 +140,8 @@ function reemplazarCuerpoApartado(html, anclaInicio, anclaFin, marcador) {
 /** Sustituye el apartado sectorial (III.C) y su título, en el cuerpo y en el
  *  índice. Si el HTML no trae las anclas —una plantilla que el usuario subió— no
  *  toca nada: devuelve el mismo HTML y diagnosticarCobertura lo reporta. */
-function reemplazarApartadoSectorial(html, study, year, wrap) {
-  const titulo = tituloSectorial(study);
+function reemplazarApartadoSectorial(html, study, year, wrap, analisisSector) {
+  const titulo = tituloSectorial(study, analisisSector, year);
 
   /* Cuerpo: conserva el <a id> y la estructura <ol><li> —si se borra el ancla, el
      hipervínculo del índice queda roto— y cambia el título y todo el contenido que
@@ -151,7 +151,7 @@ function reemplazarApartadoSectorial(html, study, year, wrap) {
     '[\\s\\S]*?(?=<ol>\\s*<li>\\s*<a id="' + ANCLA_SIGUIENTE + '">)'
   );
   html = html.replace(rxCuerpo, (completo, abre, cierra) =>
-    abre + titulo + cierra + '\n' + generarApartadoSectorial(study, year, wrap)
+    abre + titulo + cierra + '\n' + generarApartadoSectorial(study, year, wrap, analisisSector)
   );
 
   // Índice: solo el texto del enlace, conservando el número de página.
@@ -165,7 +165,7 @@ function reemplazarApartadoSectorial(html, study, year, wrap) {
 
 /** Qué quedó sin cubrir al hidratar. Alimenta el aviso de ReporteGenerador: un
  *  banner que dice qué falta sirve; uno que solo dice «revise el documento» no. */
-export function diagnosticarCobertura(rawHtml, study, datosMacro) {
+export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector) {
   const year = Number(study && study.anio) || 2025;
   const html = String(rawHtml || '');
 
@@ -201,6 +201,10 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro) {
     sectorialCubierto: html.includes('id="' + ANCLA_SECTORIAL + '"'),
     seriesFaltantes,
     narrativaCubierta: !!(datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial && datosMacro.narrativa.colombia),
+    /* Distinto de sectorialCubierto: ese solo dice si la plantilla trae el ancla de
+       III.C; esto dice si YA se generó (o se reutilizó) el análisis de esa actividad
+       para este año — sin eso, el apartado sale con el respaldo genérico y marcador. */
+    sectorNarrativaCubierta: !!(analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)]),
     razonesRechazoCubiertas: !razones.sinDatos,
     /* Los conteos no suman el universo evaluado: algo cambió en el estudio después de
        ejecutar la selección y la tabla quedaría inconsistente. */
@@ -448,7 +452,7 @@ ${images.map((imgUrl, i) => `
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
  * y realiza el reemplazo quirúrgico de las variables del cliente activo.
  */
-export function hydrateExactWordTemplate(rawHtml, study, datosMacro) {
+export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSector) {
   if (!rawHtml) return '';
 
   let html = rawHtml;
@@ -495,7 +499,7 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro) {
      el paso siguiente aparta todos los <a> del documento. Sustituye el análisis
      del sector de videojuegos de End Game —título incluido, en el cuerpo y en el
      índice— por uno construido con la actividad real del contribuyente. */
-  html = reemplazarApartadoSectorial(html, study, year, wrap);
+  html = reemplazarApartadoSectorial(html, study, year, wrap, analisisSector);
 
   /* III.A y III.B: se reserva el lugar con un marcador (van antes de
      apartarEnlaces por la misma razón que el sectorial, se delimitan con las
