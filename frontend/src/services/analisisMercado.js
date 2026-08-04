@@ -88,21 +88,27 @@ export const DATOS_MACRO = {
   },
 
   /* Proyecciones por región para un año dado. No es una serie temporal: cada año
-     trae su propio corte de regiones. */
+     trae su propio corte de regiones.
+
+     Arreglo de objetos planos y no de pares [region, valor]: Firestore prohíbe
+     que un elemento de un arreglo sea a su vez un arreglo, y esta misma forma
+     viaja desde functions/ (analisisMercadoActualizar.js la escribe en
+     analisisMercado/actual). Con pares anidados, el set() del cron fallaba y —
+     por ser una escritura atómica— se perdía el mes entero, no solo esta serie. */
   crecimiento_por_region: {
     2025: [
-      ['Mundial', '2.8'],
-      ['Estados Unidos', '1.8'],
-      ['China', '4.0'],
-      ['América Latina', '2.3'],
-      ['Colombia (OCDE)', '2.8'],
+      { region: 'Mundial', valor: '2.8' },
+      { region: 'Estados Unidos', valor: '1.8' },
+      { region: 'China', valor: '4.0' },
+      { region: 'América Latina', valor: '2.3' },
+      { region: 'Colombia (OCDE)', valor: '2.8' },
     ],
     2026: [
-      ['Mundial', '3.0'],
-      ['Estados Unidos', '2.0'],
-      ['China', '4.6'],
-      ['América Latina', '2.3'],
-      ['Colombia (OCDE)', '2.4'],
+      { region: 'Mundial', valor: '3.0' },
+      { region: 'Estados Unidos', valor: '2.0' },
+      { region: 'China', valor: '4.6' },
+      { region: 'América Latina', valor: '2.3' },
+      { region: 'Colombia (OCDE)', valor: '2.4' },
     ],
   },
 };
@@ -172,9 +178,36 @@ export function tablaHTML(titulo, encabezados, filas, fuente) {
    igual que hacían los dos generadores originales.
    ───────────────────────────────────────────────────────────────────────────── */
 
-export function generarTablaPibMundial(year, wrap) {
+/** Fecha de consulta legible, o cadena vacía si no hay ninguna o no se puede
+ *  interpretar. Acepta un Timestamp de Firestore (tiene .toDate()), un Date, o
+ *  un valor serializable a fecha. */
+function formatearFechaConsulta(fechaConsulta) {
+  if (!fechaConsulta) return '';
+  const fecha = typeof fechaConsulta.toDate === 'function' ? fechaConsulta.toDate() : new Date(fechaConsulta);
+  if (Number.isNaN(fecha.getTime())) return '';
+  return fecha.toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/** Serie y fuente para una clave: prioriza datosMacro (de Firestore) sobre el
+ *  respaldo local embebido en el código. La fecha de consulta se anota junto a
+ *  la fuente solo cuando la serie viene de Firestore: ahí sí se registró cuándo
+ *  se consultó, y el numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de
+ *  2016 la exige. Para el respaldo local no existe esa fecha y no se fabrica. */
+function resolverSerie(datosMacro, clave) {
+  const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
+  if (remota && remota.valores) {
+    let fuenteTexto = remota.fuente || FUENTES_MACRO[clave];
+    if (remota.fuenteUrl) fuenteTexto += ' (' + remota.fuenteUrl + ')';
+    const fecha = formatearFechaConsulta(remota.fechaConsulta);
+    if (fecha) fuenteTexto += ', consultado el ' + fecha;
+    return { valores: remota.valores, fuente: fuenteTexto };
+  }
+  return { valores: DATOS_MACRO[clave], fuente: FUENTES_MACRO[clave] };
+}
+
+export function generarTablaPibMundial(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
-  const S = DATOS_MACRO.pib_mundial;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
   return tablaHTML(
     'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
     ['Año', 'Crecimiento Mundial (%)'],
@@ -183,13 +216,13 @@ export function generarTablaPibMundial(year, wrap) {
       [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
       [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
     ],
-    FUENTES_MACRO.pib_mundial
+    fuente
   );
 }
 
-export function generarTablaPibColombia(year, wrap) {
+export function generarTablaPibColombia(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
-  const S = DATOS_MACRO.pib_colombia;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
   return tablaHTML(
     'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
     ['Año', 'Crecimiento del PIB (%)'],
@@ -198,13 +231,13 @@ export function generarTablaPibColombia(year, wrap) {
       [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
       [wrap(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
     ],
-    FUENTES_MACRO.pib_colombia
+    fuente
   );
 }
 
-export function generarTablaInflacionGlobal(year, wrap) {
+export function generarTablaInflacionGlobal(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
-  const S = DATOS_MACRO.inflacion_global;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
   return tablaHTML(
     'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
     ['Año', 'Tasa de Inflación (%)'],
@@ -213,12 +246,13 @@ export function generarTablaInflacionGlobal(year, wrap) {
       [wrap(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
       [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
     ],
-    FUENTES_MACRO.inflacion_global
+    fuente
   );
 }
 
-export function generarTablaCrecimientoPorRegion(year, wrap) {
-  const porRegion = DATOS_MACRO.crecimiento_por_region[year];
+export function generarTablaCrecimientoPorRegion(datosMacro, year, wrap) {
+  const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
+  const porRegion = porAnio[year];
   const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
   if (!porRegion || !porRegion.length) {
     /* Sin corte del año no se reutiliza el de otro: se listan las regiones con el
@@ -226,15 +260,15 @@ export function generarTablaCrecimientoPorRegion(year, wrap) {
     const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
     return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
       regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]),
-      FUENTES_MACRO.crecimiento_por_region);
+      fuente);
   }
   return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
-    porRegion.map(([region, valor]) => [region, wrap(valor)]),
-    FUENTES_MACRO.crecimiento_por_region);
+    porRegion.map(({ region, valor }) => [region, wrap(valor)]),
+    fuente);
 }
 
-export function generarTablaInflacionColombia(year, wrap) {
-  const S = DATOS_MACRO.inflacion_colombia;
+export function generarTablaInflacionColombia(datosMacro, year, wrap) {
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
   return tablaHTML(
     'Inflación en Colombia (' + year + ' vs. Meta ' + (year + 1) + ')',
     ['Indicador', 'Valor (%)'],
@@ -242,12 +276,12 @@ export function generarTablaInflacionColombia(year, wrap) {
       ['Inflación ' + wrap(year), wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
       ['Meta Inflación ' + wrap(year + 1), wrap(DATOS_MACRO.meta_inflacion_banrep)],
     ],
-    FUENTES_MACRO.inflacion_colombia
+    fuente
   );
 }
 
-export function generarTablaTasaIntervencion(year, wrap) {
-  const S = DATOS_MACRO.tasa_intervencion;
+export function generarTablaTasaIntervencion(datosMacro, year, wrap) {
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
   const y1 = year - 1, y2 = year;
   /* Se toman las observaciones de los dos años de la ventana con su etiqueta
      original; si falta alguna, esa fila lleva el marcador. */
@@ -262,13 +296,13 @@ export function generarTablaTasaIntervencion(year, wrap) {
     'Tasa de Intervención del Banco de la República (' + etiquetas[0] + ' - ' + etiquetas[1] + ')',
     ['Fecha', 'Tasa de Intervención (%)'],
     filas,
-    FUENTES_MACRO.tasa_intervencion
+    fuente
   );
 }
 
-export function generarTablaTRM(year, wrap) {
+export function generarTablaTRM(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year;
-  const S = DATOS_MACRO.trm_promedio;
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
   return tablaHTML(
     'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
     ['Año', 'TRM Promedio ($)'],
@@ -276,12 +310,12 @@ export function generarTablaTRM(year, wrap) {
       [wrap(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
       [wrap(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
     ],
-    FUENTES_MACRO.trm_promedio
+    fuente
   );
 }
 
-export function generarTablaDesempleo(year, wrap) {
-  const S = DATOS_MACRO.desempleo_colombia;
+export function generarTablaDesempleo(datosMacro, year, wrap) {
+  const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
   return tablaHTML(
     'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + (year + 1) + ')',
     ['Indicador', 'Valor (%)'],
@@ -289,38 +323,122 @@ export function generarTablaDesempleo(year, wrap) {
       ['Desempleo ' + wrap(year), wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
       ['Desempleo Proyectado ' + wrap(year + 1), wrap(valorODisponible(S, year + 1, 'la proyección de desempleo'))],
     ],
-    FUENTES_MACRO.desempleo_colombia
+    fuente
   );
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
    5. APARTADO SECTORIAL (III.C)
-   Port de ptSectorAuto (index.html, Bloque 4). Construye el apartado con la
-   actividad real del contribuyente y no afirma ninguna cifra sectorial: exige
-   los indicadores del año con su fuente mediante un marcador explícito.
+   Variable por la actividad real del contribuyente (study.actividad_especifica),
+   redactado por functions/analisisSectorActualizar.js (Gemini busca, Claude
+   redacta) la primera vez que esa actividad aparece — ver
+   frontend/src/components/ReporteGenerador.jsx. Se reutiliza entre todos los
+   estudios que compartan la misma actividad: no vuelve a consumir IA para cada
+   cliente nuevo del mismo sector. Sin esa corrida todavía, cae al respaldo
+   genérico con marcador (comportamiento previo a esta funcionalidad).
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* El objeto social y la actividad vienen de OCR y pueden traer caracteres que
-   rompen el HTML del informe. */
+   rompen el HTML del informe.
+
+   La comilla doble se escapa además de &, < y >: esta misma función escapa las
+   URLs de narrativa.fuentesCitadas, que van dentro de un href="…" (ver
+   generarApartadoColombia). Sin ella, una URL con comilla —viene de la IA, no la
+   controlamos— se sale del atributo y puede inyectar HTML. En texto normal
+   &quot; se muestra igual que la comilla, así que no cambia nada visible. */
 function escaparHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-/** Título de III.C. Neutro a propósito: el detalle de la actividad va en el
- *  cuerpo, donde hay espacio, y no en un encabezado que también aparece en el
- *  índice del informe. */
-export function tituloSectorial(study) {
+/* ── Clave de reutilización entre estudios ──
+   Copia idéntica de la que usa functions/analisisSectorPrompts.js: frontend
+   decide qué leer/pedir, backend decide dónde escribir, y tienen que coincidir
+   en la misma clave. No comparten código porque son entornos y formatos de
+   módulo distintos (ESM vs. CommonJS). */
+
+export function normalizarActividad(actividad) {
+  return String(actividad || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Hash FNV-1a de 32 bits, en base36 — ver el comentario gemelo en
+ *  functions/analisisSectorPrompts.js para el porqué de la forma. */
+export function claveActividad(actividadNormalizada) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < actividadNormalizada.length; i++) {
+    hash ^= actividadNormalizada.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return 'act_' + (hash >>> 0).toString(36);
+}
+
+/** La entrada de porAnio para el año pedido, o undefined si Firestore no
+ *  tiene todavía una corrida para esta actividad+año. */
+function entradaSector(analisisSector, year) {
+  return analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
+}
+
+/** Título de III.C. Con corrida disponible, nombra la industria real
+ *  (redactada por Claude, ver tituloSector); sin ella, cae al respaldo neutro
+ *  anterior a esta funcionalidad. */
+export function tituloSectorial(study, analisisSector, year) {
+  const entrada = entradaSector(analisisSector, year);
+  if (entrada && entrada.tituloSector) {
+    return 'Análisis del Sector de la industria ' + escaparHtml(entrada.tituloSector);
+  }
   const ciiu = escaparHtml((study && study.ciiu) || '').trim();
   return ciiu
     ? 'Análisis del Sector económico de la Compañía (actividad CIIU ' + ciiu + ')'
     : 'Análisis del Sector económico de la Compañía';
 }
 
-export function generarApartadoSectorial(study, year, wrap) {
+export function generarApartadoSectorial(study, year, wrap, analisisSector) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
+  const entrada = entradaSector(analisisSector, year);
+
+  if (entrada) {
+    const nombreSector = escaparHtml(entrada.tituloSector);
+    const filas = (entrada.datosClaveTabla || []).map((f) => [
+      escaparHtml(f.indicador), f.valorAnterior ? escaparHtml(f.valorAnterior) : '—', escaparHtml(f.valorActual),
+    ]);
+    const tabla = filas.length
+      ? tablaHTML(
+          'Datos Clave del Sector de la Industria ' + entrada.tituloSector + ' en Colombia (' + (year - 1) + ' vs. ' + year + ')',
+          ['Indicador Clave', String(year - 1), String(year)],
+          filas
+        )
+      : '';
+    const fuentes = ((entrada.narrativa && entrada.narrativa.fuentesCitadas) || []).filter((f) => f && f.titulo && f.url);
+    const listaFuentes = fuentes.length
+      ? '<p>\n<strong>Fuentes consultadas:</strong> ' +
+        fuentes.map((f) => '<a href="' + escaparHtml(f.url) + '">' + escaparHtml(f.titulo) + '</a>').join(', ') +
+        '\n</p>\n'
+      : '';
+
+    return (
+      '<p>\n<strong>Comportamiento del Sector de la Industria ' + nombreSector + ' en ' + year +
+      ' y Comparación con ' + (year - 1) + '</strong>\n</p>\n' +
+      entrada.narrativa.comportamiento +
+      tabla +
+      '<p>\n<strong>Importaciones y exportaciones del sector de la industria ' + nombreSector + '</strong>\n</p>\n' +
+      entrada.narrativa.comercioExterior +
+      '<p>\n<strong>¿Qué se proyecta para el sector de la industria ' + nombreSector + ' en ' + (year + 1) + '?</strong>\n</p>\n' +
+      entrada.narrativa.proyeccion +
+      '<p>\n<strong>Conclusiones y Perspectivas</strong>\n</p>\n' +
+      entrada.narrativa.conclusiones +
+      listaFuentes
+    );
+  }
+
+  // Respaldo: todavía no hay una corrida guardada para esta actividad+año.
   const ent = escaparHtml((study && study.ent) || '').trim();
   const ciiu = escaparHtml((study && study.ciiu) || '').trim();
   const actividad = escaparHtml(
@@ -349,4 +467,81 @@ export function generarApartadoSectorial(study, year, wrap) {
     'numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]\n</p>\n';
 
   return html;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   6. APARTADOS III.A Y III.B
+   Narrativa ya redactada por functions/analisisMercadoActualizar.js (Gemini busca,
+   Claude redacta), o un marcador de pendiente si Firestore todavía no tiene una
+   corrida guardada. A diferencia del apartado sectorial, el título de estos dos
+   no depende del cliente, así que no hace falta una función de título aparte.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Agrega `html` solo si `narrativaTexto` no ya trae esa tabla incrustada
+ *  (detectado por el prefijo literal de su título, estable entre años porque
+ *  el rango entre paréntesis es lo único que cambia). Cubre los dos casos:
+ *  la narrativa que redacta Claude hoy no incrusta tablas (el prompt se lo
+ *  prohíbe explícitamente), así que esta función se las agrega; una
+ *  narrativa preparada a mano que ya las incrusta junto a su tema no las
+ *  recibe por segunda vez. */
+function tablaSiFalta(narrativaTexto, prefijoTitulo, html) {
+  return narrativaTexto.includes(prefijoTitulo) ? '' : html;
+}
+
+/** Tablas de III.A que la narrativa (de Claude o preparada a mano) todavía no
+ *  incruste junto a su tema. */
+function tablasMundial(datosMacro, year, wrap, narrativaTexto) {
+  const n = narrativaTexto || '';
+  return (
+    tablaSiFalta(n, 'Crecimiento del PIB Mundial (', generarTablaPibMundial(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasas de Inflación Global (', generarTablaInflacionGlobal(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Proyecciones de Crecimiento del PIB por Región/País (', generarTablaCrecimientoPorRegion(datosMacro, year, wrap))
+  );
+}
+
+export function generarApartadoMundial(datosMacro, year, wrap) {
+  const marca = typeof wrap === 'function' ? wrap : (v) => v;
+  const narrativa = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
+  if (narrativa) return narrativa + tablasMundial(datosMacro, year, wrap, narrativa);
+  return '<p>\n' + marca(
+    '[Actualizar con el análisis del panorama de la economía mundial del año gravable ' + year +
+    ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'
+  ) + '\n</p>\n' + tablasMundial(datosMacro, year, wrap, '');
+}
+
+/** Tablas de III.B que la narrativa todavía no incruste junto a su tema.
+ *  Mismo papel que tablasMundial — ver su comentario. */
+function tablasColombia(datosMacro, year, wrap, narrativaTexto) {
+  const n = narrativaTexto || '';
+  return (
+    tablaSiFalta(n, 'Crecimiento del PIB en Colombia (', generarTablaPibColombia(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Inflación en Colombia (', generarTablaInflacionColombia(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasa de Intervención del Banco de la República (', generarTablaTasaIntervencion(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasa Representativa del Mercado (TRM) Promedio (', generarTablaTRM(datosMacro, year, wrap)) +
+    tablaSiFalta(n, 'Tasa de Desempleo en Colombia (', generarTablaDesempleo(datosMacro, year, wrap))
+  );
+}
+
+/** III.B. Además de la narrativa, cierra con las fuentes que la IA declaró haber
+ *  usado (narrativa.fuentesCitadas): el numeral 4 del artículo 1.2.2.2.1.5 del
+ *  Decreto 1625 de 2016 exige fuente y fecha de consulta, y la lista va aquí —al
+ *  final del segundo apartado— y no repetida en los dos. */
+export function generarApartadoColombia(datosMacro, year, wrap) {
+  const marca = typeof wrap === 'function' ? wrap : (v) => v;
+  const narrativa = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
+  if (narrativa) {
+    /* escaparHtml aunque el título y la URL vengan de la IA vía Firestore: es
+       texto que no controlamos y termina dentro de un href y de un enlace. */
+    const fuentes = (datosMacro.narrativa.fuentesCitadas || []).filter((f) => f && f.titulo && f.url);
+    const listaFuentes = fuentes.length
+      ? '<p>\n<strong>Fuentes consultadas:</strong> ' +
+        fuentes.map((f) => '<a href="' + escaparHtml(f.url) + '">' + escaparHtml(f.titulo) + '</a>').join(', ') +
+        '\n</p>\n'
+      : '';
+    return narrativa + tablasColombia(datosMacro, year, wrap, narrativa) + listaFuentes;
+  }
+  return '<p>\n' + marca(
+    '[Actualizar con el análisis del panorama de la economía colombiana del año gravable ' + year +
+    ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016.]'
+  ) + '\n</p>\n' + tablasColombia(datosMacro, year, wrap, '');
 }

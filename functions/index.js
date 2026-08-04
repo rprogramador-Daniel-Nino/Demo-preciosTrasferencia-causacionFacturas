@@ -4,6 +4,7 @@ const { defineSecret } = require('firebase-functions/params');
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
@@ -229,6 +230,74 @@ exports.extraerCamara = onRequest(
     } catch (err) {
       console.error('Error extrayendo Cámara de Comercio:', err);
       res.status(502).json({ error: 'Error procesando Cámara de Comercio con Gemini API', detail: err.message });
+    }
+  }
+);
+
+// Refresca mensualmente las cifras y la narrativa de la Sección III (III.A/III.B)
+// en Firestore. No se ejecuta en cada informe: ver spec
+// docs/superpowers/specs/2026-08-03-analisis-mercado-ia-design.md.
+exports.actualizarAnalisisMercadoScheduled = onSchedule(
+  {
+    schedule: '0 6 1 * *',
+    timeZone: 'America/Bogota',
+    region: 'us-central1',
+    secrets: [GEMINI_API_KEY, ANTHROPIC_API_KEY],
+    timeoutSeconds: 300,
+  },
+  async () => {
+    /* require dentro del handler y no arriba del archivo: este módulo arrastra
+       firebase-admin (y su inicialización), y todas las funciones de este archivo
+       comparten el mismo index.js. Requerido arriba, cada cold start de claude,
+       gemini, extraerRut y extraerCamara —que nunca tocan Firestore— pagaba esa
+       carga. Este cron corre una vez al mes; la carga la paga él. */
+    const { actualizarAnalisisMercado } = require('./analisisMercadoActualizar');
+    const anioActual = new Date().getFullYear();
+    await actualizarAnalisisMercado({
+      geminiApiKey: GEMINI_API_KEY.value(),
+      claudeApiKey: ANTHROPIC_API_KEY.value(),
+      anioActual,
+    });
+  }
+);
+
+// Análisis del Sector (III.C), bajo demanda: a diferencia del cron mensual de
+// arriba (un solo documento global), este se dispara desde el frontend la
+// primera vez que ve una actividad+año que no estén ya en
+// analisisSector/{clave} — ver frontend/src/components/ReporteGenerador.jsx.
+// Los estudios siguientes con la misma actividad leen el resultado guardado
+// sin volver a consumir Gemini/Claude.
+exports.generarAnalisisSector = onRequest(
+  { secrets: [GEMINI_API_KEY, ANTHROPIC_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+    const { actividad, year } = req.body || {};
+    if (typeof actividad !== 'string' || !actividad.trim()) {
+      res.status(400).json({ error: 'Falta "actividad".' });
+      return;
+    }
+    const anioNum = Number(year);
+    if (!Number.isInteger(anioNum) || anioNum < 2000 || anioNum > 2100) {
+      res.status(400).json({ error: 'Falta "year" (año gravable) válido.' });
+      return;
+    }
+    try {
+      // Mismo motivo que en el cron: no cargar firebase-admin en cada cold
+      // start de claude/gemini/extraerRut/extraerCamara.
+      const { actualizarAnalisisSector } = require('./analisisSectorActualizar');
+      const resultado = await actualizarAnalisisSector({
+        geminiApiKey: GEMINI_API_KEY.value(),
+        claudeApiKey: ANTHROPIC_API_KEY.value(),
+        actividad,
+        year: anioNum,
+      });
+      res.json(resultado);
+    } catch (err) {
+      console.error('Error generando el análisis de sector:', err);
+      res.status(502).json({ error: 'No se pudo generar el análisis de sector: ' + err.message });
     }
   }
 );

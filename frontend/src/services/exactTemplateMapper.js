@@ -12,6 +12,8 @@ import {
   generarTablaTRM,
   generarTablaDesempleo,
   generarApartadoSectorial,
+  generarApartadoMundial,
+  generarApartadoColombia,
   tituloSectorial,
 } from './analisisMercado.js';
 
@@ -38,6 +40,19 @@ const TABLAS_MACRO = [
    sobreviva a que cambie la redacción del apartado. */
 const ANCLA_SECTORIAL = '_Toc208930979';
 const ANCLA_SIGUIENTE = '_Toc208930980';
+/* III.A y III.B: mismo documento de Word, anclas ya presentes en la plantilla
+   (confirmadas en el índice de masterTemplate.js). El orden es
+   Mundial(977) -> Colombia(978) -> Sectorial(979) -> IV(980). */
+const ANCLA_MUNDIAL = '_Toc208930977';
+const ANCLA_COLOMBIA = '_Toc208930978';
+
+/* Marcadores para sustituir III.A/III.B en dos fases: primero se reserva el
+   lugar (antes de apartarEnlaces, por la misma razón que el resto de anclas),
+   y la narrativa real se inserta al final, después de ANIOS_DEL_ESTUDIO y de
+   los reemplazos literales — si se insertara antes, esas reglas reescribirían
+   años y textos dentro de la prosa de Claude. Mismo patrón que MARCA_ENLACE. */
+const MARCA_APARTADO_MUNDIAL = '@@PT_APARTADO_MUNDIAL@@';
+const MARCA_APARTADO_COLOMBIA = '@@PT_APARTADO_COLOMBIA@@';
 
 /* Años del estudio: los contextos donde «2024» significa el año gravable y no un
    dato histórico. Es una lista blanca deliberada. La regla anterior —reemplazar
@@ -105,11 +120,29 @@ function reponerEnlaces(html, deposito) {
   });
 }
 
+/** Sustituye el cuerpo de III.A o III.B entre su ancla y la del apartado
+ *  siguiente, conservando el título original (a diferencia del sectorial, este
+ *  título no depende del cliente) y descartando el resto del cuerpo original
+ *  (las tablas de End Game incluidas). En el lugar de la narrativa deja
+ *  `marcador`, no el contenido final — ver MARCA_APARTADO_MUNDIAL/COLOMBIA
+ *  arriba. Ya no se preservan las tablas del cuerpo original: desde que
+ *  generarApartadoMundial/Colombia incrustan sus propias tablas —junto al
+ *  párrafo del tema que comentan, no todas al final— conservar las de End
+ *  Game solo produciría duplicados. Si el HTML no trae la ancla —una
+ *  plantilla que el usuario subió— no toca nada. */
+function reemplazarCuerpoApartado(html, anclaInicio, anclaFin, marcador) {
+  const rx = new RegExp(
+    '(<a id="' + anclaInicio + '"></a><strong>[\\s\\S]*?</strong>\\s*</li>\\s*</ol>)' +
+    '[\\s\\S]*?(?=<ol>\\s*<li>\\s*<a id="' + anclaFin + '">)'
+  );
+  return html.replace(rx, (completo, tituloCompleto) => tituloCompleto + '\n' + marcador);
+}
+
 /** Sustituye el apartado sectorial (III.C) y su título, en el cuerpo y en el
  *  índice. Si el HTML no trae las anclas —una plantilla que el usuario subió— no
  *  toca nada: devuelve el mismo HTML y diagnosticarCobertura lo reporta. */
-function reemplazarApartadoSectorial(html, study, year, wrap) {
-  const titulo = tituloSectorial(study);
+function reemplazarApartadoSectorial(html, study, year, wrap, analisisSector) {
+  const titulo = tituloSectorial(study, analisisSector, year);
 
   /* Cuerpo: conserva el <a id> y la estructura <ol><li> —si se borra el ancla, el
      hipervínculo del índice queda roto— y cambia el título y todo el contenido que
@@ -119,7 +152,7 @@ function reemplazarApartadoSectorial(html, study, year, wrap) {
     '[\\s\\S]*?(?=<ol>\\s*<li>\\s*<a id="' + ANCLA_SIGUIENTE + '">)'
   );
   html = html.replace(rxCuerpo, (completo, abre, cierra) =>
-    abre + titulo + cierra + '\n' + generarApartadoSectorial(study, year, wrap)
+    abre + titulo + cierra + '\n' + generarApartadoSectorial(study, year, wrap, analisisSector)
   );
 
   // Índice: solo el texto del enlace, conservando el número de página.
@@ -133,22 +166,24 @@ function reemplazarApartadoSectorial(html, study, year, wrap) {
 
 /** Qué quedó sin cubrir al hidratar. Alimenta el aviso de ReporteGenerador: un
  *  banner que dice qué falta sirve; uno que solo dice «revise el documento» no. */
-export function diagnosticarCobertura(rawHtml, study) {
+export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector) {
   const year = Number(study && study.anio) || 2025;
   const html = String(rawHtml || '');
 
   const seriesFaltantes = [];
   const porAnio = [
-    ['el crecimiento del PIB mundial', DATOS_MACRO.pib_mundial],
-    ['el crecimiento del PIB de Colombia', DATOS_MACRO.pib_colombia],
-    ['la inflación global', DATOS_MACRO.inflacion_global],
-    ['la inflación de Colombia', DATOS_MACRO.inflacion_colombia],
-    ['la TRM promedio', DATOS_MACRO.trm_promedio],
-    ['la tasa de desempleo', DATOS_MACRO.desempleo_colombia],
-    ['la tasa de intervención del Banco de la República', DATOS_MACRO.tasa_intervencion],
-    ['las proyecciones de crecimiento por región', DATOS_MACRO.crecimiento_por_region],
+    ['el crecimiento del PIB mundial', 'pib_mundial'],
+    ['el crecimiento del PIB de Colombia', 'pib_colombia'],
+    ['la inflación global', 'inflacion_global'],
+    ['la inflación de Colombia', 'inflacion_colombia'],
+    ['la TRM promedio', 'trm_promedio'],
+    ['la tasa de desempleo', 'desempleo_colombia'],
+    ['la tasa de intervención del Banco de la República', 'tasa_intervencion'],
+    ['las proyecciones de crecimiento por región', 'crecimiento_por_region'],
   ];
-  porAnio.forEach(([concepto, serie]) => {
+  porAnio.forEach(([concepto, clave]) => {
+    const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
+    const serie = (remota && remota.valores) || DATOS_MACRO[clave];
     if (!serie || serie[year] === undefined) seriesFaltantes.push(concepto);
   });
 
@@ -166,6 +201,11 @@ export function diagnosticarCobertura(rawHtml, study) {
     year,
     sectorialCubierto: html.includes('id="' + ANCLA_SECTORIAL + '"'),
     seriesFaltantes,
+    narrativaCubierta: !!(datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial && datosMacro.narrativa.colombia),
+    /* Distinto de sectorialCubierto: ese solo dice si la plantilla trae el ancla de
+       III.C; esto dice si YA se generó (o se reutilizó) el análisis de esa actividad
+       para este año — sin eso, el apartado sale con el respaldo genérico y marcador. */
+    sectorNarrativaCubierta: !!(analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)]),
     razonesRechazoCubiertas: !razones.sinDatos,
     /* Los conteos no suman el universo evaluado: algo cambió en el estudio después de
        ejecutar la selección y la tabla quedaría inconsistente. */
@@ -413,7 +453,7 @@ ${images.map((imgUrl, i) => `
  * Recibe el HTML completo del informe modelo End Game (con sus 27 secciones intactas)
  * y realiza el reemplazo quirúrgico de las variables del cliente activo.
  */
-export function hydrateExactWordTemplate(rawHtml, study) {
+export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSector) {
   if (!rawHtml) return '';
 
   let html = rawHtml;
@@ -463,7 +503,15 @@ export function hydrateExactWordTemplate(rawHtml, study) {
      el paso siguiente aparta todos los <a> del documento. Sustituye el análisis
      del sector de videojuegos de End Game —título incluido, en el cuerpo y en el
      índice— por uno construido con la actividad real del contribuyente. */
-  html = reemplazarApartadoSectorial(html, study, year, wrap);
+  html = reemplazarApartadoSectorial(html, study, year, wrap, analisisSector);
+
+  /* III.A y III.B: se reserva el lugar con un marcador (van antes de
+     apartarEnlaces por la misma razón que el sectorial, se delimitan con las
+     anclas <a id="_Toc…">) y se conservan las tablas macro que traiga cada
+     cuerpo. La narrativa real se inserta al final de esta función — ver el
+     comentario junto a MARCA_APARTADO_MUNDIAL. */
+  html = reemplazarCuerpoApartado(html, ANCLA_MUNDIAL, ANCLA_COLOMBIA, MARCA_APARTADO_MUNDIAL);
+  html = reemplazarCuerpoApartado(html, ANCLA_COLOMBIA, ANCLA_SECTORIAL, MARCA_APARTADO_COLOMBIA);
 
   /* ─── Guarda de enlaces ───
      Varias fuentes citadas en la sección III llevan el año en la URL
@@ -537,17 +585,17 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     { target: /(?<![\d.])83\.801\.656(?![\d.])/g, val: wrap(study.t_dif ? fmt(num(study.t_dif)) : '—') },
     { target: /(?<![\d.])206\.129\.230(?![\d.])/g, val: wrap(study.t_act_nocurr ? fmt(num(study.t_act_nocurr)) : '—') },
 
-    /* Barrido final del nombre del cliente anterior. Las reglas de arriba cubren
-       las razones sociales completas, pero en el informe original quedaban tres
-       variantes sin regla: «ENG GAME…» (error de tecleo del propio informe),
-       «END GAME INTERACTIVE» sin sufijo, y «END GAME» a secas en prosa («permite a
-       END GAME trabajar…»). Eran 13 apariciones que viajaban a cualquier informe.
-
-       Van al final por orden de especificidad: una regla genérica antes de las
-       específicas partiría la razón social completa por la mitad. */
-    { target: /ENG GAME INTERACTIVE COLOMBIA SAS/gi, val: wrap(study.ent || 'ENG GAME INTERACTIVE COLOMBIA SAS') },
-    { target: /END GAME INTERACTIVE/g, val: wrap(study.vinc || 'END GAME INTERACTIVE') },
-    { target: /END GAME/g, val: wrap(study.ent || 'END GAME') }
+    /* Solo queda el error de tecleo del propio informe de referencia («ENG GAME…»
+       en vez de «END GAME…»), que la regla de arriba no reconoce porque no
+       empieza por «END». Las variantes «END GAME INTERACTIVE» sin sufijo y
+       «END GAME» a secas que este barrido cubría antes ya las captura la regla
+       de arriba (todos sus grupos —INTERACTIVE, COLOMBIA, sufijo— son opcionales).
+       Un barrido adicional para esas dos formas duplicaba la razón social cuando
+       el cliente real es el mismo End Game de un año anterior: el texto recién
+       insertado (p. ej. «END GAME INTERACTIVE COLOMBIA SOCIEDAD POR ACCIONES
+       SIMPLIFICADA») vuelve a empezar por «END GAME [INTERACTIVE]», y ese barrido
+       lo volvía a capturar y a reemplazar sobre sí mismo. */
+    { target: /ENG GAME INTERACTIVE COLOMBIA SAS/gi, val: wrap(study.ent || 'ENG GAME INTERACTIVE COLOMBIA SAS') }
   ];
 
   // Aplicar reemplazos iniciales
@@ -668,9 +716,21 @@ export function hydrateExactWordTemplate(rawHtml, study) {
      desempleo) salían con los valores de End Game. El título se reconoce con
      \([^<]*\) en vez del rango literal «(2023-2025)», para que la tabla siga
      siendo reconocible después de haberse regenerado una vez con otro año. */
+  /* datosMacro es el documento de Firestore (analisisMercado/actual) que recibe
+     hydrateExactWordTemplate como tercer parámetro. Cuando no trae una serie —o
+     cuando el llamador no pasa datosMacro en absoluto— cada generadora cae a su
+     respaldo local DATOS_MACRO/FUENTES_MACRO. */
   TABLAS_MACRO.forEach(({ rx, gen }) => {
-    html = html.replace(rx, () => gen(year, wrap));
+    html = html.replace(rx, () => gen(datosMacro, year, wrap));
   });
+
+  /* Sustitución tardía de III.A/III.B: si la narrativa se insertara donde se
+     reservó el lugar (arriba, antes de ANIOS_DEL_ESTUDIO y de los reemplazos
+     literales), esas reglas reescribirían años y textos dentro de la prosa de
+     Claude. Se sustituye aquí, después de todos los pases de texto, para que
+     la narrativa llegue intacta. */
+  html = html.replace(MARCA_APARTADO_MUNDIAL, () => generarApartadoMundial(datosMacro, year, wrap));
+  html = html.replace(MARCA_APARTADO_COLOMBIA, () => generarApartadoColombia(datosMacro, year, wrap));
 
   return reponerEnlaces(html, enlaces);
 }

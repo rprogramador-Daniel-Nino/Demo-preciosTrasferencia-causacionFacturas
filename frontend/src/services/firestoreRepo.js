@@ -38,6 +38,8 @@ const ESTUDIOS = 'estudios';
 const CLIENTES = 'clientes';
 const COMPARABLES = 'comparablesHistoricas';
 const EEFF = 'eeffComparables';
+const ANALISIS_MERCADO = 'analisisMercado';
+const ANALISIS_SECTOR = 'analisisSector';
 
 /* Colecciones del modelo compartido anterior, para la migración. */
 const COLECCIONES_MIGRABLES = [ESTUDIOS, CLIENTES, COMPARABLES, EEFF];
@@ -403,6 +405,26 @@ export async function leerEeffDeComparables(claves, anio, usuario) {
     if (instantanea.exists()) encontrados[clave] = instantanea.data();
   }
   return encontrados;
+}
+
+/* ══════════════════════ análisis de mercado (Sección III) ══════════════════════ */
+
+/** Cifras y narrativa vigentes de la Sección III (III.A/III.B), o null si el cron
+ *  programado (`actualizarAnalisisMercadoScheduled`) todavía no ha corrido. No pasa
+ *  por documento(usuario, …): es dato compartido, no por consultor. */
+export async function leerAnalisisMercado() {
+  const instantanea = await getDoc(doc(db, ANALISIS_MERCADO, 'actual'));
+  return instantanea.exists() ? instantanea.data() : null;
+}
+
+/** Análisis de sector (III.C) ya generado para una actividad, o null si
+ *  todavía no existe corrida para ninguna de sus años. Tampoco pasa por
+ *  documento(usuario, …): es compartido entre todos los estudios de la misma
+ *  actividad, no por consultor ni por cliente. */
+export async function leerAnalisisSector(claveActividad) {
+  if (!claveActividad) return null;
+  const instantanea = await getDoc(doc(db, ANALISIS_SECTOR, claveActividad));
+  return instantanea.exists() ? instantanea.data() : null;
 }
 
 /* ══════════════════════ migraciones ══════════════════════ */

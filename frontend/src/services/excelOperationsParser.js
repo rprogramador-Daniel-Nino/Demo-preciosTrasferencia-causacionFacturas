@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 
 /**
  * Módulo de lectura e ingesta del Excel de Operaciones con Vinculados
@@ -65,13 +65,29 @@ export async function parseExcelOperations(file) {
       });
       const iTipo = enc.findIndex(x => String(x).toLowerCase().includes('tipo de operaci'));
       const iMonto = enc.findIndex(x => String(x).toLowerCase().includes('monto'));
+      // Columna 'Cod' (código de operación DIAN). Cuando existe, solo cuentan
+      // como operación real las filas que la tengan diligenciada: filas sin
+      // código son renglones auxiliares del mismo formato/concepto (ej.
+      // retención, IVA) que no son la operación de ingreso en sí.
+      const iCod = enc.findIndex(x => String(x).trim().toLowerCase() === 'cod');
 
       let currentTipo = '';
+      // Las hojas 'Op. Vinculados Economicos' y 'Op. Paraisos Fiscales' listan
+      // primero "1. OPERACIONES DE INGRESO" y luego "2. OPERACIONES DE
+      // EGRESO" en la misma hoja. Solo las operaciones de ingreso deben
+      // sumarse al monto de la Tabla 3 (Transacciones Inter compañía); las de
+      // egreso pertenecen a otro formato y se colaban en el total porque el
+      // parser no distinguía la sección.
+      let currentSeccion = 'INGRESO';
 
       for (let i = encIdx + 1; i < Math.min(d.length, 3000); i++) {
         const f = d[i] || [];
         const a = String(f[0] || '').trim();
         if (/tipos de operacion/i.test(a)) break; // Fin de datos / Catálogo
+
+        const rowJoined = f.join(' ').toUpperCase();
+        if (rowJoined.includes('OPERACIONES DE EGRESO')) { currentSeccion = 'EGRESO'; continue; }
+        if (rowJoined.includes('OPERACIONES DE INGRESO')) { currentSeccion = 'INGRESO'; continue; }
 
         const nom = String(iNom > -1 ? f[iNom] : '').trim();
         // Las notas al pie ("* Ver lista de tipo de operaciones según DIAN")
@@ -85,12 +101,14 @@ export async function parseExcelOperations(file) {
         const nit = String(iNit > -1 ? f[iNit] : '').replace(/[^0-9]/g, '');
         const monto = parseFloat(String(iMonto > -1 ? f[iMonto] : '').replace(/[^0-9.\-]/g, '')) || 0;
         const pais = String(iPais > -1 ? f[iPais] : '').trim();
+        const cod = String(iCod > -1 ? f[iCod] : '').trim();
 
         if (nom && !mainVinculado) mainVinculado = nom;
         if (nit && !mainVinculadoId) mainVinculadoId = nit;
         if (pais && !mainPais) mainPais = pais;
 
-        if (monto > 0) {
+        const tieneCod = iCod === -1 || cod !== '';
+        if (monto > 0 && currentSeccion === 'INGRESO' && tieneCod) {
           rowsParsed.push({
             vinculado: nom,
             nit,

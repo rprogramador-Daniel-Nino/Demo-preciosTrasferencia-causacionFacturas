@@ -4,6 +4,7 @@ import {
   hydrateExactWordTemplate, filasRazonesRechazo, diagnosticarCobertura,
   filasComparablesInforme, reemplazarTablaMuestraComparables, reemplazarTablaMargenComparables,
 } from './exactTemplateMapper.js';
+import { MASTER_WORD_TEMPLATE } from './masterTemplate.js';
 
 /* Estudio de un cliente que NO es End Game. Todo lo que salga con datos de
    End Game en la salida es una fuga. */
@@ -125,6 +126,141 @@ test('reemplazo dinámico de la tabla de PIB Mundial y PIB de Colombia para el a
   assert.ok(salidaColombia.includes('3.2'), 'Falta valor 3.2 de PIB Colombia');
 });
 
+test('el apartado mundial (III.A) usa la narrativa de datosMacro cuando existe', () => {
+  const html =
+    '<ol>\n<li>\n<a id="_Toc208930977"></a><strong>Análisis del Panorama de la Economía Mundial</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game sobre 2023-2024 y Ucrania-Rusia.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930978"></a><strong>Análisis del panorama de la economía colombiana</strong>\n</li>\n</ol>';
+  const datosMacro = { narrativa: { mundial: '<p>Narrativa nueva de la economía mundial.</p>' } };
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 }, datosMacro);
+
+  assert.ok(salida.includes('Narrativa nueva de la economía mundial.'), 'no se insertó la narrativa nueva');
+  assert.ok(!salida.includes('Ucrania-Rusia'), 'quedó el texto viejo de End Game');
+  assert.ok(salida.includes('id="_Toc208930977"'), 'se borró el ancla de III.A');
+  assert.ok(salida.includes('id="_Toc208930978"'), 'el reemplazo se comió el ancla de III.B');
+});
+
+test('el apartado colombiano (III.B) usa la narrativa de datosMacro cuando existe', () => {
+  const html =
+    '<ol>\n<li>\n<a id="_Toc208930978"></a><strong>Análisis del panorama de la economía colombiana</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930979"></a><strong>Análisis del Sector</strong>\n</li>\n</ol>';
+  const datosMacro = { narrativa: { colombia: '<p>Narrativa nueva de Colombia.</p>' } };
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 }, datosMacro);
+
+  assert.ok(salida.includes('Narrativa nueva de Colombia.'), 'no se insertó la narrativa nueva');
+  assert.ok(!salida.includes('Texto original de End Game'), 'quedó el texto viejo');
+});
+
+test('sin datosMacro, III.A y III.B quedan con el marcador de pendiente, no con el texto de End Game', () => {
+  const html =
+    '<ol>\n<li>\n<a id="_Toc208930977"></a><strong>Análisis del Panorama de la Economía Mundial</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930978"></a><strong>Análisis del panorama de la economía colombiana</strong>\n</li>\n</ol>\n' +
+    '<p>Texto original de End Game.</p>\n' +
+    '<ol>\n<li>\n<a id="_Toc208930979"></a><strong>Análisis del Sector</strong>\n</li>\n</ol>';
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 });
+
+  assert.ok(!salida.includes('Texto original de End Game'), 'quedó el texto de End Game sin datosMacro');
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía mundial'), 'falta el marcador de III.A');
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía colombiana'), 'falta el marcador de III.B');
+});
+
+test('las 8 tablas macro usan las cifras de datosMacro cuando están disponibles', () => {
+  const html = '<p>\n<strong>Crecimiento del PIB Mundial (2023-2025)</strong>\n</p>\n<table>\n<tr>\n<td>\n<p>\n3.2\n</p>\n</td>\n</tr>\n</table>';
+  const datosMacro = {
+    series: { pib_mundial: { valores: { '2026': '9.9' }, fuente: 'Fuente de prueba' } },
+  };
+  const salida = hydrateExactWordTemplate(html, { anio: 2026 }, datosMacro);
+  assert.ok(salida.includes('9.9'), 'la tabla no usó la cifra de datosMacro');
+  assert.ok(salida.includes('Fuente de prueba'), 'la tabla no citó la fuente de datosMacro');
+});
+
+/* ─── Regresión con la plantilla REAL, no con un fixture sintético ───
+   Las 8 tablas macro viven DENTRO del cuerpo de III.A (3) y III.B (5). Los
+   fixtures de arriba las prueban aisladas y por eso no vieron el bug:
+   reemplazarCuerpoApartado borraba todo el cuerpo, tablas incluidas, y cuando
+   TABLAS_MACRO.forEach corría después ya no quedaba nada que regenerar. Las 8
+   desaparecían del informe en silencio. */
+
+test('las 8 tablas macro sobreviven al hidratar la plantilla real (regresión)', () => {
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, { anio: 2026 });
+  const titulosEsperados = [
+    'Crecimiento del PIB Mundial (',
+    'Crecimiento del PIB en Colombia (',
+    'Tasas de Inflación Global (',
+    'Proyecciones de Crecimiento del PIB por Región/País (',
+    'Inflación en Colombia (',
+    'Tasa de Intervención del Banco de la República (',
+    'Tasa Representativa del Mercado (TRM) Promedio (',
+    'Tasa de Desempleo en Colombia (',
+  ];
+  titulosEsperados.forEach((t) => {
+    assert.ok(salida.includes(t), 'desapareció la tabla: ' + t);
+  });
+  assert.ok(!salida.includes('@@PT_APARTADO_'), 'quedó un marcador de apartado sin sustituir');
+  assert.ok(!salida.includes('@@PT_ENLACE_'), 'quedó un marcador de enlace sin sustituir');
+});
+
+test('en la plantilla real cada tabla macro queda regenerada con el año del estudio', () => {
+  /* Que el título sobreviva no basta: tiene que sobrevivir REGENERADO. Si la
+     tabla se conservara pero el forEach no la alcanzara, el rango seguiría
+     siendo el de End Game (2023-2025) y el informe saldría con datos de otro
+     año gravable. */
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, { anio: 2026 });
+  const rangosEsperados = [
+    'Crecimiento del PIB Mundial (2025-2027)',
+    'Crecimiento del PIB en Colombia (2025-2027)',
+    'Tasas de Inflación Global (2025-2027)',
+    'Proyecciones de Crecimiento del PIB por Región/País (2026)',
+    'Inflación en Colombia (2026 vs. Meta 2027)',
+    'Tasa de Intervención del Banco de la República (Diciembre 2025 - Diciembre 2026)',
+    'Tasa Representativa del Mercado (TRM) Promedio (2025-2026)',
+    'Tasa de Desempleo en Colombia (2026 vs. Proyección 2027)',
+  ];
+  rangosEsperados.forEach((t) => {
+    assert.ok(salida.includes(t), 'la tabla no se regeneró para el año del estudio: ' + t);
+  });
+  assert.ok(
+    !salida.includes('Crecimiento del PIB Mundial (2023-2025)'),
+    'quedó el rango original de End Game en la tabla de PIB mundial'
+  );
+  /* Las 5 regiones vienen de DATOS_MACRO.crecimiento_por_region[2026], que ahora
+     son objetos {region, valor} y no pares anidados. Si el .map se hubiera
+     quedado desestructurando un arreglo, aquí saldrían celdas «undefined». */
+  ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'].forEach((r) => {
+    assert.ok(salida.includes(r), 'falta la región ' + r + ' en la tabla por región');
+  });
+  assert.ok(!salida.includes('undefined'), 'quedó un «undefined» en el documento');
+});
+
+test('la narrativa de III.A/III.B llega intacta: ni los años ni los literales la reescriben', () => {
+  /* La narrativa se inserta al final a propósito. Si se insertara donde se
+     reserva el lugar, ANIOS_DEL_ESTUDIO reescribiría «En el año 2024,» dentro de
+     la prosa —atribuyendo a 2026 una cifra correctamente citada de 2024— y los
+     reemplazos literales cambiarían «END GAME» aunque la IA lo mencionara como
+     un dato del mercado. */
+  const mundial = '<p>En el año 2024, la inflación global descendió a 5,9 % según el FMI.</p>';
+  const colombia = '<p>Durante el año 2024 el DANE reportó un crecimiento de 1,7 %.</p>';
+  const salida = hydrateExactWordTemplate(
+    MASTER_WORD_TEMPLATE,
+    { anio: 2026, ent: 'ACME COLOMBIA S.A.S' },
+    { narrativa: { mundial, colombia } }
+  );
+  assert.ok(salida.includes(mundial), 'la narrativa mundial se alteró al hidratar');
+  assert.ok(salida.includes(colombia), 'la narrativa de Colombia se alteró al hidratar');
+  // Y las tablas del mismo cuerpo siguen ahí, regeneradas.
+  assert.ok(salida.includes('Tasas de Inflación Global (2025-2027)'), 'la narrativa se comió las tablas de III.A');
+  assert.ok(salida.includes('Tasa de Desempleo en Colombia (2026 vs. Proyección 2027)'), 'la narrativa se comió las tablas de III.B');
+});
+
+test('sobre la plantilla real, sin narrativa quedan los marcadores y no el texto de End Game', () => {
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, { anio: 2026 });
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía mundial'), 'falta el marcador de III.A');
+  assert.ok(salida.includes('Actualizar con el análisis del panorama de la economía colombiana'), 'falta el marcador de III.B');
+  assert.ok(!/Ucrania|guerra en Ucrania/i.test(salida), 'quedó la prosa original de End Game en la sección III');
+});
+
 /* --- Higiene de la ruta de respaldo. Es la que toma TODO estudio que no haya
    subido y marcado un PDF, así que hoy es la ruta real de casi todo el mundo.
    Con un estudio recién creado salían 25 rastros del cliente anterior. --- */
@@ -194,6 +330,25 @@ test('la regla de la razón social no se come el nombre del vinculado', () => {
   assert.ok(salida.includes('PARTNER GAMES LLC'), 'el vinculado no se sustituyó');
   assert.ok(!/\bINC\b/.test(salida), 'quedó " INC" colgando: ' + salida);
   assert.ok(!salida.includes('ACME COLOMBIA S.A.S'), 'el contribuyente se colocó donde iba el vinculado');
+});
+
+test('un cliente que se llama igual que la plantilla no duplica su razón social', () => {
+  /* Si el contribuyente real es el mismo "End Game" de un año anterior, la
+     razón social insertada (tomada del RUT) empieza otra vez por
+     "END GAME INTERACTIVE". Un barrido final que busque esa misma cadena
+     sobre el HTML ya hidratado la vuelve a capturar y la reemplaza sobre sí
+     misma, duplicando el nombre. */
+  const html = '<p>END GAME INTERACTIVE COLOMBIA S.A.S con NIT 901.337.576-6 es una empresa</p>';
+  const study = {
+    ent: 'END GAME INTERACTIVE COLOMBIA SOCIEDAD POR ACCIONES SIMPLIFICADA',
+    vinc: 'END GAME INTERACTIVE INC',
+    nit: '800123456-7',
+    anio: 2025,
+  };
+  const salida = hydrateExactWordTemplate(html, study);
+  const apariciones = salida.split('SOCIEDAD POR ACCIONES SIMPLIFICADA').length - 1;
+  assert.strictEqual(apariciones, 1, 'la razón social salió duplicada: ' + salida);
+  assert.ok(!salida.includes('INTERACTIVE INC COLOMBIA'), 'quedó el nombre del vinculado pegado al del contribuyente: ' + salida);
 });
 
 /* ══════ Tabla 16. Razones de rechazo ══════
