@@ -401,3 +401,43 @@ test('sin páginas marcadas se emite una sola sección', async () => {
   assert.equal((doc.match(/<w:sectPr/g) || []).length, 1);
   assert.doesNotMatch(doc, /<w:br w:type="page"\/>/);
 });
+
+const ENCABEZADO = '<div data-encabezado="1" data-lado="derecha" data-desde-pagina="5">' +
+  '<img data-recurso="logo" style="width:5.53cm;height:1.23cm" /></div>';
+
+test('el logo va en el encabezado de página, una sola vez', async () => {
+  /* En el .doc llegó a repetirse 96 veces dentro del cuerpo. */
+  const { zip, doc } = await abrir(
+    ENCABEZADO + '<div class="pagina" data-pagina="1"><p>a</p></div>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.ok(zip.file('word/header1.xml'), 'no hay encabezado');
+  assert.match(zip.file('word/header1.xml').asText(), /<w:drawing>/);
+  /* Y no se queda además en el cuerpo. */
+  assert.doesNotMatch(doc, /data-encabezado/);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 0,
+    'el logo del encabezado no debe estar también en el cuerpo');
+});
+
+test('el encabezado va al lado que dice el PDF', async () => {
+  const { zip } = await abrir(ENCABEZADO + '<p>a</p>', [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(zip.file('word/header1.xml').asText(), /w:val="right"/);
+});
+
+test('si el informe no lleva encabezado en la portada, la portada va sin él', async () => {
+  /* Ponerlo en la primera lo superponía con el logo grande de la portada: son los dos logos
+     encimados que se veían en el .doc. */
+  const { doc } = await abrir(ENCABEZADO + '<p>a</p>', [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(doc, /<w:titlePg\/>/);
+});
+
+test('si el encabezado empieza en la página 1, no se activa la primera distinta', async () => {
+  const enc = '<div data-encabezado="1" data-lado="centro" data-desde-pagina="1">' +
+    '<img data-recurso="logo" style="width:2cm;height:1cm" /></div>';
+  const { doc } = await abrir(enc + '<p>a</p>', [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.doesNotMatch(doc, /<w:titlePg\/>/);
+});
+
+test('un documento sin encabezado no declara uno vacío', async () => {
+  const { zip } = await abrir('<p>a</p>');
+  assert.equal(zip.file('word/header1.xml'), null);
+});

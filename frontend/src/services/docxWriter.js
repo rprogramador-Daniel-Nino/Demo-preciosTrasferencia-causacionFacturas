@@ -9,7 +9,7 @@
    fuente que pinta la vista previa. Es lo que da la paridad que se pidió. */
 
 import {
-  Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
+  Document, Packer, Paragraph, TextRun, Header, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
@@ -38,6 +38,24 @@ const pieConNumero = () => new Footer({
     children: [new TextRun({ children: [PageNumber.CURRENT], size: 18, color: '666666' })],
   })],
 });
+
+/* El logo que el extractor apartó como encabezado, con su lado y su primera página. Los tres
+   datos los midió el extractor sobre el PDF (versión 7): el del informe de referencia va a la
+   derecha y empieza en la página 5. Una plantilla anterior no los trae y se cae a centrado y a
+   imprimirlo también en la portada, que es lo que se hacía antes. */
+function encabezadoDe(html) {
+  const m = /<div data-encabezado="1"([^>]*)>([\s\S]*?)<\/div>/.exec(html);
+  if (!m) return null;
+  const lado = (/data-lado="([^"]+)"/.exec(m[1]) || [])[1] || 'centro';
+  const desde = Number((/data-desde-pagina="(\d+)"/.exec(m[1]) || [])[1] || 1);
+  return { bloque: m[0], contenido: m[2], lado, enLaPortada: desde <= 1 };
+}
+
+const ALINEACION = {
+  derecha: AlignmentType.RIGHT,
+  izquierda: AlignmentType.LEFT,
+  centro: AlignmentType.CENTER,
+};
 
 const NIVELES = {
   h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2,
@@ -360,21 +378,41 @@ const tandasDe = (paginas) => paginas.reduce((tandas, p) => {
 
 export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}) {
   const base = estiloBaseDe(html) || { familia: 'Arial', tamano: 12 };
-  const arbol = htmlAArbol(html);
+  const enc = encabezadoDe(html);
+  /* El encabezado se saca del cuerpo: si se queda, el logo sale además como primera imagen
+     del documento. En el .doc llegó a repetirse 96 veces. `estiloBaseDe` sigue leyendo `html`
+     completo: la marca `data-estilo-base` vive en otro div y no se ve afectada. */
+  const cuerpo = enc ? html.replace(enc.bloque, '') : html;
+  const arbol = htmlAArbol(cuerpo);
   const porId = new Map((recursos || []).map((r) => [r.id, r.dataUrl]));
-  const { bloquesDe } = traductor({ porId });
+  const { bloquesDe, runsDe } = traductor({ porId });
+
+  const cabecera = enc
+    ? new Header({
+      children: [new Paragraph({
+        alignment: ALINEACION[enc.lado] || AlignmentType.CENTER,
+        children: runsDe(htmlAArbol(enc.contenido)),
+      })],
+    })
+    : null;
 
   const paginas = paginasDe(arbol);
 
   /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— se emite una sola
      sección corrida. Mejor eso que inventar una paginación que el original no tiene. */
   const secciones = paginas.length
-    ? tandasDe(paginas).map((t) => ({
+    ? tandasDe(paginas).map((t, iTanda) => ({
       properties: {
         page: t.orientacion === 'apaisada'
           ? { ...PAGINA, size: { ...PAGINA.size, orientation: PageOrientation.LANDSCAPE } }
           : PAGINA,
+        /* `titlePage` deja la primera página sin encabezado: Word sólo sabe distinguir la
+           primera de las demás. El informe de referencia no lo lleva hasta la página 5, así
+           que las páginas 2 a 4 seguirán llevándolo. Para eso harían falta más secciones, y
+           esto ya quita el solape con el logo grande de la portada. */
+        ...(iTanda === 0 && cabecera && !enc.enLaPortada ? { titlePage: true } : {}),
       },
+      ...(cabecera ? { headers: { default: cabecera } } : {}),
       footers: { default: pieConNumero() },
       children: t.paginas.flatMap((nodo, i) => [
         /* Salto delante de cada página menos de la primera de todas: la primera tanda ya
@@ -384,7 +422,12 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       ]),
     }))
     : [{
-      properties: { page: PAGINA },
+      properties: {
+        page: PAGINA,
+        /* Misma regla que arriba: es la única sección, así que ella hace de "primera". */
+        ...(cabecera && !enc.enLaPortada ? { titlePage: true } : {}),
+      },
+      ...(cabecera ? { headers: { default: cabecera } } : {}),
       footers: { default: pieConNumero() },
       children: bloquesDe(arbol).length ? bloquesDe(arbol) : [new Paragraph('')],
     }];
