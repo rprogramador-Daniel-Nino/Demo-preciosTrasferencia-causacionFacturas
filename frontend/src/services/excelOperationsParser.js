@@ -1,4 +1,5 @@
 import XLSX from 'xlsx-js-style';
+import { PAIS_DIAN } from '../utils/calculations.js';
 
 /**
  * Módulo de lectura e ingesta del Excel de Operaciones con Vinculados
@@ -71,6 +72,10 @@ export async function parseExcelOperations(file) {
       // retención, IVA) que no son la operación de ingreso en sí.
       const iCod = enc.findIndex(x => String(x).trim().toLowerCase() === 'cod');
 
+      /* Las operaciones de la hoja se acumulan aquí y no en `rowsParsed`, porque para
+         decidir si la columna 'Cod' sirve de filtro hay que haberlas visto todas. */
+      const candidatas = [];
+
       let currentTipo = '';
       // Las hojas 'Op. Vinculados Economicos' y 'Op. Paraisos Fiscales' listan
       // primero "1. OPERACIONES DE INGRESO" y luego "2. OPERACIONES DE
@@ -107,17 +112,31 @@ export async function parseExcelOperations(file) {
         if (nit && !mainVinculadoId) mainVinculadoId = nit;
         if (pais && !mainPais) mainPais = pais;
 
-        const tieneCod = iCod === -1 || cod !== '';
-        if (monto > 0 && currentSeccion === 'INGRESO' && tieneCod) {
-          rowsParsed.push({
+        if (monto > 0 && currentSeccion === 'INGRESO') {
+          candidatas.push({
             vinculado: nom,
             nit,
             pais,
             tipo: currentTipo || 'Otros servicios (07)',
-            monto
+            monto,
+            cod
           });
         }
       }
+
+      /* El filtro por 'Cod' solo se aplica si la columna está diligenciada en alguna
+         fila de esta hoja. Sirve para separar la operación real de los renglones
+         auxiliares del mismo formato —en el archivo de referencia, el concepto 4001
+         lleva código y el 4002 no—, pero es una columna opcional del formato: quien
+         escribe el tipo de operación en texto y no pone el código la deja vacía en
+         todas las filas.
+         Exigirla siempre descartaba la hoja entera de esos contribuyentes y el monto
+         salía vacío sin ninguna señal de por qué. Si nadie la diligenció no distingue
+         nada, así que no puede filtrar. */
+      const codEnUso = candidatas.some(c => c.cod !== '');
+      candidatas.forEach(({ cod, ...operacion }) => {
+        if (!codEnUso || cod !== '') rowsParsed.push(operacion);
+      });
     });
 
     // Calcular el monto total y el tipo de operación principal
@@ -140,9 +159,34 @@ export async function parseExcelOperations(file) {
       }
     });
 
-    // Traducir código país de la DIAN si es numérico (ej: 249 -> ESTADOS UNIDOS)
+    /* El país puede venir como nombre («Estados unidos») o como código numérico. Se
+       traduce con la tabla que ya usa el resto del sistema, no con un caso único: antes
+       solo se reconocía el 249 —el código que traía el archivo de referencia— y cualquier
+       otro contribuyente veía el número crudo en su informe («484» en vez de MÉXICO).
+
+       El 249 se conserva aparte porque no está en esa tabla y es el que trae el formato
+       de operaciones. OJO: la tabla dice que Estados Unidos es 840, así que las dos
+       codificaciones no son la misma y hay que decidir cuál exige la DIAN antes de
+       radicar —ver la nota al usuario en el commit. */
+    const nombrePorCodigo = Object.fromEntries(
+      Object.entries(PAIS_DIAN).map(([nombre, codigo]) => [codigo, nombre])
+    );
+    const codigo = String(mainPais || '').trim();
     let paisNombre = mainPais;
-    if (mainPais === '249') paisNombre = 'ESTADOS UNIDOS';
+    if (/^\d+$/.test(codigo)) {
+      paisNombre = nombrePorCodigo[codigo] || nombrePorCodigo[codigo.padStart(3, '0')] ||
+        (codigo === '249' ? 'ESTADOS UNIDOS' : mainPais);
+    }
+
+    /* Contrapartes distintas del archivo. El estudio guarda un solo vinculado, así que
+       cuando hay varias el monto que se ingresa es la suma de todas y el informe las
+       atribuye a la primera. No se puede resolver aquí —el modelo del estudio tiene un
+       campo, no una lista—, pero quien carga el archivo tiene que enterarse: si no, el
+       documento declara ante la DIAN una operación con una contraparte que no es la
+       única. Se agrupa por NIT y se cae al nombre cuando el NIT falta. */
+    const contrapartes = new Set(
+      rowsParsed.map(r => (r.nit || r.vinculado || '').trim().toUpperCase()).filter(Boolean)
+    );
 
     return {
       vinc: mainVinculado || null,
@@ -152,6 +196,7 @@ export async function parseExcelOperations(file) {
       monto: totalMonto || null,
       monto_operacion: totalMonto || null,
       t_s: totalMonto || null,
+      contrapartes: contrapartes.size,
       rows: rowsParsed
     };
   } catch (err) {

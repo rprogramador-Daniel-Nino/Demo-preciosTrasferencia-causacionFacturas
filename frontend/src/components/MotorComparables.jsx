@@ -18,6 +18,10 @@ import {
 } from '../services/firestoreModelo';
 import MemoriaRangoModal from './MemoriaRangoModal.jsx';
 
+/* Aviso que ocupa el lugar de la actividad económica mientras no se extraiga de los
+   adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
+const ACTIVIDAD_SIN_EXTRAER = 'No extraido por favor validar adjuntos';
+
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
@@ -28,7 +32,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [catalogo, setCatalogo] = useState(null);
 
   // State for Extracted Company Activity
-  const [actividad, setActividad] = useState(study.actividad_especifica || 'No extraido por favor validar adjuntos');
+  /* Texto que se muestra mientras no se haya extraído la actividad de los adjuntos. Es un
+     aviso para la pantalla, no un dato: más abajo se evita que se guarde como si lo
+     fuera, porque el apartado sectorial del informe se redacta con este campo. */
+  const [actividad, setActividad] = useState(study.actividad_especifica || ACTIVIDAD_SIN_EXTRAER);
   const [editingAct, setEditingAct] = useState(false);
   const [actInput, setActInput] = useState(actividad);
 
@@ -45,12 +52,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   // Imported Universe & Active Comparables
   const [universo, setUniverso] = useState(study.universo || []);
-  const [comparables, setComparables] = useState(study.comparables || [
-    { name: 'Activision Blizzard Inc', amb: 'Int', s: 7500000000, c: 2500000000, op: 1500000000, ar: 800000000, inv: 100000000, ap: 400000000, sic: '5812', id: '1' },
-    { name: 'Electronic Arts Inc', amb: 'Int', s: 7400000000, c: 2200000000, op: 1300000000, ar: 900000000, inv: 50000000, ap: 300000000, sic: '5812', id: '2' },
-    { name: 'Take-Two Interactive Software', amb: 'Int', s: 5300000000, c: 1800000000, op: 800000000, ar: 600000000, inv: 20000000, ap: 250000000, sic: '5812', id: '3' },
-    { name: 'Ubisoft Entertainment SA', amb: 'Int', s: 2200000000, c: 900000000, op: 250000000, ar: 350000000, inv: 40000000, ap: 180000000, sic: '5812', id: '4' }
-  ]);
+  /* Un estudio sin comparables arranca vacío. Antes arrancaba con cuatro empresas de
+     videojuegos —Activision, Electronic Arts, Take-Two y Ubisoft— y cifras inventadas de
+     ejemplo: en un sistema multiempresa eso significa que el estudio de cualquier
+     contribuyente podía recibir la muestra de otro sector, y como el efecto de más abajo
+     escribe `comparables` en el estudio, esas cuatro se guardaban y llegaban al rango
+     intercuartil y al informe. Un hueco se ve; una muestra plausible y ajena, no. */
+  const [comparables, setComparables] = useState(study.comparables || []);
 
   const [cmode, setCmode] = useState(study.cmode || 'all');
   /* Criterios de la hoja "Screen Criteria" del export de Capital IQ (SIC, tipo
@@ -97,7 +105,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   useEffect(() => {
     updateStudy({
-      actividad_especifica: actividad,
+      /* El aviso de «no extraído» no se guarda: el apartado sectorial del informe se
+         redacta con este campo, y con el aviso dentro el documento declararía como
+         actividad del contribuyente un texto que es una instrucción para el analista.
+         Vacío, las guardas del generador lo señalan como campo sin dato. */
+      actividad_especifica: actividad === ACTIVIDAD_SIN_EXTRAER ? '' : actividad,
       estudioAnterior: estudioAnteriorInfo,
       motorConfig: engineConfig,
       /* universo NO se persiste: es el Excel de Capital IQ completo (miles de filas

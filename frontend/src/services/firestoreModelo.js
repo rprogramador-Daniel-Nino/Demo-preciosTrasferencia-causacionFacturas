@@ -80,7 +80,21 @@ export function anioValido(valor) {
      recursos binarios del informe.
 
    Dejarlos fuera es lo que mantiene el documento del estudio lejos del techo. */
-export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages'];
+/**
+ * Sello con el id del estudio del que se leyeron los datos que hay en memoria.
+ *
+ * Existe porque un estudio acabó con los datos de otro: dos documentos distintos, misma
+ * razón social, mismo NIT y mismo monto. Cada pantalla del gestor guarda su propio estado
+ * y lo escribe en «el estudio activo», sin comprobar de qué estudio salió; con `setDoc`
+ * sin `merge`, esa escritura reemplaza el documento entero.
+ *
+ * El sello lo pone quien carga o crea el estudio y lo comprueba el autoguardado: si no
+ * coincide con el estudio activo, la escritura no sale. No viaja a la nube —está en
+ * CAMPOS_SOLO_LOCALES— porque es un dato de la sesión, no del estudio.
+ */
+export const SELLO_ESTUDIO = '_estudioId';
+
+export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', SELLO_ESTUDIO];
 
 /** Máximo que admite un documento de Firestore. */
 export const TOPE_DOCUMENTO = 1048576;

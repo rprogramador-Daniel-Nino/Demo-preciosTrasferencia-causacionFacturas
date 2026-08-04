@@ -4,7 +4,7 @@ import { nameKey } from './comparablesEngine.js';
 import {
   normalizarNit, anioValido, separarEstudio, docEstudio, docCliente,
   normalizarComparableHistorica, fusionarComparableHistorica, docEeff, idEeff,
-  estudiosPorMigrar, aNumero, CAMPOS_SOLO_LOCALES, TOPE_APARICIONES,
+  estudiosPorMigrar, aNumero, CAMPOS_SOLO_LOCALES, SELLO_ESTUDIO, TOPE_APARICIONES,
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila,
   aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
   pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
@@ -82,7 +82,7 @@ test('separarEstudio deja fuera de la nube los campos pesados', () => {
   const { nube, local } = separarEstudio(study);
   assert.deepStrictEqual(Object.keys(nube).sort(), ['comparables', 'ent']);
   assert.deepStrictEqual(Object.keys(local).sort(), ['eeffImages', 'iaMatch', 'universo']);
-  assert.deepStrictEqual(CAMPOS_SOLO_LOCALES, ['universo', 'iaMatch', 'eeffImages']);
+  assert.deepStrictEqual(CAMPOS_SOLO_LOCALES, ['universo', 'iaMatch', 'eeffImages', SELLO_ESTUDIO]);
 });
 
 test('separarEstudio no inventa campos locales que el estudio no traía', () => {
@@ -607,4 +607,28 @@ test('estudiosPorMigrar ignora las entradas del índice sin detalle guardado', (
   const porMigrar = estudiosPorMigrar(indice, detalle);
   assert.deepStrictEqual(porMigrar.map(e => e.id), ['study_1'],
     'un índice puede quedar con entradas huérfanas y no hay nada que subir de ellas');
+});
+
+/* ══════════════ Sello del estudio ══════════════
+   Un estudio acabó con los datos de otro: dos documentos distintos con la misma razón
+   social, el mismo NIT y el mismo monto. El sello es lo que permite al autoguardado
+   comprobar que los datos en memoria son del estudio que va a escribir. */
+
+test('el sello del estudio no viaja a la nube', () => {
+  /* Es un dato de la sesión: si se subiera, un estudio duplicado o compartido llevaría
+     dentro el id de otro documento. */
+  const { nube, local } = separarEstudio({ ent: 'Acme', [SELLO_ESTUDIO]: 'study_123' });
+  assert.deepStrictEqual(Object.keys(nube), ['ent']);
+  assert.strictEqual(local[SELLO_ESTUDIO], 'study_123');
+});
+
+test('docEstudio no escribe el sello dentro de los datos', () => {
+  const doc = docEstudio({
+    study: { ent: 'Acme', nit: '900123456-7', anio: 2025, [SELLO_ESTUDIO]: 'study_123' },
+    usuario: { uid: 'u1', nombre: 'Quien Sea', correo: 'q@x.com' },
+    marcaDeTiempo: 1,
+  });
+  assert.ok(!(SELLO_ESTUDIO in doc.datos), 'el sello se colaría en el documento del estudio');
+  assert.ok(!(SELLO_ESTUDIO in doc), 'ni en la raíz del documento');
+  assert.strictEqual(doc.datos.ent, 'Acme', 'el resto de los datos sí van');
 });

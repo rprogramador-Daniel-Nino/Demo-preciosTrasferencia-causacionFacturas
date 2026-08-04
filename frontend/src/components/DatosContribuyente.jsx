@@ -182,7 +182,10 @@ export default function DatosContribuyente({ study, updateStudy }) {
                   {study.accionistas.map((acc, idx) => (
                     <tr key={idx} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30">
                       <td className="py-2.5 px-3 font-semibold text-zinc-900 dark:text-zinc-100 font-sans">{acc.nombre}</td>
-                      <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 font-sans">{acc.pais || 'ESTADOS UNIDOS'}</td>
+                      {/* Hueco visible, no un país por defecto: «ESTADOS UNIDOS» era el
+                          del accionista del informe de referencia, y verlo en la tabla
+                          hacía pasar por dato la falta de dato. */}
+                      <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 font-sans">{acc.pais || '—'}</td>
                       <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">{acc.acciones ? fmt(acc.acciones) : '200.000'}</td>
                       <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">$ {acc.valor_capital ? fmt(acc.valor_capital) : '200.000.000'}</td>
                       <td className="py-2.5 px-3 text-right font-bold text-[#0FA3A1]">{acc.participacion_pct || 100}%</td>

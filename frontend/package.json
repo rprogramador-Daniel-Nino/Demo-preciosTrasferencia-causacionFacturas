@@ -15,6 +15,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "axios": "^1.19.0",
     "date-fns": "^4.4.0",
+    "docx": "^9.7.1",
     "docxtemplater": "^3.69.3",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",

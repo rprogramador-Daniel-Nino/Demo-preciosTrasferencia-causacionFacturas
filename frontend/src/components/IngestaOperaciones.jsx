@@ -26,7 +26,14 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           monto: valMonto,
           monto_operacion: valMonto
         });
-        setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(valMonto)}`);
+        /* Con varias contrapartes el total es la suma de todas y el estudio se queda
+           con la primera. Decirlo aquí es lo que evita que el informe declare ante la
+           DIAN una operación con un vinculado que no es el único. */
+        const aviso = res.contrapartes > 1
+          ? ` · ⚠ el archivo trae ${res.contrapartes} contrapartes distintas y el estudio guarda una sola ` +
+            `(${res.vinc}): revise el vinculado y el monto antes de generar el informe`
+          : '';
+        setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(valMonto)}${aviso}`);
       } else {
         setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
       }

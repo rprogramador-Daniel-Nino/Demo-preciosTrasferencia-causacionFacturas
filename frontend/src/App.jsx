@@ -18,7 +18,7 @@ import {
   guardarCliente, migrarDesdeLocalStorage, migrarDesdeRaiz,
   listarEstudiosCompartidosConmigo, leerEstudioCompartido,
 } from './services/firestoreRepo';
-import { separarEstudio } from './services/firestoreModelo';
+import { separarEstudio, SELLO_ESTUDIO } from './services/firestoreModelo';
 import { guardarAnexoEeff, leerAnexoEeff, borrarRecursosDelEstudio } from './services/plantillaStore';
 
 /* Retardo del autoguardado. El estudio cambia con cada tecla y cada escritura en
@@ -147,6 +147,29 @@ export default function App() {
        permisos por cada tecla. La barra ya avisa de que es de solo lectura. */
     if (estudioAjeno) return;
 
+    /* Los datos en memoria tienen que ser los del estudio activo. Sin esta comprobación
+       un estudio acabó con los datos de otro —dos documentos, misma razón social, mismo
+       NIT y mismo monto—: cada pantalla guarda su propio estado y lo escribe en «el
+       estudio activo» sin comprobar de dónde salió, y `setDoc` sin `merge` reemplaza el
+       documento entero.
+
+       Ante la duda no se guarda. Perder el último cambio se nota y se repite; escribir
+       los datos de un contribuyente en el estudio de otro no se nota hasta que ya se
+       radicó. El aviso es visible a propósito: un guardado que se salta en silencio es
+       lo mismo que un fallo silencioso. */
+    if (study[SELLO_ESTUDIO] !== activeStudyId) {
+      console.error(
+        '[estudios] guardado bloqueado: los datos en memoria son del estudio ' +
+        study[SELLO_ESTUDIO] + ' y el activo es ' + activeStudyId
+      );
+      setEstadoGuardado('error');
+      setAvisoSesion(
+        'No se guardó: los datos en pantalla no corresponden al estudio abierto. ' +
+        'Recargue la página (F5) y vuelva a abrirlo antes de seguir editando.'
+      );
+      return;
+    }
+
     setEstadoGuardado('guardando');
     if (temporizador.current) clearTimeout(temporizador.current);
     temporizador.current = setTimeout(async () => {
@@ -199,6 +222,9 @@ export default function App() {
         ...(datos || {}),
         ...(iaMatch ? { iaMatch } : {}),
         ...(eeffImages && eeffImages.length ? { eeffImages } : {}),
+        /* Sello del estudio del que salieron estos datos: el autoguardado no escribe si
+           no coincide con el estudio activo. Ver SELLO_ESTUDIO. */
+        [SELLO_ESTUDIO]: id,
       });
       setActiveTab('contribuyente');
     } catch (err) {
@@ -220,7 +246,7 @@ export default function App() {
       cargando.current = true;
       setEstudioAjeno({ duenoUid: compartido.duenoUid, duenoNombre: compartido.duenoNombre || 'otro consultor' });
       setActiveStudyId(compartido.id);
-      setStudy(datos);
+      setStudy({ ...(datos || {}), [SELLO_ESTUDIO]: compartido.id });
       setActiveTab('contribuyente');
     } catch (err) {
       console.error('[compartidos] no se pudo abrir', err);
@@ -231,7 +257,10 @@ export default function App() {
   /* Campos con los que nace un estudio. Se extrajo a función porque ahora hay dos
      puntos de creación: en blanco y a partir de un cliente del catálogo. */
   const estudioEnBlanco = () => ({
-    ent: 'Nueva Empresa S.A.S', nit: '', anio: new Date().getFullYear(),
+    /* Razón social vacía y no «Nueva Empresa S.A.S»: ese texto se veía como un dato ya
+       diligenciado y llegaba al informe si nadie lo cambiaba. Vacío, el tablero muestra
+       «Sin razón social» y las guardas del generador lo cuentan como campo sin dato. */
+    ent: '', nit: '', anio: new Date().getFullYear(),
     ciiu: '', objeto: '', representante: '', vinc: '', pais_vinc: '', vinc_id: '',
     vinc_tipo: '', t_s: '', t_c: '', t_op: '', t_ar: '', t_inv: '', t_ap: '',
     pli: 'MO', useadj: false, prime: '', comparables: [], cmode: 'all',
@@ -244,7 +273,7 @@ export default function App() {
       cargando.current = true;
       setEstudioAjeno(null);
       setActiveStudyId(newId);
-      setStudy(datos);
+      setStudy({ ...datos, [SELLO_ESTUDIO]: newId });
       setActiveTab('contribuyente');
       await refrescarIndice();
     } catch (err) {
@@ -416,7 +445,13 @@ export default function App() {
       {activeTab === 'catalogo' && <CatalogoHistorico usuario={usuario} />}
 
       {activeStudyId ? (
-        <>
+        /* `key` con el id del estudio: al cambiar de estudio React destruye estas
+           pantallas y las crea de nuevo, así que ningún estado local sobrevive de un
+           estudio al siguiente. El motor de comparables guarda en estado local las
+           comparables, el ámbito, la configuración, el embudo y la curación, y lo
+           inicializa una sola vez al montarse; sin remontar, ese estado se escribía en el
+           estudio que estuviera activo después. */
+        <React.Fragment key={activeStudyId}>
           {activeTab === 'contribuyente' && (
             <DatosContribuyente study={study} updateStudy={updateStudy} />
           )}
@@ -440,7 +475,7 @@ export default function App() {
           {activeTab === 'informe' && (
             <ReporteGenerador study={study} estudioId={activeStudyId} />
           )}
-        </>
+        </React.Fragment>
       ) : (
         /* El aviso solo vale para los pasos del estudio: el tablero, los clientes y el
            catálogo se consultan sin tener ninguno abierto. */
