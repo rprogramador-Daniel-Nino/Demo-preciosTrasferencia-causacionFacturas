@@ -10,10 +10,11 @@
 
 import {
   Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
+  PositionalTab, PositionalTabAlignment, PositionalTabLeader,
 } from 'docx';
 import { HOJA_TWIPS } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
-import { htmlAArbol } from './htmlAArbol.js';
+import { htmlAArbol, textoDe } from './htmlAArbol.js';
 
 /* `docx` mide las fuentes en medios puntos: Arial 12 son 24. */
 const mediosPuntos = (pt) => Math.round((Number(pt) || 12) * 2);
@@ -91,8 +92,38 @@ function runsDe(nodo, heredado = {}) {
 /* Se completa en la tarea 7. */
 function runDeImagen() { return []; }
 
+/* Una entrada del índice: título, una fila de al menos cuatro puntos, y el número de página.
+   Se exige el número al final para no confundirla con unos puntos suspensivos. */
+const RX_ENTRADA_INDICE = /^(.*?)\s*\.{4,}\s*(\d+)\s*$/;
+
+/* El título y el número, con el tabulador de Word en medio. Es lo que mantiene la fila de
+   puntos pegada al margen derecho cuando la métrica de la fuente cambia. */
+const parrafoDeIndice = (titulo, numero) => new Paragraph({
+  children: [new TextRun({
+    children: [
+      titulo,
+      new PositionalTab({
+        alignment: PositionalTabAlignment.RIGHT,
+        leader: PositionalTabLeader.DOT,
+        relativeTo: 'margin',
+      }),
+      numero,
+    ],
+    bold: true,
+  })],
+});
+
 function parrafoDe(nodo, runs = runsDe(nodo)) {
   const nivel = NIVELES[nodo.etiqueta];
+
+  /* Entrada del índice: se detecta sobre el texto plano del bloque. El extractor ya pone cada
+     entrada en su propio párrafo (rol TOCI), así que el texto del bloque es la entrada
+     completa. */
+  if (!nivel) {
+    const m = RX_ENTRADA_INDICE.exec(textoDe(nodo));
+    if (m && m[1].trim()) return parrafoDeIndice(m[1].trim(), m[2]);
+  }
+
   return new Paragraph({
     ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
     children: runs,

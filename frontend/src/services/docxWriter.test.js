@@ -170,3 +170,22 @@ test('el orden del documento se conserva', async () => {
   assert.ok(indUno < indSuelto, 'uno debe venir antes que texto suelto');
   assert.ok(indSuelto < indDos, 'texto suelto debe venir antes que dos');
 });
+
+test('las entradas del índice llevan la guía de puntos de Word, no puntos de texto', async () => {
+  /* Con puntos literales, la fila deja de terminar donde debe en cuanto cambia la métrica de
+     la fuente: es lo que hacía que el índice se viera desordenado. */
+  const { doc } = await abrir(
+    '<p>1.2. Derechos y Obligaciones ........................ 25</p>');
+  assert.match(doc, /w:leader="dot"/, 'no hay guía de puntos');
+  assert.match(doc, /1\.2\. Derechos y Obligaciones/);
+  assert.match(doc, /25/);
+  /* Y los puntos literales desaparecen. */
+  assert.doesNotMatch(doc, /\.{8}/);
+});
+
+test('un párrafo con puntos suspensivos normales no se confunde con el índice', async () => {
+  /* Hacen falta muchos puntos seguidos y un número al final para que sea una entrada. */
+  const { doc } = await abrir('<p>y así sucesivamente... hasta el final</p>');
+  assert.doesNotMatch(doc, /w:leader="dot"/);
+  assert.match(doc, /hasta el final/);
+});
