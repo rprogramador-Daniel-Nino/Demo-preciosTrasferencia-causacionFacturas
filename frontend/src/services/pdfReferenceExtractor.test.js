@@ -331,3 +331,22 @@ test('las páginas del anexo llegan todas al documento, no solo una', async () =
     );
   }
 });
+
+test('las filas de tabla no llevan párrafos sueltos dentro', async () => {
+  const r = await extraer();
+  /* El PDF cuelga un `P` vacío de cada `TR` —la marca de párrafo que Word deja al
+     exportar la tabla— y emitirlo producía `<tr><p></p>`, que es HTML inválido: al no
+     poder ser hijo de una fila, Word lo saca de la tabla. Ochocientos ochenta y nueve
+     párrafos sueltos y otras tantas tablas partidas, y el documento pasaba de poco más
+     de cien hojas a cientos. */
+  assert.ok(!/<tr>\s*<p>/.test(r.html), 'hay párrafos colgando dentro de una fila');
+  assert.ok(!/<tr>\s*<(strong|em|span|div)/.test(r.html), 'hay contenido fuera de celda en una fila');
+  /* Y lo que sí debe haber: filas con sus celdas. */
+  const filas = (r.html.match(/<tr>/g) || []).length;
+  assert.ok(filas > 100, 'se perdieron filas de tabla: ' + filas);
+  /* Cada fila abre y cierra, y solo contiene celdas. */
+  for (const m of [...r.html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].slice(0, 40)) {
+    const fuera = m[1].replace(/<t[dh]>[\s\S]*?<\/t[dh]>/g, '').trim();
+    assert.strictEqual(fuera, '', 'contenido fuera de celda en una fila: ' + fuera.slice(0, 60));
+  }
+});
