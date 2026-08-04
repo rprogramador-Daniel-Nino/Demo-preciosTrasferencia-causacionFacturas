@@ -124,3 +124,49 @@ test('un párrafo anidado en otro no se funde con él', async () => {
   assert.match(doc, /fuera/);
   assert.match(doc, /dentro/);
 });
+
+test('un fragmento en línea no sale además como párrafo suelto', async () => {
+  /* Un arreglo anterior duplicaba el texto: salía una vez bien formateado y otra como
+     párrafo espurio. Esto ocurría con <p><strong>...</strong></p>. */
+  const { doc } = await abrir(
+    '<p><strong><span style="font-family:\'Britannic\'">TÍTULO</span></strong></p>');
+  const conteo = (doc.match(/TÍTULO/g) || []).length;
+  assert.equal(conteo, 1, 'TÍTULO debe aparecer exactamente una vez, aparece ' + conteo);
+  const parrafos = (doc.match(/<w:p[ >]/g) || []).length;
+  assert.equal(parrafos, 1, 'debe haber exactamente un párrafo, hay ' + parrafos);
+});
+
+test('ningún texto sale dos veces', async () => {
+  /* Este test existe porque un arreglo anterior duplicaba el texto en línea: salía una vez
+     bien formateado y otra como párrafo espurio sin formato. */
+  const casos = [
+    '<p><strong>a</strong></p>',
+    '<p>a<div>b</div>c',
+    '<p><span>a</span>b</p>',
+    '<div><p>a</p></div>',
+    '<table><tr><td>a</td><td>b</td></tr></table>',
+    '<p>fuera<p>dentro</p></p>',
+  ];
+  for (const html of casos) {
+    const { doc } = await abrir(html);
+    /* Extraer solo el texto de los elementos <w:t>, no de todo el XML. */
+    const textos = (doc.match(/<w:t[^>]*>([^<]+)<\/w:t>/g) || [])
+      .map((m) => m.replace(/<w:t[^>]*>/, '').replace(/<\/w:t>/, ''));
+    for (const texto of textos) {
+      if (texto.trim()) {
+        const conteo = (doc.match(new RegExp('<w:t[^>]*>' + texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '<\\/w:t>', 'g')) || []).length;
+        assert.equal(conteo, 1, html + ': "' + texto + '" aparece ' + conteo + ' veces en <w:t>');
+      }
+    }
+  }
+});
+
+test('el orden del documento se conserva', async () => {
+  const { doc } = await abrir('<p>uno</p>texto suelto<p>dos</p>');
+  const indUno = doc.indexOf('uno');
+  const indSuelto = doc.indexOf('texto suelto');
+  const indDos = doc.indexOf('dos');
+  assert.ok(indUno > -1 && indSuelto > -1 && indDos > -1, 'faltan textos');
+  assert.ok(indUno < indSuelto, 'uno debe venir antes que texto suelto');
+  assert.ok(indSuelto < indDos, 'texto suelto debe venir antes que dos');
+});

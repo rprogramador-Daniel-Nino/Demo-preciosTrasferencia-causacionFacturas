@@ -42,6 +42,13 @@ const NIVELES = {
   h5: HeadingLevel.HEADING_5, h6: HeadingLevel.HEADING_6,
 };
 
+/* Etiquetas que en Word son un bloque propio y no pueden compartir párrafo con el texto que
+   las rodea. `span`, `strong`, `em` y `br` NO están aquí a propósito: son en línea y se funden
+   en el párrafo, que es lo que conserva la negrita y la familia del informe. */
+const BLOQUES = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li',
+  'table', 'thead', 'tbody', 'tr', 'td', 'th', 'div', 'blockquote', 'section', 'article']);
+const esBloque = (n) => !!n && n.etiqueta !== undefined && BLOQUES.has(n.etiqueta);
+
 /* La familia que declara un `<span style="font-family:'X'">`. El extractor sólo la declara
    cuando se desvía del cuerpo del documento. */
 const familiaDeEstilo = (estilo) => {
@@ -68,8 +75,9 @@ function runsDe(nodo, heredado = {}) {
     }
     if (h.etiqueta === 'img') { salida.push(...runDeImagen(h)); continue; }
     if (h.etiqueta === 'br') continue;
-    /* No descender en bloques. */
-    if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) continue;
+    /* Un bloque anidado no aporta runs a este párrafo: lo emite `bloquesDe` en el suyo. Sin
+       esto el texto salía dos veces, una aquí y otra como párrafo espurio. */
+    if (esBloque(h)) continue;
     const propio = { ...heredado };
     if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
     if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
@@ -83,44 +91,48 @@ function runsDe(nodo, heredado = {}) {
 /* Se completa en la tarea 7. */
 function runDeImagen() { return []; }
 
-function parrafoDe(nodo) {
+function parrafoDe(nodo, runs = runsDe(nodo)) {
   const nivel = NIVELES[nodo.etiqueta];
-  const hijos = runsDe(nodo);
   return new Paragraph({
     ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
-    children: hijos,
+    children: runs,
   });
 }
 
 /* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
    que permite que un `<div>` del contentEditable no pierda su contenido.
 
-   Cuando un bloque tiene bloques anidados, emite primero el párrafo del padre (que no
-   desciende en bloques por el cambio en `runsDe`) y luego los bloques anidados como
-   párrafos independientes. Esto maneja el HTML del contentEditable, donde los bloques
-   pueden no estar cerrados. */
+   El texto y los fragmentos en línea que aparecen fuera de un párrafo se acumulan y se
+   vuelcan como un párrafo al toparse con el siguiente bloque. Así el orden del documento se
+   conserva: si se emitieran al final, el texto de después de una tabla saldría antes que
+   ella. */
 function bloquesDe(nodo, salida = []) {
+  let sueltos = [];
+  const volcar = () => {
+    if (!sueltos.length) return;
+    salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos }));
+    sueltos = [];
+  };
   for (const h of nodo.hijos || []) {
     if (h.texto !== undefined) {
-      if (h.texto.trim()) salida.push(new Paragraph({ children: [new TextRun(h.texto)] }));
+      if (h.texto.trim()) sueltos.push(new TextRun(h.texto));
       continue;
     }
+    if (!esBloque(h)) { sueltos.push(...runsDe(h)); continue; }
+    volcar();
     if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) {
-      salida.push(parrafoDe(h));
-      /* Emitir bloques anidados (aunque htmlAArbol los cierre implícitamente, el HTML del
-         contentEditable puede tenerlos). */
-      for (const nieto of h.hijos || []) {
-        if (nieto.texto === undefined && (nieto.etiqueta === 'p' || NIVELES[nieto.etiqueta])) {
-          salida.push(parrafoDe(nieto));
-          bloquesDe(nieto, salida);
-        } else if (nieto.texto === undefined) {
-          bloquesDe(nieto, salida);
-        }
-      }
+      const runs = runsDe(h);
+      const dentro = (h.hijos || []).filter(esBloque);
+      /* Un párrafo vacío sigue siendo un párrafo: la portada del informe se centra con 35
+         seguidos. Se emite también sin runs, salvo que sea sólo un envoltorio de otros
+         bloques —ahí el párrafo vacío no existía en el original—. */
+      if (runs.length || !dentro.length) salida.push(parrafoDe(h, runs));
+      for (const b of dentro) bloquesDe({ hijos: [b] }, salida);
       continue;
     }
     bloquesDe(h, salida);
   }
+  volcar();
   return salida;
 }
 
