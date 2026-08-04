@@ -3,6 +3,10 @@ const assert = require('node:assert');
 const {
   normalizarActividad,
   claveActividad,
+  necesitaResumenActividad,
+  recortarActividad,
+  construirPromptResumenActividad,
+  parsearRespuestaResumenActividad,
   construirPromptBusquedaSector,
   parsearRespuestaBusquedaSector,
   filtrarConfiables,
@@ -35,6 +39,49 @@ test('claveActividad distingue actividades distintas', () => {
   const a = claveActividad(normalizarActividad('fabricacion de software'));
   const b = claveActividad(normalizarActividad('cultivo de cereales'));
   assert.notStrictEqual(a, b);
+});
+
+test('necesitaResumenActividad distingue una etiqueta corta de una descripción larga', () => {
+  assert.strictEqual(necesitaResumenActividad('Desarrollo de videojuegos para dispositivos móviles'), false);
+  const descripcionLarga = 'END GAME INTERACTIVE COLOMBIA S.A.S es una empresa especializada en el diseño y ' +
+    'desarrollo de videojuegos para dispositivos móviles. Sus funciones principales abarcan el ciclo creativo.';
+  assert.strictEqual(necesitaResumenActividad(descripcionLarga), true);
+});
+
+test('necesitaResumenActividad no revienta con entrada vacía o nula', () => {
+  assert.strictEqual(necesitaResumenActividad(''), false);
+  assert.strictEqual(necesitaResumenActividad(null), false);
+  assert.strictEqual(necesitaResumenActividad(undefined), false);
+});
+
+test('recortarActividad deja intacto lo que ya es corto', () => {
+  assert.strictEqual(recortarActividad('fabricación de software'), 'fabricación de software');
+});
+
+test('recortarActividad corta en un espacio, sin partir una palabra', () => {
+  const larga = 'palabra1 palabra2 palabra3 palabra4 palabra5 palabra6 palabra7';
+  const r = recortarActividad(larga, 30);
+  assert.ok(r.length <= 30, 'el recorte no debe exceder el límite');
+  assert.ok(larga.startsWith(r), 'el recorte debe ser un prefijo exacto de palabras completas');
+  assert.strictEqual(larga[r.length], ' ', 'debe cortar justo en un espacio, no a mitad de palabra');
+});
+
+test('construirPromptResumenActividad incluye la descripción completa y pide una frase corta', () => {
+  const prompt = construirPromptResumenActividad('una descripción larga cualquiera');
+  assert.ok(prompt.includes('una descripción larga cualquiera'));
+  assert.ok(prompt.includes('máximo 12 palabras'));
+});
+
+test('parsearRespuestaResumenActividad limpia comillas y punto final', () => {
+  assert.strictEqual(
+    parsearRespuestaResumenActividad('"desarrollo de videojuegos para dispositivos móviles."'),
+    'desarrollo de videojuegos para dispositivos móviles'
+  );
+});
+
+test('parsearRespuestaResumenActividad rechaza una respuesta vacía', () => {
+  assert.throws(() => parsearRespuestaResumenActividad('   '), /vacío/);
+  assert.throws(() => parsearRespuestaResumenActividad(''), /vacío/);
 });
 
 test('construirPromptBusquedaSector menciona la actividad y los tres años relevantes', () => {

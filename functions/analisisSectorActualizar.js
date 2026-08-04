@@ -4,6 +4,10 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const {
   normalizarActividad,
   claveActividad,
+  necesitaResumenActividad,
+  recortarActividad,
+  construirPromptResumenActividad,
+  parsearRespuestaResumenActividad,
   construirPromptBusquedaSector,
   parsearRespuestaBusquedaSector,
   filtrarConfiables,
@@ -16,6 +20,39 @@ if (!getApps().length) initializeApp();
 
 const GEMINI_MODEL = 'gemini-3-flash-preview';
 const CLAUDE_MODEL = 'claude-sonnet-5';
+
+/** La `actividad` que llega del estudio a veces es la descripción completa del
+ *  objeto social (varios cientos de caracteres, con la matriz, los activos y
+ *  los riesgos), no una etiqueta corta de sector. Buscarla tal cual con
+ *  `google_search` no da grounding —ver el comentario junto a
+ *  LARGO_ACTIVIDAD_CORTA en analisisSectorPrompts.js—, así que primero se
+ *  reduce a una frase de sector con un llamado liviano a Gemini (sin
+ *  herramienta de búsqueda). Si ese llamado falla, se recorta sin IA: sigue
+ *  siendo mejor una frase corta imperfecta que la descripción completa. */
+async function resumirActividad(geminiApiKey, actividad) {
+  if (!necesitaResumenActividad(actividad)) return actividad;
+  try {
+    const prompt = construirPromptResumenActividad(actividad);
+    const respuesta = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      }
+    );
+    const data = await respuesta.json();
+    const candidato = data && data.candidates && data.candidates[0];
+    if (!respuesta.ok || !candidato) {
+      throw new Error('Gemini no devolvió una respuesta usable: ' + JSON.stringify(data).slice(0, 500));
+    }
+    const texto = (candidato.content.parts || []).map((p) => p.text || '').join('');
+    return parsearRespuestaResumenActividad(texto);
+  } catch (err) {
+    console.error('No se pudo resumir la actividad con IA, se recorta sin IA:', err.message);
+    return recortarActividad(actividad);
+  }
+}
 
 async function buscarDatosSector(geminiApiKey, actividad, year) {
   const prompt = construirPromptBusquedaSector(actividad, year);
@@ -74,7 +111,8 @@ async function actualizarAnalisisSector({ geminiApiKey, claudeApiKey, actividad,
   }
   const clave = claveActividad(actividadNormalizada);
 
-  const datos = await buscarDatosSector(geminiApiKey, actividad, year);
+  const actividadBusqueda = await resumirActividad(geminiApiKey, actividad);
+  const datos = await buscarDatosSector(geminiApiKey, actividadBusqueda, year);
   const datosConfiables = filtrarConfiables(datos);
   const hayAlgunDato =
     datosConfiables.datosClaveTabla.length ||

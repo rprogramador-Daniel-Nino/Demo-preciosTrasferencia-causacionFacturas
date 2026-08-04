@@ -63,6 +63,48 @@ function claveActividad(actividadNormalizada) {
   return 'act_' + (hash >>> 0).toString(36);
 }
 
+/* Umbral para decidir si `actividad` ya es una etiqueta corta de sector o es
+   una descripción larga de la compañía (objeto social, funciones, riesgos).
+   Pasarle a Gemini un párrafo largo entre comillas como "la actividad a
+   buscar" hace que `google_search` no encuentre nada que citar —el modelo no
+   tiene una frase de búsqueda clara— y toda la corrida se descarta en
+   `filtrarConfiables` por falta de grounding, aunque el sector sea real y
+   buscable. Ver functions/analisisSectorActualizar.js:resumirActividad. */
+const LARGO_ACTIVIDAD_CORTA = 100;
+
+function necesitaResumenActividad(actividad) {
+  return String(actividad || '').trim().length > LARGO_ACTIVIDAD_CORTA;
+}
+
+/** Recorte determinista sin IA, para cuando el resumen con Gemini falla: sigue
+ *  siendo mejor una frase corta aunque quede incompleta que la descripción
+ *  completa —esa es la que ya sabemos que no da grounding. */
+function recortarActividad(actividad, limite = LARGO_ACTIVIDAD_CORTA) {
+  const texto = String(actividad || '').trim();
+  if (texto.length <= limite) return texto;
+  const cortado = texto.slice(0, limite);
+  const ultimoEspacio = cortado.lastIndexOf(' ');
+  return (ultimoEspacio > 20 ? cortado.slice(0, ultimoEspacio) : cortado).trim();
+}
+
+function construirPromptResumenActividad(actividad) {
+  return (
+    'Lee esta descripción de la actividad de una empresa y extrae, en español, una frase corta ' +
+    '(máximo 12 palabras) que nombre solo el sector o servicio económico al que pertenece — sin el ' +
+    'nombre de la empresa, sin la matriz, sin detalles de activos, funciones o riesgos. Debe poder ' +
+    'completar la frase "el sector de ___" (ejemplos: "desarrollo de videojuegos para dispositivos ' +
+    'móviles", "fabricación de calzado de cuero").\n\n' +
+    'Responde ÚNICAMENTE con esa frase, sin comillas ni punto final ni texto adicional.\n\n' +
+    'Descripción completa:\n' + actividad
+  );
+}
+
+function parsearRespuestaResumenActividad(texto) {
+  const limpio = String(texto || '').trim().replace(/^["“'\s]+|["”'.\s]+$/g, '');
+  if (!limpio) throw new Error('El resumen de la actividad vino vacío.');
+  return limpio;
+}
+
 function construirPromptBusquedaSector(actividad, year) {
   const y1 = year - 1;
   return (
@@ -228,6 +270,10 @@ module.exports = {
   extraerJSON,
   normalizarActividad,
   claveActividad,
+  necesitaResumenActividad,
+  recortarActividad,
+  construirPromptResumenActividad,
+  parsearRespuestaResumenActividad,
   construirPromptBusquedaSector,
   parsearRespuestaBusquedaSector,
   filtrarConfiables,
