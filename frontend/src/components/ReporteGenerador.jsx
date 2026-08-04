@@ -24,6 +24,7 @@ import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantill
 import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
 } from '../services/estiloDocumento.js';
+import { aDocxBlob } from '../services/docxWriter.js';
 
 export default function ReporteGenerador({ study, estudioId }) {
   const [htmlContent, setHtmlContent] = useState('');
@@ -707,6 +708,84 @@ export default function ReporteGenerador({ study, estudioId }) {
      fingir una paginación que Word no va a respetar. */
   const tienePaginas = /class="pagina"|class=pagina/.test(htmlContent);
 
+  /* Descarga en .docx real (OOXML). Convive con el .doc y no lo reemplaza: el equipo toca este
+     flujo, y tener los dos permite comparar el mismo estudio en los dos formatos.
+
+     A diferencia del .doc, aquí no hay importador de HTML de Word interpretando nada: lo que
+     el writer escribe es lo que Word abre. Los cuatro fallos de formato que costó el .doc
+     —834 páginas por párrafos colgando de una fila, una hoja por párrafo por imágenes sin
+     tamaño, los dos logos encimados y el resaltado de pantalla colándose— eran todos ese
+     importador. */
+  const [generandoDocx, setGenerandoDocx] = useState(false);
+
+  const descargarDocx = async () => {
+    setGenerandoDocx(true);
+    try {
+      /* El writer avisa por `console.warn` cuando el anexo trae más páginas que huecos
+         hay en el informe —páginas de estados financieros firmados que no entran—. Nadie
+         mira la consola del navegador, así que se intercepta mientras corre esta llamada
+         y, si aparece, se traduce a un aviso legible para el banner. Se restaura en un
+         `finally` propio —no el de la función entera— para no dejar `console.warn`
+         sustituido más tiempo del que dura la llamada, ni siquiera si ésta lanza. */
+      const warnOriginal = console.warn;
+      let avisoAnexo = null;
+      console.warn = (mensaje, ...resto) => {
+        if (typeof mensaje === 'string' && mensaje.startsWith('[docxWriter] el anexo trae')) {
+          const m = /trae (\d+) página\(s\) para sólo (\d+) hueco\(s\) en el informe: sobran (\d+)/
+            .exec(mensaje);
+          if (m) {
+            avisoAnexo = 'El anexo trae ' + m[1] + ' página(s) de estados financieros firmados ' +
+              'para sólo ' + m[2] + ' hueco(s) en el informe: sobran ' + m[3] + ' página(s) que ' +
+              'no van a entrar en el documento. Revísalo antes de radicar.';
+          }
+        }
+        warnOriginal(mensaje, ...resto);
+      };
+      let blob;
+      try {
+        blob = await aDocxBlob({
+          html: htmlContent,
+          recursos: recursosCargados,
+          anexo: study.eeffImages || [],
+        });
+      } finally {
+        console.warn = warnOriginal;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'Informe_Local_PT_' + (study.ent || 'Empresa') + '_' +
+        (study.anio || '') + '.docx';
+      a.click();
+      URL.revokeObjectURL(a.href);
+
+      /* Cuántas hojas produce Word sólo se sabe abriéndolo, así que no se afirma un número:
+         se dice cuántas declara el documento. Prometer una cuenta que no se ha medido es
+         justamente lo que hay que no hacer aquí. */
+      const declaradas = (htmlContent.match(/class="pagina"/g) || []).length;
+      const nuevosAvisos = [];
+      if (declaradas) {
+        nuevosAvisos.push({
+          nivel: 'aviso',
+          texto: 'El documento declara ' + declaradas + ' páginas, una por cada página del ' +
+            'informe de referencia. Word repagina al abrirlo: si el contenido de alguna no ' +
+            'cabe, desborda a una hoja extra. Compara el total con el original antes de radicar.',
+        });
+      }
+      if (avisoAnexo) {
+        nuevosAvisos.push({ nivel: 'aviso', texto: avisoAnexo });
+      }
+      if (nuevosAvisos.length) {
+        setAvisos((previos) => [...previos, ...nuevosAvisos]);
+      }
+    } catch (err) {
+      console.error('No se pudo generar el .docx:', err);
+      alert('No se pudo generar el .docx: ' + err.message +
+        '\n\nEl botón de .doc sigue disponible.');
+    } finally {
+      setGenerandoDocx(false);
+    }
+  };
+
   const handleDownload = () => {
     // Estilos compatibles con Word (.doc)
     /* La tipografía sale del informe de referencia, no de un gusto propio: el
@@ -847,11 +926,20 @@ export default function ReporteGenerador({ study, estudioId }) {
             </button>
           )}
           <button
-            onClick={handleDownload}
-            className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+            onClick={descargarDocx}
+            disabled={generandoDocx}
+            title="Word real (OOXML): saltos de página, encabezado y tablas exactos"
+            className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <FileDown className="w-3.5 h-3.5" />
-            Descargar Word (.doc)
+            {generandoDocx ? 'Generando…' : 'Descargar Word (.docx)'}
+          </button>
+          <button
+            onClick={handleDownload}
+            className="flex items-center gap-2 bg-white dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 hover:bg-[#f8fafc] dark:hover:bg-zinc-800 rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            Descargar .doc (anterior)
           </button>
         </div>
       </div>
