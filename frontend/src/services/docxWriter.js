@@ -54,6 +54,7 @@ const esBloque = (n) => !!n && n.etiqueta !== undefined && BLOQUES.has(n.etiquet
    cuando se desvía del cuerpo del documento. */
 const familiaDeEstilo = (estilo) => {
   const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
+  const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   return m ? m[1].trim() : null;
 };
 
@@ -62,6 +63,11 @@ const familiaDeEstilo = (estilo) => {
    llega en el `style` de un `<span>`.
 
    `pt-valor` no se mira a propósito: el resaltado del valor sustituido es de pantalla. En el
+   .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados.
+
+   No desciende en bloques: cuando encuentra un `<p>` u otro bloque, se detiene. Eso permite
+   que un párrafo con párrafos anidados emita primero su propio contenido en línea, y luego
+   `bloquesDe` maneje los bloques anidados como bloques independientes. */
    .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados.
 
    No desciende en bloques: cuando encuentra un `<p>` u otro bloque, se detiene. Eso permite
