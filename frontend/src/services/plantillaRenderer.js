@@ -4,6 +4,7 @@
    plantilla sin acordarse de añadir su regla. */
 
 import { valorDeCampo } from './plantillaVocabulario.js';
+import { resaltarValor } from './estiloDocumento.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -20,11 +21,11 @@ const escaparHTML = (texto) => {
   return String(texto).replace(/[&<>"']/g, (c) => map[c]);
 };
 
-/* Resalta el valor sustituido en la vista previa. Los estilos se limpian al
-   exportar, igual que hoy hace ReporteGenerador. */
-const resaltar = (valor) =>
-  '<span style="font-weight:600;color:#0B7C7A;border-bottom:1px dashed #0FA3A1;' +
-  'background-color:#F0FDF4;padding:0 4px;border-radius:3px;">' + valor + '</span>';
+/* Resalta el valor sustituido en la vista previa. Va por clase, y el estilo lo pinta
+   sólo el CSS del previo: así no hay nada que limpiar al exportar. Antes era un `style=`
+   inline y la exportación quitaba tres de sus seis propiedades a mano, así que las otras
+   tres se colaban en el documento que se radica. */
+const resaltar = resaltarValor;
 
 const RX_MARCA = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
 
