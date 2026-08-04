@@ -68,12 +68,8 @@ const familiaDeEstilo = (estilo) => {
    No desciende en bloques: cuando encuentra un `<p>` u otro bloque, se detiene. Eso permite
    que un párrafo con párrafos anidados emita primero su propio contenido en línea, y luego
    `bloquesDe` maneje los bloques anidados como bloques independientes. */
-   .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados.
 
-   No desciende en bloques: cuando encuentra un `<p>` u otro bloque, se detiene. Eso permite
-   que un párrafo con párrafos anidados emita primero su propio contenido en línea, y luego
-   `bloquesDe` maneje los bloques anidados como bloques independientes. */
-function runsDe(nodo, heredado = {}) {
+   function runsDe(nodo, heredado = {}) {
   const salida = [];
   for (const h of nodo.hijos || []) {
     if (h.texto !== undefined) {
