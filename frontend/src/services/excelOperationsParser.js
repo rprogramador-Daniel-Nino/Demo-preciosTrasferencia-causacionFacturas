@@ -1,4 +1,5 @@
 import XLSX from 'xlsx-js-style';
+import { PAIS_DIAN } from '../utils/calculations.js';
 
 /**
  * Módulo de lectura e ingesta del Excel de Operaciones con Vinculados
@@ -158,9 +159,24 @@ export async function parseExcelOperations(file) {
       }
     });
 
-    // Traducir código país de la DIAN si es numérico (ej: 249 -> ESTADOS UNIDOS)
+    /* El país puede venir como nombre («Estados unidos») o como código numérico. Se
+       traduce con la tabla que ya usa el resto del sistema, no con un caso único: antes
+       solo se reconocía el 249 —el código que traía el archivo de referencia— y cualquier
+       otro contribuyente veía el número crudo en su informe («484» en vez de MÉXICO).
+
+       El 249 se conserva aparte porque no está en esa tabla y es el que trae el formato
+       de operaciones. OJO: la tabla dice que Estados Unidos es 840, así que las dos
+       codificaciones no son la misma y hay que decidir cuál exige la DIAN antes de
+       radicar —ver la nota al usuario en el commit. */
+    const nombrePorCodigo = Object.fromEntries(
+      Object.entries(PAIS_DIAN).map(([nombre, codigo]) => [codigo, nombre])
+    );
+    const codigo = String(mainPais || '').trim();
     let paisNombre = mainPais;
-    if (mainPais === '249') paisNombre = 'ESTADOS UNIDOS';
+    if (/^\d+$/.test(codigo)) {
+      paisNombre = nombrePorCodigo[codigo] || nombrePorCodigo[codigo.padStart(3, '0')] ||
+        (codigo === '249' ? 'ESTADOS UNIDOS' : mainPais);
+    }
 
     /* Contrapartes distintas del archivo. El estudio guarda un solo vinculado, así que
        cuando hay varias el monto que se ingresa es la suma de todas y el informe las

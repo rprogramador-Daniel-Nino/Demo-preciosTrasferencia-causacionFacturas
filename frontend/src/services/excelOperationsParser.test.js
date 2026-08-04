@@ -191,3 +191,38 @@ test('una sola contraparte repetida en varias filas no dispara el aviso', async 
 
   assert.strictEqual(res.contrapartes, 1, 'mismo NIT en las dos filas');
 });
+
+test('el país en código numérico se traduce con la tabla del sistema', async () => {
+  /* Antes solo se reconocía el 249 del archivo de referencia y cualquier otro
+     contribuyente veía el número crudo en su informe. */
+  const wb = conEncabezado([
+    ['ACME MEXICO SA DE CV', '111', '484', '', 'VENTA', '', '', '1007', '4001', '', 1000],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.pais_vinc, 'MEXICO');
+});
+
+test('el 249 del formato de operaciones sigue leyéndose como Estados Unidos', async () => {
+  const wb = conEncabezado([
+    ['END GAME INTERACTIVE INC', '444444001', '249', '', 'VENTA', '', '', '1007', '4001', '', 1000],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.pais_vinc, 'ESTADOS UNIDOS');
+});
+
+test('el país escrito con letras se respeta tal cual', async () => {
+  const wb = conEncabezado([
+    ['VA SCALER INC', '111', 'Estados unidos', '', 'SERVICIOS', '', '', '1007', '4001', '', 1000],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.pais_vinc, 'Estados unidos');
+});
+
+test('un código de país desconocido no se inventa', async () => {
+  /* Ver el número crudo delata que falta traducirlo; un país plausible y equivocado, no. */
+  const wb = conEncabezado([
+    ['RARA LTD', '111', '999', '', 'VENTA', '', '', '1007', '4001', '', 1000],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.pais_vinc, '999');
+});
