@@ -77,7 +77,7 @@ const ANIOS_DEL_ESTUDIO = [
   /(?<=durante el año gravable )2024/gi,
   /(?<=al? 31 de diciembre de )2024/gi,
   /(?<=Último estado financiero entre junio de )2024/gi,
-  /* Frase que introduce la tabla 19: «los estados financieros correspondientes al año
+  /* Frase que introduce la tabla 17: «los estados financieros correspondientes al año
      2024». Es el año de las cifras que ahora se regeneran con las comparables del
      estudio, así que dejarlo en el del informe de referencia fecharía mal la tabla. */
   /(?<=estados financieros correspondientes al año )2024/gi,
@@ -217,7 +217,7 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
   };
 }
 
-/* ══════════════ Tabla 16. Razones de rechazo ══════════════
+/* ══════════════ Tabla 14. Razones de rechazo ══════════════
    La plantilla trae los números del informe de referencia —442 candidatas, 327 por
    diferencias funcionales, 13 aceptadas— y hay que sustituirlos por los del estudio.
    El insumo es `study.embudoSeleccion`, que guarda el motor al ejecutar la selección.
@@ -283,7 +283,7 @@ export function filasRazonesRechazo(embudo) {
 }
 
 /**
- * Cuerpo de la tabla 16 con los datos del estudio. Sin selección ejecutada devuelve
+ * Cuerpo de la tabla 14 con los datos del estudio. Sin selección ejecutada devuelve
  * null y quien llama deja la tabla como estaba: es preferible que el usuario vea que
  * falta ejecutar el motor a que el informe salga con cifras inventadas —o peor, con las
  * del cliente anterior, que es el error que este documento no puede cometer.
@@ -324,7 +324,7 @@ export function reemplazarTablaRazonesRechazo(html, study, wrap) {
   return html.slice(0, inicio) + cuerpoNuevo + html.slice(fin + '</tbody>'.length);
 }
 
-/* ══════════════ Tablas 17 y 19. Muestra y márgenes de las comparables ══════════════
+/* ══════════════ Tablas 15 y 17. Muestra y márgenes de las comparables ══════════════
    La plantilla trae las trece compañías de videojuegos del informe de referencia con
    sus nombres y sus márgenes, y ninguna regla las tocaba: era el bloque que más
    delataba que el documento se armó sobre el estudio de otro contribuyente.
@@ -346,7 +346,7 @@ export function filasComparablesInforme(study) {
 const celdaTabla = (contenido) => `<td>\n<p>\n${contenido}\n</p>\n</td>`;
 
 /**
- * Filas de la tabla 17 (Muestra Compañías comparables): número, razón social y ámbito.
+ * Filas de la tabla 15 (Muestra Compañías comparables): número, razón social y ámbito.
  * Sin comparables devuelve null y quien llama deja la tabla como estaba.
  */
 export function generarFilasMuestraComparables(study, wrap) {
@@ -359,7 +359,7 @@ export function generarFilasMuestraComparables(study, wrap) {
 }
 
 /**
- * Sustituye las filas de datos de la tabla 17, conservando su encabezado.
+ * Sustituye las filas de datos de la tabla 15, conservando su encabezado.
  *
  * El encabezado no se reconstruye a propósito: su primera celda lleva las anclas de
  * Word («RANGE!E11», «_Hlk143111901») a las que apuntan referencias del documento, y
@@ -369,7 +369,7 @@ export function reemplazarTablaMuestraComparables(html, study, wrap) {
   const cuerpo = generarFilasMuestraComparables(study, wrap);
   if (!cuerpo) return html;
 
-  const ancla = html.indexOf('Tabla 17. Muestra Compañías comparables');
+  const ancla = html.indexOf('Tabla 15. Muestra Compañías comparables');
   if (ancla < 0) return html;
   const tabla = html.indexOf('<table>', ancla);
   if (tabla < 0) return html;
@@ -382,11 +382,11 @@ export function reemplazarTablaMuestraComparables(html, study, wrap) {
 }
 
 /**
- * Cuerpo de la tabla 19 (Margen Operacional Compañías Comparables).
+ * Cuerpo de la tabla 17 (Margen Operacional Compañías Comparables).
  *
  * Una comparable sin estados financieros cargados sale con hueco en los dos márgenes y
  * no se omite: es la muestra final del informe, y esconder a la que le falta el dato
- * dejaría una tabla más corta que la 17 sin que nada lo explique.
+ * dejaría una tabla más corta que la 15 sin que nada lo explique.
  */
 export function generarTablaMargenComparables(study, wrap) {
   const filas = filasComparablesInforme(study);
@@ -400,12 +400,12 @@ export function generarTablaMargenComparables(study, wrap) {
   return `<tbody>\n${cuerpo}\n</tbody>`;
 }
 
-/** Sustituye el cuerpo de la tabla 19, anclado en su título, que es único en el documento. */
+/** Sustituye el cuerpo de la tabla 17, anclado en su título, que es único en el documento. */
 export function reemplazarTablaMargenComparables(html, study, wrap) {
   const cuerpoNuevo = generarTablaMargenComparables(study, wrap);
   if (!cuerpoNuevo) return html;
 
-  const ancla = html.indexOf('Tabla 19. Margen Operacional Compañías Comparables');
+  const ancla = html.indexOf('Tabla 17. Margen Operacional Compañías Comparables');
   if (ancla < 0) return html;
   const inicio = html.indexOf('<tbody>', ancla);
   if (inicio < 0) return html;
@@ -413,6 +413,33 @@ export function reemplazarTablaMargenComparables(html, study, wrap) {
   if (fin < 0) return html;
 
   return html.slice(0, inicio) + cuerpoNuevo + html.slice(fin + '</tbody>'.length);
+}
+
+/* Tabla 13 (Códigos SIC utilizados), a partir de `study.criteriosScreening` —lo que
+   dejó frontend/src/services/comparablesEngine.js:parsearCriteriosScreening al leer
+   la hoja "Screen Criteria" del export de Capital IQ en el Paso 1 del motor de
+   comparables—. Antes esta tabla era texto fijo del informe de referencia (SIC 7371/
+   7372, "games", 2025): una corrida real con otra actividad o otro año la dejaba
+   describiendo una búsqueda que nunca se hizo. Sin criterios cargados (estudio nuevo,
+   o Excel sin esa hoja) se deja el hueco pendiente en vez de ese texto ajeno. */
+function generarTablaCriteriosScreeningHtml(study, wrap) {
+  const criterios = (study && study.criteriosScreening) || [];
+  if (!criterios.length) {
+    return '<p>\nPendiente: importe el archivo de Capital IQ en el Paso 1 del motor de comparables para completar los criterios de búsqueda.\n</p>';
+  }
+  const filaConector = (conector) => `<tr>\n<td colspan="2">\n<p>\n<strong>${conector}</strong>\n</p>\n</td>\n</tr>\n`;
+  const filaCriterio = (etiqueta, valor) =>
+    `<tr>\n<td>\n<p>\n<strong>${wrap(etiqueta)}:</strong>\n</p>\n</td>\n<td>\n<p>\n${wrap(valor)}\n</p>\n</td>\n</tr>\n`;
+
+  const filas = criterios
+    .map((c) => (c.conector ? filaConector(c.conector) : '') + filaCriterio(c.etiqueta, c.valor))
+    .join('');
+
+  return (
+    '<table>\n<tr>\n<td colspan="2">\n<p>\n<strong>Criterio de búsqueda</strong>\n</p>\n</td>\n</tr>\n' +
+    filas +
+    '</table>'
+  );
 }
 
 /**
@@ -659,7 +686,7 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
   html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
 
-  /* ─── Tabla 16 y las cifras que la rodean ───
+  /* ─── Tabla 14 y las cifras que la rodean ───
      La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
      acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
      «quedaron 13 compañías comparables», cifras de End Game. Dejar la tabla al día y el
@@ -723,6 +750,14 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   TABLAS_MACRO.forEach(({ rx, gen }) => {
     html = html.replace(rx, () => gen(datosMacro, year, wrap));
   });
+
+  /* Tabla 13 (Códigos SIC utilizados): la corrida real de Capital IQ de este estudio,
+     no la del informe de referencia. El título de la tabla no cambia con el año, así
+     que se conserva literal y solo se regenera el <table> que le sigue. */
+  html = html.replace(
+    /<p>\s*Tabla 13\.\s*C[oó]digos SIC utilizados\s*<\/p>\s*<table>[\s\S]*?<\/table>/,
+    () => '<p>\nTabla 13. Códigos SIC utilizados\n</p>\n' + generarTablaCriteriosScreeningHtml(study, wrap)
+  );
 
   /* Sustitución tardía de III.A/III.B: si la narrativa se insertara donde se
      reservó el lugar (arriba, antes de ANIOS_DEL_ESTUDIO y de los reemplazos
