@@ -1099,7 +1099,8 @@ test('la imagen sale con el tamaño que le da el PDF, no con el natural del PNG'
   const m = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(doc);
   assert.ok(m, 'la imagen no se emitió');
   assert.equal(Number(m[1]), 209 * 9525);
-  assert.equal(Number(m[2]), 47 * 9525);
+  /* 1,23 cm x 37,795 px/cm = 46,49, que redondea a 46. El plan decía 47: error mío. */
+  assert.equal(Number(m[2]), 46 * 9525);
 });
 
 test('una imagen cuyo recurso no está en el catálogo no rompe el documento', async () => {
