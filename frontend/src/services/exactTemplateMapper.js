@@ -61,6 +61,10 @@ const ANIOS_DEL_ESTUDIO = [
   /(?<=durante el año gravable )2024/gi,
   /(?<=al? 31 de diciembre de )2024/gi,
   /(?<=Último estado financiero entre junio de )2024/gi,
+  /* Frase que introduce la tabla 19: «los estados financieros correspondientes al año
+     2024». Es el año de las cifras que ahora se regeneran con las comparables del
+     estudio, así que dejarlo en el del informe de referencia fecharía mal la tabla. */
+  /(?<=estados financieros correspondientes al año )2024/gi,
   /(?<=A\.V\. )2024/g,
   // Encabezado de año de las tablas de estados financieros (Anexo A)
   /(?<=<strong>Descripción<\/strong>\s*<\/p>\s*<\/th>\s*<th>\s*<p>\s*<strong>)2024(?=<\/strong>)/g,
@@ -152,6 +156,11 @@ export function diagnosticarCobertura(rawHtml, study) {
      que no debe pasar en un documento que se radica: hay que avisarlo antes. */
   const razones = filasRazonesRechazo(study && study.embudoSeleccion);
 
+  /* Lo mismo para las tablas 17 y 19: sin comparables en el estudio se quedan con las
+     trece compañías de videojuegos del informe de referencia, con nombre y margen. Es
+     la fuga más visible que puede tener el documento, así que se avisa aparte. */
+  const comparables = filasComparablesInforme(study);
+
   return {
     year,
     sectorialCubierto: html.includes('id="' + ANCLA_SECTORIAL + '"'),
@@ -160,6 +169,10 @@ export function diagnosticarCobertura(rawHtml, study) {
     /* Los conteos no suman el universo evaluado: algo cambió en el estudio después de
        ejecutar la selección y la tabla quedaría inconsistente. */
     razonesRechazoDescuadradas: !razones.sinDatos && !razones.cuadra,
+    comparablesCubiertas: comparables.length > 0,
+    /* Comparables de la muestra sin estados financieros cargados: salen con hueco en la
+       tabla de márgenes y no entran al rango. */
+    comparablesSinCifras: comparables.filter((f) => f.ajustado === null).length,
   };
 }
 
@@ -262,6 +275,97 @@ export function reemplazarTablaRazonesRechazo(html, study, wrap) {
   const ancla = html.search(/FILTRO\s+APLICADO\s+INTERNACIONALES/i);
   if (ancla < 0) return html;
 
+  const inicio = html.indexOf('<tbody>', ancla);
+  if (inicio < 0) return html;
+  const fin = html.indexOf('</tbody>', inicio);
+  if (fin < 0) return html;
+
+  return html.slice(0, inicio) + cuerpoNuevo + html.slice(fin + '</tbody>'.length);
+}
+
+/* ══════════════ Tablas 17 y 19. Muestra y márgenes de las comparables ══════════════
+   La plantilla trae las trece compañías de videojuegos del informe de referencia con
+   sus nombres y sus márgenes, y ninguna regla las tocaba: era el bloque que más
+   delataba que el documento se armó sobre el estudio de otro contribuyente.
+
+   Las dos salen de `analizarRango`, que es de donde sale también el rango intercuartil.
+   Repetir aquí la fórmula del ajuste habría permitido que el informe publicara unos
+   márgenes que no sustentan el rango que declara unas páginas más adelante. */
+
+const AMBITO = { Int: 'INTERNACIONAL', Nac: 'NACIONAL' };
+
+/* Las comparables que se pueden nombrar en el informe. Se descartan las filas sin
+   razón social —la tabla del motor arranca con filas en blanco que el usuario va
+   llenando— porque una fila numerada y sin nombre en la muestra final no dice nada. */
+export function filasComparablesInforme(study) {
+  const { filas } = analizarRango(study || {});
+  return (filas || []).filter((f) => f.nombre);
+}
+
+const celdaTabla = (contenido) => `<td>\n<p>\n${contenido}\n</p>\n</td>`;
+
+/**
+ * Filas de la tabla 17 (Muestra Compañías comparables): número, razón social y ámbito.
+ * Sin comparables devuelve null y quien llama deja la tabla como estaba.
+ */
+export function generarFilasMuestraComparables(study, wrap) {
+  const filas = filasComparablesInforme(study);
+  if (!filas.length) return null;
+
+  return filas.map((f, i) =>
+    `<tr>\n${celdaTabla(i + 1)}\n${celdaTabla(wrap(f.nombre))}\n${celdaTabla(wrap(AMBITO[f.amb]))}\n</tr>`
+  ).join('\n');
+}
+
+/**
+ * Sustituye las filas de datos de la tabla 17, conservando su encabezado.
+ *
+ * El encabezado no se reconstruye a propósito: su primera celda lleva las anclas de
+ * Word («RANGE!E11», «_Hlk143111901») a las que apuntan referencias del documento, y
+ * regenerarlas las dejaría rotas.
+ */
+export function reemplazarTablaMuestraComparables(html, study, wrap) {
+  const cuerpo = generarFilasMuestraComparables(study, wrap);
+  if (!cuerpo) return html;
+
+  const ancla = html.indexOf('Tabla 17. Muestra Compañías comparables');
+  if (ancla < 0) return html;
+  const tabla = html.indexOf('<table>', ancla);
+  if (tabla < 0) return html;
+  const finEncabezado = html.indexOf('</tr>', tabla);
+  if (finEncabezado < 0) return html;
+  const fin = html.indexOf('</table>', finEncabezado);
+  if (fin < 0) return html;
+
+  return html.slice(0, finEncabezado + '</tr>'.length) + '\n' + cuerpo + '\n' + html.slice(fin);
+}
+
+/**
+ * Cuerpo de la tabla 19 (Margen Operacional Compañías Comparables).
+ *
+ * Una comparable sin estados financieros cargados sale con hueco en los dos márgenes y
+ * no se omite: es la muestra final del informe, y esconder a la que le falta el dato
+ * dejaría una tabla más corta que la 17 sin que nada lo explique.
+ */
+export function generarTablaMargenComparables(study, wrap) {
+  const filas = filasComparablesInforme(study);
+  if (!filas.length) return null;
+
+  const cuerpo = filas.map((f) =>
+    `<tr>\n${celdaTabla(wrap(f.nombre))}\n${celdaTabla(wrap(pctf(f.noAjustado)))}\n` +
+    `${celdaTabla(wrap(pctf(f.ajustado)))}\n</tr>`
+  ).join('\n');
+
+  return `<tbody>\n${cuerpo}\n</tbody>`;
+}
+
+/** Sustituye el cuerpo de la tabla 19, anclado en su título, que es único en el documento. */
+export function reemplazarTablaMargenComparables(html, study, wrap) {
+  const cuerpoNuevo = generarTablaMargenComparables(study, wrap);
+  if (!cuerpoNuevo) return html;
+
+  const ancla = html.indexOf('Tabla 19. Margen Operacional Compañías Comparables');
+  if (ancla < 0) return html;
   const inicio = html.indexOf('<tbody>', ancla);
   if (inicio < 0) return html;
   const fin = html.indexOf('</tbody>', inicio);
@@ -529,6 +633,13 @@ export function hydrateExactWordTemplate(rawHtml, study) {
     }
   }
 
+  /* ─── Tablas 17 y 19: la muestra final y sus márgenes ───
+     Van después de la 16 porque cierran el mismo bloque: la 16 dice cuántas quedaron y
+     estas dicen cuáles son y cuánto ganan. Con la 16 al día y estas dos con las
+     compañías de videojuegos del informe de referencia, el documento declaraba una
+     muestra de un tamaño y listaba otra, del sector equivocado. */
+  html = reemplazarTablaMuestraComparables(html, study, wrap);
+  html = reemplazarTablaMargenComparables(html, study, wrap);
 
   // Reemplazar Rango Intercuartil si se calculó
   if (stats) {

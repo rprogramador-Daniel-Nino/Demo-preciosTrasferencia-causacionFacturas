@@ -18,20 +18,35 @@ export function analizarRango(estudio) {
   const interestRate = (num(study.prime) || 0) / 100;
   const tR = ratios(T);
 
+  /* Margen de cada comparable, con su nombre y su ámbito, además de los cuartiles.
+     Las tablas 17 (muestra) y 19 (márgenes) del informe se arman con esto y no con un
+     cálculo propio: si cada una repitiera la fórmula del ajuste, el documento podría
+     acabar publicando unos márgenes que no sustentan el rango que declara unas páginas
+     más adelante.
+
+     Se devuelven todas las comparables del estudio, también las que no tienen cifras
+     —su margen sale `null` y quien las presente pondrá un hueco—: esconderlas
+     maquillaría el tamaño de la muestra final. */
+  const filas = (study.comparables || []).map((c) => {
+    const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
+    const noAjustado = pliOf(rawVal, kind);
+    let adjVal = 0;
+    const cR = ratios(rawVal);
+    if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
+      adjVal = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
+    }
+    return {
+      nombre: String((c && c.name) || '').trim(),
+      amb: c && c.amb === 'Nac' ? 'Nac' : 'Int',
+      noAjustado,
+      ajustado: noAjustado === null ? null : noAjustado + adjVal,
+    };
+  });
+
   let stats = null;
   if (study.comparables && study.comparables.length >= 3) {
-    const activeSeries = study.comparables
-      .map((c) => {
-        const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
-        const pliVal = pliOf(rawVal, kind);
-        if (pliVal === null) return null;
-        let adjVal = 0;
-        const cR = ratios(rawVal);
-        if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
-          adjVal = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-        }
-        return pliVal + adjVal;
-      })
+    const activeSeries = filas
+      .map((f) => f.ajustado)
       .filter((val) => val !== null)
       .sort((a, b) => a - b);
 
@@ -45,5 +60,5 @@ export function analizarRango(estudio) {
      Ver la nota de la Task 0 del plan antes de cambiarlo. */
   const cumple = adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : 'CUMPLE';
 
-  return { stats, adj, cumple };
+  return { stats, adj, cumple, filas };
 }
