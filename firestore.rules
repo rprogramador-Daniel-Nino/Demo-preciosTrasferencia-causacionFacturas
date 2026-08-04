@@ -4,81 +4,49 @@ rules_version = '2';
 // Sistema PT — reglas de seguridad de Firestore
 // ===============================================================
 //
-// Modelo de acceso: la base la comparte el equipo de CR Consultores. Solo entran
-// cuentas del dominio corporativo con el correo verificado, y entre ellas todos
-// leen y escriben todo: es una consultoría donde varios trabajan sobre los mismos
-// clientes y el catálogo de comparables solo sirve si es común. No hay separación
-// por dueño; sí hay rastro de quién creó y quién modificó cada documento, y ese
-// rastro es inmutable.
+// Modelo de acceso: entra cualquier cuenta de Google con el correo verificado, y cada
+// persona trabaja con sus propios datos. Nadie ve ni escribe lo de otro.
+//
+// El aislamiento es estructural, no solo por campo: todo vive bajo
+// `usuarios/{uid}/…` y las reglas comparan ese `uid` con el de quien pide. Dos
+// razones para hacerlo con la ruta y no con un campo `creadoPor`:
+//
+//   1. Los identificadores de documento se derivan del dato —el NIT en `clientes`,
+//      la razón social normalizada en `comparablesHistoricas`—, así que dos personas
+//      que trabajen el mismo cliente pedirían el mismo documento. Con una colección
+//      común, el segundo choca con el documento del primero y no puede escribir.
+//   2. Una consulta sobre una colección común tiene que filtrar por el dueño o
+//      Firestore la rechaza entera. Bajo la ruta del usuario eso ya no hace falta.
+//
+// El acceso abierto es una decisión explícita del usuario. Consecuencia a tener presente:
+// quien encuentre la URL puede crear su espacio y consumir cuota de Firestore y de las
+// API de IA, que no piden autenticación. Los datos existentes siguen inaccesibles.
 //
 // ===============================================================
 // Modelo de datos asumido
 // ===============================================================
 //
-// Colección: clientes
-// ID del documento: NIT sin puntos ni guion de verificación (solo dígitos)
-// Campos:
-//   - nit: string (requerido, 5..30) — el mismo valor que el ID
-//   - razonSocial: string (requerido, 1..200)
-//   - ciiu: string (opcional, <=20)
-//   - objeto: string (opcional, <=4000) — objeto social
-//   - representante: string (opcional, <=200)
-//   - actividadEspecifica: string (opcional, <=4000) — actividad real detectada
-//   - creadoPor: string uid (requerido, inmutable)
-//   - creadoPorNombre: string (opcional, <=120)
-//   - creadoEn: timestamp (requerido, inmutable)
-//   - actualizadoPor: string uid (opcional)
-//   - actualizadoEn: timestamp (requerido)
+// usuarios/{uid}/estudios/{estudioId}          — el estudio completo del gestor
+// usuarios/{uid}/clientes/{nit}                — contribuyentes del consultor
+// usuarios/{uid}/comparablesHistoricas/{clave} — su catálogo de comparables
+// usuarios/{uid}/eeffComparables/{registroId}  — cifras ya leídas de un EEFF
 //
-// Colección: estudios
-// ID del documento: study_<epoch> (el que ya usa el gestor, para migrar sin romper)
-// Campos:
-//   - ent: string (requerido, 1..200) — razón social del contribuyente
-//   - nit: string (opcional, <=30)
-//   - anio: number (requerido, 2000..2100) — año gravable
-//   - clienteNit: string (opcional, <=30) — vínculo con clientes/{nit}
-//   - datos: map (requerido) — el estudio completo tal como lo maneja el gestor
-//   - creadoPor / creadoPorNombre / creadoEn: igual que arriba (inmutables los dos primeros)
-//   - actualizadoPor: string uid (opcional), actualizadoPorNombre: string (opcional)
-//   - actualizadoEn: timestamp (requerido)
-//
-// Colección: comparablesHistoricas
-// ID del documento: nameKey (razón social normalizada por nameKey() del motor)
-// Campos:
-//   - nombre: string (requerido, 1..200)
-//   - nameKey: string (requerido, 1..200) — igual al ID del documento
-//   - pais: string (opcional, <=80)
-//   - actividad: string (opcional, <=4000)
-//   - pli: string (opcional, <=40) — indicador de rentabilidad con el que se aceptó
-//   - margen: number|null (opcional, -100..100) — margen aceptado, en tanto por uno o %
-//   - anios: list de number (opcional, <=40 elementos) — años gravables en que se usó
-//   - apariciones: list de map (requerido, <=200) — rastro documental de cada carga
-//   - creadoPor / creadoEn: inmutables; actualizadoPor / actualizadoEn
-//
-// Colección: eeffComparables
-// ID del documento: <nameKey>_<anio>
-// Campos:
-//   - nameKey: string (requerido, 1..200), nombre: string (requerido, 1..200)
-//   - anio: number (requerido, 1990..2100)
-//   - ingresos / costos / utilidadOperacional / cartera / inventarios / proveedores:
-//     number|null (opcional) — cifras leídas del estado financiero
-//   - fuente: string (opcional, <=300) — archivo del que se extrajeron
-//   - hallazgos: list (opcional, <=50) — verificaciones contables anotadas
-//   - creadoPor / creadoEn: inmutables; actualizadoPor / actualizadoEn
+// Los campos de cada documento son los mismos que antes; se detallan en los
+// validadores de más abajo. `creadoPor` se conserva —redundante con la ruta— porque
+// es el rastro de autoría que muestra la aplicación y porque la migración se apoya
+// en él para saber qué mover.
 //
 // ===============================================================
-// Limitaciones conocidas (no son descuidos, son techos del lenguaje de reglas)
+// Limitaciones conocidas
 // ===============================================================
 //
-// 1. Las reglas no pueden iterar listas, así que de `apariciones`, `anios` y
-//    `hallazgos` se valida el tipo y el tamaño máximo, no cada elemento.
-// 2. `estudios.datos` es un map libre: es el estudio completo del gestor y su forma
-//    cambia con la aplicación. Se valida que sea un map; su contenido no. Un miembro
-//    del dominio puede por tanto escribir cualquier estructura ahí, hasta el techo
-//    de 1 MiB por documento que impone Firestore.
-// 3. Cualquier miembro del dominio puede borrar documentos. Si eso resulta
-//    demasiado, el paso siguiente es un campo de rol y limitar `delete` a quien lo
-//    tenga; hoy no existe esa distinción en el equipo.
+// 1. `estudios.datos` es un map libre: es el estudio completo del gestor y su forma
+//    cambia con la aplicación. Se valida que sea un map; su contenido no.
+// 2. Las reglas no pueden iterar listas: de `apariciones`, `anios` y `hallazgos` se
+//    valida el tipo y el tamaño máximo, no cada elemento.
+// 3. Las colecciones de primer nivel quedan como zona de solo lectura y borrado del
+//    propio dueño, para que cada uno pueda migrar lo que dejó ahí el modelo
+//    compartido anterior. No se puede crear nada nuevo en ellas.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -87,14 +55,22 @@ service cloud.firestore {
     // Funciones de apoyo
     // =============================================================
 
-    // Autenticado con cuenta del dominio corporativo y correo verificado. La
-    // verificación importa: sin ella, un proveedor de identidad mal configurado
-    // permitiría reclamar un correo del dominio sin controlarlo.
+    /* Cualquier cuenta de Google puede entrar, por decisión del usuario: ya no se exige
+       el dominio corporativo. Lo que protege los datos es el aislamiento por usuario
+       —todo vive bajo `usuarios/{uid}/…` y estas reglas comparan ese uid con el de quien
+       pide—, así que alguien de fuera solo alcanza su propio espacio vacío.
+
+       El correo verificado sí se sigue exigiendo: es lo que impide reclamar una dirección
+       ajena, y de ello depende la compartición, que se concede por correo. */
     function esMiembro() {
       return request.auth != null
         && request.auth.token.email is string
-        && request.auth.token.email.lower().matches('^[a-z0-9._%+-]+@crconsultorescolombia[.]com$')
         && request.auth.token.email_verified == true;
+    }
+
+    // Sesión válida y dueño del espacio al que se está entrando.
+    function esDueno(uid) {
+      return esMiembro() && request.auth.uid == uid;
     }
 
     function tieneTodos(campos) {
@@ -105,13 +81,10 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly(campos);
     }
 
-    // Texto obligatorio dentro de un rango de longitud. El tope existe en todos los
-    // campos de texto: sin él, un solo documento puede inflarse hasta 1 MiB.
     function texto(valor, minimo, maximo) {
       return valor is string && valor.size() >= minimo && valor.size() <= maximo;
     }
 
-    // Texto opcional: si viene, tiene que ser string y respetar el tope.
     function textoOpcional(datos, campo, maximo) {
       return !(campo in datos) || datos[campo] == null
         || (datos[campo] is string && datos[campo].size() <= maximo);
@@ -127,31 +100,28 @@ service cloud.firestore {
     }
 
     // Nombre propio denormalizado: no puede ser el de otra persona. Si el proveedor
-    // de identidad trae `name` en el token —Google sí lo trae—, el valor guardado
-    // tiene que coincidir con él, así que nadie firma un cambio con nombre ajeno.
-    // Si el token no lo trae, queda el tope de tamaño para que no sirva de relleno.
+    // trae `name` en el token —Google sí lo trae—, el valor guardado debe coincidir.
     function nombrePropio(datos, campo) {
       return !(campo in datos) || datos[campo] == null
         || (datos[campo] is string && datos[campo].size() <= 120
             && (!('name' in request.auth.token) || datos[campo] == request.auth.token.name));
     }
 
-    // El rastro de creación lo pone quien crea, con la hora del servidor, y no se
-    // puede falsificar a nombre de otro ni fechar en el pasado.
+    // `creadoEn` solo se acota por arriba, no por abajo: la migración al espacio
+    // privado reescribe cada documento conservando su fecha de creación original, que
+    // es lo correcto —falsearla perdería el rastro de cuándo se hizo el estudio— y con
+    // una ventana de minutos toda esa migración sería rechazada. Sigue siendo imposible
+    // fechar en el futuro, que es lo que permitiría colarse al principio de un orden.
     function creacionCoherente(datos) {
       return datos.creadoPor == request.auth.uid
         && datos.creadoEn is timestamp
         && datos.creadoEn <= request.time
-        && datos.creadoEn > request.time - duration.value(5, 'm')
         && datos.actualizadoEn is timestamp
         && datos.actualizadoEn <= request.time
         && nombrePropio(datos, 'creadoPorNombre')
         && nombrePropio(datos, 'actualizadoPorNombre');
     }
 
-    // En una modificación, el rastro de creación queda intacto —incluido el nombre
-    // de quien creó, que es de otra persona y por eso aquí solo se compara con lo
-    // que ya había— y quien modifica se identifica con su propio uid y su nombre.
     function modificacionCoherente(datos) {
       return datos.creadoPor == resource.data.creadoPor
         && datos.creadoEn == resource.data.creadoEn
@@ -164,16 +134,13 @@ service cloud.firestore {
         && nombrePropio(datos, 'actualizadoPorNombre');
     }
 
-    // Tipo y tope de un nombre cuyo dueño no es necesariamente quien escribe: se
-    // usa dentro de los validadores de dominio, donde solo importa la forma. La
-    // identidad la comprueban creacionCoherente y modificacionCoherente.
     function nombreCoherente(datos, campo) {
       return !(campo in datos) || datos[campo] == null
         || (datos[campo] is string && datos[campo].size() <= 120);
     }
 
     // =============================================================
-    // clientes — contribuyentes reutilizables entre años
+    // Validadores de dominio
     // =============================================================
 
     function clienteValido(d) {
@@ -194,25 +161,8 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
-    match /clientes/{nit} {
-      allow read: if esMiembro();
-      allow create: if esMiembro()
-        && clienteValido(request.resource.data)
-        && request.resource.data.nit == nit
-        && creacionCoherente(request.resource.data);
-      allow update: if esMiembro()
-        && clienteValido(request.resource.data)
-        && request.resource.data.nit == nit
-        && modificacionCoherente(request.resource.data);
-      allow delete: if esMiembro();
-    }
-
-    // =============================================================
-    // estudios — el estudio completo del gestor
-    // =============================================================
-
     function estudioValido(d) {
-      return soloEstosCampos(['ent', 'nit', 'anio', 'clienteNit', 'datos',
+      return soloEstosCampos(['ent', 'nit', 'anio', 'clienteNit', 'datos', 'compartidoCon',
                               'creadoPor', 'creadoPorNombre', 'creadoEn',
                               'actualizadoPor', 'actualizadoPorNombre', 'actualizadoEn'])
         && tieneTodos(['ent', 'anio', 'datos', 'creadoPor', 'creadoEn', 'actualizadoEn'])
@@ -221,26 +171,28 @@ service cloud.firestore {
         && textoOpcional(d, 'clienteNit', 30)
         && d.anio is number && d.anio >= 2000 && d.anio <= 2100
         && d.datos is map
+        && listaOpcional(d, 'compartidoCon', 25)
         && texto(d.creadoPor, 1, 128)
         && nombreCoherente(d, 'creadoPorNombre')
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
-    match /estudios/{estudioId} {
-      allow read: if esMiembro();
-      allow create: if esMiembro()
-        && estudioValido(request.resource.data)
-        && creacionCoherente(request.resource.data);
-      allow update: if esMiembro()
-        && estudioValido(request.resource.data)
-        && modificacionCoherente(request.resource.data);
-      allow delete: if esMiembro();
-    }
+    /* ── compartición de un estudio ──
+       Privado por defecto. El dueño puede habilitar a compañeros del dominio uno a uno,
+       y lo que concede es LECTURA: si dos personas pudieran guardar el mismo estudio
+       volvería el problema que este modelo viene a cerrar —un estudio creado por alguien
+       y modificado por otro sin que ninguno lo supiera.
 
-    // =============================================================
-    // comparablesHistoricas — empresas extraídas de la documentación
-    // comprobatoria de años anteriores
-    // =============================================================
+       Se comparte por correo y no por identificador de usuario porque no existe un
+       directorio del equipo: nadie puede averiguar el uid de un compañero, mientras que
+       su correo sí lo conoce. `token.email` viene de Google, en minúsculas y verificado,
+       así que la lista se guarda igualmente normalizada. */
+    function estudioCompartidoConmigo() {
+      return esMiembro()
+        && 'compartidoCon' in resource.data
+        && resource.data.compartidoCon is list
+        && request.auth.token.email.lower() in resource.data.compartidoCon;
+    }
 
     function comparableValida(d) {
       return soloEstosCampos(['nombre', 'nameKey', 'pais', 'actividad', 'pli', 'margen',
@@ -261,23 +213,6 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
-    match /comparablesHistoricas/{nameKey} {
-      allow read: if esMiembro();
-      allow create: if esMiembro()
-        && comparableValida(request.resource.data)
-        && request.resource.data.nameKey == nameKey
-        && creacionCoherente(request.resource.data);
-      allow update: if esMiembro()
-        && comparableValida(request.resource.data)
-        && request.resource.data.nameKey == nameKey
-        && modificacionCoherente(request.resource.data);
-      allow delete: if esMiembro();
-    }
-
-    // =============================================================
-    // eeffComparables — cifras ya leídas de un estado financiero, por empresa y año
-    // =============================================================
-
     function eeffValido(d) {
       return soloEstosCampos(['nameKey', 'nombre', 'anio', 'ingresos', 'costos',
                               'utilidadOperacional', 'cartera', 'inventarios',
@@ -288,8 +223,6 @@ service cloud.firestore {
         && texto(d.nameKey, 1, 200)
         && texto(d.nombre, 1, 200)
         && d.anio is number && d.anio >= 1990 && d.anio <= 2100
-        // Las cifras vienen de estados financieros reales: el tope evita que un
-        // error de lectura escriba un número absurdo, sin descartar grupos grandes.
         && numeroOpcional(d, 'ingresos', -1000000000000, 1000000000000)
         && numeroOpcional(d, 'costos', -1000000000000, 1000000000000)
         && numeroOpcional(d, 'utilidadOperacional', -1000000000000, 1000000000000)
@@ -303,22 +236,73 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
-    match /eeffComparables/{registroId} {
-      allow read: if esMiembro();
-      allow create: if esMiembro()
-        && eeffValido(request.resource.data)
-        && creacionCoherente(request.resource.data);
-      allow update: if esMiembro()
-        && eeffValido(request.resource.data)
-        && modificacionCoherente(request.resource.data);
-      allow delete: if esMiembro();
+    // =============================================================
+    // Espacio privado de cada consultor
+    // =============================================================
+
+    match /usuarios/{uid} {
+
+      // El documento `usuarios/{uid}` en sí no se usa: las subcolecciones existen sin
+      // él. Se niega explícitamente para que nadie lo use como almacén sin validar.
+      allow read, write: if false;
+
+      /* Lo lee su dueño, y además quien él haya habilitado expresamente. Escribir y
+         borrar siguen siendo solo del dueño: compartir concede lectura, no edición. */
+      match /estudios/{estudioId} {
+        allow read: if esDueno(uid) || estudioCompartidoConmigo();
+        allow create: if esDueno(uid)
+          && estudioValido(request.resource.data)
+          && creacionCoherente(request.resource.data);
+        allow update: if esDueno(uid)
+          && estudioValido(request.resource.data)
+          && modificacionCoherente(request.resource.data);
+        allow delete: if esDueno(uid);
+      }
+
+      match /clientes/{nit} {
+        allow read: if esDueno(uid);
+        allow create: if esDueno(uid)
+          && clienteValido(request.resource.data)
+          && request.resource.data.nit == nit
+          && creacionCoherente(request.resource.data);
+        allow update: if esDueno(uid)
+          && clienteValido(request.resource.data)
+          && request.resource.data.nit == nit
+          && modificacionCoherente(request.resource.data);
+        allow delete: if esDueno(uid);
+      }
+
+      match /comparablesHistoricas/{nameKey} {
+        allow read: if esDueno(uid);
+        allow create: if esDueno(uid)
+          && comparableValida(request.resource.data)
+          && request.resource.data.nameKey == nameKey
+          && creacionCoherente(request.resource.data);
+        allow update: if esDueno(uid)
+          && comparableValida(request.resource.data)
+          && request.resource.data.nameKey == nameKey
+          && modificacionCoherente(request.resource.data);
+        allow delete: if esDueno(uid);
+      }
+
+      match /eeffComparables/{registroId} {
+        allow read: if esDueno(uid);
+        allow create: if esDueno(uid)
+          && eeffValido(request.resource.data)
+          && creacionCoherente(request.resource.data);
+        allow update: if esDueno(uid)
+          && eeffValido(request.resource.data)
+          && modificacionCoherente(request.resource.data);
+        allow delete: if esDueno(uid);
+      }
     }
 
     // =============================================================
     // analisisMercado — cifras y narrativa de la Sección III (Tendencias
     // de la Economía), refrescadas mensualmente por una Cloud Function.
     // Solo la Cloud Function escribe (Admin SDK, no pasa por estas reglas);
-    // los miembros del dominio solo leen.
+    // es dato compartido (no depende del usuario), así que cualquier
+    // miembro lo lee igual que en el modelo por dominio.
     // =============================================================
 
     match /analisisMercado/{docId} {
@@ -331,7 +315,70 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Nada más existe. Cualquier ruta no declarada arriba queda negada.
+    /* ── «Compartidos conmigo» ──
+       La lista de estudios que otros me compartieron se consulta por grupo de
+       colecciones: están dentro del espacio de cada dueño y quien pregunta no sabe de
+       quién, así que la consulta recorre todas las subcolecciones `estudios` a la vez.
+
+       Esta regla existe porque una consulta de grupo NO la autoriza la regla anclada a
+       `usuarios/{uid}/estudios/{id}`: al no estar atada a un padre concreto, el motor
+       necesita un patrón con comodín recursivo que coincida con ella. Sin esto la
+       consulta se rechaza entera con «Missing or insufficient permissions», aunque cada
+       documento por separado sí fuera legible.
+
+       Solo concede lectura de los documentos que me nombran, y nada más: no permite
+       enumerar los estudios de nadie.
+
+       La condición es deliberadamente mínima —una sola pertenencia sobre el campo que la
+       consulta filtra— y no reutiliza `estudioCompartidoConmigo()`. En una consulta,
+       Firestore no evalúa las reglas documento por documento: exige demostrar que los
+       filtros garantizan la condición. Comprobar además que el campo existe, que es una
+       lista, o normalizar el correo con `.lower()`, son condiciones que la consulta no
+       puede garantizar, y entonces se rechaza la consulta entera aunque cada documento
+       fuese legible. El correo se guarda ya en minúsculas y Google lo emite así, de modo
+       que la comparación directa basta. */
+    match /{ruta=**}/estudios/{estudioId} {
+      allow read: if request.auth != null
+        && request.auth.token.email in resource.data.compartidoCon;
+    }
+
+    // =============================================================
+    // Colecciones del modelo compartido anterior
+    // =============================================================
+    //
+    // Quedan solo para que cada consultor pueda recuperar y retirar lo que creó
+    // cuando la base era común. Puede leer y borrar lo suyo —eso es lo que necesita
+    // la migración— y nada más: no puede crear, no puede modificar, y no puede ver
+    // los documentos de otro, que es justo el problema que este cambio viene a
+    // cerrar. Una vez migrado todo, estas cuatro reglas pueden retirarse.
+
+    function esMioEnLaRaiz() {
+      return esMiembro()
+        && resource.data.creadoPor is string
+        && resource.data.creadoPor == request.auth.uid;
+    }
+
+    match /estudios/{estudioId} {
+      allow read, delete: if esMioEnLaRaiz();
+      allow create, update: if false;
+    }
+
+    match /clientes/{nit} {
+      allow read, delete: if esMioEnLaRaiz();
+      allow create, update: if false;
+    }
+
+    match /comparablesHistoricas/{nameKey} {
+      allow read, delete: if esMioEnLaRaiz();
+      allow create, update: if false;
+    }
+
+    match /eeffComparables/{registroId} {
+      allow read, delete: if esMioEnLaRaiz();
+      allow create, update: if false;
+    }
+
+    // Cualquier ruta no declarada arriba queda negada.
     match /{document=**} {
       allow read, write: if false;
     }

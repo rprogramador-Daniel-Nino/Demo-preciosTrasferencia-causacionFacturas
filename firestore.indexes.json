@@ -25,6 +25,15 @@
       ]
     },
     {
+      "//": "Estudios que otros compartieron conmigo. Es COLLECTION_GROUP porque están dentro del espacio de cada dueño y quien consulta no sabe de quién: recorre todas las subcolecciones `estudios` y las reglas filtran por la lista de habilitados.",
+      "collectionGroup": "estudios",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "compartidoCon", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "actualizadoEn", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "eeffComparables",
       "queryScope": "COLLECTION",
       "fields": [

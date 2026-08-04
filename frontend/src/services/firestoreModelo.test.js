@@ -8,6 +8,8 @@ import {
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila,
   aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
   pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
+  normalizarCorreo, esCorreoCompartible, agregarCompartido, quitarCompartido,
+  TOPE_COMPARTIDO, rastroPropio,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -195,6 +197,99 @@ test('verificarTamano falla antes de escribir y nombra el campo que sobra', () =
 test('verificarTamano devuelve el peso cuando cabe, para poder vigilarlo', () => {
   const bytes = verificarTamano({ datos: { ent: 'Acme' } });
   assert.ok(bytes > 0 && bytes < TOPE_DOCUMENTO);
+});
+
+/* ══════ compartir un estudio ══════
+   Los estudios son privados de cada consultor —antes eran comunes y el equipo se
+   pisaba— y compartir es una decisión explícita por estudio. Se comparte por correo
+   porque no hay directorio del equipo: nadie puede averiguar el uid de un compañero. */
+
+const DOM = 'crconsultorescolombia.com';
+const OPCIONES = { correoPropio: 'antonio@' + DOM };
+
+test('normalizarCorreo deja el correo como lo comparan las reglas', () => {
+  assert.strictEqual(normalizarCorreo('  Juan.Mendez@CRConsultoresColombia.COM '), 'juan.mendez@crconsultorescolombia.com');
+  assert.strictEqual(normalizarCorreo(null), '');
+});
+
+test('esCorreoCompartible acepta cualquier correo con forma válida', () => {
+  /* Ya no se exige el dominio corporativo: entra cualquier cuenta de Google, así que
+     restringir a quién se comparte dejaría fuera a gente que sí puede iniciar sesión. */
+  assert.ok(esCorreoCompartible('juan@' + DOM));
+  assert.ok(esCorreoCompartible('  JUAN@' + DOM.toUpperCase() + ' '));
+  assert.ok(esCorreoCompartible('alguien@gmail.com'));
+});
+
+test('esCorreoCompartible rechaza lo que no tiene forma de correo', () => {
+  /* Solo ataja el error de tecleo: guardar un acceso que nunca serviría es peor que
+     avisar al momento. */
+  assert.ok(!esCorreoCompartible('no-es-un-correo'));
+  assert.ok(!esCorreoCompartible('falta@dominio'), 'un dominio sin punto no sirve');
+  assert.ok(!esCorreoCompartible('@solo-dominio.com'));
+  assert.ok(!esCorreoCompartible(''));
+});
+
+test('agregarCompartido habilita a cualquier cuenta de Google', () => {
+  const { lista, error } = agregarCompartido([], 'Juan@' + DOM, OPCIONES);
+  assert.strictEqual(error, null);
+  assert.deepStrictEqual(lista, ['juan@' + DOM], 'se guarda normalizado');
+
+  const externo = agregarCompartido([], 'Revisor@Gmail.com', OPCIONES);
+  assert.strictEqual(externo.error, null);
+  assert.deepStrictEqual(externo.lista, ['revisor@gmail.com']);
+});
+
+test('agregarCompartido rechaza un correo mal escrito, con motivo', () => {
+  const { lista, error } = agregarCompartido([], 'juan(arroba)algo', OPCIONES);
+  assert.match(error, /correo válido/);
+  assert.deepStrictEqual(lista, [], 'y no toca la lista');
+});
+
+test('agregarCompartido no deja compartir consigo mismo ni repetir', () => {
+  assert.match(agregarCompartido([], 'antonio@' + DOM, OPCIONES).error, /ya es suyo/);
+  assert.match(agregarCompartido(['juan@' + DOM], 'JUAN@' + DOM, OPCIONES).error, /Ya tiene acceso/,
+    'la comparación es insensible a mayúsculas');
+});
+
+test('agregarCompartido respeta el tope que verifican las reglas', () => {
+  const llena = Array.from({ length: TOPE_COMPARTIDO }, (_, i) => `p${i}@${DOM}`);
+  const { error } = agregarCompartido(llena, 'otro@' + DOM, OPCIONES);
+  assert.match(error, new RegExp(String(TOPE_COMPARTIDO)));
+});
+
+test('quitarCompartido retira el acceso sin tocar a los demás', () => {
+  const lista = quitarCompartido(['juan@' + DOM, 'daniel@' + DOM], 'JUAN@' + DOM);
+  assert.deepStrictEqual(lista, ['daniel@' + DOM]);
+});
+
+test('docEstudio no comparte con nadie por omisión', () => {
+  const doc = docEstudio({ study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA });
+  assert.ok(!('compartidoCon' in doc), 'sin el campo, el documento es privado y no queda un array vacío');
+});
+
+test('docEstudio conserva los accesos concedidos cuando el guardado no los menciona', () => {
+  /* Un autoguardado normal no debe retirar permisos: el estudio se guarda muchas veces
+     y la lista de accesos solo la toca la pantalla de compartir. */
+  const previo = { creadoPor: 'uid-antonio', creadoEn: 'F', compartidoCon: ['juan@' + DOM] };
+  const doc = docEstudio({ study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, previo, marcaDeTiempo: AHORA });
+  assert.deepStrictEqual(doc.compartidoCon, ['juan@' + DOM]);
+});
+
+test('docEstudio aplica la lista nueva cuando se pasa explícitamente', () => {
+  const previo = { creadoPor: 'uid-antonio', creadoEn: 'F', compartidoCon: ['juan@' + DOM] };
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, previo, marcaDeTiempo: AHORA,
+    compartidoCon: [],
+  });
+  assert.ok(!('compartidoCon' in doc), 'retirar al último deja el estudio privado otra vez');
+});
+
+test('docEstudio normaliza y deduplica la lista antes de escribirla', () => {
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA,
+    compartidoCon: ['JUAN@' + DOM, 'juan@' + DOM, '  daniel@' + DOM + ' ', ''],
+  });
+  assert.deepStrictEqual(doc.compartidoCon, ['juan@' + DOM, 'daniel@' + DOM]);
 });
 
 /* ══════ documento de cliente ══════ */
@@ -453,6 +548,55 @@ test('catalogoAComparablesPrevias entrega la forma que espera el motor', () => {
   const previas = catalogoAComparablesPrevias(CATALOGO);
   assert.deepStrictEqual(previas[0], { name: 'Acme Corp', pais: 'Estados Unidos', actividad: 'desarrollo de software' });
   assert.strictEqual(catalogoAComparablesPrevias([{ pais: 'X' }]).length, 0, 'sin razón social no sirve para continuidad');
+});
+
+/* ══════ migración al espacio privado ══════
+   Un documento del modelo compartido puede traer el nombre de otra persona en
+   `actualizadoPorNombre`: alguien creaba el estudio y otro lo modificaba. Copiarlo tal
+   cual hacía que las reglas rechazaran la escritura entera con permission-denied, sin
+   decir qué campo sobraba. Ocurrió de verdad con un estudio creado por una persona y
+   modificado por otra. */
+
+test('rastroPropio pone la modificación a nombre de quien migra', () => {
+  const ajeno = {
+    ent: 'Acme', creadoPor: USUARIO.uid, creadoEn: 'F',
+    actualizadoPor: 'uid-juan', actualizadoPorNombre: 'JUAN CAMILO MENDEZ HINESTROZA',
+  };
+  const doc = rastroPropio(ajeno, USUARIO);
+  assert.strictEqual(doc.actualizadoPor, USUARIO.uid);
+  assert.strictEqual(doc.actualizadoPorNombre, 'Antonio Barreto');
+});
+
+test('rastroPropio conserva la fecha y el autor de creación', () => {
+  /* Es el dato que importa mantener: falsearlo perdería cuándo se hizo el estudio. */
+  const doc = rastroPropio({ creadoPor: USUARIO.uid, creadoEn: 'FECHA_ORIGINAL' }, USUARIO);
+  assert.strictEqual(doc.creadoPor, USUARIO.uid);
+  assert.strictEqual(doc.creadoEn, 'FECHA_ORIGINAL');
+});
+
+test('rastroPropio retira un nombre de creación que no es el propio', () => {
+  /* Las reglas lo comparan con el token: dejarlo distinto rechaza la escritura. El uid
+     de creadoPor sigue siendo el dato de verdad. */
+  const doc = rastroPropio({ creadoPor: USUARIO.uid, creadoEn: 'F', creadoPorNombre: 'Otra Persona' }, USUARIO);
+  assert.ok(!('creadoPorNombre' in doc));
+});
+
+test('rastroPropio mantiene el nombre de creación cuando sí coincide', () => {
+  const doc = rastroPropio({ creadoPor: USUARIO.uid, creadoEn: 'F', creadoPorNombre: 'Antonio Barreto' }, USUARIO);
+  assert.strictEqual(doc.creadoPorNombre, 'Antonio Barreto');
+});
+
+test('rastroPropio omite el nombre si el proveedor no lo entrega', () => {
+  const sinNombre = { uid: 'u1', nombre: '', correo: 'x@y.com' };
+  const doc = rastroPropio({ creadoPor: 'u1', creadoEn: 'F', actualizadoPorNombre: 'Alguien' }, sinNombre);
+  assert.ok(!('actualizadoPorNombre' in doc), 'un nombre inventado hace fallar la escritura');
+  assert.strictEqual(doc.actualizadoPor, 'u1');
+});
+
+test('rastroPropio no muta el documento original', () => {
+  const original = { creadoPor: USUARIO.uid, actualizadoPorNombre: 'Ajeno' };
+  rastroPropio(original, USUARIO);
+  assert.strictEqual(original.actualizadoPorNombre, 'Ajeno');
 });
 
 /* ══════ migración ══════ */

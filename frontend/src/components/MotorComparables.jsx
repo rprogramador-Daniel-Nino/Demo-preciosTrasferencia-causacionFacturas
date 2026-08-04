@@ -53,7 +53,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [cmode, setCmode] = useState(study.cmode || 'all');
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
-  const [selectionFunnel, setSelectionFunnel] = useState(null);
+  /* El embudo se guarda con el estudio: la tabla de razones de rechazo del informe se
+     arma con estos conteos, y si vivieran solo en memoria habría que volver a ejecutar
+     la selección cada vez que se recarga para poder generar el Word. */
+  const [selectionFunnel, setSelectionFunnel] = useState(study.embudoSeleccion || null);
   /* Estado visible de la carga de EEFF. `uploadingEEFF` y `eeffLog` ya existían
      pero nadie los leía en el JSX, así que al cargar un EEFF no se veía nada:
      ni que estaba trabajando, ni los hallazgos contables, ni los errores, que
@@ -93,6 +96,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
+      /* Conteos de la última selección: alimentan la tabla 16 del informe. */
+      embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
          cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
          App, que lo separa antes de subirlo: se guarda en localStorage y no en
@@ -100,7 +105,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch, selectionFunnel]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -372,6 +377,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
+        /* Desglose por criterio, para la tabla de razones de rechazo del informe. */
+        porMotivo: result.rechazadasPorMotivo,
         rechazadasFiltros: cat.filtro,
         curadas: veredicto ? veredicto.total : 0,
         reutilizadas: veredicto ? (veredicto.reutilizadas || 0) : 0,
@@ -383,10 +390,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         reserva: result.reserva.length,
       });
 
-      if (finales.length < nTarget) {
-        anotar(`Solo ${finales.length} de las ${nTarget} buscadas: no quedan más candidatas válidas. Amplíe los criterios del paso 2.`, 'aviso');
+      /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
+         tamaño final, y las de continuidad ocupan parte de ese cupo. */
+      const deContinuidad = result.continuidad || 0;
+      const composicion = deContinuidad
+        ? ` (${deContinuidad} del estudio anterior + ${finales.length - deContinuidad} nuevas)`
+        : '';
+
+      if (result.continuidadExcedeObjetivo) {
+        anotar(`El estudio anterior aporta ${deContinuidad} comparables, más que las ${nTarget} pedidas: ` +
+          'no se descarta ninguna, porque retirar una comparable ya aceptada hay que justificarlo en el informe. ' +
+          'Suba el N objetivo o revise la matriz del año anterior.', 'aviso');
+      } else if (finales.length < nTarget) {
+        anotar(`Solo ${finales.length} de las ${nTarget} buscadas${composicion}: no quedan más candidatas válidas. ` +
+          'Amplíe los criterios del paso 2.', 'aviso');
       } else {
-        anotar(`${finales.length} comparables seleccionadas · ${result.reserva.length} en reserva`, 'ok');
+        anotar(`${finales.length} comparables seleccionadas${composicion} · ${result.reserva.length} en reserva`, 'ok');
       }
     } catch (err) {
       console.error("Error ejecutando selección del motor:", err);
@@ -448,7 +467,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setEeffGuardados({ buscando: true });
     try {
       const claves = comparables.map(c => c.nameKey || nameKey(c.name || '')).filter(Boolean);
-      const guardados = await leerEeffDeComparables(claves, anio);
+      const guardados = await leerEeffDeComparables(claves, anio, usuario);
       setEeffGuardados({ propuestas: comparablesConEeffReutilizable(comparables, guardados), anio });
     } catch (err) {
       console.error('[EEFF compartidos] no se pudo consultar', err);
@@ -476,7 +495,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const anio = anioEstudio - 1;
     setCatalogo({ enCurso: true });
     try {
-      const items = await comparablesHistoricasDelAnio(anio);
+      const items = await comparablesHistoricasDelAnio(anio, usuario);
       if (!items.length) {
         setCatalogo({ traidas: 0, anio });
         return;
@@ -1279,10 +1298,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="text-[11px] text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
               {eeffCompartido.error
                 ? <span className="text-amber-600 dark:text-amber-400">
-                    Las cifras quedaron en el estudio, pero no se pudieron compartir con el equipo: {eeffCompartido.error}
+                    Las cifras quedaron en el estudio, pero no se pudieron guardar para reutilizarlas: {eeffCompartido.error}
                   </span>
                 : <>
-                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para el resto del equipo
+                    {eeffCompartido.guardadas} estado(s) financiero(s) disponibles ahora para sus otros estudios
                     {eeffCompartido.anio ? ` (año ${eeffCompartido.anio})` : ''}
                     {eeffCompartido.omitidas ? ` · ${eeffCompartido.omitidas} sin ingresos, no se compartieron` : ''}
                     {eeffCompartido.fallidas ? ` · ${eeffCompartido.fallidas} fallaron` : ''}

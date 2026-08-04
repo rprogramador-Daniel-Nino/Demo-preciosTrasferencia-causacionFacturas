@@ -368,22 +368,27 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     let descartada = false;
     let motivoRechazo = '';
     let categoriaRechazo = '';
+    /* Clave estable del motivo, aparte del texto: la tabla de razones de rechazo del
+       informe necesita contar por criterio, y hacerlo sobre la redacción obligaría a
+       una expresión regular que se rompe en cuanto alguien ajusta una palabra. */
+    let motivoClave = '';
     /* El primer motivo manda y los siguientes no lo sobrescriben: el orden en que
        se evalúan las reglas es el orden de precedencia. */
-    const rechazar = (categoria, motivo) => {
+    const rechazar = (categoria, clave, motivo) => {
       if (descartada) return;
       descartada = true;
       categoriaRechazo = categoria;
+      motivoClave = clave;
       motivoRechazo = motivo;
     };
 
     // Filtros de exclusión
     if (holding === 'excluir' && cand.isHolding) {
-      rechazar('filtro', 'Sociedad holding sin actividad operativa directa.');
+      rechazar('filtro', 'holding', 'Sociedad holding sin actividad operativa directa.');
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
-      rechazar('filtro', 'Saldo negativo en balances (dato no verosímil).');
+      rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
     } else if (perdidaOp === 'excluir' && cand.hasLoss) {
-      rechazar('filtro', 'Pérdida operativa (criterio conservador DIAN).');
+      rechazar('filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN).');
     }
 
     const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
@@ -396,9 +401,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     const idIQ = cand.id ? String(cand.id).trim() : '';
     const ia = iaPorId && idIQ ? iaPorId[idIQ] : null;
     if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim() && !esContinuidad) {
-      rechazar('ia', `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`);
+      rechazar('ia', 'sinDescripcion', `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`);
     } else if (!descartada && ia && ia.coincide === false && !esContinuidad) {
-      rechazar('ia', `Curación IA: la descripción del negocio no coincide con la actividad${ia.motivo ? ' (' + ia.motivo + ')' : ''}.`);
+      rechazar('ia', 'actividadDistinta', `Curación IA: la descripción del negocio no coincide con la actividad${ia.motivo ? ' (' + ia.motivo + ')' : ''}.`);
     }
 
     /* ── perfil funcional ──
@@ -424,9 +429,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        porque su inclusión ya se sustentó en el estudio anterior. */
     if (!descartada && !esContinuidad && PERFILES_DETERMINADOS.has(perfil)) {
       if (rigor === 'estricto' && perfil !== 'SERVICIO') {
-        rechazar('rigor', `Perfil ${perfil.toLowerCase()}: el rigor estricto admite solo prestadores de servicios.`);
+        rechazar('rigor', 'rigorFuncional', `Perfil ${perfil.toLowerCase()}: el rigor estricto admite solo prestadores de servicios.`);
       } else if (rigor === 'estandar' && perfil === 'EMPRESARIO') {
-        rechazar('rigor', 'Empresario pleno, con propiedad intelectual y riesgo de mercado propios (art. 260-4 E.T.).');
+        rechazar('rigor', 'rigorFuncional', 'Empresario pleno, con propiedad intelectual y riesgo de mercado propios (art. 260-4 E.T.).');
       }
     }
 
@@ -493,6 +498,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       descartada,
       motivoRechazo,
       categoriaRechazo,
+      motivoClave,
     };
   });
 
@@ -500,12 +506,18 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const rechazadas = evaluated.filter(c => c.descartada);
 
   /* Las de continuidad ya pasaron los filtros duros (holding/saldo negativo/pérdida
-     operativa aplican igual para todas, arriba); a partir de aquí no compiten por el
-     cupo nTarget ni por puntaje — se agregan siempre, aparte. */
+     operativa aplican igual para todas, arriba) y entran primero, sin competir por
+     puntaje: su inclusión ya se sustentó en el estudio anterior.
+
+     Pero cuentan DENTRO del cupo, no aparte. Antes se sumaban al margen de `nTarget`,
+     así que pedir 12 con 7 de continuidad devolvía 19 comparables: el número que el
+     usuario escribe es el tamaño de la muestra final, no el de las candidatas nuevas.
+     El cupo se completa con las mejores del resto. */
   const continuidadIncluidas = validas.filter(c => c.esContinuidad);
   const otrasValidas = validas.filter(c => !c.esContinuidad);
 
-  const seleccionadas = [...continuidadIncluidas, ...otrasValidas.slice(0, nTarget)];
+  const cupoRestante = Math.max(0, nTarget - continuidadIncluidas.length);
+  const seleccionadas = [...continuidadIncluidas, ...otrasValidas.slice(0, cupoRestante)];
 
   return {
     evaluadas: evaluated.length,
@@ -519,10 +531,28 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       ia: rechazadas.filter(c => c.categoriaRechazo === 'ia').length,
       rigor: rechazadas.filter(c => c.categoriaRechazo === 'rigor').length,
     },
+    /* Desglose por criterio concreto, que es lo que necesita la tabla de razones de
+       rechazo del informe: ahí no vale decir «descartadas por los filtros», hay que
+       decir cuántas por holding, cuántas por pérdidas y cuántas por actividad. */
+    rechazadasPorMotivo: {
+      holding: rechazadas.filter(c => c.motivoClave === 'holding').length,
+      saldoNegativo: rechazadas.filter(c => c.motivoClave === 'saldoNegativo').length,
+      perdidaOperativa: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,
+      sinDescripcion: rechazadas.filter(c => c.motivoClave === 'sinDescripcion').length,
+      actividadDistinta: rechazadas.filter(c => c.motivoClave === 'actividadDistinta').length,
+      rigorFuncional: rechazadas.filter(c => c.motivoClave === 'rigorFuncional').length,
+    },
     totalValidas: validas.length,
     /* reserva: las válidas que no entraron al TOP-N, para poder reponer las que
-       la curación por IA descarte sin quedarse corto de comparables */
-    reserva: otrasValidas.slice(nTarget),
+       la curación por IA descarte sin quedarse corto de comparables. Se corta en el cupo
+       restante, no en `nTarget`, o las que la continuidad desplazó aparecerían a la vez
+       como seleccionadas y como reserva. */
+    reserva: otrasValidas.slice(cupoRestante),
+    /* Cuántas vienen del estudio anterior y si por sí solas ya pasan del objetivo: en
+       ese caso no se recorta ninguna —descartar una comparable aceptada el año pasado
+       exige justificarlo en el informe— y la muestra queda por encima de lo pedido. */
+    continuidad: continuidadIncluidas.length,
+    continuidadExcedeObjetivo: continuidadIncluidas.length > nTarget,
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,
