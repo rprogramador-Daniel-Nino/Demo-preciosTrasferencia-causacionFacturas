@@ -337,3 +337,40 @@ test('las listas usan viñetas de Word, no un punto escrito a mano', async () =>
   assert.match(doc, /dos/);
   assert.doesNotMatch(doc, /•/);
 });
+
+test('una imagen suelta en una celda no se pierde', async () => {
+  /* `bloquesDe` trataba un fragmento en línea colgado directamente de un bloque —sin `<p>` de
+     por medio— llamando a `runsDe(h, heredado)`, y `runsDe` traduce los HIJOS de lo que recibe,
+     no al nodo mismo: la imagen se perdía en silencio, sin excepción ni aviso, con el texto de
+     alrededor intacto. Antes de la tarea 7 esto era invisible porque `runDeImagen` devolvía
+     siempre `[]`; ahora que traduce imágenes de verdad, el hueco se nota. */
+  const { doc } = await abrir(
+    '<table><tr><td>antes<img data-recurso="logo" style="width:2cm;height:1cm" />después' +
+    '</td></tr></table>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(doc, /<wp:extent/, 'la imagen no se emitió');
+  assert.equal((doc.match(/antes/g) || []).length, 1);
+  assert.equal((doc.match(/después/g) || []).length, 1);
+});
+
+test('un fragmento con estilo suelto en una celda conserva su estilo', async () => {
+  /* Mismo fallo que la imagen suelta, pero con un `<strong>`: se perdía la negrita porque
+     `runsDe(h, heredado)` iteraba los hijos de ese `<strong>` en vez de traducirlo a él. */
+  const { doc } = await abrir(
+    '<table><tr><td>antes<strong>medio</strong>después</td></tr></table>');
+  assert.match(doc, /<w:b\/>/, 'no hay negrita');
+  assert.equal((doc.match(/antes/g) || []).length, 1);
+  assert.equal((doc.match(/medio/g) || []).length, 1);
+  assert.equal((doc.match(/después/g) || []).length, 1);
+});
+
+test('una imagen suelta en un div tampoco se pierde', async () => {
+  /* El mismo fallo, pero en el otro contenedor que llega sin `<p>` de por medio: el `<div>` del
+     contentEditable. */
+  const { doc } = await abrir(
+    '<div>antes<img data-recurso="logo" style="width:2cm;height:1cm" />después</div>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(doc, /<wp:extent/, 'la imagen no se emitió');
+  assert.equal((doc.match(/antes/g) || []).length, 1);
+  assert.equal((doc.match(/después/g) || []).length, 1);
+});

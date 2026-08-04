@@ -127,6 +127,29 @@ function traductor({ porId }) {
     return [new ImageRun({ type: datos.tipo, data: datos.bytes, transformation: tamano })];
   };
 
+  /* Traduce UN hijo a runs. Vive aparte porque la usan dos sitios: el bucle de `runsDe` y
+     `bloquesDe`, cuando un fragmento en línea cuelga directamente de un bloque —una imagen o
+     un `<strong>` dentro de un `<td>` o un `<div>`, sin `<p>` de por medio—. Antes `bloquesDe`
+     llamaba a `runsDe(h, heredado)` sobre ese fragmento suelto, y `runsDe` itera los HIJOS de
+     lo que recibe, no traduce al nodo mismo: una imagen o una negrita en esa posición se perdía
+     en silencio (con `<strong>`, además, quedaba el texto pero sin negrita). Con `runDeImagen`
+     provisional devolviendo siempre `[]` esto era invisible; ahora que traduce imágenes de
+     verdad, el hueco se nota. */
+  const runsDeHijo = (h, heredado) => {
+    if (h.texto !== undefined) return h.texto ? [new TextRun({ text: h.texto, ...heredado })] : [];
+    if (h.etiqueta === 'img') return runDeImagen(h);
+    if (h.etiqueta === 'br') return [];
+    /* Un bloque anidado no aporta runs a este párrafo: lo emite `bloquesDe` en el suyo. Sin
+       esto el texto salía dos veces, una aquí y otra como párrafo espurio. */
+    if (esBloque(h)) return [];
+    const propio = { ...heredado };
+    if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
+    if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
+    const familia = familiaDeEstilo(h.atributos && h.atributos.style);
+    if (familia) propio.font = familia;
+    return runsDe(h, propio);
+  };
+
   /* Texto del subárbol convertido a runs, arrastrando el estilo heredado. `<strong>` y `<em>`
      son las dos etiquetas que el extractor emite para el estilo de fuente; una familia propia
      llega en el `style` de un `<span>`.
@@ -140,21 +163,7 @@ function traductor({ porId }) {
   function runsDe(nodo, heredado = {}) {
     const salida = [];
     for (const h of nodo.hijos || []) {
-      if (h.texto !== undefined) {
-        if (h.texto) salida.push(new TextRun({ text: h.texto, ...heredado }));
-        continue;
-      }
-      if (h.etiqueta === 'img') { salida.push(...runDeImagen(h)); continue; }
-      if (h.etiqueta === 'br') continue;
-      /* Un bloque anidado no aporta runs a este párrafo: lo emite `bloquesDe` en el suyo. Sin
-         esto el texto salía dos veces, una aquí y otra como párrafo espurio. */
-      if (esBloque(h)) continue;
-      const propio = { ...heredado };
-      if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
-      if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
-      const familia = familiaDeEstilo(h.atributos && h.atributos.style);
-      if (familia) propio.font = familia;
-      salida.push(...runsDe(h, propio));
+      salida.push(...runsDeHijo(h, heredado));
     }
     return salida;
   }
@@ -274,7 +283,11 @@ function traductor({ porId }) {
         if (h.texto.trim()) sueltos.push(new TextRun({ text: h.texto, ...heredado }));
         continue;
       }
-      if (!esBloque(h)) { sueltos.push(...runsDe(h, heredado)); continue; }
+      /* `runsDeHijo`, no `runsDe`: `h` es el propio fragmento suelto —una imagen, un
+         `<strong>`— y `runsDe` traduciría a sus HIJOS, perdiendo `h`. Es el fallo que hacía
+         desaparecer en silencio una imagen o una negrita colgadas directamente de un `<td>`
+         o un `<div>`, sin `<p>` de por medio. */
+      if (!esBloque(h)) { sueltos.push(...runsDeHijo(h, heredado)); continue; }
       volcar();
       if (h.etiqueta === 'table') {
         const t = tablaDe(h);
