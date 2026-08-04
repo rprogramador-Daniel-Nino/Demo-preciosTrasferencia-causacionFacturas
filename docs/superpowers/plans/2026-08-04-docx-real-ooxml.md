@@ -1847,8 +1847,11 @@ test('extremo a extremo: el informe real sale como .docx', async () => {
   const doc = zip.file('word/document.xml').asText();
 
   /* Declara las 112 páginas del original. */
+  /* Con S secciones y P páginas, los saltos son P - S (uno entre página y página dentro de
+     cada sección, ninguno delante de la primera de cada una). Así que saltos + secciones = P,
+     exactamente 112, sea cuantas secciones haya salido de la orientación. */
   assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length +
-    (doc.match(/<w:sectPr/g) || []).length, 112 + 1,
+    (doc.match(/<w:sectPr/g) || []).length, 112,
     'los saltos más las secciones deben cubrir las 112 páginas');
 
   /* El texto del informe está. */
