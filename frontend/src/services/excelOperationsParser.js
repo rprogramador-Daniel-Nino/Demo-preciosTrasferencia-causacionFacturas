@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 
 /**
  * Módulo de lectura e ingesta del Excel de Operaciones con Vinculados

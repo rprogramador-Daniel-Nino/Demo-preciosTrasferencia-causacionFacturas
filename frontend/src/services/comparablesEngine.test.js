@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import axios from 'axios';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import {
   scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,

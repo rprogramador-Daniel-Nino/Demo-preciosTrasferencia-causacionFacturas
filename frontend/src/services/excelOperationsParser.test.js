@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import { parseExcelOperations } from './excelOperationsParser.js';
 
 function workbookToFakeFile(wb) {
