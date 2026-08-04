@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, {
+  useState, useEffect, useMemo, useRef,
+} from 'react';
 import axios from 'axios';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
 import mammoth from 'mammoth';
@@ -717,8 +719,18 @@ export default function ReporteGenerador({ study, estudioId }) {
      tamaño, los dos logos encimados y el resaltado de pantalla colándose— eran todos ese
      importador. */
   const [generandoDocx, setGenerandoDocx] = useState(false);
+  /* Cerrojo síncrono contra la reentrada. `generandoDocx` (el `useState`) sólo refleja el
+     render en curso: el `disabled` del botón depende de que React repinte antes del siguiente
+     clic, y si dos invocaciones se solapan en esa ventana, la intercepción de `console.warn` de
+     más abajo se anida —cada una lo restaura al valor que capturó al arrancar, que en la
+     segunda ya es el envoltorio de la primera— y `console.warn` queda parcheado con un cierre
+     obsoleto el resto de la sesión. Un `useRef` se lee y se escribe de inmediato, sin esperar a
+     un repintado, así que cierra la ventana del todo y no sólo el caso normal. */
+  const generandoDocxRef = useRef(false);
 
   const descargarDocx = async () => {
+    if (generandoDocxRef.current) return;
+    generandoDocxRef.current = true;
     setGenerandoDocx(true);
     try {
       /* El writer avisa por `console.warn` cuando el anexo trae más páginas que huecos
@@ -766,22 +778,31 @@ export default function ReporteGenerador({ study, estudioId }) {
       if (declaradas) {
         nuevosAvisos.push({
           nivel: 'aviso',
+          origen: 'docx',
           texto: 'El documento declara ' + declaradas + ' páginas, una por cada página del ' +
             'informe de referencia. Word repagina al abrirlo: si el contenido de alguna no ' +
             'cabe, desborda a una hoja extra. Compara el total con el original antes de radicar.',
         });
       }
       if (avisoAnexo) {
-        nuevosAvisos.push({ nivel: 'aviso', texto: avisoAnexo });
+        nuevosAvisos.push({ nivel: 'aviso', origen: 'docx', texto: avisoAnexo });
       }
-      if (nuevosAvisos.length) {
-        setAvisos((previos) => [...previos, ...nuevosAvisos]);
-      }
+      /* Reemplaza, no acumula. Los avisos del render de la plantilla (los demás `setAvisos` de
+         este archivo) también reemplazan la lista entera porque se recalculan de cero cada vez;
+         estos, en cambio, sólo se recalculan al pulsar este botón, así que sin este filtro cada
+         clic apilaba una copia más del mismo aviso. Se distinguen por `origen: 'docx'` en vez
+         de vaciar toda la lista, porque los avisos del render (sin ese campo) tienen que seguir
+         en pantalla mientras tanto. */
+      setAvisos((previos) => [
+        ...previos.filter((a) => a.origen !== 'docx'),
+        ...nuevosAvisos,
+      ]);
     } catch (err) {
       console.error('No se pudo generar el .docx:', err);
       alert('No se pudo generar el .docx: ' + err.message +
         '\n\nEl botón de .doc sigue disponible.');
     } finally {
+      generandoDocxRef.current = false;
       setGenerandoDocx(false);
     }
   };
