@@ -14,7 +14,7 @@ import {
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
 } from 'docx';
-import { HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
+import { HOJA, HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
 
@@ -106,7 +106,7 @@ const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
    último parámetro de las cinco— se descartó a propósito: es más ruido que un cierre y hay que
    tocar las cinco firmas dos veces, una ahora y otra en la tarea 10. Se llama una vez por
    documento desde `construirDocumento`. */
-function traductor({ porId }) {
+function traductor({ porId, anexo = [] }) {
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -282,6 +282,34 @@ function traductor({ porId }) {
     });
   }
 
+  /* Las páginas del anexo se reparten en orden entre los huecos que dejó el extractor. Si hay
+     menos que huecos, los que sobran siguen avisando de lo que falta.
+
+     No se copian las páginas escaneadas del año anterior: el informe se radica ante la DIAN, y
+     un calco perfecto con los estados financieros firmados del año equivocado dentro es peor
+     que un hueco evidente. */
+  let siguienteAnexo = 0;
+
+  const bloqueDeHueco = (nodo) => {
+    const pagina = anexo[siguienteAnexo];
+    if (!pagina) return bloquesDe(nodo);
+    siguienteAnexo += 1;
+    const datos = bytesDeDataUrl(pagina);
+    if (!datos) return bloquesDe(nodo);
+    /* La página del anexo ocupa la caja de texto entera. Mantener su proporción real no se
+       puede saber sin decodificar el PNG: se usa el ancho de la caja y un alto proporcional a
+       una hoja carta (11/8,5), que es una SUPOSICIÓN razonable para estos escaneos, no una
+       medida tomada del archivo. */
+    const anchoPx = cmAPixeles(medidaEnCm(HOJA.ancho) - 2 * medidaEnCm(HOJA.margen));
+    return [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new ImageRun({
+        type: datos.tipo, data: datos.bytes,
+        transformation: { width: anchoPx, height: Math.round(anchoPx * 11 / 8.5) },
+      })],
+    })];
+  };
+
   /* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
      que permite que un `<div>` del contentEditable no pierda su contenido.
 
@@ -307,6 +335,12 @@ function traductor({ porId }) {
          o un `<div>`, sin `<p>` de por medio. */
       if (!esBloque(h)) { sueltos.push(...runsDeHijo(h, heredado)); continue; }
       volcar();
+      /* El hueco del anexo de estados financieros: lo deja el extractor donde iba una página
+         que no puede reproducir. Se resuelve aquí, como cualquier otro bloque. */
+      if (h.atributos && h.atributos['data-hueco'] === 'anexo_eeff') {
+        salida.push(...bloqueDeHueco(h));
+        continue;
+      }
       if (h.etiqueta === 'table') {
         const t = tablaDe(h);
         if (t) salida.push(t);
@@ -385,7 +419,16 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
   const cuerpo = enc ? html.replace(enc.bloque, '') : html;
   const arbol = htmlAArbol(cuerpo);
   const porId = new Map((recursos || []).map((r) => [r.id, r.dataUrl]));
-  const { bloquesDe, runsDe } = traductor({ porId });
+  /* Si suben más páginas de anexo que huecos hay, las que sobran no se pierden en silencio:
+     perder páginas de un anexo firmado sería grave. Se avisa por consola y se quedan sin usar,
+     en el orden en que llegaron. */
+  const totalHuecos = (cuerpo.match(/data-hueco="anexo_eeff"/g) || []).length;
+  if ((anexo || []).length > totalHuecos) {
+    console.warn('[docxWriter] el anexo trae ' + anexo.length + ' página(s) para sólo ' +
+      totalHuecos + ' hueco(s) en el informe: sobran ' + (anexo.length - totalHuecos) +
+      ' página(s) que no se usan.');
+  }
+  const { bloquesDe, runsDe } = traductor({ porId, anexo });
 
   const cabecera = enc
     ? new Header({

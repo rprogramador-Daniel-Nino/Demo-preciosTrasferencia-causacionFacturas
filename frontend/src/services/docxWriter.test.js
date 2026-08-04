@@ -441,3 +441,39 @@ test('un documento sin encabezado no declara uno vacío', async () => {
   const { zip } = await abrir('<p>a</p>');
   assert.equal(zip.file('word/header1.xml'), null);
 });
+
+/* El anexo A: las páginas de estados financieros firmados que el usuario sube para llenar el
+   hueco que deja el extractor —éste no puede reproducir un documento firmado por otro
+   contribuyente y de otro año, así que marca dónde iba cada página con `data-hueco`—. */
+const HUECO = '<div class="pagina" data-pagina="98">' +
+  '<div data-hueco="anexo_eeff" data-id="hueco_98">' +
+  '<p>[Falta el anexo de estados financieros firmados — corresponde a la página 98 del ' +
+  'informe de referencia. Adjúntelo antes de radicar.]</p></div></div>';
+
+test('con el anexo subido, sus páginas entran en el sitio del hueco', async () => {
+  const { doc } = await abrir(HUECO, [], [PNG_1x1]);
+  assert.match(doc, /<w:drawing>/, 'la página del anexo no entró');
+  /* Y el texto del hueco desaparece: ya no falta nada. */
+  assert.doesNotMatch(doc, /Falta el anexo/);
+});
+
+test('sin anexo subido, el hueco se ve y dice qué falta', async () => {
+  /* Un div vacío no se ve ni en pantalla ni en Word, y en la salida anterior las 15 páginas
+     del anexo desaparecían sin dejar rastro. El informe se radica ante la DIAN: que diga qué
+     falta es lo mínimo. */
+  const { doc } = await abrir(HUECO, [], []);
+  assert.match(doc, /Falta el anexo de estados financieros firmados/);
+});
+
+test('las páginas del anexo se reparten en orden entre los huecos', async () => {
+  const dos = HUECO + HUECO.replace(/98/g, '99');
+  const { doc } = await abrir(dos, [], [PNG_1x1, PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 2);
+});
+
+test('con menos páginas de anexo que huecos, los que sobran siguen avisando', async () => {
+  const dos = HUECO + HUECO.replace(/98/g, '99');
+  const { doc } = await abrir(dos, [], [PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
+  assert.match(doc, /Falta el anexo/);
+});
