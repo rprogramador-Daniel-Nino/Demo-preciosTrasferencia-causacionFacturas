@@ -455,13 +455,15 @@ test('la hoja del .docx es la misma que la del previo', async () => {
 });
 
 test('la tipografía sale del informe, no de un gusto propio', async () => {
-  /* El extractor la anota en el HTML al leer las fuentes del PDF. En medios puntos: Arial 12
-     son 24. */
+  /* El extractor la anota en el HTML al leer las fuentes del PDF. En medios puntos: 10 pt son
+     20. Se usa a propósito una tipografía DISTINTA de la de reserva (Arial 12): con Arial 12
+     el test pasaría igual si el writer ignorara el HTML y escribiera Arial a mano, y entonces
+     no demostraría nada. Junto con el test siguiente, el par distingue los dos casos. */
   const { leer } = await abrir(
-    '<div data-extractor="7" data-estilo-base="Arial|12"></div><p>hola</p>');
+    '<div data-extractor="7" data-estilo-base="Times New Roman|10"></div><p>hola</p>');
   const estilos = leer('word/styles.xml');
-  assert.match(estilos, /w:ascii="Arial"/);
-  assert.match(estilos, /w:sz w:val="24"/);
+  assert.match(estilos, /w:ascii="Times New Roman"/);
+  assert.match(estilos, /w:sz w:val="20"/);
 });
 
 test('sin marca de tipografía cae en Arial 12, no en una serif de pantalla', async () => {
