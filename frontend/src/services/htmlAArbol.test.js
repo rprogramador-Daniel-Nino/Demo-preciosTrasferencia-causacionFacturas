@@ -151,3 +151,31 @@ test('ninguna alternativa de la expresión regular consume un <', () => {
     }
   }
 });
+
+test('una etiqueta de apertura cierra la anterior del mismo tipo', () => {
+  /* Esta es la regla de HTML5: <p>a<p>b produce dos p hermanos, no anidados.
+     Es lo que hace mammoth y el contentEditable cuando se edita sin cerrar. */
+  const r = htmlAArbol('<p>a<p>b');
+  assert.equal(r.hijos.length, 2);
+  assert.equal(r.hijos[0].etiqueta, 'p');
+  assert.equal(r.hijos[1].etiqueta, 'p');
+  assert.equal(textoDe(r), 'ab');
+});
+
+test('los <li> se cierran implícitamente entre sí', () => {
+  const r = htmlAArbol('<ul><li>a<li>b</ul>');
+  assert.equal(r.hijos[0].etiqueta, 'ul');
+  assert.equal(r.hijos[0].hijos.length, 2);
+  assert.equal(r.hijos[0].hijos[0].etiqueta, 'li');
+  assert.equal(r.hijos[0].hijos[1].etiqueta, 'li');
+  assert.equal(textoDe(r), 'ab');
+});
+
+test('los <td> se cierran implícitamente entre sí', () => {
+  const r = htmlAArbol('<tr><td>a<td>b</tr>');
+  assert.equal(r.hijos[0].etiqueta, 'tr');
+  assert.equal(r.hijos[0].hijos.length, 2);
+  assert.equal(r.hijos[0].hijos[0].etiqueta, 'td');
+  assert.equal(r.hijos[0].hijos[1].etiqueta, 'td');
+  assert.equal(textoDe(r), 'ab');
+});
