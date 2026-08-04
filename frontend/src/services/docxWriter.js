@@ -10,10 +10,11 @@
 
 import {
   Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
+  PositionalTab, PositionalTabAlignment, PositionalTabLeader,
 } from 'docx';
 import { HOJA_TWIPS } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
-import { htmlAArbol } from './htmlAArbol.js';
+import { htmlAArbol, textoDe } from './htmlAArbol.js';
 
 /* `docx` mide las fuentes en medios puntos: Arial 12 son 24. */
 const mediosPuntos = (pt) => Math.round((Number(pt) || 12) * 2);
@@ -42,9 +43,17 @@ const NIVELES = {
   h5: HeadingLevel.HEADING_5, h6: HeadingLevel.HEADING_6,
 };
 
+/* Etiquetas que en Word son un bloque propio y no pueden compartir párrafo con el texto que
+   las rodea. `span`, `strong`, `em` y `br` NO están aquí a propósito: son en línea y se funden
+   en el párrafo, que es lo que conserva la negrita y la familia del informe. */
+const BLOQUES = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li',
+  'table', 'thead', 'tbody', 'tr', 'td', 'th', 'div', 'blockquote', 'section', 'article']);
+const esBloque = (n) => !!n && n.etiqueta !== undefined && BLOQUES.has(n.etiqueta);
+
 /* La familia que declara un `<span style="font-family:'X'">`. El extractor sólo la declara
    cuando se desvía del cuerpo del documento. */
 const familiaDeEstilo = (estilo) => {
+  const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   return m ? m[1].trim() : null;
 };
@@ -59,7 +68,8 @@ const familiaDeEstilo = (estilo) => {
    No desciende en bloques: cuando encuentra un `<p>` u otro bloque, se detiene. Eso permite
    que un párrafo con párrafos anidados emita primero su propio contenido en línea, y luego
    `bloquesDe` maneje los bloques anidados como bloques independientes. */
-function runsDe(nodo, heredado = {}) {
+
+   function runsDe(nodo, heredado = {}) {
   const salida = [];
   for (const h of nodo.hijos || []) {
     if (h.texto !== undefined) {
@@ -68,8 +78,9 @@ function runsDe(nodo, heredado = {}) {
     }
     if (h.etiqueta === 'img') { salida.push(...runDeImagen(h)); continue; }
     if (h.etiqueta === 'br') continue;
-    /* No descender en bloques. */
-    if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) continue;
+    /* Un bloque anidado no aporta runs a este párrafo: lo emite `bloquesDe` en el suyo. Sin
+       esto el texto salía dos veces, una aquí y otra como párrafo espurio. */
+    if (esBloque(h)) continue;
     const propio = { ...heredado };
     if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
     if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
@@ -83,44 +94,91 @@ function runsDe(nodo, heredado = {}) {
 /* Se completa en la tarea 7. */
 function runDeImagen() { return []; }
 
-function parrafoDe(nodo) {
+/* Una entrada del índice: título, un espacio, uno o más puntos, y el número de página al final
+   de la línea.
+
+   Basta UN punto, y esto es una decisión medida, no un descuido. Con cuatro —que es lo que se
+   pidió primero— la entrada «1.5 Razones de rechazo (Filtros Cuantitativos – Filtros
+   Cualitativos) . 33» del informe de referencia se quedaba sin detectar y salía sin alinear,
+   con el punto y el número pegados al texto.
+
+   Lo que impide el falso positivo no es la cantidad de puntos, es exigir espacio antes del
+   punto y sólo cifras hasta el final de la línea. Comprobado contra los casos reales del
+   informe: «El margen fue de 3.5 puntos porcentuales en 2024» no encaja porque no hay punto
+   justo antes del número; «Ver anexo A ....... y también el B» tampoco, porque no acaba en
+   cifra; y unos puntos suspensivos sin número al final tampoco. Queda un caso ambiguo de
+   verdad —una frase que acabe en punto seguido de una cifra, «según la norma. 2024»— que es
+   raro y se ve al revisar. */
+const RX_ENTRADA_INDICE = /^(.*?\S)\s+\.+\s*(\d+)\s*$/;
+
+/* El título y el número, con el tabulador de Word en medio. Es lo que mantiene la fila de
+   puntos pegada al margen derecho cuando la métrica de la fuente cambia. */
+const parrafoDeIndice = (titulo, numero) => new Paragraph({
+  children: [new TextRun({
+    children: [
+      titulo,
+      new PositionalTab({
+        alignment: PositionalTabAlignment.RIGHT,
+        leader: PositionalTabLeader.DOT,
+        relativeTo: 'margin',
+      }),
+      numero,
+    ],
+    bold: true,
+  })],
+});
+
+function parrafoDe(nodo, runs = runsDe(nodo)) {
   const nivel = NIVELES[nodo.etiqueta];
-  const hijos = runsDe(nodo);
+
+  /* Entrada del índice: se detecta sobre el texto plano del bloque. El extractor ya pone cada
+     entrada en su propio párrafo (rol TOCI), así que el texto del bloque es la entrada
+     completa. */
+  if (!nivel) {
+    const m = RX_ENTRADA_INDICE.exec(textoDe(nodo));
+    if (m && m[1].trim()) return parrafoDeIndice(m[1].trim(), m[2]);
+  }
+
   return new Paragraph({
     ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
-    children: hijos,
+    children: runs,
   });
 }
 
 /* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
    que permite que un `<div>` del contentEditable no pierda su contenido.
 
-   Cuando un bloque tiene bloques anidados, emite primero el párrafo del padre (que no
-   desciende en bloques por el cambio en `runsDe`) y luego los bloques anidados como
-   párrafos independientes. Esto maneja el HTML del contentEditable, donde los bloques
-   pueden no estar cerrados. */
+   El texto y los fragmentos en línea que aparecen fuera de un párrafo se acumulan y se
+   vuelcan como un párrafo al toparse con el siguiente bloque. Así el orden del documento se
+   conserva: si se emitieran al final, el texto de después de una tabla saldría antes que
+   ella. */
 function bloquesDe(nodo, salida = []) {
+  let sueltos = [];
+  const volcar = () => {
+    if (!sueltos.length) return;
+    salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos }));
+    sueltos = [];
+  };
   for (const h of nodo.hijos || []) {
     if (h.texto !== undefined) {
-      if (h.texto.trim()) salida.push(new Paragraph({ children: [new TextRun(h.texto)] }));
+      if (h.texto.trim()) sueltos.push(new TextRun(h.texto));
       continue;
     }
+    if (!esBloque(h)) { sueltos.push(...runsDe(h)); continue; }
+    volcar();
     if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) {
-      salida.push(parrafoDe(h));
-      /* Emitir bloques anidados (aunque htmlAArbol los cierre implícitamente, el HTML del
-         contentEditable puede tenerlos). */
-      for (const nieto of h.hijos || []) {
-        if (nieto.texto === undefined && (nieto.etiqueta === 'p' || NIVELES[nieto.etiqueta])) {
-          salida.push(parrafoDe(nieto));
-          bloquesDe(nieto, salida);
-        } else if (nieto.texto === undefined) {
-          bloquesDe(nieto, salida);
-        }
-      }
+      const runs = runsDe(h);
+      const dentro = (h.hijos || []).filter(esBloque);
+      /* Un párrafo vacío sigue siendo un párrafo: la portada del informe se centra con 35
+         seguidos. Se emite también sin runs, salvo que sea sólo un envoltorio de otros
+         bloques —ahí el párrafo vacío no existía en el original—. */
+      if (runs.length || !dentro.length) salida.push(parrafoDe(h, runs));
+      for (const b of dentro) bloquesDe({ hijos: [b] }, salida);
       continue;
     }
     bloquesDe(h, salida);
   }
+  volcar();
   return salida;
 }
 

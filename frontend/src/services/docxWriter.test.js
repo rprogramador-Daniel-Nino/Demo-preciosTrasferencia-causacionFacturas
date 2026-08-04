@@ -124,3 +124,94 @@ test('un párrafo anidado en otro no se funde con él', async () => {
   assert.match(doc, /fuera/);
   assert.match(doc, /dentro/);
 });
+
+test('un fragmento en línea no sale además como párrafo suelto', async () => {
+  /* Un arreglo anterior duplicaba el texto: salía una vez bien formateado y otra como
+     párrafo espurio. Esto ocurría con <p><strong>...</strong></p>. */
+  const { doc } = await abrir(
+    '<p><strong><span style="font-family:\'Britannic\'">TÍTULO</span></strong></p>');
+  const conteo = (doc.match(/TÍTULO/g) || []).length;
+  assert.equal(conteo, 1, 'TÍTULO debe aparecer exactamente una vez, aparece ' + conteo);
+  const parrafos = (doc.match(/<w:p[ >]/g) || []).length;
+  assert.equal(parrafos, 1, 'debe haber exactamente un párrafo, hay ' + parrafos);
+});
+
+test('ningún texto sale dos veces', async () => {
+  /* Este test existe porque un arreglo anterior duplicaba el texto en línea: salía una vez
+     bien formateado y otra como párrafo espurio sin formato. */
+  const casos = [
+    '<p><strong>a</strong></p>',
+    '<p>a<div>b</div>c',
+    '<p><span>a</span>b</p>',
+    '<div><p>a</p></div>',
+    '<table><tr><td>a</td><td>b</td></tr></table>',
+    '<p>fuera<p>dentro</p></p>',
+  ];
+  for (const html of casos) {
+    const { doc } = await abrir(html);
+    /* Extraer solo el texto de los elementos <w:t>, no de todo el XML. */
+    const textos = (doc.match(/<w:t[^>]*>([^<]+)<\/w:t>/g) || [])
+      .map((m) => m.replace(/<w:t[^>]*>/, '').replace(/<\/w:t>/, ''));
+    for (const texto of textos) {
+      if (texto.trim()) {
+        const conteo = (doc.match(new RegExp('<w:t[^>]*>' + texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '<\\/w:t>', 'g')) || []).length;
+        assert.equal(conteo, 1, html + ': "' + texto + '" aparece ' + conteo + ' veces en <w:t>');
+      }
+    }
+  }
+});
+
+test('el orden del documento se conserva', async () => {
+  const { doc } = await abrir('<p>uno</p>texto suelto<p>dos</p>');
+  const indUno = doc.indexOf('uno');
+  const indSuelto = doc.indexOf('texto suelto');
+  const indDos = doc.indexOf('dos');
+  assert.ok(indUno > -1 && indSuelto > -1 && indDos > -1, 'faltan textos');
+  assert.ok(indUno < indSuelto, 'uno debe venir antes que texto suelto');
+  assert.ok(indSuelto < indDos, 'texto suelto debe venir antes que dos');
+});
+
+test('las entradas del índice llevan la guía de puntos de Word, no puntos de texto', async () => {
+  /* Con puntos literales, la fila deja de terminar donde debe en cuanto cambia la métrica de
+     la fuente: es lo que hacía que el índice se viera desordenado. */
+  const { doc } = await abrir(
+    '<p>1.2. Derechos y Obligaciones ........................ 25</p>');
+  assert.match(doc, /w:leader="dot"/, 'no hay guía de puntos');
+  assert.match(doc, /1\.2\. Derechos y Obligaciones/);
+  assert.match(doc, /25/);
+  /* Y los puntos literales desaparecen. */
+  assert.doesNotMatch(doc, /\.{8}/);
+});
+
+test('una entrada con un solo punto también se alinea', async () => {
+  /* Es una entrada real del informe de referencia. Con la regla anterior, de cuatro puntos,
+     se quedaba fuera. */
+  const { doc } = await abrir(
+    '<p>1.5 Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos) . 33</p>');
+  assert.match(doc, /w:leader="dot"/, 'no hay guía de puntos');
+  assert.match(doc, /1\.5 Razones de rechazo \(Filtros Cuantitativos – Filtros Cualitativos\)/);
+  assert.match(doc, /33/);
+});
+
+test('un párrafo normal del informe no se convierte en entrada de índice', async () => {
+  /* Este test sostiene la relajación de la regla: si alguien la afloja más, aquí se nota.
+     Se comprueba que ninguno de estos produce w:leader="dot". */
+  const casos = [
+    '<p>y así sucesivamente... hasta el final</p>',
+    '<p>El margen fue de 3.5 puntos porcentuales en 2024</p>',
+    '<p>Ver anexo A ....... y también el B</p>',
+    '<p>Los topes en UVT para 2024 fueron 45.000 y 10.000</p>',
+    '<p>La utilidad operacional creció 2.3 veces</p>',
+  ];
+  for (const html of casos) {
+    const { doc } = await abrir(html);
+    assert.doesNotMatch(doc, /w:leader="dot"/, 'se detectó como entrada: ' + html);
+  }
+});
+
+test('un encabezado con puntos y número no se convierte en entrada de índice', async () => {
+  /* La detección solo corre cuando el bloque no es encabezado. */
+  const { doc } = await abrir('<h2>1. Descripción de la Compañía ........... 6</h2>');
+  assert.doesNotMatch(doc, /w:leader="dot"/, 'un encabezado no debe tener guía de puntos');
+  assert.match(doc, /1\. Descripción de la Compañía/);
+});
