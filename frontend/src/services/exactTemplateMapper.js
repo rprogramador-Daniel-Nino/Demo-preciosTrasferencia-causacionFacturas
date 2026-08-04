@@ -187,31 +187,36 @@ const LETRAS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 /**
  * Filas de la tabla de razones de rechazo, ya con su letra y su conteo.
  *
- * Devuelve también si los números cuadran: rechazos + aceptadas + reserva debe dar el
- * universo evaluado. Si no cuadra, quien genera el informe tiene que saberlo antes de
- * radicarlo, no después.
+ * Devuelve también si los números cuadran: rechazos —con la reserva ya sumada a las
+ * diferencias funcionales— más aceptadas debe dar el universo evaluado. Si no cuadra,
+ * quien genera el informe tiene que saberlo antes de radicarlo, no después.
  */
 export function filasRazonesRechazo(embudo) {
   const e = embudo || null;
   if (!e || !e.evaluadas) return { filas: [], total: 0, cuadra: false, sinDatos: true };
 
   const porMotivo = e.porMotivo || {};
+
+  /* Las válidas que no entraron al cupo se cuentan dentro de las diferencias
+     funcionales, no en una fila propia. La fila que tenían declaraba por escrito que
+     esas compañías superaron todos los criterios y aun así quedaron fuera, y el motivo
+     real —el tamaño de muestra pedido— no es un criterio de comparabilidad que se
+     sostenga ante quien revise el informe.
+
+     El destino no es arbitrario: `scoreCandidates` ordena las válidas por puntaje
+     descendente (`comparablesEngine.js:505`) y la reserva es la cola de ese orden
+     (`:550`), es decir las de menor grado de comparabilidad funcional frente a la parte
+     examinada. */
+  const reserva = Number(e.reserva) || 0;
+
   const filas = [];
   RAZONES_RECHAZO.forEach(([clave, etiqueta]) => {
-    const cuantas = Number(porMotivo[clave]) || 0;
+    /* La reserva se suma ANTES de descartar los ceros. Un estudio que no rechazó a
+       nadie por rigor funcional pero dejó reserva necesita igual esta fila: omitirla
+       dejaría la columna sin sumar el universo. */
+    const cuantas = (Number(porMotivo[clave]) || 0) + (clave === 'rigorFuncional' ? reserva : 0);
     if (cuantas > 0) filas.push({ clave, etiqueta, cuantas });
   });
-
-  /* Las válidas que no entraron al cupo no son rechazos ni comparables finales: sin
-     esta fila la columna no suma el universo y el informe se contradice solo. */
-  const reserva = Number(e.reserva) || 0;
-  if (reserva > 0) {
-    filas.push({
-      clave: 'reserva',
-      etiqueta: 'Compañías que superaron los filtros pero no entraron en la muestra final',
-      cuantas: reserva,
-    });
-  }
 
   const aceptadas = Number(e.seleccionadas) || 0;
   filas.push({ clave: 'aceptadas', etiqueta: 'Compañías comparables aceptadas', cuantas: aceptadas });

@@ -242,18 +242,41 @@ test('filasRazonesRechazo omite los criterios que no descartaron a nadie', () =>
 });
 
 test('filasRazonesRechazo asigna letras corridas sobre las filas que quedan', () => {
-  /* Cinco criterios con descartes (el de «sin descripción» quedó en cero y se omite),
-     más la reserva y las aceptadas: siete filas, letras A a G sin huecos. */
+  /* Cinco criterios con descartes (el de «sin descripción» quedó en cero y se omite)
+     más las aceptadas: seis filas, letras A a F sin huecos. La reserva ya no es una
+     fila propia. */
   const { filas } = filasRazonesRechazo(embudoReal);
-  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F']);
   assert.deepStrictEqual(filas.map(f => f.clave), [
     'rigorFuncional', 'actividadDistinta', 'holding', 'perdidaOperativa', 'saldoNegativo',
-    'reserva', 'aceptadas',
+    'aceptadas',
   ]);
 });
 
+test('la reserva se cuenta dentro de las diferencias funcionales', () => {
+  /* Declarar en el informe que hubo compañías que superaron todos los criterios y aun
+     así quedaron fuera invita a una pregunta que el cupo de muestra no puede responder.
+     Van con las diferencias funcionales, que es lo que las apartó: el corte del cupo es
+     por puntaje de comparabilidad. */
+  const { filas } = filasRazonesRechazo(embudoReal);
+  assert.ok(!filas.some(f => f.clave === 'reserva'), 'la reserva no puede tener fila propia');
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.cuantas, 17, '5 por rigor + 12 de reserva');
+});
+
+test('la fila de diferencias funcionales aparece aunque solo la sostenga la reserva', () => {
+  /* Sin este caso la suma de la columna se rompe: la fila se omitiría por valer cero en
+     `porMotivo` y las 12 de reserva desaparecerían del universo. */
+  const soloReserva = { evaluadas: 20, seleccionadas: 8, reserva: 12, porMotivo: {} };
+  const { filas, cuadra } = filasRazonesRechazo(soloReserva);
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.ok(rigor, 'la fila tiene que aparecer');
+  assert.strictEqual(rigor.cuantas, 12);
+  assert.ok(cuadra, '12 + 8 = 20');
+});
+
 test('filasRazonesRechazo cuadra la suma con el universo evaluado', () => {
-  /* 30+5+15+25+5 rechazos + 12 de reserva + 8 aceptadas = 100 */
+  /* 30+5+15+25 rechazos + (5 de rigor + 12 de reserva) + 8 aceptadas = 100 */
   const { cuadra, suma, total } = filasRazonesRechazo(embudoReal);
   assert.strictEqual(suma, 100);
   assert.strictEqual(total, 100);
