@@ -59,7 +59,7 @@ Devuelve SOLO este JSON estricto sin marcas markdown:
    documento con la comparable a la que pertenece. Sin ellos el sistema no sabe de
    qué empresa es el PDF que acaba de leer, y las cifras entraban en la fila donde
    se hubiera soltado el archivo, fuera o no la correcta. */
-const EEFF_COMPARABLE_PROMPT = `Eres un analista senior de Precios de Transferencia. Lee los Estados Financieros de la empresa comparable y extrae la matriz contable completa.
+export const EEFF_COMPARABLE_PROMPT = `Eres un analista senior de Precios de Transferencia. Lee los Estados Financieros de la empresa comparable y extrae la matriz contable completa.
 
 Devuelve SOLO un JSON estricto con esta estructura:
 {
@@ -68,18 +68,26 @@ Devuelve SOLO un JSON estricto con esta estructura:
   "periodo": "Año o rango del ejercicio (ej: 2025 o 2024)",
   "moneda": "USD, COP, EUR, etc.",
   "unidad_origen": "unidades|miles|millones",
-  "ingresos_operacionales": 0,
-  "costo_ventas": 0,
-  "utilidad_bruta": 0,
-  "gastos_operacionales": 0,
-  "utilidad_operacional": 0,
-  "cuentas_por_cobrar": 0,
-  "inventarios": 0,
-  "cuentas_por_pagar": 0,
-  "total_activos": 0,
-  "total_pasivos": 0,
-  "patrimonio": 0
-}`;
+  "ingresos_operacionales": null,
+  "costo_ventas": null,
+  "utilidad_bruta": null,
+  "gastos_operacionales": null,
+  "utilidad_operacional": null,
+  "cuentas_por_cobrar": null,
+  "inventarios": null,
+  "cuentas_por_pagar": null,
+  "total_activos": null,
+  "total_pasivos": null,
+  "patrimonio": null,
+  "propiedad_planta_equipo": null,
+  "efectivo_y_equivalentes": null,
+  "gastos_investigacion_desarrollo": null,
+  "gastos_publicidad": null
+}
+
+Regla general: si un rubro numérico no aparece en el documento, devuelve null — NUNCA 0. Un 0 se lee como "la empresa reportó cero en este concepto", que es una afirmación falsa cuando en realidad el concepto simplemente no se desglosó. NO estimes, NO deduzcas por diferencia, NO inventes.
+
+Reglas para "gastos_investigacion_desarrollo" y "gastos_publicidad": son rubros OPCIONALES. Úsalos solo si la empresa los desglosa como línea propia en su estado de resultados. Si no aparecen desglosados, devuelve null — NO los deduzcas restando de gastos_operacionales, NO estimes.`;
 
 /**
  * Función auxiliar con reintento automático para manejar errores de límite de tasa 429
@@ -181,7 +189,7 @@ export async function parseEeffWithGeminiOCR(file) {
 /* Un mismo PDF suele traer los estados financieros de todas las comparables
    seleccionadas, uno tras otro. Este prompt los separa por empresa en vez de
    devolver una sola matriz mezclando cifras de varias. */
-const EEFF_COMPARABLES_LOTE_PROMPT = `Eres un analista senior de Precios de Transferencia. Este documento contiene los Estados Financieros de VARIAS empresas comparables, una tras otra.
+export const EEFF_COMPARABLES_LOTE_PROMPT = `Eres un analista senior de Precios de Transferencia. Este documento contiene los Estados Financieros de VARIAS empresas comparables, una tras otra.
 
 Identifica CADA empresa presente y extrae su matriz contable por separado. No mezcles cifras de empresas distintas y no promedies nada.
 
@@ -194,22 +202,26 @@ Devuelve SOLO un JSON estricto con esta estructura:
       "periodo": "Año o rango del ejercicio",
       "moneda": "USD, COP, EUR, etc.",
       "unidad_origen": "unidades|miles|millones",
-      "ingresos_operacionales": 0,
-      "costo_ventas": 0,
-      "utilidad_bruta": 0,
-      "gastos_operacionales": 0,
-      "utilidad_operacional": 0,
-      "cuentas_por_cobrar": 0,
-      "inventarios": 0,
-      "cuentas_por_pagar": 0,
-      "total_activos": 0,
-      "total_pasivos": 0,
-      "patrimonio": 0
+      "ingresos_operacionales": null,
+      "costo_ventas": null,
+      "utilidad_bruta": null,
+      "gastos_operacionales": null,
+      "utilidad_operacional": null,
+      "cuentas_por_cobrar": null,
+      "inventarios": null,
+      "cuentas_por_pagar": null,
+      "total_activos": null,
+      "total_pasivos": null,
+      "patrimonio": null,
+      "propiedad_planta_equipo": null,
+      "efectivo_y_equivalentes": null,
+      "gastos_investigacion_desarrollo": null,
+      "gastos_publicidad": null
     }
   ]
 }
 
-Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, ponlo en 0. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
+Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, devuélvelo en null — NUNCA en 0, porque 0 se lee como "la empresa reportó cero" y ese no es el caso cuando el concepto simplemente no aparece. Esto aplica a TODOS los rubros numéricos, incluyendo "gastos_investigacion_desarrollo" y "gastos_publicidad" (que además son OPCIONALES: van en null salvo que la empresa los desglose como línea propia). No estimes ni deduzcas ningún rubro por diferencia. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
 
 /** Lee un PDF (o imagen) que contiene los EEFF de varias comparables y devuelve
  *  una entrada por empresa, cada una con su verificación contable.

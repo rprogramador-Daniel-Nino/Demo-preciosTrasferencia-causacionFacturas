@@ -9,7 +9,8 @@ import XLSX from 'xlsx-js-style';
 import {
   scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
-  regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON
+  regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
+  parsearCriteriosScreening
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -457,7 +458,57 @@ test('importCapitalIQExcel lee un export con el título arriba, como el real', a
     assert.ok(meta.sinCuentasDeBalance, 'detecta que no vienen cartera, inventarios ni proveedores');
     assert.ok(!meta.faltantes.some(f => f.esencial), 'no falta ninguna columna esencial');
     assert.ok(etapas.length >= 2, 'informa varias etapas de progreso');
+    assert.deepStrictEqual(meta.criteriosScreening, [], 'sin hoja "Screen Criteria" no hay criterios que leer');
   });
+});
+
+/* ══════ Criterios de búsqueda (hoja "Screen Criteria") ══════
+   Alimentan la Tabla 13 del informe — ver
+   frontend/src/services/exactTemplateMapper.js:generarTablaCriteriosScreeningHtml. */
+
+test('parsearCriteriosScreening lee la hoja real, con el conector de cada línea', () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Capital IQ Company Screening Report > PRUEBA'],
+    [''],
+    ['Screening Criteria'],
+    ['1) All Available Holders - % Owned by Single Holder [Latest] (%): is less than 50'],
+    ['2) Company Type: Public Company OR Private Company'],
+    ['3) Company Status: Operating'],
+    ['And) Business Description:  Keyword: games'],
+    ['Or) SIC Codes: 7371 Computer Programming Services OR 7372 Prepackaged Software'],
+    ['4) Total Revenue [FY 2025] ($USDmm, Historical rate): is greater than 0 (Unreported data set to 0)'],
+  ]), 'Screen Criteria');
+
+  const criterios = parsearCriteriosScreening(wb);
+  assert.strictEqual(criterios.length, 6);
+  assert.strictEqual(criterios[0].conector, null, 'el primer criterio no lleva conector');
+  assert.strictEqual(criterios[0].etiqueta, 'All Available Holders - % Owned by Single Holder [Latest] (%)');
+  assert.strictEqual(criterios[0].valor, 'is less than 50');
+  assert.strictEqual(criterios[1].conector, 'Y', 'un criterio numerado se combina con Y por defecto');
+  assert.strictEqual(criterios[3].conector, 'Y', '"And)" se traduce a Y');
+  assert.strictEqual(criterios[3].etiqueta, 'Business Description');
+  assert.strictEqual(criterios[3].valor, 'Keyword: games', 'solo corta en los primeros dos puntos');
+  assert.strictEqual(criterios[4].conector, 'O', '"Or)" se traduce a O');
+  assert.strictEqual(criterios[4].etiqueta, 'SIC Codes');
+});
+
+test('parsearCriteriosScreening no revienta sin la hoja "Screen Criteria"', () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['nada aquí']]), 'Screening');
+  assert.deepStrictEqual(parsearCriteriosScreening(wb), []);
+});
+
+test('parsearCriteriosScreening descarta líneas sin etiqueta o sin valor', () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['1) Sin dos puntos no es un criterio'],
+    ['2) Etiqueta sin valor:'],
+    ['3) Company Status: Operating'],
+  ]), 'Screen Criteria');
+  const criterios = parsearCriteriosScreening(wb);
+  assert.strictEqual(criterios.length, 1);
+  assert.strictEqual(criterios[0].etiqueta, 'Company Status');
 });
 
 /* ── el archivo real del cliente, si está en el repo ── */
@@ -477,6 +528,11 @@ test('importCapitalIQExcel lee el export real de Capital IQ', { skip: !fs.exists
       assert.ok(claves.includes(k), 'reconoce la columna ' + k);
     });
     assert.strictEqual(typeof rows[0].s, 'number', 'los ingresos llegan como número');
+
+    assert.strictEqual(meta.criteriosScreening.length, 7, 'lee los 7 criterios de la hoja "Screen Criteria" real');
+    assert.strictEqual(meta.criteriosScreening[0].conector, null);
+    assert.ok(meta.criteriosScreening.some(c => c.etiqueta === 'SIC Codes' && c.conector === 'O'),
+      'el criterio de SIC Codes real va con conector O ("Or)")');
   });
 });
 

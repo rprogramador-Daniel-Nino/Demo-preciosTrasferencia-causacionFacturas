@@ -6,6 +6,7 @@ import {
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey } from '../services/comparablesEngine';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
+import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
@@ -60,6 +61,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [comparables, setComparables] = useState(study.comparables || []);
 
   const [cmode, setCmode] = useState(study.cmode || 'all');
+  /* Criterios de la hoja "Screen Criteria" del export de Capital IQ (SIC, tipo
+     de compañía, ingresos, etc.), para reconstruir la Tabla 13 del informe con
+     la corrida real de este año en vez de la del informe anterior. */
+  const [criteriosScreening, setCriteriosScreening] = useState(study.criteriosScreening || []);
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   /* El embudo se guarda con el estudio: la tabla de razones de rechazo del informe se
@@ -75,6 +80,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      (comp.eeffHallazgos), que es lo que se guarda con el estudio. El estado
      paralelo que había antes duplicaba esa información, se perdía al recargar y
      tampoco se leía en ninguna parte. */
+  /* Descripciones de actividad pendientes de redactar con IA: solo para el botón de
+     backfill del Paso 4 — el disparo automático tras cargar un EEFF no usa este estado. */
+  const [redactandoDescripciones, setRedactandoDescripciones] = useState(false);
   const [cargaEeff, setCargaEeff] = useState(null);          // { etapa, hechas, total }
   const [resultadoCarga, setResultadoCarga] = useState(null); // { aplicadas, rechazadas }
   /* Qué se subió al repositorio compartido de estados financieros tras una carga. */
@@ -111,7 +119,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
-      /* Conteos de la última selección: alimentan la tabla 16 del informe. */
+      criteriosScreening,
+      /* Conteos de la última selección: alimentan la tabla 14 del informe. */
       embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
          cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
@@ -120,7 +129,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch, selectionFunnel]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -289,6 +298,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       });
 
       setImportMeta(meta);
+      setCriteriosScreening(meta.criteriosScreening || []);
+      if (meta.criteriosScreening && meta.criteriosScreening.length) {
+        anotar(`${meta.criteriosScreening.length} criterios de búsqueda leídos de la hoja "Screen Criteria" (Tabla 13 del informe)`, 'ok');
+      } else {
+        anotar('No se encontró la hoja "Screen Criteria" en el archivo: la Tabla 13 del informe quedará pendiente.', 'aviso');
+      }
       anotar(`Hoja «${meta.hoja}» de ${meta.hojas.length} (${meta.hojas.join(', ')})`);
       anotar(`Encabezados detectados en la fila ${meta.filaEncabezados + 1}; ${meta.filas} filas en la hoja`);
       anotar(`Columnas reconocidas (${meta.reconocidas.length}): ${meta.reconocidas.map(r => r.etiqueta).join(', ')}`);
@@ -442,6 +457,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       ar: datos.cuentas_por_cobrar || copia[indice].ar,
       inv: datos.inventarios || copia[indice].inv,
       ap: datos.cuentas_por_pagar || copia[indice].ap,
+      eeffDatos: datos,
       eeffVerificado: verificacion.esValido,
       eeffHallazgos: verificacion.hallazgos,
       eeffArchivo: archivo,
@@ -451,6 +467,43 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       eeffPorConfirmar: cruce ? !esCruceFirme(cruce) : false,
     };
     return copia;
+  };
+
+  /* Redacta con IA la descripción de actividad de las filas indicadas que tengan `desc`
+     crudo y no tengan `descActividad` todavía. Es idempotente: si ya está redactada, no
+     se repite la llamada. Usa el actualizador de `setComparables` para no pisar cambios
+     de estado hechos mientras la llamada a la IA estaba en curso. */
+  const redactarDescripcionesDeFilas = async (filasActuales, indices) => {
+    const objetivos = [...new Set(indices)]
+      .map((i) => ({ indice: i, fila: filasActuales[i] }))
+      .filter(({ fila }) => fila && String(fila.desc || '').trim() && !fila.descActividad);
+    if (!objetivos.length) return;
+
+    const resultados = await redactarDescripcionesEnLote(
+      objetivos.map(({ fila }) => ({ nombre: fila.name, descCruda: fila.desc }))
+    );
+
+    setComparables((prev) => {
+      const copia = [...prev];
+      objetivos.forEach(({ indice }, pos) => {
+        if (resultados[pos] && copia[indice]) {
+          copia[indice] = { ...copia[indice], descActividad: resultados[pos] };
+        }
+      });
+      return copia;
+    });
+  };
+
+  const redactarDescripcionesPendientes = async () => {
+    setRedactandoDescripciones(true);
+    try {
+      const indices = comparables
+        .map((c, i) => (c.eeffVerificado && String(c.desc || '').trim() && !c.descActividad ? i : -1))
+        .filter((i) => i >= 0);
+      await redactarDescripcionesDeFilas(comparables, indices);
+    } finally {
+      setRedactandoDescripciones(false);
+    }
   };
 
   /* Sube al repositorio compartido las cifras que acaban de entrar en unas filas.
@@ -568,6 +621,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* Al repositorio compartido, para que otro estudio no vuelva a leer este mismo
          documento. Va después de aplicar: lo del usuario primero. */
       await publicarEeff(filas, [compIndex]);
+      redactarDescripcionesDeFilas(filas, [compIndex]).catch((err) =>
+        console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
+      );
       setResultadoCarga({
         aplicadas: [{
           archivo: file.name,
@@ -637,6 +693,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       if (aplicadas.length) {
         setComparables(filas);
         await publicarEeff(filas, aplicadas.map(a => a.indice));
+        redactarDescripcionesDeFilas(filas, aplicadas.map((a) => a.indice)).catch((err) =>
+          console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
+        );
       }
       setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
     } finally {
@@ -1311,6 +1370,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 </span>
               )
             )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={redactarDescripcionesPendientes}
+              disabled={redactandoDescripciones || !comparables.some((c) => c.eeffVerificado && c.desc && !c.descActividad)}
+              className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Redacta en español, con IA, la descripción de actividad de las comparables verificadas que todavía no la tienen"
+            >
+              <Sparkles className="w-4 h-4" />
+              {redactandoDescripciones ? 'Redactando…' : 'Redactar descripciones pendientes'}
+            </button>
           </div>
 
           {/* Qué se subió a la base tras una carga */}
