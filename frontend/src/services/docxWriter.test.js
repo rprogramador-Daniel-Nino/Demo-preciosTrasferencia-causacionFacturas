@@ -59,3 +59,46 @@ test('el texto del documento llega', async () => {
   const { doc } = await abrir('<p>informe local de precios de transferencia</p>');
   assert.match(doc, /informe local de precios de transferencia/);
 });
+
+test('la negrita y la cursiva del informe llegan al .docx', async () => {
+  const { doc } = await abrir(
+    '<p>normal <strong>negrita</strong> <em>cursiva</em></p>');
+  assert.match(doc, /<w:b\/>/, 'no hay negrita');
+  assert.match(doc, /<w:i\/>/, 'no hay cursiva');
+});
+
+test('la negrita anidada en un span con familia propia no se pierde', async () => {
+  /* Es la forma exacta que emite el extractor, y en el .doc hubo que forzarla con CSS. */
+  const { doc } = await abrir(
+    '<p><strong><span style="font-family:\'Britannic\'">TÍTULO</span></strong></p>');
+  assert.match(doc, /<w:b\/>/);
+  assert.match(doc, /w:ascii="Britannic"/);
+  assert.match(doc, /TÍTULO/);
+});
+
+test('los encabezados usan los estilos de serie, o el índice de Word no los ve', async () => {
+  const { doc } = await abrir('<h1>UNO</h1><h2>DOS</h2><h3>TRES</h3><h4>CUATRO</h4>');
+  for (const estilo of ['Heading1', 'Heading2', 'Heading3', 'Heading4']) {
+    assert.match(doc, new RegExp('w:val="' + estilo + '"'), 'falta ' + estilo);
+  }
+});
+
+test('los párrafos van justificados, como el informe', async () => {
+  const { doc } = await abrir('<p>texto</p>');
+  assert.match(doc, /w:val="both"/);
+});
+
+test('el resaltado de pantalla no llega al documento', async () => {
+  /* En el .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados. */
+  const { doc } = await abrir('<p>NIT <span class="pt-valor">900123456-7</span></p>');
+  assert.match(doc, /900123456-7/);
+  assert.doesNotMatch(doc, /pt-valor/);
+  assert.doesNotMatch(doc, /F0FDF4/);
+});
+
+test('un párrafo vacío sigue siendo un párrafo', async () => {
+  /* El informe centra la portada con párrafos vacíos: 35 seguidos. Descartarlos movería la
+     portada entera. */
+  const { doc } = await abrir('<p></p><p></p><p>algo</p>');
+  assert.equal((doc.match(/<w:p[ >]/g) || []).length >= 3, true);
+});

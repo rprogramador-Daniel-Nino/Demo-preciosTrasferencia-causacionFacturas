@@ -9,7 +9,7 @@
    fuente que pinta la vista previa. Es lo que da la paridad que se pidió. */
 
 import {
-  Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType,
+  Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
 } from 'docx';
 import { HOJA_TWIPS } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
@@ -36,13 +36,75 @@ const pieConNumero = () => new Footer({
   })],
 });
 
+const NIVELES = {
+  h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2,
+  h3: HeadingLevel.HEADING_3, h4: HeadingLevel.HEADING_4,
+  h5: HeadingLevel.HEADING_5, h6: HeadingLevel.HEADING_6,
+};
+
+/* La familia que declara un `<span style="font-family:'X'">`. El extractor sólo la declara
+   cuando se desvía del cuerpo del documento. */
+const familiaDeEstilo = (estilo) => {
+  const m = /font-family:\s*'?([^;'"]+)'?/.exec(estilo || '');
+  return m ? m[1].trim() : null;
+};
+
+/* Texto del subárbol convertido a runs, arrastrando el estilo heredado. `<strong>` y `<em>`
+   son las dos etiquetas que el extractor emite para el estilo de fuente; una familia propia
+   llega en el `style` de un `<span>`.
+
+   `pt-valor` no se mira a propósito: el resaltado del valor sustituido es de pantalla. En el
+   .doc se colaba y cada dato sustituido salía más negrita y con aire a los lados. */
+function runsDe(nodo, heredado = {}) {
+  const salida = [];
+  for (const h of nodo.hijos || []) {
+    if (h.texto !== undefined) {
+      if (h.texto) salida.push(new TextRun({ text: h.texto, ...heredado }));
+      continue;
+    }
+    if (h.etiqueta === 'img') { salida.push(...runDeImagen(h)); continue; }
+    if (h.etiqueta === 'br') continue;
+    const propio = { ...heredado };
+    if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
+    if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
+    const familia = familiaDeEstilo(h.atributos && h.atributos.style);
+    if (familia) propio.font = familia;
+    salida.push(...runsDe(h, propio));
+  }
+  return salida;
+}
+
+/* Se completa en la tarea 7. */
+function runDeImagen() { return []; }
+
+function parrafoDe(nodo) {
+  const nivel = NIVELES[nodo.etiqueta];
+  const hijos = runsDe(nodo);
+  return new Paragraph({
+    ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
+    children: hijos,
+  });
+}
+
+/* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
+   que permite que un `<div>` del contentEditable no pierda su contenido. */
+function bloquesDe(nodo, salida = []) {
+  for (const h of nodo.hijos || []) {
+    if (h.texto !== undefined) {
+      if (h.texto.trim()) salida.push(new Paragraph({ children: [new TextRun(h.texto)] }));
+      continue;
+    }
+    if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) { salida.push(parrafoDe(h)); continue; }
+    bloquesDe(h, salida);
+  }
+  return salida;
+}
+
 export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}) {
   const base = estiloBaseDe(html) || { familia: 'Arial', tamano: 12 };
   const arbol = htmlAArbol(html);
 
-  /* Provisional en esta tarea: un párrafo por el texto que haya. Las tareas siguientes
-     sustituyen esto por la traducción completa. */
-  const hijos = cuerpoProvisional(arbol);
+  const hijos = bloquesDe(arbol);
 
   return new Document({
     styles: {
@@ -59,18 +121,6 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       children: hijos.length ? hijos : [new Paragraph('')],
     }],
   });
-}
-
-/* Se retira en la tarea 4. */
-function cuerpoProvisional(nodo, salida = []) {
-  for (const h of nodo.hijos || []) {
-    if (h.texto !== undefined) {
-      if (h.texto.trim()) salida.push(new Paragraph(h.texto));
-    } else {
-      cuerpoProvisional(h, salida);
-    }
-  }
-  return salida;
 }
 
 export const aDocxBuffer = (args) => Packer.toBuffer(construirDocumento(args));
