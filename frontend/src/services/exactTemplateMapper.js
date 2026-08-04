@@ -750,9 +750,6 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
   html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
 
-  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ─── */
-  html = reemplazarAnexoB(html, study, year, wrap);
-
   /* ─── Tabla 16 y las cifras que la rodean ───
      La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
      acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
@@ -826,5 +823,15 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   html = html.replace(MARCA_APARTADO_MUNDIAL, () => generarApartadoMundial(datosMacro, year, wrap));
   html = html.replace(MARCA_APARTADO_COLOMBIA, () => generarApartadoColombia(datosMacro, year, wrap));
 
-  return reponerEnlaces(html, enlaces);
+  html = reponerEnlaces(html, enlaces);
+
+  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ───
+     Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: `apartarEnlaces`
+     (arriba) reemplaza temporalmente TODAS las etiquetas <a id="..."> del documento —
+     incluidas las de ANEXO B y ANEXO C— por marcadores @@PT_ENLACE_N@@, y solo las repone
+     al final. Buscar `id="_Toc208931006"` antes de esa reposición nunca lo encuentra: el
+     texto literal no existe todavía en ese punto del documento. */
+  html = reemplazarAnexoB(html, study, year, wrap);
+
+  return html;
 }
