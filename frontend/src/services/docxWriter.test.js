@@ -374,3 +374,30 @@ test('una imagen suelta en un div tampoco se pierde', async () => {
   assert.equal((doc.match(/antes/g) || []).length, 1);
   assert.equal((doc.match(/después/g) || []).length, 1);
 });
+
+test('cada página del original empieza en una hoja nueva', async () => {
+  const html = '<div class="pagina" data-pagina="1" data-orientacion="vertical"><p>una</p></div>' +
+    '<div class="pagina" data-pagina="2" data-orientacion="vertical"><p>dos</p></div>' +
+    '<div class="pagina" data-pagina="3" data-orientacion="vertical"><p>tres</p></div>';
+  const { doc } = await abrir(html);
+  /* Dos saltos para tres páginas: la primera no lleva salto delante. */
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 2);
+});
+
+test('la página apaisada abre su propia sección', async () => {
+  const html = '<div class="pagina" data-pagina="1" data-orientacion="vertical"><p>a</p></div>' +
+    '<div class="pagina" data-pagina="2" data-orientacion="apaisada"><p>b</p></div>' +
+    '<div class="pagina" data-pagina="3" data-orientacion="vertical"><p>c</p></div>';
+  const { doc } = await abrir(html);
+  assert.match(doc, /w:orient="landscape"/, 'no hay página apaisada');
+  /* Tres secciones: vertical, apaisada, vertical. */
+  assert.equal((doc.match(/<w:sectPr/g) || []).length, 3);
+});
+
+test('sin páginas marcadas se emite una sola sección', async () => {
+  /* La plantilla maestra y un .docx por mammoth no traen páginas. Mejor un documento corrido
+     que una paginación inventada. */
+  const { doc } = await abrir('<p>a</p><p>b</p>');
+  assert.equal((doc.match(/<w:sectPr/g) || []).length, 1);
+  assert.doesNotMatch(doc, /<w:br w:type="page"\/>/);
+});

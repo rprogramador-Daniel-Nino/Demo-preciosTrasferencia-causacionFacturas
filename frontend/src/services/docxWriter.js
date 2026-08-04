@@ -12,7 +12,7 @@ import {
   Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
-  ImageRun, LevelFormat,
+  ImageRun, LevelFormat, PageBreak, PageOrientation,
 } from 'docx';
 import { HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
@@ -325,13 +325,69 @@ function traductor({ porId }) {
   return { runsDe, parrafoDe, bloquesDe, tablaDe, runDeImagen };
 }
 
+/* Las páginas del original, agrupadas en tandas de la misma orientación. Cada tanda es una
+   sección de Word, porque la orientación es una propiedad de la sección. Dentro de una tanda,
+   un salto de página duro entre página y página: es lo que hace que la página N empiece donde
+   debe. Word repagina, así que si el contenido de una no cabe desborda a una hoja extra —eso
+   no lo evita nada—, pero ya no hay un importador de HTML añadiendo desbordes propios. */
+function paginasDe(arbol) {
+  const paginas = [];
+  const buscar = (n) => {
+    for (const h of n.hijos || []) {
+      if (h.texto !== undefined) continue;
+      const clase = (h.atributos && h.atributos.class) || '';
+      if (/\bpagina\b/.test(clase)) {
+        paginas.push({
+          nodo: h,
+          orientacion: (h.atributos['data-orientacion'] === 'apaisada')
+            ? 'apaisada' : 'vertical',
+        });
+        continue;
+      }
+      buscar(h);
+    }
+  };
+  buscar(arbol);
+  return paginas;
+}
+
+const tandasDe = (paginas) => paginas.reduce((tandas, p) => {
+  const ultima = tandas[tandas.length - 1];
+  if (ultima && ultima.orientacion === p.orientacion) ultima.paginas.push(p.nodo);
+  else tandas.push({ orientacion: p.orientacion, paginas: [p.nodo] });
+  return tandas;
+}, []);
+
 export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}) {
   const base = estiloBaseDe(html) || { familia: 'Arial', tamano: 12 };
   const arbol = htmlAArbol(html);
   const porId = new Map((recursos || []).map((r) => [r.id, r.dataUrl]));
   const { bloquesDe } = traductor({ porId });
 
-  const hijos = bloquesDe(arbol);
+  const paginas = paginasDe(arbol);
+
+  /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— se emite una sola
+     sección corrida. Mejor eso que inventar una paginación que el original no tiene. */
+  const secciones = paginas.length
+    ? tandasDe(paginas).map((t) => ({
+      properties: {
+        page: t.orientacion === 'apaisada'
+          ? { ...PAGINA, size: { ...PAGINA.size, orientation: PageOrientation.LANDSCAPE } }
+          : PAGINA,
+      },
+      footers: { default: pieConNumero() },
+      children: t.paginas.flatMap((nodo, i) => [
+        /* Salto delante de cada página menos de la primera de todas: la primera tanda ya
+           empieza en la hoja 1, y una tanda nueva ya empieza en hoja nueva por ser sección. */
+        ...(i === 0 ? [] : [new Paragraph({ children: [new PageBreak()] })]),
+        ...bloquesDe(nodo),
+      ]),
+    }))
+    : [{
+      properties: { page: PAGINA },
+      footers: { default: pieConNumero() },
+      children: bloquesDe(arbol).length ? bloquesDe(arbol) : [new Paragraph('')],
+    }];
 
   return new Document({
     styles: {
@@ -354,11 +410,7 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
         }],
       }],
     },
-    sections: [{
-      properties: { page: PAGINA },
-      footers: { default: pieConNumero() },
-      children: hijos.length ? hijos : [new Paragraph('')],
-    }],
+    sections: secciones,
   });
 }
 
