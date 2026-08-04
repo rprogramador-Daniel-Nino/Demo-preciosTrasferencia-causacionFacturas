@@ -72,6 +72,22 @@ const esBloque = (n) => !!n && n.etiqueta !== undefined && BLOQUES.has(n.etiquet
 
 /* La familia que declara un `<span style="font-family:'X'">`. El extractor sólo la declara
    cuando se desvía del cuerpo del documento. */
+/* Tamaño de fuente que declara un fragmento, en medios puntos, o null si no se desvía del
+   cuerpo del documento.
+
+   Sin esto el documento salía con 61 hojas de más sobre las 112 del original, y **todas** en
+   páginas con tabla: las que llevan tabla ocupaban 1,48 veces la caja de texto y las que no,
+   0,32. La causa es que las tablas del informe van a 8 y 9 puntos —el extractor lo anota, se
+   midió: 228 fragmentos a 9 pt, 99 a 8 pt, 42 a 10 pt— y el writer sólo leía la familia, así
+   que las emitía todas al cuerpo de 12 pt. Un 33 % más de alto por línea, sobre 890 filas.
+
+   El interlineado sí era correcto (276 twips, y la mediana medida en el PDF es 13,80 pt = 276);
+   el tamaño era lo que faltaba. */
+const tamanoDeEstilo = (estilo) => {
+  const m = /font-size:\s*([\d.]+)pt/.exec(estilo || '');
+  return m ? Math.round(Number(m[1]) * 2) : null;
+};
+
 const familiaDeEstilo = (estilo) => {
   const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   return m ? m[1].trim() : null;
@@ -163,8 +179,13 @@ function traductor({ porId, anexo = [] }) {
     const propio = { ...heredado };
     if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
     if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
-    const familia = familiaDeEstilo(h.atributos && h.atributos.style);
+    const estilo = h.atributos && h.atributos.style;
+    const familia = familiaDeEstilo(estilo);
     if (familia) propio.font = familia;
+    /* El tamaño se hereda igual que la familia: un `<span style="font-size:9pt">` con un
+       `<strong>` dentro tiene que conservar los 9 puntos. */
+    const tamano = tamanoDeEstilo(estilo);
+    if (tamano) propio.size = tamano;
     return runsDe(h, propio);
   };
 

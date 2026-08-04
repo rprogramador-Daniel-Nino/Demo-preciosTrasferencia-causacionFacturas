@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import PizZip from 'pizzip';
 import { aDocxBuffer } from './docxWriter.js';
+import { extraerReferencia } from './pdfReferenceExtractor.js';
 import { HOJA_TWIPS } from './estiloDocumento.js';
 
 /* Relee el .docx generado. Es lo que hace que todo esto se pueda probar sin Word. */
@@ -513,4 +515,116 @@ test('avisa cuando el anexo trae más páginas que huecos', async () => {
   } finally {
     console.warn = original;
   }
+});
+
+/* Extremo a extremo sobre el PDF real: el que ha atrapado todos los fallos de esta sesión.
+   Una sola extracción compartida entre los dos tests de este bloque — 112 páginas tarda, y
+   procesarlas dos veces duplicaría el tiempo sin aportar nada. Mismo patrón de caché que
+   `pdfReferenceExtractor.test.js`. */
+const RUTA_PDF = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
+let cacheRef = null;
+const referencia = async () => {
+  if (!cacheRef) cacheRef = await extraerReferencia(new Uint8Array(readFileSync(RUTA_PDF)));
+  return cacheRef;
+};
+
+test('extremo a extremo: el informe real sale como .docx', async () => {
+  const ref = await referencia();
+  const zip = new PizZip(await aDocxBuffer({
+    html: ref.html, recursos: ref.imagenes, anexo: [],
+  }));
+  const doc = zip.file('word/document.xml').asText();
+
+  /* Declara las 112 páginas del original. */
+  /* Con S secciones y P páginas, los saltos son P - S (uno entre página y página dentro de
+     cada sección, ninguno delante de la primera de cada una). Así que saltos + secciones = P,
+     exactamente 112, sea cuantas secciones haya salido de la orientación. */
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length +
+    (doc.match(/<w:sectPr/g) || []).length, 112,
+    'los saltos más las secciones deben cubrir las 112 páginas');
+
+  /* El texto del informe está. */
+  assert.match(doc, /INTRODUCCIÓN/);
+  assert.match(doc, /END GAME/);
+
+  /* La negrita del informe llegó: medido sobre el PDF real, 931 fragmentos en negrita. El
+     umbral de 500 es conservador a propósito, no un ajuste a la baja de una medición menor. */
+  assert.ok((doc.match(/<w:b\/>/g) || []).length > 500,
+    'se perdió la negrita del informe');
+
+  /* Una imagen por recurso en word/media, y ninguna más ancha que la caja de texto. */
+  const media = Object.keys(zip.files).filter((f) => /^word\/media\/.+\./.test(f));
+  assert.ok(media.length >= 3, 'faltan imágenes: ' + media.length);
+  const anchos = [...doc.matchAll(/<wp:extent cx="(\d+)"/g)].map((m) => Number(m[1]));
+  const cajaEmu = (21.6 - 5) * 360000;
+  for (const cx of anchos) {
+    assert.ok(cx <= cajaEmu, 'una imagen mide más que la caja de texto: ' + cx);
+  }
+
+  /* La página apaisada abrió su sección. */
+  assert.match(doc, /w:orient="landscape"/);
+
+  /* El encabezado va una vez, a la derecha, y la portada sin él. */
+  assert.ok(zip.file('word/header1.xml'));
+  assert.match(zip.file('word/header1.xml').asText(), /w:val="right"/);
+  assert.match(doc, /<w:titlePg\/>/);
+
+  /* Y nada del resaltado de pantalla. */
+  assert.doesNotMatch(doc, /pt-valor/);
+});
+
+test('el .docx del informe real es XML bien formado', async () => {
+  /* Un XML mal formado hace que Word ofrezca "reparar" el documento, y ahí el usuario ya
+     perdió la confianza en la herramienta. */
+  const ref = await referencia();
+  const zip = new PizZip(await aDocxBuffer({ html: ref.html, recursos: ref.imagenes }));
+  for (const parte of ['word/document.xml', 'word/styles.xml', 'word/header1.xml',
+    'word/footer1.xml', '[Content_Types].xml']) {
+    const xml = zip.file(parte);
+    assert.ok(xml, 'falta ' + parte);
+    const texto = xml.asText();
+    /* Comprobación de equilibrio de etiquetas, que es lo que se puede hacer sin parser XML.
+
+       Corrección medida sobre el PDF real: el regex del brief cuenta como "abierta" cualquier
+       `<letra...>` sin barra justo antes del `>`, pero eso falla en cuanto un atributo trae una
+       barra —los `xmlns` de `http://schemas.openxmlformats.org/...` que trae `<w:document>` y,
+       dentro de cada dibujo de imagen, `<a:graphic>`, `<a:graphicData>` y `<pic:pic>`—: el
+       carácter excluido `[^>/]*` se detiene en la barra de la URL y el `<a:graphic ...>` entero
+       deja de calzar como apertura, aunque SÍ tiene su `</a:graphic>` de cierre. Sobre
+       `word/document.xml` esto descontaba 10 aperturas (1 `w:document` + 3 de cada una de
+       `a:graphic`/`a:graphicData`/`pic:pic`, una por cada imagen del cuerpo) y el conteo daba
+       27326 aperturas contra 27336 cierres: parecía descompensado sin estarlo. Confirmado con
+       un parser XML de verdad (`xml.dom.minidom` de Python) que `word/document.xml` sí es XML
+       bien formado. El arreglo, sin necesitar parser: vaciar el contenido de los atributos
+       (`="..."` → `=""`) antes de contar, así ninguna URL puede colarse en la cuenta. */
+    const sinAtributos = texto.replace(/="[^"]*"/g, '=""');
+    const abiertas = (sinAtributos.match(/<[a-zA-Z][^>/]*(?<!\/)>/g) || []).length;
+    const cerradas = (sinAtributos.match(/<\/[a-zA-Z][^>]*>/g) || []).length;
+    assert.equal(abiertas, cerradas, parte + ': etiquetas descompensadas');
+  }
+});
+
+test('el tamaño de fuente de cada fragmento llega al documento', async () => {
+  /* Las tablas del informe van a 8 y 9 puntos, no al cuerpo de 12. El writer sólo leía la
+     familia del `style` y tiraba el tamaño, así que las emitía todas a 12 pt: un 33 % más de
+     alto por línea sobre 890 filas. Medido sobre el informe real, eso eran 61 hojas de más
+     sobre las 112 del original, y TODAS en páginas con tabla —las que llevan tabla ocupaban
+     1,48 veces la caja de texto; las que no, 0,32—. */
+  const { doc } = await abrir(
+    '<p><span style="font-size:9pt">nueve</span> ' +
+    '<span style="font-size:8pt">ocho</span> doce</p>');
+  assert.match(doc, /<w:sz w:val="18"\/>/, 'falta el tamaño de 9 pt');
+  assert.match(doc, /<w:sz w:val="16"\/>/, 'falta el tamaño de 8 pt');
+  /* Y el texto sin declaración se queda con el cuerpo del documento, sin `w:sz` propio. */
+  assert.match(doc, /nueve/);
+  assert.match(doc, /doce/);
+});
+
+test('el tamaño se hereda dentro de un fragmento con estilo', async () => {
+  /* Una celda de tabla del informe es `<span style="font-size:9pt"><strong>x</strong></span>`:
+     la negrita no puede devolver el texto a 12 pt. */
+  const { doc } = await abrir(
+    '<p><span style="font-size:9pt"><strong>cifra</strong></span></p>');
+  assert.match(doc, /<w:sz w:val="18"\/>/);
+  assert.match(doc, /<w:b\/>/);
 });
