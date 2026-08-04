@@ -581,17 +581,17 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
     { target: /(?<![\d.])83\.801\.656(?![\d.])/g, val: wrap(study.t_dif ? fmt(num(study.t_dif)) : '—') },
     { target: /(?<![\d.])206\.129\.230(?![\d.])/g, val: wrap(study.t_act_nocurr ? fmt(num(study.t_act_nocurr)) : '—') },
 
-    /* Barrido final del nombre del cliente anterior. Las reglas de arriba cubren
-       las razones sociales completas, pero en el informe original quedaban tres
-       variantes sin regla: «ENG GAME…» (error de tecleo del propio informe),
-       «END GAME INTERACTIVE» sin sufijo, y «END GAME» a secas en prosa («permite a
-       END GAME trabajar…»). Eran 13 apariciones que viajaban a cualquier informe.
-
-       Van al final por orden de especificidad: una regla genérica antes de las
-       específicas partiría la razón social completa por la mitad. */
-    { target: /ENG GAME INTERACTIVE COLOMBIA SAS/gi, val: wrap(study.ent || 'ENG GAME INTERACTIVE COLOMBIA SAS') },
-    { target: /END GAME INTERACTIVE/g, val: wrap(study.vinc || 'END GAME INTERACTIVE') },
-    { target: /END GAME/g, val: wrap(study.ent || 'END GAME') }
+    /* Solo queda el error de tecleo del propio informe de referencia («ENG GAME…»
+       en vez de «END GAME…»), que la regla de arriba no reconoce porque no
+       empieza por «END». Las variantes «END GAME INTERACTIVE» sin sufijo y
+       «END GAME» a secas que este barrido cubría antes ya las captura la regla
+       de arriba (todos sus grupos —INTERACTIVE, COLOMBIA, sufijo— son opcionales).
+       Un barrido adicional para esas dos formas duplicaba la razón social cuando
+       el cliente real es el mismo End Game de un año anterior: el texto recién
+       insertado (p. ej. «END GAME INTERACTIVE COLOMBIA SOCIEDAD POR ACCIONES
+       SIMPLIFICADA») vuelve a empezar por «END GAME [INTERACTIVE]», y ese barrido
+       lo volvía a capturar y a reemplazar sobre sí mismo. */
+    { target: /ENG GAME INTERACTIVE COLOMBIA SAS/gi, val: wrap(study.ent || 'ENG GAME INTERACTIVE COLOMBIA SAS') }
   ];
 
   // Aplicar reemplazos iniciales
