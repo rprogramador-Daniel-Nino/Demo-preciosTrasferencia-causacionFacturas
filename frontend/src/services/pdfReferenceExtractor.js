@@ -31,8 +31,13 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      3 — tipografía del informe: negrita, cursiva, familias y cuerpo
      4 — cada entrada del índice y cada nota en su propio bloque
      5 — cada página del original envuelta, para que el salto caiga donde debe
-     6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo */
-export const VERSION_EXTRACTOR = 6;
+     6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo
+     7 — cada imagen con el tamaño que le da el PDF, y el encabezado en su lado */
+export const VERSION_EXTRACTOR = 7;
+
+/* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
+   del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
+const PUNTOS_POR_CM = 72 / 2.54;
 
 const MAPA_ETIQUETAS = {
   H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h4', H5: 'h5', H6: 'h6',
@@ -157,6 +162,17 @@ export async function extraerReferencia(datos) {
              la página. Medido contra el PDF real, el bbox de la figura y este
              rectángulo coinciden al punto. */
           rect: [ctm[4], ctm[5], ctm[4] + render.ancho, ctm[5] + render.alto],
+          /* Tamaño con el que el PDF la dibuja, en centímetros. Sin esto la imagen
+             salía a su tamaño natural en píxeles, que no tiene por qué parecerse: en
+             el informe de referencia el logo se dibuja a 5,53 cm y su PNG mide 8,7 cm
+             a 96 ppp, y la figura de la página 11 mide 29,9 cm, más ancha que el papel.
+             En la vista previa no se notaba porque Tailwind le pone `max-width:100%`
+             por su cuenta; en el .doc no había ninguna regla de imagen, así que todas
+             desbordaban y Word repartía el desborde en páginas nuevas. */
+          cm: { ancho: render.ancho / PUNTOS_POR_CM, alto: render.alto / PUNTOS_POR_CM },
+          /* Centro horizontal, para saber a qué lado de la página va el encabezado. */
+          centroX: ctm[4] + render.ancho / 2,
+          anchoPagina: dimPagina.ancho,
         });
       }
     }
@@ -262,7 +278,12 @@ export async function extraerReferencia(datos) {
        se guarda pesa kilobytes en vez de megabytes, y una imagen que se repite
        en noventa páginas se almacena una sola vez. Quien muestre o exporte el
        documento la resuelve contra el catálogo de recursos. */
-    const marca = '<img data-recurso="' + d.clave + '" />';
+    /* Con el tamaño que el PDF le da, no el natural del PNG. Va en el `style` y no en
+       los atributos `width`/`height` porque en centímetros no admiten unidad, y en
+       píxeles habría que elegir una resolución: el punto es reproducir la medida del
+       informe, que está en centímetros. Word entiende una longitud CSS en una imagen. */
+    const marca = '<img data-recurso="' + d.clave + '" style="width:' +
+      d.cm.ancho.toFixed(2) + 'cm;height:' + d.cm.alto.toFixed(2) + 'cm" />';
 
     if (figura) {
       marcaDeFigura.set(figura, marca);
@@ -271,7 +292,21 @@ export async function extraerReferencia(datos) {
          global una imagen que se repite, así que el mismo logo llega con dos
          claves distintas —la local de la primera página y la global— y por clave
          saldría dos veces seguidas al abrir el documento. */
-      artefactos.push({ clave: d.clave, marca, dataUrl: yaDecodificada.get(d.clave) });
+      artefactos.push({
+        clave: d.clave, marca, dataUrl: yaDecodificada.get(d.clave),
+        /* A qué lado de la página lo dibuja el PDF. En el informe de referencia el
+           logo va a la derecha —centro en 16,7 cm de una hoja de 21,6— y se exportaba
+           centrado, que es una de las cosas que no coincidían con el original. */
+        centroX: d.centroX,
+        anchoPagina: d.anchoPagina,
+        /* En qué páginas aparece. El del informe de referencia NO está en la portada
+           ni en las cuatro siguientes, así que imprimirlo en la primera lo superponía
+           con el logo grande de la portada. */
+        paginas: [d.pagina],
+      });
+    } else if (!figura) {
+      const a = artefactos.find((x) => x.dataUrl === yaDecodificada.get(d.clave));
+      if (a && !a.paginas.includes(d.pagina)) a.paginas.push(d.pagina);
     }
   }
 
@@ -298,8 +333,23 @@ export async function extraerReferencia(datos) {
      lo saca del cuerpo y lo declara. Se queda dentro del HTML y no en un campo
      aparte para que sobreviva al marcado y al guardado, igual que el cuerpo de
      letra. */
+  /* Lado y primera página del encabezado, tomados del PDF y no supuestos. Se anotan en
+     el HTML para que la exportación y la vista previa los coloquen igual sin volver a
+     leer el PDF, que ya no está cuando se descarga el documento. */
+  const primerArtefacto = artefactos[0];
+  const ladoEncabezado = primerArtefacto
+    ? (primerArtefacto.centroX > primerArtefacto.anchoPagina * 0.6 ? 'derecha'
+      : primerArtefacto.centroX < primerArtefacto.anchoPagina * 0.4 ? 'izquierda' : 'centro')
+    : 'centro';
+  /* Desde qué página aparece. En el informe de referencia, desde la 6: la portada y las
+     cuatro siguientes no lo llevan, y ponerlo en la primera lo superponía con el logo
+     grande de la portada, que es lo que se veía en el documento generado. */
+  const desdePagina = primerArtefacto ? Math.min(...primerArtefacto.paginas) : 1;
+
   const cabecera = artefactos.length
-    ? '<div data-encabezado="1">' + artefactos.map((a) => a.marca).join('') + '</div>'
+    ? '<div data-encabezado="1" data-lado="' + ladoEncabezado + '"' +
+      ' data-desde-pagina="' + desdePagina + '">' +
+      artefactos.map((a) => a.marca).join('') + '</div>'
     : '';
 
   /* El cuerpo del documento viaja dentro del propio HTML. Es lo que permite que
@@ -378,6 +428,12 @@ export function loQueFaltaPorVersion(version) {
   if (version < 5) {
     falta.push('no hay saltos de página donde el informe cambia de página, así que la ' +
                'portada se funde con el índice');
+  }
+  if (version < 7) {
+    falta.push('las imágenes salen a su tamaño natural en píxeles y no al que les da ' +
+               'el PDF, así que desbordan la hoja y Word reparte el desborde en ' +
+               'páginas nuevas; y el logo del encabezado sale centrado y también en ' +
+               'la portada, donde el informe no lo lleva');
   }
   if (version < 6) {
     falta.push('las filas de las tablas llevan párrafos sueltos que Word saca de la ' +

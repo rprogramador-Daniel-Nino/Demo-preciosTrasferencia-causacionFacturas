@@ -649,12 +649,19 @@ export default function ReporteGenerador({ study, estudioId }) {
      marcada en casi cien páginas y con un reemplazo simple sólo la primera
      habría salido. Y conserva el atributo `data-recurso` para que aplicarlo dos
      veces sobre el mismo HTML no rompa nada. */
+  /* Se conservan los demás atributos de la marca en vez de reescribirla entera: desde
+     la versión 7 lleva su tamaño en centímetros —el que le da el PDF— y reemplazar la
+     etiqueta completa lo tiraba, así que la imagen volvía a su tamaño natural en
+     píxeles y desbordaba la hoja. El `src` previo se quita antes de poner el nuevo para
+     que aplicarlo dos veces sobre el mismo HTML no acumule dos. */
   const conImagenes = (htmlBase, recursos = recursosCargados) =>
     recursos.reduce(
       (acc, r) =>
         acc.replace(
-          new RegExp('<img data-recurso="' + r.id + '"[^>]*>', 'g'),
-          '<img data-recurso="' + r.id + '" src="' + r.dataUrl + '" />'
+          new RegExp('<img data-recurso="' + r.id + '"([^>]*)>', 'g'),
+          (_, resto) => '<img data-recurso="' + r.id + '"' +
+            resto.replace(/\s*\/?$/, '').replace(/\s+src="[^"]*"/g, '') +
+            ' src="' + r.dataUrl + '" />'
         ),
       htmlBase
     );
@@ -662,9 +669,18 @@ export default function ReporteGenerador({ study, estudioId }) {
   /* El logo que el extractor apartó como encabezado de página. Lo necesitan las dos
      salidas: Word para declararlo como encabezado, y la pantalla para repetirlo arriba
      de cada hoja igual que hará Word. */
+  /* `lado` y `desdePagina` los anota el extractor leyendo el PDF (versión 7). Una
+     plantilla anterior no los trae: entonces se cae a centrado y a imprimirlo también en
+     la portada, que es lo que se hacía antes. */
   const encabezadoDelDocumento = () => {
-    const enc = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(htmlContent);
-    return enc ? { bloque: enc[0], contenido: enc[1] } : null;
+    const enc = /<div data-encabezado="1"([^>]*)>([\s\S]*?)<\/div>/.exec(htmlContent);
+    if (!enc) return null;
+    const lado = (/data-lado="([^"]+)"/.exec(enc[1]) || [])[1] || 'centro';
+    const desde = Number((/data-desde-pagina="(\d+)"/.exec(enc[1]) || [])[1] || 1);
+    const alto = (/height:([\d.]+cm)/.exec(enc[2]) || [])[1] || null;
+    return {
+      bloque: enc[0], contenido: enc[2], lado, alto, enLaPortada: desde <= 1,
+    };
   };
 
   /* Previsualización en hojas. Antes el previo era un bloque continuo con los estilos de
@@ -672,13 +688,18 @@ export default function ReporteGenerador({ study, estudioId }) {
      se fundía con el índice, hasta descargar el .doc y abrirlo en Word. */
   const cssPrevio = useMemo(() => {
     /* El logo va como fondo de un pseudoelemento y no como `<img>`, para no meter nada
-       nuevo dentro del `contentEditable`. */
-    const enc = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(htmlContent);
-    const src = enc ? /src="(data:image\/[^"]+)"/.exec(enc[1]) : null;
+       nuevo dentro del `contentEditable`. Su lado, su alto y si va en la portada salen
+       del PDF: los anotó el extractor. */
+    const enc = encabezadoDelDocumento();
+    const src = enc ? /src="(data:image\/[^"]+)"/.exec(enc.contenido) : null;
     return cssDeHojas({
       base: estiloBaseDe(htmlContent),
       logo: src ? src[1] : null,
+      lado: enc ? enc.lado : 'centro',
+      alto: enc ? enc.alto : null,
+      enLaPortada: enc ? enc.enLaPortada : true,
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [htmlContent]);
 
   /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— no hay dónde
@@ -720,13 +741,19 @@ export default function ReporteGenerador({ study, estudioId }) {
        que Word exige: con un `@page` sin nombre ignora `mso-header` y el logo se
        queda como primera imagen del cuerpo en vez de repetirse arriba de cada
        página. Es la estructura que Word emite cuando uno guarda como página web. */
-    const wordCSS = cssDeWord({ conEncabezado: !!encabezado });
+    const wordCSS = cssDeWord({
+      conEncabezado: !!encabezado,
+      lado: conEncabezado ? conEncabezado.lado : 'centro',
+      enLaPortada: conEncabezado ? conEncabezado.enLaPortada : true,
+    });
 
-    // Limpiamos los estilos de resaltado de pantalla para que el documento final en Word quede impecable
-    const cleanHtml = cuerpoSinEncabezado
-      .replace(/background-color:\s*#F0FDF4;\s*/g, '')
-      .replace(/border-bottom:\s*1px\s*dashed\s*#0FA3A1;\s*/g, '')
-      .replace(/color:\s*#0B7C7A;\s*/g, '');
+    /* Ya no hace falta limpiar el resaltado de pantalla: va por clase y lo pinta sólo el
+       CSS del previo. Aquí se quitaban tres propiedades a mano de las seis que traía el
+       `style=` inline, así que `font-weight:600`, `padding:0 4px` y `border-radius:3px`
+       llegaban al documento: cada dato sustituido salía más negrita y con cuatro píxeles
+       de aire a cada lado, cientos de veces en las 112 páginas. Quitar propiedades
+       nombradas a mano era el problema, no la solución. */
+    const cleanHtml = cuerpoSinEncabezado;
 
     /* Encabezado y pie van dentro de la secci\u00f3n y fuera del flujo: Word los recoge
        por su id y los repite en cada p\u00e1gina. El pie lleva el campo PAGE, no el

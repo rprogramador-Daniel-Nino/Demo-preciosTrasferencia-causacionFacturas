@@ -1,5 +1,6 @@
 import { fmt, pctf, num, getUvtValue } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
+import { resaltarValor } from './estiloDocumento.js';
 import {
   DATOS_MACRO,
   generarTablaPibMundial,
@@ -471,10 +472,13 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   // El cálculo vive en su propio módulo: lo comparte la sustitución por campos.
   const { stats, adj, cumple: cumpleStr } = analizarRango(study);
 
-  // Helper para destacar visualmente las variables reemplazadas en el editor web
+  /* Helper para destacar visualmente las variables reemplazadas en el editor web. El
+     estilo va por clase y lo pinta sólo el CSS del previo: en inline se colaba en el
+     .doc, y cada valor sustituido salía más negrita y con aire a los lados en el
+     documento que se radica. */
   const wrap = (val) => {
     if (!val && val !== 0) return '—';
-    return `<span style="font-weight:600;color:#0B7C7A;border-bottom:1px dashed #0FA3A1;background-color:#F0FDF4;padding:0 4px;border-radius:3px;">${val}</span>`;
+    return resaltarValor(val);
   };
 
   /* Cifra formateada, o hueco visible si el estudio no la trae. Los valores por

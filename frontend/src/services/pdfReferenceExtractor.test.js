@@ -285,7 +285,7 @@ test('el logo queda marcado como encabezado, no como imagen del cuerpo', async (
   /* El logo del informe se repite en casi cien páginas: su sitio es el encabezado
      de página, no la primera imagen del documento. Va marcado en el HTML para que
      la exportación lo saque del cuerpo y lo declare como tal. */
-  const m = /<div data-encabezado="1">([\s\S]*?)<\/div>/.exec(r.html);
+  const m = /<div data-encabezado="1"[^>]*>([\s\S]*?)<\/div>/.exec(r.html);
   assert.ok(m, 'no se marcó el encabezado');
   assert.ok(/<img data-recurso=/.test(m[1]), 'el encabezado no lleva el logo');
   /* Y va antes que el contenido: es lo primero del documento. */
@@ -349,4 +349,37 @@ test('las filas de tabla no llevan párrafos sueltos dentro', async () => {
     const fuera = m[1].replace(/<t[dh]>[\s\S]*?<\/t[dh]>/g, '').trim();
     assert.strictEqual(fuera, '', 'contenido fuera de celda en una fila: ' + fuera.slice(0, 60));
   }
+});
+
+test('cada imagen lleva el tamaño que le da el PDF, no el natural del PNG', async () => {
+  const r = await extraer();
+  /* Sin esto salían a su tamaño en píxeles: el logo del encabezado a 8,7 cm en vez de
+     5,53, y la figura de la página 11 a 29,9 cm sobre un papel de 21,6. En el .doc no
+     había ninguna regla de imagen, así que desbordaban y Word repartía el desborde en
+     páginas nuevas —cientos—. */
+  const marcas = r.html.match(/<img[^>]*>/g) || [];
+  assert.ok(marcas.length >= 4, 'se perdieron imágenes: ' + marcas.length);
+  for (const m of marcas) {
+    assert.match(m, /style="width:[\d.]+cm;height:[\d.]+cm"/, 'imagen sin tamaño: ' + m);
+  }
+  /* Y ninguna mide más que la caja de texto del informe (21,6 − 2 × 2,5 = 16,6 cm). */
+  for (const m of marcas) {
+    const ancho = Number(/width:([\d.]+)cm/.exec(m)[1]);
+    assert.ok(ancho > 0 && ancho <= 16.7, 'imagen más ancha que la caja de texto: ' + m);
+  }
+});
+
+test('el encabezado sabe de qué lado va y desde qué página', async () => {
+  const r = await extraer();
+  const enc = /<div data-encabezado="1"([^>]*)>/.exec(r.html);
+  assert.ok(enc, 'no se apartó el logo del encabezado');
+  /* Medido sobre el PDF real: el logo va a la derecha —su centro cae en 16,7 cm de una
+     hoja de 21,6— y no aparece hasta la página 6. Se exportaba centrado y también en la
+     portada, donde se superponía con el logo grande de la portada. */
+  assert.match(enc[1], /data-lado="derecha"/);
+  const desde = Number(/data-desde-pagina="(\d+)"/.exec(enc[1])[1]);
+  assert.ok(desde > 1, 'el encabezado del informe no está en la portada, y dice que sí');
+  /* Medido: la primera con logo es la 5. Una medición por geometría exacta decía 6
+     porque la de la página 5 está unos puntos desplazada respecto a las siguientes. */
+  assert.strictEqual(desde, 5);
 });
