@@ -68,22 +68,24 @@ Devuelve SOLO un JSON estricto con esta estructura:
   "periodo": "Año o rango del ejercicio (ej: 2025 o 2024)",
   "moneda": "USD, COP, EUR, etc.",
   "unidad_origen": "unidades|miles|millones",
-  "ingresos_operacionales": 0,
-  "costo_ventas": 0,
-  "utilidad_bruta": 0,
-  "gastos_operacionales": 0,
-  "utilidad_operacional": 0,
-  "cuentas_por_cobrar": 0,
-  "inventarios": 0,
-  "cuentas_por_pagar": 0,
-  "total_activos": 0,
-  "total_pasivos": 0,
-  "patrimonio": 0,
-  "propiedad_planta_equipo": 0,
-  "efectivo_y_equivalentes": 0,
+  "ingresos_operacionales": null,
+  "costo_ventas": null,
+  "utilidad_bruta": null,
+  "gastos_operacionales": null,
+  "utilidad_operacional": null,
+  "cuentas_por_cobrar": null,
+  "inventarios": null,
+  "cuentas_por_pagar": null,
+  "total_activos": null,
+  "total_pasivos": null,
+  "patrimonio": null,
+  "propiedad_planta_equipo": null,
+  "efectivo_y_equivalentes": null,
   "gastos_investigacion_desarrollo": null,
   "gastos_publicidad": null
 }
+
+Regla general: si un rubro numérico no aparece en el documento, devuelve null — NUNCA 0. Un 0 se lee como "la empresa reportó cero en este concepto", que es una afirmación falsa cuando en realidad el concepto simplemente no se desglosó. NO estimes, NO deduzcas por diferencia, NO inventes.
 
 Reglas para "gastos_investigacion_desarrollo" y "gastos_publicidad": son rubros OPCIONALES. Úsalos solo si la empresa los desglosa como línea propia en su estado de resultados. Si no aparecen desglosados, devuelve null — NO los deduzcas restando de gastos_operacionales, NO estimes.`;
 
@@ -200,26 +202,26 @@ Devuelve SOLO un JSON estricto con esta estructura:
       "periodo": "Año o rango del ejercicio",
       "moneda": "USD, COP, EUR, etc.",
       "unidad_origen": "unidades|miles|millones",
-      "ingresos_operacionales": 0,
-      "costo_ventas": 0,
-      "utilidad_bruta": 0,
-      "gastos_operacionales": 0,
-      "utilidad_operacional": 0,
-      "cuentas_por_cobrar": 0,
-      "inventarios": 0,
-      "cuentas_por_pagar": 0,
-      "total_activos": 0,
-      "total_pasivos": 0,
-      "patrimonio": 0,
-      "propiedad_planta_equipo": 0,
-      "efectivo_y_equivalentes": 0,
+      "ingresos_operacionales": null,
+      "costo_ventas": null,
+      "utilidad_bruta": null,
+      "gastos_operacionales": null,
+      "utilidad_operacional": null,
+      "cuentas_por_cobrar": null,
+      "inventarios": null,
+      "cuentas_por_pagar": null,
+      "total_activos": null,
+      "total_pasivos": null,
+      "patrimonio": null,
+      "propiedad_planta_equipo": null,
+      "efectivo_y_equivalentes": null,
       "gastos_investigacion_desarrollo": null,
       "gastos_publicidad": null
     }
   ]
 }
 
-Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, ponlo en 0 — EXCEPTO "gastos_investigacion_desarrollo" y "gastos_publicidad": esos dos son OPCIONALES, van en null si la empresa no los desglosa como línea propia (no los deduzcas ni los estimes). Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
+Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, devuélvelo en null — NUNCA en 0, porque 0 se lee como "la empresa reportó cero" y ese no es el caso cuando el concepto simplemente no aparece. Esto aplica a TODOS los rubros numéricos, incluyendo "gastos_investigacion_desarrollo" y "gastos_publicidad" (que además son OPCIONALES: van en null salvo que la empresa los desglose como línea propia). No estimes ni deduzcas ningún rubro por diferencia. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento.`;
 
 /** Lee un PDF (o imagen) que contiene los EEFF de varias comparables y devuelve
  *  una entrada por empresa, cada una con su verificación contable.
