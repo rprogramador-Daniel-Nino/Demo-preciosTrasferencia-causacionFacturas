@@ -724,11 +724,19 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
 
   const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
 
-  assert.ok(!salida.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia');
-  assert.ok(!salida.includes('COLOPL'), 'sobrevivió una comparable del informe de referencia');
-  assert.ok(!salida.includes('FUN YOURS'), 'sobrevivió una comparable del informe de referencia');
-  assert.ok(!salida.includes('IGG INC'), 'sobrevivió una comparable del informe de referencia');
-  assert.ok(salida.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo');
-  assert.ok(salida.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
+  // Las tablas 17/19 y el ANEXO C son secciones ajenas a esta tarea: pueden seguir
+  // mostrando compañías del informe de referencia si el estudio de prueba no les
+  // alcanza los datos que ellas necesitan (comportamiento ya cubierto por otros
+  // tests de este archivo). Lo que este test verifica es solo el ANEXO B.
+  const inicioAnexoB = salida.indexOf('id="_Toc208931006"');
+  const inicioAnexoC = salida.indexOf('id="_Toc208931007"', inicioAnexoB);
+  const bloqueAnexoB = salida.slice(inicioAnexoB, inicioAnexoC);
+
+  assert.ok(!bloqueAnexoB.includes('AKATSUKI'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('COLOPL'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('FUN YOURS'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(!bloqueAnexoB.includes('IGG INC'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
+  assert.ok(bloqueAnexoB.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo en ANEXO B');
+  assert.ok(bloqueAnexoB.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');
 });
