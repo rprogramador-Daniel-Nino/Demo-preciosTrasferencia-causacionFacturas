@@ -108,8 +108,8 @@ export function cssDeHojas({ base, logo, lado = 'centro', enLaPortada = true, al
            la primera página, así que el previo hace lo mismo: si se dibujara en la
            portada, en pantalla saldría un logo que en el documento no va a estar —y
            encima del logo grande de la portada, que sí va. */
-        (enLaPortada ? '' : '.hojas .pagina:first-of-type::before{content:none}' +
-          '.hojas .pagina:first-of-type{padding-top:' + HOJA.margen + '}')
+        (enLaPortada ? '' : '.hojas [data-pagina="1"]::before{content:none}' +
+          '.hojas [data-pagina="1"]{padding-top:' + HOJA.margen + '}')
       : '') +
     /* El logo se repite arriba de cada hoja, así que en el flujo del cuerpo no va: si
        no, sale dos veces en la portada, que es justo lo que se veía en pantalla. */
@@ -183,8 +183,17 @@ export function cssDeWord({ conEncabezado, lado = 'centro', enLaPortada = true }
        centro cae en 16,7 cm de una hoja de 21,6— y se exportaba centrado. */
     'p.enc{text-align:' + alineacion + ';margin:0}' +
     /* La portada es su propia página, como en el original. Sin esto el título y el logo
-       se funden con el índice, que es lo que hacía que no se pareciera. */
-    'div.pagina{page-break-before:always}' +
-    'div.pagina:first-of-type{page-break-before:auto}'
+       se funden con el índice, que es lo que hacía que no se pareciera.
+
+       La primera página NO se exceptúa aquí con `:first-of-type`, que es lo que había y no
+       funcionaba por dos motivos a la vez: el motor HTML de Word es de la época de CSS 2 y no
+       entiende las pseudoclases estructurales de CSS 3, y además el selector era falso —el
+       primer `div` del documento es el de metadatos del extractor, no una página, así que
+       `div.pagina:first-of-type` no emparejaba con nada ni en un navegador—. Resultado: la
+       primera página también llevaba salto y Word abría el informe con una hoja en blanco.
+
+       La excepción va en un `style` en línea sobre la primera página, que Word sí respeta
+       siempre y no depende de ningún selector. La pone `handleDownload`. */
+    'div.pagina{page-break-before:always}'
   );
 }

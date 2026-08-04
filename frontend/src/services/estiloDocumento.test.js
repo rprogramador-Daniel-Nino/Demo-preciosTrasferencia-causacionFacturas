@@ -157,7 +157,7 @@ test('si el informe no lleva encabezado en la portada, no se imprime ahí', () =
   /* Y el previo hace lo mismo, para que en pantalla no salga un logo que en el
      documento no va a estar. */
   const previo = cssDeHojas({ logo: 'data:image/png;base64,A', enLaPortada: false });
-  assert.ok(previo.includes('.pagina:first-of-type::before{content:none}'));
+  assert.ok(previo.includes('[data-pagina="1"]::before{content:none}'));
   assert.ok(!cssDeHojas({ logo: 'data:image/png;base64,A' }).includes('content:none'));
 });
 
@@ -167,4 +167,30 @@ test('el alto del logo del previo sale del documento', () => {
     .includes('height:1.23cm'));
   assert.ok(cssDeHojas({ logo: 'data:image/png;base64,A' })
     .includes('height:' + HOJA.altoEncabezado));
+});
+
+test('el CSS del .doc no usa pseudoclases que Word no entiende', () => {
+  /* El motor HTML de Word es de la época de CSS 2: ignora `:first-of-type`, `:first-child`,
+     `:nth-child` y compañía. Había una regla `div.pagina:first-of-type{page-break-before:auto}`
+     para que la portada no llevara salto, y Word la ignoraba, así que la portada TAMBIÉN
+     llevaba salto y el informe abría con una hoja en blanco delante.
+
+     Y era falsa dos veces: el primer `div` del cuerpo era el de metadatos del extractor, no
+     una página, así que el selector no emparejaba con nada ni en un navegador. */
+  const css = cssDeWord({ conEncabezado: true, enLaPortada: false }) + cssDeExportacion(null);
+  for (const pseudo of [':first-of-type', ':first-child', ':last-child', ':nth-child',
+    ':nth-of-type', ':not(', ':is(', ':where(']) {
+    assert.ok(!css.includes(pseudo), 'Word no entiende ' + pseudo + ' y la regla se pierde');
+  }
+  /* El salto de página sí está: la excepción de la portada va en línea, no por selector. */
+  assert.ok(css.includes('div.pagina{page-break-before:always}'));
+});
+
+test('el previo no señala la primera página con :first-of-type', () => {
+  /* Mismo error, y en el previo tampoco funcionaba: el div de metadatos del extractor ocupa el
+     puesto de primer `div`, así que `:first-of-type` no emparejaba con la portada y el logo del
+     encabezado se seguía dibujando encima del logo grande de la portada. */
+  const css = cssDeHojas({ logo: 'data:image/png;base64,A', enLaPortada: false });
+  assert.ok(!css.includes(':first-of-type'));
+  assert.ok(css.includes('[data-pagina="1"]::before{content:none}'));
 });

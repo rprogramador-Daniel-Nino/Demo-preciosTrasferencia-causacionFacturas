@@ -663,7 +663,19 @@ export default function ReporteGenerador({ study, estudioId }) {
        llegaban al documento: cada dato sustituido salía más negrita y con cuatro píxeles
        de aire a cada lado, cientos de veces en las 112 páginas. Quitar propiedades
        nombradas a mano era el problema, no la solución. */
-    const cleanHtml = cuerpoSinEncabezado;
+    /* Dos cosas que sí hay que hacerle al cuerpo antes de exportarlo.
+
+       Una: el div de metadatos del extractor (`data-extractor`, `data-estilo-base`) no tiene
+       nada que hacer en el documento. Además era el primer `div` del cuerpo, y por eso
+       `div.pagina:first-of-type` no emparejaba con ninguna página.
+
+       Dos: la excepción del salto de la primera página va en línea. El motor HTML de Word es
+       de la época de CSS 2 y no entiende `:first-of-type`, así que con la regla en la hoja de
+       estilos la portada también llevaba salto y Word abría el informe con una hoja en blanco
+       delante. Un `style` en línea lo respeta siempre. */
+    const cleanHtml = cuerpoSinEncabezado
+      .replace(/<div data-extractor="\d+"[^>]*><\/div>/, '')
+      .replace(/<div class="pagina"/, '<div style="page-break-before:avoid" class="pagina"');
 
     /* Encabezado y pie van dentro de la secci\u00f3n y fuera del flujo: Word los recoge
        por su id y los repite en cada p\u00e1gina. El pie lleva el campo PAGE, no el
