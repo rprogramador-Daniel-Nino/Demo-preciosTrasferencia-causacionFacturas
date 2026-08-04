@@ -430,6 +430,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       ar: datos.cuentas_por_cobrar || copia[indice].ar,
       inv: datos.inventarios || copia[indice].inv,
       ap: datos.cuentas_por_pagar || copia[indice].ap,
+      eeffDatos: datos,
       eeffVerificado: verificacion.esValido,
       eeffHallazgos: verificacion.hallazgos,
       eeffArchivo: archivo,
