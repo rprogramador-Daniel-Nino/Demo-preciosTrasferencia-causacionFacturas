@@ -102,3 +102,11 @@ Desktop.ini
 sistema pt con parches
 .vscode
 *.vs
+# Cachés de Python de la skill docx, que se generan al validar el OOXML.
+__pycache__/
+*.pyc
+
+# Andamio de medición de los subagentes: scripts que generan un .docx para inspeccionarlo.
+# Se han colado ya dos veces en un commit.
+_tmp_*.mjs
+*.tmp.mjs

@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import PizZip from 'pizzip';
 import { aDocxBuffer } from './docxWriter.js';
+import { extraerReferencia } from './pdfReferenceExtractor.js';
 import { HOJA_TWIPS } from './estiloDocumento.js';
 
 /* Relee el .docx generado. Es lo que hace que todo esto se pueda probar sin Word. */
@@ -320,6 +322,20 @@ test('la imagen sale con el tamaño que le da el PDF, no con el natural del PNG'
   assert.equal(Number(m[2]), 46 * 9525);
 });
 
+test('la imagen en docx se auto-escala si supera el ancho máximo de la caja', async () => {
+  /* La caja es 21.59 - 5 = 16.59 cm.
+     Si una imagen mide 20cm x 10cm, debe escalarse a 16.59cm de ancho y 8.295cm de alto.
+     16.59cm en píxeles es 627. 8.295cm en píxeles es 314.
+     docx emite 9525 EMU por píxel. */
+  const { doc } = await abrir(
+    '<p><img data-recurso="portada" style="width:20cm;height:10cm" /></p>',
+    [{ id: 'portada', dataUrl: PNG_1x1 }]);
+  const m = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(doc);
+  assert.ok(m, 'la imagen no se emitió');
+  assert.equal(Number(m[1]), 627 * 9525);
+  assert.equal(Number(m[2]), 314 * 9525);
+});
+
 test('una imagen cuyo recurso no está en el catálogo no rompe el documento', async () => {
   /* Pasa si el catálogo y la plantilla se desincronizan. Mejor un hueco que un throw que deja
      al usuario sin documento y sin explicación. */
@@ -373,4 +389,273 @@ test('una imagen suelta en un div tampoco se pierde', async () => {
   assert.match(doc, /<wp:extent/, 'la imagen no se emitió');
   assert.equal((doc.match(/antes/g) || []).length, 1);
   assert.equal((doc.match(/después/g) || []).length, 1);
+});
+
+test('cada página del original empieza en una hoja nueva', async () => {
+  const html = '<div class="pagina" data-pagina="1" data-orientacion="vertical"><p>una</p></div>' +
+    '<div class="pagina" data-pagina="2" data-orientacion="vertical"><p>dos</p></div>' +
+    '<div class="pagina" data-pagina="3" data-orientacion="vertical"><p>tres</p></div>';
+  const { doc } = await abrir(html);
+  /* Dos saltos para tres páginas: la primera no lleva salto delante. */
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 2);
+});
+
+test('la página apaisada abre su propia sección', async () => {
+  const html = '<div class="pagina" data-pagina="1" data-orientacion="vertical"><p>a</p></div>' +
+    '<div class="pagina" data-pagina="2" data-orientacion="apaisada"><p>b</p></div>' +
+    '<div class="pagina" data-pagina="3" data-orientacion="vertical"><p>c</p></div>';
+  const { doc } = await abrir(html);
+  assert.match(doc, /w:orient="landscape"/, 'no hay página apaisada');
+  /* Tres secciones: vertical, apaisada, vertical. */
+  assert.equal((doc.match(/<w:sectPr/g) || []).length, 3);
+});
+
+test('sin páginas marcadas se emite una sola sección', async () => {
+  /* La plantilla maestra y un .docx por mammoth no traen páginas. Mejor un documento corrido
+     que una paginación inventada. */
+  const { doc } = await abrir('<p>a</p><p>b</p>');
+  assert.equal((doc.match(/<w:sectPr/g) || []).length, 1);
+  assert.doesNotMatch(doc, /<w:br w:type="page"\/>/);
+});
+
+const ENCABEZADO = '<div data-encabezado="1" data-lado="derecha" data-desde-pagina="5">' +
+  '<img data-recurso="logo" style="width:5.53cm;height:1.23cm" /></div>';
+
+test('el logo va en el encabezado de página, una sola vez', async () => {
+  /* En el .doc llegó a repetirse 96 veces dentro del cuerpo. */
+  const { zip, doc } = await abrir(
+    ENCABEZADO + '<div class="pagina" data-pagina="1"><p>a</p></div>',
+    [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.ok(zip.file('word/header1.xml'), 'no hay encabezado');
+  assert.match(zip.file('word/header1.xml').asText(), /<w:drawing>/);
+  /* Y no se queda además en el cuerpo. */
+  assert.doesNotMatch(doc, /data-encabezado/);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 0,
+    'el logo del encabezado no debe estar también en el cuerpo');
+});
+
+test('el encabezado va al lado que dice el PDF', async () => {
+  const { zip } = await abrir(ENCABEZADO + '<p>a</p>', [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(zip.file('word/header1.xml').asText(), /w:val="right"/);
+});
+
+test('si el informe no lleva encabezado en la portada, la portada va sin él', async () => {
+  /* Ponerlo en la primera lo superponía con el logo grande de la portada: son los dos logos
+     encimados que se veían en el .doc. */
+  const { doc } = await abrir(ENCABEZADO + '<p>a</p>', [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.match(doc, /<w:titlePg\/>/);
+});
+
+test('si el encabezado empieza en la página 1, no se activa la primera distinta', async () => {
+  const enc = '<div data-encabezado="1" data-lado="centro" data-desde-pagina="1">' +
+    '<img data-recurso="logo" style="width:2cm;height:1cm" /></div>';
+  const { doc } = await abrir(enc + '<p>a</p>', [{ id: 'logo', dataUrl: PNG_1x1 }]);
+  assert.doesNotMatch(doc, /<w:titlePg\/>/);
+});
+
+test('un documento sin encabezado no declara uno vacío', async () => {
+  const { zip } = await abrir('<p>a</p>');
+  assert.equal(zip.file('word/header1.xml'), null);
+});
+
+/* El anexo A: las páginas de estados financieros firmados que el usuario sube para llenar el
+   hueco que deja el extractor —éste no puede reproducir un documento firmado por otro
+   contribuyente y de otro año, así que marca dónde iba cada página con `data-hueco`—. */
+const HUECO = '<div class="pagina" data-pagina="98">' +
+  '<div data-hueco="anexo_eeff" data-id="hueco_98">' +
+  '<p>[Falta el anexo de estados financieros firmados — corresponde a la página 98 del ' +
+  'informe de referencia. Adjúntelo antes de radicar.]</p></div></div>';
+
+test('con el anexo subido, sus páginas entran en el sitio del hueco', async () => {
+  const { doc } = await abrir(HUECO, [], [PNG_1x1]);
+  assert.match(doc, /<w:drawing>/, 'la página del anexo no entró');
+  /* Y el texto del hueco desaparece: ya no falta nada. */
+  assert.doesNotMatch(doc, /Falta el anexo/);
+});
+
+test('sin anexo subido, el hueco se ve y dice qué falta', async () => {
+  /* Un div vacío no se ve ni en pantalla ni en Word, y en la salida anterior las 15 páginas
+     del anexo desaparecían sin dejar rastro. El informe se radica ante la DIAN: que diga qué
+     falta es lo mínimo. */
+  const { doc } = await abrir(HUECO, [], []);
+  assert.match(doc, /Falta el anexo de estados financieros firmados/);
+});
+
+test('las páginas del anexo se reparten en orden entre los huecos', async () => {
+  const dos = HUECO + HUECO.replace(/98/g, '99');
+  const { doc } = await abrir(dos, [], [PNG_1x1, PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 2);
+});
+
+test('con menos páginas de anexo que huecos, los que sobran siguen avisando', async () => {
+  const dos = HUECO + HUECO.replace(/98/g, '99');
+  const { doc } = await abrir(dos, [], [PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
+  assert.match(doc, /Falta el anexo/);
+});
+
+test('avisa cuando el anexo trae más páginas que huecos', async () => {
+  /* Perder páginas de un anexo de estados financieros firmados en un documento que se radica
+     ante la DIAN sería grave, y este aviso por consola es lo único que lo delata: nada en el
+     .docx generado —ni el `<w:drawing>`, ni el texto del hueco— refleja que algo quedó fuera;
+     sólo la consola lo dice. Se reemplaza `console.warn` mientras dura el test y se restaura
+     en un `finally`, para no dejarlo puesto y estropear otros tests. Se filtra por contenido
+     del mensaje y no se cuentan llamadas a ciegas: otro camino del writer dispara
+     `console.warn` por un motivo distinto (una imagen sin recurso, por ejemplo). */
+  const original = console.warn;
+  const llamadas = [];
+  console.warn = (...args) => llamadas.push(args.join(' '));
+  const avisoDeAnexo = () => llamadas.find((m) => m.includes('[docxWriter]') && m.includes('anexo'));
+  try {
+    /* 1. Un hueco, dos páginas: sobra una, y avisa mencionando cuántas. */
+    const { doc } = await abrir(HUECO, [], [PNG_1x1, PNG_1x1]);
+    const aviso = avisoDeAnexo();
+    assert.ok(aviso, 'no avisó de las páginas de anexo sobrantes');
+    assert.match(aviso, /sobran 1 página/);
+
+    /* 2. La primera página sí entra en el hueco: avisar de la que sobra no le cuesta la que
+       sí cabe. */
+    assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
+    assert.doesNotMatch(doc, /Falta el anexo/);
+
+    /* 3. Si la cuenta cuadra, o si sobran huecos en vez de páginas, no avisa: el aviso sólo
+       tiene sentido cuando de verdad se pierde algo, si no se vuelve ruido que la gente
+       aprende a ignorar. */
+    llamadas.length = 0;
+    const dos = HUECO + HUECO.replace(/98/g, '99');
+    await abrir(dos, [], [PNG_1x1, PNG_1x1]); /* dos huecos, dos páginas: cuenta exacta */
+    await abrir(dos, [], [PNG_1x1]); /* dos huecos, una página: sobra hueco, no página */
+    assert.equal(avisoDeAnexo(), undefined, 'avisó de páginas sobrantes sin que sobrara ninguna');
+  } finally {
+    console.warn = original;
+  }
+});
+
+/* Extremo a extremo sobre el PDF real: el que ha atrapado todos los fallos de esta sesión.
+   Una sola extracción compartida entre los dos tests de este bloque — 112 páginas tarda, y
+   procesarlas dos veces duplicaría el tiempo sin aportar nada. Mismo patrón de caché que
+   `pdfReferenceExtractor.test.js`. */
+const RUTA_PDF = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
+let cacheRef = null;
+const referencia = async () => {
+  if (!cacheRef) cacheRef = await extraerReferencia(new Uint8Array(readFileSync(RUTA_PDF)));
+  return cacheRef;
+};
+
+test('extremo a extremo: el informe real sale como .docx', async () => {
+  const ref = await referencia();
+  const zip = new PizZip(await aDocxBuffer({
+    html: ref.html, recursos: ref.imagenes, anexo: [],
+  }));
+  const doc = zip.file('word/document.xml').asText();
+
+  /* Declara las 112 páginas del original. */
+  /* Con S secciones y P páginas, los saltos son P - S (uno entre página y página dentro de
+     cada sección, ninguno delante de la primera de cada una). Así que saltos + secciones = P,
+     exactamente 112, sea cuantas secciones haya salido de la orientación. */
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length +
+    (doc.match(/<w:sectPr/g) || []).length, 112,
+    'los saltos más las secciones deben cubrir las 112 páginas');
+
+  /* El texto del informe está. */
+  assert.match(doc, /INTRODUCCIÓN/);
+  assert.match(doc, /END GAME/);
+
+  /* La negrita del informe llegó: medido sobre el PDF real, 931 fragmentos en negrita. El
+     umbral de 500 es conservador a propósito, no un ajuste a la baja de una medición menor. */
+  assert.ok((doc.match(/<w:b\/>/g) || []).length > 500,
+    'se perdió la negrita del informe');
+
+  /* Una imagen por recurso en word/media, y ninguna más ancha que la caja de texto. */
+  const media = Object.keys(zip.files).filter((f) => /^word\/media\/.+\./.test(f));
+  assert.ok(media.length >= 3, 'faltan imágenes: ' + media.length);
+  const anchos = [...doc.matchAll(/<wp:extent cx="(\d+)"/g)].map((m) => Number(m[1]));
+  const cajaEmu = (21.6 - 5) * 360000;
+  for (const cx of anchos) {
+    assert.ok(cx <= cajaEmu, 'una imagen mide más que la caja de texto: ' + cx);
+  }
+
+  /* La página apaisada abrió su sección. */
+  assert.match(doc, /w:orient="landscape"/);
+
+  /* El encabezado va una vez, a la derecha, y la portada sin él. */
+  assert.ok(zip.file('word/header1.xml'));
+  assert.match(zip.file('word/header1.xml').asText(), /w:val="right"/);
+  assert.match(doc, /<w:titlePg\/>/);
+
+  /* Y nada del resaltado de pantalla. */
+  assert.doesNotMatch(doc, /pt-valor/);
+});
+
+test('el .docx del informe real es XML bien formado', async () => {
+  /* Un XML mal formado hace que Word ofrezca "reparar" el documento, y ahí el usuario ya
+     perdió la confianza en la herramienta. */
+  const ref = await referencia();
+  const zip = new PizZip(await aDocxBuffer({ html: ref.html, recursos: ref.imagenes }));
+  for (const parte of ['word/document.xml', 'word/styles.xml', 'word/header1.xml',
+    'word/footer1.xml', '[Content_Types].xml']) {
+    const xml = zip.file(parte);
+    assert.ok(xml, 'falta ' + parte);
+    const texto = xml.asText();
+    /* Comprobación de equilibrio de etiquetas, que es lo que se puede hacer sin parser XML.
+
+       Corrección medida sobre el PDF real: el regex del brief cuenta como "abierta" cualquier
+       `<letra...>` sin barra justo antes del `>`, pero eso falla en cuanto un atributo trae una
+       barra —los `xmlns` de `http://schemas.openxmlformats.org/...` que trae `<w:document>` y,
+       dentro de cada dibujo de imagen, `<a:graphic>`, `<a:graphicData>` y `<pic:pic>`—: el
+       carácter excluido `[^>/]*` se detiene en la barra de la URL y el `<a:graphic ...>` entero
+       deja de calzar como apertura, aunque SÍ tiene su `</a:graphic>` de cierre. Sobre
+       `word/document.xml` esto descontaba 10 aperturas (1 `w:document` + 3 de cada una de
+       `a:graphic`/`a:graphicData`/`pic:pic`, una por cada imagen del cuerpo) y el conteo daba
+       27326 aperturas contra 27336 cierres: parecía descompensado sin estarlo. Confirmado con
+       un parser XML de verdad (`xml.dom.minidom` de Python) que `word/document.xml` sí es XML
+       bien formado. El arreglo, sin necesitar parser: vaciar el contenido de los atributos
+       (`="..."` → `=""`) antes de contar, así ninguna URL puede colarse en la cuenta. */
+    const sinAtributos = texto.replace(/="[^"]*"/g, '=""');
+    const abiertas = (sinAtributos.match(/<[a-zA-Z][^>/]*(?<!\/)>/g) || []).length;
+    const cerradas = (sinAtributos.match(/<\/[a-zA-Z][^>]*>/g) || []).length;
+    assert.equal(abiertas, cerradas, parte + ': etiquetas descompensadas');
+  }
+});
+
+test('el tamaño de fuente de cada fragmento llega al documento', async () => {
+  /* Las tablas del informe van a 8 y 9 puntos, no al cuerpo de 12. El writer sólo leía la
+     familia del `style` y tiraba el tamaño, así que las emitía todas a 12 pt: un 33 % más de
+     alto por línea sobre 890 filas. Medido sobre el informe real, eso eran 61 hojas de más
+     sobre las 112 del original, y TODAS en páginas con tabla —las que llevan tabla ocupaban
+     1,48 veces la caja de texto; las que no, 0,32—. */
+  const { doc } = await abrir(
+    '<p><span style="font-size:9pt">nueve</span> ' +
+    '<span style="font-size:8pt">ocho</span> doce</p>');
+  assert.match(doc, /<w:sz w:val="18"\/>/, 'falta el tamaño de 9 pt');
+  assert.match(doc, /<w:sz w:val="16"\/>/, 'falta el tamaño de 8 pt');
+  /* Y el texto sin declaración se queda con el cuerpo del documento, sin `w:sz` propio. */
+  assert.match(doc, /nueve/);
+  assert.match(doc, /doce/);
+});
+
+test('el tamaño se hereda dentro de un fragmento con estilo', async () => {
+  /* Una celda de tabla del informe es `<span style="font-size:9pt"><strong>x</strong></span>`:
+     la negrita no puede devolver el texto a 12 pt. */
+  const { doc } = await abrir(
+    '<p><span style="font-size:9pt"><strong>cifra</strong></span></p>');
+  assert.match(doc, /<w:sz w:val="18"\/>/);
+  assert.match(doc, /<w:b\/>/);
+});
+
+test('el estilo por defecto fija el espacio entre párrafos en cero', async () => {
+  /* Sin `w:after` explícito, Word aplica su valor de fábrica: 200 twips = 10 pt DESPUÉS DE CADA
+     párrafo. Sobre los 3867 párrafos del informe son unas 49 hojas de espaciado puro, y era la
+     causa principal de que el documento saliera con 173 hojas donde el original tiene 112.
+
+     La vista previa no lo sufría —su CSS no añade ese margen—, así que era la última asimetría
+     pantalla/archivo de este trabajo. El informe separa sus párrafos con párrafos vacíos que
+     trae el propio PDF, así que el espacio que hace falta ya está en el contenido. */
+  const { leer } = await abrir('<p>hola</p>');
+  const estilos = leer('word/styles.xml');
+  assert.match(estilos, /<w:spacing[^>]*w:after="0"/, 'falta el after:0 del estilo por defecto');
+  /* Y el interlineado va proporcional, no fijo: una celda de tabla a 9 pt no debe arrastrar el
+     interlineado del cuerpo de 12. */
+  assert.match(estilos, /<w:spacing[^>]*w:lineRule="auto"/);
+  assert.match(estilos, /<w:spacing[^>]*w:line="276"/);
 });

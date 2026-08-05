@@ -57,10 +57,23 @@ export function renderizar(htmlMarcado, estudio, recursos = []) {
     if (recursoMap.has(id)) {
       const dataUrl = recursoMap.get(id);
       html = html.replace(
-        new RegExp('<img data-recurso="' + escaparParaRegex(id) + '"[^>]*>', 'g'),
-        (_) => {
-          /* Usa callback para evitar que caracteres especiales en dataUrl se interpreten. */
-          return '<img data-recurso="' + id + '" src="' + dataUrl + '" />';
+        new RegExp('<img data-recurso="' + escaparParaRegex(id) + '"([^>]*)>', 'g'),
+        (_, resto) => {
+          /* Se CONSERVAN los demás atributos de la marca en vez de reescribir la etiqueta
+             entera. Desde la versión 7 del lector cada imagen lleva su tamaño en el `style`
+             —el que le da el PDF—, y reescribir la etiqueta lo tiraba: la imagen volvía a su
+             tamaño natural en píxeles y desbordaba la hoja. Ese fallo ya se arregló una vez en
+             `conImagenes`, pero esta es la ruta que se usa de verdad —la de plantilla marcada—
+             así que seguía perdiéndose por aquí.
+
+             El `src` previo se quita antes de poner el nuevo para que aplicarlo dos veces sobre
+             el mismo HTML no acumule dos. El callback evita además que los caracteres
+             especiales del data URL se interpreten como referencias de sustitución. */
+          const atributos = resto
+            .replace(/\s*\/?$/, '')
+            .replace(/\s+src="[^"]*"/g, '');
+          return '<img data-recurso="' + id + '"' + atributos +
+            ' src="' + dataUrl + '" />';
         }
       );
     } else {

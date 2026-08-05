@@ -32,8 +32,9 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      4 — cada entrada del índice y cada nota en su propio bloque
      5 — cada página del original envuelta, para que el salto caiga donde debe
      6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo
-     7 — cada imagen con el tamaño que le da el PDF, y el encabezado en su lado */
-export const VERSION_EXTRACTOR = 7;
+     7 — cada imagen con el tamaño que le da el PDF, y el encabezado en su lado
+     8 — la orientación de cada página, para la sección apaisada */
+export const VERSION_EXTRACTOR = 8;
 
 /* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
    del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
@@ -130,7 +131,10 @@ export async function extraerReferencia(datos) {
       .trim();
 
     if (arbol) etiquetado = true;
-    leidas.push({ pagina: n, arbol, porId, textoPlano });
+    /* Orientación de la página. El informe de referencia trae una apaisada de 112, y sin
+       decirlo esa página sale vertical y su contenido no cabe. */
+    const orientacion = dimPagina.ancho > dimPagina.alto ? 'apaisada' : 'vertical';
+    leidas.push({ pagina: n, arbol, porId, textoPlano, orientacion });
 
     /* La matriz acumulada es la única forma de saber a qué tamaño se dibuja
        una imagen: los argumentos de paintImageXObject traen los píxeles
@@ -180,7 +184,7 @@ export async function extraerReferencia(datos) {
 
   /* --- El cuerpo del documento, y con él el HTML --- */
   const base = estiloDominante(censoEstilos);
-  const bloques = leidas.map(({ pagina: n, arbol, porId, textoPlano }) => {
+  const bloques = leidas.map(({ pagina: n, arbol, porId, textoPlano, orientacion }) => {
     if (arbol) {
       const figuras = [];
       const htmlStruct = aHTML(arbol, porId, figuras, n, base);
@@ -201,10 +205,14 @@ export async function extraerReferencia(datos) {
          documento y las otras catorce páginas se perdían sin dejar rastro. */
       const tieneTexto = !!htmlStruct.replace(/<[^>]*>/g, '').trim();
       const tieneFigura = htmlStruct.includes('<!--FIG:');
-      if (tieneTexto || tieneFigura) return { pagina: n, html: htmlStruct };
-      return { pagina: n, html: textoPlano ? '<p>' + escapar(textoPlano) + '</p>' : '' };
+      if (tieneTexto || tieneFigura) return { pagina: n, html: htmlStruct, orientacion };
+      return {
+        pagina: n,
+        html: textoPlano ? '<p>' + escapar(textoPlano) + '</p>' : '',
+        orientacion,
+      };
     }
-    return { pagina: n, html: '<p>' + escapar(textoPlano) + '</p>' };
+    return { pagina: n, html: '<p>' + escapar(textoPlano) + '</p>', orientacion };
   });
 
   /* --- Decisión: qué páginas son anexo --- */
@@ -377,7 +385,8 @@ export async function extraerReferencia(datos) {
      final. Es lo máximo alcanzable sin fijar alturas, que dejaría el documento
      imposible de editar. */
   const html = marcaEstilo + cabecera + bloques
-    .map((b) => '<div class="pagina" data-pagina="' + b.pagina + '">' +
+    .map((b) => '<div class="pagina" data-pagina="' + b.pagina +
+                '" data-orientacion="' + b.orientacion + '">' +
                 conFiguras(b.html) + '</div>')
     .join('\n');
 
@@ -428,6 +437,10 @@ export function loQueFaltaPorVersion(version) {
   if (version < 5) {
     falta.push('no hay saltos de página donde el informe cambia de página, así que la ' +
                'portada se funde con el índice');
+  }
+  if (version < 8) {
+    falta.push('las páginas no dicen su orientación, así que la página apaisada del ' +
+               'informe sale vertical y su contenido no cabe');
   }
   if (version < 7) {
     falta.push('las imágenes salen a su tamaño natural en píxeles y no al que les da ' +
