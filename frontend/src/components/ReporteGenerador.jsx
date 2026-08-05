@@ -2,7 +2,7 @@ import React, {
   useState, useEffect, useMemo, useRef,
 } from 'react';
 import axios from 'axios';
-import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
+import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle } from 'lucide-react';
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
@@ -935,6 +935,31 @@ export default function ReporteGenerador({ study, estudioId }) {
           <p className="text-xs text-zinc-500 mt-1">
             Conserva el texto íntegro original del informe (Introducción, FAR, Tendencias, Anexos A-C) e inyecta quirúrgicamente los datos del cliente.
           </p>
+          {/* Con qué plantilla se está generando. El formato del Word depende de esto más
+              que de cualquier otra cosa, y no se decía en ninguna parte: dos personas con
+              el mismo estudio obtenían documentos distintos —una con la plantilla marcada
+              en su navegador, la otra con la maestra incrustada— sin nada en pantalla que
+              lo explicara. La plantilla vive en IndexedDB, o sea en un solo equipo, así
+              que la diferencia aparece también al cambiar de navegador. */}
+          {plantillaActiva && plantillaActiva.marcada ? (
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1">
+              <Check className="w-3 h-3" />
+              Se genera con la plantilla de referencia marcada por campos, guardada en este navegador.
+            </p>
+          ) : plantillaActiva ? (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              Plantilla cargada pero <strong>sin marcar</strong>: la sustitución va por literales y el
+              formato puede diferir. Márquela para que el Word salga como el de la plantilla.
+            </p>
+          ) : (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              Sin plantilla de referencia en este navegador: se usa la plantilla maestra del sistema, y
+              el formato no coincidirá con el de quien sí la tenga cargada. Súbala con «Subir Otra
+              Plantilla Word» — se guarda por navegador, no viaja con el estudio.
+            </p>
+          )}
         </div>
         <div className="flex gap-3">
           <div className="relative">
