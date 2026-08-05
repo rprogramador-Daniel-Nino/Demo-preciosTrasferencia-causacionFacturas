@@ -18,8 +18,8 @@ const {
 
 if (!getApps().length) initializeApp();
 
-const GEMINI_MODEL = 'gemini-3-flash-preview';
-const CLAUDE_MODEL = 'claude-sonnet-5';
+const GEMINI_MODEL = 'gemini-3.5-flash';
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 
 /** La `actividad` que llega del estudio a veces es la descripción completa del
  *  objeto social (varios cientos de caracteres, con la matriz, los activos y
@@ -73,8 +73,11 @@ async function buscarDatosSector(geminiApiKey, actividad, year) {
     throw new Error('Gemini no devolvió una respuesta usable: ' + JSON.stringify(data).slice(0, 500));
   }
   const texto = (candidato.content.parts || []).map((p) => p.text || '').join('');
-  const groundingChunks = (candidato.groundingMetadata && candidato.groundingMetadata.groundingChunks) || [];
-  return parsearRespuestaBusquedaSector(texto, groundingChunks);
+  /* groundingChunks nunca llega con este modelo + google_search + JSON en texto
+     (confirmado en vivo) — webSearchQueries es el campo que sí confirma que hubo
+     una búsqueda real. Ver el comentario en analisisSectorPrompts.js. */
+  const webSearchQueries = (candidato.groundingMetadata && candidato.groundingMetadata.webSearchQueries) || [];
+  return parsearRespuestaBusquedaSector(texto, webSearchQueries);
 }
 
 async function redactarSector(claudeApiKey, datosConfiables, actividad, year) {

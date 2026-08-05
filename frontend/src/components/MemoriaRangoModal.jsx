@@ -3,8 +3,73 @@ import { X, FileSpreadsheet, AlertTriangle, ChevronDown } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { pctf, fmt } from '../utils/calculations.js';
 import {
-  construirMemoriaRango, hojasMemoriaRango, nombreArchivoMemoria,
+  construirMemoriaRango, nombreArchivoMemoria,
 } from '../services/memoriaCalculoRango.js';
+import { hojasMemoriaRangoOptimo } from '../services/memoriaCalculoRangoOptimo.js';
+import { normalizarEeff } from '../services/eeffParserNormalizador.js';
+
+/**
+ * Prepara una copia aislada del estudio para la memoria de cálculo óptima
+ * sin tocar ni alterar el objeto 'estudio' original usado por el resto del sistema
+ * (previniendo inversiones de signo o cambios de convención en op / EBIT).
+ */
+function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
+  if (!estudioOriginal) return {};
+  
+  // 1. Clonar profundamente para no mutar las referencias originales
+  const copia = JSON.parse(JSON.stringify(estudioOriginal));
+  
+  // 2. Normalizar el contribuyente para la convención del parche (op = gastos operacionales)
+  const cftNormalizadas = normalizarEeff({
+    ingresos_operacionales: copia.t_s,
+    costo_ventas: copia.t_c,
+    utilidad_operacional: copia.t_op, // en el sistema original t_op era utilidad/EBIT
+    gastos_operacionales: copia.t_gastos || copia.t_opex,
+    cuentas_por_cobrar: copia.t_ar,
+    inventarios: copia.t_inv,
+    cuentas_por_pagar: copia.t_ap,
+    propiedad_planta_equipo: copia.t_ppe,
+  });
+  
+  if (cftNormalizadas.op !== null && cftNormalizadas.op !== undefined) {
+    copia.t_op = cftNormalizadas.op;
+  } else if (copia.t_s != null && copia.t_c != null && copia.t_op != null) {
+    copia.t_op = Number(copia.t_s) - Number(copia.t_c) - Number(copia.t_op);
+  }
+  
+  if (cftNormalizadas.ppe != null) {
+    copia.t_ppe = cftNormalizadas.ppe;
+  }
+
+  // 3. Normalizar comparables si existen
+  if (Array.isArray(copia.comparables)) {
+    copia.comparables = copia.comparables.map((comp) => {
+      const compNorm = normalizarEeff({
+        ingresos_operacionales: comp.s,
+        costo_ventas: comp.c,
+        utilidad_operacional: comp.op, // en sistema original comp.op era EBIT
+        gastos_operacionales: comp.gastos || comp.opex,
+        cuentas_por_cobrar: comp.ar,
+        inventarios: comp.inv,
+        cuentas_por_pagar: comp.ap,
+        propiedad_planta_equipo: comp.ppe || comp.propiedad_planta_equipo,
+      });
+
+      let opex = compNorm.op;
+      if ((opex === null || opex === undefined) && comp.s != null && comp.c != null && comp.op != null) {
+        opex = Number(comp.s) - Number(comp.c) - Number(comp.op);
+      }
+
+      return {
+        ...comp,
+        op: opex !== null && opex !== undefined ? opex : comp.op, // gastos operativos para el parche
+        ppe: compNorm.ppe !== null && compNorm.ppe !== undefined ? compNorm.ppe : comp.ppe,
+      };
+    });
+  }
+  
+  return copia;
+}
 
 /* Cómo se llegó al rango intercuartil que muestra la tarjeta del panel: la fórmula del
    indicador, el margen de cada comparable, el ajuste de capital de trabajo y la posición
@@ -54,6 +119,11 @@ const PESTANAS = [
 
 export default function MemoriaRangoModal({ estudio, alCerrar }) {
   const memoria = useMemo(() => construirMemoriaRango(estudio), [estudio]);
+  const estudioNormalizado = useMemo(
+    () => obtenerEstudioNormalizadoParaParche(estudio),
+    [estudio]
+  );
+
   const [pestana, setPestana] = useState('resumen');
   /* Las advertencias arrancan plegadas: son la razón por la que el modal crecía sin
      control, y en una línea siguen estando a la vista sin empujar el contenido. */
@@ -65,23 +135,30 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
     return () => window.removeEventListener('keydown', alTeclear);
   }, [alCerrar]);
 
-  /* Se arma el libro en memoria y se descarga con un Blob, en vez de `XLSX.writeFile`:
-     esa función depende de que SheetJS detecte el entorno y en el build ESM no siempre
-     está. Con Blob la descarga es la misma en cualquier navegador. */
+  /* Se arma el libro en memoria con fórmulas vivas (hojasMemoriaRangoOptimo)
+     y se descarga mediante Blob. */
   const descargar = () => {
     const libro = XLSX.utils.book_new();
-    hojasMemoriaRango(memoria, estudio).forEach(({ nombre, filas, cols, rows, merges, autofiltro }) => {
-      /* Las celdas llegan del servicio con su formato ya puesto. Aquí solo se cuelgan las
-         propiedades que son de la hoja y no de la celda.
+    const seleccionadasKeys = new Set((estudio?.comparables || []).map(c => c.nameKey || (c.name ? c.name.toUpperCase() : '')));
+    const candidatasUniverso = Array.isArray(estudio?.universo) && estudio.universo.length > 0
+      ? estudio.universo.map(cand => ({
+          ...cand,
+          seleccionada: seleccionadasKeys.has(cand.nameKey || (cand.name ? cand.name.toUpperCase() : ''))
+        }))
+      : null;
+    const seleccion = estudio?.seleccion || (candidatasUniverso ? {
+      criterios: estudio?.criteriosScreening || [],
+      candidatas: candidatasUniverso
+    } : null);
+    const hojas = hojasMemoriaRangoOptimo(estudioNormalizado, seleccion);
 
-         No se intenta congelar el encabezado: el escritor de SheetJS descarta `!freeze`
-         —lo comprobé inspeccionando el XML, la hoja sale sin `<pane>`—, así que ponerlo
-         sería código que no hace nada. */
-      const hoja = XLSX.utils.aoa_to_sheet(filas);
+    hojas.forEach(({ nombre, celdas, filas, cols, rows, merges, autofiltro }) => {
+      /* Se lee 'celdas' (o fallback a 'filas') */
+      const hoja = XLSX.utils.aoa_to_sheet(celdas || filas);
       if (cols) hoja['!cols'] = cols;
       if (rows) hoja['!rows'] = rows;
       if (merges && merges.length) hoja['!merges'] = merges;
-      if (autofiltro) hoja['!autofilter'] = { ref: autofiltro };
+      if (autofiltro) hoja['!autofilter'] = typeof autofiltro === 'string' ? { ref: autofiltro } : autofiltro;
       XLSX.utils.book_append_sheet(libro, hoja, nombre);
     });
     const bytes = XLSX.write(libro, { bookType: 'xlsx', type: 'array' });

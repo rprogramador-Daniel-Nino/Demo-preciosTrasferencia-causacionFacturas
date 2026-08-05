@@ -53,7 +53,7 @@ export async function parseAccionistasWithGeminiOCR(file) {
         }
 
         const payload = {
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-3.5-flash',
           contents: [{
             parts: [
               { inline_data: { mime_type: mimeType, data: base64Data } },

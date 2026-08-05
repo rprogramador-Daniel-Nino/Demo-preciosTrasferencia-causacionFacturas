@@ -91,7 +91,7 @@ Desktop.ini
 
 # Scratch de ejecución de planes (superpowers). Efímero, no se comparte.
 .superpowers/
-
+sistema pt con parches
 .vscode
 *.vs
 # Cachés de Python de la skill docx, que se generan al validar el OOXML.

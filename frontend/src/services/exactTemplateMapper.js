@@ -77,7 +77,7 @@ const ANIOS_DEL_ESTUDIO = [
   /(?<=durante el año gravable )2024/gi,
   /(?<=al? 31 de diciembre de )2024/gi,
   /(?<=Último estado financiero entre junio de )2024/gi,
-  /* Frase que introduce la tabla 19: «los estados financieros correspondientes al año
+  /* Frase que introduce la tabla 17: «los estados financieros correspondientes al año
      2024». Es el año de las cifras que ahora se regeneran con las comparables del
      estudio, así que dejarlo en el del informe de referencia fecharía mal la tabla. */
   /(?<=estados financieros correspondientes al año )2024/gi,
@@ -217,7 +217,7 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
   };
 }
 
-/* ══════════════ Tabla 16. Razones de rechazo ══════════════
+/* ══════════════ Tabla 14. Razones de rechazo ══════════════
    La plantilla trae los números del informe de referencia —442 candidatas, 327 por
    diferencias funcionales, 13 aceptadas— y hay que sustituirlos por los del estudio.
    El insumo es `study.embudoSeleccion`, que guarda el motor al ejecutar la selección.
@@ -283,7 +283,7 @@ export function filasRazonesRechazo(embudo) {
 }
 
 /**
- * Cuerpo de la tabla 16 con los datos del estudio. Sin selección ejecutada devuelve
+ * Cuerpo de la tabla 14 con los datos del estudio. Sin selección ejecutada devuelve
  * null y quien llama deja la tabla como estaba: es preferible que el usuario vea que
  * falta ejecutar el motor a que el informe salga con cifras inventadas —o peor, con las
  * del cliente anterior, que es el error que este documento no puede cometer.
@@ -324,7 +324,7 @@ export function reemplazarTablaRazonesRechazo(html, study, wrap) {
   return html.slice(0, inicio) + cuerpoNuevo + html.slice(fin + '</tbody>'.length);
 }
 
-/* ══════════════ Tablas 17 y 19. Muestra y márgenes de las comparables ══════════════
+/* ══════════════ Tablas 15 y 17. Muestra y márgenes de las comparables ══════════════
    La plantilla trae las trece compañías de videojuegos del informe de referencia con
    sus nombres y sus márgenes, y ninguna regla las tocaba: era el bloque que más
    delataba que el documento se armó sobre el estudio de otro contribuyente.
@@ -346,7 +346,7 @@ export function filasComparablesInforme(study) {
 const celdaTabla = (contenido) => `<td>\n<p>\n${contenido}\n</p>\n</td>`;
 
 /**
- * Filas de la tabla 17 (Muestra Compañías comparables): número, razón social y ámbito.
+ * Filas de la tabla 15 (Muestra Compañías comparables): número, razón social y ámbito.
  * Sin comparables devuelve null y quien llama deja la tabla como estaba.
  */
 export function generarFilasMuestraComparables(study, wrap) {
@@ -359,7 +359,7 @@ export function generarFilasMuestraComparables(study, wrap) {
 }
 
 /**
- * Sustituye las filas de datos de la tabla 17, conservando su encabezado.
+ * Sustituye las filas de datos de la tabla 15, conservando su encabezado.
  *
  * El encabezado no se reconstruye a propósito: su primera celda lleva las anclas de
  * Word («RANGE!E11», «_Hlk143111901») a las que apuntan referencias del documento, y
@@ -369,7 +369,7 @@ export function reemplazarTablaMuestraComparables(html, study, wrap) {
   const cuerpo = generarFilasMuestraComparables(study, wrap);
   if (!cuerpo) return html;
 
-  const ancla = html.indexOf('Tabla 17. Muestra Compañías comparables');
+  const ancla = html.indexOf('Tabla 15. Muestra Compañías comparables');
   if (ancla < 0) return html;
   const tabla = html.indexOf('<table>', ancla);
   if (tabla < 0) return html;
@@ -382,11 +382,11 @@ export function reemplazarTablaMuestraComparables(html, study, wrap) {
 }
 
 /**
- * Cuerpo de la tabla 19 (Margen Operacional Compañías Comparables).
+ * Cuerpo de la tabla 17 (Margen Operacional Compañías Comparables).
  *
  * Una comparable sin estados financieros cargados sale con hueco en los dos márgenes y
  * no se omite: es la muestra final del informe, y esconder a la que le falta el dato
- * dejaría una tabla más corta que la 17 sin que nada lo explique.
+ * dejaría una tabla más corta que la 15 sin que nada lo explique.
  */
 export function generarTablaMargenComparables(study, wrap) {
   const filas = filasComparablesInforme(study);
@@ -400,12 +400,12 @@ export function generarTablaMargenComparables(study, wrap) {
   return `<tbody>\n${cuerpo}\n</tbody>`;
 }
 
-/** Sustituye el cuerpo de la tabla 19, anclado en su título, que es único en el documento. */
+/** Sustituye el cuerpo de la tabla 17, anclado en su título, que es único en el documento. */
 export function reemplazarTablaMargenComparables(html, study, wrap) {
   const cuerpoNuevo = generarTablaMargenComparables(study, wrap);
   if (!cuerpoNuevo) return html;
 
-  const ancla = html.indexOf('Tabla 19. Margen Operacional Compañías Comparables');
+  const ancla = html.indexOf('Tabla 17. Margen Operacional Compañías Comparables');
   if (ancla < 0) return html;
   const inicio = html.indexOf('<tbody>', ancla);
   if (inicio < 0) return html;
@@ -413,6 +413,33 @@ export function reemplazarTablaMargenComparables(html, study, wrap) {
   if (fin < 0) return html;
 
   return html.slice(0, inicio) + cuerpoNuevo + html.slice(fin + '</tbody>'.length);
+}
+
+/* Tabla 13 (Códigos SIC utilizados), a partir de `study.criteriosScreening` —lo que
+   dejó frontend/src/services/comparablesEngine.js:parsearCriteriosScreening al leer
+   la hoja "Screen Criteria" del export de Capital IQ en el Paso 1 del motor de
+   comparables—. Antes esta tabla era texto fijo del informe de referencia (SIC 7371/
+   7372, "games", 2025): una corrida real con otra actividad o otro año la dejaba
+   describiendo una búsqueda que nunca se hizo. Sin criterios cargados (estudio nuevo,
+   o Excel sin esa hoja) se deja el hueco pendiente en vez de ese texto ajeno. */
+function generarTablaCriteriosScreeningHtml(study, wrap) {
+  const criterios = (study && study.criteriosScreening) || [];
+  if (!criterios.length) {
+    return '<p>\nPendiente: importe el archivo de Capital IQ en el Paso 1 del motor de comparables para completar los criterios de búsqueda.\n</p>';
+  }
+  const filaConector = (conector) => `<tr>\n<td colspan="2">\n<p>\n<strong>${conector}</strong>\n</p>\n</td>\n</tr>\n`;
+  const filaCriterio = (etiqueta, valor) =>
+    `<tr>\n<td>\n<p>\n<strong>${wrap(etiqueta)}:</strong>\n</p>\n</td>\n<td>\n<p>\n${wrap(valor)}\n</p>\n</td>\n</tr>\n`;
+
+  const filas = criterios
+    .map((c) => (c.conector ? filaConector(c.conector) : '') + filaCriterio(c.etiqueta, c.valor))
+    .join('');
+
+  return (
+    '<table>\n<tr>\n<td colspan="2">\n<p>\n<strong>Criterio de búsqueda</strong>\n</p>\n</td>\n</tr>\n' +
+    filas +
+    '</table>'
+  );
 }
 
 /**
@@ -447,6 +474,107 @@ ${images.map((imgUrl, i) => `
 <p>
 <img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" /><img src="IMAGE_PLACEHOLDER" />
 </p>`;
+}
+
+/* ══════════════ ANEXO B. Descripciones de comparables y Estados Financieros ══════════════
+   La plantilla trae las trece compañías de videojuegos del informe de referencia (Akatsuki,
+   Colopl, Fun Yours, IGG, Maximum Entertainment, Neptune Company, Ourpalm, Playstudios,
+   Qubicgames, The Dust, Tose, Wemade Play, Yoozoo). Solo entran aquí las comparables con
+   EEFF verificado: una fila con cifras a medio cargar y sin confirmar es peor que no mostrarla. */
+
+const ANEXO_B_ETIQUETAS_PL = [
+  { etiqueta: 'Ventas netas', valor: (c) => c.s },
+  { etiqueta: 'Costo de los bienes vendidos', valor: (c) => c.c },
+  { etiqueta: 'Beneficio bruto', valor: (c) => c.eeffDatos && c.eeffDatos.utilidad_bruta },
+  { etiqueta: 'Gastos operativos', valor: (c) => c.eeffDatos && c.eeffDatos.gastos_operacionales },
+  { etiqueta: 'Utilidad de operación', valor: (c) => c.op },
+];
+
+const ANEXO_B_ETIQUETAS_BALANCE = [
+  { etiqueta: 'Activos totales promedio', valor: (c) => c.eeffDatos && c.eeffDatos.total_activos },
+  { etiqueta: 'Promedio de cuentas por pagar netas', valor: (c) => c.ap },
+  { etiqueta: 'Promedio de cuentas por cobrar netas', valor: (c) => c.ar },
+  { etiqueta: 'EPP neto promedio', valor: (c) => c.eeffDatos && c.eeffDatos.propiedad_planta_equipo },
+  { etiqueta: 'Inventario neto promedio', valor: (c) => c.inv },
+  { etiqueta: 'Efectivo promedio y equivalentes de efectivo', valor: (c) => c.eeffDatos && c.eeffDatos.efectivo_y_equivalentes },
+];
+
+/* Filas opcionales de la tabla de P&L: no todas las comparables desglosan I+D o
+   publicidad como línea propia (ver ejemplos reales: Akatsuki ninguna, Colopl solo
+   publicidad, Fun Yours solo I+D, IGG ambas). Solo se agregan si el dato no es nulo. */
+function filasOpcionalesPL(c) {
+  const filas = [];
+  const rd = c.eeffDatos && c.eeffDatos.gastos_investigacion_desarrollo;
+  const adv = c.eeffDatos && c.eeffDatos.gastos_publicidad;
+  if (rd !== null && rd !== undefined) filas.push({ etiqueta: 'Gastos de investigación y desarrollo', valor: () => rd });
+  if (adv !== null && adv !== undefined) filas.push({ etiqueta: 'Gastos de publicidad', valor: () => adv });
+  return filas;
+}
+
+/* Las tres tablas de una comparable. Celda vacía cuando falta el dato: a diferencia del
+   resto del informe, aquí no se marca con «—» porque el usuario lo pidió así para esta
+   sección en particular. */
+function generarBloqueComparableAnexoB(comp, year, wrap) {
+  const celdaCifra = (v) => {
+    const n = num(v);
+    return n === null ? '' : wrap(fmt(n));
+  };
+  const anioCol = (comp.eeffDatos && comp.eeffDatos.periodo) || year;
+
+  const filaTabla = (etiqueta, valor) =>
+    `<tr>\n${celdaTabla(etiqueta)}\n${celdaTabla(celdaCifra(valor))}\n</tr>`;
+
+  const tablaCifras = (filas) =>
+    `<table>\n<thead>\n<tr>\n<th>\n<p>\n<strong>Descripción</strong>\n</p>\n</th>\n<th>\n<p>\n<strong>${anioCol}</strong>\n</p>\n</th>\n</tr>\n</thead>\n<tbody>\n${filas.join('\n')}\n</tbody>\n</table>`;
+
+  const filasPL = [...ANEXO_B_ETIQUETAS_PL, ...filasOpcionalesPL(comp)]
+    .map((f) => filaTabla(f.etiqueta, f.valor(comp)));
+  const filasBalance = ANEXO_B_ETIQUETAS_BALANCE.map((f) => filaTabla(f.etiqueta, f.valor(comp)));
+
+  const descripcion = comp.descActividad || comp.desc || 'Descripción de actividad no disponible.';
+
+  const tablaNombreDescripcion =
+    `<table>\n<thead>\n<tr>\n<th>\n<p>\n<strong>NOMBRE DE LA COMPAÑÍA COMPARABLE</strong>\n</p>\n</th>\n<th>\n<p>\n<strong>DESCRIPCIÓN ACTIVIDAD</strong>\n</p>\n</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n${celdaTabla('<strong>' + comp.name + '</strong>')}\n${celdaTabla(descripcion)}\n</tr>\n</tbody>\n</table>`;
+
+  return tablaNombreDescripcion + '\n' + tablaCifras(filasPL) + '\n' + tablaCifras(filasBalance);
+}
+
+/* Cuerpo dinámico del ANEXO B. Entra cualquier comparable con un EEFF cargado y cruzado a
+   su fila (`eeffArchivo`), tenga o no alertas contables: la verificación aritmética
+   (`eeffVerificado`) casi nunca sale limpia con comparables reales —el año de su EEFF rara
+   vez coincide con el del estudio porque el del mismo año aún no se ha publicado, y algunas
+   no desglosan patrimonio— así que exigirla dejaba el Anexo B en «Pendiente» aun con EEFF
+   real cargado para todas. Las alertas se siguen mostrando en el Paso 4 para que el analista
+   las revise; no bloquean el informe. Sin ninguna comparable con archivo cargado, sale el
+   aviso de pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
+export function generarAnexoBHtml(study, year, wrap) {
+  const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
+  const titulo = '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n';
+
+  if (!comparables.length) {
+    return titulo + '<p>\nPendiente: cargue los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
+  }
+
+  return titulo + comparables.map((c) => generarBloqueComparableAnexoB(c, year, wrap)).join('\n') + '\n';
+}
+
+/* Sustituye todo el bloque de ANEXO B, desde su título hasta (sin incluirlo) el título de
+   ANEXO C. Se ubica por `indexOf` del id de cada uno y no con una sola regex de tramo largo:
+   el `<h1>` de ANEXO C trae varios id de Word apilados antes del suyo (anclas de referencias
+   cruzadas de versiones previas del documento), y anclar con una regex rígida sobre esa forma
+   se rompería si cambia cuántos id se apilan. */
+export function reemplazarAnexoB(html, study, year, wrap) {
+  const posIdB = html.indexOf('id="_Toc208931006"');
+  if (posIdB < 0) return html;
+  const inicioH1 = html.lastIndexOf('<h1>', posIdB);
+  if (inicioH1 < 0) return html;
+
+  const posIdC = html.indexOf('id="_Toc208931007"', posIdB);
+  if (posIdC < 0) return html;
+  const finH1 = html.lastIndexOf('<h1>', posIdC);
+  if (finH1 < 0 || finH1 <= inicioH1) return html;
+
+  return html.slice(0, inicioH1) + generarAnexoBHtml(study, year, wrap) + html.slice(finH1);
 }
 
 /**
@@ -563,8 +691,10 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
          inmediato y no al final de la expresión a propósito: puesto al final, el
          motor haría backtracking y acabaría casando solo "END GAME", dejando
          " INTERACTIVE INC" colgando y sin sustituir. */
+    /* Sustitución del vinculado (END GAME INTERACTIVE INC, o END GAME INTERACTIVE en contrato después de "Y ") */
+    { target: /END\s+GAME\s+INTERACTIVE\s+INC/gi, val: wrap(study.vinc) },
+    { target: /(?<=Y\s+)END\s+GAME\s+INTERACTIVE(?!\s+COLOMBIA)/gi, val: wrap(study.vinc) },
     { target: /END\s+GAME(?!\s+INTERACTIVE\s+INC)(?:\s+INTERACTIVE)?(?:\s+COLOMBIA)?(?:\s+S\.?A\.?S?\.?)?(?!\w)/gi, val: wrap(study.ent) },
-    { target: /END GAME INTERACTIVE INC/gi, val: wrap(study.vinc) },
     { target: /ESTADOS UNIDOS/gi, val: wrap(study.pais_vinc) },
     { target: /604477955/g, val: wrap(study.vinc_id) },
     { target: /Otros servicios \(\s*07\s*\)/gi, val: wrap(formattedTipo) },
@@ -655,11 +785,7 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
     html = html.replace(/1\.989\.688\.200/g, cifra(totalActivos));
   }
 
-  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ─── */
-  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
-  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
-
-  /* ─── Tabla 16 y las cifras que la rodean ───
+  /* ─── Tabla 14 y las cifras que la rodean ───
      La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
      acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
      «quedaron 13 compañías comparables», cifras de End Game. Dejar la tabla al día y el
@@ -695,17 +821,24 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
 
   // Reemplazar Rango Intercuartil si se calculó
   if (stats) {
-    html = html.replace(/Percentil 25:?\s*[\d\.\,%]+/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);
-    html = html.replace(/Mediana:?\s*[\d\.\,%]+/gi, `Mediana: ${wrap(pctf(stats.med))}`);
-    html = html.replace(/Percentil 75:?\s*[\d\.\,%]+/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
+    html = html.replace(/Percentil 25:?\s*[\d\.\,-]+%/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);
+    html = html.replace(/Mediana:?\s*[\d\.\,-]+%/gi, `Mediana: ${wrap(pctf(stats.med))}`);
+    html = html.replace(/Percentil 75:?\s*[\d\.\,-]+%/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
+    html = html.replace(
+      /se ubica entre el percentil 25 \([^)]+\) y \([^)]+\) percentil 75/gi,
+      `se ubica entre el percentil 25 (${wrap(pctf(stats.p25))}) y el percentil 75 (${wrap(pctf(stats.p75))})`
+    );
   }
 
   /* Monto del ajuste. Si el estudio está dentro del rango no hay ajuste que
-     reportar, pero la frase de la plantilla sí existe: se pone un marcador
-     visible en vez de la cifra de End Game. Corregir la redacción de esa frase
-     queda para el plan 2, cuando la plantilla tenga campos con nombre. */
-  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '—';
-  html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
+     reportar. Se reemplaza la frase estática del ajuste por la situación real del estudio. */
+  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '0';
+  if (!adj || adj.within) {
+    html = html.replace(/la suma de \$983\.180\.000 fue ajustada/gi, 'no se requirió realizar ajustes a la suma declarada');
+    html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, '0');
+  } else {
+    html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
+  }
 
   // Reemplazar resultado Cumple/No Cumple
   html = html.replace(/cumple con el principio de plena competencia/gi, `${wrap(cumpleStr)} con el principio de plena competencia`);
@@ -724,6 +857,14 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
     html = html.replace(rx, () => gen(datosMacro, year, wrap));
   });
 
+  /* Tabla 13 (Códigos SIC utilizados): la corrida real de Capital IQ de este estudio,
+     no la del informe de referencia. El título de la tabla no cambia con el año, así
+     que se conserva literal y solo se regenera el <table> que le sigue. */
+  html = html.replace(
+    /<p>\s*Tabla 13\.\s*C[oó]digos SIC utilizados\s*<\/p>\s*<table>[\s\S]*?<\/table>/,
+    () => '<p>\nTabla 13. Códigos SIC utilizados\n</p>\n' + generarTablaCriteriosScreeningHtml(study, wrap)
+  );
+
   /* Sustitución tardía de III.A/III.B: si la narrativa se insertara donde se
      reservó el lugar (arriba, antes de ANIOS_DEL_ESTUDIO y de los reemplazos
      literales), esas reglas reescribirían años y textos dentro de la prosa de
@@ -732,5 +873,21 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
   html = html.replace(MARCA_APARTADO_MUNDIAL, () => generarApartadoMundial(datosMacro, year, wrap));
   html = html.replace(MARCA_APARTADO_COLOMBIA, () => generarApartadoColombia(datosMacro, year, wrap));
 
-  return reponerEnlaces(html, enlaces);
+  html = reponerEnlaces(html, enlaces);
+
+  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ───
+     Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: `apartarEnlaces`
+     (arriba) reemplaza temporalmente TODAS las etiquetas <a id="..."> del documento —
+     incluida la de ANEXO A— por marcadores @@PT_ENLACE_N@@, y solo las repone al final.
+     Buscar `id="_Toc208931005"` antes de esa reposición nunca lo encuentra: el texto
+     literal no existe todavía en ese punto del documento (mismo bug que tenía ANEXO B,
+     ver commit a638866). */
+  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
+  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
+
+  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ───
+     Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: mismo motivo. */
+  html = reemplazarAnexoB(html, study, year, wrap);
+
+  return html;
 }

@@ -31,6 +31,39 @@ export function elegirHoja(nombresDeHoja) {
 }
 
 /**
+ * Extrae los criterios de búsqueda de la hoja "Screen Criteria" del export de
+ * Capital IQ —aparte de "Screening" (las candidatas) y "Aggregates"—, para
+ * poder reconstruir la Tabla 13 (Códigos SIC utilizados) del informe con la
+ * corrida real de este año en vez de arrastrar la del informe anterior (ver
+ * frontend/src/services/exactTemplateMapper.js:generarTablaCriteriosScreeningHtml).
+ *
+ * Cada fila de esa hoja es una sola celda de texto, con la forma
+ * "N) Etiqueta: valor", "And) Etiqueta: valor" u "Or) Etiqueta: valor" — el
+ * conector antes del paréntesis dice cómo se combina ese criterio con el
+ * anterior; el primero de la lista no lleva conector.
+ */
+export function parsearCriteriosScreening(workbook) {
+  const nombreHoja = ((workbook && workbook.SheetNames) || []).find(n => /screen.*criteria/i.test(n));
+  if (!nombreHoja) return [];
+  const filas = XLSX.utils.sheet_to_json(workbook.Sheets[nombreHoja], { header: 1, defval: '' });
+  const patronLinea = /^(\d+|and|or)\)\s*(.+)$/i;
+  const criterios = [];
+  (filas || []).forEach((fila) => {
+    const texto = String((fila || [])[0] || '').trim();
+    const m = texto.match(patronLinea);
+    if (!m) return;
+    const resto = m[2];
+    const separador = resto.indexOf(':');
+    const etiqueta = (separador > -1 ? resto.slice(0, separador) : resto).trim();
+    const valor = (separador > -1 ? resto.slice(separador + 1) : '').trim();
+    if (!etiqueta || !valor) return;
+    criterios.push({ conector: m[1].toLowerCase() === 'or' ? 'O' : 'Y', etiqueta, valor });
+  });
+  if (criterios.length) criterios[0].conector = null;
+  return criterios;
+}
+
+/**
  * Localiza la fila de encabezados. El export de Capital IQ NO los pone en la
  * primera fila: la 0 es el título del reporte ("Capital IQ Company Screening
  * Report > ..."), la 1 va vacía y los encabezados están en la 2. Asumir json[0]
@@ -91,6 +124,7 @@ export async function importCapitalIQExcel(file, onProgress) {
         avisar('Abriendo el archivo…', 0, null);
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
+        const criteriosScreening = parsearCriteriosScreening(workbook);
         const hoja = elegirHoja(workbook.SheetNames);
         const worksheet = workbook.Sheets[hoja];
         if (!worksheet) throw new Error('El archivo no tiene ninguna hoja legible.');
@@ -126,6 +160,7 @@ export async function importCapitalIQExcel(file, onProgress) {
           reconocidas,
           faltantes,
           sinCuentasDeBalance: ['ar', 'inv', 'ap'].every(k => idx[k] < 0),
+          criteriosScreening,
         };
 
         const nameIdx = idx.name;
@@ -767,7 +802,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
 
     try {
       const respuesta = await axios.post('/api/gemini', {
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-3.5-flash',
         contents: [{ parts: [{ text: prompt }] }],
       });
       /* todas las partes, no solo la primera: los modelos parten la respuesta */

@@ -3,7 +3,7 @@ const { defineSecret } = require('firebase-functions/params');
 
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
-const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
+const GEMINI_MODEL_DEFAULT = 'gemini-3.5-flash';
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
@@ -24,7 +24,7 @@ exports.claude = onRequest(
 
       const body = req.body || {};
       if (!body.model) {
-        body.model = 'claude-haiku-4-5';
+        body.model = 'claude-3-5-haiku-20241022';
       }
 
       const upstream = await fetch('https://api.anthropic.com/v1/messages', {

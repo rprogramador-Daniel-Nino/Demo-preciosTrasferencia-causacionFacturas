@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey } from '../services/comparablesEngine';
+import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
+import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
@@ -17,6 +19,10 @@ import {
 } from '../services/firestoreModelo';
 import MemoriaRangoModal from './MemoriaRangoModal.jsx';
 
+/* Aviso que ocupa el lugar de la actividad económica mientras no se extraiga de los
+   adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
+const ACTIVIDAD_SIN_EXTRAER = 'No extraido por favor validar adjuntos';
+
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
@@ -27,7 +33,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [catalogo, setCatalogo] = useState(null);
 
   // State for Extracted Company Activity
-  const [actividad, setActividad] = useState(study.actividad_especifica || 'No extraido por favor validar adjuntos');
+  /* Texto que se muestra mientras no se haya extraído la actividad de los adjuntos. Es un
+     aviso para la pantalla, no un dato: más abajo se evita que se guarde como si lo
+     fuera, porque el apartado sectorial del informe se redacta con este campo. */
+  const [actividad, setActividad] = useState(study.actividad_especifica || ACTIVIDAD_SIN_EXTRAER);
   const [editingAct, setEditingAct] = useState(false);
   const [actInput, setActInput] = useState(actividad);
 
@@ -44,14 +53,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   // Imported Universe & Active Comparables
   const [universo, setUniverso] = useState(study.universo || []);
-  const [comparables, setComparables] = useState(study.comparables || [
-    { name: 'Activision Blizzard Inc', amb: 'Int', s: 7500000000, c: 2500000000, op: 1500000000, ar: 800000000, inv: 100000000, ap: 400000000, sic: '5812', id: '1' },
-    { name: 'Electronic Arts Inc', amb: 'Int', s: 7400000000, c: 2200000000, op: 1300000000, ar: 900000000, inv: 50000000, ap: 300000000, sic: '5812', id: '2' },
-    { name: 'Take-Two Interactive Software', amb: 'Int', s: 5300000000, c: 1800000000, op: 800000000, ar: 600000000, inv: 20000000, ap: 250000000, sic: '5812', id: '3' },
-    { name: 'Ubisoft Entertainment SA', amb: 'Int', s: 2200000000, c: 900000000, op: 250000000, ar: 350000000, inv: 40000000, ap: 180000000, sic: '5812', id: '4' }
-  ]);
+  /* Un estudio sin comparables arranca vacío. Antes arrancaba con cuatro empresas de
+     videojuegos —Activision, Electronic Arts, Take-Two y Ubisoft— y cifras inventadas de
+     ejemplo: en un sistema multiempresa eso significa que el estudio de cualquier
+     contribuyente podía recibir la muestra de otro sector, y como el efecto de más abajo
+     escribe `comparables` en el estudio, esas cuatro se guardaban y llegaban al rango
+     intercuartil y al informe. Un hueco se ve; una muestra plausible y ajena, no. */
+  const [comparables, setComparables] = useState(study.comparables || []);
 
   const [cmode, setCmode] = useState(study.cmode || 'all');
+  /* Criterios de la hoja "Screen Criteria" del export de Capital IQ (SIC, tipo
+     de compañía, ingresos, etc.), para reconstruir la Tabla 13 del informe con
+     la corrida real de este año en vez de la del informe anterior. */
+  const [criteriosScreening, setCriteriosScreening] = useState(study.criteriosScreening || []);
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   /* El embudo se guarda con el estudio: la tabla de razones de rechazo del informe se
@@ -67,6 +81,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      (comp.eeffHallazgos), que es lo que se guarda con el estudio. El estado
      paralelo que había antes duplicaba esa información, se perdía al recargar y
      tampoco se leía en ninguna parte. */
+  /* Descripciones de actividad pendientes de redactar con IA: solo para el botón de
+     backfill del Paso 4 — el disparo automático tras cargar un EEFF no usa este estado. */
+  const [redactandoDescripciones, setRedactandoDescripciones] = useState(false);
   const [cargaEeff, setCargaEeff] = useState(null);          // { etapa, hechas, total }
   const [resultadoCarga, setResultadoCarga] = useState(null); // { aplicadas, rechazadas }
   /* Qué se subió al repositorio compartido de estados financieros tras una carga. */
@@ -87,9 +104,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   /* Memoria de cálculo del rango intercuartil, abierta desde su tarjeta. */
   const [memoriaAbierta, setMemoriaAbierta] = useState(false);
 
+  /* Detalle de candidatas rechazadas y en reserva de la última corrida del motor,
+     para el Excel de soporte. Igual que `universo`, NO se persiste con el estudio:
+     puede traer miles de filas y guardarlas revienta la cuota de localStorage. Se
+     recalcula corriendo el motor otra vez. */
+  const [motorAuditoria, setMotorAuditoria] = useState(null); // { rechazadas, reserva } | null
+
   useEffect(() => {
     updateStudy({
-      actividad_especifica: actividad,
+      /* El aviso de «no extraído» no se guarda: el apartado sectorial del informe se
+         redacta con este campo, y con el aviso dentro el documento declararía como
+         actividad del contribuyente un texto que es una instrucción para el analista.
+         Vacío, las guardas del generador lo señalan como campo sin dato. */
+      actividad_especifica: actividad === ACTIVIDAD_SIN_EXTRAER ? '' : actividad,
       estudioAnterior: estudioAnteriorInfo,
       motorConfig: engineConfig,
       /* universo NO se persiste: es el Excel de Capital IQ completo (miles de filas
@@ -99,7 +126,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
       comparables,
       cmode,
-      /* Conteos de la última selección: alimentan la tabla 16 del informe. */
+      criteriosScreening,
+      /* Conteos de la última selección: alimentan la tabla 14 del informe. */
       embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
          cada candidata, y evita volver a pagar la consulta. Viaja con el estudio hasta
@@ -108,7 +136,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, iaMatch, selectionFunnel]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -261,6 +289,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const cambiarConfig = (campo, valor) => {
     setEngineConfig(prev => ({ ...prev, [campo]: valor }));
     setSelectionFunnel(null);
+    setMotorAuditoria(null);
   };
 
   // Handle Capital IQ File Upload
@@ -277,6 +306,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       });
 
       setImportMeta(meta);
+      setCriteriosScreening(meta.criteriosScreening || []);
+      if (meta.criteriosScreening && meta.criteriosScreening.length) {
+        anotar(`${meta.criteriosScreening.length} criterios de búsqueda leídos de la hoja "Screen Criteria" (Tabla 13 del informe)`, 'ok');
+      } else {
+        anotar('No se encontró la hoja "Screen Criteria" en el archivo: la Tabla 13 del informe quedará pendiente.', 'aviso');
+      }
       anotar(`Hoja «${meta.hoja}» de ${meta.hojas.length} (${meta.hojas.join(', ')})`);
       anotar(`Encabezados detectados en la fila ${meta.filaEncabezados + 1}; ${meta.filas} filas en la hoja`);
       anotar(`Columnas reconocidas (${meta.reconocidas.length}): ${meta.reconocidas.map(r => r.etiqueta).join(', ')}`);
@@ -311,6 +346,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          filtros solo consulta las candidatas que aún no tengan dictamen. */
       setIaMatch(null);
       setSelectionFunnel(null);
+      setMotorAuditoria(null);
       anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
@@ -377,6 +413,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const nTarget = engineConfig.nTarget || 12;
       const finales = result.seleccionadas;
       setComparables(finales);
+      /* Detalle por candidata para el Excel de soporte: `scoreCandidates` ya lo
+         calcula (motivo, categoría, score, factores), pero hasta ahora solo se
+         guardaban los conteos agregados en el embudo y este detalle se perdía. */
+      setMotorAuditoria({ rechazadas: result.rechazadas, reserva: result.reserva });
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
@@ -430,6 +470,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       ar: datos.cuentas_por_cobrar || copia[indice].ar,
       inv: datos.inventarios || copia[indice].inv,
       ap: datos.cuentas_por_pagar || copia[indice].ap,
+      eeffDatos: datos,
       eeffVerificado: verificacion.esValido,
       eeffHallazgos: verificacion.hallazgos,
       eeffArchivo: archivo,
@@ -439,6 +480,43 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       eeffPorConfirmar: cruce ? !esCruceFirme(cruce) : false,
     };
     return copia;
+  };
+
+  /* Redacta con IA la descripción de actividad de las filas indicadas que tengan `desc`
+     crudo y no tengan `descActividad` todavía. Es idempotente: si ya está redactada, no
+     se repite la llamada. Usa el actualizador de `setComparables` para no pisar cambios
+     de estado hechos mientras la llamada a la IA estaba en curso. */
+  const redactarDescripcionesDeFilas = async (filasActuales, indices) => {
+    const objetivos = [...new Set(indices)]
+      .map((i) => ({ indice: i, fila: filasActuales[i] }))
+      .filter(({ fila }) => fila && String(fila.desc || '').trim() && !fila.descActividad);
+    if (!objetivos.length) return;
+
+    const resultados = await redactarDescripcionesEnLote(
+      objetivos.map(({ fila }) => ({ nombre: fila.name, descCruda: fila.desc }))
+    );
+
+    setComparables((prev) => {
+      const copia = [...prev];
+      objetivos.forEach(({ indice }, pos) => {
+        if (resultados[pos] && copia[indice]) {
+          copia[indice] = { ...copia[indice], descActividad: resultados[pos] };
+        }
+      });
+      return copia;
+    });
+  };
+
+  const redactarDescripcionesPendientes = async () => {
+    setRedactandoDescripciones(true);
+    try {
+      const indices = comparables
+        .map((c, i) => (c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad ? i : -1))
+        .filter((i) => i >= 0);
+      await redactarDescripcionesDeFilas(comparables, indices);
+    } finally {
+      setRedactandoDescripciones(false);
+    }
   };
 
   /* Sube al repositorio compartido las cifras que acaban de entrar en unas filas.
@@ -556,6 +634,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* Al repositorio compartido, para que otro estudio no vuelva a leer este mismo
          documento. Va después de aplicar: lo del usuario primero. */
       await publicarEeff(filas, [compIndex]);
+      redactarDescripcionesDeFilas(filas, [compIndex]).catch((err) =>
+        console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
+      );
       setResultadoCarga({
         aplicadas: [{
           archivo: file.name,
@@ -625,6 +706,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       if (aplicadas.length) {
         setComparables(filas);
         await publicarEeff(filas, aplicadas.map(a => a.indice));
+        redactarDescripcionesDeFilas(filas, aplicadas.map((a) => a.indice)).catch((err) =>
+          console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
+        );
       }
       setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
     } finally {
@@ -696,6 +780,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return {
       ...c,
       pli: pliVal,
+      adj,
+      ratiosComp: cR,
       adjustedPli,
       isIncluded
     };
@@ -713,6 +799,42 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   } : null;
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
+
+  /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
+     rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de
+     capital de trabajo. Solo arma lo que ya está calculado en este componente. */
+  const handleExportarExcel = () => {
+    if (!comparables.length) {
+      alert('No hay comparables cargadas: importe o agregue al menos una antes de exportar el Excel de soporte.');
+      return;
+    }
+
+    const seleccionadasKeys = new Set((calculatedRows || comparables).map(c => c.nameKey || nameKey(c.name)));
+    const candidatasUniverso = Array.isArray(universo) && universo.length > 0
+      ? universo.map(cand => ({
+          ...cand,
+          seleccionada: seleccionadasKeys.has(cand.nameKey || nameKey(cand.name))
+        }))
+      : null;
+
+    const datos = {
+      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate },
+      examinada: { T, tPLI, tR },
+      rango: { stats, activeCount: activeSeries.length, adjustment },
+      filtros: { engineConfig, selectionFunnel },
+      comparables: calculatedRows,
+      auditoria: motorAuditoria,
+      seleccion: {
+        criterios: criteriosScreening || [],
+        candidatas: candidatasUniverso
+      }
+    };
+    const entidadSlug = String(datos.estudio.entidad || 'estudio')
+      .trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'estudio';
+    exportarSoporteMotor(datos, `Soporte_Motor_Comparables_${entidadSlug}_${datos.estudio.anio || 's-f'}.xlsx`);
+  };
 
   return (
     <div className="space-y-6">
@@ -849,7 +971,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="flex gap-2">
               <button
                 /* el embudo describía una corrida contra la actividad anterior */
-                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); }}
+                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); setMotorAuditoria(null); }}
                 className="bg-[#0FA3A1] text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
               >
                 Guardar Actividad
@@ -1301,6 +1423,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             )}
           </div>
 
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={redactarDescripcionesPendientes}
+              disabled={redactandoDescripciones || !comparables.some((c) => c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad)}
+              className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Redacta en español, con IA, la descripción de actividad de las comparables con EEFF cargado que todavía no la tienen"
+            >
+              <Sparkles className="w-4 h-4" />
+              {redactandoDescripciones ? 'Redactando…' : 'Redactar descripciones pendientes'}
+            </button>
+          </div>
+
           {/* Qué se subió a la base tras una carga */}
           {eeffCompartido && (
             <div className="text-[11px] text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2">
@@ -1521,7 +1656,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           se está viendo en la tarjeta, no el del render anterior. */}
       {memoriaAbierta && (
         <MemoriaRangoModal
-          estudio={{ ...study, comparables, cmode }}
+          estudio={{ ...study, comparables, cmode, universo, criteriosScreening }}
           alCerrar={() => setMemoriaAbierta(false)}
         />
       )}
@@ -1673,6 +1808,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* ══════ EXPORTAR EXCEL DE SOPORTE DEL MOTOR ══════ */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={handleExportarExcel}
+          disabled={!comparables.length}
+          className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-5 py-2.5 text-xs font-bold transition-colors shadow-sm cursor-pointer"
+          title="Genera un Excel con los filtros aplicados, las comparables (seleccionadas, rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de capital de trabajo"
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          Exportar Excel de Soporte del Motor
+        </button>
       </div>
     </div>
   );
