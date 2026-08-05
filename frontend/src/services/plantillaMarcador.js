@@ -74,7 +74,7 @@ function construirCorridas(segmentos) {
 function posicionesEn(texto, fragmento) {
   const posiciones = [];
   let desde = 0;
-  for (;;) {
+  for (; ;) {
     const pos = texto.indexOf(fragmento, desde);
     if (pos === -1) break;
     posiciones.push(pos);
@@ -296,7 +296,7 @@ const promptDe = (trozo) =>
 /* Llamada real al proxy. Se aísla aquí para que los tests inyecten la suya. */
 async function pedirAlModelo(prompt) {
   const respuesta = await axios.post('/api/gemini', {
-    model: 'gemini-2.0-flash',
+    model: 'gemini-3.5-flash',
     contents: [{ parts: [{ text: prompt }] }],
   });
   /* Todas las partes, no solo la primera: los modelos parten la respuesta. */
@@ -349,7 +349,7 @@ export async function proponerMarcas(html, opciones = {}) {
     desplazamiento += t.length;
   }
 
-  const avisar = typeof opciones.avisar === 'function' ? opciones.avisar : () => {};
+  const avisar = typeof opciones.avisar === 'function' ? opciones.avisar : () => { };
   /* Un informe de 112 páginas son unos veinte trozos, y en serie eran cinco
      minutos de reloj con un spinner que no decía nada: indistinguible de un
      cuelgue. De cuatro en cuatro baja a poco más de un minuto. No se sube más
@@ -365,7 +365,7 @@ export async function proponerMarcas(html, opciones = {}) {
   let terminados = 0;
 
   const trabajar = async () => {
-    for (;;) {
+    for (; ;) {
       const i = siguiente++;
       if (i >= trozos.length) return;
 

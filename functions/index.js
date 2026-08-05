@@ -3,7 +3,7 @@ const { defineSecret } = require('firebase-functions/params');
 
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
-const GEMINI_MODEL_DEFAULT = 'gemini-2.0-flash';
+const GEMINI_MODEL_DEFAULT = 'gemini-3.5-flash';
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,

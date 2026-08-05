@@ -802,7 +802,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
 
     try {
       const respuesta = await axios.post('/api/gemini', {
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3.5-flash',
         contents: [{ parts: [{ text: prompt }] }],
       });
       /* todas las partes, no solo la primera: los modelos parten la respuesta */

@@ -18,7 +18,7 @@ const {
 
 if (!getApps().length) initializeApp();
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-3.5-flash';
 const CLAUDE_MODEL = 'claude-3-5-sonnet-20241022';
 
 /** La `actividad` que llega del estudio a veces es la descripción completa del
