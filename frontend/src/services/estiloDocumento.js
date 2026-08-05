@@ -64,10 +64,10 @@ export const HOJA_TWIPS = {
 };
 
 export const REGLAS_DOCUMENTO = [
-  ['h1', 'font-size:1.5em;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px'],
+  ['h1', 'font-size:1.5em;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px;margin:0;padding:0'],
   ['h2', 'font-size:1.2em;color:#0E1726;border-bottom:1px solid #E2E8F0;' +
-         'padding-bottom:4px;margin-top:26px'],
-  ['h3', 'font-size:1.05em;color:#0E1726'],
+         'padding-bottom:4px;margin:0;padding:0'],
+  ['h3', 'font-size:1.05em;color:#0E1726;margin:0;padding:0'],
   /* El `0.9em` de la tabla no es decoración: la vista previa lo aplica desde siempre, así que
      el texto de las tablas se ve al 90 % del cuerpo. El writer del .docx tiene que aplicar el
      MISMO factor —lo hace con `FACTOR_TABLA`— o pantalla y archivo divergen en el 99 % del texto
@@ -80,7 +80,7 @@ export const REGLAS_DOCUMENTO = [
      peso se hereda; con esto la negrita del informe llega intacta. */
   ['strong', 'font-weight:bold'],
   ['em', 'font-style:italic'],
-  ['p,li,td', 'text-align:justify'],
+  ['p,li,td', 'text-align:justify;margin:0;padding:0'],
   /* Red de seguridad de las imágenes. Cada una lleva ya el tamaño que le da el PDF,
      pero esta regla es la que impide que una sin medida —una plantilla vieja, un .docx
      por mammoth— desborde la hoja. No la había en el .doc, y como el previo sí la
@@ -137,7 +137,7 @@ export function cssDeHojas({ base, logo, lado = 'centro', enLaPortada = true, al
     'width:' + HOJA.ancho + ';min-height:' + HOJA.alto + ';margin:0 auto 24px;' +
     'background:#fff;color:#111;padding:' + arriba + ' ' + HOJA.margen + ' ' +
     HOJA.pie + ' ' + HOJA.margen + ';box-shadow:0 2px 14px rgba(0,0,0,.5);' +
-    'line-height:1.5;' + cuerpoDe(base) + '}' +
+    'line-height:1.15;' + cuerpoDe(base) + '}' +
     /* Papel blanco también en tema oscuro: el previo es la hoja, no la interfaz. */
     '.hojas .pagina *{color:inherit}' +
     '.hojas .pagina th{color:#fff}' +
@@ -194,7 +194,7 @@ export function resaltarValor(valor) {
    El fondo se declara explícito para que un visor en modo oscuro no invierta el
    documento: el informe es papel blanco con letra negra en cualquier visor. */
 export function cssDeExportacion(base) {
-  return 'body{' + cuerpoDe(base) + ';color:#222;background:#fff;line-height:1.5;' +
+  return 'body{' + cuerpoDe(base) + ';color:#222;background:#fff;line-height:1.15;' +
     'margin:0;padding:0}' + reglasDocumento();
 }
 

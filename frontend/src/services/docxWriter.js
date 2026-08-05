@@ -231,6 +231,7 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
       ],
       bold: true,
     })],
+    spacing: { before: 0, after: 0, line: 276 },
   });
 
   function parrafoDe(nodo, runs = runsDe(nodo)) {
@@ -247,6 +248,7 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
     return new Paragraph({
       ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
       children: runs,
+      spacing: { before: 0, after: 0, line: 276 },
     });
   }
 
@@ -377,7 +379,7 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
     let sueltos = [];
     const volcar = () => {
       if (!sueltos.length) return;
-      salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos }));
+      salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos, spacing: { before: 0, after: 0, line: 276 } }));
       sueltos = [];
     };
     for (const h of nodo.hijos || []) {
@@ -410,6 +412,7 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
           salida.push(new Paragraph({
             numbering: { reference: 'vinetas', level: 0 },
             children: runsDe(li, heredado),
+            spacing: { before: 0, after: 0, line: 276 },
           }));
         }
         continue;
@@ -540,7 +543,18 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       default: {
         document: {
           run: { font: base.familia || 'Arial', size: mediosPuntos(base.tamano) },
-          paragraph: { spacing: { line: 276 } },
+          /* `after: 0` no es redundante: **sin él Word aplica su valor de fábrica, 200 twips
+             = 10 pt de espacio después de CADA párrafo**. Sobre los 3867 párrafos del informe
+             son unas 49 hojas de espaciado puro, y es la causa principal de que el documento
+             saliera con 173 hojas donde el original tiene 112. La vista previa no lo sufría
+             porque su CSS no añade ese margen: era la última asimetría pantalla/archivo.
+
+             El informe separa sus párrafos con párrafos vacíos —los trae el PDF—, así que el
+             espacio que hace falta ya está en el contenido y no hay que añadir más.
+
+             `lineRule: 'auto'` hace que el 276 sea proporcional (1,15 líneas) en vez de fijo,
+             para que una celda de tabla a 9 pt no arrastre el interlineado del cuerpo de 12. */
+          paragraph: { spacing: { line: 276, lineRule: 'auto', after: 0 } },
         },
       },
     },

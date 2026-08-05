@@ -642,3 +642,20 @@ test('el tamaño se hereda dentro de un fragmento con estilo', async () => {
   assert.match(doc, /<w:sz w:val="18"\/>/);
   assert.match(doc, /<w:b\/>/);
 });
+
+test('el estilo por defecto fija el espacio entre párrafos en cero', async () => {
+  /* Sin `w:after` explícito, Word aplica su valor de fábrica: 200 twips = 10 pt DESPUÉS DE CADA
+     párrafo. Sobre los 3867 párrafos del informe son unas 49 hojas de espaciado puro, y era la
+     causa principal de que el documento saliera con 173 hojas donde el original tiene 112.
+
+     La vista previa no lo sufría —su CSS no añade ese margen—, así que era la última asimetría
+     pantalla/archivo de este trabajo. El informe separa sus párrafos con párrafos vacíos que
+     trae el propio PDF, así que el espacio que hace falta ya está en el contenido. */
+  const { leer } = await abrir('<p>hola</p>');
+  const estilos = leer('word/styles.xml');
+  assert.match(estilos, /<w:spacing[^>]*w:after="0"/, 'falta el after:0 del estilo por defecto');
+  /* Y el interlineado va proporcional, no fijo: una celda de tabla a 9 pt no debe arrastrar el
+     interlineado del cuerpo de 12. */
+  assert.match(estilos, /<w:spacing[^>]*w:lineRule="auto"/);
+  assert.match(estilos, /<w:spacing[^>]*w:line="276"/);
+});
