@@ -91,7 +91,7 @@ test('el encabezado de Word sólo se declara si el documento lo trae', () => {
 test('reglasDocumento acota cada selector de una lista, no sólo el primero', () => {
   /* `p,li,td` acotado a medias dejaría `li` y `td` sueltos pintando la interfaz. */
   const r = reglasDocumento('.x ');
-  assert.ok(r.includes('.x p,.x li,.x td{text-align:justify}'));
+  assert.ok(r.includes('.x p,.x li,.x td{text-align:justify;margin:0;padding:0}'));
 });
 
 test('el resaltado de pantalla no puede llegar al documento', () => {
@@ -299,4 +299,16 @@ test('conTamanoDeImagen aguanta un documento sin imágenes y uno vacío', () => 
   assert.equal(conTamanoDeImagen('<p>hola</p>'), '<p>hola</p>');
   assert.equal(conTamanoDeImagen(''), '');
   assert.equal(conTamanoDeImagen(undefined), '');
+});
+
+test('conTamanoDeImagen auto-escala imágenes que exceden el ancho de la caja', () => {
+  const r = conTamanoDeImagen(
+    '<img data-recurso="portada" style="width:20cm;height:10cm" src="data:image/png;base64,A" />');
+  /* La caja es 21.59 - 5 = 16.59 cm.
+     El alto escalado proporcionalmente es 10 * (16.59 / 20) = 8.295 cm (8.29cm con toFixed(2) en JS por precisión de coma flotante).
+     16.59 cm a píxeles es Math.round(16.59 * 96 / 2.54) = 627.
+     8.295 cm a píxeles es Math.round(8.295 * 96 / 2.54) = 314. */
+  assert.match(r, /width="627"/);
+  assert.match(r, /height="314"/);
+  assert.match(r, /style="width:16\.59cm;height:8\.29cm"/);
 });

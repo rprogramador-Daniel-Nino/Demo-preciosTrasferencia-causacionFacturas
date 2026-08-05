@@ -78,6 +78,14 @@ package-lock.json
 **/api/config.php
 **/api/usage_data.json
 
+# Excel y Word crean un archivo de bloqueo «~$nombre.xlsx» mientras el documento
+# está abierto, y desaparece al cerrarlo. Ensucia `git status` en medio de un
+# merge y ya se colaron dos al repo (~$forme Local End Game _ 2024_v2.docx y
+# ~$Información Operaciones PT 2025-2 modificado cr.xlsx); esos siguen
+# trackeados —.gitignore no afecta a lo ya versionado— y conviene sacarlos con
+# `git rm --cached`, que no los borra del disco.
+~$*
+
 # Google Drive File Stream crea desktop.ini en cada carpeta que sincroniza.
 # Sin barra inicial, el patrón aplica en todo el árbol. Se incluye la variante
 # con mayúscula porque NTFS no distingue mayúsculas pero git sí.
@@ -94,4 +102,13 @@ Desktop.ini
 sistema pt con parches
 .vscode
 *.vs
+# Cachés de Python de la skill docx, que se generan al validar el OOXML.
+__pycache__/
+*.pyc
+
+# Andamio de medición de los subagentes: scripts que generan un .docx para inspeccionarlo.
+# Se han colado ya dos veces en un commit.
+_tmp_*.mjs
+*.tmp.mjs
+
 parche/

@@ -297,17 +297,29 @@ test('cada página del original queda envuelta y numerada', async () => {
   /* Es lo que permite poner el salto donde el informe cambia de página. Sin esto la
      portada se fundía con el índice y la primera página no se parecía a la del
      original. */
-  const envueltas = (r.html.match(/<div class="pagina" data-pagina="\d+">/g) || []).length;
+  const envueltas =
+    (r.html.match(/<div class="pagina" data-pagina="\d+" data-orientacion="\w+">/g) || []).length;
   assert.strictEqual(envueltas, r.paginas, 'faltan páginas por envolver');
   /* Y la portada es la primera, con su título dentro. */
-  const m = /<div class="pagina" data-pagina="1">([\s\S]*?)<div class="pagina" data-pagina="2">/
-    .exec(r.html);
+  const m =
+    /<div class="pagina" data-pagina="1" data-orientacion="\w+">([\s\S]*?)<div class="pagina" data-pagina="2"/
+      .exec(r.html);
   assert.ok(m, 'no se pudo aislar la portada');
   const texto = m[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
   assert.match(texto, /INFORME LOCAL DE PRECIOS DE TRANSFERENCIA/);
   assert.match(texto, /PERÍODO FISCAL/);
   /* El índice no debe estar en la portada: si aparece aquí, el salto no separa. */
   assert.ok(!/RESUMEN EJECUTIVO/.test(texto), 'el índice se colvió a la portada');
+});
+
+test('cada página dice su orientación, y hay una apaisada', async () => {
+  const r = await extraer();
+  const orientaciones = [...r.html.matchAll(/data-orientacion="(\w+)"/g)].map((m) => m[1]);
+  assert.equal(orientaciones.length, 112, 'todas las páginas deben decir su orientación');
+  const apaisadas = orientaciones.filter((o) => o === 'apaisada').length;
+  /* Medido sobre el PDF real: 111 verticales y 1 apaisada. Sin esto, esa página sale vertical
+     y su contenido no cabe. */
+  assert.equal(apaisadas, 1, 'debe haber exactamente una apaisada');
 });
 
 test('las páginas del anexo llegan todas al documento, no solo una', async () => {

@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const MODELO_REDACCION = 'claude-3-5-haiku-20241022';
+/* Antes aquí estaba claude-3-5-haiku-20241022, retirado por Anthropic el 19-02-2026 y
+   respondiendo 404: la redacción de descripciones fallaba en toda comparable. */
+const MODELO_REDACCION = 'claude-haiku-4-5-20251001';
 
 /* Traduce y redacta en español la descripción de negocio cruda de Capital IQ (normalmente
    en inglés) en un párrafo estilo Anexo B: qué hace la compañía, marcas/productos si el

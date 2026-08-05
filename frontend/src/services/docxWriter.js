@@ -9,12 +9,14 @@
    fuente que pinta la vista previa. Es lo que da la paridad que se pidió. */
 
 import {
-  Document, Packer, Paragraph, TextRun, Footer, PageNumber, AlignmentType, HeadingLevel,
+  Document, Packer, Paragraph, TextRun, Header, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
-  ImageRun, LevelFormat,
+  ImageRun, LevelFormat, PageBreak, PageOrientation,
 } from 'docx';
-import { HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
+import {
+  HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
+} from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
 
@@ -39,6 +41,24 @@ const pieConNumero = () => new Footer({
   })],
 });
 
+/* El logo que el extractor apartó como encabezado, con su lado y su primera página. Los tres
+   datos los midió el extractor sobre el PDF (versión 7): el del informe de referencia va a la
+   derecha y empieza en la página 5. Una plantilla anterior no los trae y se cae a centrado y a
+   imprimirlo también en la portada, que es lo que se hacía antes. */
+function encabezadoDe(html) {
+  const m = /<div data-encabezado="1"([^>]*)>([\s\S]*?)<\/div>/.exec(html);
+  if (!m) return null;
+  const lado = (/data-lado="([^"]+)"/.exec(m[1]) || [])[1] || 'centro';
+  const desde = Number((/data-desde-pagina="(\d+)"/.exec(m[1]) || [])[1] || 1);
+  return { bloque: m[0], contenido: m[2], lado, enLaPortada: desde <= 1 };
+}
+
+const ALINEACION = {
+  derecha: AlignmentType.RIGHT,
+  izquierda: AlignmentType.LEFT,
+  centro: AlignmentType.CENTER,
+};
+
 const NIVELES = {
   h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2,
   h3: HeadingLevel.HEADING_3, h4: HeadingLevel.HEADING_4,
@@ -54,6 +74,22 @@ const esBloque = (n) => !!n && n.etiqueta !== undefined && BLOQUES.has(n.etiquet
 
 /* La familia que declara un `<span style="font-family:'X'">`. El extractor sólo la declara
    cuando se desvía del cuerpo del documento. */
+/* Tamaño de fuente que declara un fragmento, en medios puntos, o null si no se desvía del
+   cuerpo del documento.
+
+   Sin esto el documento salía con 61 hojas de más sobre las 112 del original, y **todas** en
+   páginas con tabla: las que llevan tabla ocupaban 1,48 veces la caja de texto y las que no,
+   0,32. La causa es que las tablas del informe van a 8 y 9 puntos —el extractor lo anota, se
+   midió: 228 fragmentos a 9 pt, 99 a 8 pt, 42 a 10 pt— y el writer sólo leía la familia, así
+   que las emitía todas al cuerpo de 12 pt. Un 33 % más de alto por línea, sobre 890 filas.
+
+   El interlineado sí era correcto (276 twips, y la mediana medida en el PDF es 13,80 pt = 276);
+   el tamaño era lo que faltaba. */
+const tamanoDeEstilo = (estilo) => {
+  const m = /font-size:\s*([\d.]+)pt/.exec(estilo || '');
+  return m ? Math.round(Number(m[1]) * 2) : null;
+};
+
 const familiaDeEstilo = (estilo) => {
   const m = /font-family:\s*["']?([^;"']+)["']?/.exec(estilo || '');
   return m ? m[1].trim() : null;
@@ -88,7 +124,7 @@ const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
    último parámetro de las cinco— se descartó a propósito: es más ruido que un cierre y hay que
    tocar las cinco firmas dos veces, una ahora y otra en la tarea 10. Se llama una vez por
    documento desde `construirDocumento`. */
-function traductor({ porId }) {
+function traductor({ porId, anexo = [], tamanoBase = 24 }) {
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -109,7 +145,14 @@ function traductor({ porId }) {
     const ancho = medidaEnCm((/width:\s*([\d.]+cm)/.exec(estilo || '') || [])[1]);
     const alto = medidaEnCm((/height:\s*([\d.]+cm)/.exec(estilo || '') || [])[1]);
     if (!ancho || !alto) return null;
-    return { width: cmAPixeles(ancho), height: cmAPixeles(alto) };
+    let wPx = cmAPixeles(ancho);
+    let hPx = cmAPixeles(alto);
+    const anchoMaxPx = Math.round(CAJA_TEXTO * 96 / 1440);
+    if (wPx > anchoMaxPx) {
+      hPx = Math.round(hPx * (anchoMaxPx / wPx));
+      wPx = anchoMaxPx;
+    }
+    return { width: wPx, height: hPx };
   }
 
   /* Una imagen cuyo recurso no está en el catálogo no rompe el documento: se emite nada y el
@@ -145,8 +188,13 @@ function traductor({ porId }) {
     const propio = { ...heredado };
     if (h.etiqueta === 'strong' || h.etiqueta === 'b') propio.bold = true;
     if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
-    const familia = familiaDeEstilo(h.atributos && h.atributos.style);
+    const estilo = h.atributos && h.atributos.style;
+    const familia = familiaDeEstilo(estilo);
     if (familia) propio.font = familia;
+    /* El tamaño se hereda igual que la familia: un `<span style="font-size:9pt">` con un
+       `<strong>` dentro tiene que conservar los 9 puntos. */
+    const tamano = tamanoDeEstilo(estilo);
+    if (tamano) propio.size = tamano;
     return runsDe(h, propio);
   };
 
@@ -183,6 +231,7 @@ function traductor({ porId }) {
       ],
       bold: true,
     })],
+    spacing: { before: 0, after: 0, line: 276 },
   });
 
   function parrafoDe(nodo, runs = runsDe(nodo)) {
@@ -199,6 +248,7 @@ function traductor({ porId }) {
     return new Paragraph({
       ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
       children: runs,
+      spacing: { before: 0, after: 0, line: 276 },
     });
   }
 
@@ -247,8 +297,32 @@ function traductor({ porId }) {
              en un fallback que nunca se alcanza: `bloquesDe` siempre vuelca el texto suelto
              de una celda como párrafo (el `volcar()` final, fuera del `for`), así que la rama
              de abajo nunca estaba vacía y el color nunca llegaba a los runs. */
-          const heredadoCelda = c.etiqueta === 'th' ? { color: 'FFFFFF' } : {};
-          const contenido = bloquesDe(c, [], heredadoCelda);
+          /* El tamaño reducido de la tabla se hereda a la celda. La vista previa lo aplica
+             por CSS (`table{font-size:0.9em}` en REGLAS_DOCUMENTO) desde siempre; sin esto el
+             .docx emitía las tablas al cuerpo entero y pantalla y archivo divergían en el 99 %
+             del texto de tabla del informe —2311 nodos de 2333, medido—. Un fragmento que
+             declare su propio `font-size` lo sobrescribe después, en `runsDeHijo`, que es lo
+             correcto: ahí manda lo que dice el PDF. */
+          const heredadoCelda = {
+            size: Math.round(tamanoBase * FACTOR_TABLA),
+            ...(c.etiqueta === 'th' ? { color: 'FFFFFF' } : {}),
+          };
+          const todo = bloquesDe(c, [], heredadoCelda);
+          /* Los párrafos vacíos de una celda se descartan, y sólo dentro de una celda.
+             El PDF cuelga un `<p>` vacío delante del contenido de 432 de las 2291 celdas del
+             informe —el 19 %—, que es la marca de párrafo que Word deja al exportar la tabla.
+             Emitirlos dobla el alto de esas filas: sobre 890 filas eran una docena de hojas de
+             más, y en la página 73 el PDF pone 69 renglones donde el writer emitía 141
+             párrafos.
+
+             Fuera de una tabla NO se descartan, y esa distinción es deliberada: la portada del
+             informe se centra con 35 párrafos vacíos seguidos y quitarlos la descuadraría. Aquí
+             no centran nada, son un artefacto de la exportación.
+
+             Si la celda se queda sin nada, más abajo recibe un párrafo vacío: una celda de
+             OOXML sin ningún párrafo obliga a Word a reparar el documento. */
+          const contenido = todo.filter((b) =>
+            !(b instanceof Paragraph) || JSON.stringify(b).includes('"w:t"'));
           return new TableCell({
             width: { size: anchos[i] ?? ancho, type: WidthType.DXA },
             /* CLEAR y no SOLID: la skill lo marca porque SOLID sale negro. */
@@ -264,6 +338,36 @@ function traductor({ porId }) {
     });
   }
 
+  /* Las páginas del anexo se reparten en orden entre los huecos que dejó el extractor. Si hay
+     menos que huecos, los que sobran siguen avisando de lo que falta.
+
+     No se copian las páginas escaneadas del año anterior: el informe se radica ante la DIAN, y
+     un calco perfecto con los estados financieros firmados del año equivocado dentro es peor
+     que un hueco evidente. */
+  let siguienteAnexo = 0;
+
+  const bloqueDeHueco = (nodo) => {
+    const pagina = anexo[siguienteAnexo];
+    if (!pagina) return bloquesDe(nodo);
+    siguienteAnexo += 1;
+    const datos = bytesDeDataUrl(pagina);
+    if (!datos) return bloquesDe(nodo);
+    /* La página del anexo ocupa la caja de texto entera: la misma `CAJA_TEXTO` que usan las
+       tablas, sólo que en píxeles y no en twips. 96/1440 es la conversión de twips (1440 por
+       pulgada) a píxeles de 96 ppp, la misma proporción que usa `cmAPixeles` para centímetros.
+       Mantener la proporción real de la página no se puede saber sin decodificar el PNG: se usa
+       el ancho de la caja y un alto proporcional a una hoja carta (11/8,5), que es una
+       SUPOSICIÓN razonable para estos escaneos, no una medida tomada del archivo. */
+    const anchoPx = Math.round(CAJA_TEXTO * 96 / 1440);
+    return [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new ImageRun({
+        type: datos.tipo, data: datos.bytes,
+        transformation: { width: anchoPx, height: Math.round(anchoPx * 11 / 8.5) },
+      })],
+    })];
+  };
+
   /* Recorre el HTML y emite bloques. Las etiquetas que no son bloque se atraviesan, que es lo
      que permite que un `<div>` del contentEditable no pierda su contenido.
 
@@ -275,7 +379,7 @@ function traductor({ porId }) {
     let sueltos = [];
     const volcar = () => {
       if (!sueltos.length) return;
-      salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos }));
+      salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos, spacing: { before: 0, after: 0, line: 276 } }));
       sueltos = [];
     };
     for (const h of nodo.hijos || []) {
@@ -289,6 +393,12 @@ function traductor({ porId }) {
          o un `<div>`, sin `<p>` de por medio. */
       if (!esBloque(h)) { sueltos.push(...runsDeHijo(h, heredado)); continue; }
       volcar();
+      /* El hueco del anexo de estados financieros: lo deja el extractor donde iba una página
+         que no puede reproducir. Se resuelve aquí, como cualquier otro bloque. */
+      if (h.atributos && h.atributos['data-hueco'] === 'anexo_eeff') {
+        salida.push(...bloqueDeHueco(h));
+        continue;
+      }
       if (h.etiqueta === 'table') {
         const t = tablaDe(h);
         if (t) salida.push(t);
@@ -302,6 +412,7 @@ function traductor({ porId }) {
           salida.push(new Paragraph({
             numbering: { reference: 'vinetas', level: 0 },
             children: runsDe(li, heredado),
+            spacing: { before: 0, after: 0, line: 276 },
           }));
         }
         continue;
@@ -325,20 +436,125 @@ function traductor({ porId }) {
   return { runsDe, parrafoDe, bloquesDe, tablaDe, runDeImagen };
 }
 
+/* Las páginas del original, agrupadas en tandas de la misma orientación. Cada tanda es una
+   sección de Word, porque la orientación es una propiedad de la sección. Dentro de una tanda,
+   un salto de página duro entre página y página: es lo que hace que la página N empiece donde
+   debe. Word repagina, así que si el contenido de una no cabe desborda a una hoja extra —eso
+   no lo evita nada—, pero ya no hay un importador de HTML añadiendo desbordes propios. */
+function paginasDe(arbol) {
+  const paginas = [];
+  const buscar = (n) => {
+    for (const h of n.hijos || []) {
+      if (h.texto !== undefined) continue;
+      const clase = (h.atributos && h.atributos.class) || '';
+      if (/\bpagina\b/.test(clase)) {
+        paginas.push({
+          nodo: h,
+          orientacion: (h.atributos['data-orientacion'] === 'apaisada')
+            ? 'apaisada' : 'vertical',
+        });
+        continue;
+      }
+      buscar(h);
+    }
+  };
+  buscar(arbol);
+  return paginas;
+}
+
+const tandasDe = (paginas) => paginas.reduce((tandas, p) => {
+  const ultima = tandas[tandas.length - 1];
+  if (ultima && ultima.orientacion === p.orientacion) ultima.paginas.push(p.nodo);
+  else tandas.push({ orientacion: p.orientacion, paginas: [p.nodo] });
+  return tandas;
+}, []);
+
 export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}) {
   const base = estiloBaseDe(html) || { familia: 'Arial', tamano: 12 };
-  const arbol = htmlAArbol(html);
+  const enc = encabezadoDe(html);
+  /* El encabezado se saca del cuerpo: si se queda, el logo sale además como primera imagen
+     del documento. En el .doc llegó a repetirse 96 veces. `estiloBaseDe` sigue leyendo `html`
+     completo: la marca `data-estilo-base` vive en otro div y no se ve afectada. */
+  const cuerpo = enc ? html.replace(enc.bloque, '') : html;
+  const arbol = htmlAArbol(cuerpo);
   const porId = new Map((recursos || []).map((r) => [r.id, r.dataUrl]));
-  const { bloquesDe } = traductor({ porId });
+  /* Si suben más páginas de anexo que huecos hay, las que sobran no se pierden en silencio:
+     perder páginas de un anexo firmado sería grave. Se avisa por consola y se quedan sin usar,
+     en el orden en que llegaron. */
+  const totalHuecos = (cuerpo.match(/data-hueco="anexo_eeff"/g) || []).length;
+  if ((anexo || []).length > totalHuecos) {
+    console.warn('[docxWriter] el anexo trae ' + anexo.length + ' página(s) para sólo ' +
+      totalHuecos + ' hueco(s) en el informe: sobran ' + (anexo.length - totalHuecos) +
+      ' página(s) que no se usan.');
+  }
+  /* El cuerpo base se pasa al traductor porque de él sale el tamaño reducido de las tablas:
+     el mismo 0,9 que la vista previa aplica por CSS. */
+  const { bloquesDe, runsDe } = traductor({
+    porId, anexo, tamanoBase: mediosPuntos(base.tamano),
+  });
 
-  const hijos = bloquesDe(arbol);
+  const cabecera = enc
+    ? new Header({
+      children: [new Paragraph({
+        alignment: ALINEACION[enc.lado] || AlignmentType.CENTER,
+        children: runsDe(htmlAArbol(enc.contenido)),
+      })],
+    })
+    : null;
+
+  const paginas = paginasDe(arbol);
+
+  /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— se emite una sola
+     sección corrida. Mejor eso que inventar una paginación que el original no tiene. */
+  const secciones = paginas.length
+    ? tandasDe(paginas).map((t, iTanda) => ({
+      properties: {
+        page: t.orientacion === 'apaisada'
+          ? { ...PAGINA, size: { ...PAGINA.size, orientation: PageOrientation.LANDSCAPE } }
+          : PAGINA,
+        /* `titlePage` deja la primera página sin encabezado: Word sólo sabe distinguir la
+           primera de las demás. El informe de referencia no lo lleva hasta la página 5, así
+           que las páginas 2 a 4 seguirán llevándolo. Para eso harían falta más secciones, y
+           esto ya quita el solape con el logo grande de la portada. */
+        ...(iTanda === 0 && cabecera && !enc.enLaPortada ? { titlePage: true } : {}),
+      },
+      ...(cabecera ? { headers: { default: cabecera } } : {}),
+      footers: { default: pieConNumero() },
+      children: t.paginas.flatMap((nodo, i) => [
+        /* Salto delante de cada página menos de la primera de todas: la primera tanda ya
+           empieza en la hoja 1, y una tanda nueva ya empieza en hoja nueva por ser sección. */
+        ...(i === 0 ? [] : [new Paragraph({ children: [new PageBreak()] })]),
+        ...bloquesDe(nodo),
+      ]),
+    }))
+    : [{
+      properties: {
+        page: PAGINA,
+        /* Misma regla que arriba: es la única sección, así que ella hace de "primera". */
+        ...(cabecera && !enc.enLaPortada ? { titlePage: true } : {}),
+      },
+      ...(cabecera ? { headers: { default: cabecera } } : {}),
+      footers: { default: pieConNumero() },
+      children: bloquesDe(arbol).length ? bloquesDe(arbol) : [new Paragraph('')],
+    }];
 
   return new Document({
     styles: {
       default: {
         document: {
           run: { font: base.familia || 'Arial', size: mediosPuntos(base.tamano) },
-          paragraph: { spacing: { line: 276 } },
+          /* `after: 0` no es redundante: **sin él Word aplica su valor de fábrica, 200 twips
+             = 10 pt de espacio después de CADA párrafo**. Sobre los 3867 párrafos del informe
+             son unas 49 hojas de espaciado puro, y es la causa principal de que el documento
+             saliera con 173 hojas donde el original tiene 112. La vista previa no lo sufría
+             porque su CSS no añade ese margen: era la última asimetría pantalla/archivo.
+
+             El informe separa sus párrafos con párrafos vacíos —los trae el PDF—, así que el
+             espacio que hace falta ya está en el contenido y no hay que añadir más.
+
+             `lineRule: 'auto'` hace que el 276 sea proporcional (1,15 líneas) en vez de fijo,
+             para que una celda de tabla a 9 pt no arrastre el interlineado del cuerpo de 12. */
+          paragraph: { spacing: { line: 276, lineRule: 'auto', after: 0 } },
         },
       },
     },
@@ -354,11 +570,7 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
         }],
       }],
     },
-    sections: [{
-      properties: { page: PAGINA },
-      footers: { default: pieConNumero() },
-      children: hijos.length ? hijos : [new Paragraph('')],
-    }],
+    sections: secciones,
   });
 }
 

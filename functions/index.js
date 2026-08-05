@@ -24,7 +24,11 @@ exports.claude = onRequest(
 
       const body = req.body || {};
       if (!body.model) {
-        body.model = 'claude-3-5-haiku-20241022';
+        /* Antes aquí estaba claude-3-5-haiku-20241022, retirado por Anthropic el
+           19-02-2026 y respondiendo 404: fallaba cualquier llamada que no mandara
+           `model`. Mismo identificador que usan analisisMercadoActualizar.js y
+           analisisSectorActualizar.js. */
+        body.model = 'claude-haiku-4-5-20251001';
       }
 
       const upstream = await fetch('https://api.anthropic.com/v1/messages', {
@@ -46,11 +50,28 @@ exports.claude = onRequest(
   }
 );
 
+/* Firebase Hosting corta a los 60 s toda petición que llega por un rewrite hacia una
+   función, sin importar el `timeoutSeconds` de esta. Cuando eso pasaba, el navegador
+   recibía un 502 opaco del borde y la curación por IA perdía el lote entero. Cortando
+   nosotros a los 50 s la función alcanza a responder un error propio, con cuerpo JSON
+   y código reintentable, antes de que el borde tumbe la conexión.
+   Deliberadamente NO está en `server.js`: en local no existe ese techo, y /api/gemini
+   también sirve lecturas de PDF grandes que legítimamente tardan más. */
+const GEMINI_CORTE_MS = 50_000;
+
 // Proxy hacia la API de Gemini. El frontend llama a /api/gemini para lectura/OCR
 // de documentos (más económico que Claude para esta tarea), nunca directo a
 // generativelanguage.googleapis.com — así la key queda oculta.
 exports.gemini = onRequest(
-  { secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
+  {
+    secrets: [GEMINI_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180,
+    /* 512 MiB y no los 256 por defecto, con la concurrencia limitada: la curación por
+       IA dispara varios lotes a la vez y con los 80 por instancia de fábrica todos
+       caían en la misma, parseando respuestas grandes en paralelo. Una instancia que
+       se queda sin memoria también se ve desde el navegador como un 502. */
+    memory: '512MiB',
+    concurrency: 8,
+  },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
@@ -73,12 +94,21 @@ exports.gemini = onRequest(
             'x-goog-api-key': apiKey,
           },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(GEMINI_CORTE_MS),
         }
       );
 
       const data = await upstream.json();
       res.status(upstream.status).json(data);
     } catch (err) {
+      if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        console.error(`Gemini no respondió en ${GEMINI_CORTE_MS / 1000} s; se corta antes del límite de Hosting.`);
+        res.status(504).json({
+          error: 'La consulta a Gemini superó el tiempo disponible.',
+          detail: `Sin respuesta en ${GEMINI_CORTE_MS / 1000} s. Reintente con menos elementos por consulta.`,
+        });
+        return;
+      }
       console.error('Error llamando a Gemini:', err);
       res.status(502).json({ error: 'No se pudo contactar a la API de Gemini.', detail: err.message });
     }
