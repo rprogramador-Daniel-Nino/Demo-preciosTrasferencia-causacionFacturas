@@ -658,10 +658,29 @@ function bloqueConfirmadas(priorComps) {
 }
 
 export const CURACION_LOTE = 60;
-export const CURACION_CONCURRENCIA = 6;
+export const CURACION_CONCURRENCIA = 3;
 /* Cada lote tarda del orden de 30-45 s porque el modelo razona un motivo por
    candidata. Se usa para estimar la espera y avisarla desde el principio. */
 const SEGUNDOS_POR_LOTE = 35;
+
+/** Helper con reintento automático para manejar errores de límite de tasa (429) o errores temporales del proxy (502, 503, 504) */
+async function postGeminiWithRetry(payload, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await axios.post('/api/gemini', payload);
+    } catch (err) {
+      const status = err.response ? err.response.status : null;
+      const isTransient = status === 429 || status === 502 || status === 503 || status === 504;
+      if (isTransient && attempt < maxRetries) {
+        const delayMs = attempt * 3000;
+        console.warn(`[Gemini Curación] HTTP ${status || 'Network Error'}. Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, delayMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
 
 /**
  * Curación de candidatas contra la actividad del contribuyente, con la Business
@@ -801,7 +820,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       'Incluye una entrada por cada ID recibido, en el mismo orden.';
 
     try {
-      const respuesta = await axios.post('/api/gemini', {
+      const respuesta = await postGeminiWithRetry({
         model: 'gemini-3-flash-preview',
         contents: [{ parts: [{ text: prompt }] }],
       });
