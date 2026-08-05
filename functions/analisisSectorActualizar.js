@@ -19,7 +19,7 @@ const {
 if (!getApps().length) initializeApp();
 
 const GEMINI_MODEL = 'gemini-3.5-flash';
-const CLAUDE_MODEL = 'claude-3-5-sonnet-20241022';
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 
 /** La `actividad` que llega del estudio a veces es la descripción completa del
  *  objeto social (varios cientos de caracteres, con la matriz, los activos y
