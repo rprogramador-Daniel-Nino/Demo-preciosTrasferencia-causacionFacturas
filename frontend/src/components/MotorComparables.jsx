@@ -804,6 +804,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const lista = Array.from(files || []);
     if (!lista.length) return;
 
+    /* Sin comparables en la tabla no hay a qué fila aplicar nada, y leer los documentos
+       primero para rechazarlos después cuesta una consulta a Gemini por archivo —minutos y
+       dinero— para acabar en una lista de rechazos idénticos. Se avisa antes de leer. */
+    if (!comparables.length) {
+      setResultadoCarga({
+        aplicadas: [],
+        rechazadas: lista.map((f) => ({
+          archivo: f.name,
+          motivo: 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a ' +
+            'la que aplicar sus cifras. Ejecute la selección del paso 3 y vuelva a cargar los ' +
+            'estados financieros. No se leyó ningún documento, así que no se gastó ninguna consulta.',
+        })),
+      });
+      return;
+    }
+
     setUploadingEEFF(true);
     setResultadoCarga(null);
     const entradas = [];

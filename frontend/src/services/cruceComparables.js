@@ -110,6 +110,15 @@ export function cruzar(entrada, nombreArchivo, comparables) {
   const idDoc = String((entrada && entrada.identificador_fuente) || '').trim().toUpperCase();
   const nomDoc = String((entrada && entrada.nombre) || '').trim();
 
+  /* Sin comparables no hay contra qué cruzar, y hay que decirlo así.
+     Antes esto caía en el mismo «no se parece a ninguna de las comparables del estudio»
+     que un documento de otra empresa, con un mensaje por documento: quince rechazos
+     idénticos y ninguna pista de que lo que faltaba era ejecutar la selección del paso 3.
+     Es un estado distinto y merece un motivo distinto. */
+  if (!filas.length) {
+    return { indice: -1, comparable: null, modo: 'sin-comparables', punt: 0, masCercana: null };
+  }
+
   if (idDoc) {
     const i = filas.findIndex((f) => f && f.id && String(f.id).trim().toUpperCase() === idDoc);
     if (i >= 0) return { indice: i, comparable: filas[i], modo: 'id', punt: 1 };
@@ -206,6 +215,12 @@ const NOMBRE_MODO = {
 export function motivoCruce(cruce, entrada, nombreArchivo) {
   const leido = String((entrada && entrada.nombre) || '').trim() || nombreArchivo || 'documento sin nombre';
   const pct = Math.round((cruce.punt || 0) * 100);
+
+  if (cruce.modo === 'sin-comparables') {
+    return 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a la ' +
+      'que aplicar «' + leido + '». Ejecute la selección del paso 3 y vuelva a cargar los estados ' +
+      'financieros; o cargue este documento desde la fila de su comparable.';
+  }
 
   if (cruce.modo === 'ambiguo') {
     return 'El documento de «' + leido + '» encaja igual de bien con ' + cruce.empatados +
