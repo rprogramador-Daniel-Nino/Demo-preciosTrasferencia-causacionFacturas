@@ -91,7 +91,7 @@ test('construirPromptBusquedaSector menciona la actividad y los tres años relev
   assert.ok(prompt.includes('datosClaveTabla'));
 });
 
-test('parsearRespuestaBusquedaSector marca confiable según haya grounding, no por URL puntual', () => {
+test('parsearRespuestaBusquedaSector marca confiable según webSearchQueries, no groundingChunks (nunca llega con este modelo)', () => {
   const texto = JSON.stringify({
     datosClaveTabla: [
       { indicador: 'Empleo', valorAnterior: '100', valorActual: '120', fuente: 'DANE', fuenteUrl: 'https://dane.gov.co/x' },
@@ -100,14 +100,14 @@ test('parsearRespuestaBusquedaSector marca confiable según haya grounding, no p
     datosComercioExterior: [],
     datosProyeccion: [],
   });
-  const conGrounding = parsearRespuestaBusquedaSector(texto, [{ web: { uri: 'https://vertexaisearch.example/redirect/1' } }]);
-  assert.strictEqual(conGrounding.datosClaveTabla[0].confiable, true);
-  assert.strictEqual(conGrounding.datosClaveTabla[0].fuenteUrl, 'https://dane.gov.co/x');
-  assert.strictEqual(conGrounding.datosComportamiento[0].confiable, true);
+  const conBusqueda = parsearRespuestaBusquedaSector(texto, ['empleo sector software colombia 2025']);
+  assert.strictEqual(conBusqueda.datosClaveTabla[0].confiable, true);
+  assert.strictEqual(conBusqueda.datosClaveTabla[0].fuenteUrl, 'https://dane.gov.co/x');
+  assert.strictEqual(conBusqueda.datosComportamiento[0].confiable, true);
 
-  const sinGrounding = parsearRespuestaBusquedaSector(texto, []);
-  assert.strictEqual(sinGrounding.datosClaveTabla[0].confiable, false);
-  assert.strictEqual(sinGrounding.datosClaveTabla[0].fuenteUrl, null, 'sin grounding no debe conservar fuenteUrl');
+  const sinBusqueda = parsearRespuestaBusquedaSector(texto, []);
+  assert.strictEqual(sinBusqueda.datosClaveTabla[0].confiable, false);
+  assert.strictEqual(sinBusqueda.datosClaveTabla[0].fuenteUrl, null, 'sin búsqueda real no debe conservar fuenteUrl');
 });
 
 test('parsearRespuestaBusquedaSector descarta filas de la tabla sin indicador o sin valorActual', () => {

@@ -73,8 +73,11 @@ async function buscarDatosSector(geminiApiKey, actividad, year) {
     throw new Error('Gemini no devolvió una respuesta usable: ' + JSON.stringify(data).slice(0, 500));
   }
   const texto = (candidato.content.parts || []).map((p) => p.text || '').join('');
-  const groundingChunks = (candidato.groundingMetadata && candidato.groundingMetadata.groundingChunks) || [];
-  return parsearRespuestaBusquedaSector(texto, groundingChunks);
+  /* groundingChunks nunca llega con este modelo + google_search + JSON en texto
+     (confirmado en vivo) — webSearchQueries es el campo que sí confirma que hubo
+     una búsqueda real. Ver el comentario en analisisSectorPrompts.js. */
+  const webSearchQueries = (candidato.groundingMetadata && candidato.groundingMetadata.webSearchQueries) || [];
+  return parsearRespuestaBusquedaSector(texto, webSearchQueries);
 }
 
 async function redactarSector(claudeApiKey, datosConfiables, actividad, year) {
