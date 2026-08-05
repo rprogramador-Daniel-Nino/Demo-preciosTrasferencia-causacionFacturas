@@ -192,6 +192,14 @@ export async function importCapitalIQExcel(file, onProgress) {
           const name = String(row[nameIdx]).trim();
           if (!name) { saltadas++; continue; }
 
+          /* Capital IQ agrega al final de «Screening» una fila de nota legal
+             ("*Denotes proprietary information.") escrita en la misma columna del
+             nombre de la compañía, con el resto de la fila vacío. Una compañía real
+             siempre trae algo más —ticker, ID, SIC, estado o alguna cifra—, así que
+             una fila donde ninguna otra columna tiene dato no es una candidata. */
+          const soloTieneNombre = !row.some((valor, idx) => idx !== nameIdx && String(valor ?? '').trim() !== '');
+          if (soloTieneNombre) { saltadas++; continue; }
+
           const s = sIdx >= 0 ? num(row[sIdx]) : null;
           const c = cIdx >= 0 ? Math.abs(num(row[cIdx]) || 0) : null;
           const op = opIdx >= 0 ? num(row[opIdx]) : null;
