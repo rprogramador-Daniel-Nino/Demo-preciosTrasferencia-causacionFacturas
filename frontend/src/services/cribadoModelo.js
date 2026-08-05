@@ -56,6 +56,20 @@ export function rutaCuracion(uid, estudioId) {
 }
 
 /**
+ * Ruta de la plantilla del informe con su marcado y sus recursos.
+ *
+ * Vivían solo en IndexedDB, o sea en un único navegador, y de eso depende el formato del
+ * Word: quien había subido y marcado la plantilla obtenía el documento con su formato, y
+ * quien abría el mismo estudio en otro equipo caía a la plantilla maestra incrustada en el
+ * código y obtenía otro documento, sin nada que se lo advirtiera.
+ */
+export function rutaPlantilla(uid, estudioId) {
+  if (!uid) throw new Error('Sin usuario: no se puede guardar la plantilla en la nube.');
+  if (!estudioId) throw new Error('Sin identificador de estudio: no se puede guardar la plantilla en la nube.');
+  return `usuarios/${uid}/estudios/${estudioId}/plantilla.json`;
+}
+
+/**
  * ¿El fallo es que Cloud Storage no está habilitado en el proyecto?
  *
  * Merece distinguirse porque no es un error del usuario ni algo que se arregle

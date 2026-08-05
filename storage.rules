@@ -63,6 +63,19 @@ service firebase.storage {
         && request.resource.size < 5 * 1024 * 1024;
     }
 
+    /* La plantilla del informe con su marcado y los recursos del cliente. De esto depende
+       el formato del Word, y vivía solo en IndexedDB: quien la había subido obtenía el
+       documento con su formato y quien abría el mismo estudio en otro equipo caía a la
+       plantilla maestra incrustada en el código.
+
+       50 MB porque los recursos son imágenes en data URL —el logo y las páginas del
+       cliente— y un caso real de anexo pesaba 5,25 MB por sí solo. */
+    match /usuarios/{uid}/estudios/{estudioId}/plantilla.json {
+      allow read, delete: if esDueno(uid);
+      allow write: if esDueno(uid)
+        && request.resource.size < 50 * 1024 * 1024;
+    }
+
     // Cualquier otra ruta queda negada.
     match /{ruta=**} {
       allow read, write: if false;

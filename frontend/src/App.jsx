@@ -544,7 +544,9 @@ export default function App() {
                 <AuditoriaNorma study={study} />
               )}
               {tab === 'informe' && (
-                <ReporteGenerador study={study} estudioId={activeStudyId} />
+                /* `usuario` hace falta para guardar la plantilla del informe en la nube:
+                   la ruta de Storage cuelga de su uid. */
+                <ReporteGenerador study={study} estudioId={activeStudyId} usuario={usuario} />
               )}
             </div>
           ))}
