@@ -18,6 +18,47 @@ const COMPARABLES = [
   { name: 'EPAM SYSTEMS INC', id: 'IQ32307058' },
 ];
 
+/* ─── Sin comparables en la tabla ─── */
+
+test('sin comparables el cruce lo dice, en vez de culpar al documento', () => {
+  /* Pasó de verdad: una carga masiva de quince estados financieros devolvió quince
+     rechazos con «no se parece a ninguna de las comparables del estudio», cuando lo que
+     faltaba era ejecutar la selección del paso 3. El mensaje mandaba a revisar las razones
+     sociales de los documentos, que estaban bien. */
+  const cruce = cruzar({ nombre: 'APPIRITS INC' }, '9 APPIRITS INC.pdf', []);
+  assert.strictEqual(cruce.indice, -1);
+  assert.strictEqual(cruce.modo, 'sin-comparables');
+  const motivo = motivoCruce(cruce, { nombre: 'APPIRITS INC' }, '9 APPIRITS INC.pdf');
+  assert.match(motivo, /todavía no tiene comparables/);
+  assert.match(motivo, /paso 3/, 'dice qué hacer, no solo qué falló');
+  assert.doesNotMatch(motivo, /no se parece/,
+    'el documento no tiene nada de malo: no hay contra qué cruzarlo');
+});
+
+test('una lista ausente se trata igual que una vacía', () => {
+  assert.strictEqual(cruzar({ nombre: 'APPIRITS INC' }, 'a.pdf', null).modo, 'sin-comparables');
+  assert.strictEqual(cruzar({ nombre: 'APPIRITS INC' }, 'a.pdf', undefined).modo, 'sin-comparables');
+});
+
+test('repartir sin comparables rechaza todo con el motivo correcto', () => {
+  const entradas = [
+    { archivo: '9 APPIRITS INC.pdf', datos: { nombre: 'APPIRITS INC' } },
+    { archivo: '15 KIDS STAR INC.pdf', datos: { nombre: 'KIDS STAR INC' } },
+  ];
+  const { aplicadas, rechazadas } = repartir(entradas, []);
+  assert.strictEqual(aplicadas.length, 0);
+  assert.strictEqual(rechazadas.length, 2);
+  rechazadas.forEach((r) => assert.match(r.motivo, /todavía no tiene comparables/));
+});
+
+test('con comparables, un documento ajeno sigue diciendo cuál era la más parecida', () => {
+  /* La rama de siempre no cambia: el motivo útil no es «no cruzó» sino «lo más parecido
+     era X, al N %». */
+  const cruce = cruzar({ nombre: 'APPIRITS INC' }, 'appirits.pdf', COMPARABLES);
+  assert.strictEqual(cruce.indice, -1);
+  assert.strictEqual(cruce.modo, 'sin-cruce');
+});
+
 /* ─── Tokens y parecido ─── */
 
 test('las palabras que no distinguen una empresa no cuentan', () => {

@@ -89,25 +89,40 @@ Regla general: si un rubro numérico no aparece en el documento, devuelve null �
 
 Reglas para "gastos_investigacion_desarrollo" y "gastos_publicidad": son rubros OPCIONALES. Úsalos solo si la empresa los desglosa como línea propia en su estado de resultados. Si no aparecen desglosados, devuelve null — NO los deduzcas restando de gastos_operacionales, NO estimes.`;
 
+/* Códigos que merecen otro intento. Antes solo se reintentaba el 429 y todo lo demás se
+   descartaba de inmediato, así que la lectura de un documento se perdía por un corte
+   pasajero: leer un PDF de estados financieros tarda decenas de segundos y compite con el
+   techo de 60 s que Firebase Hosting impone al rewrite hacia la función —de ahí los 502 y
+   504 en una carga de varios archivos—. Un 400 no entra: es un error de contrato o un
+   documento que el modelo rechaza, y repetirlo solo gasta cuota. */
+const ESTADOS_REINTENTABLES = [408, 425, 429, 500, 502, 503, 504];
+
 /**
- * Función auxiliar con reintento automático para manejar errores de límite de tasa 429
+ * Llama a Gemini reintentando los fallos pasajeros.
+ *
+ * Un documento perdido aquí no es un inconveniente menor: son las cifras de una comparable
+ * que se queda fuera del rango intercuartil, y el analista solo lo nota si lee la lista de
+ * rechazos.
  */
 async function postGeminiWithRetry(payload, maxRetries = 3) {
+  let ultimo;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await axios.post('/api/gemini', payload);
-      return response;
+      return await axios.post('/api/gemini', payload);
     } catch (err) {
-      const is429 = err.response && err.response.status === 429;
-      if (is429 && attempt < maxRetries) {
-        const delayMs = attempt * 3000;
-        console.warn(`[Gemini OCR] HTTP 429. Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
-        await new Promise(r => setTimeout(r, delayMs));
-      } else {
-        throw err;
-      }
+      ultimo = err;
+      const status = err && err.response ? err.response.status : undefined;
+      /* Sin `response` es un fallo de red o una conexión cortada a mitad —que es lo que
+         hace el borde de Hosting al agotarse su plazo—: también pasajero. */
+      const pasajero = status === undefined || ESTADOS_REINTENTABLES.includes(status);
+      if (!pasajero || attempt === maxRetries) break;
+      const delayMs = attempt * 3000;
+      console.warn(`[Gemini OCR] ${status ? 'HTTP ' + status : 'fallo de red'}. ` +
+        `Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, delayMs));
     }
   }
+  throw ultimo;
 }
 
 /**
