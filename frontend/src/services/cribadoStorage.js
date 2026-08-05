@@ -23,12 +23,41 @@ import { deleteObject, getBytes, getStorage, ref, uploadBytes } from 'firebase/s
 import { app } from './firebase.js';
 import {
   rutaCribado, rutaCuracion, referenciaCribado, TOPE_CRIBADO_BYTES,
+  podriaFaltarElBucket, esStorageNoHabilitado, urlSondaBucket, faltaElBucket,
 } from './cribadoModelo.js';
 
 export {
   nombreSeguro, rutaCribado, rutaCuracion, debeRestaurarCribado, esStorageNoHabilitado,
   AVISO_STORAGE_APAGADO, TOPE_CRIBADO_BYTES,
 } from './cribadoModelo.js';
+
+/**
+ * ¿El fallo se explica porque el proyecto no tiene bucket?
+ *
+ * El SDK no lo dice: sin bucket, el preflight CORS responde 404, el navegador lo reporta
+ * como bloqueo de CORS y el SDK lo toma por un fallo de red y reintenta hasta agotarse,
+ * devolviendo `storage/retry-limit-exceeded` —el mismo código que daría una conexión
+ * mala—. Se confirma preguntando por el bucket, que sin credenciales responde 404 si no
+ * existe y 401/403 si existe pero no se puede listar.
+ *
+ * Solo se consulta cuando ya ha fallado algo, así que no añade tráfico al camino normal.
+ * Ante la duda devuelve `false`: es peor mandar a habilitar Storage a quien ya lo tiene
+ * que dejar el mensaje genérico.
+ */
+export async function bucketAusente(err) {
+  if (!podriaFaltarElBucket(err)) return false;
+  if (esStorageNoHabilitado(err)) return true;
+  const bucket = (app.options && app.options.storageBucket) || '';
+  if (!bucket) return true;
+  try {
+    const respuesta = await fetch(urlSondaBucket(bucket), { method: 'GET' });
+    return faltaElBucket(respuesta.status);
+  } catch {
+    /* Sin red no se puede afirmar nada, y afirmarlo sería mandar a tocar la consola de
+       Firebase a quien solo se quedó sin conexión. */
+    return false;
+  }
+}
 
 /** Sube el cribado y devuelve la referencia que se guarda con el estudio. */
 export async function subirCribado(archivo, { uid, estudioId, filas = null, hoja = '' }) {
