@@ -139,7 +139,17 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
      y se descarga mediante Blob. */
   const descargar = () => {
     const libro = XLSX.utils.book_new();
-    const seleccion = estudio?.seleccion || null;
+    const seleccionadasKeys = new Set((estudio?.comparables || []).map(c => c.nameKey || (c.name ? c.name.toUpperCase() : '')));
+    const candidatasUniverso = Array.isArray(estudio?.universo) && estudio.universo.length > 0
+      ? estudio.universo.map(cand => ({
+          ...cand,
+          seleccionada: seleccionadasKeys.has(cand.nameKey || (cand.name ? cand.name.toUpperCase() : ''))
+        }))
+      : null;
+    const seleccion = estudio?.seleccion || (candidatasUniverso ? {
+      criterios: estudio?.criteriosScreening || [],
+      candidatas: candidatasUniverso
+    } : null);
     const hojas = hojasMemoriaRangoOptimo(estudioNormalizado, seleccion);
 
     hojas.forEach(({ nombre, celdas, filas, cols, rows, merges, autofiltro }) => {
