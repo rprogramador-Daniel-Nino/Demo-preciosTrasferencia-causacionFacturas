@@ -2,7 +2,7 @@ import React, {
   useState, useEffect, useMemo, useRef,
 } from 'react';
 import axios from 'axios';
-import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText } from 'lucide-react';
+import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle } from 'lucide-react';
 import mammoth from 'mammoth';
 import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
 import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
@@ -27,8 +27,12 @@ import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
 } from '../services/estiloDocumento.js';
 import { aDocxBlob } from '../services/docxWriter.js';
+import {
+  subirPlantillaDelEstudio, descargarPlantillaDelEstudio, restaurarPlantillaEnLocal,
+} from '../services/plantillaNube.js';
+import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage.js';
 
-export default function ReporteGenerador({ study, estudioId }) {
+export default function ReporteGenerador({ study, estudioId, usuario }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
@@ -78,6 +82,9 @@ export default function ReporteGenerador({ study, estudioId }) {
   /* Avance del marcado por IA: `{ terminados, total, fallidos }` mientras corre,
      null cuando no hay marcado en curso. */
   const [progresoMarcado, setProgresoMarcado] = useState(null);
+  /* Por qué la copia en la nube no está disponible. Se muestra junto a la plantilla: sin
+     esto, el usuario creería que el formato viaja con el estudio cuando no lo hace. */
+  const [avisoNube, setAvisoNube] = useState('');
   /* Plantilla vinculada al estudio: `{ id, html, huecos, marcada }`. Se guarda para
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
@@ -351,12 +358,37 @@ export default function ReporteGenerador({ study, estudioId }) {
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los avisos del anterior. */
       if (vivo) { setAvisos([]); setAvisoHidratacion(''); }
-      const recursos = await leerRecursos(estudioId);
+      /* `let` porque la restauración desde la nube, más abajo, puede traer los recursos
+         del cliente: el resto del efecto renderiza con esta variable —no con el estado, que
+         no ha surtido efecto todavía—, así que si no se actualiza aquí las imágenes salen
+         vacías en la primera pintada. */
+      let recursos = await leerRecursos(estudioId);
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los recursos del anterior. */
       if (vivo) setRecursosCargados(recursos);
 
-      const idPlantilla = await leerVinculo(estudioId);
+      let idPlantilla = await leerVinculo(estudioId);
+
+      /* Sin plantilla en este navegador, se busca la copia del estudio en la nube y se
+         deja en IndexedDB antes de seguir. Es lo que evita que el mismo estudio dé un Word
+         distinto según el equipo: quien la subió tenía el vínculo y el marcado en su
+         IndexedDB, y quien abría el estudio en otra parte caía a la plantilla maestra
+         incrustada en el código sin que nada se lo advirtiera. */
+      if (!idPlantilla && usuario) {
+        try {
+          const paquete = await descargarPlantillaDelEstudio({ uid: usuario.uid, estudioId });
+          if (paquete && await restaurarPlantillaEnLocal(estudioId, paquete)) {
+            idPlantilla = paquete.plantillaId;
+            if (paquete.recursos && paquete.recursos.length) {
+              recursos = paquete.recursos;
+              if (vivo) setRecursosCargados(recursos);
+            }
+          }
+        } catch (err) {
+          console.error('[plantilla] no se pudo traer la copia del estudio', err);
+        }
+      }
+
       if (!idPlantilla) return;
       const html = await leerPlantilla(idPlantilla);
 
@@ -404,8 +436,30 @@ export default function ReporteGenerador({ study, estudioId }) {
        sector arranca, falla o termina con un motivo específico, `analisisSector`
        no cambia (sigue null) y este efecto no se repite — el banner se quedaba
        pegado en el primer mensaje genérico ("todavía no está generado") para
-       siempre, aunque ya se supiera que está en curso o por qué falló. */
-  }, [estudioId, analisisMercado, analisisSector, motivoFalloSector, sectorEnCurso]);
+       siempre, aunque ya se supiera que está en curso o por qué falló.
+       `usuario` entra porque de su uid depende la ruta de la copia en la nube:
+       al resolverse la sesión hay que volver a intentar traerla. */
+  }, [estudioId, analisisMercado, analisisSector, motivoFalloSector, sectorEnCurso, usuario]);
+
+  /* Sube al estudio la copia de la plantilla, para que el formato del Word no dependa del
+     navegador en que se cargó. Nunca lanza: la plantilla ya está guardada en local y
+     sirve para trabajar; lo que se pierde si esto falla es poder abrir el estudio en otro
+     equipo con el mismo formato, y eso se dice en el aviso. */
+  const guardarPlantillaEnLaNube = async ({ plantillaId, html, marcado, huecos, recursos }) => {
+    if (!usuario || !estudioId) return;
+    try {
+      await subirPlantillaDelEstudio({
+        uid: usuario.uid, estudioId, plantillaId, html, marcado, huecos, recursos,
+      });
+      setAvisoNube('');
+    } catch (err) {
+      console.error('[plantilla] no se pudo guardar en la nube', err);
+      setAvisoNube(await bucketAusente(err)
+        ? AVISO_STORAGE_APAGADO
+        : 'La plantilla no se pudo guardar en la nube: ' + ((err && err.message) || 'error desconocido') +
+          '. Funciona en este navegador, pero al abrir el estudio en otro equipo el Word saldrá con la plantilla maestra.');
+    }
+  };
 
   // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
   const loadExactMasterTemplate = () => {
@@ -475,6 +529,12 @@ export default function ReporteGenerador({ study, estudioId }) {
 
           setPlantillaActiva({
             id: idPlantilla, html: ref.html, huecos, marcada: !!marcadoPrevio,
+          });
+          /* La copia va con lo que hay ahora: si el marcado se confirma después, se vuelve
+             a subir en ese momento con el marcado incluido. */
+          await guardarPlantillaEnLaNube({
+            plantillaId: idPlantilla, html: ref.html, marcado: marcadoPrevio,
+            huecos, recursos: ref.imagenes,
           });
           if (!marcadoPrevio) {
             /* Los avisos visibles corresponden a la plantilla anterior (u
@@ -696,6 +756,16 @@ export default function ReporteGenerador({ study, estudioId }) {
       html: plantillaPendiente.html,
       huecos: plantillaPendiente.huecos || 0,
       marcada: true,
+    });
+    /* El marcado es lo que de verdad fija el formato del Word, y es lo más caro de
+       obtener —unos veinte viajes al modelo en un informe de 112 páginas—: la copia en la
+       nube se actualiza aquí para no volver a pagarlo en otro equipo. */
+    await guardarPlantillaEnLaNube({
+      plantillaId: plantillaPendiente.id,
+      html: plantillaPendiente.html,
+      marcado: html,
+      huecos: plantillaPendiente.huecos || 0,
+      recursos: recursosCargados,
     });
     renderizarYAvisar(html, recursosCargados, plantillaPendiente.huecos || 0);
     setMarcasPropuestas(null);
@@ -979,6 +1049,36 @@ export default function ReporteGenerador({ study, estudioId }) {
           <p className="text-xs text-zinc-500 mt-1">
             Conserva el texto íntegro original del informe (Introducción, FAR, Tendencias, Anexos A-C) e inyecta quirúrgicamente los datos del cliente.
           </p>
+          {/* Con qué plantilla se está generando. El formato del Word depende de esto más
+              que de cualquier otra cosa, y no se decía en ninguna parte: dos personas con
+              el mismo estudio obtenían documentos distintos —una con la plantilla marcada
+              en su navegador, la otra con la maestra incrustada— sin nada en pantalla que
+              lo explicara. La plantilla vive en IndexedDB, o sea en un solo equipo, así
+              que la diferencia aparece también al cambiar de navegador. */}
+          {plantillaActiva && plantillaActiva.marcada ? (
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1">
+              <Check className="w-3 h-3" />
+              Se genera con la plantilla de referencia marcada por campos, guardada con el estudio.
+            </p>
+          ) : plantillaActiva ? (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              Plantilla cargada pero <strong>sin marcar</strong>: la sustitución va por literales y el
+              formato puede diferir. Márquela para que el Word salga como el de la plantilla.
+            </p>
+          ) : (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              Sin plantilla de referencia: se usa la plantilla maestra del sistema, y el formato no
+              coincidirá con el de un estudio que sí la tenga. Súbala con «Subir Otra Plantilla Word»
+              y quedará guardada con el estudio para cualquier equipo.
+            </p>
+          )}
+          {avisoNube && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />{avisoNube}
+            </p>
+          )}
         </div>
         <div className="flex gap-3">
           <div className="relative">

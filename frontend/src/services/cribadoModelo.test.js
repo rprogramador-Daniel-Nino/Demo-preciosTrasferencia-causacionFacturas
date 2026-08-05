@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   nombreSeguro, rutaCribado, rutaCuracion, esStorageNoHabilitado,
   debeRestaurarCribado, referenciaCribado, TOPE_CRIBADO_BYTES,
+  podriaFaltarElBucket, urlSondaBucket, faltaElBucket, AVISO_STORAGE_APAGADO,
 } from './cribadoModelo.js';
 
 test('el nombre del archivo pierde la ruta del disco', () => {
@@ -72,8 +73,47 @@ test('se reconoce el fallo de Storage no habilitado, que no se arregla reintenta
     'el SDK reporta el bucket ausente como «unknown» con un 404 dentro');
   assert.strictEqual(esStorageNoHabilitado({ code: 'storage/unauthorized' }), false,
     'un permiso denegado es otra cosa: las reglas están, el usuario no encaja');
-  assert.strictEqual(esStorageNoHabilitado({ code: 'storage/retry-limit-exceeded' }), false);
   assert.strictEqual(esStorageNoHabilitado(null), false);
+});
+
+test('un límite de reintentos agotado obliga a sondear antes de concluir', () => {
+  /* Es el código que devuelve de verdad un bucket que no existe: el preflight responde
+     404, el navegador lo enseña como bloqueo de CORS, el SDK lo toma por fallo de red y
+     reintenta hasta agotarse. Y es el mismo código que da una conexión mala, así que por
+     sí solo no permite mandar a nadie a habilitar Storage. */
+  assert.strictEqual(esStorageNoHabilitado({ code: 'storage/retry-limit-exceeded' }), false,
+    'no concluye por sí mismo');
+  assert.strictEqual(podriaFaltarElBucket({ code: 'storage/retry-limit-exceeded' }), true,
+    'pero sí justifica preguntar por el bucket');
+  assert.strictEqual(podriaFaltarElBucket({ code: 'storage/unknown' }), true);
+  assert.strictEqual(podriaFaltarElBucket({ code: 'storage/bucket-not-found' }), true,
+    'lo ya concluyente no necesita sonda, pero tampoco la estorba');
+  assert.strictEqual(podriaFaltarElBucket({ code: 'storage/unauthorized' }), false,
+    'un permiso denegado prueba que el bucket está ahí');
+  assert.strictEqual(podriaFaltarElBucket({ code: 'storage/quota-exceeded' }), false);
+  assert.strictEqual(podriaFaltarElBucket(null), false);
+});
+
+test('la sonda del bucket solo afirma su ausencia con un 404', () => {
+  assert.strictEqual(faltaElBucket(404), true);
+  assert.strictEqual(faltaElBucket(401), false, 'existe, pero pide credenciales');
+  assert.strictEqual(faltaElBucket(403), false, 'existe, y las reglas niegan listarlo');
+  assert.strictEqual(faltaElBucket(200), false);
+  assert.strictEqual(faltaElBucket(500), false, 'un fallo del servidor no dice nada del bucket');
+});
+
+test('la URL de la sonda escapa el nombre del bucket', () => {
+  assert.strictEqual(
+    urlSondaBucket('precios-trasnferencia.firebasestorage.app'),
+    'https://firebasestorage.googleapis.com/v0/b/precios-trasnferencia.firebasestorage.app/o?maxResults=1'
+  );
+});
+
+test('el aviso dice que no hay que configurar CORS', () => {
+  /* El síntoma en el navegador es «blocked by CORS policy», y quien lo lea sin más se
+     pondrá a configurar CORS sobre un bucket que no existe. */
+  assert.match(AVISO_STORAGE_APAGADO, /no hay que configurar\s+CORS/);
+  assert.match(AVISO_STORAGE_APAGADO, /Compilación → Storage/);
 });
 
 test('la referencia guardada lleva con qué explicar en pantalla lo que hay', () => {

@@ -19,7 +19,7 @@ import {
 } from '../services/firestoreModelo';
 import {
   subirCribado, descargarCribado, borrarCribado, subirCuracion, descargarCuracion,
-  debeRestaurarCribado, esStorageNoHabilitado, AVISO_STORAGE_APAGADO,
+  debeRestaurarCribado, bucketAusente, AVISO_STORAGE_APAGADO,
 } from '../services/cribadoStorage';
 import MemoriaRangoModal from './MemoriaRangoModal.jsx';
 
@@ -349,7 +349,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       anotar(`Cribado guardado en la nube (${(referencia.bytes / 1024 / 1024).toFixed(2)} MB): ` +
         'al reabrir el estudio el universo se restaura solo.', 'ok');
     } catch (err) {
-      if (esStorageNoHabilitado(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
+      if (await bucketAusente(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
       else anotar('No se pudo guardar el cribado en la nube: ' + ((err && err.message) || 'error desconocido') +
         '. El motor funciona igual, pero al reabrir el estudio habrá que cargar el Excel de nuevo.', 'aviso');
       console.error('[cribado] no se pudo subir', err);
@@ -365,7 +365,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const referencia = await subirCuracion(veredicto, { uid: usuario.uid, estudioId });
       setCribadoIQ(prev => ({ ...(prev || {}), curacion: referencia }));
     } catch (err) {
-      if (esStorageNoHabilitado(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
+      if (await bucketAusente(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
       else anotar('La curación no se pudo guardar en la nube: ' + ((err && err.message) || 'error desconocido') +
         '. Sigue disponible en este navegador, pero al abrir el estudio en otra máquina habría que volver a pagarla.', 'aviso');
       console.error('[curación] no se pudo subir el veredicto', err);
@@ -406,7 +406,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         }
       } catch (err) {
         if (cancelado) return;
-        if (esStorageNoHabilitado(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
+        if (await bucketAusente(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
         else anotar('No se pudo restaurar el cribado guardado: ' + ((err && err.message) || 'error desconocido') +
           '. Cargue el Excel de Capital IQ de nuevo.', 'error');
         console.error('[cribado] no se pudo restaurar', err);

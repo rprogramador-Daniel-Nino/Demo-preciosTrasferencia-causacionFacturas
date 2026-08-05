@@ -20,6 +20,9 @@ import {
 } from './services/firestoreRepo';
 import { separarEstudio, SELLO_ESTUDIO } from './services/firestoreModelo';
 import { guardarAnexoEeff, leerAnexoEeff, borrarRecursosDelEstudio } from './services/plantillaStore';
+import {
+  leerSesionUi, guardarSesionUi, limpiarSesionUi, acumularVistaMontada, tabCanonica,
+} from './services/sesionUi';
 
 /* Retardo del autoguardado. El estudio cambia con cada tecla y cada escritura en
    Firestore se factura y cuenta contra el límite de escrituras por documento, así que
@@ -39,6 +42,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [activeStudyId, setActiveStudyId] = useState(null);
   const [study, setStudy] = useState({});
+  /* Pantallas del estudio que se mantienen montadas: { estudioId, tabs }. Cambiar de
+     pestaña las desmontaba, y con ellas se iba su estado —el registro de la importación,
+     el avance de una lectura de documentos, una curación a medias—. Ver
+     `acumularVistaMontada`. */
+  const [vistasMontadas, setVistasMontadas] = useState({ estudioId: null, tabs: [] });
+  /* Restauración de la sesión anterior en curso, para no enseñar el tablero un instante
+     antes de abrir el estudio que el usuario ya tenía abierto. */
+  const [restaurandoSesion, setRestaurandoSesion] = useState(false);
 
   const [usuario, setUsuario] = useState(null);
   const [cargandoSesion, setCargandoSesion] = useState(true);
@@ -200,7 +211,10 @@ export default function App() {
     return () => { if (temporizador.current) clearTimeout(temporizador.current); };
   }, [study, activeStudyId, usuario, estudioAjeno]);
 
-  const selectStudy = async (id) => {
+  /* `tabInicial` existe para la restauración al arrancar: abrir un estudio a mano empieza
+     por el primer paso, pero volver tras una recarga tiene que dejar al usuario en el paso
+     donde estaba. */
+  const selectStudy = async (id, { tabInicial = 'contribuyente' } = {}) => {
     try {
       const datos = await leerEstudio(id, usuario);
       cargando.current = true;
@@ -226,12 +240,54 @@ export default function App() {
            no coincide con el estudio activo. Ver SELLO_ESTUDIO. */
         [SELLO_ESTUDIO]: id,
       });
-      setActiveTab('contribuyente');
+      setActiveTab(tabCanonica(tabInicial));
+      return true;
     } catch (err) {
       console.error('[estudios] no se pudo abrir', err);
       setAvisoSesion('No se pudo abrir el estudio: ' + (err && err.message ? err.message : 'error desconocido'));
+      return false;
     }
   };
+
+  /* ── volver donde estaba ──
+     Recargar la página devolvía al tablero con el estudio cerrado, y había que buscarlo y
+     abrirlo otra vez. Y no hace falta recargar a mano: basta que el navegador descarte la
+     pestaña o que se despliegue una versión nueva. Corre una sola vez, cuando la sesión ya
+     está resuelta: sin usuario las reglas rechazan la lectura.
+
+     Si el estudio guardado ya no se puede abrir —borrado, o de otra cuenta— se olvida, para
+     no reintentarlo en cada arranque. */
+  const sesionRestaurada = useRef(false);
+  useEffect(() => {
+    if (cargandoSesion || !usuario || sesionRestaurada.current) return;
+    sesionRestaurada.current = true;
+    const anterior = leerSesionUi();
+    if (!anterior) return;
+    setRestaurandoSesion(true);
+    (async () => {
+      const abierto = await selectStudy(anterior.estudioId, { tabInicial: anterior.tab });
+      if (!abierto) limpiarSesionUi();
+      setRestaurandoSesion(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cargandoSesion, usuario]);
+
+  /* Anota dónde está el usuario, para el arranque siguiente. Solo con estudio abierto:
+     sin él no hay nada que restaurar y el tablero ya es el punto de partida.
+
+     Los estudios que otro compartió quedan fuera: se abren con `leerEstudioCompartido`, que
+     necesita el uid del dueño, y restaurarlos con `leerEstudio` fallaría contra las reglas.
+     El usuario vería un «no se pudo abrir el estudio» al arrancar sin haber pedido nada. */
+  useEffect(() => {
+    if (activeStudyId && !estudioAjeno) guardarSesionUi({ estudioId: activeStudyId, tab: activeTab });
+    else limpiarSesionUi();
+  }, [activeStudyId, activeTab, estudioAjeno]);
+
+  /* Qué pantallas del estudio quedan montadas. Se acumulan a medida que se visitan y no
+     se retiran al cambiar de pestaña, que es lo que conserva lo que esté en marcha. */
+  useEffect(() => {
+    setVistasMontadas(prev => acumularVistaMontada(prev, { estudioId: activeStudyId, tab: activeTab }));
+  }, [activeStudyId, activeTab]);
 
   /* Abre un estudio que otra persona compartió. Se carga en solo lectura y sin tocar
      los recursos locales: las imágenes de su ANEXO A están en el navegador del dueño,
@@ -425,7 +481,12 @@ export default function App() {
         </div>
       )}
 
-      {activeTab === 'dashboard' && (
+      {activeTab === 'dashboard' && (restaurandoSesion ? (
+        /* Sin esto se ve el tablero un instante y salta al estudio, que parece un fallo. */
+        <div className="text-center text-xs text-zinc-500 py-10">
+          Volviendo al estudio que tenía abierto…
+        </div>
+      ) : (
         <Dashboard
           indice={indice}
           compartidos={compartidos}
@@ -435,7 +496,7 @@ export default function App() {
           deleteStudy={deleteStudy}
           duplicateStudy={duplicateStudy}
         />
-      )}
+      ))}
 
       {/* Vistas de la base compartida: no dependen de tener un estudio abierto. */}
       {activeTab === 'clientes' && (
@@ -451,30 +512,44 @@ export default function App() {
            comparables, el ámbito, la configuración, el embudo y la curación, y lo
            inicializa una sola vez al montarse; sin remontar, ese estado se escribía en el
            estudio que estuviera activo después. */
+        /* Las pantallas visitadas se quedan montadas y solo se ocultan. Antes se
+           renderizaba `activeTab === 'x' && <Pantalla/>`, así que cambiar de pestaña
+           desmontaba la anterior y se perdía todo su estado local: el registro de la
+           importación de Capital IQ, el avance de una lectura de documentos, una curación
+           por IA a medias —con sus consultas ya pagadas—. Oculta pero montada, lo que está
+           en marcha sigue en marcha y al volver todo está donde estaba.
+
+           Se ocultan con `display:none` y no con la clase `hidden` de Tailwind porque
+           cualquier utilidad de layout en el componente la sobreescribiría.
+
+           `key` con el identificador del estudio se conserva: al cambiar de estudio estas
+           pantallas se destruyen y se crean de nuevo, y ese remonte es lo que impide que el
+           estado local de un estudio acabe escrito en el siguiente. */
         <React.Fragment key={activeStudyId}>
-          {activeTab === 'contribuyente' && (
-            <DatosContribuyente study={study} updateStudy={updateStudy} />
-          )}
-
-          {(activeTab === 'operaciones' || activeTab === 'Operaciones') && (
-            <IngestaOperaciones study={study} updateStudy={updateStudy} />
-          )}
-
-          {(activeTab === 'eeff' || activeTab === 'Estados financieros' || activeTab === 'cifras') && (
-            <IngestaCifras study={study} updateStudy={updateStudy} />
-          )}
-
-          {activeTab === 'comparables' && (
-            <MotorComparables study={study} updateStudy={updateStudy} estudioId={activeStudyId} usuario={usuario} />
-          )}
-
-          {activeTab === 'auditoria' && (
-            <AuditoriaNorma study={study} />
-          )}
-
-          {activeTab === 'informe' && (
-            <ReporteGenerador study={study} estudioId={activeStudyId} />
-          )}
+          {vistasMontadas.estudioId === activeStudyId && vistasMontadas.tabs.map(tab => (
+            <div key={tab} style={{ display: tab === tabCanonica(activeTab) ? undefined : 'none' }}>
+              {tab === 'contribuyente' && (
+                <DatosContribuyente study={study} updateStudy={updateStudy} />
+              )}
+              {tab === 'Operaciones' && (
+                <IngestaOperaciones study={study} updateStudy={updateStudy} />
+              )}
+              {tab === 'Estados financieros' && (
+                <IngestaCifras study={study} updateStudy={updateStudy} />
+              )}
+              {tab === 'comparables' && (
+                <MotorComparables study={study} updateStudy={updateStudy} estudioId={activeStudyId} usuario={usuario} />
+              )}
+              {tab === 'auditoria' && (
+                <AuditoriaNorma study={study} />
+              )}
+              {tab === 'informe' && (
+                /* `usuario` hace falta para guardar la plantilla del informe en la nube:
+                   la ruta de Storage cuelga de su uid. */
+                <ReporteGenerador study={study} estudioId={activeStudyId} usuario={usuario} />
+              )}
+            </div>
+          ))}
         </React.Fragment>
       ) : (
         /* El aviso solo vale para los pasos del estudio: el tablero, los clientes y el
