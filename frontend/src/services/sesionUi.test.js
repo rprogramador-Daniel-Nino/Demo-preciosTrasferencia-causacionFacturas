@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   CLAVE_SESION_UI, VISTAS_DEL_ESTUDIO, tabCanonica, tabConocida,
   leerSesionUi, guardarSesionUi, limpiarSesionUi, acumularVistaMontada,
+  accionSobreElRecuerdo,
 } from './sesionUi.js';
 
 /** localStorage mínimo, para probar sin navegador. */
@@ -97,6 +98,50 @@ test('limpiar olvida dónde estaba', () => {
   guardarSesionUi({ estudioId: 'study_1', tab: 'comparables' }, almacen);
   limpiarSesionUi(almacen);
   assert.strictEqual(leerSesionUi(almacen), null);
+});
+
+/* ══════════ cuándo se toca el recuerdo ══════════ */
+
+test('en el arranque no se toca el recuerdo, aunque no haya estudio abierto', () => {
+  /* Este era el fallo que anulaba toda la función: al arrancar no hay estudio —la sesión de
+     Google aún no se ha resuelto, así que la restauración no ha podido abrir nada— y tomar
+     eso por «cerró el estudio» borraba el recuerdo antes de leerlo. Recargar seguía
+     devolviendo al tablero, que es justo lo que había que evitar. */
+  assert.strictEqual(
+    accionSobreElRecuerdo({ restauracionIntentada: false, estudioId: null }),
+    'nada',
+    'sin haber intentado restaurar, no se escribe ni se borra'
+  );
+  assert.strictEqual(
+    accionSobreElRecuerdo({ restauracionIntentada: false, estudioId: 'study_1' }),
+    'nada',
+    'tampoco se guarda: el estudio abierto puede ser el que acaba de restaurar'
+  );
+});
+
+test('una vez intentada la restauración, el recuerdo sigue al estudio abierto', () => {
+  assert.strictEqual(
+    accionSobreElRecuerdo({ restauracionIntentada: true, estudioId: 'study_1' }),
+    'guardar'
+  );
+  assert.strictEqual(
+    accionSobreElRecuerdo({ restauracionIntentada: true, estudioId: null }),
+    'limpiar',
+    'aquí sí: el usuario cerró o borró el estudio'
+  );
+});
+
+test('un estudio de otra persona no se recuerda', () => {
+  /* Se abre por otra vía, que necesita el identificador de su dueño; restaurarlo por la
+     normal falla contra las reglas y el usuario vería un error que no pidió. */
+  assert.strictEqual(
+    accionSobreElRecuerdo({ restauracionIntentada: true, estudioId: 'study_1', estudioAjeno: { duenoUid: 'otro' } }),
+    'limpiar'
+  );
+});
+
+test('sin argumentos no revienta y no toca nada', () => {
+  assert.strictEqual(accionSobreElRecuerdo(), 'nada');
 });
 
 /* ══════════ qué pantallas se mantienen montadas ══════════ */

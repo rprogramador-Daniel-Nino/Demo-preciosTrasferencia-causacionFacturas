@@ -22,6 +22,7 @@ import { separarEstudio, SELLO_ESTUDIO } from './services/firestoreModelo';
 import { guardarAnexoEeff, leerAnexoEeff, borrarRecursosDelEstudio } from './services/plantillaStore';
 import {
   leerSesionUi, guardarSesionUi, limpiarSesionUi, acumularVistaMontada, tabCanonica,
+  accionSobreElRecuerdo,
 } from './services/sesionUi';
 
 /* Retardo del autoguardado. El estudio cambia con cada tecla y cada escritura en
@@ -50,6 +51,10 @@ export default function App() {
   /* Restauración de la sesión anterior en curso, para no enseñar el tablero un instante
      antes de abrir el estudio que el usuario ya tenía abierto. */
   const [restaurandoSesion, setRestaurandoSesion] = useState(false);
+  /* Si ya se intentó recuperar dónde estaba el usuario. Mientras sea `false`, nadie escribe
+     ni borra ese recuerdo: en el primer render no hay estudio abierto todavía y el guardado
+     lo interpretaba como «cerró el estudio», borrándolo antes de poder leerlo. */
+  const [restauracionIntentada, setRestauracionIntentada] = useState(false);
 
   const [usuario, setUsuario] = useState(null);
   const [cargandoSesion, setCargandoSesion] = useState(true);
@@ -262,12 +267,15 @@ export default function App() {
     if (cargandoSesion || !usuario || sesionRestaurada.current) return;
     sesionRestaurada.current = true;
     const anterior = leerSesionUi();
-    if (!anterior) return;
+    /* Se marca como intentada en todos los caminos, incluido «no había nada guardado»:
+       hasta que esto ocurre, el efecto de abajo no puede tocar el recuerdo. */
+    if (!anterior) { setRestauracionIntentada(true); return; }
     setRestaurandoSesion(true);
     (async () => {
       const abierto = await selectStudy(anterior.estudioId, { tabInicial: anterior.tab });
       if (!abierto) limpiarSesionUi();
       setRestaurandoSesion(false);
+      setRestauracionIntentada(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cargandoSesion, usuario]);
@@ -275,13 +283,23 @@ export default function App() {
   /* Anota dónde está el usuario, para el arranque siguiente. Solo con estudio abierto:
      sin él no hay nada que restaurar y el tablero ya es el punto de partida.
 
+     `restauracionIntentada` es lo que hace que esto funcione, y su ausencia era el fallo:
+     en el primer render `activeStudyId` vale null —todavía no se ha resuelto la sesión de
+     Google, así que el efecto de arriba aún no ha podido abrir nada— y este efecto borraba
+     el recuerdo antes de que hubiera ocasión de usarlo. El resultado era exactamente lo que
+     este arreglo venía a evitar: recargar devolvía al tablero con el estudio cerrado. Hasta
+     que la restauración se haya intentado, aquí no se escribe ni se borra nada.
+
      Los estudios que otro compartió quedan fuera: se abren con `leerEstudioCompartido`, que
      necesita el uid del dueño, y restaurarlos con `leerEstudio` fallaría contra las reglas.
      El usuario vería un «no se pudo abrir el estudio» al arrancar sin haber pedido nada. */
   useEffect(() => {
-    if (activeStudyId && !estudioAjeno) guardarSesionUi({ estudioId: activeStudyId, tab: activeTab });
-    else limpiarSesionUi();
-  }, [activeStudyId, activeTab, estudioAjeno]);
+    const accion = accionSobreElRecuerdo({
+      restauracionIntentada, estudioId: activeStudyId, estudioAjeno,
+    });
+    if (accion === 'guardar') guardarSesionUi({ estudioId: activeStudyId, tab: activeTab });
+    else if (accion === 'limpiar') limpiarSesionUi();
+  }, [activeStudyId, activeTab, estudioAjeno, restauracionIntentada]);
 
   /* Qué pantallas del estudio quedan montadas. Se acumulan a medida que se visitan y no
      se retiran al cambiar de pestaña, que es lo que conserva lo que esté en marcha. */
