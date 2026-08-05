@@ -801,6 +801,28 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');
 });
 
+/* Mismo bug que tenía ANEXO B (ver test de arriba y commit a638866): apartarEnlaces
+   convierte `<a id="_Toc208931005">` en un marcador @@PT_ENLACE_N@@ antes de que el
+   reemplazo de ANEXO A busque ese id literal, así que nunca lo encontraba y ANEXO A
+   quedaba con los IMAGE_PLACEHOLDER y el nombre de End Game del informe de referencia. */
+test('hydrateExactWordTemplate reemplaza el ANEXO A completo con los EEFF ingestados del estudio activo, no los IMAGE_PLACEHOLDER de End Game', () => {
+  const estudio = {
+    ent: 'ACME COLOMBIA S.A.S', nit: '800123456-7', anio: 2025,
+    eeffImages: ['https://storage.example/eeff-pagina-1.png', 'https://storage.example/eeff-pagina-2.png'],
+  };
+
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
+
+  const inicioAnexoA = salida.indexOf('id="_Toc208931005"');
+  const inicioAnexoB = salida.indexOf('id="_Toc208931006"', inicioAnexoA);
+  const bloqueAnexoA = salida.slice(inicioAnexoA, inicioAnexoB);
+
+  assert.ok(!bloqueAnexoA.includes('IMAGE_PLACEHOLDER'), 'sobrevivió el IMAGE_PLACEHOLDER estático del informe de referencia');
+  assert.ok(bloqueAnexoA.includes('https://storage.example/eeff-pagina-1.png'), 'no entró la primera página de EEFF ingestada');
+  assert.ok(bloqueAnexoA.includes('https://storage.example/eeff-pagina-2.png'), 'no entró la segunda página de EEFF ingestada');
+  assert.ok(bloqueAnexoA.includes('ACME COLOMBIA S.A.S'), 'no se puso la razón social del estudio activo en el título de ANEXO A');
+});
+
 /* ══════ Tabla 13. Códigos SIC utilizados ══════
    A partir de `study.criteriosScreening`, que llena
    comparablesEngine.js:parsearCriteriosScreening al leer la hoja "Screen
