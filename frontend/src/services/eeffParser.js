@@ -127,7 +127,7 @@ export async function parseEeffWithGeminiOCR(file) {
         }
 
         const payload = {
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-2.0-flash',
           contents: [{
             parts: [
               { inline_data: { mime_type: mimeType, data: base64Data } },
@@ -290,7 +290,7 @@ export async function parseEEFFComparableOCR(file, studyYear) {
         }
 
         const payload = {
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-2.0-flash',
           contents: [{
             parts: [
               { inline_data: { mime_type: mimeType, data: base64Data } },

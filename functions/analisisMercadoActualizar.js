@@ -11,8 +11,8 @@ const {
 
 if (!getApps().length) initializeApp();
 
-const GEMINI_MODEL = 'gemini-3-flash-preview';
-const CLAUDE_MODEL = 'claude-sonnet-5';
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const CLAUDE_MODEL = 'claude-3-5-sonnet-20241022';
 
 async function buscarCifras(geminiApiKey, anioActual) {
   const prompt = construirPromptBusqueda(anioActual);

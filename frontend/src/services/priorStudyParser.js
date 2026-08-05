@@ -80,7 +80,7 @@ export async function parsePriorStudyFile(file) {
   if (fileText && fileText.length > 50) {
     const payloadText = PRIOR_STUDY_PROMPT + `\n\nCONTENIDO DEL ESTUDIO ANTERIOR:\n` + fileText.slice(0, 45000);
     const payload = {
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.0-flash',
       contents: [{ parts: [{ text: payloadText }] }]
     };
 
@@ -115,7 +115,7 @@ export async function parsePriorStudyFile(file) {
         }
 
         const payload = {
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-2.0-flash',
           contents: [{
             parts: [
               { inline_data: { mime_type: mimeType, data: base64Data } },

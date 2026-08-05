@@ -296,7 +296,7 @@ const promptDe = (trozo) =>
 /* Llamada real al proxy. Se aísla aquí para que los tests inyecten la suya. */
 async function pedirAlModelo(prompt) {
   const respuesta = await axios.post('/api/gemini', {
-    model: 'gemini-3-flash-preview',
+    model: 'gemini-2.0-flash',
     contents: [{ parts: [{ text: prompt }] }],
   });
   /* Todas las partes, no solo la primera: los modelos parten la respuesta. */

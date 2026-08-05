@@ -691,8 +691,10 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
          inmediato y no al final de la expresión a propósito: puesto al final, el
          motor haría backtracking y acabaría casando solo "END GAME", dejando
          " INTERACTIVE INC" colgando y sin sustituir. */
+    /* Sustitución del vinculado (END GAME INTERACTIVE INC, o END GAME INTERACTIVE en contrato después de "Y ") */
+    { target: /END\s+GAME\s+INTERACTIVE\s+INC/gi, val: wrap(study.vinc) },
+    { target: /(?<=Y\s+)END\s+GAME\s+INTERACTIVE(?!\s+COLOMBIA)/gi, val: wrap(study.vinc) },
     { target: /END\s+GAME(?!\s+INTERACTIVE\s+INC)(?:\s+INTERACTIVE)?(?:\s+COLOMBIA)?(?:\s+S\.?A\.?S?\.?)?(?!\w)/gi, val: wrap(study.ent) },
-    { target: /END GAME INTERACTIVE INC/gi, val: wrap(study.vinc) },
     { target: /ESTADOS UNIDOS/gi, val: wrap(study.pais_vinc) },
     { target: /604477955/g, val: wrap(study.vinc_id) },
     { target: /Otros servicios \(\s*07\s*\)/gi, val: wrap(formattedTipo) },
@@ -819,17 +821,24 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
 
   // Reemplazar Rango Intercuartil si se calculó
   if (stats) {
-    html = html.replace(/Percentil 25:?\s*[\d\.\,%]+/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);
-    html = html.replace(/Mediana:?\s*[\d\.\,%]+/gi, `Mediana: ${wrap(pctf(stats.med))}`);
-    html = html.replace(/Percentil 75:?\s*[\d\.\,%]+/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
+    html = html.replace(/Percentil 25:?\s*[\d\.\,-]+%/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);
+    html = html.replace(/Mediana:?\s*[\d\.\,-]+%/gi, `Mediana: ${wrap(pctf(stats.med))}`);
+    html = html.replace(/Percentil 75:?\s*[\d\.\,-]+%/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
+    html = html.replace(
+      /se ubica entre el percentil 25 \([^)]+\) y \([^)]+\) percentil 75/gi,
+      `se ubica entre el percentil 25 (${wrap(pctf(stats.p25))}) y el percentil 75 (${wrap(pctf(stats.p75))})`
+    );
   }
 
   /* Monto del ajuste. Si el estudio está dentro del rango no hay ajuste que
-     reportar, pero la frase de la plantilla sí existe: se pone un marcador
-     visible en vez de la cifra de End Game. Corregir la redacción de esa frase
-     queda para el plan 2, cuando la plantilla tenga campos con nombre. */
-  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '—';
-  html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
+     reportar. Se reemplaza la frase estática del ajuste por la situación real del estudio. */
+  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '0';
+  if (!adj || adj.within) {
+    html = html.replace(/la suma de \$983\.180\.000 fue ajustada/gi, 'no se requirió realizar ajustes a la suma declarada');
+    html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, '0');
+  } else {
+    html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
+  }
 
   // Reemplazar resultado Cumple/No Cumple
   html = html.replace(/cumple con el principio de plena competencia/gi, `${wrap(cumpleStr)} con el principio de plena competencia`);
