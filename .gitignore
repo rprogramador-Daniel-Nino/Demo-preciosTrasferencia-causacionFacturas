@@ -94,3 +94,6 @@ Desktop.ini
 
 .vscode
 *.vs
+# Cachés de Python de la skill docx, que se generan al validar el OOXML.
+__pycache__/
+*.pyc
