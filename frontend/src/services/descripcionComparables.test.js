@@ -20,7 +20,7 @@ test('redacta la descripción de una comparable con el texto que devuelve Claude
     assert.strictEqual(texto, 'Akatsuki Inc. se dedica al juego y cómic en Japón.');
     assert.strictEqual(llamadas.length, 1);
     assert.strictEqual(llamadas[0].url, '/api/claude');
-    assert.strictEqual(llamadas[0].body.model, 'claude-3-5-haiku-20241022');
+    assert.strictEqual(llamadas[0].body.model, 'claude-haiku-4-5-20251001');
     assert.ok(llamadas[0].body.messages[0].content.includes('AKATSUKI INC.'));
     assert.ok(llamadas[0].body.messages[0].content.includes('Akatsuki Inc. is engaged in game...'));
   } finally {

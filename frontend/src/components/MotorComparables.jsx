@@ -251,7 +251,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       } else {
         anotar(`Curación terminada: ${veredicto.coinciden} de ${veredicto.total} coinciden con la actividad`, 'ok');
         if (veredicto.fallidas) {
-          anotar(`${veredicto.fallidas} candidatas no se pudieron evaluar; se dejan pasar sin descartarlas por actividad.`, 'aviso');
+          /* Con el código HTTP y el motivo a la vista: un 502/504 es el servidor
+             cortando por tiempo y conviene volver a curar; un tope de gasto agotado
+             no se arregla reintentando y hay que ir a la consola de Gemini. Sin esto
+             el usuario solo veía «no se pudieron evaluar». */
+          const errores = veredicto.errores || [];
+          const codigos = [...new Set(errores.map(e => e.status ? 'HTTP ' + e.status : 'fallo de red'))];
+          anotar(`${veredicto.fallidas} candidatas no se pudieron evaluar` +
+            (errores.length ? ` (${errores.length} lote(s): ${codigos.join(', ')})` : '') +
+            '; se dejan pasar sin descartarlas por actividad. Puede volver a curar para reintentar solo esas.', 'aviso');
+          const cuota = errores.find(e => /spending cap|current quota|billing|free tier/i.test(e.mensaje || ''));
+          if (cuota) {
+            anotar('La cuenta de Gemini agotó su tope de gasto: «' + cuota.mensaje +
+              '». Reintentar no sirve hasta levantarlo en ai.studio/spend.', 'error');
+          }
         }
       }
       return veredicto;

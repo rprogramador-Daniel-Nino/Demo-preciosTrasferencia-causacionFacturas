@@ -10,7 +10,7 @@ import {
   scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
-  parsearCriteriosScreening
+  parsearCriteriosScreening, CURACION_LOTE
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -53,20 +53,37 @@ function mockGeminiRechazandoTodas() {
 }
 
 /**
+ * Error como los que produce axios: un número se convierte en respuesta HTTP con ese
+ * código; `true` es un fallo sin respuesta, como una conexión cortada.
+ */
+function errorFalso(fallo) {
+  if (typeof fallo === 'number' || typeof fallo === 'object') {
+    const status = typeof fallo === 'number' ? fallo : fallo.status;
+    const err = new Error('Request failed with status code ' + status);
+    err.response = { status, data: { error: { message: (fallo && fallo.mensaje) || 'algo salió mal' } } };
+    return err;
+  }
+  return new Error('límite de la API');
+}
+
+/**
  * Responde a cada lote con el veredicto que dicte `decidir(candidato)`.
  * `opciones.perfil(candidato)` dicta el perfil funcional devuelto; si no se pasa, la
  * respuesta no trae perfil, como la de un modelo que ignora ese campo.
+ * `opciones.fallar({ n, ids })` decide si esa consulta falla: devolver un número la
+ * hace fallar con ese código HTTP y `true` con un fallo de red. Recibe el número de
+ * consulta y los identificadores del lote, porque con reintentos un mismo lote puede
+ * consultarse varias veces y hay pruebas que necesitan distinguirlo.
  */
 function mockGemini(decidir, opciones = {}) {
   const original = axios.post;
   const llamadas = [];
   axios.post = async (url, body) => {
     llamadas.push(body);
-    if (opciones.fallarLlamada && opciones.fallarLlamada(llamadas.length)) {
-      throw new Error('límite de la API');
-    }
     const texto = body.contents[0].parts[0].text;
     const lista = JSON.parse(texto.slice(texto.indexOf('Candidatas:\n') + 12, texto.lastIndexOf('\n\nResponde')));
+    const fallo = opciones.fallar && opciones.fallar({ n: llamadas.length, ids: lista.map(c => c.id) });
+    if (fallo) throw errorFalso(fallo);
     return {
       data: {
         candidates: [{
@@ -276,34 +293,123 @@ test('la curación se omite sin actividad detectada, sin descartar a nadie', asy
   }
 });
 
-test('la curación trocea el universo en lotes de 60', async () => {
+test('la curación trocea el universo en lotes del tamaño configurado', async () => {
   const { restore, llamadas } = mockGemini(() => true);
   try {
-    const candidatas = Array.from({ length: 130 }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: 'software development services' }));
+    /* dos lotes completos y uno a medias, sea cual sea el tamaño de lote vigente */
+    const cuantas = CURACION_LOTE * 2 + Math.ceil(CURACION_LOTE / 2);
+    const candidatas = Array.from({ length: cuantas }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: 'software development services' }));
     const veredicto = await curateCandidatesWithGemini(candidatas, 'desarrollo de software');
-    assert.strictEqual(llamadas.length, 3, '130 candidatas son 3 lotes de 60, 60 y 10');
-    assert.strictEqual(Object.keys(veredicto.porId).length, 130, 'y todas quedan con veredicto');
-    assert.strictEqual(veredicto.evaluadas, 130);
+    assert.strictEqual(llamadas.length, 3, `${cuantas} candidatas son 3 lotes con CURACION_LOTE=${CURACION_LOTE}`);
+    assert.strictEqual(Object.keys(veredicto.porId).length, cuantas, 'y todas quedan con veredicto');
+    assert.strictEqual(veredicto.evaluadas, cuantas);
     assert.strictEqual(veredicto.fallidas, 0);
   } finally {
     restore();
   }
 });
 
-test('un lote que falla no descarta a sus candidatas', async () => {
+test('un lote que falla todos sus intentos no descarta a sus candidatas', async () => {
   /* Un problema de red no puede traducirse en excluir comparables del estudio. */
-  const { restore } = mockGemini(() => true, { fallarLlamada: (n) => n === 1 });
+  const { restore } = mockGemini(() => true, { fallar: ({ ids }) => ids.includes('C0') && 502 });
   try {
-    const candidatas = Array.from({ length: 90 }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: 'software development services' }));
-    const veredicto = await curateCandidatesWithGemini(candidatas, 'desarrollo de software');
-    assert.strictEqual(veredicto.fallidas, 60, 'el lote caído se cuenta como no evaluado');
-    assert.strictEqual(veredicto.evaluadas, 30, 'el otro sí se evaluó');
+    const cuantas = CURACION_LOTE * 2;
+    const candidatas = Array.from({ length: cuantas }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: 'software development services' }));
+    const veredicto = await curateCandidatesWithGemini(candidatas, 'desarrollo de software', { pausaBaseMs: 0 });
+    assert.strictEqual(veredicto.fallidas, CURACION_LOTE, 'el lote caído se cuenta como no evaluado');
+    assert.strictEqual(veredicto.evaluadas, CURACION_LOTE, 'el otro sí se evaluó');
     /* las del lote caído no tienen veredicto, así que el motor no las descarta */
     const sinVeredicto = candidatas.filter(c => !veredicto.porId[c.id]);
-    assert.strictEqual(sinVeredicto.length, 60);
+    assert.strictEqual(sinVeredicto.length, CURACION_LOTE);
     const r = scoreCandidates(candidatas, { nTarget: 100 }, 'desarrollo de software', [], { iaMatch: veredicto });
     const descartadasPorIA = r.rechazadas.filter(c => /Curación IA/.test(c.motivoRechazo || ''));
     assert.strictEqual(descartadasPorIA.length, 0, 'ninguna se descarta por un fallo de la API');
+  } finally {
+    restore();
+  }
+});
+
+test('un lote que falla con un error transitorio se reintenta y termina bien', async () => {
+  /* El 502 del borde de Hosting llegaba a costar el lote entero: 60 candidatas sin
+     curar por un corte de unos segundos. */
+  const { restore, llamadas } = mockGemini(() => true, { fallar: ({ n }) => n === 1 && 502 });
+  try {
+    const candidatas = Array.from({ length: 3 }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: 'software development services' }));
+    const veredicto = await curateCandidatesWithGemini(candidatas, 'desarrollo de software', { pausaBaseMs: 0 });
+    assert.strictEqual(llamadas.length, 2, 'un solo lote, dos intentos');
+    assert.strictEqual(veredicto.fallidas, 0, 'el reintento lo salvó');
+    assert.strictEqual(veredicto.evaluadas, 3);
+    assert.strictEqual(veredicto.errores.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('un fallo de red también se reintenta', async () => {
+  const { restore, llamadas } = mockGemini(() => true, { fallar: ({ n }) => n === 1 });
+  try {
+    const veredicto = await curateCandidatesWithGemini(
+      [{ id: 'A', name: 'A', desc: 'software development services' }],
+      'desarrollo de software', { pausaBaseMs: 0 }
+    );
+    assert.strictEqual(llamadas.length, 2, 'una petición sin respuesta es transitoria, no definitiva');
+    assert.strictEqual(veredicto.porId.A.coincide, true);
+  } finally {
+    restore();
+  }
+});
+
+test('un 429 por tope de gasto agotado no se reintenta', async () => {
+  /* El mismo código que un pico de tráfico, pero esperar unos segundos no levanta el
+     tope: reintentarlo eran tres consultas perdidas por lote. */
+  const { restore, llamadas } = mockGemini(() => true, {
+    fallar: () => ({
+      status: 429,
+      mensaje: 'Your project has exceeded its monthly spending cap. Please go to AI Studio at https://ai.studio/spend',
+    }),
+  });
+  try {
+    const veredicto = await curateCandidatesWithGemini(
+      [{ id: 'A', name: 'A', desc: 'software development services' }],
+      'desarrollo de software', { pausaBaseMs: 0 }
+    );
+    assert.strictEqual(llamadas.length, 1, 'un solo intento contra el muro');
+    assert.strictEqual(veredicto.errores.length, 1);
+    assert.strictEqual(veredicto.errores[0].status, 429);
+    assert.match(veredicto.errores[0].mensaje, /spending cap/,
+      'se guarda el motivo real de Gemini, no el «Request failed with status code» de axios');
+  } finally {
+    restore();
+  }
+});
+
+test('un 429 por saturación sí se reintenta', async () => {
+  const { restore, llamadas } = mockGemini(() => true, {
+    fallar: ({ n }) => n === 1 && { status: 429, mensaje: 'Resource has been exhausted (e.g. check quota).' },
+  });
+  try {
+    const veredicto = await curateCandidatesWithGemini(
+      [{ id: 'A', name: 'A', desc: 'software development services' }],
+      'desarrollo de software', { pausaBaseMs: 0 }
+    );
+    assert.strictEqual(llamadas.length, 2, 'un 429 sin mención de tope de gasto es transitorio');
+    assert.strictEqual(veredicto.porId.A.coincide, true);
+  } finally {
+    restore();
+  }
+});
+
+test('un error de contrato no se reintenta y queda registrado con su código', async () => {
+  /* Repetir un 400 solo gasta cuota: el prompt no va a mejorar por insistir. */
+  const { restore, llamadas } = mockGemini(() => true, { fallar: () => 400 });
+  try {
+    const candidatas = Array.from({ length: 2 }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: 'software development services' }));
+    const veredicto = await curateCandidatesWithGemini(candidatas, 'desarrollo de software', { pausaBaseMs: 0 });
+    assert.strictEqual(llamadas.length, 1, 'un solo intento');
+    assert.strictEqual(veredicto.fallidas, 2);
+    assert.strictEqual(veredicto.errores.length, 1, 'el fallo queda registrado');
+    assert.strictEqual(veredicto.errores[0].status, 400, 'con el código, para poder decirlo en pantalla');
+    assert.strictEqual(veredicto.errores[0].candidatas, 2);
   } finally {
     restore();
   }

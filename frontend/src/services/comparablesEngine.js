@@ -657,11 +657,92 @@ function bloqueConfirmadas(priorComps) {
     nombres.map(n => '- ' + n).join('\n') + '\n\n';
 }
 
-export const CURACION_LOTE = 60;
-export const CURACION_CONCURRENCIA = 6;
-/* Cada lote tarda del orden de 30-45 s porque el modelo razona un motivo por
-   candidata. Se usa para estimar la espera y avisarla desde el principio. */
-const SEGUNDOS_POR_LOTE = 35;
+/* 20 y no 60: el modelo razona un motivo por candidata, así que un lote de 60
+   tardaba 30-45 s y quedaba pegado al techo de 60 s que Firebase Hosting impone a
+   todo lo que pasa por el rewrite hacia la función —los `timeoutSeconds` de la
+   función no cuentan detrás del rewrite—. Los lotes que se pasaban de ahí volvían
+   con 502 desde el borde y dejaban sin curar a sus 60 candidatas. Con 20 el lote
+   baja a ~12-15 s y queda margen para un pico de latencia del modelo. No subirlo
+   sin medir cuánto tarda el lote de verdad. */
+export const CURACION_LOTE = 20;
+export const CURACION_CONCURRENCIA = 3;
+/* Se usa para estimar la espera y avisarla desde el principio. */
+const SEGUNDOS_POR_LOTE = 15;
+
+/* Códigos que merecen otro intento: el borde de Hosting corta a los 60 s (502/504),
+   Gemini responde 429 cuando se satura y un despliegue en curso tumba las peticiones
+   en vuelo. Todos son transitorios, y sin reintento cada uno cuesta el lote entero.
+   Un 400/401/403 no entra: es un error de contrato o de credenciales y repetirlo
+   solo gasta cuota. */
+/* En una constante y no incrustado en la llamada: el nombre del modelo vive también
+   en `GEMINI_MODEL_DEFAULT` de server.js y functions/index.js, y cada vez que alguien
+   lo actualiza en un sitio y no en los otros la curación queda pidiendo un modelo
+   distinto al del resto del sistema. Mantener los tres iguales. */
+export const GEMINI_MODELO_CURACION = 'gemini-3.5-flash';
+
+const ESTADOS_REINTENTABLES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const CURACION_REINTENTOS = 2;
+const CURACION_PAUSA_BASE_MS = 1500;
+
+const dormir = (ms) => new Promise(r => setTimeout(r, ms));
+
+/** El mensaje que de verdad explica el fallo: Gemini lo manda en el cuerpo, y el de
+ *  axios se queda en un «Request failed with status code 429» que no dice nada. */
+function mensajeDeError(err) {
+  const cuerpo = err?.response?.data;
+  return String(
+    cuerpo?.error?.message || cuerpo?.error || cuerpo?.detail ||
+    err?.message || 'error desconocido'
+  ).trim();
+}
+
+/* No todo 429 es un pico de tráfico: cuando el proyecto agota su tope de gasto
+   mensual —o la cuota del plan— Gemini responde también 429, y ahí reintentar es
+   tiempo perdido, porque eso no se levanta esperando unos segundos. Se distingue por
+   el mensaje del cuerpo, no por el código. */
+function esCuotaAgotada(err) {
+  return /spending cap|current quota|billing|free tier/i.test(mensajeDeError(err));
+}
+
+/**
+ * Consulta a Gemini reintentando los fallos transitorios y devuelve el texto de la
+ * respuesta ya recompuesto.
+ *
+ * Si se agotan los intentos lanza el último error con `status` adjunto, para que
+ * quien reporte el fallo pueda decir de qué se trató en lugar de «error desconocido».
+ */
+async function consultarGemini(prompt, { reintentos, pausaBaseMs }) {
+  let ultimo;
+  for (let intento = 0; intento <= reintentos; intento++) {
+    try {
+      const respuesta = await axios.post('/api/gemini', {
+        model: GEMINI_MODELO_CURACION,
+        contents: [{ parts: [{ text: prompt }] }],
+      });
+      /* todas las partes, no solo la primera: los modelos parten la respuesta */
+      const texto = (respuesta.data?.candidates?.[0]?.content?.parts || [])
+        .map(p => p.text || '').join('');
+      if (!texto) throw new Error('Respuesta vacía de Gemini');
+      return texto;
+    } catch (err) {
+      ultimo = err;
+      const status = err?.response?.status;
+      /* sin `response` es un fallo de red o una conexión cortada a mitad —que es
+         justo lo que hace el borde cuando se agota su plazo—: también transitorio.
+         Con `response`, manda la lista de códigos. */
+      const transitorio = (status === undefined || ESTADOS_REINTENTABLES.has(status)) && !esCuotaAgotada(err);
+      if (!transitorio || intento === reintentos) break;
+      /* espera creciente con jitter, para que los lotes en vuelo no vuelvan a
+         chocar todos en el mismo instante */
+      const espera = pausaBaseMs * (2 ** intento) * (0.75 + Math.random() * 0.5);
+      console.warn(`[curación IA] ${status ? 'HTTP ' + status : 'fallo de red'}; ` +
+        `reintento ${intento + 1} de ${reintentos} en ${Math.round(espera / 1000)} s`);
+      await dormir(espera);
+    }
+  }
+  if (ultimo && ultimo.response && ultimo.status === undefined) ultimo.status = ultimo.response.status;
+  throw ultimo;
+}
 
 /**
  * Curación de candidatas contra la actividad del contribuyente, con la Business
@@ -677,8 +758,10 @@ const SEGUNDOS_POR_LOTE = 35;
  * función devolvía las candidatas marcadas y el componente las pasaba enteras a
  * la tabla, así que las rechazadas seguían entrando al rango.
  *
- * Los lotes que fallan NO descartan a sus candidatas: un problema de red no puede
- * traducirse en excluir comparables del estudio.
+ * Cada lote se reintenta ante fallos transitorios (ver `consultarGemini`), y los que
+ * aun así fallan NO descartan a sus candidatas: un problema de red no puede
+ * traducirse en excluir comparables del estudio. El motivo de cada fallo queda en
+ * `veredicto.errores` con su código HTTP, para poder decirlo en pantalla.
  *
  * De cada candidata se pide también el perfil funcional (prestador de servicios,
  * empresario pleno o mixto), en la misma consulta y sin costo extra: es el criterio
@@ -689,7 +772,11 @@ const SEGUNDOS_POR_LOTE = 35;
  * pagarlo. Solo se reutiliza si la actividad evaluada es la misma.
  */
 export async function curateCandidatesWithGemini(candidates, companyActivity, opciones = {}) {
-  const { onProgress, priorComps = [], fuente = '', veredictoPrevio = null } = opciones;
+  const {
+    onProgress, priorComps = [], fuente = '', veredictoPrevio = null,
+    /* parametrizados para que las pruebas no tengan que esperar los backoffs reales */
+    reintentos = CURACION_REINTENTOS, pausaBaseMs = CURACION_PAUSA_BASE_MS,
+  } = opciones;
   const avisar = (info) => {
     if (typeof onProgress === 'function') {
       try { onProgress(info); } catch (e) { /* la UI no debe romper la curación */ }
@@ -705,6 +792,9 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
     total: 0,
     evaluadas: 0,
     fallidas: 0,
+    /* Qué falló y con qué código, para poder decirlo en pantalla: antes el único
+       rastro de un lote caído era un console.error que nadie ve. */
+    errores: [],
     omitida: null,
   };
 
@@ -772,7 +862,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       `; estimado ~${etaMinutos} min. No cierre la pestaña.`,
   });
 
-  await conConcurrencia(lotes, async (lote) => {
+  await conConcurrencia(lotes, async (lote, indice) => {
     const candidatos = lote.map(c => ({
       id: String(c.id).trim(),
       name: c.name || '',
@@ -801,15 +891,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       'Incluye una entrada por cada ID recibido, en el mismo orden.';
 
     try {
-      const respuesta = await axios.post('/api/gemini', {
-        model: 'gemini-3.5-flash',
-        contents: [{ parts: [{ text: prompt }] }],
-      });
-      /* todas las partes, no solo la primera: los modelos parten la respuesta */
-      const texto = (respuesta.data?.candidates?.[0]?.content?.parts || [])
-        .map(p => p.text || '').join('');
-      if (!texto) throw new Error('Respuesta vacía de Gemini');
-
+      const texto = await consultarGemini(prompt, { reintentos, pausaBaseMs });
       const j = extraerJSON(texto);
       (j.resultados || j.evaluacion || []).forEach(r => {
         if (!r || !r.id) return;
@@ -825,7 +907,15 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       veredicto.evaluadas += lote.length;
     } catch (err) {
       veredicto.fallidas += lote.length;
-      console.error('[curación IA] lote falló:', err);
+      const status = err?.status || err?.response?.status || null;
+      veredicto.errores.push({
+        lote: indice + 1,
+        candidatas: lote.length,
+        status,
+        mensaje: mensajeDeError(err),
+      });
+      console.error(`[curación IA] lote ${indice + 1} falló tras ${reintentos + 1} intento(s)` +
+        (status ? ` (HTTP ${status})` : ''), err);
     }
 
     avisar({
@@ -845,7 +935,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
   avisar({
     etapa: 'fin',
     evaluadas: veredicto.evaluadas, total: conDatos.length, fallidas: veredicto.fallidas,
-    reutilizadas: veredicto.reutilizadas, coinciden,
+    reutilizadas: veredicto.reutilizadas, coinciden, errores: veredicto.errores,
     mensaje: veredicto.fallidas
       ? `${coinciden} de ${conDatos.length} coinciden con la actividad · ${veredicto.fallidas} no se pudieron evaluar (se dejan pasar sin descartarlas)`
       : `${coinciden} de ${conDatos.length} coinciden con la actividad`,
