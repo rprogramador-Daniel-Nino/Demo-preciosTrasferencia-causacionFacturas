@@ -91,7 +91,7 @@ test('el encabezado de Word sólo se declara si el documento lo trae', () => {
 test('reglasDocumento acota cada selector de una lista, no sólo el primero', () => {
   /* `p,li,td` acotado a medias dejaría `li` y `td` sueltos pintando la interfaz. */
   const r = reglasDocumento('.x ');
-  assert.ok(r.includes('.x p,.x li,.x td{text-align:justify}'));
+  assert.ok(r.includes('.x p,.x li,.x td{text-align:justify;margin:0;padding:0}'));
 });
 
 test('el resaltado de pantalla no puede llegar al documento', () => {
