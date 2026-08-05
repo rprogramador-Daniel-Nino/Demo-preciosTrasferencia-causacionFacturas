@@ -17,6 +17,10 @@ import {
 import {
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila, catalogoAComparablesPrevias,
 } from '../services/firestoreModelo';
+import {
+  subirCribado, descargarCribado, borrarCribado, subirCuracion, descargarCuracion,
+  debeRestaurarCribado, esStorageNoHabilitado, AVISO_STORAGE_APAGADO,
+} from '../services/cribadoStorage';
 import MemoriaRangoModal from './MemoriaRangoModal.jsx';
 
 /* Aviso que ocupa el lugar de la actividad económica mientras no se extraiga de los
@@ -53,6 +57,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   // Imported Universe & Active Comparables
   const [universo, setUniverso] = useState(study.universo || []);
+  /* Referencia al cribado guardado en Cloud Storage: { ruta, archivo, filas, hoja,
+     bytes, subidoEn, subidoPor, curacion? }. El universo en sí no cabe en el documento
+     del estudio —miles de filas con su descripción de negocio, por encima del millón de
+     bytes que admite Firestore—, así que lo que viaja con el estudio es esto, y el
+     archivo vive aparte. Sin ello, reabrir el estudio obligaba a cargar el Excel otra
+     vez y la curación ya pagada se perdía al cambiar de máquina. */
+  const [cribadoIQ, setCribadoIQ] = useState(study.cribadoIQ || null);
+  /* Restauración en curso desde la nube, para que la pantalla no parezca vacía mientras
+     se descarga y reparsea un archivo de varios MB. */
+  const [restaurando, setRestaurando] = useState(false);
   /* Un estudio sin comparables arranca vacío. Antes arrancaba con cuatro empresas de
      videojuegos —Activision, Electronic Arts, Take-Two y Ubisoft— y cifras inventadas de
      ejemplo: en un sistema multiempresa eso significa que el estudio de cualquier
@@ -122,8 +136,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* universo NO se persiste: es el Excel de Capital IQ completo (miles de filas
          con descripción de negocio) y guardarlo en cada estudio hacía que el JSON
          superara la cuota de localStorage y tumbara toda la app (QuotaExceededError
-         sin capturar). Se recalcula re-importando el Excel; lo que sí importa para
-         el resto del estudio, `comparables`, sigue persistiendo igual que antes. */
+         sin capturar). Lo que se guarda es `cribadoIQ`, la referencia al archivo en
+         Cloud Storage, con la que el universo se restaura al reabrir el estudio; lo
+         que sí importa para el resto del estudio, `comparables`, sigue persistiendo
+         igual que antes. */
+      cribadoIQ,
       comparables,
       cmode,
       criteriosScreening,
@@ -136,7 +153,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          miles de candidatas no cabe cómodo en un documento */
       iaMatch
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -246,6 +263,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         },
       });
       setIaMatch(veredicto);
+      /* El veredicto vale dinero —son consultas a Gemini ya pagadas— y es la constancia
+         de por qué se aceptó o rechazó cada candidata. Va a la nube junto al cribado y
+         no dentro del estudio: un dictamen por cada una de miles de candidatas ronda
+         cientos de KB y se comería el presupuesto de un documento de Firestore. */
+      if (!veredicto.omitida) await guardarCuracionEnLaNube(veredicto);
       if (veredicto.omitida) {
         anotar(veredicto.omitida, 'aviso');
       } else {
@@ -305,6 +327,99 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setMotorAuditoria(null);
   };
 
+  /* Guarda el cribado en la nube y deja su referencia en el estudio. Nunca lanza: la
+     importación ya terminó bien y un fallo de red no puede deshacerla. Lo que sí hace es
+     decir en el panel qué pasó, porque un cribado que se cree guardado y no lo esté se
+     descubre semanas después, al reabrir el estudio y encontrarlo vacío. */
+  const guardarCribadoEnLaNube = async (file, meta, filas) => {
+    if (!usuario || !estudioId) {
+      anotar('El cribado no se guardó en la nube: hace falta una sesión y un estudio guardado. ' +
+        'El motor funciona igual, pero al reabrir el estudio habrá que cargar el Excel de nuevo.', 'aviso');
+      return;
+    }
+    try {
+      const referencia = await subirCribado(file, {
+        uid: usuario.uid, estudioId, filas, hoja: (meta && meta.hoja) || '',
+      });
+      /* Reimportar con otro nombre de archivo da otra ruta, así que el anterior queda sin
+         nada que lo referencie: se retira para no ir acumulando copias pagadas. */
+      const anterior = cribadoIQ && cribadoIQ.ruta;
+      if (anterior && anterior !== referencia.ruta) await borrarCribado(anterior);
+      setCribadoIQ(referencia);
+      anotar(`Cribado guardado en la nube (${(referencia.bytes / 1024 / 1024).toFixed(2)} MB): ` +
+        'al reabrir el estudio el universo se restaura solo.', 'ok');
+    } catch (err) {
+      if (esStorageNoHabilitado(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
+      else anotar('No se pudo guardar el cribado en la nube: ' + ((err && err.message) || 'error desconocido') +
+        '. El motor funciona igual, pero al reabrir el estudio habrá que cargar el Excel de nuevo.', 'aviso');
+      console.error('[cribado] no se pudo subir', err);
+    }
+  };
+
+  /* Sube el veredicto de la curación y anota la referencia dentro de `cribadoIQ`, para
+     que viaje con el estudio en un solo campo. Tampoco lanza: la curación ya está en
+     memoria y sirve para esta sesión aunque no se pueda guardar. */
+  const guardarCuracionEnLaNube = async (veredicto) => {
+    if (!usuario || !estudioId) return;
+    try {
+      const referencia = await subirCuracion(veredicto, { uid: usuario.uid, estudioId });
+      setCribadoIQ(prev => ({ ...(prev || {}), curacion: referencia }));
+    } catch (err) {
+      if (esStorageNoHabilitado(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
+      else anotar('La curación no se pudo guardar en la nube: ' + ((err && err.message) || 'error desconocido') +
+        '. Sigue disponible en este navegador, pero al abrir el estudio en otra máquina habría que volver a pagarla.', 'aviso');
+      console.error('[curación] no se pudo subir el veredicto', err);
+    }
+  };
+
+  /* Trae el cribado guardado y reconstruye el universo. Corre una sola vez al abrir el
+     estudio, y solo si no hay universo en memoria: reimportar el Excel a mano deja el
+     universo puesto, y volver a descargarlo entonces sería pagar tráfico por nada. */
+  useEffect(() => {
+    if (!debeRestaurarCribado({ universo, cribadoIQ })) return;
+    let cancelado = false;
+    (async () => {
+      setRestaurando(true);
+      anotar(`Restaurando el cribado guardado («${cribadoIQ.archivo || 'archivo'}»)…`);
+      try {
+        const blob = await descargarCribado(cribadoIQ.ruta);
+        const { rows, meta } = await importCapitalIQExcel(blob, (etapa, hechas, total) => {
+          if (!cancelado) setImportProgreso({ etapa, hechas, total });
+        });
+        if (cancelado) return;
+        setUniverso(rows);
+        setImportMeta(meta);
+        if (meta.criteriosScreening && meta.criteriosScreening.length) {
+          setCriteriosScreening(meta.criteriosScreening);
+        }
+        anotar(`${rows.length} compañías restauradas del cribado guardado, sin volver a cargar el archivo.`, 'ok');
+
+        /* El veredicto ya pagado. Solo si no hay uno en memoria: el de localStorage es
+           igual de válido y más reciente que el de la nube si se curó y no se subió. */
+        if (!iaMatch && cribadoIQ.curacion && cribadoIQ.curacion.ruta) {
+          const guardado = await descargarCuracion(cribadoIQ.curacion.ruta);
+          if (!cancelado && guardado && guardado.porId) {
+            setIaMatch(guardado);
+            anotar(`Curación recuperada de la nube: ${Object.keys(guardado.porId).length} candidatas ya evaluadas, ` +
+              'no hay que volver a pagarlas.', 'ok');
+          }
+        }
+      } catch (err) {
+        if (cancelado) return;
+        if (esStorageNoHabilitado(err)) anotar(AVISO_STORAGE_APAGADO, 'aviso');
+        else anotar('No se pudo restaurar el cribado guardado: ' + ((err && err.message) || 'error desconocido') +
+          '. Cargue el Excel de Capital IQ de nuevo.', 'error');
+        console.error('[cribado] no se pudo restaurar', err);
+      } finally {
+        if (!cancelado) { setRestaurando(false); setImportProgreso(null); }
+      }
+    })();
+    return () => { cancelado = true; };
+    /* Solo al montar: las dependencias reales (universo, iaMatch) cambian dentro del
+       propio efecto y volverlo reactivo lo relanzaría contra sí mismo. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Handle Capital IQ File Upload
   const handleImportExcel = async (file) => {
     if (!file) return;
@@ -360,6 +475,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setIaMatch(null);
       setSelectionFunnel(null);
       setMotorAuditoria(null);
+
+      /* El archivo se guarda tal como se cargó. Va después de dejar el universo en
+         pantalla y en su propio try: si la subida falla, el motor tiene que seguir
+         funcionando exactamente como antes —el universo ya está en memoria— y lo único
+         que se pierde es poder reabrir el estudio sin volver a cargar el Excel. */
+      await guardarCribadoEnLaNube(file, meta, rows.length);
+
       anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
@@ -1028,9 +1150,27 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             </label>
             {universo.length > 0 && (
               <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-                <CheckCircle className="w-4 h-4" /> {universo.length} candidatas cargadas en memoria.
+                <CheckCircle className="w-4 h-4" /> {universo.length} candidatas cargadas.
               </span>
             )}
+            {restaurando && (
+              <span className="text-xs text-sky-600 dark:text-sky-400 font-semibold flex items-center gap-1">
+                <RefreshCw className="w-4 h-4 animate-spin" /> Restaurando el cribado guardado…
+              </span>
+            )}
+            {/* Distingue «guardado» de «solo en esta pestaña»: es la diferencia entre
+                poder reabrir el estudio y tener que volver a cargar el archivo. */}
+            {!restaurando && cribadoIQ && cribadoIQ.ruta ? (
+              <span className="text-xs text-zinc-500 flex items-center gap-1" title={`Guardado en la nube: ${cribadoIQ.archivo || ''}`}>
+                <FileCheck className="w-4 h-4" /> Cribado guardado
+                {cribadoIQ.subidoEn ? ` el ${new Date(cribadoIQ.subidoEn).toLocaleDateString('es-CO')}` : ''}
+                {cribadoIQ.curacion ? ' · curación incluida' : ''}
+              </span>
+            ) : (!restaurando && universo.length > 0 && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="w-4 h-4" /> Solo en esta pestaña: al reabrir habrá que cargar el Excel otra vez.
+              </span>
+            ))}
           </div>
 
           {/* Progreso de la carga: etapa, contador y barra. Sin esto, un archivo de

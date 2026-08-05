@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-/* claude-3-5-haiku-20241022 está retirado desde el 19-02-2026 y responde 404, así que
+/* claude-haiku-4-5-20251001 está retirado desde el 19-02-2026 y responde 404, así que
    la redacción de descripciones fallaba en toda comparable. */
 const MODELO_REDACCION = 'claude-haiku-4-5-20251001';
 
