@@ -110,3 +110,5 @@ __pycache__/
 # Se han colado ya dos veces en un commit.
 _tmp_*.mjs
 *.tmp.mjs
+
+parche/

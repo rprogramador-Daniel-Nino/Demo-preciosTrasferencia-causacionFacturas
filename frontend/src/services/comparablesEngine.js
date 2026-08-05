@@ -1,6 +1,7 @@
 import XLSX from 'xlsx-js-style';
 import axios from 'axios';
 import { num, pliOf } from '../utils/calculations.js';
+import { esHolding } from './filtrosComparablesPatch.js';
 
 /**
  * Normaliza nombres de empresas para cruces de continuidad
@@ -202,7 +203,7 @@ export async function importCapitalIQExcel(file, onProgress) {
           const desc = descIdx >= 0 ? String(row[descIdx] || '').trim() : '';
           const country = countryIdx >= 0 ? String(row[countryIdx] || '').trim() : '';
 
-          const isHolding = /\b(holdings?|inversiones|investment)\b/i.test(name + ' ' + desc);
+          const isHolding = esHolding({ name, desc, sic });
           const hasNegativeBalance = (ar !== null && ar < 0) || (inv !== null && inv < 0) || (ap !== null && ap < 0);
           const hasLoss = op !== null && op < 0;
 
