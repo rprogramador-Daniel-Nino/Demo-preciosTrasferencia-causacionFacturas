@@ -168,19 +168,29 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     }
 
     const rN = r0 + n - 1; // última fila de comparable
-    // filas de cuartiles (QUARTILE inclusivo)
-    const filaP25 = celdas.length + 1;
+    // filas de estadísticos del rango (MIN, cuartiles inclusivos, MAX)
     const RES = ['S', 'T', 'U', 'V', 'W', 'X', 'Y'];
+    const statRow = (etq, fn) => {
+      const fila = new Array(17).fill(cTxt(''));
+      fila[17] = cTxt(etq); // columna R (índice 17)
+      RES.forEach((L) => fila.push(cFor(`${fn}(${L}${r0}:${L}${rN})`, M.fmt)));
+      return fila;
+    };
     const qRow = (etq, q) => {
       const fila = new Array(17).fill(cTxt(''));
       fila[17] = cTxt(etq); // columna R (índice 17)
       RES.forEach((L) => fila.push(cFor(`QUARTILE(${L}${r0}:${L}${rN},${q})`, M.fmt)));
       return fila;
     };
+    celdas.push(statRow('Mínimo', 'MIN'));
+    const filaMin = celdas.length; // 1-based
+    const filaP25 = celdas.length + 1;
     celdas.push(qRow('P25 (cuartil inferior)', 1));
     celdas.push(qRow('Mediana (P50)', 2));
     celdas.push(qRow('P75 (cuartil superior)', 3));
     const filaP75 = celdas.length; // 1-based de P75 (ya empujada)
+    celdas.push(statRow('Máximo', 'MAX'));
+    const filaMax = celdas.length; // 1-based
     // indicador del contribuyente (mismo con cualquier ajuste)
     const testedFor = M.base === 'ventas'
       ? (M.num === 'ebit' ? `(${S_s}-${C_s}-${OP_s})/${S_s}` : `(${S_s}-${C_s})/${S_s}`)
@@ -204,7 +214,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       celdas.push(fila);
     }
 
-    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, filaP25, filaP75, filaTested, filaConcl: celdas.length });
+    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
 
     hojas.push({
       nombre: M.hoja, celdas,
@@ -216,7 +226,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const resumen = [];
   resumen.push([cTxt('RESUMEN Y SENSIBILIDAD — todo son referencias a las hojas de método')]);
   resumen.push([]);
-  resumen.push(['Método', 'Ajuste', 'Contribuyente', 'P25', 'Mediana', 'P75', 'Conclusión'].map(cTxt));
+  resumen.push(['Método', 'Ajuste', 'Contribuyente', 'Mínimo', 'P25', 'Mediana', 'P75', 'Máximo', 'Conclusión'].map(cTxt));
   const RES = ['S', 'T', 'U', 'V', 'W', 'X', 'Y'];
   infoMetodos.forEach((M) => {
     AJUSTES.forEach((aj, k) => {
@@ -224,16 +234,18 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       resumen.push([
         cTxt(M.nombre), cTxt(aj.etiqueta),
         cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt),
+        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt),
         cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt),
         cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt),
         cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt),
+        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt),
         cForT(`${M.hoja}!${L}${M.filaConcl}`),
       ]);
     });
   });
   hojas.unshift({
     nombre: 'Resumen', celdas: resumen,
-    cols: [{ wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 13 }],
+    cols: [{ wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 13 }],
   });
 
   /* ─── Hoja Selección de comparables: universo Capital IQ + filtros + embudo ───

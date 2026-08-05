@@ -15,10 +15,10 @@ import { normalizarEeff } from '../services/eeffParserNormalizador.js';
  */
 function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
   if (!estudioOriginal) return {};
-  
+
   // 1. Clonar profundamente para no mutar las referencias originales
   const copia = JSON.parse(JSON.stringify(estudioOriginal));
-  
+
   // 2. Normalizar el contribuyente para la convención del parche (op = gastos operacionales)
   const cftNormalizadas = normalizarEeff({
     ingresos_operacionales: copia.t_s,
@@ -30,13 +30,13 @@ function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
     cuentas_por_pagar: copia.t_ap,
     propiedad_planta_equipo: copia.t_ppe,
   });
-  
+
   if (cftNormalizadas.op !== null && cftNormalizadas.op !== undefined) {
     copia.t_op = cftNormalizadas.op;
   } else if (copia.t_s != null && copia.t_c != null && copia.t_op != null) {
     copia.t_op = Number(copia.t_s) - Number(copia.t_c) - Number(copia.t_op);
   }
-  
+
   if (cftNormalizadas.ppe != null) {
     copia.t_ppe = cftNormalizadas.ppe;
   }
@@ -67,7 +67,7 @@ function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
       };
     });
   }
-  
+
   return copia;
 }
 
@@ -139,17 +139,7 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
      y se descarga mediante Blob. */
   const descargar = () => {
     const libro = XLSX.utils.book_new();
-    const seleccionadasKeys = new Set((estudio?.comparables || []).map(c => c.nameKey || (c.name ? c.name.toUpperCase() : '')));
-    const candidatasUniverso = Array.isArray(estudio?.universo) && estudio.universo.length > 0
-      ? estudio.universo.map(cand => ({
-          ...cand,
-          seleccionada: seleccionadasKeys.has(cand.nameKey || (cand.name ? cand.name.toUpperCase() : ''))
-        }))
-      : null;
-    const seleccion = estudio?.seleccion || (candidatasUniverso ? {
-      criterios: estudio?.criteriosScreening || [],
-      candidatas: candidatasUniverso
-    } : null);
+    const seleccion = estudio?.seleccion || null;
     const hojas = hojasMemoriaRangoOptimo(estudioNormalizado, seleccion);
 
     hojas.forEach(({ nombre, celdas, filas, cols, rows, merges, autofiltro }) => {
