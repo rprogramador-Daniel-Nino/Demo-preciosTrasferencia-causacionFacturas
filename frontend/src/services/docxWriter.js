@@ -14,7 +14,9 @@ import {
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
 } from 'docx';
-import { HOJA_TWIPS, cmAPixeles, medidaEnCm } from './estiloDocumento.js';
+import {
+  HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
+} from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
 
@@ -122,7 +124,7 @@ const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
    último parámetro de las cinco— se descartó a propósito: es más ruido que un cierre y hay que
    tocar las cinco firmas dos veces, una ahora y otra en la tarea 10. Se llama una vez por
    documento desde `construirDocumento`. */
-function traductor({ porId, anexo = [] }) {
+function traductor({ porId, anexo = [], tamanoBase = 24 }) {
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -143,7 +145,14 @@ function traductor({ porId, anexo = [] }) {
     const ancho = medidaEnCm((/width:\s*([\d.]+cm)/.exec(estilo || '') || [])[1]);
     const alto = medidaEnCm((/height:\s*([\d.]+cm)/.exec(estilo || '') || [])[1]);
     if (!ancho || !alto) return null;
-    return { width: cmAPixeles(ancho), height: cmAPixeles(alto) };
+    let wPx = cmAPixeles(ancho);
+    let hPx = cmAPixeles(alto);
+    const anchoMaxPx = Math.round(CAJA_TEXTO * 96 / 1440);
+    if (wPx > anchoMaxPx) {
+      hPx = Math.round(hPx * (anchoMaxPx / wPx));
+      wPx = anchoMaxPx;
+    }
+    return { width: wPx, height: hPx };
   }
 
   /* Una imagen cuyo recurso no está en el catálogo no rompe el documento: se emite nada y el
@@ -286,8 +295,32 @@ function traductor({ porId, anexo = [] }) {
              en un fallback que nunca se alcanza: `bloquesDe` siempre vuelca el texto suelto
              de una celda como párrafo (el `volcar()` final, fuera del `for`), así que la rama
              de abajo nunca estaba vacía y el color nunca llegaba a los runs. */
-          const heredadoCelda = c.etiqueta === 'th' ? { color: 'FFFFFF' } : {};
-          const contenido = bloquesDe(c, [], heredadoCelda);
+          /* El tamaño reducido de la tabla se hereda a la celda. La vista previa lo aplica
+             por CSS (`table{font-size:0.9em}` en REGLAS_DOCUMENTO) desde siempre; sin esto el
+             .docx emitía las tablas al cuerpo entero y pantalla y archivo divergían en el 99 %
+             del texto de tabla del informe —2311 nodos de 2333, medido—. Un fragmento que
+             declare su propio `font-size` lo sobrescribe después, en `runsDeHijo`, que es lo
+             correcto: ahí manda lo que dice el PDF. */
+          const heredadoCelda = {
+            size: Math.round(tamanoBase * FACTOR_TABLA),
+            ...(c.etiqueta === 'th' ? { color: 'FFFFFF' } : {}),
+          };
+          const todo = bloquesDe(c, [], heredadoCelda);
+          /* Los párrafos vacíos de una celda se descartan, y sólo dentro de una celda.
+             El PDF cuelga un `<p>` vacío delante del contenido de 432 de las 2291 celdas del
+             informe —el 19 %—, que es la marca de párrafo que Word deja al exportar la tabla.
+             Emitirlos dobla el alto de esas filas: sobre 890 filas eran una docena de hojas de
+             más, y en la página 73 el PDF pone 69 renglones donde el writer emitía 141
+             párrafos.
+
+             Fuera de una tabla NO se descartan, y esa distinción es deliberada: la portada del
+             informe se centra con 35 párrafos vacíos seguidos y quitarlos la descuadraría. Aquí
+             no centran nada, son un artefacto de la exportación.
+
+             Si la celda se queda sin nada, más abajo recibe un párrafo vacío: una celda de
+             OOXML sin ningún párrafo obliga a Word a reparar el documento. */
+          const contenido = todo.filter((b) =>
+            !(b instanceof Paragraph) || JSON.stringify(b).includes('"w:t"'));
           return new TableCell({
             width: { size: anchos[i] ?? ancho, type: WidthType.DXA },
             /* CLEAR y no SOLID: la skill lo marca porque SOLID sale negro. */
@@ -451,7 +484,11 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       totalHuecos + ' hueco(s) en el informe: sobran ' + (anexo.length - totalHuecos) +
       ' página(s) que no se usan.');
   }
-  const { bloquesDe, runsDe } = traductor({ porId, anexo });
+  /* El cuerpo base se pasa al traductor porque de él sale el tamaño reducido de las tablas:
+     el mismo 0,9 que la vista previa aplica por CSS. */
+  const { bloquesDe, runsDe } = traductor({
+    porId, anexo, tamanoBase: mediosPuntos(base.tamano),
+  });
 
   const cabecera = enc
     ? new Header({

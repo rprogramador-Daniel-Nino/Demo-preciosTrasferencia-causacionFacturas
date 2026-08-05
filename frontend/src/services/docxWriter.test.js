@@ -322,6 +322,20 @@ test('la imagen sale con el tamaño que le da el PDF, no con el natural del PNG'
   assert.equal(Number(m[2]), 46 * 9525);
 });
 
+test('la imagen en docx se auto-escala si supera el ancho máximo de la caja', async () => {
+  /* La caja es 21.59 - 5 = 16.59 cm.
+     Si una imagen mide 20cm x 10cm, debe escalarse a 16.59cm de ancho y 8.295cm de alto.
+     16.59cm en píxeles es 627. 8.295cm en píxeles es 314.
+     docx emite 9525 EMU por píxel. */
+  const { doc } = await abrir(
+    '<p><img data-recurso="portada" style="width:20cm;height:10cm" /></p>',
+    [{ id: 'portada', dataUrl: PNG_1x1 }]);
+  const m = /<wp:extent cx="(\d+)" cy="(\d+)"/.exec(doc);
+  assert.ok(m, 'la imagen no se emitió');
+  assert.equal(Number(m[1]), 627 * 9525);
+  assert.equal(Number(m[2]), 314 * 9525);
+});
+
 test('una imagen cuyo recurso no está en el catálogo no rompe el documento', async () => {
   /* Pasa si el catálogo y la plantilla se desincronizan. Mejor un hueco que un throw que deja
      al usuario sin documento y sin explicación. */

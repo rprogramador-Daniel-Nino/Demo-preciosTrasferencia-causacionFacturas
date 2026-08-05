@@ -40,6 +40,11 @@ const TWIPS_POR_CM = 1440 / 2.54;
    saldrían un 33 % más grandes. */
 const PIXELES_POR_CM = 96 / 2.54;
 
+/* Factor de tamaño de letra de las tablas: el 0,9 del `font-size:0.9em` de REGLAS_DOCUMENTO,
+   en un solo sitio para que la vista previa y el .docx no puedan separarse. La pantalla lo
+   aplica por CSS; el writer lo multiplica sobre el cuerpo. */
+export const FACTOR_TABLA = 0.9;
+
 export const cmATwips = (cm) => Math.round((Number(cm) || 0) * TWIPS_POR_CM);
 export const cmAPixeles = (cm) => Math.round((Number(cm) || 0) * PIXELES_POR_CM);
 
@@ -63,6 +68,11 @@ export const REGLAS_DOCUMENTO = [
   ['h2', 'font-size:1.2em;color:#0E1726;border-bottom:1px solid #E2E8F0;' +
          'padding-bottom:4px;margin-top:26px'],
   ['h3', 'font-size:1.05em;color:#0E1726'],
+  /* El `0.9em` de la tabla no es decoración: la vista previa lo aplica desde siempre, así que
+     el texto de las tablas se ve al 90 % del cuerpo. El writer del .docx tiene que aplicar el
+     MISMO factor —lo hace con `FACTOR_TABLA`— o pantalla y archivo divergen en el 99 % del texto
+     de tabla del informe: 2311 nodos de 2333, medido. Es la misma clase de asimetría
+     pantalla/archivo que ya costó cuatro fallos en este proyecto. */
   ['table', 'width:100%;border-collapse:collapse;margin:16px 0;font-size:0.9em'],
   ['th', 'background:#0E1726;color:#fff;text-align:left;padding:8px 12px'],
   ['td', 'padding:8px 12px;border-bottom:1px solid #E2E8F0'],
@@ -203,14 +213,29 @@ export function cssDeExportacion(base) {
    deja como está: inventarle un tamaño sería peor que dejar que salga al natural, porque
    parecería correcto. Para eso está el aviso de versión. */
 export function conTamanoDeImagen(html) {
+  const cajaTextoCm = medidaEnCm(HOJA.ancho) - 2 * medidaEnCm(HOJA.margen);
   return String(html || '').replace(/<img\s[^>]*>/g, (etiqueta) => {
     if (/\s(?:width|height)=/.test(etiqueta)) return etiqueta;
     const estilo = (/style="([^"]*)"/.exec(etiqueta) || [])[1] || '';
-    const ancho = medidaEnCm((/width:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
-    const alto = medidaEnCm((/height:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
+    let ancho = medidaEnCm((/width:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
+    let alto = medidaEnCm((/height:\s*([\d.]+cm)/.exec(estilo) || [])[1]);
     if (!ancho || !alto) return etiqueta;
-    return etiqueta.replace(/<img\s/,
+
+    let estiloNuevo = estilo;
+    if (ancho > cajaTextoCm) {
+      alto = alto * (cajaTextoCm / ancho);
+      ancho = cajaTextoCm;
+      estiloNuevo = estilo
+        .replace(/width:\s*[\d.]+cm/g, 'width:' + ancho.toFixed(2) + 'cm')
+        .replace(/height:\s*[\d.]+cm/g, 'height:' + alto.toFixed(2) + 'cm');
+    }
+
+    let res = etiqueta.replace(/<img\s/,
       '<img width="' + cmAPixeles(ancho) + '" height="' + cmAPixeles(alto) + '" ');
+    if (estiloNuevo !== estilo) {
+      res = res.replace(/style="[^"]*"/, 'style="' + estiloNuevo + '"');
+    }
+    return res;
   });
 }
 
