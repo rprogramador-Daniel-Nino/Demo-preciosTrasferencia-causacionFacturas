@@ -24,9 +24,10 @@ exports.claude = onRequest(
 
       const body = req.body || {};
       if (!body.model) {
-        /* claude-haiku-4-5-20251001 está retirado desde el 19-02-2026 y responde 404:
-           cualquier llamada que no mandara `model` fallaba. Mismo identificador que
-           usan analisisMercadoActualizar.js y analisisSectorActualizar.js. */
+        /* Antes aquí estaba claude-3-5-haiku-20241022, retirado por Anthropic el
+           19-02-2026 y respondiendo 404: fallaba cualquier llamada que no mandara
+           `model`. Mismo identificador que usan analisisMercadoActualizar.js y
+           analisisSectorActualizar.js. */
         body.model = 'claude-haiku-4-5-20251001';
       }
 
