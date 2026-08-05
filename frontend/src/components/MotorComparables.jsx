@@ -808,6 +808,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       alert('No hay comparables cargadas: importe o agregue al menos una antes de exportar el Excel de soporte.');
       return;
     }
+
+    const seleccionadasKeys = new Set((calculatedRows || comparables).map(c => c.nameKey || nameKey(c.name)));
+    const candidatasUniverso = Array.isArray(universo) && universo.length > 0
+      ? universo.map(cand => ({
+          ...cand,
+          seleccionada: seleccionadasKeys.has(cand.nameKey || nameKey(cand.name))
+        }))
+      : null;
+
     const datos = {
       estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate },
       examinada: { T, tPLI, tR },
@@ -815,6 +824,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       filtros: { engineConfig, selectionFunnel },
       comparables: calculatedRows,
       auditoria: motorAuditoria,
+      seleccion: {
+        criterios: criteriosScreening || [],
+        candidatas: candidatasUniverso
+      }
     };
     const entidadSlug = String(datos.estudio.entidad || 'estudio')
       .trim().toLowerCase()
@@ -1643,7 +1656,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           se está viendo en la tarjeta, no el del render anterior. */}
       {memoriaAbierta && (
         <MemoriaRangoModal
-          estudio={{ ...study, comparables, cmode }}
+          estudio={{ ...study, comparables, cmode, universo, criteriosScreening }}
           alCerrar={() => setMemoriaAbierta(false)}
         />
       )}
