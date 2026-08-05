@@ -1,158 +1,60 @@
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import { pctf, fmt } from '../utils/calculations.js';
+import { hojasMemoriaRangoOptimo } from './memoriaCalculoRangoOptimo.js';
+import { normalizarEeff } from './eeffParserNormalizador.js';
 
-const PLI_LABEL = { MO: 'Margen Operacional (MO)', MB: 'Margen Bruto (MB)', Berry: 'Razón Berry' };
 const CATEGORIA_RECHAZO = { filtro: 'Filtro (holding/saldo negativo/pérdida)', ia: 'Curación IA', rigor: 'Rigor funcional' };
-
-const conFormato = (v, formatter) => (v === null || v === undefined ? '—' : formatter(v));
 const puntaje = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '—');
 
-function hojaResumen(datos) {
-  const { estudio, examinada, rango } = datos;
-  const { T, tPLI } = examinada;
-  const { stats, activeCount, adjustment } = rango;
-
-  const filas = [
-    ['Resumen del cálculo — Motor de Comparables'],
-    [],
-    ['Entidad', estudio.entidad || '—'],
-    ['Año gravable', estudio.anio || '—'],
-    ['Indicador de rentabilidad (PLI)', PLI_LABEL[estudio.pli] || estudio.pli || '—'],
-    ['Ajuste de capital de trabajo', estudio.useAdj ? 'Sí' : 'No'],
-    ['Tasa de interés usada', estudio.useAdj ? pctf(estudio.interestRate) : '—'],
-    [],
-    ['Cifras de la parte examinada'],
-    ['Ventas', fmt(T.s)],
-    ['Costo de ventas', fmt(T.c)],
-    ['Utilidad operacional', fmt(T.op)],
-    ['Cuentas por cobrar', fmt(T.ar)],
-    ['Inventarios', fmt(T.inv)],
-    ['Cuentas por pagar', fmt(T.ap)],
-    ['PLI de la parte examinada', conFormato(tPLI, pctf)],
-    [],
-    ['Rango intercuartil'],
-    ['Comparables activas usadas en el rango', activeCount],
-    ['Percentil 25', stats ? pctf(stats.p25) : '—'],
-    ['Mediana', stats ? pctf(stats.med) : '—'],
-    ['Percentil 75', stats ? pctf(stats.p75) : '—'],
-    [],
-    ['Resultado de cumplimiento'],
-  ];
-
-  if (adjustment) {
-    filas.push(['¿Dentro del rango?', adjustment.within ? 'Sí — CUMPLE' : 'No — NO CUMPLE']);
-    if (!adjustment.within) {
-      filas.push(
-        ['Dirección', adjustment.dir],
-        ['Ajuste bruto (a la mediana)', fmt(adjustment.raw)],
-        ['Ajuste aplicado (topado por el egreso)', fmt(adjustment.capped)],
-        ['¿Se topó por el monto del egreso?', adjustment.flag ? 'Sí' : 'No'],
-        ['¿Ajuste improcedente (resultaría negativo)?', adjustment.improcedente ? 'Sí' : 'No'],
-      );
-    }
-  } else {
-    filas.push(['Sin datos suficientes (cifras de la examinada y/o comparables activas) para evaluar el cumplimiento.', '']);
-  }
-
-  return XLSX.utils.aoa_to_sheet(filas);
-}
-
-function hojaMetodologia() {
-  const filas = [
-    ['Metodología del cálculo'],
-    [],
-    ['1. Indicador de rentabilidad (PLI)'],
-    ['Margen Operacional (MO)', 'Utilidad Operacional / Ventas'],
-    ['Margen Bruto (MB)', '(Ventas − Costo de Ventas) / Ventas'],
-    ['Razón Berry', 'Ventas / (Costo de Ventas + Gastos Operativos), donde Gastos Operativos = Ventas − Costo de Ventas − Utilidad Operacional'],
-    [],
-    ['2. Ajuste de capital de trabajo (cuando aplica; no se calcula sobre Razón Berry)'],
-    ['Fórmula', 'Tasa de interés × [ (CxC/Ventas examinada − CxC/Ventas comparable) + (Inventarios/Ventas examinada − Inventarios/Ventas comparable) − (CxP/Costo examinada − CxP/Costo comparable) ]'],
-    ['PLI ajustado', 'PLI crudo de la comparable + el ajuste anterior'],
-    [],
-    ['3. Rango intercuartil'],
-    ['Cálculo', 'Se ordenan de menor a mayor los PLI ajustados de las comparables activas (según el filtro Todas/Internacionales/Nacionales de la tabla) y se toma el valor en la posición floor(percentil × (n−1)) para el percentil 25, la mediana (percentil 50) y el percentil 75.'],
-    [],
-    ['4. Regla de ajuste de la parte examinada'],
-    ['Dentro del rango', 'No se ajusta: el PLI de la parte examinada está entre el percentil 25 y el percentil 75.'],
-    ['Fuera del rango', 'Se calcula un ajuste bruto que llevaría el resultado a la mediana: (Mediana − PLI examinada) × Ventas de la examinada.'],
-    ['Tope', 'Si el ajuste bruto supera en valor absoluto el monto del egreso declarado, se topa a ese monto (con el mismo signo).'],
-    ['Improcedencia', 'Si el ajuste resultara negativo, no se aplica: queda en cero y se marca como improcedente.'],
-  ];
-  return XLSX.utils.aoa_to_sheet(filas);
-}
-
-function hojaFiltros(datos) {
-  const { engineConfig, selectionFunnel } = datos.filtros;
-  const filas = [
-    ['Filtros configurados en el motor'],
-    [],
-    ['N objetivo (tope 30)', engineConfig.nTarget],
-    ['Pérdidas operativas', engineConfig.perdidaOp === 'excluir' ? 'Excluir (criterio conservador DIAN)' : 'Incluir (criterio OCDE)'],
-    ['Sociedades holding', engineConfig.holding === 'excluir' ? 'Excluir (sin actividad propia)' : 'Incluir'],
-    ['Saldos negativos', engineConfig.saldoNegativo === 'excluir' ? 'Excluir (datos no verosímiles)' : 'Incluir'],
-    ['Prioridad geográfica', engineConfig.geo === 'ninguna' ? 'Global' : engineConfig.geo],
-    ['Rigor funcional', engineConfig.rigor],
-    ['Justificación de pérdida', engineConfig.justificacionPerdida || '—'],
-    [],
-    ['Embudo de selección'],
-  ];
-
-  if (selectionFunnel) {
-    filas.push(
-      ['Universo evaluado', selectionFunnel.evaluadas],
-      ['Descartadas por los filtros (holding/saldo negativo/pérdida)', selectionFunnel.rechazadasFiltros ?? 0],
-      ['Curadas con IA', selectionFunnel.curadas ?? 0],
-      ['  · de esas, reutilizadas de una corrida anterior', selectionFunnel.reutilizadas ?? 0],
-      ['Rechazadas por la curación IA', selectionFunnel.rechazadasIA ?? 0],
-      ['Rechazadas por el rigor funcional', selectionFunnel.rechazadasRigor ?? 0],
-      ['Válidas (pasaron todos los filtros)', selectionFunnel.validas],
-      ['Seleccionadas', selectionFunnel.seleccionadas],
-      ['Objetivo (N)', selectionFunnel.objetivo],
-      ['En reserva (válidas que no entraron por el tope N)', selectionFunnel.reserva],
-    );
-  } else {
-    filas.push(['No se ejecutó la selección automática del motor en esta corrida: las comparables de este estudio se cargaron o editaron manualmente.']);
-  }
-
-  return XLSX.utils.aoa_to_sheet(filas);
-}
-
-const HEADERS_BASE = ['Razón Social', 'ID', 'Ámbito', 'SIC', 'Ventas', 'Costo de Ventas', 'Utilidad Operacional', 'CxC', 'Inventarios', 'CxP', 'PLI Crudo'];
-const HEADERS_ADJ = ['CxC/Ventas (comparable)', 'CxC/Ventas (examinada)', 'Inv/Ventas (comparable)', 'Inv/Ventas (examinada)', 'CxP/Costo (comparable)', 'CxP/Costo (examinada)', 'Tasa de Interés', 'Ajuste de Capital de Trabajo'];
-const HEADERS_TAIL = ['PLI Ajustado', 'Incluida en el Rango', 'Puntaje del Motor', 'Razones', 'Continuidad'];
-
-function hojaComparables(datos) {
-  const { comparables, estudio, examinada } = datos;
-  const conAjuste = !!estudio.useAdj && estudio.pli !== 'Berry';
-  const headers = [...HEADERS_BASE, ...(conAjuste ? HEADERS_ADJ : []), ...HEADERS_TAIL];
-  const tR = examinada.tR || {};
-
-  const filas = [headers];
-  (comparables || []).forEach(row => {
-    const base = [
-      row.name || '', row.id || '', row.amb || '', row.sic || '',
-      fmt(row.s), fmt(row.c), fmt(row.op), fmt(row.ar), fmt(row.inv), fmt(row.ap),
-      conFormato(row.pli, pctf),
-    ];
-    const ajuste = conAjuste ? [
-      conFormato(row.ratiosComp?.arS, pctf), conFormato(tR.arS, pctf),
-      conFormato(row.ratiosComp?.invS, pctf), conFormato(tR.invS, pctf),
-      conFormato(row.ratiosComp?.apC, pctf), conFormato(tR.apC, pctf),
-      pctf(estudio.interestRate),
-      row.adj !== undefined ? fmt(row.adj) : '—',
-    ] : [];
-    const cola = [
-      conFormato(row.adjustedPli, pctf),
-      row.isIncluded ? 'Sí' : 'No',
-      puntaje(row.score),
-      row.razones || '',
-      row.esContinuidad ? 'Sí' : 'No',
-    ];
-    filas.push([...base, ...ajuste, ...cola]);
+/**
+ * Prepara una copia aislada del estudio para la memoria de cálculo óptima
+ * sin tocar ni alterar el objeto 'estudio' original usado por el resto del sistema.
+ */
+function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
+  if (!estudioOriginal) return {};
+  const copia = JSON.parse(JSON.stringify(estudioOriginal));
+  const cftNormalizadas = normalizarEeff({
+    ingresos_operacionales: copia.t_s ?? copia.T?.s,
+    costo_ventas: copia.t_c ?? copia.T?.c,
+    utilidad_operacional: copia.t_op ?? copia.T?.op,
+    gastos_operacionales: copia.t_gastos || copia.t_opex,
+    cuentas_por_cobrar: copia.t_ar ?? copia.T?.ar,
+    inventarios: copia.t_inv ?? copia.T?.inv,
+    cuentas_por_pagar: copia.t_ap ?? copia.T?.ap,
+    propiedad_planta_equipo: copia.t_ppe ?? copia.T?.ppe,
   });
 
-  return XLSX.utils.aoa_to_sheet(filas);
+  if (cftNormalizadas.op !== null && cftNormalizadas.op !== undefined) {
+    copia.t_op = cftNormalizadas.op;
+  } else if (copia.t_s != null && copia.t_c != null && copia.t_op != null) {
+    copia.t_op = Number(copia.t_s) - Number(copia.t_c) - Number(copia.t_op);
+  }
+  if (cftNormalizadas.ppe != null) copia.t_ppe = cftNormalizadas.ppe;
+
+  if (Array.isArray(copia.comparables)) {
+    copia.comparables = copia.comparables.map((comp) => {
+      const compNorm = normalizarEeff({
+        ingresos_operacionales: comp.s,
+        costo_ventas: comp.c,
+        utilidad_operacional: comp.op,
+        gastos_operacionales: comp.gastos || comp.opex,
+        cuentas_por_cobrar: comp.ar,
+        inventarios: comp.inv,
+        cuentas_por_pagar: comp.ap,
+        propiedad_planta_equipo: comp.ppe || comp.propiedad_planta_equipo,
+      });
+      let opex = compNorm.op;
+      if ((opex === null || opex === undefined) && comp.s != null && comp.c != null && comp.op != null) {
+        opex = Number(comp.s) - Number(comp.c) - Number(comp.op);
+      }
+      return {
+        ...comp,
+        op: opex !== null && opex !== undefined ? opex : comp.op,
+        ppe: compNorm.ppe !== null && compNorm.ppe !== undefined ? compNorm.ppe : comp.ppe,
+      };
+    });
+  }
+  return copia;
 }
 
 function hojaRechazadas(rechazadas) {
@@ -175,25 +77,55 @@ function hojaReserva(reserva) {
 }
 
 /**
- * Arma el libro de soporte del Motor de Comparables. Función pura: no toca el
- * DOM, así que se puede testear igual que el resto de `services/`.
- *
- * `datos` esperado:
- * {
- *   estudio: { entidad, anio, pli, useAdj, interestRate },
- *   examinada: { T, tPLI, tR },
- *   rango: { stats, activeCount, adjustment },
- *   filtros: { engineConfig, selectionFunnel },
- *   comparables: calculatedRows,           // filas ya calculadas por el componente
- *   auditoria: { rechazadas, reserva } | null,
- * }
+ * Arma el libro de soporte del Motor de Comparables integrando las 8 hojas del Excel Óptimo
+ * con fórmulas dinámicas recalculables.
  */
 export function construirLibroSoporte(datos) {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, hojaResumen(datos), 'Resumen');
-  XLSX.utils.book_append_sheet(wb, hojaMetodologia(), 'Metodología');
-  XLSX.utils.book_append_sheet(wb, hojaFiltros(datos), 'Filtros del motor');
-  XLSX.utils.book_append_sheet(wb, hojaComparables(datos), 'Comparables seleccionadas');
+
+  const estudioBase = {
+    t_s: datos.examinada?.T?.s ?? datos.estudio?.t_s ?? datos.estudio?.s,
+    t_c: datos.examinada?.T?.c ?? datos.estudio?.t_c ?? datos.estudio?.c,
+    t_op: datos.examinada?.T?.op ?? datos.estudio?.t_op ?? datos.estudio?.op,
+    t_ar: datos.examinada?.T?.ar ?? datos.estudio?.t_ar ?? datos.estudio?.ar,
+    t_inv: datos.examinada?.T?.inv ?? datos.estudio?.t_inv ?? datos.estudio?.inv,
+    t_ap: datos.examinada?.T?.ap ?? datos.estudio?.t_ap ?? datos.estudio?.ap,
+    t_ppe: datos.examinada?.T?.ppe ?? datos.estudio?.t_ppe ?? datos.estudio?.ppe,
+    prime: datos.estudio?.interestRate ?? datos.estudio?.prime ?? 0,
+    comparables: (datos.comparables || []).map((c) => ({
+      name: c.name || c.razonSocial || '',
+      s: c.s,
+      c: c.c,
+      op: c.op,
+      ar: c.ar,
+      inv: c.inv,
+      ap: c.ap,
+      ppe: c.ppe,
+      tasaEfectiva: c.tasaEfectiva,
+    })),
+  };
+
+  const estudioNorm = obtenerEstudioNormalizadoParaParche(estudioBase);
+
+  const seleccion = datos.seleccion || (datos.auditoria || datos.filtros ? {
+    criterios: datos.filtros?.selectionFunnel?.criterios || [],
+    candidatas: [
+      ...(datos.comparables || []).map(c => ({ ...c, seleccionada: true })),
+      ...((datos.auditoria && datos.auditoria.rechazadas) || []).map(c => ({ ...c, seleccionada: false })),
+      ...((datos.auditoria && datos.auditoria.reserva) || []).map(c => ({ ...c, seleccionada: false })),
+    ]
+  } : null);
+
+  const hojasOptimas = hojasMemoriaRangoOptimo(estudioNorm, seleccion);
+
+  hojasOptimas.forEach(({ nombre, celdas, filas, cols, rows, merges, autofiltro }) => {
+    const hoja = XLSX.utils.aoa_to_sheet(celdas || filas);
+    if (cols) hoja['!cols'] = cols;
+    if (rows) hoja['!rows'] = rows;
+    if (merges && merges.length) hoja['!merges'] = merges;
+    if (autofiltro) hoja['!autofilter'] = typeof autofiltro === 'string' ? { ref: autofiltro } : autofiltro;
+    XLSX.utils.book_append_sheet(wb, hoja, nombre);
+  });
 
   const rechazadas = (datos.auditoria && datos.auditoria.rechazadas) || [];
   if (rechazadas.length) {
