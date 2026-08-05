@@ -215,7 +215,7 @@ test('en la plantilla real cada tabla macro queda regenerada con el año del est
     'Tasas de Inflación Global (2025-2027)',
     'Proyecciones de Crecimiento del PIB por Región/País (2026)',
     'Inflación en Colombia (2026 vs. Meta 2027)',
-    'Tasa de Intervención del Banco de la República (Diciembre 2025 - Diciembre 2026)',
+    'Tasa de Intervención del Banco de la República (Diciembre 2025 - Agosto 2026)',
     'Tasa Representativa del Mercado (TRM) Promedio (2025-2026)',
     'Tasa de Desempleo en Colombia (2026 vs. Proyección 2027)',
   ];
