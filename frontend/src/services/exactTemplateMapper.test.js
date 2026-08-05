@@ -215,7 +215,7 @@ test('en la plantilla real cada tabla macro queda regenerada con el año del est
     'Tasas de Inflación Global (2025-2027)',
     'Proyecciones de Crecimiento del PIB por Región/País (2026)',
     'Inflación en Colombia (2026 vs. Meta 2027)',
-    'Tasa de Intervención del Banco de la República (Diciembre 2025 - Diciembre 2026)',
+    'Tasa de Intervención del Banco de la República (Diciembre 2025 - Agosto 2026)',
     'Tasa Representativa del Mercado (TRM) Promedio (2025-2026)',
     'Tasa de Desempleo en Colombia (2026 vs. Proyección 2027)',
   ];
@@ -614,6 +614,7 @@ test('el año de la frase que introduce la tabla 17 se actualiza', () => {
 const comparableCompleta = {
   name: 'AKATSUKI INC.',
   eeffVerificado: true,
+  eeffArchivo: 'akatsuki_eeff.pdf',
   desc: 'Akatsuki Inc. is engaged in the game, comic and other businesses.',
   descActividad: 'Akatsuki Inc. se dedica al juego y cómic en Japón.',
   s: 23652000000, c: 9954000000, op: 3916000000, ar: 4252000000, inv: 626000000, ap: 975500000,
@@ -713,8 +714,24 @@ test('un valor con separador de miles en formato español se formatea, no se tru
   assert.ok(!/<p>\s*1\s*<\/p>/.test(fila), 'no debería truncar "1.000" a "1": ' + fila);
 });
 
-test('sin comparables con EEFF verificado, sale el aviso de pendiente y no el ejemplo estático', () => {
-  const html = generarAnexoBHtml({ anio: 2025, comparables: [{ name: 'SIN VERIFICAR', eeffVerificado: false }] }, 2025, (v) => v);
+test('una comparable con EEFF cargado pero con alertas contables entra igual al Anexo B', () => {
+  // Caso real reportado: comparables extranjeras casi nunca cuadran la ecuación
+  // patrimonial ni coinciden en año con el estudio (su EEFF más reciente disponible
+  // suele ser del año anterior), así que exigir eeffVerificado dejaba el Anexo B
+  // en "Pendiente" incluso con EEFF real cargado para todas las comparables.
+  const conAlertas = {
+    ...comparableCompleta,
+    name: 'TOSE CO., LTD.',
+    eeffVerificado: false,
+    eeffHallazgos: ['⚠️ Ecuación patrimonial no cuadra: Activos (7836) ≠ Pasivos (1675) + Patrimonio (0)'],
+  };
+  const html = generarAnexoBHtml({ anio: 2026, comparables: [conAlertas] }, 2026, (v) => v);
+  assert.ok(!html.includes('Pendiente'), 'no debería pedir cargar EEFF si ya hay un archivo cargado');
+  assert.ok(html.includes('<strong>TOSE CO., LTD.</strong>'), 'la comparable con alertas debería entrar al Anexo B');
+});
+
+test('sin comparables con EEFF cargado, sale el aviso de pendiente y no el ejemplo estático', () => {
+  const html = generarAnexoBHtml({ anio: 2025, comparables: [{ name: 'SIN ARCHIVO', eeffVerificado: false }] }, 2025, (v) => v);
   assert.ok(html.includes('Pendiente'));
   assert.ok(!html.includes('AKATSUKI'));
   assert.ok(!html.includes('COLOPL'));
@@ -745,6 +762,7 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
     comparables: [{
       name: 'DISTRIBUIDORA ANDINA S.A.',
       eeffVerificado: true,
+      eeffArchivo: 'distribuidora_andina_eeff.pdf',
       desc: 'Distributes consumer goods across the Andean region.',
       descActividad: 'Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.',
       s: 1000000, c: 400000, op: 100000, ar: 50000, inv: 30000, ap: 20000,
@@ -781,6 +799,28 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
   assert.ok(bloqueAnexoB.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo en ANEXO B');
   assert.ok(bloqueAnexoB.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');
+});
+
+/* Mismo bug que tenía ANEXO B (ver test de arriba y commit a638866): apartarEnlaces
+   convierte `<a id="_Toc208931005">` en un marcador @@PT_ENLACE_N@@ antes de que el
+   reemplazo de ANEXO A busque ese id literal, así que nunca lo encontraba y ANEXO A
+   quedaba con los IMAGE_PLACEHOLDER y el nombre de End Game del informe de referencia. */
+test('hydrateExactWordTemplate reemplaza el ANEXO A completo con los EEFF ingestados del estudio activo, no los IMAGE_PLACEHOLDER de End Game', () => {
+  const estudio = {
+    ent: 'ACME COLOMBIA S.A.S', nit: '800123456-7', anio: 2025,
+    eeffImages: ['https://storage.example/eeff-pagina-1.png', 'https://storage.example/eeff-pagina-2.png'],
+  };
+
+  const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
+
+  const inicioAnexoA = salida.indexOf('id="_Toc208931005"');
+  const inicioAnexoB = salida.indexOf('id="_Toc208931006"', inicioAnexoA);
+  const bloqueAnexoA = salida.slice(inicioAnexoA, inicioAnexoB);
+
+  assert.ok(!bloqueAnexoA.includes('IMAGE_PLACEHOLDER'), 'sobrevivió el IMAGE_PLACEHOLDER estático del informe de referencia');
+  assert.ok(bloqueAnexoA.includes('https://storage.example/eeff-pagina-1.png'), 'no entró la primera página de EEFF ingestada');
+  assert.ok(bloqueAnexoA.includes('https://storage.example/eeff-pagina-2.png'), 'no entró la segunda página de EEFF ingestada');
+  assert.ok(bloqueAnexoA.includes('ACME COLOMBIA S.A.S'), 'no se puso la razón social del estudio activo en el título de ANEXO A');
 });
 
 /* ══════ Tabla 13. Códigos SIC utilizados ══════

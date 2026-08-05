@@ -539,14 +539,20 @@ function generarBloqueComparableAnexoB(comp, year, wrap) {
   return tablaNombreDescripcion + '\n' + tablaCifras(filasPL) + '\n' + tablaCifras(filasBalance);
 }
 
-/* Cuerpo dinámico del ANEXO B. Sin ninguna comparable verificada devuelve el aviso de
-   pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
+/* Cuerpo dinámico del ANEXO B. Entra cualquier comparable con un EEFF cargado y cruzado a
+   su fila (`eeffArchivo`), tenga o no alertas contables: la verificación aritmética
+   (`eeffVerificado`) casi nunca sale limpia con comparables reales —el año de su EEFF rara
+   vez coincide con el del estudio porque el del mismo año aún no se ha publicado, y algunas
+   no desglosan patrimonio— así que exigirla dejaba el Anexo B en «Pendiente» aun con EEFF
+   real cargado para todas. Las alertas se siguen mostrando en el Paso 4 para que el analista
+   las revise; no bloquean el informe. Sin ninguna comparable con archivo cargado, sale el
+   aviso de pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
 export function generarAnexoBHtml(study, year, wrap) {
-  const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffVerificado);
+  const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
   const titulo = '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n';
 
   if (!comparables.length) {
-    return titulo + '<p>\nPendiente: cargue y verifique los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
+    return titulo + '<p>\nPendiente: cargue los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
   }
 
   return titulo + comparables.map((c) => generarBloqueComparableAnexoB(c, year, wrap)).join('\n') + '\n';
@@ -685,8 +691,10 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
          inmediato y no al final de la expresión a propósito: puesto al final, el
          motor haría backtracking y acabaría casando solo "END GAME", dejando
          " INTERACTIVE INC" colgando y sin sustituir. */
+    /* Sustitución del vinculado (END GAME INTERACTIVE INC, o END GAME INTERACTIVE en contrato después de "Y ") */
+    { target: /END\s+GAME\s+INTERACTIVE\s+INC/gi, val: wrap(study.vinc) },
+    { target: /(?<=Y\s+)END\s+GAME\s+INTERACTIVE(?!\s+COLOMBIA)/gi, val: wrap(study.vinc) },
     { target: /END\s+GAME(?!\s+INTERACTIVE\s+INC)(?:\s+INTERACTIVE)?(?:\s+COLOMBIA)?(?:\s+S\.?A\.?S?\.?)?(?!\w)/gi, val: wrap(study.ent) },
-    { target: /END GAME INTERACTIVE INC/gi, val: wrap(study.vinc) },
     { target: /ESTADOS UNIDOS/gi, val: wrap(study.pais_vinc) },
     { target: /604477955/g, val: wrap(study.vinc_id) },
     { target: /Otros servicios \(\s*07\s*\)/gi, val: wrap(formattedTipo) },
@@ -777,10 +785,6 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
     html = html.replace(/1\.989\.688\.200/g, cifra(totalActivos));
   }
 
-  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ─── */
-  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
-  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
-
   /* ─── Tabla 14 y las cifras que la rodean ───
      La tabla se arma con el embudo del motor. Y con ella hay que mover el texto que la
      acompaña: el informe dice «se identificó un total de 442 Compañías potenciales» y
@@ -817,17 +821,24 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
 
   // Reemplazar Rango Intercuartil si se calculó
   if (stats) {
-    html = html.replace(/Percentil 25:?\s*[\d\.\,%]+/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);
-    html = html.replace(/Mediana:?\s*[\d\.\,%]+/gi, `Mediana: ${wrap(pctf(stats.med))}`);
-    html = html.replace(/Percentil 75:?\s*[\d\.\,%]+/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
+    html = html.replace(/Percentil 25:?\s*[\d\.\,-]+%/gi, `Percentil 25: ${wrap(pctf(stats.p25))}`);
+    html = html.replace(/Mediana:?\s*[\d\.\,-]+%/gi, `Mediana: ${wrap(pctf(stats.med))}`);
+    html = html.replace(/Percentil 75:?\s*[\d\.\,-]+%/gi, `Percentil 75: ${wrap(pctf(stats.p75))}`);
+    html = html.replace(
+      /se ubica entre el percentil 25 \([^)]+\) y \([^)]+\) percentil 75/gi,
+      `se ubica entre el percentil 25 (${wrap(pctf(stats.p25))}) y el percentil 75 (${wrap(pctf(stats.p75))})`
+    );
   }
 
   /* Monto del ajuste. Si el estudio está dentro del rango no hay ajuste que
-     reportar, pero la frase de la plantilla sí existe: se pone un marcador
-     visible en vez de la cifra de End Game. Corregir la redacción de esa frase
-     queda para el plan 2, cuando la plantilla tenga campos con nombre. */
-  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '—';
-  html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
+     reportar. Se reemplaza la frase estática del ajuste por la situación real del estudio. */
+  const montoAjuste = adj && !adj.within ? fmt(Math.abs(adj.capped)) : '0';
+  if (!adj || adj.within) {
+    html = html.replace(/la suma de \$983\.180\.000 fue ajustada/gi, 'no se requirió realizar ajustes a la suma declarada');
+    html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, '0');
+  } else {
+    html = html.replace(/(?<![\d.])983\.180\.000(?![\d.])/g, wrap(montoAjuste));
+  }
 
   // Reemplazar resultado Cumple/No Cumple
   html = html.replace(/cumple con el principio de plena competencia/gi, `${wrap(cumpleStr)} con el principio de plena competencia`);
@@ -864,12 +875,18 @@ export function hydrateExactWordTemplate(rawHtml, study, datosMacro, analisisSec
 
   html = reponerEnlaces(html, enlaces);
 
-  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ───
+  /* ─── ANEXO A: Reemplazo de los anexos estáticos de End Game por los EEFF ingestados ───
      Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: `apartarEnlaces`
      (arriba) reemplaza temporalmente TODAS las etiquetas <a id="..."> del documento —
-     incluidas las de ANEXO B y ANEXO C— por marcadores @@PT_ENLACE_N@@, y solo las repone
-     al final. Buscar `id="_Toc208931006"` antes de esa reposición nunca lo encuentra: el
-     texto literal no existe todavía en ese punto del documento. */
+     incluida la de ANEXO A— por marcadores @@PT_ENLACE_N@@, y solo las repone al final.
+     Buscar `id="_Toc208931005"` antes de esa reposición nunca lo encuentra: el texto
+     literal no existe todavía en ese punto del documento (mismo bug que tenía ANEXO B,
+     ver commit a638866). */
+  const rxAnexoABody = /<p>\s*<a id="_Toc208931005"><\/a>ANEXO A\. Estados financieros[\s\S]*?(?=<h1[^>]*>\s*<a id="_Toc208931006"><\/a>|<p>\s*<a id="_Toc208931006"><\/a>|<h1>\s*<a id="_Toc208931006"><\/a>ANEXO B)/i;
+  html = html.replace(rxAnexoABody, () => generarAnexoAHtml(study, year, wrap));
+
+  /* ─── ANEXO B: Descripciones de comparables y Estados Financieros ───
+     Va después de reponerEnlaces, no junto al resto de ANEXO A/Tabla 16: mismo motivo. */
   html = reemplazarAnexoB(html, study, year, wrap);
 
   return html;

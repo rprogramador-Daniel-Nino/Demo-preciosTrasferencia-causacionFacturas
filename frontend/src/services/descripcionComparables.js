@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const MODELO_REDACCION = 'claude-haiku-4-5';
+const MODELO_REDACCION = 'claude-3-5-haiku-20241022';
 
 /* Traduce y redacta en español la descripción de negocio cruda de Capital IQ (normalmente
    en inglés) en un párrafo estilo Anexo B: qué hace la compañía, marcas/productos si el

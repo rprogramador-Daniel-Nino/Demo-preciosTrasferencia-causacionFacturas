@@ -66,12 +66,20 @@ export const DATOS_MACRO = {
   /* Tasa de intervención del Banco de la República. A diferencia de las demás,
      estas son observaciones puntuales y no promedios anuales, así que cada una
      conserva su etiqueta original: reetiquetar «marzo de 2023» como «2023» daría
-     por anual un máximo que fue de un mes. */
+     por anual un máximo que fue de un mes.
+
+     2026 verificado el 2026-08-04: la Junta Directiva la mantuvo en 12,00% para
+     agosto (decisión del 31 de julio de 2026, El Tiempo). Reemplaza un valor
+     anterior de 6,75% etiquetado «Diciembre 2026» que databa una decisión de un
+     mes todavía futuro en ese momento — no podía ser un dato observado. Este
+     valor de agosto también quedará desactualizado en cuanto la Junta vuelva a
+     reunirse (próxima reunión, previsiblemente en septiembre); quien radique
+     debe volver a verificarlo contra la fuente. */
   tasa_intervencion: {
     2023: { etiqueta: 'Marzo 2023 (máximo del ciclo)', valor: '13.25' },
     2024: { etiqueta: 'Diciembre 2024', valor: '9.50' },
     2025: { etiqueta: 'Diciembre 2025', valor: '8.50' },
-    2026: { etiqueta: 'Diciembre 2026', valor: '6.75' },
+    2026: { etiqueta: 'Agosto 2026', valor: '12.00' },
   },
 
   trm_promedio: {

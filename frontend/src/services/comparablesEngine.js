@@ -674,6 +674,12 @@ const SEGUNDOS_POR_LOTE = 15;
    en vuelo. Todos son transitorios, y sin reintento cada uno cuesta el lote entero.
    Un 400/401/403 no entra: es un error de contrato o de credenciales y repetirlo
    solo gasta cuota. */
+/* En una constante y no incrustado en la llamada: el nombre del modelo vive también
+   en `GEMINI_MODEL_DEFAULT` de server.js y functions/index.js, y cada vez que alguien
+   lo actualiza en un sitio y no en los otros la curación queda pidiendo un modelo
+   distinto al del resto del sistema. Mantener los tres iguales. */
+export const GEMINI_MODELO_CURACION = 'gemini-3.5-flash';
+
 const ESTADOS_REINTENTABLES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const CURACION_REINTENTOS = 2;
 const CURACION_PAUSA_BASE_MS = 1500;
@@ -710,7 +716,7 @@ async function consultarGemini(prompt, { reintentos, pausaBaseMs }) {
   for (let intento = 0; intento <= reintentos; intento++) {
     try {
       const respuesta = await axios.post('/api/gemini', {
-        model: 'gemini-3-flash-preview',
+        model: GEMINI_MODELO_CURACION,
         contents: [{ parts: [{ text: prompt }] }],
       });
       /* todas las partes, no solo la primera: los modelos parten la respuesta */

@@ -41,6 +41,14 @@ export default function ReporteGenerador({ study, estudioId }) {
      mientras carga o si todavía no hay corrida: generarApartadoSectorial cae
      al respaldo genérico con marcador. */
   const [analisisSector, setAnalisisSector] = useState(null);
+  /* Motivo por el que no se pudo generar/leer el análisis de sector, o null si no ha
+     fallado (todavía no corre, o corrió bien). Se distingue del resto de `analisisSector`
+     porque el banner necesita decir POR QUÉ falló, no solo que falló: "no hay información
+     pública confiable para esta actividad" (el sector es real pero no se encontró nada
+     verificable — no va a resolverse solo reintentando) es una situación muy distinta de
+     un error técnico (red, API caída), y antes ambas quedaban indistinguibles detrás del
+     mismo mensaje genérico de "todavía no está generado". */
+  const [motivoFalloSector, setMotivoFalloSector] = useState(null);
   /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
      aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
      que se abre el estudio sería más molesto que informativo. El alert sí se
@@ -103,6 +111,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     }
 
     const clave = claveActividad(normalizarActividad(actividadTexto));
+    if (vivo) setMotivoFalloSector(null);
     (async () => {
       try {
         let doc = await leerAnalisisSector(clave);
@@ -114,7 +123,10 @@ export default function ReporteGenerador({ study, estudioId }) {
         if (vivo) setAnalisisSector(doc);
       } catch (err) {
         console.error('No se pudo generar/leer el análisis de sector:', err);
-        if (vivo) setAnalisisSector(null);
+        if (vivo) {
+          setAnalisisSector(null);
+          setMotivoFalloSector(err?.response?.data?.error || err?.message || 'error desconocido');
+        }
       }
     })();
     return () => { vivo = false; };
@@ -131,6 +143,19 @@ export default function ReporteGenerador({ study, estudioId }) {
       avisos.push(
         'esta plantilla no trae la sección del análisis del sector, así que no se ' +
         'reemplazó por la actividad de la compañía: revísala a mano'
+      );
+    } else if (motivoFalloSector) {
+      /* Distinguir "no hay nada público que citar" de un error técnico: la primera no se
+         arregla reintentando (el analista necesita redactarla a mano o buscar otra fuente),
+         la segunda sí puede ser transitoria. Antes las dos quedaban indistinguibles detrás
+         del mismo mensaje genérico de "todavía no está generado". */
+      avisos.push(
+        /Ning[uú]n dato del sector trajo confirmaci[oó]n de b[uú]squeda/i.test(motivoFalloSector)
+          ? 'no se encontró información pública confiable para el sector de esta actividad: el ' +
+            'análisis del sector (III.C) quedó con el respaldo genérico — redáctalo a mano, no va ' +
+            'a resolverse solo con reintentar'
+          : 'no se pudo generar el análisis del sector (III.C) por un error técnico (' + motivoFalloSector + '): ' +
+            'quedó con el respaldo genérico, vuelve a intentarlo'
       );
     } else if (!d.sectorNarrativaCubierta) {
       avisos.push(

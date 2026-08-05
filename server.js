@@ -10,7 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL_DEFAULT = 'gemini-3-flash-preview';
+const GEMINI_MODEL_DEFAULT = 'gemini-3.5-flash';
 
 if (!API_KEY) {
   console.error('\n⚠️  Falta ANTHROPIC_API_KEY en el archivo .env — el proxy no va a funcionar.\n');

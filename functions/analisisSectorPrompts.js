@@ -108,18 +108,23 @@ function parsearRespuestaResumenActividad(texto) {
 function construirPromptBusquedaSector(actividad, year) {
   const y1 = year - 1;
   return (
-    'Usa la búsqueda de Google para encontrar información real y verificable sobre el sector ' +
-    'económico de esta actividad en Colombia: "' + actividad + '". Necesito datos para el año ' +
-    y1 + ' y para el año ' + year + ', y proyecciones para ' + (year + 1) + '.\n\n' +
+    'Usa la búsqueda de Google para encontrar información real, verificable y ESPECÍFICA (cifras, ' +
+    'porcentajes de variación año a año, montos) sobre el sector económico de esta actividad en ' +
+    'Colombia: "' + actividad + '". Necesito datos para el año ' + y1 + ' y para el año ' + year + ', ' +
+    'y proyecciones para ' + (year + 1) + '. Busca en varios ángulos, no te quedes con la primera ' +
+    'búsqueda: empleo generado por el sector (cifra y variación % interanual), tamaño o valor del ' +
+    'mercado (en COP o USD), PIB o valor agregado del sector, exportaciones e importaciones (montos y ' +
+    'variación % respecto al año anterior), número de empresas o de consumidores/usuarios si aplica, y ' +
+    'tendencias tecnológicas o regulatorias relevantes para el sector.\n\n' +
     'Responde ÚNICAMENTE con un objeto JSON (sin texto adicional, sin marcas markdown) con esta forma:\n' +
     '{\n' +
     '  "datosClaveTabla": [\n' +
     '    { "indicador": "Empleo del sector", "valorAnterior": "...", "valorActual": "...", "fuente": "...", "fuenteUrl": "https://..." },\n' +
     '    { "indicador": "Exportaciones del sector", "valorAnterior": "...", "valorActual": "...", "fuente": "...", "fuenteUrl": "https://..." }\n' +
     '  ],\n' +
-    '  "datosComportamiento": [ { "dato": "descripción de un hecho o cifra sobre el comportamiento del sector en ' + year + '", "fuente": "...", "fuenteUrl": "https://..." } ],\n' +
-    '  "datosComercioExterior": [ { "dato": "cifra de importaciones o exportaciones del sector", "fuente": "...", "fuenteUrl": "https://..." } ],\n' +
-    '  "datosProyeccion": [ { "dato": "proyección o expectativa para el sector en ' + (year + 1) + '", "fuente": "...", "fuenteUrl": "https://..." } ]\n' +
+    '  "datosComportamiento": [ { "dato": "hecho o cifra concreta y comparada (ej. \'generó 250.000 empleos directos, un incremento del 13,7% frente a ' + y1 + '\') sobre el comportamiento del sector en ' + year + '", "fuente": "...", "fuenteUrl": "https://..." } ],\n' +
+    '  "datosComercioExterior": [ { "dato": "cifra concreta de importaciones o exportaciones del sector, con su variación % respecto a ' + y1 + '", "fuente": "...", "fuenteUrl": "https://..." } ],\n' +
+    '  "datosProyeccion": [ { "dato": "proyección o expectativa cuantificada para el sector en ' + (year + 1) + '", "fuente": "...", "fuenteUrl": "https://..." } ]\n' +
     '}\n\n' +
     'Reglas estrictas:\n' +
     '1. Solo incluye datos que hayas verificado con la búsqueda. Si no encuentras nada confiable ' +
@@ -128,18 +133,23 @@ function construirPromptBusquedaSector(actividad, year) {
     'que recuerdes de memoria.\n' +
     '3. "datosClaveTabla" son indicadores cuantitativos comparables entre ' + y1 + ' y ' + year + ' ' +
     '(empleo, exportaciones, tamaño del mercado, inversión, etc.) — máximo 6 filas, las más relevantes.\n' +
-    '4. No agregues ninguna clave que no esté en la lista de arriba.'
+    '4. Prioriza cifras con comparación explícita entre años y con porcentaje de variación sobre datos ' +
+    'sueltos de un solo año: son las que permiten redactar un análisis comparativo, no una lista de hechos.\n' +
+    '5. No agregues ninguna clave que no esté en la lista de arriba.'
   );
 }
 
-/** Confiable a nivel de respuesta completa, no por URL puntual: los
- *  groundingChunks de Gemini son redirecciones propias de Google, nunca la URL
- *  del medio que el modelo cita — comparar cadena a cadena nunca coincide (ver
- *  el mismo ajuste en analisisMercadoPrompts.js, Importante 3 de la revisión
- *  final del análisis de mercado). */
-function parsearRespuestaBusquedaSector(texto, groundingChunks) {
+/** Confiable a nivel de respuesta completa, no por URL puntual: `groundingMetadata`
+ *  nunca trae `groundingChunks`/`groundingSupports` con `google_search` + salida en
+ *  JSON de texto (limitación conocida de la API, no de este código — un dato con
+ *  fuenteUrl real y grounding real salía descartado siempre porque ese campo nunca
+ *  llega). Lo único que sí llega de forma consistente es `webSearchQueries`: la
+ *  lista de búsquedas que Gemini de verdad ejecutó en Google antes de responder.
+ *  Ya no se verifica la URL puntual —esa garantía no la da la API en este modo—,
+ *  solo que hubo una búsqueda real detrás de la respuesta. */
+function parsearRespuestaBusquedaSector(texto, webSearchQueries) {
   const bruto = extraerJSON(texto);
-  const huboBusquedaReal = Array.isArray(groundingChunks) && groundingChunks.length > 0;
+  const huboBusquedaReal = Array.isArray(webSearchQueries) && webSearchQueries.length > 0;
 
   const datosClaveTabla = (Array.isArray(bruto.datosClaveTabla) ? bruto.datosClaveTabla : [])
     .filter((f) => f && typeof f.indicador === 'string' && f.indicador.trim() && typeof f.valorActual === 'string' && f.valorActual.trim())
@@ -198,20 +208,27 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'Comportamiento del sector:\n' + resumir(datos.datosComportamiento) + '\n\n' +
     'Comercio exterior:\n' + resumir(datos.datosComercioExterior) + '\n\n' +
     'Proyección para ' + (year + 1) + ':\n' + resumir(datos.datosProyeccion) + '\n\n' +
-    'Redacta cuatro apartados en español, tono técnico-formal (mínimo 1 párrafo cada uno, más si hay ' +
-    'material), más un título corto para los encabezados de esta sección:\n' +
+    'Redacta cuatro apartados en español, tono técnico-formal, denso en cifras concretas y ' +
+    'comparaciones año a año (2-3 párrafos sustanciales cada uno cuando el material lo permita, nunca ' +
+    'una lista de frases sueltas), más un título corto para los encabezados de esta sección:\n' +
     '1. "tituloSector": el fragmento que completa la frase "Análisis del Sector de la industria ___", ' +
     'con la preposición correcta en español y en 2 a 6 palabras (ej. "del software y los videojuegos", ' +
     '"de la construcción", "de los alimentos procesados") — a partir de la actividad de arriba, no la ' +
     'copies completa, resúmela.\n' +
-    '2. "comportamiento": comportamiento del sector en ' + year + ' y comparación con ' + y1 + '.\n' +
-    '3. "comercioExterior": importaciones y exportaciones del sector.\n' +
-    '4. "proyeccion": qué se proyecta para el sector en ' + (year + 1) + '.\n' +
-    '5. "conclusiones": conclusiones y perspectivas del sector, relevantes para evaluar la ' +
-    'comparabilidad de la parte examinada.\n\n' +
+    '2. "comportamiento": comportamiento del sector en ' + year + ' y comparación con ' + y1 + ', citando ' +
+    'las cifras concretas de empleo, tamaño de mercado, PIB/valor agregado y su variación % que traigan ' +
+    'los datos de arriba — no los resumas en una frase, desarróllalos.\n' +
+    '3. "comercioExterior": importaciones y exportaciones del sector, con montos y variación % año a año.\n' +
+    '4. "proyeccion": qué se proyecta para el sector en ' + (year + 1) + ', con la cifra o el porcentaje ' +
+    'proyectado si los datos lo traen.\n' +
+    '5. "conclusiones": conclusiones y perspectivas del sector — no una repetición de lo ya dicho, sino ' +
+    'qué implica para evaluar la comparabilidad de la parte examinada (riesgos, oportunidades, retos del ' +
+    'sector que el analista deba tener presentes).\n\n' +
     'Reglas estrictas:\n' +
     '- NO menciones ninguna cifra que no esté en los datos de arriba. Si no tienes datos para un ' +
     'apartado, redáctalo en términos cualitativos sin inventar números.\n' +
+    '- Prefiere siempre la cifra concreta y su fuente sobre la afirmación vaga ("creció de forma ' +
+    'importante" sin el dato detrás no sirve; "generó 250.000 empleos, un incremento del 13,7%" sí).\n' +
     '- Cada apartado (excepto tituloSector) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
     'tablas (la tabla de datos clave se arma aparte, no la repitas).\n' +
     '- Responde ÚNICAMENTE con un objeto JSON (sin marcas markdown) con esta forma exacta:\n' +

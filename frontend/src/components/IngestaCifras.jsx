@@ -48,7 +48,16 @@ export default function IngestaCifras({ study, updateStudy }) {
       }
 
       updateStudy(updates);
-      setEeffMsg('✅ EEFF leídos y páginas del PDF adjuntadas para el ANEXO A.');
+      /* El mensaje decía siempre "páginas adjuntadas" aunque convertPdfToImages
+         hubiera devuelto un arreglo vacío (falla silenciosa, ver pdfRenderer.js): el
+         analista veía "éxito" y solo se enteraba de que el ANEXO A quedó sin imágenes
+         al abrir el Word ya generado. */
+      const paginasAdjuntas = eeffImages ? eeffImages.length : 0;
+      if (paginasAdjuntas > 0) {
+        setEeffMsg(`✅ EEFF leídos y ${paginasAdjuntas} página(s) del PDF adjuntadas para el ANEXO A.`);
+      } else {
+        setEeffMsg('⚠ Se leyeron las cifras, pero no se pudieron adjuntar las páginas del PDF para el ANEXO A (revise que el archivo no esté dañado, o inténtelo de nuevo).');
+      }
     } catch (err) {
       console.error("Error procesando EEFF con OCR:", err);
       setEeffMsg('⚠ No se pudo procesar el archivo. Puede ingresar las cifras manualmente.');
