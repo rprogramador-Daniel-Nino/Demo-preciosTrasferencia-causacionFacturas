@@ -64,7 +64,7 @@ const D = (celda) => `Datos!${celda}`;
  *                 (usar el normalizador eeffParserNormalizador.js antes).
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], candidatas:[{name,ticker,
- *                 sic,country,s,op,c,holderPct,isHolding,hasLoss,hasNeg,seleccionada}] }.
+ *                 sic,country,s,op,c,holderPct,isHolding,hasLoss,hasNegativeBalance,seleccionada}] }.
  *                 Si se entrega, se antepone la hoja «Selección comparables» con el
  *                 universo de Capital IQ, los filtros y el embudo, todo por fórmula.
  * @returns arreglo de { nombre, celdas, cols, merges, autofiltro }.
@@ -311,7 +311,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         c.holderPct == null ? cTxt('') : cNum(c.holderPct, '0.0'),
         cTxt(c.isHolding ? 'Sí' : ''),
         cTxt(c.hasLoss ? 'Sí' : ''),
-        cTxt(c.hasNeg ? 'Sí' : ''),
+        cTxt(c.hasNegativeBalance ? 'Sí' : ''),
         cForT(estado),                         // M Estado (fórmula)
         cTxt(c.seleccionada ? 'Sí' : ''),      // N ¿Seleccionada?
       ]);

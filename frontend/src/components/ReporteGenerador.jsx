@@ -52,6 +52,12 @@ export default function ReporteGenerador({ study, estudioId }) {
      un error técnico (red, API caída), y antes ambas quedaban indistinguibles detrás del
      mismo mensaje genérico de "todavía no está generado". */
   const [motivoFalloSector, setMotivoFalloSector] = useState(null);
+  /* true mientras la generación bajo demanda del análisis de sector está en
+     vuelo. La llamada real (Gemini busca + Claude redacta) tarda 60-100+ s, y
+     sin esto el banner de abajo decía "todavía no está generado" desde el
+     primer instante — indistinguible para el usuario de una corrida que
+     nunca se disparó o que falló, cuando en realidad solo estaba en curso. */
+  const [sectorEnCurso, setSectorEnCurso] = useState(false);
   /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
      aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
      que se abre el estudio sería más molesto que informativo. El alert sí se
@@ -114,24 +120,29 @@ export default function ReporteGenerador({ study, estudioId }) {
     }
 
     const clave = claveActividad(normalizarActividad(actividadTexto));
-    if (vivo) setMotivoFalloSector(null);
+    if (vivo) { setMotivoFalloSector(null); setSectorEnCurso(false); }
     (async () => {
       try {
         let doc = await leerAnalisisSector(clave);
         const yaTieneEsteAnio = doc && doc.porAnio && doc.porAnio[String(year)];
         if (!yaTieneEsteAnio) {
-          /* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector:
-             ese path pasa por el rewrite de Firebase Hosting, que corta cualquier
-             petición a los 60 s sin importar el timeoutSeconds de la función (ver el
-             comentario junto a GEMINI_CORTE_MS en functions/index.js). La cadena
-             Gemini→Gemini→Claude de este endpoint puede tardar más que eso —el
-             navegador recibía un 502 opaco del borde aunque la función siguiera viva
-             dentro de su propio límite de 180 s. La función ya tiene cors:true. */
-          const resp = await axios.post(
-            'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector',
-            { actividad: actividadTexto, year }
-          );
-          doc = { porAnio: { [String(year)]: resp.data.entrada } };
+          if (vivo) setSectorEnCurso(true);
+          try {
+            /* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector:
+               ese path pasa por el rewrite de Firebase Hosting, que corta cualquier
+               petición a los 60 s sin importar el timeoutSeconds de la función (ver el
+               comentario junto a GEMINI_CORTE_MS en functions/index.js). La cadena
+               Gemini→Gemini→Claude de este endpoint puede tardar más que eso —el
+               navegador recibía un 502 opaco del borde aunque la función siguiera viva
+               dentro de su propio límite de 180 s. La función ya tiene cors:true. */
+            const resp = await axios.post(
+              'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector',
+              { actividad: actividadTexto, year }
+            );
+            doc = { porAnio: { [String(year)]: resp.data.entrada } };
+          } finally {
+            if (vivo) setSectorEnCurso(false);
+          }
         }
         if (vivo) setAnalisisSector(doc);
       } catch (err) {
@@ -156,6 +167,15 @@ export default function ReporteGenerador({ study, estudioId }) {
       avisos.push(
         'esta plantilla no trae la sección del análisis del sector, así que no se ' +
         'reemplazó por la actividad de la compañía: revísala a mano'
+      );
+    } else if (sectorEnCurso) {
+      /* En vuelo, no fallado ni pendiente: la corrida real (Gemini busca + Claude
+         redacta) tarda 60-100+ s. Sin esta rama el banner de abajo se confundía con
+         "todavía no está generado", que suena a que hay que hacer algo — aquí no hay
+         nada que hacer, solo esperar a que este mismo aviso se actualice solo. */
+      avisos.push(
+        'el análisis del sector (III.C) se está generando para esta actividad y año — ' +
+        'puede tardar uno o dos minutos, este aviso se actualiza solo cuando esté listo'
       );
     } else if (motivoFalloSector) {
       /* Distinguir "no hay nada público que citar" de un error técnico: la primera no se
@@ -380,7 +400,12 @@ export default function ReporteGenerador({ study, estudioId }) {
       }
     })();
     return () => { vivo = false; };
-  }, [estudioId, analisisMercado, analisisSector]);
+    /* motivoFalloSector/sectorEnCurso: sin ellas, cuando la generación del
+       sector arranca, falla o termina con un motivo específico, `analisisSector`
+       no cambia (sigue null) y este efecto no se repite — el banner se quedaba
+       pegado en el primer mensaje genérico ("todavía no está generado") para
+       siempre, aunque ya se supiera que está en curso o por qué falló. */
+  }, [estudioId, analisisMercado, analisisSector, motivoFalloSector, sectorEnCurso]);
 
   // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
   const loadExactMasterTemplate = () => {
@@ -396,7 +421,7 @@ export default function ReporteGenerador({ study, estudioId }) {
     if (!customTemplateLoaded) {
       loadExactMasterTemplate();
     }
-  }, [study, customTemplateLoaded, analisisMercado, analisisSector]);
+  }, [study, customTemplateLoaded, analisisMercado, analisisSector, motivoFalloSector, sectorEnCurso]);
 
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
@@ -931,6 +956,15 @@ export default function ReporteGenerador({ study, estudioId }) {
     URL.revokeObjectURL(a.href);
   };
 
+  /* Confirmación de que el análisis de sector (III.C) de ESTA actividad+año ya
+     quedó generado (no solo que la lectura a Firestore respondió, sino que trae
+     la corrida de ese año puntual). Se calcula aparte del banner de arriba
+     (`avisoHidratacion`, que solo lista problemas) porque generar toma 60-100+ s
+     y el usuario necesita saber que ya terminó sin tener que abrir el Word. */
+  const anioEstudio = Number(study && study.anio) || null;
+  const sectorListo = !sectorEnCurso && !motivoFalloSector && anioEstudio
+    && !!(analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(anioEstudio)]);
+
   return (
     <div className="space-y-6">
       {/* Barra de Acciones y Control */}
@@ -1009,6 +1043,21 @@ export default function ReporteGenerador({ study, estudioId }) {
             setMarcasPropuestas(null); setPlantillaPendiente(null); setTelemetriaMarcado(null);
           }}
         />
+      )}
+
+      {/* Estado del análisis de sector (III.C): en curso o ya listo para esta
+          actividad+año. Aparte de `avisoHidratacion` porque ese banner solo lista
+          problemas — esto es información de estado, no una advertencia. */}
+      {sectorEnCurso && (
+        <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          Generando el análisis del sector (III.C) para esta actividad y año — puede tardar uno o dos minutos.
+        </div>
+      )}
+      {sectorListo && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300 rounded-xl px-5 py-3 text-xs leading-relaxed">
+          ✓ Análisis del sector (III.C) generado para esta actividad y año {anioEstudio}.
+        </div>
       )}
 
       {/* Aviso de la ruta de respaldo: la sustitución por valor literal no se
