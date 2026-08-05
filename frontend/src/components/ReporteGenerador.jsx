@@ -120,7 +120,17 @@ export default function ReporteGenerador({ study, estudioId }) {
         let doc = await leerAnalisisSector(clave);
         const yaTieneEsteAnio = doc && doc.porAnio && doc.porAnio[String(year)];
         if (!yaTieneEsteAnio) {
-          const resp = await axios.post('/api/generar-analisis-sector', { actividad: actividadTexto, year });
+          /* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector:
+             ese path pasa por el rewrite de Firebase Hosting, que corta cualquier
+             petición a los 60 s sin importar el timeoutSeconds de la función (ver el
+             comentario junto a GEMINI_CORTE_MS en functions/index.js). La cadena
+             Gemini→Gemini→Claude de este endpoint puede tardar más que eso —el
+             navegador recibía un 502 opaco del borde aunque la función siguiera viva
+             dentro de su propio límite de 180 s. La función ya tiene cors:true. */
+          const resp = await axios.post(
+            'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector',
+            { actividad: actividadTexto, year }
+          );
           doc = { porAnio: { [String(year)]: resp.data.entrada } };
         }
         if (vivo) setAnalisisSector(doc);
