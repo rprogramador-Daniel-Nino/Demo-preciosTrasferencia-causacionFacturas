@@ -118,6 +118,11 @@ app.post('/api/claude', async (req, res) => {
 // Proxy hacia la API de Gemini. El frontend llama a /api/gemini para lectura/OCR
 // de documentos (más económico que Claude para esta tarea), nunca directo a
 // generativelanguage.googleapis.com — así la key queda oculta.
+//
+// A diferencia de functions/index.js, aquí el fetch NO lleva corte por tiempo, y es
+// deliberado: ese corte existe allá solo para responder antes de los 60 s que Firebase
+// Hosting concede al rewrite hacia la función. En local no hay tal techo, y este mismo
+// endpoint lee PDFs grandes (estados financieros, estudio anterior) que tardan más.
 app.post('/api/gemini', async (req, res) => {
   if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: 'Servidor sin GEMINI_API_KEY configurada.' });
