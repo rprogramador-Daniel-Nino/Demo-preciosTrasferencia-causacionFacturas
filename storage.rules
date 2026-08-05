@@ -21,6 +21,22 @@ rules_version = '2';
 // `usuarios/{uid}/…` y estas reglas comparan ese uid con el de quien pide, así que el
 // aislamiento es estructural y no depende de ningún campo del contenido.
 //
+// LEER DESDE EL NAVEGADOR EXIGE CONFIGURAR CORS EN EL BUCKET, y no se hace desde aquí:
+// estas reglas gobiernan el permiso, no las cabeceras. Subir un archivo funciona sin
+// tocar nada —lo atiende la API de Firebase, que responde con CORS permisivo—, pero
+// descargarlo (`?alt=media`) lo sirve Cloud Storage directamente y ahí manda la
+// configuración CORS del bucket, que en un bucket recién creado está vacía. El síntoma es
+// desconcertante: la respuesta llega con el archivo y un 206, y el navegador la descarta
+// por «No 'Access-Control-Allow-Origin' header is present», aunque el preflight sí
+// responda 200 con la cabecera. Los orígenes permitidos están en `storage.cors.json`, y
+// se aplican una vez con:
+//
+//   gcloud storage buckets update gs://precios-trasnferencia.firebasestorage.app \
+//     --cors-file=storage.cors.json
+//
+// `firebase deploy` NO lo aplica: no hay forma de declarar el CORS del bucket en
+// firebase.json, así que al crear un bucket nuevo hay que acordarse de esto.
+//
 // LIMITACIÓN CONOCIDA — compartir un estudio no comparte su cribado. En Firestore, el
 // dueño puede conceder lectura por correo (`compartidoCon`) y las reglas lo comprueban
 // consultando el documento. Las reglas de Storage no pueden leer Firestore: no existe
