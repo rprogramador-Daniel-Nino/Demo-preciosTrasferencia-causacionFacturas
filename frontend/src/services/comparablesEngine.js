@@ -101,7 +101,22 @@ export const COLUMNAS_IQ = {
   id: { etiqueta: 'Identificador de la fuente', esencial: false, claves: ['excel company id', 'capital iq id', 'company id', 'iqid'] },
   desc: { etiqueta: 'Descripción del negocio', esencial: false, claves: ['business description', 'descripción', 'descripcion', 'actividad', 'profile'] },
   country: { etiqueta: 'País', esencial: false, claves: ['country', 'país', 'pais', 'ubicación', 'location'] },
+  /* Capital IQ solo trae esta columna si el reporte se configuró con ese campo
+     agregado (no siempre); si no está presente, holderPct queda en null y la
+     hoja de Selección comparables la muestra en blanco, como antes. */
+  holderPct: {
+    etiqueta: '% mayor accionista (holder único)', esencial: false,
+    claves: ['% owned by single holder', 'owned by single holder', 'single holder'],
+  },
 };
+
+/** Extrae el ticker bursátil que Capital IQ agrega entre paréntesis al final del
+ * nombre, p. ej. "Akatsuki Inc. (TSE:3932)" → "TSE:3932". El export de Capital IQ
+ * no trae una columna de ticker aparte: solo viene embebido en el nombre. */
+export function extraerTicker(name) {
+  const m = String(name || '').match(/\(([A-Za-z]+:[A-Za-z0-9.-]+)\)\s*$/);
+  return m ? m[1] : '';
+}
 
 /**
  * Parsea archivo de Capital IQ (.xlsx, .xls, .csv).
@@ -177,7 +192,8 @@ export async function importCapitalIQExcel(file, onProgress) {
           throw err;
         }
         const sIdx = idx.s, cIdx = idx.c, opIdx = idx.op, arIdx = idx.ar, invIdx = idx.inv,
-          apIdx = idx.ap, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc, countryIdx = idx.country;
+          apIdx = idx.ap, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc, countryIdx = idx.country,
+          holderPctIdx = idx.holderPct;
         const total = json.length - filaEncabezados - 1;
         avisar('Leyendo compañías…', 0, total);
         const rows = [];
@@ -210,6 +226,7 @@ export async function importCapitalIQExcel(file, onProgress) {
           const idIQ = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
           const desc = descIdx >= 0 ? String(row[descIdx] || '').trim() : '';
           const country = countryIdx >= 0 ? String(row[countryIdx] || '').trim() : '';
+          const holderPct = holderPctIdx >= 0 ? num(row[holderPctIdx]) : null;
 
           const isHolding = esHolding({ name, desc, sic });
           const hasNegativeBalance = (ar !== null && ar < 0) || (inv !== null && inv < 0) || (ap !== null && ap < 0);
@@ -219,6 +236,7 @@ export async function importCapitalIQExcel(file, onProgress) {
             id: idIQ || `ciq_${i}`,
             name,
             nameKey: nameKey(name),
+            ticker: extraerTicker(name),
             amb: country && !/colombia/i.test(country) ? 'Int' : 'Nac',
             country: country || 'Internacional',
             s,
@@ -229,6 +247,7 @@ export async function importCapitalIQExcel(file, onProgress) {
             ap,
             sic,
             desc,
+            holderPct,
             isHolding,
             hasNegativeBalance,
             hasLoss,
