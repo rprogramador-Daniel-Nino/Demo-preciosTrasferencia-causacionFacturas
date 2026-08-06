@@ -262,44 +262,7 @@ export default function DatosContribuyente({ study, updateStudy }) {
           </h3>
           <p className="text-xs text-zinc-500">Suba el RUT, Cámara de Comercio o Certificado de Composición Accionaria para extraer la información con Gemini Vision.</p>
 
-          {/* Cargar Composición Accionaria */}
-          <div className="space-y-2 pt-2 border-b border-zinc-100 dark:border-zinc-800 pb-4">
-            <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-[#0FA3A1]" />
-              Certificado Composición Accionaria (PDF/Imagen)
-            </span>
-            <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg p-4 flex flex-col items-center justify-center text-center hover:border-[#0FA3A1] transition-colors relative cursor-pointer bg-zinc-50/50 dark:bg-zinc-900/30">
-              <input
-                type="file"
-                accept="application/pdf,image/*"
-                disabled={loadingAccionistas}
-                onChange={(e) => {
-                  if (e.target.files[0]) {
-                    handleAccionistasUpload(e.target.files[0]);
-                  }
-                }}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-              {loadingAccionistas ? (
-                <div className="flex flex-col items-center gap-2 py-2">
-                  <Loader2 className="w-6 h-6 text-[#0FA3A1] animate-spin" />
-                  <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Leyendo composición accionaria...</span>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-1 py-1">
-                  <Upload className="w-6 h-6 text-zinc-400 mb-1" />
-                  <span className="text-xs text-zinc-700 dark:text-zinc-300 font-semibold">Cargar Certificado de Accionistas</span>
-                  <span className="text-[11px] text-zinc-400">PDFs escaneados o imágenes</span>
-                </div>
-              )}
-            </div>
-            {accionistasMsg && (
-              <div className="text-[11px] font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 p-2 rounded-lg flex items-center gap-1.5">
-                <FileCheck className="w-3.5 h-3.5" />
-                {accionistasMsg}
-              </div>
-            )}
-          </div>
+
 
           {/* Carga de RUT */}
           <div className="space-y-2">
@@ -349,13 +312,52 @@ export default function DatosContribuyente({ study, updateStudy }) {
             </div>
           </div>
 
+          {/* Cargar Composición Accionaria */}
+          <div className="space-y-2 pt-2 border-b border-zinc-100 dark:border-zinc-800 pb-4">
+            <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-[#0FA3A1]" />
+              Certificado Composición Accionaria (PDF/Imagen)
+            </span>
+            <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-lg p-4 flex flex-col items-center justify-center text-center hover:border-[#0FA3A1] transition-colors relative cursor-pointer bg-zinc-50/50 dark:bg-zinc-900/30">
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                disabled={loadingAccionistas}
+                onChange={(e) => {
+                  if (e.target.files[0]) {
+                    handleAccionistasUpload(e.target.files[0]);
+                  }
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+              {loadingAccionistas ? (
+                <div className="flex flex-col items-center gap-2 py-2">
+                  <Loader2 className="w-6 h-6 text-[#0FA3A1] animate-spin" />
+                  <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Leyendo composición accionaria...</span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-1 py-1">
+                  <Upload className="w-6 h-6 text-zinc-400 mb-1" />
+                  <span className="text-xs text-zinc-700 dark:text-zinc-300 font-semibold">Cargar Certificado de Accionistas</span>
+                  <span className="text-[11px] text-zinc-400">PDFs escaneados o imágenes</span>
+                </div>
+              )}
+            </div>
+            {accionistasMsg && (
+              <div className="text-[11px] font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 p-2 rounded-lg flex items-center gap-1.5">
+                <FileCheck className="w-3.5 h-3.5" />
+                {accionistasMsg}
+              </div>
+            )}
+          </div>
+
           {/* Mensajes de Estado del Procesamiento */}
           {extractionMsg && (
             <div className={`p-3 rounded-lg text-xs flex gap-2 items-center ${extractionMsg.includes('✅')
-                ? 'bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-emerald-800 dark:text-emerald-300'
-                : extractionMsg.includes('⚠')
-                  ? 'bg-rose-50 dark:bg-rose-950/20 border border-rose-200 text-rose-800 dark:text-rose-300'
-                  : 'bg-blue-50 dark:bg-blue-950/20 border border-blue-200 text-blue-800 dark:text-blue-300'
+              ? 'bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-emerald-800 dark:text-emerald-300'
+              : extractionMsg.includes('⚠')
+                ? 'bg-rose-50 dark:bg-rose-950/20 border border-rose-200 text-rose-800 dark:text-rose-300'
+                : 'bg-blue-50 dark:bg-blue-950/20 border border-blue-200 text-blue-800 dark:text-blue-300'
               }`}>
               {extractionMsg.includes('✅') ? (
                 <CheckCircle className="w-4 h-4 text-emerald-500" />
