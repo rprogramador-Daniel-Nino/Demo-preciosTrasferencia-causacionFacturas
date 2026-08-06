@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  hashPlantilla, claveMarcado, claveHuecos,
+  hashPlantilla, claveMarcado, claveHuecos, claveDocx, claveDocxMarcado,
   guardarRecursos, guardarAnexoEeff, guardarVinculo, guardarPlantilla,
   leerRecursos, leerAnexoEeff, leerVinculo, leerPlantilla, borrarRecursosDelEstudio,
   guardarMarcado, leerMarcado, guardarHuecos, leerHuecos,
@@ -196,4 +196,27 @@ test('un borrado que falla no impide los demás', async () => {
     assert.strictEqual(resumen.borrados, 2, 'los otros dos sí se borraron');
     assert.deepStrictEqual(await leerRecursos('study_1'), [], 'este no dependía del caído');
   }, { fallarEn: 'anexos' });
+});
+
+/* ══════════════ Claves del .docx original y del marcado ══════════════ */
+
+test('las claves del .docx no colisionan con las demás del almacén', () => {
+  /* Todo convive en el mismo almacén con prefijos, para no subir VERSION del
+     esquema. Un prefijo repetido sobrescribiría datos de otra cosa en silencio. */
+  const id = 'abc123';
+  const claves = [id, 'vinculo:' + id, claveMarcado(id), claveHuecos(id), claveDocx(id), claveDocxMarcado(id)];
+  assert.strictEqual(new Set(claves).size, claves.length, 'las seis han de ser distintas');
+});
+
+test('claveDocx y claveDocxMarcado son estables y distinguen plantillas', () => {
+  assert.strictEqual(claveDocx('abc123'), 'docx:abc123');
+  assert.strictEqual(claveDocxMarcado('abc123'), 'docx-marcado:abc123');
+  assert.notStrictEqual(claveDocx('abc'), claveDocx('abd'));
+  assert.notStrictEqual(claveDocxMarcado('abc'), claveDocxMarcado('abd'));
+});
+
+test('el prefijo del .docx marcado no es prefijo de otra clave', () => {
+  /* `docx:` y `docx-marcado:` empiezan igual: si alguien recorriera el almacén por
+     prefijo, `docx:` no debe arrastrar los marcados. */
+  assert.ok(!claveDocxMarcado('x').startsWith(claveDocx('')), 'docx-marcado no cae bajo docx:');
 });

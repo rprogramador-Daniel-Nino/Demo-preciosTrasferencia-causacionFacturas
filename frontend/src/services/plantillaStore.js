@@ -119,6 +119,34 @@ export const leerMarcado = (plantillaId) => leerPlantilla(claveMarcado(plantilla
 export const borrarMarcado = (plantillaId) =>
   operar('plantillas', 'readwrite', (s) => s.delete(claveMarcado(plantillaId)));
 
+/* El .docx original del cliente, tal cual lo subió.
+   Es la pieza de la ruta que rellena el documento en vez de reconstruirlo: como el
+   informe se produce editando su propio OOXML, hay que conservar el archivo y no
+   una conversión suya. Se guarda el binario (IndexedDB admite Blob y ArrayBuffer
+   sin serializar) y, como el marcado, va por plantilla y no por estudio: el
+   `plantillaId` es el hash del contenido, así que dos estudios que suban el mismo
+   Word comparten archivo y marcado.
+   Con prefijo en el almacén de plantillas, igual que el resto, para no subir
+   VERSION del esquema. */
+export const claveDocx = (plantillaId) => 'docx:' + plantillaId;
+
+export const guardarDocx = (plantillaId, binario) =>
+  guardarPlantilla(claveDocx(plantillaId), binario);
+
+export const leerDocx = (plantillaId) => leerPlantilla(claveDocx(plantillaId));
+
+/* El OOXML ya marcado con {campo}. Se guarda aparte del original para poder volver
+   a marcar sin pedirle al usuario que suba otra vez el archivo. */
+export const claveDocxMarcado = (plantillaId) => 'docx-marcado:' + plantillaId;
+
+export const guardarDocxMarcado = (plantillaId, binario) =>
+  guardarPlantilla(claveDocxMarcado(plantillaId), binario);
+
+export const leerDocxMarcado = (plantillaId) => leerPlantilla(claveDocxMarcado(plantillaId));
+
+export const borrarDocxMarcado = (plantillaId) =>
+  operar('plantillas', 'readwrite', (s) => s.delete(claveDocxMarcado(plantillaId)));
+
 /* Cuántos huecos de anexo dejó el extractor en esta plantilla. Sin conservarla
    no hay forma de saber, al recargar el estudio, que el documento tiene 16
    páginas de anexo sin rellenar: `ref.huecos` solo existe en el momento de
