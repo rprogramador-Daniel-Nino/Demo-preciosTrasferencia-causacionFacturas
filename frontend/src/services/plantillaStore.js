@@ -88,6 +88,21 @@ export const leerAnexoEeff = (estudioId) =>
 export const borrarAnexoEeff = (estudioId) =>
   operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId)));
 
+/* Imágenes del EEFF de cada comparable para el ANEXO B, mismo almacén y mismo motivo de
+   tamaño que el ANEXO A (`guardarAnexoEeff`): son data URLs, no caben en Firestore ni en
+   localStorage. A diferencia del ANEXO A —un solo arreglo por estudio, un solo EEFF del
+   contribuyente— aquí hay una comparable por fila, así que el valor es un mapa
+   `{ [nameKey]: string[] }` en vez de un arreglo plano. Clave distinta (":cmpB") para no
+   colisionar con la del ANEXO A del mismo estudio. */
+export const guardarAnexoBImagenes = (estudioId, mapaPorComparable) =>
+  operar('anexos', 'readwrite', (s) => s.put(mapaPorComparable, esc(estudioId) + ':cmpB'));
+
+export const leerAnexoBImagenes = (estudioId) =>
+  operar('anexos', 'readonly', (s) => s.get(esc(estudioId) + ':cmpB')).then((r) => r || {});
+
+export const borrarAnexoBImagenes = (estudioId) =>
+  operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId) + ':cmpB'));
+
 /* Vínculo estudio -> plantilla. Sin esto, al recargar no hay forma de saber qué
    plantilla corresponde al estudio abierto, y la vista previa vuelve a la
    maestra genérica: las imágenes guardadas se quedan sin sitio donde ir.
@@ -186,6 +201,7 @@ export async function borrarRecursosDelEstudio(estudioId) {
   const resultados = await Promise.allSettled([
     borrarRecursos(estudioId),
     borrarAnexoEeff(estudioId),
+    borrarAnexoBImagenes(estudioId),
     borrarVinculo(estudioId),
   ]);
   const fallidos = resultados.filter((r) => r.status === 'rejected');
