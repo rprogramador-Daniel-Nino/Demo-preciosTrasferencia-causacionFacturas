@@ -18,7 +18,7 @@ export default function DatosContribuyente({ study, updateStudy }) {
   const processFile = (file, apiEndpoint, loadingSetter) => {
     loadingSetter(true);
     setExtractionMsg('Analizando documento con Inteligencia Artificial...');
-    
+
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = async () => {
@@ -351,13 +351,12 @@ export default function DatosContribuyente({ study, updateStudy }) {
 
           {/* Mensajes de Estado del Procesamiento */}
           {extractionMsg && (
-            <div className={`p-3 rounded-lg text-xs flex gap-2 items-center ${
-              extractionMsg.includes('✅') 
+            <div className={`p-3 rounded-lg text-xs flex gap-2 items-center ${extractionMsg.includes('✅')
                 ? 'bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-emerald-800 dark:text-emerald-300'
                 : extractionMsg.includes('⚠')
                   ? 'bg-rose-50 dark:bg-rose-950/20 border border-rose-200 text-rose-800 dark:text-rose-300'
                   : 'bg-blue-50 dark:bg-blue-950/20 border border-blue-200 text-blue-800 dark:text-blue-300'
-            }`}>
+              }`}>
               {extractionMsg.includes('✅') ? (
                 <CheckCircle className="w-4 h-4 text-emerald-500" />
               ) : extractionMsg.includes('⚠') ? (

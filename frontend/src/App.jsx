@@ -334,7 +334,7 @@ export default function App() {
     /* Razón social vacía y no «Nueva Empresa S.A.S»: ese texto se veía como un dato ya
        diligenciado y llegaba al informe si nadie lo cambiaba. Vacío, el tablero muestra
        «Sin razón social» y las guardas del generador lo cuentan como campo sin dato. */
-    ent: '', nit: '', anio: new Date().getFullYear(),
+    ent: '', nit: '', anio: 2025,
     ciiu: '', objeto: '', representante: '', vinc: '', pais_vinc: '', vinc_id: '',
     vinc_tipo: '', t_s: '', t_c: '', t_op: '', t_ar: '', t_inv: '', t_ap: '',
     pli: 'MO', useadj: false, prime: '', comparables: [], cmode: 'all',
