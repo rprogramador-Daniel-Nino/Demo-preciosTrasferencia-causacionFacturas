@@ -859,6 +859,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
   const construirDocxDelEstudio = (binarioMarcado, tipoSalida = 'blob') => rellenarDocx({
     binario: binarioMarcado,
     estudio: study,
+    datosMacro: analisisMercado,
     colecciones: coleccionesDelEstudio(study),
     imagenesAnexo: (study.eeffImages || []).map((img) => ({
       dataUrl: typeof img === 'string' ? img : (img && (img.dataUrl || img.src)),

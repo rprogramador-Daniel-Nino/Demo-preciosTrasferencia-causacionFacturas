@@ -32,6 +32,9 @@ import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { filasComparablesInforme, filasRazonesRechazo } from './exactTemplateMapper.js';
 import { pctf } from '../utils/calculations.js';
+import {
+  DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
+} from './analisisMercado.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -85,6 +88,218 @@ export function coleccionesDelEstudio(estudio) {
   return { comparables, razonesRechazo };
 }
 
+function escaparXml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/** Genera el XML de una tabla limpia y estilizada en OOXML. */
+export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
+  const colCount = cabeceras.length;
+  const colWidth = Math.round(9405 / colCount); // 9405 dxa es el ancho útil aproximado
+
+  let xml = `<w:p><w:pPr><w:keepNext/><w:outlineLvl w:val="9"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escaparXml(titulo)}</w:t></w:r></w:p>`;
+  xml += `<w:tbl>`;
+  xml += `<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="9405" w:type="dxa"/><w:tblBorders>`
+    + `<w:top w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`
+    + `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`
+    + `<w:insideH w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`
+    + `<w:left w:val="none"/><w:right w:val="none"/><w:insideV w:val="none"/>`
+    + `</w:tblBorders></w:tblPr>`;
+
+  // Headers
+  xml += `<w:tr><w:trPr><w:tblHeader/></w:trPr>`;
+  cabeceras.forEach((h) => {
+    xml += `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0E1726"/></w:tcPr>`
+      + `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:color w:val="FFFFFF"/><w:b/></w:rPr>`
+      + `<w:t>${escaparXml(h)}</w:t></w:r></w:p></w:tc>`;
+  });
+  xml += `</w:tr>`;
+
+  // Rows
+  filas.forEach((f) => {
+    xml += `<w:tr>`;
+    f.forEach((celda) => {
+      xml += `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/></w:tcPr>`
+        + `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>${escaparXml(celda)}</w:t></w:r></w:p></w:tc>`;
+    });
+    xml += `</w:tr>`;
+  });
+
+  xml += `</w:tbl>`;
+
+  if (fuente) {
+    xml += `<w:p><w:pPr><w:pStyle w:val="Normal"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:b/></w:rPr><w:t>FUENTE: ${escaparXml(fuente)}</w:t></w:r></w:p>`;
+  }
+
+  return xml;
+}
+
+/** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
+export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
+  let out = xml;
+
+  const y1 = year - 1, y2 = year, y3 = year + 1;
+  const wrap = (v) => String(v == null ? '—' : v);
+
+  // 1. PIB Mundial
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?PIB Mundial(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
+        ['Año', 'Crecimiento Mundial (%)'],
+        [
+          [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
+          [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
+          [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
+        ],
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 2. PIB Colombia
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?PIB en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
+        ['Año', 'Crecimiento del PIB (%)'],
+        [
+          [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
+          [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
+          [String(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
+        ],
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 3. Inflación Global
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Inflación Global(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
+        ['Año', 'Tasa de Inflación (%)'],
+        [
+          [String(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
+          [String(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
+          [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
+        ],
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 4. PIB por Región
+  {
+    const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?por Región\/País(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const porRegion = porAnio[year];
+      const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
+      let filas = [];
+      if (!porRegion || !porRegion.length) {
+        const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
+        filas = regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]);
+      } else {
+        filas = porRegion.map(({ region, valor }) => [region, wrap(valor)]);
+      }
+      const tabla = generarTablaOoxml(titulo, ['Región/País', 'Crecimiento Proyectado (%)'], filas, fuente);
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 5. Inflación Colombia
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Inflación en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Inflación en Colombia (' + year + ' vs. Meta ' + y3 + ')',
+        ['Indicador', 'Valor (%)'],
+        [
+          ['Inflación ' + year, wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
+          ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
+        ],
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 6. Tasa de Intervención
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Intervención del Banco(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const filas = [y1, y2].map((y) => {
+        const obs = S[y];
+        return obs
+          ? [obs.etiqueta, wrap(obs.valor)]
+          : ['Diciembre ' + y, wrap(marcadorPendiente(y, 'la tasa de intervención del Banco de la República'))];
+      });
+      const tabla = generarTablaOoxml(
+        'Tasa de Intervención del Banco de la República (' + filas[0][0] + ' - ' + filas[1][0] + ')',
+        ['Fecha', 'Tasa de Intervención (%)'],
+        filas,
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 7. TRM Promedio
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tasa Representativa del Mercado(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
+        ['Año', 'TRM Promedio ($)'],
+        [
+          [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
+          [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
+        ],
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 8. Tasa de Desempleo
+  {
+    const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Desempleo en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + y3 + ')',
+        ['Indicador', 'Valor (%)'],
+        [
+          ['Desempleo ' + year, wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
+          ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
+        ],
+        fuente
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  return out;
+}
+
 /**
  * Sustituye los marcadores del .docx por los datos del estudio.
  *
@@ -106,10 +321,17 @@ export function coleccionesDelEstudio(estudio) {
  *          campos salieron sin dato, para poder avisarlo antes de radicar.
  */
 export function renderizarDocx(binario, estudio, opciones = {}) {
-  const { colecciones = {}, delimitadores } = opciones;
+  const { datosMacro, colecciones = {}, delimitadores } = opciones;
   const camposVacios = new Set();
 
   const zip = new PizZip(binario);
+  
+  // Actualizar tablas macro antes de procesar marcas con docxtemplater
+  let xml = zip.file(RUTA_DOC).asText();
+  const year = Number(estudio && estudio.anio) || 2025;
+  xml = actualizarTablasMacroOoxml(xml, datosMacro, year);
+  zip.file(RUTA_DOC, xml);
+
   const doc = new Docxtemplater(zip, {
     paragraphLoop: true,
     linebreaks: true,
@@ -255,9 +477,9 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
  * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
  */
 export function rellenarDocx({
-  binario, estudio, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
+  binario, estudio, datosMacro, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
 }) {
-  const { zip, camposVacios } = renderizarDocx(binario, estudio, { colecciones, delimitadores });
+  const { zip, camposVacios } = renderizarDocx(binario, estudio, { datosMacro, colecciones, delimitadores });
   const { insertadas } = insertarImagenes(zip, imagenesAnexo);
   return {
     salida: zip.generate({
