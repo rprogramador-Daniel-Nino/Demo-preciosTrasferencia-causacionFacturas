@@ -12,7 +12,7 @@ import {
   Document, Packer, Paragraph, TextRun, Header, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
-  ImageRun, LevelFormat, PageBreak, PageOrientation,
+  ImageRun, LevelFormat, PageOrientation,
 } from 'docx';
 import {
   HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
@@ -520,12 +520,7 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       },
       ...(cabecera ? { headers: { default: cabecera } } : {}),
       footers: { default: pieConNumero() },
-      children: t.paginas.flatMap((nodo, i) => [
-        /* Salto delante de cada página menos de la primera de todas: la primera tanda ya
-           empieza en la hoja 1, y una tanda nueva ya empieza en hoja nueva por ser sección. */
-        ...(i === 0 ? [] : [new Paragraph({ children: [new PageBreak()] })]),
-        ...bloquesDe(nodo),
-      ]),
+      children: t.paginas.flatMap((nodo) => bloquesDe(nodo)),
     }))
     : [{
       properties: {
