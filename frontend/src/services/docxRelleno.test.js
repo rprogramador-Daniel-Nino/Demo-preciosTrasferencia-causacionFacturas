@@ -7,7 +7,7 @@ import {
 import PizZip from 'pizzip';
 import {
   renderizarDocx, insertarImagenes, rellenarDocx, desdeDataUrl,
-  CENTINELA_ANEXO, SIN_DATO, EMU_POR_CM,
+  CENTINELA_ANEXO, SIN_DATO, EMU_POR_CM, actualizarTablasMacroOoxml,
 } from './docxRelleno.js';
 
 
@@ -349,4 +349,22 @@ test('el ciclo real: marcar la plantilla y luego rellenarla', async () => {
   const texto = textoDe(new PizZip(salida), 'word/document.xml');
   assert.strictEqual(texto, 'La sociedad ACME COLOMBIA S.A.S, NIT 900.123.456-7.');
   assert.ok(!texto.includes('END GAME'), 'no queda rastro del cliente anterior');
+});
+
+test('actualización de tablas macroeconómicas en el OOXML de docxRelleno', async () => {
+  const xmlOriginal = '<w:p><w:t>Crecimiento del PIB Mundial (2023-2025)</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Header</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const year = 2025;
+  const datosMacro = {
+    series: {
+      pib_mundial: {
+        valores: { 2024: '3.3', 2025: '3.2', 2026: '2.8' },
+        fuente: 'FMI',
+      }
+    }
+  };
+  const xmlActualizado = actualizarTablasMacroOoxml(xmlOriginal, datosMacro, year);
+  assert.ok(xmlActualizado.includes('Crecimiento del PIB Mundial (2024-2026)'), 'No actualizó el rango del título en la tabla de PIB mundial');
+  assert.ok(xmlActualizado.includes('2024'), 'Falta el año 2024 en la tabla de PIB mundial');
+  assert.ok(xmlActualizado.includes('3.3'), 'Falta el valor 3.3 en la tabla de PIB mundial');
+  assert.ok(xmlActualizado.includes('2.8'), 'Falta el valor 2.8 en la tabla de PIB mundial');
 });
