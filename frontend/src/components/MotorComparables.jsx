@@ -4,7 +4,7 @@ import {
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey } from '../services/comparablesEngine';
+import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso } from '../services/comparablesEngine';
 import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
@@ -49,6 +49,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     nTarget: 12,
     perdidaOp: 'excluir',
     holding: 'excluir',
+    /* Independencia (Art. 260-1 E.T.): una comparable con un accionista por encima
+       del umbral no es independiente. Los estudios guardados antes de que existiera
+       esta opción no la traen en `motorConfig`, y entonces el motor aplica sus
+       valores por defecto, que son estos mismos. */
+    control: 'excluir',
+    umbralControl: 50,
     saldoNegativo: 'excluir',
     geo: 'ninguna',
     rigor: 'estandar',
@@ -960,12 +966,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       return;
     }
 
-    const seleccionadasKeys = new Set((calculatedRows || comparables).map(c => c.nameKey || nameKey(c.name)));
+    /* El universo es el import crudo: el motivo de rechazo y el perfil funcional los
+       aporta la auditoría de la última corrida del motor (ver `enriquecerUniverso`). */
     const candidatasUniverso = Array.isArray(universo) && universo.length > 0
-      ? universo.map(cand => ({
-          ...cand,
-          seleccionada: seleccionadasKeys.has(cand.nameKey || nameKey(cand.name))
-        }))
+      ? enriquecerUniverso(universo, calculatedRows || comparables, motorAuditoria)
       : null;
 
     const datos = {
@@ -980,7 +984,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          construirLibroSoporte caiga en su propio fallback (comparables + rechazadas +
          reserva) en vez de armar una hoja «Selección comparables» vacía. */
       ...(candidatasUniverso ? {
-        seleccion: { criterios: criteriosScreening || [], candidatas: candidatasUniverso }
+        seleccion: {
+          criterios: criteriosScreening || [],
+          umbralControl: engineConfig.umbralControl,
+          candidatas: candidatasUniverso,
+        }
       } : {}),
     };
     const entidadSlug = String(datos.estudio.entidad || 'estudio')
@@ -1358,9 +1366,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           {/* Decir en qué orden se aplican: el reclamo era que la curación y los
               filtros parecían juzgar conjuntos distintos, y así era. */}
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1">
-            Holding, saldos negativos y pérdidas operativas se aplican <b>antes</b> de curar con IA, así que
-            la curación solo evalúa —y solo se paga por— lo que pasa estos filtros. El rigor funcional se
-            aplica <b>después</b>, sobre el perfil que dictamina la propia curación.
+            Independencia, holding, saldos negativos y pérdidas operativas se aplican <b>antes</b> de curar
+            con IA, así que la curación solo evalúa —y solo se paga por— lo que pasa estos filtros. El rigor
+            funcional se aplica <b>después</b>, sobre el perfil que dictamina la propia curación. El holding
+            se identifica por la razón social, y por eso <b>no</b> retira una comparable que venga del
+            estudio anterior; el control accionario sí, porque es un hecho de la composición societaria.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1398,6 +1408,32 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <option value="excluir">Excluir (sin actividad propia)</option>
                 <option value="incluir">Incluir</option>
               </select>
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Independencia (Art. 260-1)</label>
+              <select
+                value={engineConfig.control ?? 'excluir'}
+                onChange={(e) => cambiarConfig('control', e.target.value)}
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+              >
+                <option value="excluir">Excluir controladas</option>
+                <option value="incluir">Incluir</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Umbral de control (%)</label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                value={engineConfig.umbralControl ?? 50}
+                disabled={(engineConfig.control ?? 'excluir') !== 'excluir'}
+                onChange={(e) => cambiarConfig('umbralControl', Number(e.target.value))}
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40"
+              />
             </div>
 
             <div className="flex flex-col">
@@ -1828,7 +1864,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           se está viendo en la tarjeta, no el del render anterior. */}
       {memoriaAbierta && (
         <MemoriaRangoModal
-          estudio={{ ...study, comparables, cmode, universo, criteriosScreening }}
+          /* `auditoria` va aquí y no se persiste con el estudio: es el detalle de la
+             última corrida del motor, con el motivo de rechazo de cada candidata, y
+             es lo que permite que el embudo del Excel refleje lo que el motor
+             decidió en vez de contar cero en todos los motivos. */
+          estudio={{ ...study, comparables, cmode, universo, criteriosScreening, motorConfig: engineConfig, auditoria: motorAuditoria }}
           alCerrar={() => setMemoriaAbierta(false)}
         />
       )}

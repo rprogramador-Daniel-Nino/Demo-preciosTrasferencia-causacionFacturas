@@ -107,8 +107,13 @@ export function construirLibroSoporte(datos) {
 
   const estudioNorm = obtenerEstudioNormalizadoParaParche(estudioBase);
 
+  /* Sin `datos.seleccion` (universo no importado) se arma con lo que sí evaluó el
+     motor. Estas candidatas vienen de `scoreCandidates`, así que ya traen
+     `motivoClave` y `perfilFuncional`: la hoja de trazabilidad cuenta su embudo
+     sobre esas claves y aquí no hace falta enriquecerlas. */
   const seleccion = datos.seleccion || (datos.auditoria || datos.filtros ? {
     criterios: datos.filtros?.selectionFunnel?.criterios || [],
+    umbralControl: datos.filtros?.engineConfig?.umbralControl,
     candidatas: [
       ...(datos.comparables || []).map(c => ({ ...c, seleccionada: true })),
       ...((datos.auditoria && datos.auditoria.rechazadas) || []).map(c => ({ ...c, seleccionada: false })),

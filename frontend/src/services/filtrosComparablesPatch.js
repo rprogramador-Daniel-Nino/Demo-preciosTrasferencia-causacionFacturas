@@ -1,54 +1,88 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   filtrosComparablesPatch.js — Detección de sociedades holding, AGNÓSTICA AL SECTOR.
+   filtrosComparablesPatch.js — Filtros de comparables, AGNÓSTICOS AL SECTOR.
 
-   El sistema analiza contribuyentes de MUCHOS sectores. Por eso la detección de
-   holding NO puede depender de una lista de SIC de un sector concreto (sería
-   sesgada: funcionaría para software y fallaría para construcción, alimentos,
-   manufactura, etc.). La regla es universal:
+   El sistema sirve a contribuyentes de MUCHOS sectores, así que ningún filtro
+   puede depender de una lista de códigos SIC de un sector concreto: sería sesgada
+   —funcionaría para software y fallaría para construcción, alimentos o
+   manufactura—. Los dos filtros de este módulo responden preguntas universales.
 
-     · Un holding es una sociedad de cartera / oficina de inversión: su función es
-       TENER participaciones o invertir, no operar. En la clasificación SIC esto
-       es el grupo mayor 67xx «Holding and Other Investment Offices»
-       (6712 bank holding, 6719 holding NEC, 6722/6726 investment offices,
-       6732/6733 trusts, 6792/6794/6798/6799 inversores, REIT, etc.).
-     · Un SIC es «operativo» si NO pertenece a esa familia 67xx — cualquiera que
-       sea el sector (7372 software, 1531 construcción, 2000 alimentos, 3600
-       manufactura, 6021 banca…). No hay lista blanca por sector.
+   ── 1. HOLDING: CLASIFICACIÓN SOLO SEMÁNTICA ──
+   La condición de holding se determina por la RAZÓN SOCIAL y la descripción del
+   negocio, en español e inglés. El código SIC NO clasifica holdings (decisión del
+   usuario, 2026-08-06): la familia SIC 67xx «Holding and Other Investment Offices»
+   describe cómo Capital IQ codificó la actividad, no si la empresa opera, y hacerla
+   decidir volvía el filtro dependiente de cómo vengan ordenados los códigos.
 
-   DECISIÓN (con el SIC siempre presente, como en los export de Capital IQ):
-     1. Todos los SIC de la empresa son de la familia holding (67xx) → HOLDING puro
-        (solo tiene participaciones/inversión) → se excluye.
-     2. Tiene algún SIC operativo (fuera de 67xx), aunque el principal sea 67xx o
-        el nombre diga "Holdings" → OPERA en algún sector → NO es holding.
-     3. Sólo si NO hay ningún SIC (caso rarísimo), se usa el nombre como respaldo.
+     · tieneSemanticaHolding(cand) → true si el nombre o la descripción trae un
+       término inequívoco de sociedad de cartera o grupo empresarial.
+     · esHolding(cand)             → alias de lo anterior. Conserva el nombre que el
+       motor ya usaba (isHolding), pero OJO: su criterio cambió por completo.
+     · holdingSospecha(cand)       → 'no' | 'revisar'.
 
-   Esto es agnóstico: nunca se nombra un sector. La comparabilidad por sector la
-   resuelve OTRA parte del motor (cribado por actividad + curación funcional); la
-   detección de holding sólo responde «¿es una sociedad de cartera sin operación?»,
-   que es universal.
+   Del vocabulario se excluyen a propósito los términos ambiguos —«investment»,
+   «invest», «ventures»—, que aparecen en nombres de empresas plenamente operativas
+   («Cultural Investment», «Supreme Ventures») y producían falsos positivos.
 
-   PROBLEMA QUE CORRIGE (verificado sobre el universo real de END GAME, 2.987
-   candidatas; el criterio anterior detectaba holding sólo por el nombre):
-     · 415 falsos positivos (operativas con "Holdings" en la razón social, p. ej.
-       «360 Ludashi Holdings», SIC 7372, excluidas mal).
-     · 91 holdings reales que se escapaban (SIC 6719 sin "holding" en el nombre,
-       p. ej. «Acroud AB»).
+   ── 2. INDEPENDENCIA / CONTROL (Art. 260-1 E.T.) ──
+   Una empresa cuyo capital está en manos de un solo accionista por encima del
+   umbral (50 % por defecto) no es un comparable independiente. El porcentaje se
+   toma del dato numérico de Capital IQ («% Owned by Single Holder») cuando el
+   export lo trae, y si no, se extrae del texto de accionistas «Nombre (pct); …».
 
-   Fundamento normativo: Art. 260-4 E.T. (análisis funcional). El Consejo de Estado
-   evalúa la comparabilidad por las funciones reales, no por la razón social;
-   clasificar por actividad (SIC) y no por el nombre alinea el filtro con la norma.
-
-   INTEGRACIÓN: en comparablesEngine.js sustituir
-       const isHolding = /\b(holdings?|inversiones|investment)\b/i.test(name + ' ' + desc);
-   por
-       const isHolding = esHolding({ name, desc, sic });
-   importando `esHolding` de este módulo. El resto del motor no cambia.
+   Fundamento normativo: Art. 260-4 (análisis funcional) y Art. 260-1
+   (independencia). El Consejo de Estado evalúa la comparabilidad por las funciones
+   reales y por la vinculación efectiva, no por una etiqueta mecánica.
    ───────────────────────────────────────────────────────────────────────────── */
 
+/* Términos semánticos INEQUÍVOCOS de holding / grupo, en español e inglés. */
+const TERMINOS_HOLDING = [
+  // español
+  'holding', 'holdings', 'grupo', 'grupo empresarial', 'sociedad de cartera',
+  'sociedad tenedora', 'sociedad matriz', 'tenedora de acciones',
+  // inglés / uso internacional en Capital IQ
+  'group', 'holdco', 'hldg',
+  // otros idiomas frecuentes
+  'groupe', 'gruppo', 'holdingmaatschappij',
+];
+const RX_HOLDING_SEM = new RegExp(
+  '\\b(' + TERMINOS_HOLDING.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b',
+  'i',
+);
+
 /**
- * ¿Un código SIC pertenece a la familia holding / oficina de inversión (67xx)?
- * Universal, no depende del sector operativo del contribuyente.
+ * ¿El nombre o la descripción contienen un término de holding/grupo (ES/EN)?
+ * @param {{name?:string, desc?:string}} cand
+ * @returns {boolean}
  */
+export function tieneSemanticaHolding(cand) {
+  const texto = `${(cand && cand.name) || ''} ${(cand && cand.desc) || ''}`;
+  return RX_HOLDING_SEM.test(texto);
+}
+
+/**
+ * Nivel de sospecha de holding, para marcar la candidata en la trazabilidad.
+ * @param {{name?:string, desc?:string}} cand
+ * @returns {'no'|'revisar'}
+ */
+export function holdingSospecha(cand) {
+  return tieneSemanticaHolding(cand) ? 'revisar' : 'no';
+}
+
+/**
+ * ¿Es holding? Clasificación SOLO semántica; el SIC no interviene.
+ * @param {{name?:string, desc?:string}} cand
+ * @returns {boolean}
+ */
+export function esHolding(cand) {
+  return tieneSemanticaHolding(cand);
+}
+
+/* ── Utilidades de código SIC ──
+   Ya no deciden la condición de holding, pero se conservan: son la única forma que
+   tiene el resto del sistema de leer los SIC de una candidata, y la hoja de
+   trazabilidad los muestra. */
+
+/** ¿Un código SIC pertenece a la familia holding / inversión (67xx)? */
 export function esSicHolding(sic4) {
   return /^67\d\d$/.test(String(sic4 || ''));
 }
@@ -64,27 +98,61 @@ export function sicsTodos(sic) {
   return String(sic || '').match(/\d{4}/g) || [];
 }
 
+/* ── INDEPENDENCIA / CONTROL (Art. 260-1 E.T.) ── */
+
+/** Mayor % de un accionista, desde «Nombre (pct); Nombre (pct); …». */
+export function maxParticipacion(texto) {
+  const s = String(texto || '');
+  const pcts = s.match(/\(\s*([\d]+(?:\.[\d]+)?)\s*\)/g) || [];
+  const vals = pcts.map((p) => parseFloat(p.replace(/[()\s]/g, ''))).filter((n) => Number.isFinite(n));
+  return vals.length ? Math.max(...vals) : null;
+}
+
 /**
- * Detección de holding agnóstica al sector.
+ * ¿La candidata está controlada (un accionista supera el umbral)?
  *
- * @param {{name?:string, desc?:string, sic?:string}} cand  candidata (Capital IQ)
- * @param {{familiaHolding?:(s:string)=>boolean}} [config]  test de familia holding
- *        personalizable (por defecto, grupo SIC 67xx).
- * @returns {boolean} true si es una sociedad de cartera sin operación.
+ * Acepta las dos formas en que puede llegar el dato: el porcentaje ya numérico que
+ * Capital IQ entrega en `holderPct`/`maxpct` cuando el reporte se configuró con ese
+ * campo, o el texto de accionistas del que hay que extraerlo. Sin ningún dato no se
+ * excluye, que es el criterio conservador.
+ *
+ * @param {{holderPct?:number, maxpct?:number, holders?:string, holdersText?:string, ownership?:string}} cand
+ * @param {{umbral?:number}} [config]  umbral de control (por defecto 50).
+ * @returns {boolean}
  */
-export function esHolding(cand, config = {}) {
-  const esFamiliaHolding = config.familiaHolding || esSicHolding;
-  const sics = sicsTodos(cand && cand.sic);
+export function esControlada(cand, config = {}) {
+  const umbral = config.umbral != null ? config.umbral : 50;
+  const maxp = participacionMaxima(cand);
+  if (maxp == null) return false;
+  return maxp > umbral;
+}
 
-  if (sics.length > 0) {
-    // Con SIC presente, la decisión es 100% por actividad (agnóstica al sector).
-    const tieneOperativo = sics.some((s) => !esFamiliaHolding(s));
-    const tieneHolding = sics.some((s) => esFamiliaHolding(s));
-    // Holding puro sólo si TODOS sus SIC son de la familia holding.
-    return tieneHolding && !tieneOperativo;
+/**
+ * Participación del mayor accionista de una candidata, venga como número o como
+ * texto. Devuelve null si no hay dato.
+ * @param {{holderPct?:number, maxpct?:number, holders?:string, holdersText?:string, ownership?:string}} cand
+ * @returns {number|null}
+ */
+export function participacionMaxima(cand) {
+  if (!cand) return null;
+  for (const valor of [cand.maxpct, cand.holderPct]) {
+    if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
   }
+  return maxParticipacion(cand.holders || cand.holdersText || cand.ownership || '');
+}
 
-  // Respaldo (SIC ausente, muy raro en Capital IQ): el nombre por sí solo.
-  const texto = `${(cand && cand.name) || ''} ${(cand && cand.desc) || ''}`.toLowerCase();
-  return /\b(holdings?|inversiones|investment holding|sociedad de inversi[oó]n)\b/.test(texto);
+/**
+ * Criterio UNIFICADO de falta de independencia, para quien necesite una sola
+ * pregunta: ¿holding/grupo por semántica, o controlada por participación?
+ *
+ * El motor NO lo usa —lleva los dos motivos por separado, porque el informe los
+ * reporta en filas distintas—, pero `prefiltrar` sí lo aprovecha cuando el llamador
+ * no distingue.
+ *
+ * @param {object} cand
+ * @param {{umbral?:number}} [config]
+ * @returns {boolean}
+ */
+export function esVinculadaOControlada(cand, config = {}) {
+  return tieneSemanticaHolding(cand) || esControlada(cand, config);
 }

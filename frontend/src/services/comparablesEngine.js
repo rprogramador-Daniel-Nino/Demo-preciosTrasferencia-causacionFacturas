@@ -1,7 +1,10 @@
 import XLSX from 'xlsx-js-style';
 import axios from 'axios';
 import { num, pliOf } from '../utils/calculations.js';
-import { esHolding } from './filtrosComparablesPatch.js';
+import {
+  esHolding, tieneSemanticaHolding, holdingSospecha, esControlada, participacionMaxima,
+} from './filtrosComparablesPatch.js';
+import { perfilFuncionalBilingue, PERFILES_DETERMINADOS } from './perfilFuncionalPatch.js';
 
 /**
  * Normaliza nombres de empresas para cruces de continuidad
@@ -108,6 +111,14 @@ export const COLUMNAS_IQ = {
     etiqueta: '% mayor accionista (holder único)', esencial: false,
     claves: ['% owned by single holder', 'owned by single holder', 'single holder'],
   },
+  /* El listado de accionistas en texto («Nombre (pct); Nombre (pct); …»), que es
+     como viene el dato cuando el reporte no incluye la columna numérica de arriba.
+     Se guarda tal cual para que la hoja de trazabilidad pueda mostrar de dónde sale
+     el porcentaje, y de él se extrae el mayor cuando `holderPct` no llega. */
+  holders: {
+    etiqueta: 'Accionistas', esencial: false,
+    claves: ['available holders', 'accionista', 'shareholders', 'participación', 'participacion'],
+  },
 };
 
 /** Extrae el ticker bursátil que Capital IQ agrega entre paréntesis al final del
@@ -193,7 +204,7 @@ export async function importCapitalIQExcel(file, onProgress) {
         }
         const sIdx = idx.s, cIdx = idx.c, opIdx = idx.op, arIdx = idx.ar, invIdx = idx.inv,
           apIdx = idx.ap, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc, countryIdx = idx.country,
-          holderPctIdx = idx.holderPct;
+          holderPctIdx = idx.holderPct, holdersIdx = idx.holders;
         const total = json.length - filaEncabezados - 1;
         avisar('Leyendo compañías…', 0, total);
         const rows = [];
@@ -226,7 +237,20 @@ export async function importCapitalIQExcel(file, onProgress) {
           const idIQ = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
           const desc = descIdx >= 0 ? String(row[descIdx] || '').trim() : '';
           const country = countryIdx >= 0 ? String(row[countryIdx] || '').trim() : '';
-          const holderPct = holderPctIdx >= 0 ? num(row[holderPctIdx]) : null;
+          /* Capital IQ a veces junta accionistas y porcentaje bajo un solo encabezado
+             («All Available Holders - % Owned by Single Holder»), que entonces cae en
+             las dos entradas de COLUMNAS_IQ. Cuál es cuál se decide por el CONTENIDO
+             de la celda, no por el encabezado: una celda con letras es el listado de
+             accionistas, y pasarla por `num` la aplanaría concatenando sus dígitos
+             —«Socio A (49); B (9)» → 499—, con lo que una compañía independiente
+             quedaría excluida por control. */
+          const soloTexto = (v) => {
+            const s = String(v ?? '').trim();
+            return /[a-zA-Z]/.test(s) ? s : '';
+          };
+          const crudoPct = holderPctIdx >= 0 ? row[holderPctIdx] : '';
+          const holdersText = soloTexto(holdersIdx >= 0 ? row[holdersIdx] : '') || soloTexto(crudoPct);
+          const holderPct = soloTexto(crudoPct) ? null : num(crudoPct);
 
           const isHolding = esHolding({ name, desc, sic });
           const hasNegativeBalance = (ar !== null && ar < 0) || (inv !== null && inv < 0) || (ap !== null && ap < 0);
@@ -248,7 +272,14 @@ export async function importCapitalIQExcel(file, onProgress) {
             sic,
             desc,
             holderPct,
+            holdersText,
+            /* Participación del mayor accionista, venga como número o dentro del
+               texto de accionistas: es lo que mira el filtro de independencia. */
+            maxpct: participacionMaxima({ holderPct, holdersText }),
             isHolding,
+            /* 'no' | 'revisar': el holding se identifica por la razón social, y la
+               hoja de trazabilidad lo muestra aunque el filtro esté desactivado. */
+            sospechaHolding: holdingSospecha({ name, desc }),
             hasNegativeBalance,
             hasLoss,
             perfil: op !== null && op > 0 ? 'SERVICIO' : 'INDEFINIDO'
@@ -289,11 +320,6 @@ export function regionDe(pais) {
   return 'OTRA';
 }
 
-const CLAVES_PERFIL = {
-  servicio: /software development services|it services|information technology services|custom software|application development|development .{0,25}services|systems integration|software engineering|technology consulting|outsourc|offshore|nearshore|contract develop|develops? .{0,20}for |work[- ]?for[- ]?hire|co-develop|porting/i,
-  empresario: /publish|free[- ]?to[- ]?play|in-house|its own|own (ip|titles|games|brands|products)|monetiz|franchis|licenses its|its (own )?(products?|platform)|saas|subscription|proprietary/i,
-};
-
 /**
  * Perfil funcional a partir de la descripción del negocio. El prestador de
  * servicios es comparable con una filial que presta servicios; el empresario
@@ -301,40 +327,51 @@ const CLAVES_PERFIL = {
  * (Art. 260-4 E.T.).
  *
  * Antes el gestor lo derivaba de la utilidad: `op > 0 ? 'SERVICIO' : 'INDEFINIDO'`,
- * que no dice nada de las funciones asumidas.
+ * que no dice nada de las funciones asumidas. Después pasó a una lista de palabras
+ * clave solo en inglés y del nicho de software y juegos («publish», «free-to-play»,
+ * «SaaS»), que fallaba con una constructora o una comercializadora y fallaba con
+ * cualquier descripción en español. Hoy delega en `perfilFuncionalBilingue`, que
+ * clasifica por funciones y riesgos —no por sector— en los dos idiomas.
+ *
+ * Se conserva el nombre por las llamadas existentes; la semántica del valor
+ * devuelto (SERVICIO / EMPRESARIO / MIXTO / INDEFINIDO) no cambió.
  */
 export function perfilDe(descripcion) {
-  const d = String(descripcion || '');
-  const esServicio = CLAVES_PERFIL.servicio.test(d);
-  const esEmpresario = CLAVES_PERFIL.empresario.test(d);
-  if (esServicio && !esEmpresario) return 'SERVICIO';
-  if (esServicio && esEmpresario) return 'MIXTO';
-  if (esEmpresario) return 'EMPRESARIO';
-  return 'INDEFINIDO';
+  return perfilFuncionalBilingue(descripcion);
 }
 
 /* Perfiles que sí afirman algo sobre las funciones asumidas. INDEFINIDO queda
    fuera a propósito: es ausencia de información, no un perfil incompatible, y por
-   eso nunca descarta ni desplaza al veredicto de la IA. */
-export const PERFILES_DETERMINADOS = new Set(['SERVICIO', 'EMPRESARIO', 'MIXTO']);
+   eso nunca descarta ni desplaza al veredicto de la IA.
+
+   Se reexporta el de `perfilFuncionalPatch.js` en lugar de declarar otro conjunto
+   igual: dos copias del mismo criterio acaban divergiendo. */
+export { PERFILES_DETERMINADOS };
 
 /**
- * Filtros duros que no dependen de la descripción del negocio: holding, saldos
- * negativos y pérdida operativa. Se aplican ANTES de curar para no pagarle a la IA
- * por candidatas que el motor iba a descartar igual — en un cribado real de 2.987
- * compañías eran ~1.359 evaluaciones tiradas, casi la mitad del gasto de la corrida.
+ * Filtros duros que no dependen de la descripción del negocio: control accionario,
+ * holding, saldos negativos y pérdida operativa. Se aplican ANTES de curar para no
+ * pagarle a la IA por candidatas que el motor iba a descartar igual — en un cribado
+ * real de 2.987 compañías eran ~1.359 evaluaciones tiradas, casi la mitad del gasto
+ * de la corrida.
  *
  * El rigor funcional NO se aplica aquí: depende del perfil, y el perfil lo dictamina
  * la propia curación. Se evalúa después, en `scoreCandidates`.
  *
  * `scoreCandidates` vuelve a aplicar estos mismos filtros —es idempotente— para
- * seguir siendo correcta cuando se la llama suelta con el universo completo.
+ * seguir siendo correcta cuando se la llama suelta con el universo completo. El
+ * orden de las ramas es el mismo allá, para que las dos funciones atribuyan cada
+ * candidata al mismo motivo.
  */
 export function prefiltrar(candidates, config = {}) {
-  const { perdidaOp = 'excluir', holding = 'excluir', saldoNegativo = 'excluir' } = config;
+  const {
+    perdidaOp = 'excluir', holding = 'excluir', saldoNegativo = 'excluir',
+    control = 'excluir', umbralControl = 50,
+  } = config;
   const validas = [], rechazadas = [];
   (candidates || []).forEach(cand => {
-    if (holding === 'excluir' && cand.isHolding) rechazadas.push(cand);
+    if (control === 'excluir' && esControlada(cand, { umbral: umbralControl })) rechazadas.push(cand);
+    else if (holding === 'excluir' && tieneSemanticaHolding(cand)) rechazadas.push(cand);
     else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) rechazadas.push(cand);
     else if (perdidaOp === 'excluir' && cand.hasLoss) rechazadas.push(cand);
     else validas.push(cand);
@@ -399,8 +436,8 @@ function medianaDe(valores) {
  * `contexto.ventasParteExaminada` alimenta el factor de tamaño: sin él, ese
  * factor queda neutro en 0,5 para todas.
  *
- * Los descartes se clasifican en `categoriaRechazo` — 'filtro' (holding, saldos,
- * pérdidas), 'ia' (la curación no reconoció la actividad) y 'rigor' (perfil
+ * Los descartes se clasifican en `categoriaRechazo` — 'filtro' (control, holding,
+ * saldos, pérdidas), 'ia' (la curación no reconoció la actividad) y 'rigor' (perfil
  * funcional incompatible)—, para que el embudo pueda contar cada etapa sin
  * adivinar el motivo con expresiones regulares sobre el texto.
  */
@@ -409,6 +446,8 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     nTarget = 12,
     perdidaOp = 'excluir',
     holding = 'excluir',
+    control = 'excluir',
+    umbralControl = 50,
     saldoNegativo = 'excluir',
     geo = 'ninguna',
     rigor = 'estandar',
@@ -445,16 +484,29 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivoRechazo = motivo;
     };
 
-    // Filtros de exclusión
-    if (holding === 'excluir' && cand.isHolding) {
-      rechazar('filtro', 'holding', 'Sociedad holding sin actividad operativa directa.');
+    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
+
+    /* ── Filtros de exclusión ──
+       Control y holding van separados y en ese orden. Son dos hechos distintos y el
+       informe los reporta en filas distintas, así que fundirlos en un solo motivo
+       obligaría a deshacer la suma después.
+
+       El control efectivo (Art. 260-1) es el filtro más duro y NO se exime por
+       continuidad: una participación por encima del umbral dice que la empresa no es
+       independiente hoy, y eso no lo sustenta el estudio anterior. La condición de
+       holding, en cambio, se presume de la razón social, y ahí una comparable que ya
+       venía del estudio previo conserva su exención: su inclusión se sustentó en su
+       momento y retirarla ahora rompería la continuidad de la serie. */
+    if (control === 'excluir' && esControlada(cand, { umbral: umbralControl })) {
+      rechazar('filtro', 'controlada',
+        `Vinculada: un accionista supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
+    } else if (holding === 'excluir' && tieneSemanticaHolding(cand) && !esContinuidad) {
+      rechazar('filtro', 'holding', 'Sociedad holding o de grupo, sin actividad operativa directa.');
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
       rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
     } else if (perdidaOp === 'excluir' && cand.hasLoss) {
       rechazar('filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN).');
     }
-
-    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
 
     /* ── veredicto de la curación por IA ──
        Solo alcanza a las candidatas con identificador: las de otras fuentes no se
@@ -471,13 +523,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 
     /* ── perfil funcional ──
        El dictamen de la IA manda cuando afirma algo: lee la Business Description
-       entera, mientras que `perfilDe` busca literales en inglés del nicho de software
-       y deja en INDEFINIDO casi todo lo demás. Antes el perfil por palabras clave
-       contradecía a la IA — una candidata que la IA aprobaba por actividad caía a
-       factor 0,35 de perfil y salía del TOP-N por puntaje, aunque nada la hubiera
-       descartado. Si la IA no logró decidirlo, se vuelve a la heurística. */
+       entera, mientras que la heurística solo mira frases sueltas. Antes el perfil por
+       palabras clave contradecía a la IA — una candidata que la IA aprobaba por
+       actividad caía a factor 0,35 de perfil y salía del TOP-N por puntaje, aunque
+       nada la hubiera descartado. Si la IA no logró decidirlo, se vuelve a la
+       heurística, hoy bilingüe y agnóstica al sector. */
     const perfilIA = ia && PERFILES_DETERMINADOS.has(ia.perfil) ? ia.perfil : null;
-    const perfil = perfilIA || cand.perfilFuncional || perfilDe(cand.desc);
+    const perfil = perfilIA || cand.perfilFuncional || perfilFuncionalBilingue(cand.desc);
     const perfilOrigen = perfilIA ? 'ia' : 'heuristica';
     const fPerfil = perfil === 'SERVICIO' ? 1 : (perfil === 'MIXTO' ? 0.6 : 0.35);
 
@@ -492,9 +544,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        porque su inclusión ya se sustentó en el estudio anterior. */
     if (!descartada && !esContinuidad && PERFILES_DETERMINADOS.has(perfil)) {
       if (rigor === 'estricto' && perfil !== 'SERVICIO') {
-        rechazar('rigor', 'rigorFuncional', `Perfil ${perfil.toLowerCase()}: el rigor estricto admite solo prestadores de servicios.`);
+        rechazar('rigor', 'rigorFuncional', `Diferencias funcionales (perfil ${perfil.toLowerCase()}): el rigor estricto admite solo prestadores de servicios (art. 260-4 E.T.).`);
       } else if (rigor === 'estandar' && perfil === 'EMPRESARIO') {
-        rechazar('rigor', 'rigorFuncional', 'Empresario pleno, con propiedad intelectual y riesgo de mercado propios (art. 260-4 E.T.).');
+        rechazar('rigor', 'rigorFuncional', 'Diferencias funcionales (empresario pleno): propiedad intelectual y riesgo de mercado propios (art. 260-4 E.T.).');
       }
     }
 
@@ -568,9 +620,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const validas = evaluated.filter(c => !c.descartada).sort((a, b) => b.score - a.score);
   const rechazadas = evaluated.filter(c => c.descartada);
 
-  /* Las de continuidad ya pasaron los filtros duros (holding/saldo negativo/pérdida
-     operativa aplican igual para todas, arriba) y entran primero, sin competir por
-     puntaje: su inclusión ya se sustentó en el estudio anterior.
+  /* Las de continuidad ya pasaron los filtros sobre hechos (control, saldo negativo y
+     pérdida operativa aplican igual para todas, arriba; solo la presunción de holding
+     las exime) y entran primero, sin competir por puntaje: su inclusión ya se
+     sustentó en el estudio anterior.
 
      Pero cuentan DENTRO del cupo, no aparte. Antes se sumaban al margen de `nTarget`,
      así que pedir 12 con 7 de continuidad devolvía 19 comparables: el número que el
@@ -599,6 +652,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        decir cuántas por holding, cuántas por pérdidas y cuántas por actividad. */
     rechazadasPorMotivo: {
       holding: rechazadas.filter(c => c.motivoClave === 'holding').length,
+      controlada: rechazadas.filter(c => c.motivoClave === 'controlada').length,
       saldoNegativo: rechazadas.filter(c => c.motivoClave === 'saldoNegativo').length,
       perdidaOperativa: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,
       sinDescripcion: rechazadas.filter(c => c.motivoClave === 'sinDescripcion').length,
@@ -620,6 +674,53 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,
   };
+}
+
+/**
+ * Devuelve el universo de Capital IQ con el veredicto del motor pegado a cada
+ * candidata: si quedó seleccionada, por qué se rechazó y con qué perfil funcional.
+ *
+ * Existe porque el universo que guarda el componente es el import CRUDO —lo que
+ * salió de `importCapitalIQExcel`—, mientras que `motivoClave` y `perfilFuncional`
+ * los produce `scoreCandidates` sobre copias. La hoja «Selección comparables» cuenta
+ * su embudo con fórmulas COUNTIF sobre la columna de motivo, así que sin este cruce
+ * saldría con todas las filas en «Válida»: un embudo en cero que además cuadra, que
+ * es peor que uno vacío porque parece correcto.
+ *
+ * Degrada sin romper: al reabrir un estudio sin volver a correr el motor no hay
+ * auditoría —no se persiste, por la cuota de localStorage—, y entonces cada
+ * candidata sale sin motivo, que es la verdad disponible en ese momento.
+ *
+ * @param {Array} universo      candidatas tal como las devolvió la importación.
+ * @param {Array} comparables   la muestra final seleccionada.
+ * @param {{rechazadas?:Array, reserva?:Array}|null} auditoria  detalle de la corrida.
+ * @returns {Array} el universo con `seleccionada`, `motivoClave`, `motivoRechazo`,
+ *          `categoriaRechazo` y `perfilFuncional` por candidata.
+ */
+export function enriquecerUniverso(universo, comparables = [], auditoria = null) {
+  if (!Array.isArray(universo) || universo.length === 0) return [];
+
+  const clave = (c) => (c && (c.nameKey || nameKey(c.name))) || '';
+  const seleccionadas = new Set((comparables || []).map(clave).filter(Boolean));
+
+  /* Un solo índice con todo lo que evaluó el motor: las rechazadas traen el motivo y
+     las de reserva confirman el perfil de una válida que no entró al TOP-N. */
+  const evaluadas = new Map();
+  [...((auditoria && auditoria.rechazadas) || []), ...((auditoria && auditoria.reserva) || []), ...(comparables || [])]
+    .forEach(c => { const k = clave(c); if (k) evaluadas.set(k, c); });
+
+  return universo.map(cand => {
+    const k = clave(cand);
+    const ev = evaluadas.get(k);
+    return {
+      ...cand,
+      seleccionada: seleccionadas.has(k),
+      motivoClave: (ev && ev.motivoClave) || '',
+      motivoRechazo: (ev && ev.motivoRechazo) || '',
+      categoriaRechazo: (ev && ev.categoriaRechazo) || '',
+      perfilFuncional: (ev && ev.perfilFuncional) || cand.perfilFuncional || '',
+    };
+  });
 }
 
 /**
