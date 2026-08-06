@@ -94,6 +94,25 @@ export function guardarSesionUi({ estudioId, tab }, almacen = almacenPorDefecto(
   }
 }
 
+/**
+ * Qué hacer con el recuerdo de dónde estaba el usuario: `nada`, `guardar` o `limpiar`.
+ *
+ * Existe porque el orden importa y equivocarse aquí anula toda la función. Al arrancar no
+ * hay estudio abierto —la sesión de Google todavía no se ha resuelto, así que aún no se ha
+ * podido abrir nada—, y tomar ese estado por «el usuario cerró el estudio» borraba el
+ * recuerdo antes de que hubiera ocasión de leerlo: recargar seguía devolviendo al tablero,
+ * que es justo lo que se quería evitar. Hasta que la restauración se haya intentado, no se
+ * escribe ni se borra nada.
+ *
+ * Los estudios que otro compartió no se recuerdan: se abren por otra vía, que necesita el
+ * identificador de su dueño, y restaurarlos por la normal falla contra las reglas.
+ */
+export function accionSobreElRecuerdo({ restauracionIntentada, estudioId, estudioAjeno } = {}) {
+  if (!restauracionIntentada) return 'nada';
+  if (estudioId && !estudioAjeno) return 'guardar';
+  return 'limpiar';
+}
+
 /** Olvida dónde estaba: al cerrar el estudio o al borrarlo. */
 export function limpiarSesionUi(almacen = almacenPorDefecto()) {
   if (!almacen) return;

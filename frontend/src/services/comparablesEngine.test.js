@@ -10,7 +10,7 @@ import {
   scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
-  parsearCriteriosScreening, CURACION_LOTE
+  parsearCriteriosScreening, CURACION_LOTE, enriquecerUniverso
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -248,15 +248,69 @@ test('nameKey ignora el sufijo de bolsa/ticker entre paréntesis de Capital IQ',
   assert.strictEqual(nameKey('QubicGames S.A. (WSE:QUB)'), nameKey('QUBICGAMES S.A.'));
 });
 
-test('holding y saldo negativo siguen excluyendo a una candidata de continuidad', () => {
-  const priorComps = [{ name: 'Holding Corp' }, { name: 'Saldo Corp' }];
+test('los filtros sobre hechos excluyen a una candidata de continuidad', () => {
+  /* Saldo negativo, pérdida y control accionario son hechos verificables en las
+     cifras: no los redime que la comparable viniera del estudio anterior. */
+  const priorComps = [{ name: 'Saldo Corp' }, { name: 'Controlada Corp' }, { name: 'Perdida Corp' }];
   const candidatas = [
-    { id: 'H', name: 'Holding Corp', nameKey: nameKey('Holding Corp'), isHolding: true },
     { id: 'S', name: 'Saldo Corp', nameKey: nameKey('Saldo Corp'), hasNegativeBalance: true },
+    { id: 'C', name: 'Controlada Corp', nameKey: nameKey('Controlada Corp'), holderPct: 80 },
+    { id: 'P', name: 'Perdida Corp', nameKey: nameKey('Perdida Corp'), hasLoss: true, op: -5 },
   ];
   const r = scoreCandidates(candidatas, {}, '', priorComps);
   assert.strictEqual(r.seleccionadas.length, 0, 'ninguna debe pasar pese a ser de continuidad');
-  assert.strictEqual(r.rechazadas.length, 2);
+  assert.strictEqual(r.rechazadas.length, 3);
+});
+
+test('el holding SÍ exime a una candidata de continuidad', () => {
+  /* Cambio de criterio (2026-08-06): la condición de holding pasó de leerse del
+     código SIC —la actividad tal como la codificó Capital IQ— a presumirse de la
+     razón social. Una presunción por el nombre no puede retirar una comparable cuya
+     inclusión ya se sustentó en el estudio anterior; el control accionario, que es
+     un hecho y no una presunción, sí la retira (test de arriba). */
+  const priorComps = [{ name: 'Alpha Group' }];
+  const candidatas = [
+    { id: 'G', name: 'Alpha Group', nameKey: nameKey('Alpha Group'), desc: 'software development services', s: 100, op: 10 },
+    { id: 'G2', name: 'Beta Group', nameKey: nameKey('Beta Group'), desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5 }, '', priorComps);
+  assert.deepStrictEqual(r.seleccionadas.map(c => c.id), ['G'], 'solo la de continuidad sobrevive');
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'la que no es de continuidad sí cae');
+});
+
+test('el flag isHolding heredado ya no decide: manda la razón social', () => {
+  /* Regresión del cambio de criterio: `isHolding` sigue viajando en la candidata para
+     la hoja de trazabilidad, pero el filtro lee el nombre y la descripción. */
+  const candidatas = [
+    { id: 'A', name: 'Textiles del Norte', isHolding: true, desc: 'software development services', s: 100, op: 10 },
+    { id: 'B', name: 'Beta Holdings', isHolding: false, desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5 }, '', []);
+  assert.deepStrictEqual(r.seleccionadas.map(c => c.id), ['A'], 'el flag no excluye');
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'el nombre sí excluye');
+});
+
+test('el control accionario se cuenta aparte del holding', () => {
+  const candidatas = [
+    { id: 'C', name: 'Controlada SA', holderPct: 75, desc: 'software development services', s: 100, op: 10 },
+    { id: 'T', name: 'Texto SA', holdersText: 'Juan Pérez (62.5); Otro (3)', desc: 'software development services', s: 100, op: 10 },
+    { id: 'H', name: 'Alpha Group', desc: 'software development services', s: 100, op: 10 },
+    { id: 'L', name: 'Libre SA', holderPct: 20, desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5 }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.controlada, 2, 'el % numérico y el texto cuentan igual');
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1);
+  assert.deepStrictEqual(r.seleccionadas.map(c => c.id), ['L']);
+});
+
+test('el umbral de control es configurable y se puede desactivar el filtro', () => {
+  const candidatas = [
+    { id: 'A', name: 'Alfa SA', holderPct: 40, desc: 'software development services', s: 100, op: 10 },
+  ];
+  assert.strictEqual(
+    scoreCandidates(candidatas, { nTarget: 5, umbralControl: 30 }, '', []).rechazadasPorMotivo.controlada, 1);
+  assert.strictEqual(
+    scoreCandidates(candidatas, { nTarget: 5, control: 'incluir' }, '', []).rechazadasPorMotivo.controlada, 0);
 });
 
 /* ══════ Curación por IA: comportamiento completo migrado del monolito ══════ */
@@ -830,17 +884,22 @@ test('una comparable de continuidad no se descarta por el rigor funcional', () =
 });
 
 test('el perfil dictaminado por la IA manda sobre las palabras clave', async () => {
-  /* La descripción real está en un sector que perfilDe no reconoce, así que la
-     heurística la dejaba en INDEFINIDO (factor 0,35) aunque la IA la hubiera
-     aprobado. Ahora el dictamen de la IA fija el perfil y el factor. */
+  /* La descripción no trae ninguna señal funcional, así que la heurística la deja en
+     INDEFINIDO (factor 0,35) aunque la IA la hubiera aprobado. Ahora el dictamen de
+     la IA fija el perfil y el factor.
+
+     La descripción de este caso era «contract manufacturing … for third parties»,
+     que la heurística en inglés del nicho de software tampoco reconocía; la
+     bilingüe sí la clasifica como SERVICIO, así que el caso dejó de probar lo que
+     quería probar y se cambió por una que ninguna de las dos resuelve. */
   const { restore } = mockGemini(() => true, { perfil: () => 'SERVICIO' });
   try {
-    const cand = { id: 'A', name: 'Maquila SA', desc: 'contract manufacturing of auto parts for third parties', s: 1000, op: 100 };
-    assert.strictEqual(perfilDe(cand.desc), 'INDEFINIDO', 'la heurística no reconoce este sector');
-    const veredicto = await curateCandidatesWithGemini([cand], 'fabricación por encargo');
+    const cand = { id: 'A', name: 'Minera SA', desc: 'iron ore mining and steel plate rolling', s: 1000, op: 100 };
+    assert.strictEqual(perfilDe(cand.desc), 'INDEFINIDO', 'la heurística no saca perfil de esta descripción');
+    const veredicto = await curateCandidatesWithGemini([cand], 'extracción de mineral de hierro');
     assert.strictEqual(veredicto.porId.A.perfil, 'SERVICIO', 'la IA dictaminó el perfil');
 
-    const r = scoreCandidates([cand], { nTarget: 1, rigor: 'estricto' }, 'fabricación por encargo', [], { iaMatch: veredicto });
+    const r = scoreCandidates([cand], { nTarget: 1, rigor: 'estricto' }, 'extracción de mineral de hierro', [], { iaMatch: veredicto });
     assert.strictEqual(r.seleccionadas.length, 1, 'con el perfil de la IA sobrevive al rigor estricto');
     assert.strictEqual(r.seleccionadas[0].perfilFuncional, 'SERVICIO');
     assert.strictEqual(r.seleccionadas[0].perfilOrigen, 'ia');
@@ -895,6 +954,7 @@ test('el desglose por motivo cuenta cada criterio por separado', () => {
 
   assert.deepStrictEqual(r.rechazadasPorMotivo, {
     holding: 2,
+    controlada: 0,
     saldoNegativo: 1,
     perdidaOperativa: 1,
     sinDescripcion: 1,
@@ -1036,4 +1096,117 @@ test('num respeta los formatos numéricos que usan los analistas', () => {
   assert.strictEqual(num(''), null);
   assert.strictEqual(num(null), null);
   assert.strictEqual(num('abc'), null);
+});
+
+/* ══════ enriquecerUniverso: el veredicto del motor pegado al universo crudo ══════ */
+
+test('enriquecerUniverso pega motivo y perfil a cada candidata del universo', () => {
+  const universo = [
+    { name: 'Buena SA', nameKey: nameKey('Buena SA'), s: 100 },
+    { name: 'Alpha Group', nameKey: nameKey('Alpha Group'), s: 200 },
+    { name: 'Reserva SA', nameKey: nameKey('Reserva SA'), s: 300 },
+  ];
+  const comparables = [{ name: 'Buena SA', nameKey: nameKey('Buena SA'), perfilFuncional: 'SERVICIO' }];
+  const auditoria = {
+    rechazadas: [{ name: 'Alpha Group', nameKey: nameKey('Alpha Group'), motivoClave: 'holding', categoriaRechazo: 'filtro', motivoRechazo: 'Sociedad holding…', perfilFuncional: 'INDEFINIDO' }],
+    reserva: [{ name: 'Reserva SA', nameKey: nameKey('Reserva SA'), perfilFuncional: 'MIXTO' }],
+  };
+
+  const r = enriquecerUniverso(universo, comparables, auditoria);
+  assert.strictEqual(r.length, 3, 'no pierde ni añade filas');
+  assert.strictEqual(r[0].seleccionada, true);
+  assert.strictEqual(r[0].motivoClave, '', 'una seleccionada no tiene motivo de rechazo');
+  assert.strictEqual(r[0].perfilFuncional, 'SERVICIO');
+  assert.strictEqual(r[1].seleccionada, false);
+  assert.strictEqual(r[1].motivoClave, 'holding');
+  assert.strictEqual(r[1].categoriaRechazo, 'filtro');
+  assert.strictEqual(r[2].motivoClave, '', 'la reserva no está rechazada');
+  assert.strictEqual(r[2].perfilFuncional, 'MIXTO');
+  assert.strictEqual(r[0].s, 100, 'conserva las cifras del universo crudo');
+});
+
+test('enriquecerUniverso degrada sin auditoría en vez de romper', () => {
+  /* Al reabrir un estudio sin volver a correr el motor no hay auditoría: no se
+     persiste, por la cuota de localStorage. */
+  const universo = [{ name: 'Buena SA', nameKey: nameKey('Buena SA') }];
+  const r = enriquecerUniverso(universo, [{ name: 'Buena SA', nameKey: nameKey('Buena SA') }], null);
+  assert.strictEqual(r[0].seleccionada, true);
+  assert.strictEqual(r[0].motivoClave, '');
+  assert.deepStrictEqual(enriquecerUniverso([], [], null), []);
+  assert.deepStrictEqual(enriquecerUniverso(null, [], null), []);
+});
+
+test('enriquecerUniverso cruza por nameKey pese al ticker de Capital IQ', () => {
+  /* El universo trae «Akatsuki Inc. (TSE:3932)» y la muestra puede traer el nombre
+     sin el sufijo de bolsa: nameKey los iguala. */
+  const universo = [{ name: 'Akatsuki Inc. (TSE:3932)' }];
+  const r = enriquecerUniverso(universo, [{ name: 'AKATSUKI INC.' }], null);
+  assert.strictEqual(r[0].seleccionada, true);
+});
+
+/* ══════ Columna de accionistas: número o listado, decidido por el contenido ══════ */
+
+test('un listado de accionistas no se aplana a una cifra falsa', async () => {
+  /* Capital IQ junta accionistas y porcentaje bajo un solo encabezado
+     («All Available Holders - % Owned by Single Holder»), que cae en las dos entradas
+     de COLUMNAS_IQ. Si el listado se pasara por `num`, «Socio A (49); B (9)» daría
+     499 y una compañía independiente quedaría excluida por control. */
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue', 'Operating Income',
+     'All Available Holders - % Owned by Single Holder [Latest]'],
+    ['Independiente SA', 1000, 100, 'Socio A (49); Socio B (9)'],
+    ['Controlada SA', 1000, 100, 'Dueño Único (73.4); Menor (2)'],
+    ['Sin dato SA', 1000, 100, ''],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+  await conFileReader(buf, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'holders.xlsx', size: buf.length });
+    const [indep, ctrl, sin] = rows;
+
+    assert.strictEqual(indep.maxpct, 49, 'el mayor accionista es 49, no 499');
+    assert.strictEqual(indep.holdersText, 'Socio A (49); Socio B (9)', 'el dato original se conserva');
+    assert.strictEqual(indep.holderPct, null, 'un listado no es una cifra');
+    assert.strictEqual(ctrl.maxpct, 73.4, 'y no 73.42');
+    assert.strictEqual(sin.maxpct, null);
+
+    const r = scoreCandidates(rows, { nTarget: 5, umbralControl: 50 }, '', []);
+    assert.strictEqual(r.rechazadasPorMotivo.controlada, 1, 'solo cae la que de verdad supera el umbral');
+    assert.ok(r.seleccionadas.some(c => c.name === 'Independiente SA'), 'la del 49 % sobrevive');
+  });
+});
+
+test('una columna de porcentaje puramente numérica se lee como cifra', async () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue', 'Operating Income', '% Owned by Single Holder'],
+    ['Controlada SA', 1000, 100, 73.4],
+    ['Libre SA', 1000, 100, 12.5],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+  await conFileReader(buf, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'pct.xlsx', size: buf.length });
+    assert.strictEqual(rows[0].holderPct, 73.4);
+    assert.strictEqual(rows[0].maxpct, 73.4);
+    assert.strictEqual(rows[0].holdersText, '', 'una cifra no se guarda como listado');
+    assert.strictEqual(rows[1].maxpct, 12.5);
+  });
+});
+
+test('la importación marca la sospecha de holding por la razón social', async () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue', 'Operating Income'],
+    ['Alpha Group Ltd', 1000, 100],
+    ['Textiles del Norte', 1000, 100],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+  await conFileReader(buf, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'h.xlsx', size: buf.length });
+    assert.strictEqual(rows[0].sospechaHolding, 'revisar');
+    assert.strictEqual(rows[1].sospechaHolding, 'no');
+  });
 });

@@ -6,6 +6,7 @@ import {
   construirMemoriaRango, nombreArchivoMemoria,
 } from '../services/memoriaCalculoRango.js';
 import { hojasMemoriaRangoOptimo } from '../services/memoriaCalculoRangoOptimo.js';
+import { enriquecerUniverso } from '../services/comparablesEngine.js';
 import { normalizarEeff } from '../services/eeffParserNormalizador.js';
 
 /**
@@ -139,15 +140,17 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
      y se descarga mediante Blob. */
   const descargar = () => {
     const libro = XLSX.utils.book_new();
-    const seleccionadasKeys = new Set((estudio?.comparables || []).map(c => c.nameKey || (c.name ? c.name.toUpperCase() : '')));
+    /* El universo que guarda el motor es el import CRUDO de Capital IQ: no trae el
+       motivo de rechazo ni el perfil funcional, que los produce `scoreCandidates`.
+       `enriquecerUniverso` los cruza por nameKey con la muestra y la auditoría de la
+       última corrida; sin ese cruce el embudo de la hoja contaría cero en todos los
+       motivos y daría por válido el universo entero. */
     const candidatasUniverso = Array.isArray(estudio?.universo) && estudio.universo.length > 0
-      ? estudio.universo.map(cand => ({
-          ...cand,
-          seleccionada: seleccionadasKeys.has(cand.nameKey || (cand.name ? cand.name.toUpperCase() : ''))
-        }))
+      ? enriquecerUniverso(estudio.universo, estudio?.comparables || [], estudio?.auditoria)
       : null;
     const seleccion = estudio?.seleccion || (candidatasUniverso ? {
       criterios: estudio?.criteriosScreening || [],
+      umbralControl: estudio?.motorConfig?.umbralControl,
       candidatas: candidatasUniverso
     } : null);
     const hojas = hojasMemoriaRangoOptimo(estudioNormalizado, seleccion);
