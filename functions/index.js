@@ -24,9 +24,10 @@ exports.claude = onRequest(
 
       const body = req.body || {};
       if (!body.model) {
-        /* claude-3-5-haiku-20241022 está retirado desde el 19-02-2026 y responde 404:
-           cualquier llamada que no mandara `model` fallaba. Mismo identificador que
-           usan analisisMercadoActualizar.js y analisisSectorActualizar.js. */
+        /* Antes aquí estaba claude-3-5-haiku-20241022, retirado por Anthropic el
+           19-02-2026 y respondiendo 404: fallaba cualquier llamada que no mandara
+           `model`. Mismo identificador que usan analisisMercadoActualizar.js y
+           analisisSectorActualizar.js. */
         body.model = 'claude-haiku-4-5-20251001';
       }
 
@@ -290,6 +291,14 @@ exports.actualizarAnalisisMercadoScheduled = onSchedule(
   }
 );
 
+/* El frontend llama a la URL de esta función directamente, no a
+   /api/generar-analisis-sector: ver el comentario junto a esa llamada en
+   ReporteGenerador.jsx. Este corte es un respaldo para el propio límite de
+   180 s de la función (Cloud Run responde su propio 504 sin cuerpo JSON si
+   se deja llegar hasta ahí) — no es el mismo problema que GEMINI_CORTE_MS
+   resuelve para /api/gemini, que es el corte de 60 s del rewrite de Hosting. */
+const ANALISIS_SECTOR_CORTE_MS = 170_000;
+
 // Análisis del Sector (III.C), bajo demanda: a diferencia del cron mensual de
 // arriba (un solo documento global), este se dispara desde el frontend la
 // primera vez que ve una actividad+año que no estén ya en
@@ -317,14 +326,27 @@ exports.generarAnalisisSector = onRequest(
       // Mismo motivo que en el cron: no cargar firebase-admin en cada cold
       // start de claude/gemini/extraerRut/extraerCamara.
       const { actualizarAnalisisSector } = require('./analisisSectorActualizar');
-      const resultado = await actualizarAnalisisSector({
-        geminiApiKey: GEMINI_API_KEY.value(),
-        claudeApiKey: ANTHROPIC_API_KEY.value(),
-        actividad,
-        year: anioNum,
-      });
+      const resultado = await Promise.race([
+        actualizarAnalisisSector({
+          geminiApiKey: GEMINI_API_KEY.value(),
+          claudeApiKey: ANTHROPIC_API_KEY.value(),
+          actividad,
+          year: anioNum,
+        }),
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(Object.assign(new Error('corte interno'), { esCorte: true })), ANALISIS_SECTOR_CORTE_MS);
+        }),
+      ]);
       res.json(resultado);
     } catch (err) {
+      if (err && err.esCorte) {
+        console.error(`generarAnalisisSector no respondió en ${ANALISIS_SECTOR_CORTE_MS / 1000} s; se corta antes del límite de la función.`);
+        res.status(504).json({
+          error: 'La generación del análisis de sector superó el tiempo disponible.',
+          detail: `Sin respuesta en ${ANALISIS_SECTOR_CORTE_MS / 1000} s. Reintente.`,
+        });
+        return;
+      }
       console.error('Error generando el análisis de sector:', err);
       res.status(502).json({ error: 'No se pudo generar el análisis de sector: ' + err.message });
     }

@@ -875,3 +875,37 @@ test('hydrateExactWordTemplate reemplaza la Tabla 13 completa de la plantilla re
   assert.ok(salida.includes('5045 Computers, Peripherals and Software'), 'falta el criterio del estudio activo');
   assert.ok(salida.includes('Tabla 13. Códigos SIC utilizados'), 'se perdió el título de la tabla');
 });
+
+/* ══════ Motivo «controlada»: falta de independencia (Art. 260-1 E.T.) ══════ */
+
+test('filasRazonesRechazo cuenta las vinculadas aparte de las holding', () => {
+  const embudo = {
+    evaluadas: 100, seleccionadas: 10, reserva: 0,
+    porMotivo: {
+      holding: 30, controlada: 20, saldoNegativo: 5, perdidaOperativa: 15,
+      sinDescripcion: 0, actividadDistinta: 15, rigorFuncional: 5,
+    },
+  };
+  const { filas, cuadra, suma, total } = filasRazonesRechazo(embudo);
+  const controlada = filas.find(f => f.clave === 'controlada');
+  assert.ok(controlada, 'la fila de vinculadas aparece');
+  assert.strictEqual(controlada.cuantas, 20);
+  assert.ok(filas.find(f => f.clave === 'holding'), 'y no desplaza a la de holding');
+  assert.strictEqual(cuadra, true, `los conteos deben sumar el universo (${suma} vs ${total})`);
+  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+});
+
+test('un estudio guardado antes del cambio sigue cuadrando sin la clave controlada', () => {
+  /* Compatibilidad hacia atrás: los estudios en Firestore no traen `controlada`.
+     La fila cuenta 0, se omite, y la tabla sigue sumando el universo. */
+  const embudo = {
+    evaluadas: 100, seleccionadas: 10, reserva: 0,
+    porMotivo: {
+      holding: 50, saldoNegativo: 5, perdidaOperativa: 15,
+      sinDescripcion: 0, actividadDistinta: 15, rigorFuncional: 5,
+    },
+  };
+  const { filas, cuadra } = filasRazonesRechazo(embudo);
+  assert.ok(!filas.some(f => f.clave === 'controlada'), 'sin dato no se inventa la fila');
+  assert.strictEqual(cuadra, true);
+});

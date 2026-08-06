@@ -1,0 +1,100 @@
+rules_version = '2';
+
+// ===============================================================
+// Sistema PT — reglas de Cloud Storage
+// ===============================================================
+//
+// Aquí vive lo que no cabe en un documento de Firestore. Hoy, dos cosas por estudio:
+//
+//   usuarios/{uid}/estudios/{estudioId}/cribado/{archivo}  — el .xlsx de Capital IQ
+//                                                            tal como se cargó
+//   usuarios/{uid}/estudios/{estudioId}/curacion.json      — el veredicto de la
+//                                                            curación por IA
+//
+// El cribado son miles de filas con la descripción de negocio de cada candidata: entre
+// 1 y 2 MB, por encima del millón de bytes que admite un documento de Firestore. Antes
+// no se guardaba en ninguna parte y había que volver a cargar el Excel cada vez que se
+// reabría el estudio; el veredicto de la curación vivía solo en localStorage, así que
+// abrir el estudio en otra máquina obligaba a volver a pagar las consultas a Gemini.
+//
+// Mismo aislamiento que en Firestore y por las mismas razones: todo cuelga de
+// `usuarios/{uid}/…` y estas reglas comparan ese uid con el de quien pide, así que el
+// aislamiento es estructural y no depende de ningún campo del contenido.
+//
+// LEER DESDE EL NAVEGADOR EXIGE CONFIGURAR CORS EN EL BUCKET, y no se hace desde aquí:
+// estas reglas gobiernan el permiso, no las cabeceras. Subir un archivo funciona sin
+// tocar nada —lo atiende la API de Firebase, que responde con CORS permisivo—, pero
+// descargarlo (`?alt=media`) lo sirve Cloud Storage directamente y ahí manda la
+// configuración CORS del bucket, que en un bucket recién creado está vacía. El síntoma es
+// desconcertante: la respuesta llega con el archivo y un 206, y el navegador la descarta
+// por «No 'Access-Control-Allow-Origin' header is present», aunque el preflight sí
+// responda 200 con la cabecera. Los orígenes permitidos están en `storage.cors.json`, y
+// se aplican una vez con:
+//
+//   gcloud storage buckets update gs://precios-trasnferencia.firebasestorage.app \
+//     --cors-file=storage.cors.json
+//
+// `firebase deploy` NO lo aplica: no hay forma de declarar el CORS del bucket en
+// firebase.json, así que al crear un bucket nuevo hay que acordarse de esto.
+//
+// LIMITACIÓN CONOCIDA — compartir un estudio no comparte su cribado. En Firestore, el
+// dueño puede conceder lectura por correo (`compartidoCon`) y las reglas lo comprueban
+// consultando el documento. Las reglas de Storage no pueden leer Firestore: no existe
+// `get()` aquí. Quien reciba un estudio compartido lo verá completo salvo el universo,
+// y tendrá que cargar el Excel él mismo. Resolverlo exigiría duplicar la lista de
+// correos en la ruta del archivo o en sus metadatos, y eso abre la puerta a que las dos
+// copias digan cosas distintas.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    /* Igual que en firestore.rules: cualquier cuenta de Google con el correo
+       verificado. Lo que protege los datos es el aislamiento por usuario. */
+    function esMiembro() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+
+    function esDueno(uid) {
+      return esMiembro() && request.auth.uid == uid;
+    }
+
+    /* El cribado de Capital IQ. 50 MB de tope: los exports reales rondan 1-5 MB y el
+       margen cubre un cribado grande sin dejar la ruta abierta a subir cualquier cosa.
+       La extensión se comprueba para que esta carpeta no acabe siendo un almacén
+       general: es el archivo del cribado o nada. */
+    match /usuarios/{uid}/estudios/{estudioId}/cribado/{archivo} {
+      allow read, delete: if esDueno(uid);
+      allow write: if esDueno(uid)
+        && request.resource.size < 50 * 1024 * 1024
+        && archivo.matches('.*\\.(xlsx|xls|csv|XLSX|XLS|CSV)');
+    }
+
+    /* El veredicto de la curación. Un dictamen por candidata (coincide, motivo breve y
+       perfil funcional): unos cientos de KB en el peor caso. */
+    match /usuarios/{uid}/estudios/{estudioId}/curacion.json {
+      allow read, delete: if esDueno(uid);
+      allow write: if esDueno(uid)
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    /* La plantilla del informe con su marcado y los recursos del cliente. De esto depende
+       el formato del Word, y vivía solo en IndexedDB: quien la había subido obtenía el
+       documento con su formato y quien abría el mismo estudio en otro equipo caía a la
+       plantilla maestra incrustada en el código.
+
+       50 MB porque los recursos son imágenes en data URL —el logo y las páginas del
+       cliente— y un caso real de anexo pesaba 5,25 MB por sí solo. */
+    match /usuarios/{uid}/estudios/{estudioId}/plantilla.json {
+      allow read, delete: if esDueno(uid);
+      allow write: if esDueno(uid)
+        && request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // Cualquier otra ruta queda negada.
+    match /{ruta=**} {
+      allow read, write: if false;
+    }
+  }
+}

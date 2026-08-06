@@ -6,6 +6,7 @@ import {
   construirMemoriaRango, nombreArchivoMemoria,
 } from '../services/memoriaCalculoRango.js';
 import { hojasMemoriaRangoOptimo } from '../services/memoriaCalculoRangoOptimo.js';
+import { enriquecerUniverso } from '../services/comparablesEngine.js';
 import { normalizarEeff } from '../services/eeffParserNormalizador.js';
 
 /**
@@ -15,10 +16,10 @@ import { normalizarEeff } from '../services/eeffParserNormalizador.js';
  */
 function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
   if (!estudioOriginal) return {};
-  
+
   // 1. Clonar profundamente para no mutar las referencias originales
   const copia = JSON.parse(JSON.stringify(estudioOriginal));
-  
+
   // 2. Normalizar el contribuyente para la convención del parche (op = gastos operacionales)
   const cftNormalizadas = normalizarEeff({
     ingresos_operacionales: copia.t_s,
@@ -30,13 +31,13 @@ function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
     cuentas_por_pagar: copia.t_ap,
     propiedad_planta_equipo: copia.t_ppe,
   });
-  
+
   if (cftNormalizadas.op !== null && cftNormalizadas.op !== undefined) {
     copia.t_op = cftNormalizadas.op;
   } else if (copia.t_s != null && copia.t_c != null && copia.t_op != null) {
     copia.t_op = Number(copia.t_s) - Number(copia.t_c) - Number(copia.t_op);
   }
-  
+
   if (cftNormalizadas.ppe != null) {
     copia.t_ppe = cftNormalizadas.ppe;
   }
@@ -67,7 +68,7 @@ function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
       };
     });
   }
-  
+
   return copia;
 }
 
@@ -139,15 +140,17 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
      y se descarga mediante Blob. */
   const descargar = () => {
     const libro = XLSX.utils.book_new();
-    const seleccionadasKeys = new Set((estudio?.comparables || []).map(c => c.nameKey || (c.name ? c.name.toUpperCase() : '')));
+    /* El universo que guarda el motor es el import CRUDO de Capital IQ: no trae el
+       motivo de rechazo ni el perfil funcional, que los produce `scoreCandidates`.
+       `enriquecerUniverso` los cruza por nameKey con la muestra y la auditoría de la
+       última corrida; sin ese cruce el embudo de la hoja contaría cero en todos los
+       motivos y daría por válido el universo entero. */
     const candidatasUniverso = Array.isArray(estudio?.universo) && estudio.universo.length > 0
-      ? estudio.universo.map(cand => ({
-          ...cand,
-          seleccionada: seleccionadasKeys.has(cand.nameKey || (cand.name ? cand.name.toUpperCase() : ''))
-        }))
+      ? enriquecerUniverso(estudio.universo, estudio?.comparables || [], estudio?.auditoria)
       : null;
     const seleccion = estudio?.seleccion || (candidatasUniverso ? {
       criterios: estudio?.criteriosScreening || [],
+      umbralControl: estudio?.motorConfig?.umbralControl,
       candidatas: candidatasUniverso
     } : null);
     const hojas = hojasMemoriaRangoOptimo(estudioNormalizado, seleccion);

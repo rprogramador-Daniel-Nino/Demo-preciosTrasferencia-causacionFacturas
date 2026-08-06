@@ -232,6 +232,12 @@ const RAZONES_RECHAZO = [
   ['actividadDistinta', 'Actividad económica distinta a la de la parte examinada'],
   ['sinDescripcion', 'Sin descripción del negocio que permita verificar la actividad'],
   ['holding', 'Compañías holding o sin actividad operativa propia'],
+  /* Motivo separado del anterior y no fundido con él: el holding se presume de la
+     razón social, mientras que el control es un hecho de la composición accionaria
+     (Art. 260-1 E.T.). Ante la DIAN son dos justificaciones distintas y la tabla las
+     tiene que poder sustentar por separado. Los estudios guardados antes de este
+     cambio no traen la clave, cuentan 0 y la fila se omite sola. */
+  ['controlada', 'Compañías vinculadas: un accionista supera el umbral de independencia'],
   ['perdidaOperativa', 'Pérdidas operativas en el período analizado'],
   ['saldoNegativo', 'Saldos negativos en balances: cifras no verosímiles'],
 ];

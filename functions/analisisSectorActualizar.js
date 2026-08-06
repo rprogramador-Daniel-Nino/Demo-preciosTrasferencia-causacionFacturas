@@ -18,7 +18,14 @@ const {
 
 if (!getApps().length) initializeApp();
 
-const GEMINI_MODEL = 'gemini-3.5-flash';
+/* NO usar 'gemini-2.0-flash' (retirado, 404) ni 'gemini-3.5-flash': verificado en vivo
+   el 2026-08-05 que este último nunca devuelve `groundingMetadata` (ni siquiera
+   `webSearchQueries`) con `tools:[{google_search:{}}]` + salida JSON en texto, así que
+   `filtrarConfiables` descarta todo y `actualizarAnalisisSector` falla el 100% de las
+   corridas con "Ningún dato del sector trajo confirmación de búsqueda esta corrida".
+   'gemini-3-flash-preview' sí devuelve `webSearchQueries` de forma consistente (mismo
+   modelo con el que se probó en vivo el fix del 2026-08-04, ver commit ef79aa6). */
+const GEMINI_MODEL = 'gemini-3-flash-preview';
 const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 
 /** La `actividad` que llega del estudio a veces es la descripción completa del
