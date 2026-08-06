@@ -37,10 +37,10 @@
 /* Términos semánticos INEQUÍVOCOS de holding / grupo, en español e inglés. */
 const TERMINOS_HOLDING = [
   // español
-  'holding', 'holdings', 'grupo', 'grupo empresarial', 'sociedad de cartera',
+  'holding', 'holdings', 'grupo', 'grupos', 'grupo empresarial', 'sociedad de cartera',
   'sociedad tenedora', 'sociedad matriz', 'tenedora de acciones',
   // inglés / uso internacional en Capital IQ
-  'group', 'holdco', 'hldg',
+  'group', 'groups', 'holdco', 'hldg',
   // otros idiomas frecuentes
   'groupe', 'gruppo', 'holdingmaatschappij',
 ];
@@ -50,13 +50,16 @@ const RX_HOLDING_SEM = new RegExp(
 );
 
 /**
- * ¿El nombre o la descripción contienen un término de holding/grupo (ES/EN)?
- * @param {{name?:string, desc?:string}} cand
+ * ¿La Razón Social contiene un término de holding/grupo (ES/EN)?
+ * La evaluación se realiza EXCLUSIVAMENTE sobre la Razón Social (`cand.name` o `cand.razonSocial`)
+ * para evitar que descripciones largas con menciones de empresas matrices generen falsos positivos.
+ * @param {{name?:string, razonSocial?:string, desc?:string}} cand
  * @returns {boolean}
  */
 export function tieneSemanticaHolding(cand) {
-  const texto = `${(cand && cand.name) || ''} ${(cand && cand.desc) || ''}`;
-  return RX_HOLDING_SEM.test(texto);
+  const razonSocial = String((cand && (cand.name || cand.razonSocial)) || '');
+  if (!razonSocial.trim()) return false;
+  return RX_HOLDING_SEM.test(razonSocial);
 }
 
 /**

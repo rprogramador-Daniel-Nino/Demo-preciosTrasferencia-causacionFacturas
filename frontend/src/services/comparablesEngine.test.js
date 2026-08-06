@@ -290,6 +290,16 @@ test('el flag isHolding heredado ya no decide: manda la razón social', () => {
   assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'el nombre sí excluye');
 });
 
+test('una empresa con múltiples términos (ej: holding group) cuenta exactamente UNA sola vez', () => {
+  const candidatas = [
+    { id: '1', name: 'Cocacola holding group SAS', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5 }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'cuenta exactamente 1 empresa descartada');
+  assert.strictEqual(r.rechazadas.length, 1, 'solo hay 1 empresa en el listado de rechazadas');
+  assert.strictEqual(r.evaluadas, 1, 'el universo evaluado es 1');
+});
+
 test('el control accionario se cuenta aparte del holding', () => {
   const candidatas = [
     { id: 'C', name: 'Controlada SA', holderPct: 75, desc: 'software development services', s: 100, op: 10 },
