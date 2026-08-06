@@ -51,8 +51,7 @@ const RX_HOLDING_SEM = new RegExp(
 
 /**
  * ¿La Razón Social contiene un término de holding/grupo (ES/EN)?
- * La evaluación se realiza EXCLUSIVAMENTE sobre la Razón Social (`cand.name` o `cand.razonSocial`)
- * para evitar que descripciones largas con menciones de empresas matrices generen falsos positivos.
+ * La evaluación se realiza sobre la Razón Social (`cand.name` o `cand.razonSocial`).
  * @param {{name?:string, razonSocial?:string, desc?:string}} cand
  * @returns {boolean}
  */
@@ -60,6 +59,19 @@ export function tieneSemanticaHolding(cand) {
   const razonSocial = String((cand && (cand.name || cand.razonSocial)) || '');
   if (!razonSocial.trim()) return false;
   return RX_HOLDING_SEM.test(razonSocial);
+}
+
+/**
+ * ¿La descripción contiene un término de holding/grupo (ES/EN) cuando la razón social NO lo trae?
+ * Sirve para llevar un contador separado de descarte por mención en la descripción.
+ * @param {{name?:string, razonSocial?:string, desc?:string}} cand
+ * @returns {boolean}
+ */
+export function tieneSemanticaHoldingDesc(cand) {
+  if (tieneSemanticaHolding(cand)) return false;
+  const desc = String((cand && cand.desc) || '');
+  if (!desc.trim()) return false;
+  return RX_HOLDING_SEM.test(desc);
 }
 
 /**

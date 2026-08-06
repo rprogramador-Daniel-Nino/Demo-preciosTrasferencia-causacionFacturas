@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  esHolding, holdingSospecha, tieneSemanticaHolding,
+  esHolding, holdingSospecha, tieneSemanticaHolding, tieneSemanticaHoldingDesc,
   maxParticipacion, participacionMaxima, esControlada, esVinculadaOControlada,
   esSicHolding, sicPrincipal, sicsTodos,
 } from './filtrosComparablesPatch.js';
@@ -62,6 +62,10 @@ test('tieneSemanticaHolding reconoce términos ES/EN inequívocos', () => {
 test('evalúa ÚNICAMENTE la razón social (nombre) y ignora menciones en la descripción', () => {
   assert.equal(tieneSemanticaHolding({ name: 'Acme Services LLC', desc: 'Subsidiary of Global Holding Group' }), false);
   assert.equal(tieneSemanticaHolding({ name: 'Software Solutions Inc', desc: 'Part of the Technology Grupo' }), false);
+});
+test('tieneSemanticaHoldingDesc detecta holding en descripción si NO está en la razón social', () => {
+  assert.equal(tieneSemanticaHoldingDesc({ name: 'Acme Services LLC', desc: 'Subsidiary of Global Holding Group' }), true);
+  assert.equal(tieneSemanticaHoldingDesc({ name: 'Alpha Holdings', desc: 'Subsidiary of Global Holding Group' }), false, 'si la razón social ya lo trae, la desc retorna false');
 });
 test('términos AMBIGUOS no marcan (investment/ventures/invest)', () => {
   // el usuario reportó falsos positivos: nombres que no dicen holding/grupo

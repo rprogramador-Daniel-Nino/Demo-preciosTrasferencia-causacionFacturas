@@ -231,7 +231,8 @@ const RAZONES_RECHAZO = [
   ['rigorFuncional', 'Diferencias funcionales: perfil no comparable con la parte examinada'],
   ['actividadDistinta', 'Actividad económica distinta a la de la parte examinada'],
   ['sinDescripcion', 'Sin descripción del negocio que permita verificar la actividad'],
-  ['holding', 'Compañías holding o sin actividad operativa propia'],
+  ['holding', 'Compañías holding o de grupo (en la razón social)'],
+  ['holdingDescripcion', 'Mención de sociedad holding o grupo en la descripción del negocio'],
   /* Motivo separado del anterior y no fundido con él: el holding se presume de la
      razón social, mientras que el control es un hecho de la composición accionaria
      (Art. 260-1 E.T.). Ante la DIAN son dos justificaciones distintas y la tabla las
