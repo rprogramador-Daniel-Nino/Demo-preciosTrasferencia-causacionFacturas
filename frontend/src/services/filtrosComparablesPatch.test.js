@@ -51,10 +51,17 @@ test('multisector ES/EN: la semántica clasifica igual sin importar el sector', 
 /* ── tieneSemanticaHolding directo ── */
 test('tieneSemanticaHolding reconoce términos ES/EN inequívocos', () => {
   assert.equal(tieneSemanticaHolding({ name: 'X Holding' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'X Holdings' }), true);
   assert.equal(tieneSemanticaHolding({ name: 'X Grupo' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'X Grupos' }), true);
   assert.equal(tieneSemanticaHolding({ name: 'X Group' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'X Groups' }), true);
   assert.equal(tieneSemanticaHolding({ name: 'X Sociedad de Cartera' }), true);
   assert.equal(tieneSemanticaHolding({ name: 'X Manufacturing' }), false);
+});
+test('evalúa ÚNICAMENTE la razón social (nombre) y ignora menciones en la descripción', () => {
+  assert.equal(tieneSemanticaHolding({ name: 'Acme Services LLC', desc: 'Subsidiary of Global Holding Group' }), false);
+  assert.equal(tieneSemanticaHolding({ name: 'Software Solutions Inc', desc: 'Part of the Technology Grupo' }), false);
 });
 test('términos AMBIGUOS no marcan (investment/ventures/invest)', () => {
   // el usuario reportó falsos positivos: nombres que no dicen holding/grupo
