@@ -391,13 +391,13 @@ test('una imagen suelta en un div tampoco se pierde', async () => {
   assert.equal((doc.match(/después/g) || []).length, 1);
 });
 
-test('las páginas del mismo tipo de orientación fluyen de forma continua (sin saltos manuales)', async () => {
+test('las páginas del mismo tipo de orientación fluyen de forma continua (con salto solo después de la portada)', async () => {
   const html = '<div class="pagina" data-pagina="1" data-orientacion="vertical"><p>una</p></div>' +
     '<div class="pagina" data-pagina="2" data-orientacion="vertical"><p>dos</p></div>' +
     '<div class="pagina" data-pagina="3" data-orientacion="vertical"><p>tres</p></div>';
   const { doc } = await abrir(html);
-  /* Con flujo continuo, no se insertan saltos manuales <w:br w:type="page"/> para evitar páginas vacías por desborde */
-  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 0);
+  /* Un solo salto manual para separar la portada (página 1) del resto; el resto fluye de forma continua */
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 1);
 });
 
 test('la página apaisada abre su propia sección', async () => {
@@ -554,8 +554,8 @@ test('extremo a extremo: el informe real sale como .docx', async () => {
      sino que fluye de forma continua. El número de secciones corresponde únicamente a los cambios de orientación. */
   assert.equal((doc.match(/<w:sectPr/g) || []).length, 3,
     'las secciones deben corresponder a los cambios de orientación de página');
-  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 0,
-    'no debe haber saltos de página manuales en flujo continuo');
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 1,
+    'debe haber exactamente un salto de página manual para la portada');
 
   /* El texto del informe está. */
   assert.match(doc, /INTRODUCCIÓN/);

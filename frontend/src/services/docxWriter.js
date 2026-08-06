@@ -12,7 +12,7 @@ import {
   Document, Packer, Paragraph, TextRun, Header, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
-  ImageRun, LevelFormat, PageOrientation,
+  ImageRun, LevelFormat, PageBreak, PageOrientation,
 } from 'docx';
 import {
   HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
@@ -249,6 +249,7 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
       ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
       children: runs,
       spacing: { before: 0, after: 0, line: 276 },
+      ...(nivel === HeadingLevel.HEADING_1 ? { pageBreakBefore: true } : {}),
     });
   }
 
@@ -520,7 +521,11 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       },
       ...(cabecera ? { headers: { default: cabecera } } : {}),
       footers: { default: pieConNumero() },
-      children: t.paginas.flatMap((nodo) => bloquesDe(nodo)),
+      children: t.paginas.flatMap((nodo, i) => [
+        /* Salto delante de la segunda página para separar la portada (primera página de la primera tanda) */
+        ...(iTanda === 0 && i === 1 ? [new Paragraph({ children: [new PageBreak()] })] : []),
+        ...bloquesDe(nodo),
+      ]),
     }))
     : [{
       properties: {
