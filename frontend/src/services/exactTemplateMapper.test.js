@@ -854,3 +854,44 @@ test('un estudio guardado antes del cambio sigue cuadrando sin la clave controla
   assert.ok(!filas.some(f => f.clave === 'controlada'), 'sin dato no se inventa la fila');
   assert.strictEqual(cuadra, true);
 });
+
+test('Caso Real - End Game 2025: Formateo y sumas de control de balance general de las capturas', () => {
+  const estudioEndGame2025 = {
+    ent: 'END GAME INTERACTIVE COLOMBIA SAS',
+    nit: '901337576',
+    anio: 2025,
+    t_cash: 12417756,          // Efectivo y equiv.
+    t_inv_assoc: 1031832388,   // Inversiones asociadas
+    t_ar: 578289605,           // Cuentas por cobrar
+    t_tax: 388909218,          // Impuestos
+    t_act_curr: 2011448966,    // Total Activo Corriente
+    t_ppe: 114783610,          // Propiedad, planta y equipo
+    t_intang: 4620815,         // Intangibles
+    t_dif: 48626297,           // Diferidos
+    t_act_nocurr: 168030721,   // Total Activos no corrientes
+    t_act_tot: 2179479687      // Total Activos
+  };
+
+  const html = 
+    '<td>87.957.645</td>' +
+    '<td>179.720.372</td>' +
+    '<td>268.433.497</td>' +
+    '<td>1.783.558.970</td>' +
+    '<td>117.624.200</td>' +
+    '<td>1.989.688.200</td>';
+
+  const salida = hydrateExactWordTemplate(html, estudioEndGame2025);
+
+  // Verificamos que se hayan reemplazado los valores de End Game 2024 con los nuevos de End Game 2025 de forma idéntica a las capturas
+  assert.ok(salida.includes('12.417.756'), 'No se formateó/reemplazó el efectivo de 2025');
+  assert.ok(salida.includes('578.289.605'), 'No se formateó/reemplazó cuentas por cobrar de 2025');
+  assert.ok(salida.includes('388.909.218'), 'No se formateó/reemplazó impuestos de 2025');
+  assert.ok(salida.includes('2.011.448.966'), 'No se formateó/reemplazó Total Activo Corriente de 2025');
+  assert.ok(salida.includes('114.783.610'), 'No se formateó/reemplazó PPE de 2025');
+  assert.ok(salida.includes('2.179.479.687'), 'No se formateó/reemplazó Total Activos de 2025');
+
+  // Asegurar que las cifras viejas de 2024 (que se usaban de reemplazo primario) ya no estén en la salida
+  for (const cifraVieja of ['87.957.645', '179.720.372', '268.433.497', '1.783.558.970', '117.624.200', '1.989.688.200']) {
+    assert.ok(!salida.includes(cifraVieja), `Sobrevivió la cifra de referencia ${cifraVieja}`);
+  }
+});

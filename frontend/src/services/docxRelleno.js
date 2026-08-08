@@ -32,6 +32,7 @@ import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { filasComparablesInforme, filasRazonesRechazo } from './exactTemplateMapper.js';
 import { pctf } from '../utils/calculations.js';
+import { nameKey } from './comparablesEngine.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
 } from './analisisMercado.js';
@@ -476,17 +477,126 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
  * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
  */
+/**
+ * Inserta de manera dinámica el Anexo B en el OOXML de la plantilla .docx.
+ * Identifica la sección de Anexo B, genera la tabla de Nombre y Descripción de comparables
+ * utilizando la función nativa generarTablaOoxml, e inyecta las imágenes correspondientes
+ * del EEFF de cada comparable conservando el flujo OOXML estándar.
+ *
+ * @param {PizZip} zip
+ * @param {object} estudio
+ * @returns {{insertadas:number}}
+ */
+export function insertarImagenesAnexoB(zip, estudio) {
+  const comparables = ((estudio && estudio.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
+  if (!comparables.length) return { insertadas: 0 };
+
+  let xml = zip.file(RUTA_DOC).asText();
+
+  // Encontrar sección ANEXO B y ANEXO C de forma insensible a mayúsculas
+  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
+  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
+
+  const mB = rxB.exec(xml);
+  if (!mB) return { insertadas: 0 };
+  const inicioB = mB.index;
+
+  const mC = rxC.exec(xml);
+  let finB = xml.length;
+  if (mC && mC.index > inicioB) {
+    finB = mC.index;
+  }
+
+  let rels = zip.file(RUTA_RELS).asText();
+  let ct = zip.file(RUTA_CT).asText();
+  let rId = siguienteRId(rels);
+  let idDibujo = siguienteIdDibujo(xml);
+
+  const imagenesPorComparable = (estudio && estudio.eeffImagenesComparables) || {};
+  let nuevoXmlB = `<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>ANEXO B. Descripciones de comparables y Estados Financieros</w:t></w:r></w:p>`;
+
+  let totalInsertadas = 0;
+
+  comparables.forEach((c) => {
+    const desc = c.descActividad || c.desc || 'Descripción de actividad no disponible.';
+    // Generar la tabla de nombre y descripción
+    const tablaXml = generarTablaOoxml(
+      'Descripción de la Compañía Comparable',
+      ['NOMBRE DE LA COMPAÑÍA COMPARABLE', 'DESCRIPCIÓN ACTIVIDAD'],
+      [[c.name, desc]]
+    );
+    nuevoXmlB += '\n' + tablaXml;
+
+    // Obtener imágenes de esta comparable
+    const key = nameKey(c.name);
+    const listaImg = (imagenesPorComparable[key] || []).filter(Boolean);
+
+    if (listaImg.length > 0) {
+      listaImg.forEach((imgUrl, idx) => {
+        const desde = desdeDataUrl(imgUrl);
+        if (!desde) return;
+        const ext = desde.ext || 'png';
+        const nombreImg = `anexo_b_${key}_${idx + 1}.${ext}`;
+
+        // Guardar imagen en el zip
+        zip.file(`word/media/${nombreImg}`, desde.base64, { base64: true });
+
+        // Asegurar Content_Type
+        if (!new RegExp(`Extension="${ext}"`).test(ct)) {
+          ct = ct.replace('</Types>',
+            `<Default Extension="${ext}" ContentType="image/${ext}"/></Types>`);
+        }
+
+        // Agregar relación
+        const idRel = `rId${rId++}`;
+        rels = rels.replace('</Relationships>',
+          `<Relationship Id="${idRel}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"`
+          + ` Target="media/${nombreImg}"/></Relationships>`);
+
+        // Generar párrafo de dibujo con proporción A4 estándar
+        const anchoCm = ANCHO_UTIL_CM;
+        const altoCm = (anchoCm * 297) / 210;
+        nuevoXmlB += '\n' + parrafoConImagen({
+          rId: idRel, id: idDibujo++, nombre: nombreImg,
+          cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
+        });
+
+        totalInsertadas++;
+      });
+    } else {
+      // Párrafo de pendiente si no tiene imágenes
+      nuevoXmlB += `\n<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/><w:b/></w:rPr><w:t>Pendiente: vuelva a cargar el Estado Financiero de esta comparable en el Paso 4 del motor de comparables.</w:t></w:r></w:p>`;
+    }
+  });
+
+  xml = asegurarNamespaceWp(xml.slice(0, inicioB) + nuevoXmlB + xml.slice(finB));
+  zip.file(RUTA_DOC, xml);
+  zip.file(RUTA_RELS, rels);
+  zip.file(RUTA_CT, ct);
+
+  return { insertadas: totalInsertadas };
+}
+
+/**
+ * El camino completo: plantilla marcada + estudio → .docx listo para descargar.
+ *
+ * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
+ *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
+ *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
+ * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
+ */
 export function rellenarDocx({
   binario, estudio, datosMacro, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
 }) {
   const { zip, camposVacios } = renderizarDocx(binario, estudio, { datosMacro, colecciones, delimitadores });
   const { insertadas } = insertarImagenes(zip, imagenesAnexo);
+  const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
   return {
     salida: zip.generate({
       type: tipoSalida,
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
     camposVacios,
-    imagenesInsertadas: insertadas,
+    imagenesInsertadas: insertadas + insertadasB,
   };
 }

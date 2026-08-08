@@ -467,7 +467,7 @@ A continuación se adjuntan las páginas originales de los Estados Financieros d
 </p>
 ${images.map((imgUrl, i) => `
 <p style="text-align:center;margin:16px 0;">
-  <img src="${imgUrl}" alt="Página ${i + 1} EEFF ${entName}" style="max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);" />
+  <img src="${imgUrl}" alt="Página ${i + 1} EEFF ${entName}" style="width:16cm;height:22.6cm;max-width:100%;border:1px solid #e2e8f0;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);" />
 </p>`).join('\n')}
 `;
   }
@@ -503,7 +503,7 @@ function generarBloqueComparableAnexoB(comp, year, wrap, imagenes) {
   if (imagenes && imagenes.length > 0) {
     const bloqueImagenes = imagenes.map((img, i) => `
 <p style="text-align:center;margin:16px 0;">
-  <img src="${img}" alt="Página ${i + 1} EEFF ${comp.name}" style="max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);" />
+  <img src="${img}" alt="Página ${i + 1} EEFF ${comp.name}" style="width:16cm;height:22.6cm;max-width:100%;border:1px solid #e2e8f0;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);" />
 </p>`).join('\n');
     return tablaNombreDescripcion + '\n' + bloqueImagenes;
   }
