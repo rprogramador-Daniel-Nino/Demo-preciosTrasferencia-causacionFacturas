@@ -39,3 +39,13 @@ test('ambos prompts exigen null (nunca 0) como convención general para cualquie
   assert.doesNotMatch(EEFF_COMPARABLE_PROMPT, /"ingresos_operacionales":\s*0/);
   assert.doesNotMatch(EEFF_COMPARABLES_LOTE_PROMPT, /"ingresos_operacionales":\s*0/);
 });
+
+test('el prompt de lote pide pagina_inicio y pagina_fin por empresa, sobre el PDF completo', () => {
+  assert.ok(EEFF_COMPARABLES_LOTE_PROMPT.includes('pagina_inicio'), 'falta "pagina_inicio"');
+  assert.ok(EEFF_COMPARABLES_LOTE_PROMPT.includes('pagina_fin'), 'falta "pagina_fin"');
+  assert.match(
+    EEFF_COMPARABLES_LOTE_PROMPT,
+    /pagina_inicio[\s\S]{0,400}null|null[\s\S]{0,400}pagina_inicio/i,
+    'debe decir que se devuelve null si no se puede determinar con certeza',
+  );
+});

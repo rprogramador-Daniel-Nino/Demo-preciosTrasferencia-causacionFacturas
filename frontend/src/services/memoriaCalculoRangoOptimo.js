@@ -364,7 +364,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         /* L Holding: la señal que trae la candidata y, si no viniera, el veredicto
            del motor. Una fila rechazada por holding con esta columna en blanco se
            lee como una contradicción de la hoja consigo misma. */
-        cTxt(c.sospechaHolding === 'revisar' || c.isHolding || c.motivoClave === 'holding' ? 'Sí' : ''),
+        cTxt(c.sospechaHolding === 'revisar' || c.isHolding || c.motivoClave === 'holding' || c.motivoClave === 'holdingDescripcion' ? 'Sí' : ''),
         cForT(`IF(N(G${r})<0,"Sí","")`),                             // M Pérdida (fórmula)
         cTxt(c.motivoClave || ''),                                   // N Motivo (del motor)
         cTxt(c.perfilFuncional || 'INDEFINIDO'),                     // O Perfil funcional

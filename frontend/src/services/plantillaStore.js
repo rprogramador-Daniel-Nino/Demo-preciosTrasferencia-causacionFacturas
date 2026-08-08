@@ -88,6 +88,21 @@ export const leerAnexoEeff = (estudioId) =>
 export const borrarAnexoEeff = (estudioId) =>
   operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId)));
 
+/* Imágenes del EEFF de cada comparable para el ANEXO B, mismo almacén y mismo motivo de
+   tamaño que el ANEXO A (`guardarAnexoEeff`): son data URLs, no caben en Firestore ni en
+   localStorage. A diferencia del ANEXO A —un solo arreglo por estudio, un solo EEFF del
+   contribuyente— aquí hay una comparable por fila, así que el valor es un mapa
+   `{ [nameKey]: string[] }` en vez de un arreglo plano. Clave distinta (":cmpB") para no
+   colisionar con la del ANEXO A del mismo estudio. */
+export const guardarAnexoBImagenes = (estudioId, mapaPorComparable) =>
+  operar('anexos', 'readwrite', (s) => s.put(mapaPorComparable, esc(estudioId) + ':cmpB'));
+
+export const leerAnexoBImagenes = (estudioId) =>
+  operar('anexos', 'readonly', (s) => s.get(esc(estudioId) + ':cmpB')).then((r) => r || {});
+
+export const borrarAnexoBImagenes = (estudioId) =>
+  operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId) + ':cmpB'));
+
 /* Vínculo estudio -> plantilla. Sin esto, al recargar no hay forma de saber qué
    plantilla corresponde al estudio abierto, y la vista previa vuelve a la
    maestra genérica: las imágenes guardadas se quedan sin sitio donde ir.
@@ -118,6 +133,34 @@ export const leerMarcado = (plantillaId) => leerPlantilla(claveMarcado(plantilla
    marcar— la única alternativa era revisar cien páginas a mano. */
 export const borrarMarcado = (plantillaId) =>
   operar('plantillas', 'readwrite', (s) => s.delete(claveMarcado(plantillaId)));
+
+/* El .docx original del cliente, tal cual lo subió.
+   Es la pieza de la ruta que rellena el documento en vez de reconstruirlo: como el
+   informe se produce editando su propio OOXML, hay que conservar el archivo y no
+   una conversión suya. Se guarda el binario (IndexedDB admite Blob y ArrayBuffer
+   sin serializar) y, como el marcado, va por plantilla y no por estudio: el
+   `plantillaId` es el hash del contenido, así que dos estudios que suban el mismo
+   Word comparten archivo y marcado.
+   Con prefijo en el almacén de plantillas, igual que el resto, para no subir
+   VERSION del esquema. */
+export const claveDocx = (plantillaId) => 'docx:' + plantillaId;
+
+export const guardarDocx = (plantillaId, binario) =>
+  guardarPlantilla(claveDocx(plantillaId), binario);
+
+export const leerDocx = (plantillaId) => leerPlantilla(claveDocx(plantillaId));
+
+/* El OOXML ya marcado con {campo}. Se guarda aparte del original para poder volver
+   a marcar sin pedirle al usuario que suba otra vez el archivo. */
+export const claveDocxMarcado = (plantillaId) => 'docx-marcado:' + plantillaId;
+
+export const guardarDocxMarcado = (plantillaId, binario) =>
+  guardarPlantilla(claveDocxMarcado(plantillaId), binario);
+
+export const leerDocxMarcado = (plantillaId) => leerPlantilla(claveDocxMarcado(plantillaId));
+
+export const borrarDocxMarcado = (plantillaId) =>
+  operar('plantillas', 'readwrite', (s) => s.delete(claveDocxMarcado(plantillaId)));
 
 /* Cuántos huecos de anexo dejó el extractor en esta plantilla. Sin conservarla
    no hay forma de saber, al recargar el estudio, que el documento tiene 16
@@ -158,6 +201,7 @@ export async function borrarRecursosDelEstudio(estudioId) {
   const resultados = await Promise.allSettled([
     borrarRecursos(estudioId),
     borrarAnexoEeff(estudioId),
+    borrarAnexoBImagenes(estudioId),
     borrarVinculo(estudioId),
   ]);
   const fallidos = resultados.filter((r) => r.status === 'rejected');

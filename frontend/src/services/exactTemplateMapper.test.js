@@ -617,116 +617,61 @@ const comparableCompleta = {
   eeffArchivo: 'akatsuki_eeff.pdf',
   desc: 'Akatsuki Inc. is engaged in the game, comic and other businesses.',
   descActividad: 'Akatsuki Inc. se dedica al juego y cómic en Japón.',
-  s: 23652000000, c: 9954000000, op: 3916000000, ar: 4252000000, inv: 626000000, ap: 975500000,
-  eeffDatos: {
-    periodo: '2024',
-    utilidad_bruta: 13698000000,
-    gastos_operacionales: 9782000000,
-    total_activos: 53337500000,
-    propiedad_planta_equipo: 468500000,
-    efectivo_y_equivalentes: 29670500000,
-    gastos_investigacion_desarrollo: null,
-    gastos_publicidad: null,
-  },
 };
 
-test('genera las tres tablas de una comparable con EEFF verificado', () => {
-  const study = { anio: 2025, comparables: [comparableCompleta] };
+const IMG_AKATSUKI = ['data:image/png;base64,PAGINA1', 'data:image/png;base64,PAGINA2'];
+
+test('pinta las páginas del EEFF como imagen cuando la comparable las tiene', () => {
+  const study = { anio: 2025, comparables: [comparableCompleta], eeffImagenesComparables: { AKATSUKI: IMG_AKATSUKI } };
   const html = generarAnexoBHtml(study, 2025, (v) => v);
 
   assert.ok(html.includes('<strong>AKATSUKI INC.</strong>'));
   assert.ok(html.includes('Akatsuki Inc. se dedica al juego y cómic en Japón.'));
-  assert.ok(html.includes('Ventas netas'));
-  assert.ok(html.includes('23.652.000.000'));
-  assert.ok(html.includes('Beneficio bruto'));
-  assert.ok(html.includes('13.698.000.000'));
-  assert.ok(html.includes('EPP neto promedio'));
-  assert.ok(html.includes('468.500.000'));
-  assert.ok(html.includes('Efectivo promedio y equivalentes de efectivo'));
-  assert.ok(html.includes('29.670.500.000'));
-  // Encabezado de columna con el período leído por el OCR, no el año fijo del estudio
-  assert.ok(html.includes('<strong>2024</strong>'));
+  assert.ok(html.includes('<img src="data:image/png;base64,PAGINA1"'), 'falta la primera página');
+  assert.ok(html.includes('<img src="data:image/png;base64,PAGINA2"'), 'falta la segunda página');
+  // Ya no se transcribe ninguna cifra a tabla: sin OCR de por medio en esta sección.
+  assert.ok(!html.includes('Ventas netas'), 'no debería sobrevivir la tabla vieja de P&L');
+  assert.ok(!html.includes('Activos totales promedio'), 'no debería sobrevivir la tabla vieja de balance');
 });
 
-test('las filas de I+D y publicidad solo salen si la comparable las trae', () => {
-  const conAmbas = {
-    ...comparableCompleta,
-    name: 'IGG INC.',
-    eeffDatos: { ...comparableCompleta.eeffDatos, gastos_investigacion_desarrollo: 787408000, gastos_publicidad: 2754598000 },
+test('sin imágenes para esa comparable, sale un aviso de pendiente por fila, no una tabla', () => {
+  const study = { anio: 2025, comparables: [comparableCompleta], eeffImagenesComparables: {} };
+  const html = generarAnexoBHtml(study, 2025, (v) => v);
+
+  assert.ok(html.includes('<strong>AKATSUKI INC.</strong>'), 'la tabla de nombre+descripción se conserva');
+  assert.ok(html.includes('Akatsuki Inc. se dedica al juego y cómic en Japón.'));
+  assert.ok(html.includes('Pendiente: vuelva a cargar el Estado Financiero de esta comparable en el Paso 4'));
+  assert.ok(!html.includes('<img'), 'no debería haber ninguna imagen');
+});
+
+test('cada comparable pinta solo sus propias imágenes, no las de otra', () => {
+  const otra = { ...comparableCompleta, name: 'IGG INC.', descActividad: 'IGG Inc. desarrolla videojuegos móviles.' };
+  const study = {
+    anio: 2025,
+    comparables: [comparableCompleta, otra],
+    eeffImagenesComparables: {
+      AKATSUKI: ['data:image/png;base64,A'],
+      IGG: ['data:image/png;base64,B'],
+    },
   };
-  const html = generarAnexoBHtml({ anio: 2025, comparables: [comparableCompleta, conAmbas] }, 2025, (v) => v);
+  const html = generarAnexoBHtml(study, 2025, (v) => v);
 
   const bloqueAkatsuki = html.slice(0, html.indexOf('IGG INC.'));
-  assert.ok(!bloqueAkatsuki.includes('Gastos de investigación y desarrollo'));
-  assert.ok(!bloqueAkatsuki.includes('Gastos de publicidad'));
-
-  assert.ok(html.includes('Gastos de investigación y desarrollo'));
-  assert.ok(html.includes('787.408.000'));
-  assert.ok(html.includes('Gastos de publicidad'));
-  assert.ok(html.includes('2.754.598.000'));
-});
-
-test('un rubro sin dato sale con celda vacía, no con guion ni con cero', () => {
-  const sinEfectivo = {
-    ...comparableCompleta,
-    eeffDatos: { ...comparableCompleta.eeffDatos, efectivo_y_equivalentes: null },
-  };
-  const html = generarAnexoBHtml({ anio: 2025, comparables: [sinEfectivo] }, 2025, (v) => v);
-  // La fila es <tr>\n<td>\n<p>\nEfectivo promedio y equivalentes de efectivo\n</p>\n</td>\n<td>\n<p>\nVALOR\n</p>\n</td>\n</tr>
-  // Con VALOR vacío, la segunda celda queda "<p>\n\n</p>" (sin guion ni cero entre las etiquetas).
-  const inicioFila = html.indexOf('Efectivo promedio y equivalentes de efectivo');
-  // finFila incluye el propio "</tr>" (no solo su posición inicial): el assert final
-  // valida que la fila termine en "</tr>", y slice() excluye el índice de corte.
-  const finFila = html.indexOf('</tr>', inicioFila) + '</tr>'.length;
-  const fila = html.slice(inicioFila, finFila);
-  assert.ok(!fila.includes('—'), 'la celda no debería traer guion: ' + fila);
-  assert.ok(!/<p>\s*0\s*<\/p>/.test(fila), 'la celda no debería traer un cero inventado: ' + fila);
-  assert.ok(/<td>\s*<p>\s*<\/p>\s*<\/td>\s*<\/tr>$/.test(fila.trimEnd()), 'la celda del valor debería estar vacía: ' + fila);
-});
-
-test('un valor no numérico en la fila de la comparable sale con celda vacía, no con "NaN"', () => {
-  /* c.s/c.op/etc. vienen de columnas que el usuario puede escribir a mano en la tabla de
-     comparables; un texto suelto como "abc" no debe colarse a fmt() y aparecer como NaN. */
-  const conBasura = {
-    ...comparableCompleta,
-    s: 'abc',
-  };
-  const html = generarAnexoBHtml({ anio: 2025, comparables: [conBasura] }, 2025, (v) => v);
-  assert.ok(!html.includes('NaN'), 'se coló el literal NaN en la celda: revisar celdaCifra');
-  const inicioFila = html.indexOf('Ventas netas');
-  const finFila = html.indexOf('</tr>', inicioFila) + '</tr>'.length;
-  const fila = html.slice(inicioFila, finFila);
-  assert.ok(/<td>\s*<p>\s*<\/p>\s*<\/td>\s*<\/tr>$/.test(fila.trimEnd()), 'la celda debería quedar vacía ante un valor no numérico: ' + fila);
-});
-
-test('un valor con separador de miles en formato español se formatea, no se trunca', () => {
-  /* "1.000" tecleado a mano por un usuario significa mil, no uno: debe pasar por num()
-     (que interpreta el punto como separador de miles) antes de formatear. */
-  const conMiles = {
-    ...comparableCompleta,
-    s: '1.000',
-  };
-  const html = generarAnexoBHtml({ anio: 2025, comparables: [conMiles] }, 2025, (v) => v);
-  assert.ok(html.includes('1.000'), 'debería formatear "1.000" como mil, no truncarlo a "1": ' + html);
-  const inicioFila = html.indexOf('Ventas netas');
-  const finFila = html.indexOf('</tr>', inicioFila) + '</tr>'.length;
-  const fila = html.slice(inicioFila, finFila);
-  assert.ok(!/<p>\s*1\s*<\/p>/.test(fila), 'no debería truncar "1.000" a "1": ' + fila);
+  assert.ok(bloqueAkatsuki.includes('data:image/png;base64,A'));
+  assert.ok(!bloqueAkatsuki.includes('data:image/png;base64,B'), 'se coló la imagen de otra comparable');
 });
 
 test('una comparable con EEFF cargado pero con alertas contables entra igual al Anexo B', () => {
   // Caso real reportado: comparables extranjeras casi nunca cuadran la ecuación
-  // patrimonial ni coinciden en año con el estudio (su EEFF más reciente disponible
-  // suele ser del año anterior), así que exigir eeffVerificado dejaba el Anexo B
-  // en "Pendiente" incluso con EEFF real cargado para todas las comparables.
+  // patrimonial ni coinciden en año con el estudio, así que exigir eeffVerificado dejaba
+  // el Anexo B en "Pendiente" incluso con EEFF real cargado para todas las comparables.
   const conAlertas = {
     ...comparableCompleta,
     name: 'TOSE CO., LTD.',
     eeffVerificado: false,
     eeffHallazgos: ['⚠️ Ecuación patrimonial no cuadra: Activos (7836) ≠ Pasivos (1675) + Patrimonio (0)'],
   };
-  const html = generarAnexoBHtml({ anio: 2026, comparables: [conAlertas] }, 2026, (v) => v);
-  assert.ok(!html.includes('Pendiente'), 'no debería pedir cargar EEFF si ya hay un archivo cargado');
+  const html = generarAnexoBHtml({ anio: 2026, comparables: [conAlertas], eeffImagenesComparables: {} }, 2026, (v) => v);
   assert.ok(html.includes('<strong>TOSE CO., LTD.</strong>'), 'la comparable con alertas debería entrar al Anexo B');
 });
 
@@ -743,7 +688,7 @@ test('reemplazarAnexoB sustituye el bloque estático completo, entre su título 
     '<table><thead><tr><th>NOMBRE</th></tr></thead><tbody><tr><td>AKATSUKI INC.</td></tr></tbody></table>\n' +
     '<h1>\n<a id="_Toc456190765"></a><a id="_Toc208931007"></a>ANEXO C. Matriz de Rechazo\n</h1>\n<table>otra tabla</table>';
 
-  const study = { anio: 2025, comparables: [comparableCompleta] };
+  const study = { anio: 2025, comparables: [comparableCompleta], eeffImagenesComparables: { AKATSUKI: IMG_AKATSUKI } };
   const salida = reemplazarAnexoB(fragmentoConEjemploEstatico, study, 2025, (v) => v);
 
   // El fragmento estático de prueba tiene "AKATSUKI INC." en una tabla sin descripción;
@@ -765,9 +710,8 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
       eeffArchivo: 'distribuidora_andina_eeff.pdf',
       desc: 'Distributes consumer goods across the Andean region.',
       descActividad: 'Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.',
-      s: 1000000, c: 400000, op: 100000, ar: 50000, inv: 30000, ap: 20000,
-      eeffDatos: { periodo: '2025', utilidad_bruta: 600000, gastos_operacionales: 500000, total_activos: 900000, propiedad_planta_equipo: 200000, efectivo_y_equivalentes: 150000, gastos_investigacion_desarrollo: null, gastos_publicidad: null },
     }],
+    eeffImagenesComparables: { DISTRIBUIDORAANDINASA: ['data:image/png;base64,X'] },
   };
 
   const salida = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, estudio);
@@ -798,6 +742,7 @@ test('hydrateExactWordTemplate reemplaza el ANEXO B completo con las comparables
   assert.ok(!bloqueAnexoB.includes('YOOZOO'), 'sobrevivió una comparable del informe de referencia en ANEXO B');
   assert.ok(bloqueAnexoB.includes('DISTRIBUIDORA ANDINA S.A.'), 'no entró la comparable del estudio activo en ANEXO B');
   assert.ok(bloqueAnexoB.includes('Distribuidora Andina S.A. distribuye bienes de consumo en la región andina.'));
+  assert.ok(bloqueAnexoB.includes('data:image/png;base64,X'), 'no se pintó la imagen de la comparable');
   assert.ok(salida.includes('ANEXO C. Matriz de Rechazo'), 'se perdió el título de ANEXO C tras el reemplazo');
 });
 

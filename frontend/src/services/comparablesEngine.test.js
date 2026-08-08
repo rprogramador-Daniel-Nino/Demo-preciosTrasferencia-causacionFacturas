@@ -290,6 +290,16 @@ test('el flag isHolding heredado ya no decide: manda la razón social', () => {
   assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'el nombre sí excluye');
 });
 
+test('una empresa con múltiples términos (ej: holding group) cuenta exactamente UNA sola vez', () => {
+  const candidatas = [
+    { id: '1', name: 'Cocacola holding group SAS', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5 }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'cuenta exactamente 1 empresa descartada');
+  assert.strictEqual(r.rechazadas.length, 1, 'solo hay 1 empresa en el listado de rechazadas');
+  assert.strictEqual(r.evaluadas, 1, 'el universo evaluado es 1');
+});
+
 test('el control accionario se cuenta aparte del holding', () => {
   const candidatas = [
     { id: 'C', name: 'Controlada SA', holderPct: 75, desc: 'software development services', s: 100, op: 10 },
@@ -954,6 +964,7 @@ test('el desglose por motivo cuenta cada criterio por separado', () => {
 
   assert.deepStrictEqual(r.rechazadasPorMotivo, {
     holding: 2,
+    holdingDescripcion: 0,
     controlada: 0,
     saldoNegativo: 1,
     perdidaOperativa: 1,
@@ -977,6 +988,18 @@ test('el desglose por motivo suma lo mismo que las categorías', () => {
   const porCategoria = Object.values(r.rechazadasPorCategoria).reduce((a, b) => a + b, 0);
   assert.strictEqual(porMotivo, porCategoria, 'los dos desgloses cuentan los mismos descartes');
   assert.strictEqual(porMotivo, r.rechazadas.length);
+});
+
+test('desglosa holding por Razón Social (holding) y holding por Descripción (holdingDescripcion)', () => {
+  const candidatas = [
+    { id: '1', name: 'Alpha Holdings Inc', desc: 'software development services', s: 100, op: 10 },
+    { id: '2', name: 'Beta Services LLC', desc: 'Subsidiary of Global Holding Group', s: 100, op: 10 },
+    { id: '3', name: 'Gamma Operating Corp', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5, holding: 'excluir' }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'Alpha Holdings descarta por Razón Social');
+  assert.strictEqual(r.rechazadasPorMotivo.holdingDescripcion, 1, 'Beta Services descarta por mención en Descripción');
+  assert.strictEqual(r.rechazadasPorMotivo.holding + r.rechazadasPorMotivo.holdingDescripcion, 2, 'La suma total de holdings da 2');
 });
 
 test('las categorías de rechazo cubren cada descarte una sola vez', () => {

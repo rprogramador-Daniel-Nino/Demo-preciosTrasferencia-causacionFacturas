@@ -391,13 +391,13 @@ test('una imagen suelta en un div tampoco se pierde', async () => {
   assert.equal((doc.match(/después/g) || []).length, 1);
 });
 
-test('cada página del original empieza en una hoja nueva', async () => {
+test('las páginas del mismo tipo de orientación fluyen de forma continua (con salto solo después de la portada)', async () => {
   const html = '<div class="pagina" data-pagina="1" data-orientacion="vertical"><p>una</p></div>' +
     '<div class="pagina" data-pagina="2" data-orientacion="vertical"><p>dos</p></div>' +
     '<div class="pagina" data-pagina="3" data-orientacion="vertical"><p>tres</p></div>';
   const { doc } = await abrir(html);
-  /* Dos saltos para tres páginas: la primera no lleva salto delante. */
-  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 2);
+  /* Un solo salto manual para separar la portada (página 1) del resto; el resto fluye de forma continua */
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 1);
 });
 
 test('la página apaisada abre su propia sección', async () => {
@@ -550,12 +550,12 @@ test('extremo a extremo: el informe real sale como .docx', async () => {
   const doc = zip.file('word/document.xml').asText();
 
   /* Declara las 112 páginas del original. */
-  /* Con S secciones y P páginas, los saltos son P - S (uno entre página y página dentro de
-     cada sección, ninguno delante de la primera de cada una). Así que saltos + secciones = P,
-     exactamente 112, sea cuantas secciones haya salido de la orientación. */
-  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length +
-    (doc.match(/<w:sectPr/g) || []).length, 112,
-    'los saltos más las secciones deben cubrir las 112 páginas');
+  /* Con flujo continuo, ya no hay un salto manual ni una sección por cada página individual del PDF original,
+     sino que fluye de forma continua. El número de secciones corresponde únicamente a los cambios de orientación. */
+  assert.equal((doc.match(/<w:sectPr/g) || []).length, 3,
+    'las secciones deben corresponder a los cambios de orientación de página');
+  assert.equal((doc.match(/<w:br w:type="page"\/>/g) || []).length, 1,
+    'debe haber exactamente un salto de página manual para la portada');
 
   /* El texto del informe está. */
   assert.match(doc, /INTRODUCCIÓN/);

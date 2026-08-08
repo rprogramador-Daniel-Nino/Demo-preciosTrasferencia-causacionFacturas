@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 import axios from 'axios';
 import { num, pliOf } from '../utils/calculations.js';
 import {
-  esHolding, tieneSemanticaHolding, holdingSospecha, esControlada, participacionMaxima,
+  esHolding, tieneSemanticaHolding, tieneSemanticaHoldingDesc, holdingSospecha, esControlada, participacionMaxima,
 } from './filtrosComparablesPatch.js';
 import { perfilFuncionalBilingue, PERFILES_DETERMINADOS } from './perfilFuncionalPatch.js';
 
@@ -501,7 +501,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       rechazar('filtro', 'controlada',
         `Vinculada: un accionista supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
     } else if (holding === 'excluir' && tieneSemanticaHolding(cand) && !esContinuidad) {
-      rechazar('filtro', 'holding', 'Sociedad holding o de grupo, sin actividad operativa directa.');
+      rechazar('filtro', 'holding', 'Sociedad holding o de grupo (en Razón Social).');
+    } else if (holding === 'excluir' && tieneSemanticaHoldingDesc(cand) && !esContinuidad) {
+      rechazar('filtro', 'holdingDescripcion', 'Mención de sociedad holding o grupo en la descripción del negocio.');
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
       rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
     } else if (perdidaOp === 'excluir' && cand.hasLoss) {
@@ -652,6 +654,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        decir cuántas por holding, cuántas por pérdidas y cuántas por actividad. */
     rechazadasPorMotivo: {
       holding: rechazadas.filter(c => c.motivoClave === 'holding').length,
+      holdingDescripcion: rechazadas.filter(c => c.motivoClave === 'holdingDescripcion').length,
       controlada: rechazadas.filter(c => c.motivoClave === 'controlada').length,
       saldoNegativo: rechazadas.filter(c => c.motivoClave === 'saldoNegativo').length,
       perdidaOperativa: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,

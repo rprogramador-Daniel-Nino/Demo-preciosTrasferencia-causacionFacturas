@@ -19,7 +19,10 @@ import {
   listarEstudiosCompartidosConmigo, leerEstudioCompartido,
 } from './services/firestoreRepo';
 import { separarEstudio, SELLO_ESTUDIO } from './services/firestoreModelo';
-import { guardarAnexoEeff, leerAnexoEeff, borrarRecursosDelEstudio } from './services/plantillaStore';
+import {
+  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes, leerAnexoBImagenes,
+  borrarRecursosDelEstudio,
+} from './services/plantillaStore';
 import {
   leerSesionUi, guardarSesionUi, limpiarSesionUi, acumularVistaMontada, tabCanonica,
   accionSobreElRecuerdo,
@@ -135,6 +138,9 @@ export default function App() {
         const resultado = await migrarDesdeLocalStorage(usuario, {
           guardarLocales: async (id, local) => {
             if (local.eeffImages && local.eeffImages.length) await guardarAnexoEeff(id, local.eeffImages);
+            if (local.eeffImagenesComparables && Object.keys(local.eeffImagenesComparables).length) {
+              await guardarAnexoBImagenes(id, local.eeffImagenesComparables);
+            }
           },
         });
         if (vigente && !resultado.yaHecha && resultado.total) setMigracion(resultado);
@@ -197,6 +203,10 @@ export default function App() {
         if (local.eeffImages && local.eeffImages.length) {
           await guardarAnexoEeff(activeStudyId, local.eeffImages);
         }
+        /* Mismo motivo, pero por comparable: ver CAMPOS_SOLO_LOCALES. */
+        if (local.eeffImagenesComparables && Object.keys(local.eeffImagenesComparables).length) {
+          await guardarAnexoBImagenes(activeStudyId, local.eeffImagenesComparables);
+        }
         await guardarEstudio(activeStudyId, study, usuario);
         await guardarCliente(study, usuario);
         setEstadoGuardado('guardado');
@@ -237,10 +247,18 @@ export default function App() {
       } catch (err) {
         console.error('[anexo EEFF] no se pudieron leer las páginas guardadas', err);
       }
+      /* Mismo motivo, pero las imágenes del EEFF de cada comparable para el ANEXO B. */
+      let eeffImagenesComparables = {};
+      try {
+        eeffImagenesComparables = await leerAnexoBImagenes(id);
+      } catch (err) {
+        console.error('[anexo B] no se pudieron leer las imágenes guardadas', err);
+      }
       setStudy({
         ...(datos || {}),
         ...(iaMatch ? { iaMatch } : {}),
         ...(eeffImages && eeffImages.length ? { eeffImages } : {}),
+        ...(eeffImagenesComparables && Object.keys(eeffImagenesComparables).length ? { eeffImagenesComparables } : {}),
         /* Sello del estudio del que salieron estos datos: el autoguardado no escribe si
            no coincide con el estudio activo. Ver SELLO_ESTUDIO. */
         [SELLO_ESTUDIO]: id,

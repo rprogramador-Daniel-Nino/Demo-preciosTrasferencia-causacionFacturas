@@ -249,6 +249,7 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
       ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
       children: runs,
       spacing: { before: 0, after: 0, line: 276 },
+      ...(nivel === HeadingLevel.HEADING_1 ? { pageBreakBefore: true } : {}),
     });
   }
 
@@ -521,9 +522,8 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       ...(cabecera ? { headers: { default: cabecera } } : {}),
       footers: { default: pieConNumero() },
       children: t.paginas.flatMap((nodo, i) => [
-        /* Salto delante de cada página menos de la primera de todas: la primera tanda ya
-           empieza en la hoja 1, y una tanda nueva ya empieza en hoja nueva por ser sección. */
-        ...(i === 0 ? [] : [new Paragraph({ children: [new PageBreak()] })]),
+        /* Salto delante de la segunda página para separar la portada (primera página de la primera tanda) */
+        ...(iTanda === 0 && i === 1 ? [new Paragraph({ children: [new PageBreak()] })] : []),
         ...bloquesDe(nodo),
       ]),
     }))

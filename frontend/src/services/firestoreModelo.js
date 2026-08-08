@@ -78,6 +78,9 @@ export function anioValido(valor) {
      documento— y hacía que el estudio entero dejara de guardarse con un
      `FirebaseError` en consola. Van a IndexedDB, que es donde ya viven los demás
      recursos binarios del informe.
+   - `eeffImagenesComparables`: las páginas del EEFF de cada comparable para el ANEXO B,
+     mismo motivo de tamaño que `eeffImages` — un mapa por comparable en vez de un arreglo
+     plano. Va a IndexedDB junto con el resto de recursos binarios del informe.
 
    Dejarlos fuera es lo que mantiene el documento del estudio lejos del techo. */
 /**
@@ -94,7 +97,7 @@ export function anioValido(valor) {
  */
 export const SELLO_ESTUDIO = '_estudioId';
 
-export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', SELLO_ESTUDIO];
+export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO];
 
 /** Máximo que admite un documento de Firestore. */
 export const TOPE_DOCUMENTO = 1048576;

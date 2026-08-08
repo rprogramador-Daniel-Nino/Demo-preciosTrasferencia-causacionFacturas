@@ -146,7 +146,7 @@ export function marcadorPendiente(anio, concepto) {
 }
 
 /** Valor de una serie para un año, o el marcador si no está. */
-function valorODisponible(serie, anio, concepto) {
+export function valorODisponible(serie, anio, concepto) {
   const v = serie && serie[anio];
   return (v === undefined || v === null || v === '') ? marcadorPendiente(anio, concepto) : v;
 }
@@ -201,7 +201,7 @@ function formatearFechaConsulta(fechaConsulta) {
  *  la fuente solo cuando la serie viene de Firestore: ahí sí se registró cuándo
  *  se consultó, y el numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de
  *  2016 la exige. Para el respaldo local no existe esa fecha y no se fabrica. */
-function resolverSerie(datosMacro, clave) {
+export function resolverSerie(datosMacro, clave) {
   const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
   if (remota && remota.valores) {
     let fuenteTexto = remota.fuente || FUENTES_MACRO[clave];

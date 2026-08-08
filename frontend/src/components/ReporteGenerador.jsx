@@ -14,6 +14,7 @@ import {
   guardarRecursos, leerRecursos, hashPlantilla, guardarPlantilla, leerPlantilla,
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
   guardarHuecos, leerHuecos,
+  guardarDocx, leerDocx, guardarDocxMarcado, leerDocxMarcado, borrarDocxMarcado,
 } from '../services/plantillaStore';
 import { leerAnalisisMercado, leerAnalisisSector } from '../services/firestoreRepo';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
@@ -27,6 +28,9 @@ import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
 } from '../services/estiloDocumento.js';
 import { aDocxBlob } from '../services/docxWriter.js';
+import PizZip from 'pizzip';
+import { htmlParaMarcar, aplicarMarcasOoxml, envolverTablaEnBucle } from '../services/docxPlantilla.js';
+import { rellenarDocx, coleccionesDelEstudio, CENTINELA_ANEXO } from '../services/docxRelleno.js';
 import {
   subirPlantillaDelEstudio, descargarPlantillaDelEstudio, restaurarPlantillaEnLocal,
 } from '../services/plantillaNube.js';
@@ -390,6 +394,19 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       }
 
       if (!idPlantilla) return;
+
+      /* Plantilla .docx del cliente: se restaura antes que la de PDF porque su
+         marcado vive en otro almacén. Sin esto, al recargar el estudio se caía a la
+         plantilla maestra y el usuario perdía de vista que había subido la suya. */
+      const docxMarcado = await leerDocxMarcado(idPlantilla);
+      if (docxMarcado) {
+        if (!vivo) return;
+        setPlantillaActiva({ id: idPlantilla, tipo: 'docx', huecos: 0, marcada: true });
+        setCustomTemplateLoaded(true);
+        await previsualizarDocx(docxMarcado);
+        return;
+      }
+
       const html = await leerPlantilla(idPlantilla);
 
       /* Si la plantilla está marcada se renderiza por campo; si no, se cae a
@@ -559,21 +576,42 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
             renderizarYAvisar(marcadoPrevio, recursos, huecos);
           }
         } else {
-          const result = await mammoth.convertToHtml({ arrayBuffer });
-          const html = result.value;
+          /* ── Plantilla .docx: se rellena, no se reconstruye ──
+             Antes esta rama convertía el Word a HTML con mammoth y el informe se
+             volvía a construir desde ahí, de modo que salía con el formato del
+             sistema y no con el del cliente: mammoth produce HTML semántico y
+             descarta la presentación —encabezado, pie, fuentes, colores, bordes,
+             sombreados y márgenes—, que es justo lo que el cliente quiere conservar.
+             Ahora se guarda el archivo tal cual y el informe se produce editando su
+             propio OOXML. Mammoth sigue en la ruta, pero solo para la vista previa
+             del resultado. */
+          const binario = new Uint8Array(arrayBuffer);
+          const idPlantilla = await hashPlantilla(binario);
+          await guardarDocx(idPlantilla, binario);
+          if (estudioId) await guardarVinculo(estudioId, idPlantilla);
 
-          /* Ruta de respaldo, sin marcado: mammoth ya incrusta las imágenes
-             en el propio HTML, así que no hay recursos que resolver aparte.
-             Se limpian los avisos porque, sin marcado, no hay de dónde
-             recalcularlos, y los de la plantilla anterior ya no corresponden
-             a este documento. */
           setAvisos([]);
-          const hydrated = hydrateExactWordTemplate(html, study, analisisMercado, analisisSector);
-          setHtmlContent(conImagenes(hydrated, []));
-          /* Detección de fuga de la ruta legado. Estaba escrita y no se
-             invocaba desde ningún sitio: la ruta aparentaba tenerla y no la
-             tenía. */
-          revisarHidratacion(html, hydrated);
+          setAvisoHidratacion('');
+          setRecursosCargados([]);
+
+          /* El marcado se paga una vez por plantilla: el id es el hash del archivo,
+             así que volver a subir el mismo Word reutiliza lo ya marcado. */
+          const marcadoPrevio = await leerDocxMarcado(idPlantilla);
+          if (marcadoPrevio) {
+            setPlantillaActiva({ id: idPlantilla, tipo: 'docx', huecos: 0, marcada: true });
+            await previsualizarDocx(marcadoPrevio);
+          } else {
+            const xml = new PizZip(binario).file('word/document.xml').asText();
+            const propuestas = await proponerMarcas(htmlParaMarcar(xml), {
+              avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
+                terminados, total, fallidos,
+              }),
+            });
+            setProgresoMarcado(null);
+            setPlantillaPendiente({ id: idPlantilla, tipo: 'docx', binario, huecos: 0 });
+            setMarcasPropuestas(propuestas.marcas);
+            setTelemetriaMarcado(propuestas);
+          }
           setCustomTemplateLoaded(true);
         }
       } catch (err) {
@@ -671,6 +709,44 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
   const volverAMarcar = async () => {
     if (!plantillaActiva) return;
 
+    /* Plantilla .docx: el original se guardó al subirlo, así que se vuelve a marcar
+       sobre él sin pedirle al usuario el archivo otra vez. No aplica la comprobación
+       de versión del lector de PDF, que aquí no interviene. */
+    if (plantillaActiva.tipo === 'docx') {
+      if (!window.confirm(
+        'Se va a descartar el marcado guardado de esta plantilla y a marcarla de nuevo ' +
+        'con IA. Son varios viajes al modelo y tarda un rato. ¿Continuar?'
+      )) return;
+      setLoading(true);
+      try {
+        const binario = await leerDocx(plantillaActiva.id);
+        if (!binario) {
+          alert('No se encontró el documento original. Vuelve a subirlo para marcarlo.');
+          return;
+        }
+        await borrarDocxMarcado(plantillaActiva.id);
+        setAvisos([]);
+        setAvisoHidratacion('');
+        const xml = new PizZip(binario).file('word/document.xml').asText();
+        const propuestas = await proponerMarcas(htmlParaMarcar(xml), {
+          avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
+            terminados, total, fallidos,
+          }),
+        });
+        setProgresoMarcado(null);
+        setPlantillaPendiente({ id: plantillaActiva.id, tipo: 'docx', binario, huecos: 0 });
+        setMarcasPropuestas(propuestas.marcas);
+        setTelemetriaMarcado(propuestas);
+      } catch (err) {
+        console.error('No se pudo volver a marcar la plantilla .docx:', err);
+        alert('No se pudo volver a marcar: ' + err.message);
+      } finally {
+        setProgresoMarcado(null);
+        setLoading(false);
+      }
+      return;
+    }
+
     /* Si el HTML crudo guardado es de un lector anterior, volver a marcar no
        recupera lo que ese lector no leyó: hay que releer el PDF. Decirlo aquí
        evita el viaje al modelo y la decepción de que el documento salga igual. */
@@ -727,7 +803,99 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      anterior sin un solo aviso. Al no guardarlo, la plantilla sigue disponible
      para marcarse otra vez y la ruta de respaldo por literales toma el relevo
      mientras tanto. */
+  /* Escribe las marcas confirmadas dentro del OOXML y guarda el .docx marcado.
+     Mismo criterio que la ruta de PDF: un marcado sin ninguna marca aplicada NO se
+     guarda, porque dejaría la plantilla registrada como marcada y el informe saldría
+     con los datos del cliente anterior sin un solo aviso. */
+  const confirmarMarcasDocx = async (marcas) => {
+    const zip = new PizZip(plantillaPendiente.binario);
+    const { xml, aplicadas, descartadas } = aplicarMarcasOoxml(
+      zip.file('word/document.xml').asText(), marcas);
+
+    const resumen = [
+      telemetriaMarcado ? resumirMarcado(telemetriaMarcado, { reintentable: aplicadas === 0 }) : '',
+      descartadas.length ? resumirDescartes(descartadas) : '',
+    ].filter(Boolean).join('\n');
+
+    if (aplicadas === 0) {
+      setMarcasPropuestas(null);
+      setPlantillaPendiente(null);
+      setTelemetriaMarcado(null);
+      alert(
+        'No se aplicó ninguna marca, así que la plantilla NO se guardó como marcada.\n' +
+        (resumen ? resumen + '\n' : '') +
+        'Vuelve a subir el documento para marcarlo de nuevo.'
+      );
+      return;
+    }
+
+    /* Las tablas que se repiten se envuelven después de las marcas de campo: se
+       localizan por su título y se marca su fila modelo, de modo que el relleno
+       clone su formato una vez por comparable. Si la plantilla del cliente no trae
+       esas tablas, no pasa nada: `envolverTablaEnBucle` avisa y sigue. */
+    let conTablas = xml;
+    [
+      { ancla: 'Compañías comparables', coleccion: 'comparables', campos: ['n', 'nombre', 'ambito'] },
+      { ancla: 'Razones de rechazo', coleccion: 'razonesRechazo', campos: ['letra', 'criterio', 'cantidad'] },
+    ].forEach((cfg) => {
+      const r = envolverTablaEnBucle(conTablas, cfg);
+      if (r.envuelta) conTablas = r.xml;
+    });
+
+    zip.file('word/document.xml', conTablas);
+    const marcado = zip.generate({ type: 'uint8array' });
+    await guardarDocxMarcado(plantillaPendiente.id, marcado);
+
+    setPlantillaActiva({ id: plantillaPendiente.id, tipo: 'docx', huecos: 0, marcada: true });
+    await previsualizarDocx(marcado);
+    setMarcasPropuestas(null);
+    setPlantillaPendiente(null);
+    setTelemetriaMarcado(null);
+    if (resumen) alert('Se aplicaron ' + aplicadas + ' marcas.\n' + resumen);
+  };
+
+  /* Rellena la plantilla .docx marcada con los datos del estudio y devuelve el
+     binario. Es la única fuente del documento que se descarga. */
+  const construirDocxDelEstudio = (binarioMarcado, tipoSalida = 'blob') => rellenarDocx({
+    binario: binarioMarcado,
+    estudio: study,
+    datosMacro: analisisMercado,
+    colecciones: coleccionesDelEstudio(study),
+    imagenesAnexo: (study.eeffImages || []).map((img) => ({
+      dataUrl: typeof img === 'string' ? img : (img && (img.dataUrl || img.src)),
+    })),
+    tipoSalida,
+  });
+
+  /* Vista previa de la ruta .docx: se rellena el documento y se convierte el
+     RESULTADO con mammoth, no la plantilla. Así lo que se ve en pantalla son los
+     datos que de verdad va a llevar el archivo. Pierde el formato —mammoth lo
+     descarta—, pero el .docx que se descarga sale del original intacto, que es lo
+     que importa. */
+  const previsualizarDocx = async (binarioMarcado) => {
+    try {
+      const { salida, camposVacios } = construirDocxDelEstudio(binarioMarcado, 'uint8array');
+      const { value } = await mammoth.convertToHtml({ arrayBuffer: salida.buffer.slice(
+        salida.byteOffset, salida.byteOffset + salida.byteLength) });
+      setHtmlContent(value);
+      const avisos = revisarAntesDeGenerar({
+        estudio: study,
+        tieneAnexo: true,
+        vacios: camposVacios,
+        faltaPorVersion: [],
+        recursosFaltantes: [],
+      });
+      setAvisos(avisos);
+    } catch (err) {
+      console.error('No se pudo previsualizar la plantilla .docx:', err);
+      setAvisoHidratacion('No se pudo previsualizar la plantilla: ' + err.message);
+    }
+  };
+
   const confirmarMarcas = async (marcas) => {
+    if (plantillaPendiente && plantillaPendiente.tipo === 'docx') {
+      return confirmarMarcasDocx(marcas);
+    }
     const { html, aplicadas, descartadas } = aplicarMarcas(plantillaPendiente.html, marcas);
     const resumen = [
       telemetriaMarcado ? resumirMarcado(telemetriaMarcado, { reintentable: aplicadas === 0 }) : '',
@@ -863,6 +1031,41 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     generandoDocxRef.current = true;
     setGenerandoDocx(true);
     try {
+      /* Plantilla .docx del cliente: el documento sale de rellenar SU archivo, no de
+         reconstruirlo. Es lo que conserva encabezado, pie, estilos, tablas y
+         márgenes; el writer de más abajo produce el formato del sistema y aquí sería
+         exactamente lo que no se quiere. */
+      if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
+        const marcado = await leerDocxMarcado(plantillaActiva.id);
+        if (!marcado) throw new Error('No se encontró la plantilla marcada. Vuelve a subirla.');
+        const { salida, camposVacios, imagenesInsertadas } = construirDocxDelEstudio(marcado, 'blob');
+        const enlace = document.createElement('a');
+        enlace.href = URL.createObjectURL(salida);
+        enlace.download = 'Informe_Local_PT_' + (study.ent || 'Empresa') + '_' +
+          (study.anio || '') + '.docx';
+        enlace.click();
+        URL.revokeObjectURL(enlace.href);
+
+        const nuevos = [];
+        if (camposVacios.length) {
+          nuevos.push({
+            nivel: 'aviso', origen: 'docx',
+            texto: 'Salen sin dato ' + camposVacios.length + ' campo(s) marcado(s) (' +
+              camposVacios.join(', ') + '): en el documento aparecen como «—». ' +
+              'Complétalos antes de radicar.',
+          });
+        }
+        if ((study.eeffImages || []).length && imagenesInsertadas === 0) {
+          nuevos.push({
+            nivel: 'aviso', origen: 'docx',
+            texto: 'El anexo de estados financieros no se insertó: la plantilla no trae el ' +
+              'punto donde va (' + CENTINELA_ANEXO + '). Añádelo al Word y vuelve a subirlo.',
+          });
+        }
+        setAvisos((previos) => [...previos.filter((a) => a.origen !== 'docx'), ...nuevos]);
+        return;
+      }
+
       /* El writer avisa por `console.warn` cuando el anexo trae más páginas que huecos
          hay en el informe —páginas de estados financieros firmados que no entran—. Nadie
          mira la consola del navegador, así que se intercepta mientras corre esta llamada
