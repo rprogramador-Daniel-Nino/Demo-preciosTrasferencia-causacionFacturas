@@ -95,9 +95,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     ['Gastos operativos', study.t_op], ['Cuentas por cobrar', study.t_ar],
     ['Inventarios', study.t_inv], ['Cuentas por pagar', study.t_ap],
     ['Propiedad, planta y equipo', study.t_ppe],
+    ['Tasa de interés de referencia (Prime Rate)', (Number(study.prime) || 0) / 100],
   ];
-  tp.forEach(([k, v]) => datos.push([cTxt(k), cNum(Number(v) || 0)]));
-  // filas Datos: 4=Ventas B4, 5=Costo B5, 6=Gastos B6, 7=CxC B7, 8=Inv B8, 9=CxP B9, 10=PPE B10
+  tp.forEach(([k, v], idx) => {
+    if (idx === 7) {
+      datos.push([cTxt(k), cNum(v, '0.00%')]);
+    } else {
+      datos.push([cTxt(k), cNum(Number(v) || 0)]);
+    }
+  });
+  // filas Datos: 4=Ventas B4, 5=Costo B5, 6=Gastos B6, 7=CxC B7, 8=Inv B8, 9=CxP B9, 10=PPE B10, 11=Prime B11
   datos.push([]);
   datos.push([cTxt('COMPARABLES')]);
   const hdr = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inventario', 'CxP', 'PP&E', 'Tasa'];
@@ -107,7 +114,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     datos.push([
       cTxt(c.name), cNum(Number(c.s) || 0), cNum(Number(c.c) || 0), cNum(Number(c.op) || 0),
       cNum(Number(c.ar) || 0), cNum(Number(c.inv) || 0), cNum(Number(c.ap) || 0),
-      cNum(Number(c.ppe) || 0), cNum(Number(c.tasaEfectiva) || 0, '0.0000'),
+      cNum(Number(c.ppe) || 0), cFor('=$B$11', '0.00%'),
     ]);
   });
   hojas.push({

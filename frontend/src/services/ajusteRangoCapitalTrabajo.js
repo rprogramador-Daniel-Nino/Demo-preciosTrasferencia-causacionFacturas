@@ -228,7 +228,9 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
   const tasaEstudio = (num(study.prime) || 0) / 100;
 
   const filas = (study.comparables || []).map((comp) => {
-    const tasa = num(comp.tasaEfectiva) !== null ? num(comp.tasaEfectiva) : tasaEstudio;
+    // Al uniformar la tasa (atendiendo auditoría de fuga de Capital IQ), se ignora la tasa por país
+    // de la comparable y se asigne siempre la tasa de interés de referencia del estudio (Prime Rate)
+    const tasa = tasaEstudio;
     const valor = indicadorAjustado(comp, contribuyente, kind, tipo, tasa);
     return {
       nombre: String((comp && comp.name) || '').trim(),
