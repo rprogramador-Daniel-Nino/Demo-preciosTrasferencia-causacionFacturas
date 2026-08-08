@@ -1,6 +1,7 @@
 import { fmt, pctf, num, getUvtValue } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
 import { resaltarValor } from './estiloDocumento.js';
+import { nameKey } from './comparablesEngine.js';
 import {
   DATOS_MACRO,
   generarTablaPibMundial,
@@ -231,7 +232,8 @@ const RAZONES_RECHAZO = [
   ['rigorFuncional', 'Diferencias funcionales: perfil no comparable con la parte examinada'],
   ['actividadDistinta', 'Actividad económica distinta a la de la parte examinada'],
   ['sinDescripcion', 'Sin descripción del negocio que permita verificar la actividad'],
-  ['holding', 'Compañías holding o sin actividad operativa propia'],
+  ['holding', 'Compañías holding o de grupo (en la razón social)'],
+  ['holdingDescripcion', 'Mención de sociedad holding o grupo en la descripción del negocio'],
   /* Motivo separado del anterior y no fundido con él: el holding se presume de la
      razón social, mientras que el control es un hecho de la composición accionaria
      (Art. 260-1 E.T.). Ante la DIAN son dos justificaciones distintas y la tabla las
@@ -483,76 +485,38 @@ ${images.map((imgUrl, i) => `
 }
 
 /* ══════════════ ANEXO B. Descripciones de comparables y Estados Financieros ══════════════
-   La plantilla trae las trece compañías de videojuegos del informe de referencia (Akatsuki,
-   Colopl, Fun Yours, IGG, Maximum Entertainment, Neptune Company, Ourpalm, Playstudios,
-   Qubicgames, The Dust, Tose, Wemade Play, Yoozoo). Solo entran aquí las comparables con
-   EEFF verificado: una fila con cifras a medio cargar y sin confirmar es peor que no mostrarla. */
+   La tabla 1 (nombre + descripción) se sigue redactando con IA (descripcionComparables.js).
+   Las cifras del EEFF de cada comparable ya NO se transcriben a tabla: se pega como imagen
+   la página del documento que el analista subió en el Paso 4 (mismo patrón que el ANEXO A,
+   ver generarAnexoAHtml), para no arriesgar que el OCR redondee o lea mal una cifra en un
+   informe que se radica ante la DIAN. Ver docs/superpowers/specs/2026-08-06-anexo-b-eeff-como-imagen-design.md. */
 
-const ANEXO_B_ETIQUETAS_PL = [
-  { etiqueta: 'Ventas netas', valor: (c) => c.s },
-  { etiqueta: 'Costo de los bienes vendidos', valor: (c) => c.c },
-  { etiqueta: 'Beneficio bruto', valor: (c) => c.eeffDatos && c.eeffDatos.utilidad_bruta },
-  { etiqueta: 'Gastos operativos', valor: (c) => c.eeffDatos && c.eeffDatos.gastos_operacionales },
-  { etiqueta: 'Utilidad de operación', valor: (c) => c.op },
-];
-
-const ANEXO_B_ETIQUETAS_BALANCE = [
-  { etiqueta: 'Activos totales promedio', valor: (c) => c.eeffDatos && c.eeffDatos.total_activos },
-  { etiqueta: 'Promedio de cuentas por pagar netas', valor: (c) => c.ap },
-  { etiqueta: 'Promedio de cuentas por cobrar netas', valor: (c) => c.ar },
-  { etiqueta: 'EPP neto promedio', valor: (c) => c.eeffDatos && c.eeffDatos.propiedad_planta_equipo },
-  { etiqueta: 'Inventario neto promedio', valor: (c) => c.inv },
-  { etiqueta: 'Efectivo promedio y equivalentes de efectivo', valor: (c) => c.eeffDatos && c.eeffDatos.efectivo_y_equivalentes },
-];
-
-/* Filas opcionales de la tabla de P&L: no todas las comparables desglosan I+D o
-   publicidad como línea propia (ver ejemplos reales: Akatsuki ninguna, Colopl solo
-   publicidad, Fun Yours solo I+D, IGG ambas). Solo se agregan si el dato no es nulo. */
-function filasOpcionalesPL(c) {
-  const filas = [];
-  const rd = c.eeffDatos && c.eeffDatos.gastos_investigacion_desarrollo;
-  const adv = c.eeffDatos && c.eeffDatos.gastos_publicidad;
-  if (rd !== null && rd !== undefined) filas.push({ etiqueta: 'Gastos de investigación y desarrollo', valor: () => rd });
-  if (adv !== null && adv !== undefined) filas.push({ etiqueta: 'Gastos de publicidad', valor: () => adv });
-  return filas;
-}
-
-/* Las tres tablas de una comparable. Celda vacía cuando falta el dato: a diferencia del
-   resto del informe, aquí no se marca con «—» porque el usuario lo pidió así para esta
-   sección en particular. */
-function generarBloqueComparableAnexoB(comp, year, wrap) {
-  const celdaCifra = (v) => {
-    const n = num(v);
-    return n === null ? '' : wrap(fmt(n));
-  };
-  const anioCol = (comp.eeffDatos && comp.eeffDatos.periodo) || year;
-
-  const filaTabla = (etiqueta, valor) =>
-    `<tr>\n${celdaTabla(etiqueta)}\n${celdaTabla(celdaCifra(valor))}\n</tr>`;
-
-  const tablaCifras = (filas) =>
-    `<table>\n<thead>\n<tr>\n<th>\n<p>\n<strong>Descripción</strong>\n</p>\n</th>\n<th>\n<p>\n<strong>${anioCol}</strong>\n</p>\n</th>\n</tr>\n</thead>\n<tbody>\n${filas.join('\n')}\n</tbody>\n</table>`;
-
-  const filasPL = [...ANEXO_B_ETIQUETAS_PL, ...filasOpcionalesPL(comp)]
-    .map((f) => filaTabla(f.etiqueta, f.valor(comp)));
-  const filasBalance = ANEXO_B_ETIQUETAS_BALANCE.map((f) => filaTabla(f.etiqueta, f.valor(comp)));
-
+/* Las tres tablas de una comparable pasan a ser una (nombre+descripción) más las páginas de
+   su EEFF como imagen. `imagenes` ya viene resuelto por `generarAnexoBHtml` desde
+   `study.eeffImagenesComparables[nameKey(comp.name)]`. */
+function generarBloqueComparableAnexoB(comp, year, wrap, imagenes) {
   const descripcion = comp.descActividad || comp.desc || 'Descripción de actividad no disponible.';
 
   const tablaNombreDescripcion =
     `<table>\n<thead>\n<tr>\n<th>\n<p>\n<strong>NOMBRE DE LA COMPAÑÍA COMPARABLE</strong>\n</p>\n</th>\n<th>\n<p>\n<strong>DESCRIPCIÓN ACTIVIDAD</strong>\n</p>\n</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n${celdaTabla('<strong>' + comp.name + '</strong>')}\n${celdaTabla(descripcion)}\n</tr>\n</tbody>\n</table>`;
 
-  return tablaNombreDescripcion + '\n' + tablaCifras(filasPL) + '\n' + tablaCifras(filasBalance);
+  if (imagenes && imagenes.length > 0) {
+    const bloqueImagenes = imagenes.map((img, i) => `
+<p style="text-align:center;margin:16px 0;">
+  <img src="${img}" alt="Página ${i + 1} EEFF ${comp.name}" style="max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);" />
+</p>`).join('\n');
+    return tablaNombreDescripcion + '\n' + bloqueImagenes;
+  }
+
+  return tablaNombreDescripcion +
+    '\n<p>\nPendiente: vuelva a cargar el Estado Financiero de esta comparable en el Paso 4 del motor de comparables.\n</p>\n';
 }
 
 /* Cuerpo dinámico del ANEXO B. Entra cualquier comparable con un EEFF cargado y cruzado a
-   su fila (`eeffArchivo`), tenga o no alertas contables: la verificación aritmética
-   (`eeffVerificado`) casi nunca sale limpia con comparables reales —el año de su EEFF rara
-   vez coincide con el del estudio porque el del mismo año aún no se ha publicado, y algunas
-   no desglosan patrimonio— así que exigirla dejaba el Anexo B en «Pendiente» aun con EEFF
-   real cargado para todas. Las alertas se siguen mostrando en el Paso 4 para que el analista
-   las revise; no bloquean el informe. Sin ninguna comparable con archivo cargado, sale el
-   aviso de pendiente en vez de las trece compañías de videojuegos del informe de referencia. */
+   su fila (`eeffArchivo`), tenga o no alertas contables — ver el comentario largo que ya
+   traía esta función sobre por qué no se exige `eeffVerificado`. Sin ninguna comparable con
+   archivo cargado, sale el aviso de pendiente en vez de las trece compañías de videojuegos
+   del informe de referencia. */
 export function generarAnexoBHtml(study, year, wrap) {
   const comparables = ((study && study.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
   const titulo = '<h1>\n<a id="_Toc208931006"></a>ANEXO B. Descripciones de comparables y Estados Financieros\n</h1>\n';
@@ -561,7 +525,10 @@ export function generarAnexoBHtml(study, year, wrap) {
     return titulo + '<p>\nPendiente: cargue los Estados Financieros de las comparables en el Paso 4 del motor de comparables.\n</p>\n';
   }
 
-  return titulo + comparables.map((c) => generarBloqueComparableAnexoB(c, year, wrap)).join('\n') + '\n';
+  const imagenesPorComparable = (study && study.eeffImagenesComparables) || {};
+  return titulo + comparables.map((c) =>
+    generarBloqueComparableAnexoB(c, year, wrap, imagenesPorComparable[nameKey(c.name)] || [])
+  ).join('\n') + '\n';
 }
 
 /* Sustituye todo el bloque de ANEXO B, desde su título hasta (sin incluirlo) el título de

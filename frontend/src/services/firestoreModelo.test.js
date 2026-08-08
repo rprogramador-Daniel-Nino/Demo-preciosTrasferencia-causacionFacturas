@@ -78,11 +78,18 @@ test('separarEstudio deja fuera de la nube los campos pesados', () => {
     universo: [{ id: 1 }, { id: 2 }],
     iaMatch: { porId: { A: {} } },
     eeffImages: ['data:image/png;base64,AAAA'],
+    eeffImagenesComparables: { ACME_COMP: ['data:image/png;base64,BBBB'] },
   };
   const { nube, local } = separarEstudio(study);
   assert.deepStrictEqual(Object.keys(nube).sort(), ['comparables', 'ent']);
-  assert.deepStrictEqual(Object.keys(local).sort(), ['eeffImages', 'iaMatch', 'universo']);
-  assert.deepStrictEqual(CAMPOS_SOLO_LOCALES, ['universo', 'iaMatch', 'eeffImages', SELLO_ESTUDIO]);
+  assert.deepStrictEqual(
+    Object.keys(local).sort(),
+    ['eeffImagenesComparables', 'eeffImages', 'iaMatch', 'universo'],
+  );
+  assert.deepStrictEqual(
+    CAMPOS_SOLO_LOCALES,
+    ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO],
+  );
 });
 
 test('separarEstudio no inventa campos locales que el estudio no traía', () => {
@@ -149,6 +156,13 @@ test('eeffImages no viaja a la nube', () => {
   const { nube, local } = separarEstudio(study);
   assert.ok(!('eeffImages' in nube), 'las páginas del ANEXO A van a IndexedDB, no a Firestore');
   assert.strictEqual(local.eeffImages.length, 2);
+});
+
+test('eeffImagenesComparables no viaja a la nube', () => {
+  const study = { ent: 'Acme', eeffImagenesComparables: { QUBICGAMES: ['data:image/png;base64,AAAA'] } };
+  const { nube, local } = separarEstudio(study);
+  assert.ok(!('eeffImagenesComparables' in nube), 'las imágenes del EEFF de comparables van a IndexedDB, no a Firestore');
+  assert.deepStrictEqual(local.eeffImagenesComparables, { QUBICGAMES: ['data:image/png;base64,AAAA'] });
 });
 
 test('docEstudio deja fuera las imágenes del anexo', () => {

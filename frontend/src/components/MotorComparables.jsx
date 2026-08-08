@@ -7,6 +7,7 @@ import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calcu
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso } from '../services/comparablesEngine';
 import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
+import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
@@ -80,6 +81,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      escribe `comparables` en el estudio, esas cuatro se guardaban y llegaban al rango
      intercuartil y al informe. Un hueco se ve; una muestra plausible y ajena, no. */
   const [comparables, setComparables] = useState(study.comparables || []);
+  /* Imágenes del EEFF de cada comparable para el ANEXO B, por nameKey — ver
+     plantillaStore.js (guardarAnexoBImagenes) y exactTemplateMapper.js
+     (generarBloqueComparableAnexoB). No es parte de `comparables`: pesa demasiado para
+     ir dentro de cada fila del estudio (ver CAMPOS_SOLO_LOCALES). */
+  const [eeffImagenesComparables, setEeffImagenesComparables] = useState(study.eeffImagenesComparables || {});
 
   const [cmode, setCmode] = useState(study.cmode || 'all');
   /* Criterios de la hoja "Screen Criteria" del export de Capital IQ (SIC, tipo
@@ -157,9 +163,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          App, que lo separa antes de subirlo: se guarda en localStorage y no en
          Firestore, por decisión del usuario y porque un dictamen por cada una de
          miles de candidatas no cabe cómodo en un documento */
-      iaMatch
+      iaMatch,
+      eeffImagenesComparables,
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -623,6 +630,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return copia;
   };
 
+  /* Guarda las páginas rasterizadas de esta comparable para el ANEXO B. Se combina con
+     lo que ya había: dos cargas sucesivas sobre comparables distintas no deben
+     pisarse entre sí. */
+  const guardarImagenesComparable = (clave, imagenes) => {
+    if (!clave) return;
+    setEeffImagenesComparables((prev) => ({ ...prev, [clave]: imagenes }));
+  };
+
   /* Redacta con IA la descripción de actividad de las filas indicadas que tengan `desc`
      crudo y no tengan `descActividad` todavía. Es idempotente: si ya está redactada, no
      se repite la llamada. Usa el actualizador de `setComparables` para no pisar cambios
@@ -772,6 +787,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
       const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
       setComparables(filas);
+
+      /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. */
+      const clave = nameKey(filas[compIndex].name || '');
+      const imagenes = await rasterizarConReintento(file);
+      guardarImagenesComparable(clave, imagenes);
+      const avisoImagen = imagenes.length
+        ? ''
+        : ' No se pudieron adjuntar las páginas del EEFF para el ANEXO B (revise que el archivo no esté dañado, o inténtelo de nuevo); las cifras se aplicaron igual.';
+
       /* Al repositorio compartido, para que otro estudio no vuelva a leer este mismo
          documento. Va después de aplicar: lo del usuario primero. */
       await publicarEeff(filas, [compIndex]);
@@ -782,10 +806,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         aplicadas: [{
           archivo: file.name,
           datos: result.data,
-          motivo: traeNombre
+          motivo: (traeNombre
             ? motivoCruce(cruce, result.data, file.name)
             : 'El documento no trae razón social, así que se aplicó a «' + destino.name +
-            '» sin poder verificar que le corresponde: confírmalo.',
+            '» sin poder verificar que le corresponde: confírmalo.') + avisoImagen,
           firme: traeNombre && esCruceFirme(cruce),
           verificacion: result.verificacion,
         }],
@@ -844,8 +868,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               motivo: 'No se pudo identificar ninguna empresa con razón social en el documento. ' +
                 'Si es el estado financiero de una sola comparable, cárgalo desde su fila.',
             });
+          } else {
+            /* Una sola rasterización por archivo: el PDF de lote puede traer varias
+               empresas, y cada una se recorta de este mismo arreglo más abajo. */
+            const imagenesDelArchivo = await rasterizarConReintento(file);
+            entradas.push(...leidas.map((l) => ({ ...l, _imagenesDelArchivo: imagenesDelArchivo })));
           }
-          entradas.push(...leidas);
         } catch (err) {
           fallosLectura.push({ archivo: file.name, motivo: 'No se pudo leer: ' + (err?.message || err) });
         }
@@ -860,6 +888,24 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       aplicadas.forEach((a) => {
         filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
       });
+
+      /* Imágenes por empresa, recortadas del PDF de lote al que pertenecen. Se hace
+         después de aplicar las cifras: la clave (nameKey) sale del nombre ya asentado
+         en la fila, que puede diferir en mayúsculas/acentos del que trajo el documento. */
+      aplicadas.forEach((a) => {
+        const clave = nameKey(filas[a.indice].name || '');
+        const imagenesArchivo = a._imagenesDelArchivo || [];
+        if (!imagenesArchivo.length) {
+          a.motivo += ' No se pudieron adjuntar las páginas del EEFF para el ANEXO B (revise que el archivo no esté dañado, o inténtelo de nuevo); las cifras se aplicaron igual.';
+          return;
+        }
+        const { imagenes, delimitada } = recortarPorPagina(imagenesArchivo, a.datos.pagina_inicio, a.datos.pagina_fin);
+        guardarImagenesComparable(clave, imagenes);
+        if (!delimitada) {
+          a.motivo += ' No se pudo delimitar la página de esta empresa dentro del documento; se adjuntó el PDF completo — revisa que no incluya páginas de otras comparables.';
+        }
+      });
+
       if (aplicadas.length) {
         setComparables(filas);
         await publicarEeff(filas, aplicadas.map(a => a.indice));

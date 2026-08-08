@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   hashPlantilla, claveMarcado, claveHuecos, claveDocx, claveDocxMarcado,
-  guardarRecursos, guardarAnexoEeff, guardarVinculo, guardarPlantilla,
-  leerRecursos, leerAnexoEeff, leerVinculo, leerPlantilla, borrarRecursosDelEstudio,
+  guardarRecursos, guardarAnexoEeff, guardarAnexoBImagenes, guardarVinculo, guardarPlantilla,
+  leerRecursos, leerAnexoEeff, leerAnexoBImagenes, leerVinculo, leerPlantilla, borrarRecursosDelEstudio,
   guardarMarcado, leerMarcado, guardarHuecos, leerHuecos,
 } from './plantillaStore.js';
 
@@ -141,16 +141,43 @@ test('borrar un estudio NO se lleva el marcado ni los huecos de su plantilla', a
    su plantilla quedaban en IndexedDB sin dueño y sin forma de llegar a ellas, y un PDF
    de referencia ronda los 5 MB en base64. */
 
-test('borrar un estudio se lleva sus recursos, su anexo y su vínculo', async () => {
+test('las imágenes del Anexo B se guardan y leen por estudio, como mapa por comparable', async () => {
+  await conIndexedDBSimulado(async () => {
+    await guardarAnexoBImagenes('study_1', { QUBICGAMES: ['data:image/png;base64,P1', 'data:image/png;base64,P2'] });
+    assert.deepStrictEqual(
+      await leerAnexoBImagenes('study_1'),
+      { QUBICGAMES: ['data:image/png;base64,P1', 'data:image/png;base64,P2'] },
+    );
+  });
+});
+
+test('leer las imágenes del Anexo B de un estudio sin nada guardado da un objeto vacío', async () => {
+  await conIndexedDBSimulado(async () => {
+    assert.deepStrictEqual(await leerAnexoBImagenes('study_sin_nada'), {});
+  });
+});
+
+test('la clave del Anexo B no colisiona con la del Anexo A del mismo estudio', async () => {
+  await conIndexedDBSimulado(async () => {
+    await guardarAnexoEeff('study_1', ['data:image/png;base64,ANEXO_A']);
+    await guardarAnexoBImagenes('study_1', { ACME: ['data:image/png;base64,ANEXO_B'] });
+    assert.deepStrictEqual(await leerAnexoEeff('study_1'), ['data:image/png;base64,ANEXO_A']);
+    assert.deepStrictEqual(await leerAnexoBImagenes('study_1'), { ACME: ['data:image/png;base64,ANEXO_B'] });
+  });
+});
+
+test('borrar un estudio se lleva sus recursos, su anexo, sus imágenes de comparables y su vínculo', async () => {
   await conIndexedDBSimulado(async () => {
     await guardarRecursos('study_1', ['data:image/png;base64,LOGO']);
     await guardarAnexoEeff('study_1', ['data:image/png;base64,PAGINA']);
+    await guardarAnexoBImagenes('study_1', { ACME: ['data:image/png;base64,CMP'] });
     await guardarVinculo('study_1', 'hash-plantilla');
 
     const resumen = await borrarRecursosDelEstudio('study_1');
 
     assert.deepStrictEqual(await leerRecursos('study_1'), []);
     assert.deepStrictEqual(await leerAnexoEeff('study_1'), []);
+    assert.deepStrictEqual(await leerAnexoBImagenes('study_1'), {});
     assert.strictEqual(await leerVinculo('study_1'), null);
     assert.strictEqual(resumen.fallidos, 0);
   });
@@ -192,8 +219,10 @@ test('un borrado que falla no impide los demás', async () => {
 
     const resumen = await borrarRecursosDelEstudio('study_1');
 
-    assert.strictEqual(resumen.fallidos, 1, 'el almacén caído se cuenta');
-    assert.strictEqual(resumen.borrados, 2, 'los otros dos sí se borraron');
+    // 'anexos' guarda tanto el Anexo A (borrarAnexoEeff) como el Anexo B
+    // (borrarAnexoBImagenes) de este estudio: con ese almacén caído, las dos fallan.
+    assert.strictEqual(resumen.fallidos, 2, 'las dos operaciones sobre el almacén caído cuentan');
+    assert.strictEqual(resumen.borrados, 2, 'recursos y vínculo, que no dependen de "anexos", sí se borran');
     assert.deepStrictEqual(await leerRecursos('study_1'), [], 'este no dependía del caído');
   }, { fallarEn: 'anexos' });
 });
