@@ -192,6 +192,89 @@ test('una sola contraparte repetida en varias filas no dispara el aviso', async 
   assert.strictEqual(res.contrapartes, 1, 'mismo NIT en las dos filas');
 });
 
+test('la misma razón social con identificaciones distintas se detecta cruzando ingresos y egresos', async () => {
+  /* Caso real del archivo del cliente: END GAME INTERACTIVE INC va con 444444001 en la
+     sección de ingresos y con 444444031 en la de egresos. El estudio guarda un solo
+     `vinc_id`, así que sin este aviso el informe se radica con un Tax ID que no coincide
+     con el resto del archivo. */
+  const filas = [];
+  for (let i = 0; i < 9; i++) filas.push(['(portada)']);
+  filas.push(ENCABEZADO);
+  filas.push(['END GAME INTERACTIVE INC', '444444001', '249', 'BELLEVUE', 'VENTA SERVICIOS', '7', '', '1007', '4001', '', 3432402110]);
+  filas.push(['END GAME INTERACTIVE INC', '444444001', '249', '', '', '', '', '1007', '4002', '', 1140574]);
+  filas.push(['2.', 'OPERACIONES DE EGRESO']);
+  filas.push(ENCABEZADO); // la sección de egreso repite su propia fila de encabezados
+  filas.push(['END GAME INTERACTIVE INC', '444444031', '249', '', '', '', '', '1001', '5088', '', 26484324]);
+  const wb = workbookConHoja('Op. Vinculados Economicos', filas);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.idsDivergentes.length, 1);
+  assert.strictEqual(res.idsDivergentes[0].vinculado, 'END GAME INTERACTIVE INC');
+  assert.deepStrictEqual(res.idsDivergentes[0].ids, ['444444001', '444444031']);
+  assert.strictEqual(res.monto, 3432402110, 'el aviso no cambia lo que se suma');
+});
+
+test('la razón social escrita con distinta caja o espacios se agrupa igual', async () => {
+  const wb = conEncabezado([
+    ['End Game  Interactive Inc', '444444001', '249', '', 'VENTA', '', '', '1007', '4001', '', 100],
+    ['END GAME INTERACTIVE INC', '444444031', '249', '', '', '', '', '1007', '4001', '', 200],
+  ]);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.idsDivergentes.length, 1, 'es el mismo vinculado escrito de dos formas');
+  assert.deepStrictEqual(res.idsDivergentes[0].ids, ['444444001', '444444031']);
+});
+
+test('los egresos descartados se cuentan y se totalizan', async () => {
+  const filas = [];
+  for (let i = 0; i < 9; i++) filas.push(['(portada)']);
+  filas.push(ENCABEZADO);
+  filas.push(['INGRESO SAS', '111', 'MEXICO', '', 'VENTA', '', '', '1007', '4001', '', 1000]);
+  filas.push(['2.', 'OPERACIONES DE EGRESO']);
+  filas.push(['EGRESO UNO SAS', '222', 'PANAMA', '', 'COMPRA', '', '', '1001', '5088', '', 9999]);
+  filas.push(['EGRESO DOS SAS', '333', 'PANAMA', '', 'COMPRA', '', '', '1001', '5088', '', 1]);
+  const wb = workbookConHoja('Op. Vinculados Economicos', filas);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.monto, 1000, 'los egresos siguen sin sumarse');
+  assert.deepStrictEqual(res.egresosDescartados, { filas: 2, monto: 10000 });
+});
+
+test('la sección "3. OTRAS OPERACIONES" no se cuenta como egreso', async () => {
+  /* Arrastraba el 'EGRESO' de la sección anterior e inflaría el aviso con filas que no
+     son egresos. */
+  const filas = [];
+  for (let i = 0; i < 9; i++) filas.push(['(portada)']);
+  filas.push(ENCABEZADO);
+  filas.push(['INGRESO SAS', '111', 'MEXICO', '', 'VENTA', '', '', '1007', '4001', '', 1000]);
+  filas.push(['2.', 'OPERACIONES DE EGRESO']);
+  filas.push(['EGRESO SAS', '222', 'PANAMA', '', 'COMPRA', '', '', '1001', '5088', '', 500]);
+  filas.push(['3.', 'OTRAS OPERACIONES']);
+  filas.push(['OTRA COSA SAS', '333', 'PANAMA', '', 'CUENTA POR COBRAR', '', '', '', '', '', 777]);
+  const wb = workbookConHoja('Op. Vinculados Economicos', filas);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.deepStrictEqual(res.egresosDescartados, { filas: 1, monto: 500 });
+});
+
+test('un archivo limpio no emite ninguna advertencia', async () => {
+  const wb = conEncabezado([
+    ['ACME MEXICO SA DE CV', '900123456', '484', '', 'VENTA', '', '', '1007', '4001', '', 1000],
+    ['ACME MEXICO SA DE CV', '900123456', '484', '', '', '', '', '1007', '4001', '', 500],
+  ]);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.contrapartes, 1);
+  assert.deepStrictEqual(res.idsDivergentes, []);
+  assert.deepStrictEqual(res.egresosDescartados, { filas: 0, monto: 0 });
+  assert.strictEqual(res.monto, 1500);
+});
+
 test('el país en código numérico se traduce con la tabla del sistema', async () => {
   /* Antes solo se reconocía el 249 del archivo de referencia y cualquier otro
      contribuyente veía el número crudo en su informe. */

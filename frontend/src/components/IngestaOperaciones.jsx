@@ -26,13 +26,35 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           monto: valMonto,
           monto_operacion: valMonto
         });
+        const avisos = [];
         /* Con varias contrapartes el total es la suma de todas y el estudio se queda
            con la primera. Decirlo aquí es lo que evita que el informe declare ante la
            DIAN una operación con un vinculado que no es el único. */
-        const aviso = res.contrapartes > 1
-          ? ` · ⚠ el archivo trae ${res.contrapartes} contrapartes distintas y el estudio guarda una sola ` +
+        if (res.contrapartes > 1) {
+          avisos.push(
+            `⚠ el archivo trae ${res.contrapartes} contrapartes distintas y el estudio guarda una sola ` +
             `(${res.vinc}): revise el vinculado y el monto antes de generar el informe`
-          : '';
+          );
+        }
+        /* Misma razón social con varios NIT entre secciones. El estudio guarda un solo
+           `vinc_id`, así que sin este aviso el informe se va con la identificación de la
+           primera fila y la diferencia con el resto del archivo no la ve nadie. */
+        (res.idsDivergentes || []).forEach(d => {
+          avisos.push(
+            `⚠ «${d.vinculado}» aparece en el archivo con ${d.ids.length} identificaciones distintas ` +
+            `(${d.ids.join(', ')}): verifique cuál corresponde al vinculado del informe`
+          );
+        });
+        /* Los egresos son de otro formato (1001) y por eso no se suman, pero callarlo hacía
+           que el usuario viera un total menor al del archivo sin explicación. */
+        const egresos = res.egresosDescartados;
+        if (egresos && egresos.filas > 0) {
+          avisos.push(
+            `⚠ se descartaron ${egresos.filas} ${egresos.filas === 1 ? 'operación' : 'operaciones'} de egreso ` +
+            `por COP $ ${fmt(egresos.monto)}: el estudio solo suma las operaciones de ingreso`
+          );
+        }
+        const aviso = avisos.length ? ' · ' + avisos.join(' · ') : '';
         setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(valMonto)}${aviso}`);
       } else {
         setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
