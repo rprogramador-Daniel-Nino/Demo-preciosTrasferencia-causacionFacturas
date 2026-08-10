@@ -886,37 +886,36 @@ test('prefiltrar respeta los filtros puestos en «incluir»', () => {
   assert.strictEqual(prefiltrar(candidatas, {}).validas.length, 0, 'excluir es el criterio por defecto');
 });
 
-test('el rigor estricto deja solo prestadores de servicios', () => {
+test('el perfil funcional ya no descarta por sí solo, con ningún nivel de rigor', () => {
+  /* El filtro de rigor se retiró (decisión del usuario, 2026-08-10): el informe pasó
+     a reportar bajo un solo concepto —diferencias funcionales— todo lo que supera los
+     filtros objetivos y no integra la muestra, así que apartar antes a unas cuantas
+     por su perfil no aportaba nada y le quitaba candidatas al puntaje. */
   const candidatas = [
     { id: 'S', name: 'Servicio SA', desc: 'software development services', s: 100, op: 10 },
     { id: 'M', name: 'Mixta SA', desc: 'software development services and publishes its own games', s: 100, op: 10 },
     { id: 'E', name: 'Empresario SA', desc: 'publishes its own titles and monetizes them', s: 100, op: 10 },
   ];
-  const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estricto' }, '', [], {});
-  assert.deepStrictEqual(r.seleccionadas.map(c => c.id), ['S']);
-  assert.strictEqual(r.rechazadasPorCategoria.rigor, 2, 'mixto y empresario se caen por rigor');
-  assert.match(r.rechazadas.find(c => c.id === 'M').motivoRechazo, /rigor estricto/);
+  ['estricto', 'estandar', 'amplio'].forEach((rigor) => {
+    const r = scoreCandidates(candidatas, { nTarget: 10, rigor }, '', [], {});
+    assert.deepStrictEqual(r.seleccionadas.map(c => c.id).sort(), ['E', 'M', 'S'], `con rigor ${rigor}`);
+    assert.strictEqual(r.rechazadasPorCategoria.rigor, 0, `con rigor ${rigor}`);
+  });
 });
 
-test('el rigor estándar admite servicios y mixtos, y descarta al empresario pleno', () => {
+test('el perfil se sigue calculando y publicando, aunque no descarte', () => {
+  /* Ordena el puntaje y va a la columna «Perfil funcional» de la hoja: lo que se
+     retiró es su capacidad de excluir, no el dato. */
   const candidatas = [
     { id: 'S', name: 'Servicio SA', desc: 'software development services', s: 100, op: 10 },
-    { id: 'M', name: 'Mixta SA', desc: 'software development services and publishes its own games', s: 100, op: 10 },
     { id: 'E', name: 'Empresario SA', desc: 'publishes its own titles and monetizes them', s: 100, op: 10 },
   ];
   const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estandar' }, '', [], {});
-  assert.deepStrictEqual(r.seleccionadas.map(c => c.id).sort(), ['M', 'S']);
-  assert.strictEqual(r.rechazadasPorCategoria.rigor, 1);
-  assert.match(r.rechazadas[0].motivoRechazo, /260-4/, 'el motivo cita la norma que sustenta el descarte');
-});
-
-test('el rigor amplio no descarta a nadie por su perfil', () => {
-  const candidatas = [
-    { id: 'E', name: 'Empresario SA', desc: 'publishes its own titles and monetizes them', s: 100, op: 10 },
-  ];
-  const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'amplio' }, '', [], {});
-  assert.strictEqual(r.seleccionadas.length, 1);
-  assert.strictEqual(r.rechazadasPorCategoria.rigor, 0);
+  const perfiles = Object.fromEntries(r.seleccionadas.map(c => [c.id, c.perfilFuncional]));
+  assert.strictEqual(perfiles.S, 'SERVICIO');
+  assert.strictEqual(perfiles.E, 'EMPRESARIO');
+  /* Y el de servicios puntúa por encima del empresario pleno. */
+  assert.strictEqual(r.seleccionadas[0].id, 'S', 'el perfil sigue pesando en el orden');
 });
 
 test('el perfil INDEFINIDO nunca se descarta por rigor', () => {
@@ -1013,7 +1012,10 @@ test('el desglose por motivo cuenta cada criterio por separado', () => {
     perdidaOperativa: 1,
     sinDescripcion: 1,
     actividadDistinta: 1,
-    rigorFuncional: 1,
+    /* El filtro de rigor se retiró: el perfil ya no descarta por sí solo, así que
+       este contador se queda en cero. La clave se conserva porque la tabla de
+       razones de rechazo del informe y los estudios ya guardados la esperan. */
+    rigorFuncional: 0,
   });
 });
 
@@ -1103,7 +1105,7 @@ test('las categorías de rechazo cubren cada descarte una sola vez', () => {
   const veredicto = { porId: { R: { coincide: false, motivo: 'otra actividad' }, OK: { coincide: true }, E: { coincide: true } } };
   const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estandar' }, 'desarrollo de software', [], { iaMatch: veredicto });
   const cat = r.rechazadasPorCategoria;
-  assert.deepStrictEqual(cat, { filtro: 1, ia: 1, rigor: 1 });
+  assert.deepStrictEqual(cat, { filtro: 1, ia: 1, rigor: 0 });
   assert.strictEqual(cat.filtro + cat.ia + cat.rigor + r.totalValidas, r.evaluadas,
     'nada se cuenta dos veces ni se pierde');
 });
@@ -1319,4 +1321,41 @@ test('la importación marca la sospecha de holding por la razón social', async 
     assert.strictEqual(rows[0].sospechaHolding, 'revisar');
     assert.strictEqual(rows[1].sospechaHolding, 'no');
   });
+});
+
+test('el motivo de rechazo no se contagia entre compañías con el mismo nameKey', () => {
+  /* Caso real del universo del cliente: «N-able, Inc. (NYSE:NABL)» y «Nable Inc.
+     (KOSDAQ:A153460)» dan las dos la clave «NABLE», porque `nameKey` quita
+     paréntesis y sufijos societarios para poder cruzar con el estudio anterior. La
+     segunda sí está controlada (66,35 %); la primera no (32,63 %), y aparecía
+     descartada por control heredando el motivo de su homónima. */
+  const universo = [
+    { id: 'IQ_NABL', name: 'N-able, Inc. (NYSE:NABL)', holderPct: 32.63 },
+    { id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)', holderPct: 66.35 },
+  ];
+  const auditoria = {
+    rechazadas: [{ id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)', motivoClave: 'controlada', categoriaRechazo: 'filtro' }],
+  };
+  const [nable, otra] = enriquecerUniverso(universo, [], auditoria);
+  assert.strictEqual(otra.motivoClave, 'controlada', 'la que sí está controlada conserva su motivo');
+  assert.strictEqual(nable.motivoClave, '', 'y no se le pega a la que comparte nombre');
+});
+
+test('sin identificador el cruce por nombre sigue funcionando', () => {
+  /* Las candidatas cargadas a mano o traídas de otras fuentes no traen id; para
+     ellas el nombre es lo único que hay. */
+  const universo = [{ name: 'Alpha Group' }];
+  const auditoria = { rechazadas: [{ name: 'Alpha Group', motivoClave: 'holding', categoriaRechazo: 'filtro' }] };
+  assert.strictEqual(enriquecerUniverso(universo, [], auditoria)[0].motivoClave, 'holding');
+});
+
+test('la selección tampoco se contagia entre homónimas', () => {
+  const universo = [
+    { id: 'IQ_NABL', name: 'N-able, Inc. (NYSE:NABL)' },
+    { id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)' },
+  ];
+  const seleccionadas = [{ id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)' }];
+  const [nable, otra] = enriquecerUniverso(universo, seleccionadas, null);
+  assert.strictEqual(otra.seleccionada, true);
+  assert.strictEqual(nable.seleccionada, false, 'la homónima no queda marcada como comparable del estudio');
 });
