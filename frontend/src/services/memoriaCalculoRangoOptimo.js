@@ -485,16 +485,15 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     etapa('holding', '(−) Holdings o grupos', 'Término de holding, grupo o group en la razón social (Art. 260-4)');
     etapa('negativo', '(−) Saldos negativos', 'Dato de balance no verosímil');
     etapa('perdida', '(−) Pérdida operativa', 'Criterio conservador DIAN: comparable rentable');
-    etapa('sinDesc', '(−) Sin descripción del negocio', 'No hay con qué verificar la actividad');
-    /* «Actividad distinta» y «rigor funcional» van en una sola fila: las dos dicen que
-       el perfil de la compañía no es comparable con el de la parte examinada, una por
-       la descripción del negocio y otra por las funciones, y el informe las sustenta
-       bajo el mismo artículo. El motor los sigue llevando como motivos separados en la
-       columna «Motivo de rechazo», así que la fila se puede desglosar si la DIAN lo
-       pide; lo que se unifica es cómo se presentan. */
-    etapa('rigor', '(−) Diferencias funcionales', 'Perfil no comparable con la parte examinada (Art. 260-4)');
+    /* Una sola fila para todo lo que supera los cuatro filtros objetivos y no integra
+       la muestra: la curación no reconoció su actividad, faltaba la descripción del
+       negocio, o simplemente no alcanzó el puntaje de las comparables elegidas. Ante
+       la DIAN todas responden a lo mismo —no son funcionalmente comparables con la
+       parte examinada—, y el desglose por criterio sigue disponible en la columna
+       «Motivo de rechazo» de la base de datos. */
+    etapa('rigor', '(−) Diferencias funcionales', 'No comparable con la parte examinada (Art. 260-4)');
     etapa('validas', '= Válidas tras todos los criterios', 'Universo − las exclusiones de arriba');
-    etapa('seleccionadas', '= Muestra final seleccionada', 'Comparables usadas en el rango (⊂ válidas)');
+    etapa('seleccionadas', '= Muestra final seleccionada', 'Las válidas son exactamente la muestra');
     sel.push([]);
 
     /* Suma de control: las exclusiones y las válidas son mutuamente excluyentes —el
@@ -508,13 +507,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sel.push([cTxt(etiqueta), null, cTxt(criterio)]);
     };
     control('rechazadas', 'Total rechazadas', 'Suma de las exclusiones del embudo');
-    control('validas', 'Total válidas', 'Estado = "Válida"');
+    control('validas', 'Total válidas = muestra del estudio', 'Estado = "Válida"');
     control('suma', 'SUMA', 'Rechazadas + válidas');
     control('universo', 'UNIVERSO (Capital IQ)', 'Total de compañías');
     control('check', '¿CUADRA? (suma = universo)', 'Debe decir "SÍ ✓"');
-    control('seleccionadas', '   · de las válidas, la muestra del estudio', '¿Seleccionada? = "Sí"');
-    control('difFuncional', '   · de las válidas, con diferencias funcionales', 'Superan los criterios pero no integran la muestra');
-    control('checkVal', '¿Muestra + diferencias = válidas?', 'Debe decir "SÍ ✓"');
+    control('seleccionadas', '   · contadas por «¿Seleccionada?»', '¿Seleccionada? = "Sí"');
+    control('checkVal', '¿Coincide con las válidas del embudo?', 'Debe decir "SÍ ✓"');
     sel.push([]);
 
     // Base de datos: encabezado + una fila por candidata
@@ -558,11 +556,14 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         cForT(`IF(N(G${r})<0,"Sí","")`),                             // M Pérdida (fórmula)
         cTxt(c.motivoClave || ''),                                   // N Motivo (del motor)
         cTxt(c.perfilFuncional || 'INDEFINIDO'),                     // O Perfil funcional
-        cForT(`IF(N${r}="","Válida","Rechazada")`),                  // P Estado (fórmula)
+        /* P Estado. Válida es solo la que integra la muestra: todo lo que supera los
+           filtros objetivos y no se incorpora al rango queda rechazado por diferencias
+           funcionales, así que la partición del universo es «las 16 y todo lo demás». */
+        cForT(`IF(Q${r}="Sí","Válida","Rechazada")`),
         cTxt(c.seleccionada ? 'Sí' : ''),                            // Q ¿Seleccionada?
         /* R: el estado de comparabilidad dicho en palabras, en cada fila, para que
            quien filtre la tabla no tenga que cruzar el motivo con la selección. */
-        cForT(`IF(P${r}<>"Válida","Rechazada (ver motivo)",IF(Q${r}="Sí","Sin diferencias funcionales","Con diferencias funcionales"))`),
+        cForT(`IF(Q${r}="Sí","Comparable de la muestra",IF(N${r}="","Diferencias funcionales","Rechazada (ver motivo)"))`),
       ]);
     });
     const rN = r0 + cand.length - 1;
@@ -571,7 +572,6 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const cMotivo = `N${r0}:N${rN}`;
     const cEstado = `P${r0}:P${rN}`;
     const cSel = `Q${r0}:Q${rN}`;
-    const cComp = `R${r0}:R${rN}`;
 
     /* Los motivos, con la MISMA clave que emite `scoreCandidates`: la hoja no
        reclasifica nada, cuenta lo que el motor escribió. */
@@ -580,23 +580,33 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       ['holding', 'filtro', ['holding'], 'Holdings o grupos, por la razón social (Art. 260-4)'],
       ['negativo', 'filtro', ['saldoNegativo'], 'Saldo negativo en balances (dato no verosímil)'],
       ['perdida', 'filtro', ['perdidaOperativa'], 'Pérdida operativa (criterio conservador DIAN)'],
-      ['sinDesc', 'ia', ['sinDescripcion'], 'Sin descripción del negocio para verificar la actividad'],
-      /* Una sola fila para los dos motivos de perfil. «Actividad distinta» sale de la
-         descripción del negocio y «rigor funcional» de las funciones, pero las dos
-         concluyen lo mismo —el perfil no es comparable— y el informe las sustenta bajo
-         el mismo artículo. El motor los sigue escribiendo por separado en la columna
-         «Motivo de rechazo», así que la fila se puede desglosar si hace falta. */
-      ['rigor', 'rigor', ['actividadDistinta', 'rigorFuncional'],
-        'Diferencias funcionales: perfil no comparable con la parte examinada (Art. 260-4)'],
+      /* Una sola fila para TODO lo que supera los filtros objetivos y no integra la
+         muestra. Recoge los motivos cualitativos que escribe el motor —la curación no
+         reconoció la actividad, faltaba la descripción del negocio, o el perfil no era
+         comparable en los estudios anteriores al retiro de ese filtro— y además las
+         que no llevan motivo pero tampoco se incorporaron al rango.
+
+         Todas responden a lo mismo ante la DIAN: no son funcionalmente comparables con
+         la parte examinada (Art. 260-4). El desglose fino sigue en la columna «Motivo
+         de rechazo» de la base de datos, para quien lo necesite. */
+      ['rigor', 'rigor', ['sinDescripcion', 'actividadDistinta', 'rigorFuncional'],
+        'Diferencias funcionales: no comparable con la parte examinada (Art. 260-4)',
+        true],
     ];
 
     /* Una fila del embudo puede recoger varios motivos del motor, así que el conteo es
-       la suma de sus COUNTIF y no uno solo. */
-    const contarMotivos = (rango, motivos) => motivos.map((m) => `COUNTIF(${rango},"${m}")`).join('+');
+       la suma de sus COUNTIF y no uno solo. Las que llevan `sinMotivo` suman además
+       las que pasaron todo y no entraron a la muestra: no traen motivo escrito, pero
+       quedan fuera por la misma razón. */
+    const contarMotivos = (rango, motivos, sinMotivo, rangoSel) => {
+      const partes = motivos.map((m) => `COUNTIF(${rango},"${m}")`);
+      if (sinMotivo) partes.push(`COUNTIFS(${rango},"",${rangoSel},"<>Sí")`);
+      return partes.join('+');
+    };
 
     sel[fe.universo - 1][1] = cFor(`COUNTA(${cNombre})`, '#,##0');
-    MOTIVOS.forEach(([clave, , motivos]) => {
-      sel[fe[clave] - 1][1] = cFor(contarMotivos(cMotivo, motivos), '#,##0');
+    MOTIVOS.forEach(([clave, , motivos, , sinMotivo]) => {
+      sel[fe[clave] - 1][1] = cFor(contarMotivos(cMotivo, motivos, sinMotivo, cSel), '#,##0');
     });
     sel[fe.validas - 1][1] = cFor(
       `B${fe.universo}-` + MOTIVOS.map(([clave]) => `B${fe[clave]}`).join('-'), '#,##0');
@@ -608,14 +618,13 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     sel[sc.universo - 1][1] = cFor(`COUNTA(${cNombre})`, '#,##0');
     sel[sc.check - 1][1] = cForT(
       `IF(B${sc.suma}=B${sc.universo},"SÍ ✓","NO ✗ ("&B${sc.suma}&" vs "&B${sc.universo}&")")`);
+    /* Las válidas son ahora exactamente la muestra, así que el segundo cuadre compara
+       las dos formas de contarla: por la columna «¿Seleccionada?» y por el estado que
+       de ella se deriva. Si difieren, alguna fila quedó seleccionada llevando motivo
+       de rechazo. */
     sel[sc.seleccionadas - 1][1] = cFor(`COUNTIF(${cSel},"Sí")`, '#,##0');
-    sel[sc.difFuncional - 1][1] = cFor(`COUNTIF(${cComp},"Con diferencias funcionales")`, '#,##0');
-    /* La muestra y las que quedaron fuera tienen que agotar entre las dos lo que
-       pasó todos los filtros. Si no cuadra, o el motor asignó un motivo que la hoja
-       no cuenta —fue lo que pasó con el descarte por descripción— o el cribado no se
-       ha ejecutado y la columna de motivos llegó vacía. */
     sel[sc.checkVal - 1][1] = cForT(
-      `IF(B${sc.seleccionadas}+B${sc.difFuncional}=B${fe.validas},"SÍ ✓","NO ✗ ("&(B${sc.seleccionadas}+B${sc.difFuncional})&" vs "&B${fe.validas}&")")`);
+      `IF(B${sc.seleccionadas}=B${fe.validas},"SÍ ✓","NO ✗ ("&B${sc.seleccionadas}&" vs "&B${fe.validas}&")")`);
 
     hojas.unshift({
       nombre: 'Selección comparables', celdas: sel,
@@ -637,9 +646,10 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     mtz.push([cTxt('Categoría'), cTxt('Motivo'), cTxt('Descripción'), cTxt('Empresas')]);
     const refMotivo = `'Selección comparables'!${cMotivo}`;
     const mFila0 = mtz.length + 1;
-    MOTIVOS.forEach(([, categoria, motivos, descripcion]) => {
-      mtz.push([cTxt(categoria), cTxt(motivos.join(' + ')), cTxt(descripcion),
-        cFor(contarMotivos(refMotivo, motivos), '#,##0')]);
+    const refSel = `'Selección comparables'!${cSel}`;
+    MOTIVOS.forEach(([, categoria, motivos, descripcion, sinMotivo]) => {
+      mtz.push([cTxt(categoria), cTxt(sinMotivo ? 'diferenciaFuncional' : motivos.join(' + ')), cTxt(descripcion),
+        cFor(contarMotivos(refMotivo, motivos, sinMotivo, refSel), '#,##0')]);
     });
     const mFilaN = mFila0 + MOTIVOS.length - 1;
     mtz.push([]);
@@ -655,24 +665,22 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     mtz.push([cTxt('TOTAL RECHAZADAS'), cTxt(''), cTxt(''),
       cFor(`SUM(${colCant})`, '#,##0')]);
     const fSel = mtz.length + 1;
-    mtz.push([cTxt('(+) Válidas — muestra seleccionada'), cTxt(''),
-      cTxt('Sin diferencias funcionales relevantes: las comparables del estudio'),
+    mtz.push([cTxt('(+) Muestra seleccionada'), cTxt(''),
+      cTxt('Las comparables que sustentan el rango del informe'),
       cFor(`COUNTIF('Selección comparables'!${cSel},"Sí")`, '#,##0')]);
-    const fDif = mtz.length + 1;
-    mtz.push([cTxt('(+) Válidas — con diferencias funcionales'), cTxt(''),
-      cTxt('Superan los criterios pero no integran la muestra'),
-      cFor(`COUNTIF('Selección comparables'!${cComp},"Con diferencias funcionales")`, '#,##0')]);
     const fUniv = mtz.length + 1;
     mtz.push([cTxt('= UNIVERSO (debe igualar el de Capital IQ)'), cTxt(''), cTxt(''),
-      cFor(`D${fTotRech}+D${fSel}+D${fDif}`, '#,##0')]);
+      cFor(`D${fTotRech}+D${fSel}`, '#,##0')]);
     const fReal = mtz.length + 1;
     mtz.push([cTxt('UNIVERSO real (Capital IQ)'), cTxt(''), cTxt(''),
       cFor(`COUNTA('Selección comparables'!${cNombre})`, '#,##0')]);
-    mtz.push([cTxt('¿CUADRA? (rechazadas + válidas = universo)'), cTxt(''), cTxt(''),
+    mtz.push([cTxt('¿CUADRA? (rechazadas + muestra = universo)'), cTxt(''), cTxt(''),
       cForT(`IF(D${fUniv}=D${fReal},"SÍ ✓","NO ✗ ("&D${fUniv}&" vs "&D${fReal}&")")`)]);
     mtz.push([]);
-    mtz.push([cTxt('Nota: los motivos «ia» y «rigor» los asigna el motor sobre la descripción del negocio')]);
-    mtz.push([cTxt('y el perfil funcional. Si la selección no se ha ejecutado, llegan en cero.')]);
+    mtz.push([cTxt('Nota: «diferencias funcionales» recoge todo lo que supera los filtros objetivos y no')]);
+    mtz.push([cTxt('integra la muestra. El desglose por criterio está en la columna «Motivo de rechazo»')]);
+    mtz.push([cTxt('de la hoja Selección comparables, y las que no llevan motivo son las que pasaron')]);
+    mtz.push([cTxt('todos los criterios sin alcanzar el puntaje de la muestra final.')]);
 
     hojas.splice(1, 0, {
       nombre: 'Matriz de rechazo', celdas: mtz,

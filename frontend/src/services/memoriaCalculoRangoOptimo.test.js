@@ -81,7 +81,7 @@ test('las válidas se restan de TODAS las exclusiones, no de algunas', () => {
   assert.strictEqual(restas, exclusiones, `hay ${exclusiones} exclusiones y se restan ${restas}`);
 });
 
-test('los siete motivos del motor quedan contados, aunque se presenten en menos filas', () => {
+test('todos los motivos del motor quedan contados, aunque se presenten en menos filas', () => {
   /* La presentación agrupa; la aritmética no puede perder ninguno. Un motivo que el
      motor escriba y la hoja no cuente descuadra la suma de control: fue exactamente
      lo que pasó con el descarte de holding por descripción. */
@@ -96,14 +96,31 @@ test('los siete motivos del motor quedan contados, aunque se presenten en menos 
   ].forEach((m) => assert.match(formulas, new RegExp(`COUNTIF\\(N\\d+:N\\d+,"${m}"\\)`), `falta contar ${m}`));
 });
 
-test('la fila de diferencias funcionales suma actividad distinta y rigor funcional', () => {
+test('«Diferencias funcionales» recoge los motivos cualitativos y las que no entraron a la muestra', () => {
+  /* Todo lo que supera los cuatro filtros objetivos y no integra la muestra cuenta
+     como rechazado por comparabilidad funcional, lleve motivo escrito o no. */
   const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
   const f = fila(sel.celdas, '(−) Diferencias funcionales');
   assert.ok(f, 'existe la fila unificada');
-  assert.match(f[1].f, /COUNTIF\(N\d+:N\d+,"actividadDistinta"\)\+COUNTIF\(N\d+:N\d+,"rigorFuncional"\)/);
-  assert.match(String(f[2].v), /Perfil no comparable con la parte examinada \(Art\. 260-4\)/);
-  /* Y «Actividad distinta» deja de tener fila propia. */
-  assert.ok(!fila(sel.celdas, '(−) Actividad distinta'), 'ya no se presenta por separado');
+  ['sinDescripcion', 'actividadDistinta', 'rigorFuncional'].forEach((m) =>
+    assert.match(f[1].f, new RegExp(`COUNTIF\\(N\\d+:N\\d+,"${m}"\\)`), `falta ${m}`));
+  /* El término que recoge a las que pasaron todo y no se seleccionaron. */
+  assert.match(f[1].f, /COUNTIFS\(N\d+:N\d+,"",Q\d+:Q\d+,"<>Sí"\)/);
+  assert.match(String(f[2].v), /No comparable con la parte examinada \(Art\. 260-4\)/);
+  /* Y dejan de tener fila propia. */
+  assert.ok(!fila(sel.celdas, '(−) Actividad distinta'));
+  assert.ok(!fila(sel.celdas, '(−) Sin descripción'));
+});
+
+test('válida es solo la que integra la muestra', () => {
+  /* El estado ya no depende de si hay motivo escrito: una compañía que superó todos
+     los criterios pero no entró al rango queda rechazada por diferencias
+     funcionales, que es como el informe la sustenta. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  assert.match(filaCand[15].f, /IF\(Q\d+="Sí","Válida","Rechazada"\)/);
+  assert.match(filaCand[17].f, /"Comparable de la muestra"/);
+  assert.match(filaCand[17].f, /"Diferencias funcionales"/);
 });
 
 test('la suma de control compara rechazadas + válidas contra el universo', () => {
@@ -176,14 +193,13 @@ test('Controlada, Holding y Pérdida se marcan por separado, cada una con su fó
   assert.match(filaCand[12].f, /IF\(N\(G\d+\)<0/, 'M Pérdida, sobre la utilidad operacional');
 });
 
-test('el cuadre muestra + diferencias se compara contra lo que quedó tras los filtros', () => {
-  /* Este es el cuadre que delata un universo sin cribar: si la columna de motivos
-     llega vacía, «válidas tras los criterios» da el universo entero mientras que la
-     muestra son solo las seleccionadas, y la comprobación lo dice con los dos
-     números en vez de limitarse a un «NO ✗». */
+test('el segundo cuadre compara las dos formas de contar la muestra', () => {
+  /* Las válidas del embudo salen de restar las exclusiones al universo; la muestra
+     sale de contar «¿Seleccionada?». Si difieren, alguna fila quedó seleccionada
+     llevando motivo de rechazo, o un motivo del motor dejó de contarse. */
   const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
   const filaExacta = (etq) => sel.celdas.find((f) => f && f[0] && f[0].v === etq);
-  const check = filaExacta('¿Muestra + diferencias = válidas?');
+  const check = filaExacta('¿Coincide con las válidas del embudo?');
   assert.ok(check, 'existe la fila de cuadre');
   assert.match(check[1].f, /"NO ✗ \("&/, 'informa los dos números cuando no cuadra');
 });
