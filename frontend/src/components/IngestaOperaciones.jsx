@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, ArrowRight, Building2, Globe, DollarSign } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, ArrowRight, Building2, Globe, DollarSign, AlertTriangle } from 'lucide-react';
 import { fmt, montoOperacion } from '../utils/calculations';
 import { parseExcelOperations } from '../services/excelOperationsParser';
+import { avisoIdentificacionVinculado } from '../services/cotejoVinculado';
 
 export default function IngestaOperaciones({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
@@ -26,13 +27,35 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           monto: valMonto,
           monto_operacion: valMonto
         });
+        const avisos = [];
         /* Con varias contrapartes el total es la suma de todas y el estudio se queda
            con la primera. Decirlo aquí es lo que evita que el informe declare ante la
            DIAN una operación con un vinculado que no es el único. */
-        const aviso = res.contrapartes > 1
-          ? ` · ⚠ el archivo trae ${res.contrapartes} contrapartes distintas y el estudio guarda una sola ` +
+        if (res.contrapartes > 1) {
+          avisos.push(
+            `⚠ el archivo trae ${res.contrapartes} contrapartes distintas y el estudio guarda una sola ` +
             `(${res.vinc}): revise el vinculado y el monto antes de generar el informe`
-          : '';
+          );
+        }
+        /* Misma razón social con varios NIT entre secciones. El estudio guarda un solo
+           `vinc_id`, así que sin este aviso el informe se va con la identificación de la
+           primera fila y la diferencia con el resto del archivo no la ve nadie. */
+        (res.idsDivergentes || []).forEach(d => {
+          avisos.push(
+            `⚠ «${d.vinculado}» aparece en el archivo con ${d.ids.length} identificaciones distintas ` +
+            `(${d.ids.join(', ')}): verifique cuál corresponde al vinculado del informe`
+          );
+        });
+        /* Los egresos son de otro formato (1001) y por eso no se suman, pero callarlo hacía
+           que el usuario viera un total menor al del archivo sin explicación. */
+        const egresos = res.egresosDescartados;
+        if (egresos && egresos.filas > 0) {
+          avisos.push(
+            `⚠ se descartaron ${egresos.filas} ${egresos.filas === 1 ? 'operación' : 'operaciones'} de egreso ` +
+            `por COP $ ${fmt(egresos.monto)}: el estudio solo suma las operaciones de ingreso`
+          );
+        }
+        const aviso = avisos.length ? ' · ' + avisos.join(' · ') : '';
         setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(valMonto)}${aviso}`);
       } else {
         setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
@@ -104,6 +127,17 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           </div>
         )}
       </div>
+
+      {/* El cotejo contra el informe del año anterior va aparte del mensaje de la carga:
+          el estudio anterior se ingiere en el paso 4, después de este, así que cuando
+          llega ya no hay mensaje de carga donde colgarlo. Como se calcula del estudio,
+          aparece en cuanto el dato existe y sigue visible al volver a este paso. */}
+      {avisoIdentificacionVinculado(study) && (
+        <div className="p-4 rounded-xl text-xs flex gap-2 items-start bg-amber-50 dark:bg-amber-950/20 border border-amber-200 text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+          <span className="font-medium text-sm">{avisoIdentificacionVinculado(study)}</span>
+        </div>
+      )}
 
       {/* Tarjeta Detallada de Operación Extraída */}
       {study.vinc_tipo && (

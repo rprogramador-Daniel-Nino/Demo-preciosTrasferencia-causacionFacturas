@@ -1,6 +1,7 @@
 import React from 'react';
 import { ShieldCheck, ShieldAlert, AlertCircle, FileText, CheckCircle2, XCircle } from 'lucide-react';
-import { num, pliOf, quart, adjustInfo, pctf, fmt, segmentacionDesajuste } from '../utils/calculations';
+import { num, pliOf, pctf, fmt, segmentacionDesajuste } from '../utils/calculations';
+import { analizarRango } from '../services/rangoIntercuartil';
 
 export default function AuditoriaNorma({ study }) {
   const auditPoints = [];
@@ -66,38 +67,30 @@ export default function AuditoriaNorma({ study }) {
   let hasRange = false;
   
   if (study.comparables && study.comparables.length >= 3 && study.t_s && study.t_op) {
-    const kind = study.pli || 'MO';
-    const segExcluido = num(study.seg_excluido) || 0;
-    const T = {
-      s: num(study.t_s) - segExcluido,
-      c: num(study.t_c),
-      op: num(study.t_op) - segExcluido,
-      ar: num(study.t_ar),
-      inv: num(study.t_inv),
-      ap: num(study.t_ap)
-    };
-    const tPLI = pliOf(T, kind);
-    
-    const activeSeries = study.comparables
-      .map(c => {
-        const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
-        return pliOf(rawVal, kind);
-      })
-      .filter(val => val !== null)
-      .sort((a, b) => a - b);
+    /* El rango y el veredicto salen de `analizarRango`, el mismo servicio que alimenta
+       el informe Word y el Excel de soporte. Esta pantalla calculaba antes sus propios
+       cuartiles, sin ajuste de capital de trabajo ni filtro de ámbito, de modo que podía
+       declarar cumplimiento contra un rango que ningún documento del estudio publicaba. */
+    const { stats, adj } = analizarRango(study);
 
-    if (activeSeries.length >= 3) {
+    /* El margen del contribuyente se arma aquí porque el servicio devuelve la conclusión
+       y no la cifra que se imprime. Es el mismo `pliOf` con `seg_excluido` descontado que
+       el servicio usa por dentro —no un segundo descuento encima del suyo—, así que el
+       número que se muestra es el que `adj` comparó contra el rango. */
+    const segExcluido = num(study.seg_excluido) || 0;
+    const tS = num(study.t_s);
+    const tOp = num(study.t_op);
+    const tPLI = pliOf({
+      s: tS !== null ? tS - segExcluido : null,
+      c: num(study.t_c),
+      op: tOp !== null ? tOp - segExcluido : null
+    }, study.pli || 'MO');
+
+    if (stats) {
       hasRange = true;
-      const stats = {
-        p25: quart(activeSeries, .25),
-        med: quart(activeSeries, .5),
-        p75: quart(activeSeries, .75)
-      };
-      
-      const adj = adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso);
       if (adj) {
         withinRange = adj.within;
-        statusDetail = adj.within 
+        statusDetail = adj.within
           ? `Cumple: Margen ${pctf(tPLI)} dentro del rango intercuartil [${pctf(stats.p25)} - ${pctf(stats.p75)}]`
           : `Requiere ajuste: Margen ${pctf(tPLI)} fuera del rango [${pctf(stats.p25)} - ${pctf(stats.p75)}]. Ajuste sugerido: COP ${fmt(adj.capped)}`;
       }

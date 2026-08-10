@@ -1,7 +1,7 @@
 /* Rango intercuartil de las comparables y conclusión de cumplimiento.
-   Vive aparte porque lo usan dos rutas: la sustitución por campos con nombre y
-   `exactTemplateMapper.js`, que queda como respaldo de las plantillas sin
-   marcar. Cuando el mapper se retire, este módulo se queda donde está.
+   Vive aparte porque lo consumen varias rutas: la sustitución por campos con
+   nombre (`plantillaVocabulario.js`), las filas de las tablas del informe
+   (`tablasInforme.js`) y el Excel de soporte.
 
    ─── Sobre el ajuste de capital de trabajo ───
 
@@ -17,13 +17,18 @@
      · MO → utilidad operacional / ventas
      · MB → utilidad bruta / ventas
 
-   Berry se queda en la ruta heredada a propósito. El sistema lo define como
-   «Ventas / Costos totales» (así lo dice el selector de IngestaCifras.jsx y así lo
-   calcula `pliOf`), mientras que el motor OCDE lo define como «utilidad bruta /
-   gastos operativos». No son el mismo indicador, así que enrutarlo al motor no
-   sería unificar el ajuste: sería cambiarle el indicador al informe sin decirlo.
-   Mientras esa definición no se decida, Berry sigue como estaba —y sin ajuste,
-   igual que antes—.
+     · Berry → utilidad bruta / gastos operativos
+
+   Berry estuvo fuera del motor mientras el sistema lo definía como «Ventas /
+   Costos totales» y el motor como «utilidad bruta / gastos operativos»: no eran
+   el mismo indicador y enrutarlo habría cambiado la cifra del informe en silencio.
+   Esa definición ya se decidió a favor de la del motor —la del Anexo del Cap. III
+   de las Guías OCDE, y la que replica el Excel validado por el consultor—, así que
+   `pliOf` la adoptó y Berry entra por la misma ruta que los demás.
+
+   Consecuencia que hay que conocer: Berry pasa a admitir el ajuste de capital de
+   trabajo, que antes no recibía. El modelo Excel ya lo ajusta —su hoja Berry trae
+   las siete columnas de escenario—, así que es alinearse con él, no un invento.
 
    ─── Convenio de `op` ───
 
@@ -32,13 +37,13 @@
    y no en el motor, porque el motor también lo consume el Excel, que ya recibe las
    cifras normalizadas. */
 
-import { num, pliOf, ratios, quart, adjustInfo } from '../utils/calculations.js';
+import { num, pliOf, adjustInfo } from '../utils/calculations.js';
 import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
 
-/* Métodos cuyo indicador es idéntico en las dos implementaciones. Ampliar esta
-   lista exige comprobar antes que `pliOf` y el motor calculen lo mismo sin ajuste;
-   si no, el rango cambia de significado en silencio. */
-const METODOS_OCDE = new Set(['MO', 'MB']);
+/* Ya no hay lista de métodos enrutados: los tres indicadores que ofrece el sistema
+   —MO, MB y Berry— pasan por el motor. Un `pli` que el motor no sepa construir
+   devuelve `stats: null`, que es la respuesta honesta; antes caía en una segunda
+   implementación del cuartil que publicaba un número con otra fórmula. */
 
 /* Escenario que reporta el informe: cuentas por cobrar, cuentas por pagar e
    inventario. Es el que describe el anexo de ajustes de capital de trabajo y el
@@ -69,10 +74,7 @@ export function analizarRango(estudio) {
   };
   const tPLI = pliOf(T, kind);
 
-  const { filas, stats } = METODOS_OCDE.has(kind)
-    ? porMetodologiaOCDE(study, kind)
-    : heredado(study, kind, T);
-
+  const { filas, stats } = porMetodologiaOCDE(study, kind);
 
   const adj = stats && tPLI !== null ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
   /* 'CUMPLE' cuando no hay ajuste es comportamiento heredado, no un descuido.
@@ -105,44 +107,8 @@ function porMetodologiaOCDE(study, kind) {
   };
 }
 
-/* Ruta heredada, hoy solo para Berry: margen sin ajuste de capital de trabajo y
-   cuartiles por posición truncada. Se conserva tal cual estaba para no moverle el
-   rango a los estudios que usan ese método mientras su definición se decide. */
-function heredado(study, kind, T) {
-  const useAdj = study.useadj || false;
-  const interestRate = (num(study.prime) || 0) / 100;
-  const tR = ratios(T);
-
-  /* Se devuelven todas las comparables del estudio, también las que no tienen
-     cifras —su margen sale `null` y quien las presente pondrá un hueco—:
-     esconderlas maquillaría el tamaño de la muestra final. */
-  const filas = (study.comparables || []).map((c) => {
-    const rawVal = { s: num(c.s), c: num(c.c), op: num(c.op), ar: num(c.ar), inv: num(c.inv), ap: num(c.ap) };
-    const noAjustado = pliOf(rawVal, kind);
-    let adjVal = 0;
-    const cR = ratios(rawVal);
-    if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
-      adjVal = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-    }
-    return {
-      nombre: String((c && c.name) || '').trim(),
-      amb: c && c.amb === 'Nac' ? 'Nac' : 'Int',
-      noAjustado,
-      ajustado: noAjustado === null ? null : noAjustado + adjVal,
-    };
-  });
-
-  let stats = null;
-  if (study.comparables && study.comparables.length >= 3) {
-    const activeSeries = filas
-      .map((f) => f.ajustado)
-      .filter((val) => val !== null)
-      .sort((a, b) => a - b);
-
-    if (activeSeries.length >= 3) {
-      stats = { p25: quart(activeSeries, 0.25), med: quart(activeSeries, 0.5), p75: quart(activeSeries, 0.75) };
-    }
-  }
-
-  return { stats, filas };
-}
+/* Aquí vivía `heredado`: margen sin ajuste de capital de trabajo y cuartiles por
+   posición truncada con `quart`. Era la segunda implementación del cuartil del
+   sistema y solo la alcanzaba Berry. Al adoptar Berry la definición del motor
+   quedó sin ningún llamador, y con ella desaparece la posibilidad de que el mismo
+   estudio muestre un rango en el modal y otro en el informe. */

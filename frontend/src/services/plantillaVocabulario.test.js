@@ -73,8 +73,7 @@ test('un campo fuera del vocabulario nunca devuelve valor', () => {
   assert.strictEqual(valorDeCampo({ ...estudio, telefono: '3001234567' }, 'telefono'), null);
 });
 
-/* Los topes UVT son de lo que más muta: cambian cada año gravable y hoy
-   `exactTemplateMapper` los sustituye por valor literal. */
+/* Los topes UVT son de lo que más muta: cambian cada año gravable. */
 test('los topes UVT se calculan contra el año del estudio', () => {
   const de2025 = valorDeCampo({ anio: 2025 }, 'uvt.tope45k');
   const de2024 = valorDeCampo({ anio: 2024 }, 'uvt.tope45k');
@@ -131,3 +130,85 @@ test('dato no numérico en accionista sale nulo, no como placeholder', () => {
   };
   assert.strictEqual(valorDeCampo(conValorMalo, 'accionista.valor_capital'), null, 'valor_capital inválido -> null');
 });
+
+/* ══════════════ Pruebas de la Fase 2 ══════════════ */
+
+test('el monto de la operación y el formato DIAN se resuelven correctamente', () => {
+  const conMonto = { ...estudio, monto_operacion: 1250000000 };
+  assert.strictEqual(valorDeCampo(conMonto, 'monto_operacion'), '1.250.000.000');
+  assert.strictEqual(valorDeCampo(conMonto, 'vinc_monto'), '1.250.000.000');
+  assert.strictEqual(valorDeCampo(conMonto, 'vinc_formato'), 'Formato 1125');
+});
+
+test('el valor de la UVT se resuelve correctamente', () => {
+  assert.strictEqual(valorDeCampo({ anio: 2025 }, 'uvt.valor'), '49.799');
+  assert.strictEqual(valorDeCampo({ anio: 2024 }, 'uvt.valor'), '47.065');
+});
+
+test('la participación de accionista se resuelve e incluye el signo de porcentaje', () => {
+  const conParticipacion = {
+    ...estudio,
+    accionistas: [{ nombre: 'ACME INC', pais: 'MÉXICO', participacion_pct: 85.5 }],
+  };
+  assert.strictEqual(valorDeCampo(conParticipacion, 'accionista.participacion'), '85.5%');
+});
+
+test('capital pagado y total de acciones se resuelven y formatean correctamente', () => {
+  const conCapital = { ...estudio, capital_pagado: 500000000, total_acciones: 1000000 };
+  assert.strictEqual(valorDeCampo(conCapital, 'capital_pagado'), '500.000.000');
+  assert.strictEqual(valorDeCampo(conCapital, 'total_acciones'), '1.000.000');
+});
+
+test('las narrativas e información de la IA se resuelven y limpian el HTML de forma segura', () => {
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>La economía mundial creció.</p><p>Se proyecta estabilización.</p>',
+      colombia: '<p>Colombia mostró resiliencia.</p>'
+    }
+  };
+  const analisisSector = {
+    porAnio: {
+      '2025': {
+        tituloSector: 'Videojuegos y Entretenimiento',
+        narrativa: {
+          comportamiento: '<p>Ventas estables en 2025.</p>',
+          comercioExterior: '<p>Altas exportaciones.</p>',
+          proyeccion: '<p>Crecimiento en móviles.</p>',
+          conclusiones: '<p>Cumplimiento del sector.</p>'
+        }
+      }
+    }
+  };
+
+  const opciones = { datosMacro, analisisSector };
+
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.economia_mundial', opciones),
+    'La economía mundial creció.\nSe proyecta estabilización.'
+  );
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.economia_colombia', opciones),
+    'Colombia mostró resiliencia.'
+  );
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.sector_titulo', opciones),
+    'Videojuegos y Entretenimiento'
+  );
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.sector_comportamiento', opciones),
+    'Ventas estables en 2025.'
+  );
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.sector_comercio', opciones),
+    'Altas exportaciones.'
+  );
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.sector_proyeccion', opciones),
+    'Crecimiento en móviles.'
+  );
+  assert.strictEqual(
+    valorDeCampo({ anio: 2025 }, 'ia.sector_conclusiones', opciones),
+    'Cumplimiento del sector.'
+  );
+});
+

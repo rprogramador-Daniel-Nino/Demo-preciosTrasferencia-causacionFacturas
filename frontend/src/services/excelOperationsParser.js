@@ -22,6 +22,19 @@ export async function parseExcelOperations(file) {
     let mainVinculadoId = '';
     let mainPais = '';
 
+    /* Identificaciones vistas por razón social, en TODAS las secciones y hojas (no solo en
+       las filas que terminan sumando). El archivo de referencia trae «END GAME INTERACTIVE
+       INC» con 444444001 en ingresos y 444444031 en egresos: como el estudio guarda un solo
+       `vinc_id` y el parser solo mira ingresos, el informe se iba con un Tax ID sin que nadie
+       lo notara. Aquí no se puede elegir cuál es el bueno —eso lo sabe el contribuyente—,
+       pero sí se puede decir que hay más de uno. */
+    const identificacionesPorRazon = new Map();
+    /* Los egresos se descartan a propósito (pertenecen al formato 1001, no al 1007), pero
+       hoy se descartan en silencio: quien carga el archivo no tiene forma de saber que había
+       operaciones y plata que el informe no está mirando. */
+    let egresosFilas = 0;
+    let egresosMonto = 0;
+
     sheetsToScan.forEach(hj => {
       const sh = wb.Sheets[hj.n];
       if (!sh) return;
@@ -93,6 +106,10 @@ export async function parseExcelOperations(file) {
         const rowJoined = f.join(' ').toUpperCase();
         if (rowJoined.includes('OPERACIONES DE EGRESO')) { currentSeccion = 'EGRESO'; continue; }
         if (rowJoined.includes('OPERACIONES DE INGRESO')) { currentSeccion = 'INGRESO'; continue; }
+        // La sección «3. OTRAS OPERACIONES» venía arrastrando el 'EGRESO' de la sección
+        // anterior. No cambiaba el monto (solo se suma INGRESO), pero sí inflaría el aviso
+        // de egresos descartados con filas que no son egresos.
+        if (rowJoined.includes('OTRAS OPERACIONES')) { currentSeccion = 'OTRAS'; continue; }
 
         const nom = String(iNom > -1 ? f[iNom] : '').trim();
         // Las notas al pie ("* Ver lista de tipo de operaciones según DIAN")
@@ -111,6 +128,24 @@ export async function parseExcelOperations(file) {
         if (nom && !mainVinculado) mainVinculado = nom;
         if (nit && !mainVinculadoId) mainVinculadoId = nit;
         if (pais && !mainPais) mainPais = pais;
+
+        if (nom && nit) {
+          // Se agrupa por razón social normalizada: el mismo vinculado se escribe con
+          // espacios o mayúsculas distintas entre secciones y si no, no se cruzaría.
+          const clave = nom.toUpperCase().replace(/\s+/g, ' ');
+          if (!identificacionesPorRazon.has(clave)) {
+            identificacionesPorRazon.set(clave, { vinculado: nom, ids: new Set() });
+          }
+          identificacionesPorRazon.get(clave).ids.add(nit);
+        }
+
+        /* Los egresos se cuentan sin pasar por el filtro de 'Cod': ese filtro se calibra con
+           las filas de ingreso de la hoja y aplicarlo aquí escondería egresos, que es justo
+           lo contrario de lo que el aviso busca. Prefiere sobre-informar. */
+        if (monto > 0 && currentSeccion === 'EGRESO') {
+          egresosFilas++;
+          egresosMonto += monto;
+        }
 
         if (monto > 0 && currentSeccion === 'INGRESO') {
           candidatas.push({
@@ -188,6 +223,13 @@ export async function parseExcelOperations(file) {
       rowsParsed.map(r => (r.nit || r.vinculado || '').trim().toUpperCase()).filter(Boolean)
     );
 
+    /* Razones sociales con más de una identificación. Es una lista y no un contador porque
+       el aviso tiene que nombrar cuál es el vinculado y cuáles los números en conflicto:
+       decir «hay una divergencia» sin decir dónde no le sirve a quien tiene que corregirla. */
+    const idsDivergentes = [...identificacionesPorRazon.values()]
+      .filter(v => v.ids.size > 1)
+      .map(v => ({ vinculado: v.vinculado, ids: [...v.ids] }));
+
     return {
       vinc: mainVinculado || null,
       vinc_id: mainVinculadoId || null,
@@ -197,6 +239,8 @@ export async function parseExcelOperations(file) {
       monto_operacion: totalMonto || null,
       t_s: totalMonto || null,
       contrapartes: contrapartes.size,
+      idsDivergentes,
+      egresosDescartados: { filas: egresosFilas, monto: egresosMonto },
       rows: rowsParsed
     };
   } catch (err) {
