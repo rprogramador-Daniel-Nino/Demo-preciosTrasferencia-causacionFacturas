@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  esHolding, holdingSospecha, tieneSemanticaHolding, tieneSemanticaHoldingDesc,
+  esHolding, holdingSospecha, tieneSemanticaHolding,
   maxParticipacion, participacionMaxima, esControlada, esVinculadaOControlada,
   esSicHolding, sicPrincipal, sicsTodos,
 } from './filtrosComparablesPatch.js';
@@ -63,9 +63,18 @@ test('evalúa ÚNICAMENTE la razón social (nombre) y ignora menciones en la des
   assert.equal(tieneSemanticaHolding({ name: 'Acme Services LLC', desc: 'Subsidiary of Global Holding Group' }), false);
   assert.equal(tieneSemanticaHolding({ name: 'Software Solutions Inc', desc: 'Part of the Technology Grupo' }), false);
 });
-test('tieneSemanticaHoldingDesc detecta holding en descripción si NO está en la razón social', () => {
-  assert.equal(tieneSemanticaHoldingDesc({ name: 'Acme Services LLC', desc: 'Subsidiary of Global Holding Group' }), true);
-  assert.equal(tieneSemanticaHoldingDesc({ name: 'Alpha Holdings', desc: 'Subsidiary of Global Holding Group' }), false, 'si la razón social ya lo trae, la desc retorna false');
+test('el término basta con que esté contenido, aunque no sea palabra suelta', () => {
+  /* Con límites de palabra estos cuatro se escapaban, y son razones sociales
+     corrientes en el export de Capital IQ. */
+  assert.equal(tieneSemanticaHolding({ name: 'GRUPOSURA' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'Bancolombia-Grupo' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'TechGroupCorp' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'ABCHoldings Ltd.' }), true);
+});
+test('no distingue mayúsculas de minúsculas', () => {
+  assert.equal(tieneSemanticaHolding({ name: 'ACME HOLDING S.A.' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'acme holding s.a.' }), true);
+  assert.equal(tieneSemanticaHolding({ name: 'AcMe HoLdInG' }), true);
 });
 test('términos AMBIGUOS no marcan (investment/ventures/invest)', () => {
   // el usuario reportó falsos positivos: nombres que no dicen holding/grupo
@@ -79,10 +88,28 @@ test('maxParticipacion extrae el mayor %', () => {
   assert.equal(maxParticipacion('Alain Wilmouth (51.03); Michel (3.90)'), 51.03);
   assert.equal(maxParticipacion(''), null);
 });
-test('controlada > umbral → excluir; <= umbral → conservar', () => {
+test('maxParticipacion ignora el año de fundación y cualquier número que no sea un %', () => {
+  /* Capital IQ mete el año de constitución entre paréntesis en la misma columna;
+     leído como porcentaje daba 1998 % y excluía la empresa por control. */
+  assert.equal(maxParticipacion('Acme Corp (1998); Juan Pérez (12.5)'), 12.5);
+  assert.equal(maxParticipacion('Fundada (2015)'), null, 'sin ningún % válido no hay dato');
+  assert.equal(maxParticipacion('X (100)'), 100, 'el 100 % sí es un porcentaje');
+  assert.equal(maxParticipacion('X (101)'), null, 'por encima de 100 no puede ser participación');
+});
+
+test('controlada >= umbral → excluir; por debajo → conservar', () => {
   assert.equal(esControlada({ holders: 'X (51.03)' }), true);
+  /* El 50 % justo también es control: hay control conjunto y la empresa deja de
+     ser independiente. */
+  assert.equal(esControlada({ holders: 'X (50)' }), true);
+  assert.equal(esControlada({ holderPct: 50 }), true);
+  assert.equal(esControlada({ holders: 'X (49.99)' }), false);
   assert.equal(esControlada({ holders: 'X (47.10); Y (5)' }), false);
   assert.equal(esControlada({ holders: '' }), false);
+});
+
+test('el año de fundación no convierte una independiente en controlada', () => {
+  assert.equal(esControlada({ holders: 'Constituida (1998); Socio A (30); Socio B (20)' }), false);
 });
 test('umbral de control configurable', () => {
   assert.equal(esControlada({ holders: 'X (47.10)' }, { umbral: 25 }), true);

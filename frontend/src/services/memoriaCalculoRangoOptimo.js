@@ -55,6 +55,22 @@ const cForT = (f) => ({ t: 's', f }); // fórmula de texto (conclusión)
 /* Referencia a una celda de la hoja Datos. */
 const D = (celda) => `Datos!${celda}`;
 
+/* Términos que delatan una sociedad de cartera o de grupo en la razón social. Es el
+   mismo criterio que aplica `tieneSemanticaHolding` en filtrosComparablesPatch.js:
+   subcadena, sin distinguir mayúsculas, y SOLO sobre el nombre —ni el código SIC ni
+   la descripción del negocio intervienen—. Se replican aquí como fórmula para que la
+   hoja muestre el criterio en vez de una marca ya decidida; si el vocabulario cambia
+   allá, hay que traerlo aquí, y el test de paridad entre ambos lo recuerda. */
+export const TERMINOS_HOLDING_HOJA = [
+  'holding', 'grupo', 'group', 'holdco', 'hldg', 'groupe', 'gruppo',
+  'sociedad de cartera', 'sociedad tenedora', 'sociedad matriz', 'tenedora de acciones',
+  'holdingmaatschappij',
+];
+/* SEARCH no distingue mayúsculas de minúsculas, que es justo lo que se busca. */
+const HOLDING_FORMULA = (ref) => 'IF(OR('
+  + TERMINOS_HOLDING_HOJA.map((t) => `ISNUMBER(SEARCH("${t}",${ref}))`).join(',')
+  + '),"Sí","")';
+
 /**
  * Construye las hojas del libro con fórmulas vivas.
  *
@@ -464,8 +480,8 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sel.push([cTxt(etiqueta), null, cTxt(criterio)]);
     };
     etapa('universo', 'Universo Capital IQ (tras cribado)', 'COUNTA de la columna Compañía');
-    etapa('controlada', '(−) Vinculadas o controladas', `Un accionista supera el ${umbralControl} % del capital (Art. 260-1)`);
-    etapa('holding', '(−) Holdings o grupos', 'Sociedad de cartera o grupo, sin operación directa (Art. 260-4)');
+    etapa('controlada', '(−) Vinculadas o controladas', `Un accionista alcanza o supera el ${umbralControl} % del capital (Art. 260-1)`);
+    etapa('holding', '(−) Holdings o grupos', 'Término de holding, grupo o group en la razón social (Art. 260-4)');
     etapa('negativo', '(−) Saldos negativos', 'Dato de balance no verosímil');
     etapa('perdida', '(−) Pérdida operativa', 'Criterio conservador DIAN: comparable rentable');
     etapa('sinDesc', '(−) Sin descripción del negocio', 'No hay con qué verificar la actividad');
@@ -473,12 +489,17 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     etapa('rigor', '(−) Diferencias funcionales', 'Perfil no comparable con la parte examinada (Art. 260-4)');
     etapa('validas', '= Válidas tras todos los criterios', 'Universo − las siete exclusiones de arriba');
     etapa('seleccionadas', '= Muestra final seleccionada', 'Comparables usadas en el rango (⊂ válidas)');
+    etapa('reserva', '= En reserva (válidas no incorporadas)', 'Superan todos los criterios pero no integran la muestra');
     sel.push([]);
 
-    /* Suma de control: los siete motivos y las válidas son mutuamente excluyentes
-       —el motor asigna un solo motivo por candidata, el primero que aplica— y agotan
-       el universo, así que su suma tiene que dar el total exacto. Es la comprobación
-       que permite firmar la hoja. */
+    /* Suma de control: los siete motivos, la muestra y la reserva son mutuamente
+       excluyentes —el motor asigna un solo motivo por candidata, el primero que
+       aplica— y agotan el universo, así que su suma tiene que dar el total exacto.
+       Es la comprobación que permite firmar la hoja.
+
+       Los tres términos son tres, y no dos, desde que una compañía sin motivo de
+       rechazo solo cuenta como válida si entró en la muestra. Antes la reserva se
+       sumaba a las válidas y la partición era «rechazadas + válidas». */
     sel.push([cTxt('SUMA DE CONTROL (partición del universo — cada empresa cuenta una vez)')]);
     const sc = {};
     const control = (clave, etiqueta, criterio) => {
@@ -486,13 +507,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sel.push([cTxt(etiqueta), null, cTxt(criterio)]);
     };
     control('rechazadas', 'Total rechazadas', 'Suma de los siete motivos');
-    control('validas', 'Total válidas', 'Estado = "Válida"');
-    control('suma', 'SUMA', 'Rechazadas + válidas');
+    control('validas', 'Muestra del estudio', 'Estado = "Válida" (sin motivo y seleccionada)');
+    control('difFuncional', 'En reserva', 'Estado = "En reserva" (sin motivo, sin seleccionar)');
+    control('suma', 'SUMA', 'Rechazadas + muestra + reserva');
     control('universo', 'UNIVERSO (Capital IQ)', 'Total de compañías');
     control('check', '¿CUADRA? (suma = universo)', 'Debe decir "SÍ ✓"');
-    control('seleccionadas', '   · de las válidas, la muestra del estudio', '¿Seleccionada? = "Sí"');
-    control('difFuncional', '   · de las válidas, con diferencias funcionales', 'Superan los criterios pero no integran la muestra');
-    control('checkVal', '¿Muestra + diferencias = válidas?', 'Debe decir "SÍ ✓"');
+    control('checkVal', '¿Muestra + reserva = las que pasaron los filtros?', 'Debe decir "SÍ ✓"');
     sel.push([]);
 
     // Base de datos: encabezado + una fila por candidata
@@ -523,19 +543,28 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         costo == null ? cTxt('') : cNum(costo, '#,##0.00'),
         pct == null ? cTxt('') : cNum(pct, '0.00'),
         cTxt(c.holdersText || ''),                                  // J dato original, auditable
-        cForT(`IF(N(I${r})>${umbralControl},"Sí","")`),              // K Controlada (fórmula)
-        /* L Holding: la señal que trae la candidata y, si no viniera, el veredicto
-           del motor. Una fila rechazada por holding con esta columna en blanco se
-           lee como una contradicción de la hoja consigo misma. */
-        cTxt(c.sospechaHolding === 'revisar' || c.isHolding || c.motivoClave === 'holding' || c.motivoClave === 'holdingDescripcion' ? 'Sí' : ''),
+        /* K, L y M son tres hechos independientes y se marcan por separado: una
+           compañía puede ser a la vez controlada, holding y estar en pérdida, y las
+           tres casillas tienen que decirlo. La precedencia —controlada, luego
+           holding, luego pérdida— solo decide cuál queda escrito en el motivo de
+           rechazo de la columna N, no cuáles se marcan aquí. */
+        cForT(`IF(N(I${r})>=${umbralControl},"Sí","")`),              // K Controlada (fórmula)
+        /* L Holding, también por fórmula y solo sobre la razón social: quien audita
+           la hoja puede ver el criterio aplicado en vez de tener que fiarse de una
+           marca volcada desde el motor. */
+        cForT(HOLDING_FORMULA(`B${r}`)),                              // L Holding (fórmula)
         cForT(`IF(N(G${r})<0,"Sí","")`),                             // M Pérdida (fórmula)
         cTxt(c.motivoClave || ''),                                   // N Motivo (del motor)
         cTxt(c.perfilFuncional || 'INDEFINIDO'),                     // O Perfil funcional
-        cForT(`IF(N${r}="","Válida","Rechazada")`),                  // P Estado (fórmula)
+        /* P Estado. El motivo vacío por sí solo NO basta para dar una compañía por
+           válida: eso solo aplica si además entró en la muestra. Una fila sin motivo
+           y sin seleccionar superó los filtros pero no se incorporó al rango, y
+           llamarla «válida» a secas la confundía con las que sí lo sustentan. */
+        cForT(`IF(N${r}<>"","Rechazada",IF(Q${r}="Sí","Válida","En reserva"))`),
         cTxt(c.seleccionada ? 'Sí' : ''),                            // Q ¿Seleccionada?
         /* R: el estado de comparabilidad dicho en palabras, en cada fila, para que
            quien filtre la tabla no tenga que cruzar el motivo con la selección. */
-        cForT(`IF(P${r}<>"Válida","Rechazada (ver motivo)",IF(Q${r}="Sí","Sin diferencias funcionales","Con diferencias funcionales"))`),
+        cForT(`IF(P${r}="Rechazada","Rechazada (ver motivo)",IF(P${r}="Válida","Comparable del estudio","Válida, no incorporada a la muestra"))`),
       ]);
     });
     const rN = r0 + cand.length - 1;
@@ -549,8 +578,8 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     /* Los siete motivos, con la MISMA clave que emite `scoreCandidates`: la hoja no
        reclasifica nada, cuenta lo que el motor escribió. */
     const MOTIVOS = [
-      ['controlada', 'filtro', 'controlada', `Vinculadas: un accionista supera el ${umbralControl} % (Art. 260-1)`],
-      ['holding', 'filtro', 'holding', 'Holdings o grupos, sin actividad operativa directa (Art. 260-4)'],
+      ['controlada', 'filtro', 'controlada', `Vinculadas: un accionista alcanza o supera el ${umbralControl} % (Art. 260-1)`],
+      ['holding', 'filtro', 'holding', 'Holdings o grupos, por la razón social (Art. 260-4)'],
       ['negativo', 'filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil)'],
       ['perdida', 'filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN)'],
       ['sinDesc', 'ia', 'sinDescripcion', 'Sin descripción del negocio para verificar la actividad'],
@@ -564,18 +593,22 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     });
     sel[fe.validas - 1][1] = cFor(
       `B${fe.universo}-` + MOTIVOS.map(([clave]) => `B${fe[clave]}`).join('-'), '#,##0');
-    sel[fe.seleccionadas - 1][1] = cFor(`COUNTIF(${cSel},"Sí")`, '#,##0');
+    sel[fe.seleccionadas - 1][1] = cFor(`COUNTIF(${cEstado},"Válida")`, '#,##0');
+    sel[fe.reserva - 1][1] = cFor(`COUNTIF(${cEstado},"En reserva")`, '#,##0');
 
     sel[sc.rechazadas - 1][1] = cFor(MOTIVOS.map(([clave]) => `B${fe[clave]}`).join('+'), '#,##0');
     sel[sc.validas - 1][1] = cFor(`COUNTIF(${cEstado},"Válida")`, '#,##0');
-    sel[sc.suma - 1][1] = cFor(`B${sc.rechazadas}+B${sc.validas}`, '#,##0');
+    sel[sc.difFuncional - 1][1] = cFor(`COUNTIF(${cEstado},"En reserva")`, '#,##0');
+    sel[sc.suma - 1][1] = cFor(`B${sc.rechazadas}+B${sc.validas}+B${sc.difFuncional}`, '#,##0');
     sel[sc.universo - 1][1] = cFor(`COUNTA(${cNombre})`, '#,##0');
     sel[sc.check - 1][1] = cForT(
       `IF(B${sc.suma}=B${sc.universo},"SÍ ✓","NO ✗ ("&B${sc.suma}&" vs "&B${sc.universo}&")")`);
-    sel[sc.seleccionadas - 1][1] = cFor(`COUNTIF(${cSel},"Sí")`, '#,##0');
-    sel[sc.difFuncional - 1][1] = cFor(`COUNTIF(${cComp},"Con diferencias funcionales")`, '#,##0');
+    /* La muestra y la reserva tienen que agotar entre las dos lo que quedó tras los
+       siete filtros. Si no cuadra, o el motor asignó un motivo que la hoja no cuenta
+       —fue exactamente lo que pasó con el descarte por descripción— o alguna quedó
+       seleccionada llevando motivo de rechazo. */
     sel[sc.checkVal - 1][1] = cForT(
-      `IF(B${sc.seleccionadas}+B${sc.difFuncional}=B${sc.validas},"SÍ ✓","NO ✗")`);
+      `IF(B${sc.validas}+B${sc.difFuncional}=B${fe.validas},"SÍ ✓","NO ✗ ("&(B${sc.validas}+B${sc.difFuncional})&" vs "&B${fe.validas}&")")`);
 
     hojas.unshift({
       nombre: 'Selección comparables', celdas: sel,
@@ -615,20 +648,20 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     mtz.push([cTxt('TOTAL RECHAZADAS'), cTxt(''), cTxt(''),
       cFor(`SUM(${colCant})`, '#,##0')]);
     const fSel = mtz.length + 1;
-    mtz.push([cTxt('(+) Válidas — muestra seleccionada'), cTxt(''),
-      cTxt('Sin diferencias funcionales relevantes: las comparables del estudio'),
-      cFor(`COUNTIF('Selección comparables'!${cSel},"Sí")`, '#,##0')]);
+    mtz.push([cTxt('(+) Muestra seleccionada'), cTxt(''),
+      cTxt('Sin motivo de rechazo y con selección: las comparables del estudio'),
+      cFor(`COUNTIF('Selección comparables'!${cEstado},"Válida")`, '#,##0')]);
     const fDif = mtz.length + 1;
-    mtz.push([cTxt('(+) Válidas — con diferencias funcionales'), cTxt(''),
-      cTxt('Superan los criterios pero no integran la muestra'),
-      cFor(`COUNTIF('Selección comparables'!${cComp},"Con diferencias funcionales")`, '#,##0')]);
+    mtz.push([cTxt('(+) En reserva'), cTxt(''),
+      cTxt('Superan todos los criterios pero no integran la muestra'),
+      cFor(`COUNTIF('Selección comparables'!${cEstado},"En reserva")`, '#,##0')]);
     const fUniv = mtz.length + 1;
     mtz.push([cTxt('= UNIVERSO (debe igualar el de Capital IQ)'), cTxt(''), cTxt(''),
       cFor(`D${fTotRech}+D${fSel}+D${fDif}`, '#,##0')]);
     const fReal = mtz.length + 1;
     mtz.push([cTxt('UNIVERSO real (Capital IQ)'), cTxt(''), cTxt(''),
       cFor(`COUNTA('Selección comparables'!${cNombre})`, '#,##0')]);
-    mtz.push([cTxt('¿CUADRA? (rechazadas + válidas = universo)'), cTxt(''), cTxt(''),
+    mtz.push([cTxt('¿CUADRA? (rechazadas + muestra + reserva = universo)'), cTxt(''), cTxt(''),
       cForT(`IF(D${fUniv}=D${fReal},"SÍ ✓","NO ✗ ("&D${fUniv}&" vs "&D${fReal}&")")`)]);
     mtz.push([]);
     mtz.push([cTxt('Nota: los motivos «ia» y «rigor» los asigna el motor sobre la descripción del negocio')]);

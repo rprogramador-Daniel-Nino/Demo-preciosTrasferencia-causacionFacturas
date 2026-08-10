@@ -34,44 +34,45 @@
    reales y por la vinculación efectiva, no por una etiqueta mecánica.
    ───────────────────────────────────────────────────────────────────────────── */
 
-/* Términos semánticos INEQUÍVOCOS de holding / grupo, en español e inglés. */
-const TERMINOS_HOLDING = [
+/* Términos semánticos INEQUÍVOCOS de holding / grupo, en español e inglés.
+
+   Se buscan como SUBCADENA, sin límites de palabra (decisión del usuario,
+   2026-08-10): «Grupo Aval», «ABC Holdings», «Groupe Danone» y «GRUPOSURA» tienen
+   que caer los cuatro, y con `\b…\b` el último se escapaba. La contrapartida es que
+   un nombre que contenga el término dentro de otra palabra —«Groupon»— también
+   cae; es el precio de no dejar pasar ninguna sociedad de cartera, y la hoja de
+   trazabilidad deja ver por qué se descartó cada una para poder revisarlo. */
+export const TERMINOS_HOLDING = [
   // español
-  'holding', 'holdings', 'grupo', 'grupos', 'grupo empresarial', 'sociedad de cartera',
-  'sociedad tenedora', 'sociedad matriz', 'tenedora de acciones',
+  'holding', 'grupo', 'sociedad de cartera', 'sociedad tenedora', 'sociedad matriz',
+  'tenedora de acciones',
   // inglés / uso internacional en Capital IQ
-  'group', 'groups', 'holdco', 'hldg',
+  'group', 'holdco', 'hldg',
   // otros idiomas frecuentes
   'groupe', 'gruppo', 'holdingmaatschappij',
 ];
+/* Sin `\b`: basta con que el término esté contenido. Los plurales («holdings»,
+   «grupos», «groups») quedan cubiertos por su singular, así que no se listan. */
 const RX_HOLDING_SEM = new RegExp(
-  '\\b(' + TERMINOS_HOLDING.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b',
+  '(' + TERMINOS_HOLDING.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')',
   'i',
 );
 
 /**
  * ¿La Razón Social contiene un término de holding/grupo (ES/EN)?
- * La evaluación se realiza sobre la Razón Social (`cand.name` o `cand.razonSocial`).
- * @param {{name?:string, razonSocial?:string, desc?:string}} cand
+ *
+ * SOLO mira la razón social (`cand.name` o `cand.razonSocial`). Ni el código SIC
+ * —que describe cómo Capital IQ codificó la actividad, no si la empresa opera— ni
+ * la descripción del negocio intervienen: una descripción puede mencionar al grupo
+ * al que pertenece la empresa sin que ella misma sea la sociedad de cartera.
+ *
+ * @param {{name?:string, razonSocial?:string}} cand
  * @returns {boolean}
  */
 export function tieneSemanticaHolding(cand) {
   const razonSocial = String((cand && (cand.name || cand.razonSocial)) || '');
   if (!razonSocial.trim()) return false;
   return RX_HOLDING_SEM.test(razonSocial);
-}
-
-/**
- * ¿La descripción contiene un término de holding/grupo (ES/EN) cuando la razón social NO lo trae?
- * Sirve para llevar un contador separado de descarte por mención en la descripción.
- * @param {{name?:string, razonSocial?:string, desc?:string}} cand
- * @returns {boolean}
- */
-export function tieneSemanticaHoldingDesc(cand) {
-  if (tieneSemanticaHolding(cand)) return false;
-  const desc = String((cand && cand.desc) || '');
-  if (!desc.trim()) return false;
-  return RX_HOLDING_SEM.test(desc);
 }
 
 /**
@@ -115,11 +116,19 @@ export function sicsTodos(sic) {
 
 /* ── INDEPENDENCIA / CONTROL (Art. 260-1 E.T.) ── */
 
-/** Mayor % de un accionista, desde «Nombre (pct); Nombre (pct); …». */
+/** Mayor % de un accionista, desde «Nombre (pct); Nombre (pct); …».
+ *
+ * Capital IQ mete entre paréntesis más cosas que participaciones: el año de
+ * fundación de la compañía es la más frecuente («Fundación (1998)»), y tomarlo por
+ * un porcentaje daba 1998 % y excluía la empresa por control. Un porcentaje vive
+ * entre 0 y 100, así que cualquier número fuera de ese rango no lo es y se
+ * descarta —no se recorta a 100, que sería inventar un dato—. */
 export function maxParticipacion(texto) {
   const s = String(texto || '');
   const pcts = s.match(/\(\s*([\d]+(?:\.[\d]+)?)\s*\)/g) || [];
-  const vals = pcts.map((p) => parseFloat(p.replace(/[()\s]/g, ''))).filter((n) => Number.isFinite(n));
+  const vals = pcts
+    .map((p) => parseFloat(p.replace(/[()\s]/g, '')))
+    .filter((n) => Number.isFinite(n) && n >= 0 && n <= 100);
   return vals.length ? Math.max(...vals) : null;
 }
 
@@ -139,7 +148,10 @@ export function esControlada(cand, config = {}) {
   const umbral = config.umbral != null ? config.umbral : 50;
   const maxp = participacionMaxima(cand);
   if (maxp == null) return false;
-  return maxp > umbral;
+  /* Mayor o IGUAL: con el 50 % justo hay control conjunto y la empresa deja de ser
+     independiente. Antes exigía superarlo, así que un accionista con exactamente la
+     mitad del capital pasaba el filtro. */
+  return maxp >= umbral;
 }
 
 /**

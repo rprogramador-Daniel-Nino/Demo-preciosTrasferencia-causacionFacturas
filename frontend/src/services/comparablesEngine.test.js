@@ -1008,7 +1008,6 @@ test('el desglose por motivo cuenta cada criterio por separado', () => {
 
   assert.deepStrictEqual(r.rechazadasPorMotivo, {
     holding: 2,
-    holdingDescripcion: 0,
     controlada: 0,
     saldoNegativo: 1,
     perdidaOperativa: 1,
@@ -1034,16 +1033,60 @@ test('el desglose por motivo suma lo mismo que las categorías', () => {
   assert.strictEqual(porMotivo, r.rechazadas.length);
 });
 
-test('desglosa holding por Razón Social (holding) y holding por Descripción (holdingDescripcion)', () => {
+test('el holding se decide SOLO por la razón social, no por la descripción ni por el SIC', () => {
+  /* La descripción menciona al grupo del que la empresa forma parte, que no es lo
+     mismo que ser ella la sociedad de cartera. Descartarla por eso retiraba
+     comparables operativas perfectamente válidas. */
   const candidatas = [
     { id: '1', name: 'Alpha Holdings Inc', desc: 'software development services', s: 100, op: 10 },
     { id: '2', name: 'Beta Services LLC', desc: 'Subsidiary of Global Holding Group', s: 100, op: 10 },
+    { id: '3', name: 'Gamma Operating Corp', sic: '6719 Offices of Holding Companies', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5, holding: 'excluir' }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'solo Alpha Holdings, por su razón social');
+  assert.ok(!('holdingDescripcion' in r.rechazadasPorMotivo), 'el motivo por descripción ya no existe');
+  const rechazadas = r.rechazadas.map((c) => c.name);
+  assert.ok(!rechazadas.includes('Beta Services LLC'), 'la mención en la descripción no descarta');
+  assert.ok(!rechazadas.includes('Gamma Operating Corp'), 'el SIC 67xx no descarta');
+});
+
+test('el término de holding se busca contenido en el nombre y sin distinguir mayúsculas', () => {
+  const candidatas = [
+    { id: '1', name: 'GRUPOSURA', desc: 'software development services', s: 100, op: 10 },
+    { id: '2', name: 'techgroupcorp', desc: 'software development services', s: 100, op: 10 },
     { id: '3', name: 'Gamma Operating Corp', desc: 'software development services', s: 100, op: 10 },
   ];
   const r = scoreCandidates(candidatas, { nTarget: 5, holding: 'excluir' }, '', []);
-  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'Alpha Holdings descarta por Razón Social');
-  assert.strictEqual(r.rechazadasPorMotivo.holdingDescripcion, 1, 'Beta Services descarta por mención en Descripción');
-  assert.strictEqual(r.rechazadasPorMotivo.holding + r.rechazadasPorMotivo.holdingDescripcion, 2, 'La suma total de holdings da 2');
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 2);
+});
+
+test('la utilidad en negativo marca pérdida aunque la candidata no traiga hasLoss', () => {
+  /* `hasLoss` solo lo pone la importación de Capital IQ; una candidata cargada a
+     mano o corregida después llegaba sin él y pasaba el filtro con la utilidad en
+     rojo. */
+  const candidatas = [
+    { id: '1', name: 'Roja SA', desc: 'software development services', s: 100, op: -20 },
+    { id: '2', name: 'Verde SA', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5, perdidaOp: 'excluir' }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.perdidaOperativa, 1);
+  assert.strictEqual(r.rechazadas[0].name, 'Roja SA');
+});
+
+test('la precedencia es controlada > holding > pérdida', () => {
+  /* Una compañía puede cumplir los tres a la vez; el motivo que se escribe es el
+     primero de la lista, y las tres casillas de la hoja se marcan por separado. */
+  const lasTres = { id: '1', name: 'Mega Grupo Holding', holderPct: 80, op: -5, s: 100, desc: 'software development services' };
+  const r = scoreCandidates([lasTres], { nTarget: 5 }, '', []);
+  assert.strictEqual(r.rechazadas[0].motivoClave, 'controlada');
+
+  const holdingYPerdida = { ...lasTres, holderPct: 10 };
+  const r2 = scoreCandidates([holdingYPerdida], { nTarget: 5 }, '', []);
+  assert.strictEqual(r2.rechazadas[0].motivoClave, 'holding');
+
+  const soloPerdida = { ...lasTres, holderPct: 10, name: 'Operativa SA' };
+  const r3 = scoreCandidates([soloPerdida], { nTarget: 5 }, '', []);
+  assert.strictEqual(r3.rechazadas[0].motivoClave, 'perdidaOperativa');
 });
 
 test('las categorías de rechazo cubren cada descarte una sola vez', () => {

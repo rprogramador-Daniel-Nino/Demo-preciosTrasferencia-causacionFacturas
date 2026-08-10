@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 import axios from 'axios';
 import { num, pliOf } from '../utils/calculations.js';
 import {
-  esHolding, tieneSemanticaHolding, tieneSemanticaHoldingDesc, holdingSospecha, esControlada, participacionMaxima,
+  esHolding, tieneSemanticaHolding, holdingSospecha, esControlada, participacionMaxima,
 } from './filtrosComparablesPatch.js';
 import { perfilFuncionalBilingue, PERFILES_DETERMINADOS } from './perfilFuncionalPatch.js';
 
@@ -89,6 +89,20 @@ export function encontrarFilaEncabezados(filas) {
     if (puntaje > mejorPuntaje) { mejorPuntaje = puntaje; mejor = i; }
   }
   return mejor;
+}
+
+/** ¿La candidata tiene la utilidad operacional en negativo?
+ *
+ * Se mira la cifra, no un `hasLoss` calculado antes: ese campo solo lo pone
+ * `importCapitalIQExcel`, así que una candidata que llegue por otra vía —cargada a
+ * mano, traída del estudio anterior o con la utilidad corregida después de
+ * importar— pasaba el filtro con la utilidad en rojo. Se acepta `op` y también
+ * `utilidadOperacional`, que es como la nombra el paquete de parches. */
+export function enPerdida(cand) {
+  if (!cand) return false;
+  if (cand.hasLoss === true) return true;
+  const op = num(cand.op != null ? cand.op : cand.utilidadOperacional);
+  return op !== null && op < 0;
 }
 
 /** Sinónimos por columna, en un solo sitio para poder informar qué se buscó. */
@@ -510,14 +524,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        momento y retirarla ahora rompería la continuidad de la serie. */
     if (control === 'excluir' && esControlada(cand, { umbral: umbralControl })) {
       rechazar('filtro', 'controlada',
-        `Vinculada: un accionista supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
+        `Vinculada: un accionista alcanza o supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
     } else if (holding === 'excluir' && tieneSemanticaHolding(cand) && !esContinuidad) {
       rechazar('filtro', 'holding', 'Sociedad holding o de grupo (en Razón Social).');
-    } else if (holding === 'excluir' && tieneSemanticaHoldingDesc(cand) && !esContinuidad) {
-      rechazar('filtro', 'holdingDescripcion', 'Mención de sociedad holding o grupo en la descripción del negocio.');
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
       rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
-    } else if (perdidaOp === 'excluir' && cand.hasLoss) {
+    } else if (perdidaOp === 'excluir' && enPerdida(cand)) {
       rechazar('filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN).');
     }
 
@@ -665,7 +677,6 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        decir cuántas por holding, cuántas por pérdidas y cuántas por actividad. */
     rechazadasPorMotivo: {
       holding: rechazadas.filter(c => c.motivoClave === 'holding').length,
-      holdingDescripcion: rechazadas.filter(c => c.motivoClave === 'holdingDescripcion').length,
       controlada: rechazadas.filter(c => c.motivoClave === 'controlada').length,
       saldoNegativo: rechazadas.filter(c => c.motivoClave === 'saldoNegativo').length,
       perdidaOperativa: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,

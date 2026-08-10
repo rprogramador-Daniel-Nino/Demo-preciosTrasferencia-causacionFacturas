@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { hojasMemoriaRangoOptimo } from './memoriaCalculoRangoOptimo.js';
+import { hojasMemoriaRangoOptimo, TERMINOS_HOLDING_HOJA } from './memoriaCalculoRangoOptimo.js';
 import { enriquecerUniverso } from './comparablesEngine.js';
+import { TERMINOS_HOLDING } from './filtrosComparablesPatch.js';
 
 /* La hoja «Selección comparables» y la «Matriz de rechazo» son el respaldo que se
    entrega ante la DIAN: si sus conteos no cuadran con el universo, el informe no se
@@ -126,8 +127,75 @@ test('el umbral de control viaja a las fórmulas y a los rótulos', () => {
     criterios: [], candidatas: universoDePrueba(), umbralControl: 30,
   });
   const texto = JSON.stringify(sel.celdas);
-  assert.ok(texto.includes('>30'), 'la fórmula de la columna Controlada usa el umbral dado');
+  /* Mayor o IGUAL: con el umbral justo también hay control. */
+  assert.ok(texto.includes('>=30'), 'la fórmula de la columna Controlada usa el umbral dado');
   assert.ok(texto.includes('30 %'), 'y el rótulo del embudo lo dice');
+});
+
+test('Controlada, Holding y Pérdida se marcan por separado, cada una con su fórmula', () => {
+  /* Una compañía puede ser las tres cosas a la vez. La precedencia solo decide qué
+     motivo queda escrito en la columna N; estas tres casillas son hechos
+     independientes y ninguna depende de las otras. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, {
+    criterios: [],
+    candidatas: [{ name: 'Mega Grupo Holding', holderPct: 80, op: -5, motivoClave: 'controlada' }],
+  });
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  assert.match(filaCand[10].f, /IF\(N\(I\d+\)>=50/, 'K Controlada, sobre el % del mayor accionista');
+  assert.match(filaCand[11].f, /SEARCH\("holding"/, 'L Holding, sobre la razón social');
+  assert.match(filaCand[11].f, /SEARCH\("grupo"/, 'y con todo el vocabulario, no solo un término');
+  assert.match(filaCand[12].f, /IF\(N\(G\d+\)<0/, 'M Pérdida, sobre la utilidad operacional');
+});
+
+test('sin motivo de rechazo pero sin seleccionar, la compañía queda «En reserva», no «Válida»', () => {
+  /* El motivo vacío solo vale como válida si además entró en la muestra. Antes toda
+     fila sin motivo se daba por válida, y la reserva se confundía con las
+     comparables que sustentan el rango. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const filaEstado = sel.celdas[sel.celdas.length - 1][15];
+  assert.match(filaEstado.f, /IF\(N\d+<>"","Rechazada",IF\(Q\d+="Sí","Válida","En reserva"\)\)/);
+});
+
+test('la partición del universo son tres términos y la hoja lo comprueba', () => {
+  /* Rechazadas + muestra + reserva = universo. La suma de control es lo que permite
+     firmar la hoja: si un motivo que el motor escribe no está entre los siete que
+     cuenta el embudo, esta comprobación es la única que lo delata. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  /* Por etiqueta exacta: «SUMA» a secas es una fila del bloque, y el título del
+     bloque —«SUMA DE CONTROL (…)»— también empieza por ahí. */
+  const filaExacta = (etq) => sel.celdas.find((f) => f && f[0] && f[0].v === etq);
+  const suma = filaExacta('SUMA');
+  const reserva = filaExacta('En reserva');
+  const muestra = filaExacta('Muestra del estudio');
+  assert.ok(reserva && muestra, 'la suma de control separa muestra y reserva');
+  assert.match(reserva[1].f, /COUNTIF\(P\d+:P\d+,"En reserva"\)/);
+  assert.match(muestra[1].f, /COUNTIF\(P\d+:P\d+,"Válida"\)/);
+  /* La SUMA tiene que encadenar los tres términos, no dos. */
+  assert.match(suma[1].f, /^B\d+\+B\d+\+B\d+$/, `SUMA = ${suma[1].f}`);
+});
+
+test('el vocabulario de holding de la hoja es el mismo que aplica el motor', () => {
+  /* La hoja traduce el criterio a fórmula de Excel, así que la lista está escrita
+     dos veces. Si divergen, el libro dice que una compañía es holding y el motor no
+     la descartó —o al revés—, que es la contradicción más difícil de sostener ante
+     la DIAN: la hoja se estaría desmintiendo a sí misma. */
+  assert.deepStrictEqual(
+    [...TERMINOS_HOLDING_HOJA].sort(),
+    [...TERMINOS_HOLDING].sort(),
+    'sincronizar TERMINOS_HOLDING_HOJA con TERMINOS_HOLDING de filtrosComparablesPatch.js'
+  );
+});
+
+test('la columna Holding solo mira el nombre, nunca el SIC ni la descripción', () => {
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, {
+    criterios: [],
+    candidatas: [{ name: 'Gamma Operating Corp', sic: '6719 Offices of Holding Companies', desc: 'Subsidiary of Global Holding Group' }],
+  });
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  /* La fórmula referencia B —la columna Compañía— y ninguna otra. */
+  const refs = filaCand[11].f.match(/,([A-R]\d+)\)/g) || [];
+  assert.ok(refs.length > 0, 'la fórmula debería referenciar alguna celda');
+  refs.forEach((ref) => assert.match(ref, /,B\d+\)/, `referencia inesperada: ${ref}`));
 });
 
 test('la matriz de rechazo cuadra contra el universo real, no contra un número fijo', () => {
@@ -165,7 +233,9 @@ test('el universo enriquecido por el motor alimenta el embudo de la hoja', () =>
 
   const filas = sel.celdas.slice(-2);
   assert.strictEqual(filas[0][13].v, 'holding', 'el motivo del motor llega a la columna N');
-  assert.strictEqual(filas[0][11].v, 'Sí', 'y la columna Holding queda marcada');
+  /* La columna Holding es una fórmula sobre el nombre —«Alpha Group» contiene
+     «group»—, no una marca volcada desde el motor: la hoja muestra el criterio. */
+  assert.match(filas[0][11].f, /SEARCH\("group"/, 'y la columna Holding aplica el criterio');
   assert.strictEqual(filas[1][13].v, '', 'la seleccionada no trae motivo');
   assert.strictEqual(filas[1][16].v, 'Sí', 'y sí queda marcada como seleccionada');
 });
