@@ -17,15 +17,11 @@ npm run build          # sync-index.js (raíz→public) + build de frontend/ (Vi
 npm start              # corre build (prestart) y levanta server.js en :3000
 npm run dev  --prefix frontend    # Vite dev server del gestor de reportes, proxy /api → :3000
 npm run lint --prefix frontend    # oxlint (única herramienta de lint del repo)
-npm test               # node --test sobre scripts/lib/ — cubre solo los helpers de scripts/
+npm test               # corre la suite de pruebas unitarias sobre scripts/lib/, frontend/src/services/, frontend/src/utils/ y functions/
 firebase deploy        # hosting + functions; el predeploy dispara `npm run build`
 ```
 
-**La aplicación no tiene tests.** `npm test` cubre únicamente los helpers de `scripts/lib/`;
-nada de `index.html` ni de `frontend/` está bajo test. Para un cambio en la aplicación la
-verificación es: (a) `grep` de que ningún símbolo eliminado siga referenciado, y (b) prueba
-manual en el navegador. No afirmes que algo "pasa los tests" apoyándote en `npm test` si
-tocaste la aplicación; describe qué verificaste y cómo.
+**La aplicación tiene pruebas unitarias integradas.** `npm test` ejecuta los casos de prueba sobre `scripts/lib/`, los servicios puros en `frontend/src/services/` (por ejemplo, el motor de rango, cálculos, parser y vocabulario de plantillas), las utilidades en `frontend/src/utils/` y las funciones de Firebase en `functions/` (con un total de ~895 pruebas). Para un cambio en estos servicios, la suite debe quedar al 100 % en verde. Para cambios puramente visuales o sobre `index.html` de la raíz, la verificación sigue siendo manual en el navegador.
 
 ## Regla crítica de edición
 
