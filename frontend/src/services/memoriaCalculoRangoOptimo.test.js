@@ -147,31 +147,16 @@ test('Controlada, Holding y Pérdida se marcan por separado, cada una con su fó
   assert.match(filaCand[12].f, /IF\(N\(G\d+\)<0/, 'M Pérdida, sobre la utilidad operacional');
 });
 
-test('sin motivo de rechazo pero sin seleccionar, la compañía queda «En reserva», no «Válida»', () => {
-  /* El motivo vacío solo vale como válida si además entró en la muestra. Antes toda
-     fila sin motivo se daba por válida, y la reserva se confundía con las
-     comparables que sustentan el rango. */
+test('el cuadre muestra + diferencias se compara contra lo que quedó tras los filtros', () => {
+  /* Este es el cuadre que delata un universo sin cribar: si la columna de motivos
+     llega vacía, «válidas tras los criterios» da el universo entero mientras que la
+     muestra son solo las seleccionadas, y la comprobación lo dice con los dos
+     números en vez de limitarse a un «NO ✗». */
   const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
-  const filaEstado = sel.celdas[sel.celdas.length - 1][15];
-  assert.match(filaEstado.f, /IF\(N\d+<>"","Rechazada",IF\(Q\d+="Sí","Válida","En reserva"\)\)/);
-});
-
-test('la partición del universo son tres términos y la hoja lo comprueba', () => {
-  /* Rechazadas + muestra + reserva = universo. La suma de control es lo que permite
-     firmar la hoja: si un motivo que el motor escribe no está entre los siete que
-     cuenta el embudo, esta comprobación es la única que lo delata. */
-  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
-  /* Por etiqueta exacta: «SUMA» a secas es una fila del bloque, y el título del
-     bloque —«SUMA DE CONTROL (…)»— también empieza por ahí. */
   const filaExacta = (etq) => sel.celdas.find((f) => f && f[0] && f[0].v === etq);
-  const suma = filaExacta('SUMA');
-  const reserva = filaExacta('En reserva');
-  const muestra = filaExacta('Muestra del estudio');
-  assert.ok(reserva && muestra, 'la suma de control separa muestra y reserva');
-  assert.match(reserva[1].f, /COUNTIF\(P\d+:P\d+,"En reserva"\)/);
-  assert.match(muestra[1].f, /COUNTIF\(P\d+:P\d+,"Válida"\)/);
-  /* La SUMA tiene que encadenar los tres términos, no dos. */
-  assert.match(suma[1].f, /^B\d+\+B\d+\+B\d+$/, `SUMA = ${suma[1].f}`);
+  const check = filaExacta('¿Muestra + diferencias = válidas?');
+  assert.ok(check, 'existe la fila de cuadre');
+  assert.match(check[1].f, /"NO ✗ \("&/, 'informa los dos números cuando no cuadra');
 });
 
 test('el vocabulario de holding de la hoja es el mismo que aplica el motor', () => {

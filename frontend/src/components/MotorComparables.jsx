@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
@@ -1003,6 +1003,29 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
 
+  /* Auditoría del motor: el motivo de rechazo y el perfil funcional de cada
+     candidata del universo.
+
+     Vive SOLO en memoria —no se persiste con el estudio, igual que el universo— así
+     que al reabrir un estudio guardado el universo se restauraba desde el archivo de
+     Capital IQ pero los motivos no, y la hoja de trazabilidad salía con las 2.986
+     compañías sin motivo y todos los contadores del embudo en cero: un documento que
+     parece declarar que no se descartó a ninguna.
+
+     `scoreCandidates` es determinista y tiene sus insumos persistidos —universo,
+     configuración, actividad, veredicto de la IA y estudio anterior—, así que se
+     recalcula cuando falta en lugar de emitir una hoja vacía. */
+  const auditoria = useMemo(() => {
+    if (motorAuditoria) return motorAuditoria;
+    if (!Array.isArray(universo) || universo.length === 0) return null;
+    const rehecha = scoreCandidates(
+      universo, engineConfig, actividad,
+      (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
+      { ventasParteExaminada: study.t_s, iaMatch },
+    );
+    return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
+
   /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
      rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de
      capital de trabajo. Solo arma lo que ya está calculado en este componente. */
@@ -1013,9 +1036,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     }
 
     /* El universo es el import crudo: el motivo de rechazo y el perfil funcional los
-       aporta la auditoría de la última corrida del motor (ver `enriquecerUniverso`). */
+       aporta la auditoría del motor (ver `enriquecerUniverso`). */
     const candidatasUniverso = Array.isArray(universo) && universo.length > 0
-      ? enriquecerUniverso(universo, calculatedRows || comparables, motorAuditoria)
+      ? enriquecerUniverso(universo, calculatedRows || comparables, auditoria)
       : null;
 
     const datos = {
@@ -1028,7 +1051,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       rango: { stats, activeCount: activeSeries.length, adjustment },
       filtros: { engineConfig, selectionFunnel },
       comparables: calculatedRows,
-      auditoria: motorAuditoria,
+      auditoria,
       /* Sin `universo` (candidatasUniverso null: estudio con comparables cargadas a mano,
          sin importar el Excel de Capital IQ) se omite `seleccion` para que
          construirLibroSoporte caiga en su propio fallback (comparables + rechazadas +
@@ -1918,7 +1941,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
              última corrida del motor, con el motivo de rechazo de cada candidata, y
              es lo que permite que el embudo del Excel refleje lo que el motor
              decidió en vez de contar cero en todos los motivos. */
-          estudio={{ ...study, comparables, cmode, universo, criteriosScreening, motorConfig: engineConfig, auditoria: motorAuditoria }}
+          estudio={{ ...study, comparables, cmode, universo, criteriosScreening, motorConfig: engineConfig, auditoria }}
           alCerrar={() => setMemoriaAbierta(false)}
         />
       )}
