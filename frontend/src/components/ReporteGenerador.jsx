@@ -1060,8 +1060,9 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
         if ((study.eeffImages || []).length && imagenesInsertadas === 0) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',
-            texto: 'El anexo de estados financieros no se insertó: la plantilla no trae el ' +
-              'punto donde va (' + CENTINELA_ANEXO + '). Añádelo al Word y vuelve a subirlo.',
+            texto: 'El anexo de estados financieros no se insertó: la plantilla no trae un ' +
+              'encabezado «ANEXO A» donde anclarlo, ni el centinela ' + CENTINELA_ANEXO + '. ' +
+              'Añade uno de los dos al Word y vuelve a subirlo.',
           });
         }
         setAvisos((previos) => [...previos.filter((a) => a.origen !== 'docx'), ...nuevos]);

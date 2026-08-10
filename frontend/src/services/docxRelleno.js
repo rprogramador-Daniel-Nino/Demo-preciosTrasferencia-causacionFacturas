@@ -516,6 +516,25 @@ function sustituidorDeTablas(xmlInicial, avisos) {
   };
 }
 
+/**
+ * El análisis vertical de un rubro sobre el total de activos del estudio.
+ *
+ * Una sola definición para la Tabla 10 del cuerpo y para el ESF del ANEXO A: si cada una
+ * llevara su cuenta, el informe publicaría dos verticales distintos para el mismo estado
+ * financiero, y el que revisa no tendría forma de saber cuál vale.
+ *
+ * @param {object} estudio
+ * @returns {(valor:*) => string} el porcentaje formateado, o «—» sin total de activos.
+ */
+export function verticalSobreActivos(estudio) {
+  const total = num(estudio && estudio.t_act_tot);
+  return (valor) => {
+    const n = num(valor);
+    if (n === null || !total) return '—';
+    return ((n / total) * 100).toFixed(2) + '%';
+  };
+}
+
 export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
   const doc = sustituidorDeTablas(xml, avisos);
@@ -697,12 +716,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   // 9. Tabla 10. Activos a 31 de diciembre de ${year}
   reemplazar('Activos a 31 de diciembre', (b) => {
     {
-      const totalActivos = num(estudio.t_act_tot) || 1;
-      const av = (v) => {
-        const n = num(v);
-        if (n === null || totalActivos === 1) return '—';
-        return ((n / totalActivos) * 100).toFixed(2) + '%';
-      };
+      const av = verticalSobreActivos(estudio);
       const filas10 = [
         ['Efectivo y equivalentes de efectivo', wrap(estudio.t_cash ? fmt(num(estudio.t_cash)) : null), av(estudio.t_cash)],
         ['Inversiones asociadas', wrap(estudio.t_inv_assoc ? fmt(num(estudio.t_inv_assoc)) : null), av(estudio.t_inv_assoc)],
@@ -923,6 +937,31 @@ function parrafoConImagen({ rId, id, nombre, cx, cy }) {
     + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>';
 }
 
+/**
+ * Mete una imagen en el paquete y devuelve el `rId` con el que referirla.
+ *
+ * Las tres cosas que hay que tocar para que Word la abra —el binario en `word/media/`, el
+ * content-type de su extensión y la relación en `document.xml.rels`— van juntas aquí porque
+ * olvidar una sola de ellas produce un .docx que Word declara corrupto, y ese es el fallo
+ * que el spec 2026-08-04-docx-real-ooxml-design.md documenta como el más fácil de repetir.
+ *
+ * @returns {{rels:string, ct:string, idRel:string}} los dos archivos ya actualizados.
+ */
+function registrarImagen({ zip, rels, ct, rId, nombre, base64, datos, ext }) {
+  zip.file(`word/media/${nombre}`, base64 || datos, base64 ? { base64: true } : {});
+
+  const ctNuevo = new RegExp(`Extension="${ext}"`).test(ct)
+    ? ct
+    : ct.replace('</Types>', `<Default Extension="${ext}" ContentType="image/${ext}"/></Types>`);
+
+  const idRel = `rId${rId}`;
+  const relsNuevo = rels.replace('</Relationships>',
+    `<Relationship Id="${idRel}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"`
+    + ` Target="media/${nombre}"/></Relationships>`);
+
+  return { rels: relsNuevo, ct: ctNuevo, idRel };
+}
+
 /** Separa una data URL en su tipo y sus bytes. */
 export function desdeDataUrl(dataUrl) {
   const m = /^data:image\/(png|jpe?g|gif);base64,(.+)$/i.exec(String(dataUrl || '').trim());
@@ -1008,6 +1047,185 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
  * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
  */
+/* ─────────────────────────────────────────────────────────────────────────────
+   ANEXO A — Estados financieros del contribuyente, desde la ingesta.
+
+   POR QUÉ NO BASTABA `insertarImagenes`. Depende del centinela `@@ANEXO_EEFF@@`, y la
+   plantilla del cliente no lo trae: cero ocurrencias en el informe generado el
+   2026-08-10. Las páginas que el usuario ya había cargado en la ingesta nunca entraban
+   y el anexo se radicaba en blanco. El ANEXO B se ancla por su encabezado desde el
+   principio; el A no tenía equivalente, y esto lo es.
+
+   POR QUÉ TABLAS NATIVAS Y NO SOLO LAS PÁGINAS ESCANEADAS. Las cifras ya están
+   parseadas: `eeffParser.js` las escribe en el estudio y de ahí salen la Tabla 10, el
+   indicador de rentabilidad y el rango. Publicarlas como tabla —seleccionable, con el
+   formato del informe y con el mismo A.V. que el cuerpo— es lo que hace que el anexo
+   sea verificable contra el análisis en vez de una foto que nadie puede cotejar. Las
+   páginas del PDF van debajo, como soporte.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Nombre y valor de cada rubro del ESF que la ingesta sabe leer, en orden de balance. */
+const RUBROS_ESF = [
+  ['Efectivo y equivalentes de efectivo', 't_cash'],
+  ['Inversiones asociadas', 't_inv_assoc'],
+  ['Cuentas por cobrar comerciales y otras cuentas por cobrar', 't_ar'],
+  ['Inventarios', 't_inv'],
+  ['Activos por impuestos corrientes', 't_tax'],
+  ['Total, Activo corriente', 't_act_curr'],
+  ['Propiedades, planta y equipo', 't_ppe'],
+  ['Intangibles', 't_intang'],
+  ['Diferidos', 't_dif'],
+  ['Total, Activos no corrientes', 't_act_nocurr'],
+  ['Total, Activos', 't_act_tot'],
+];
+
+/** true si el estudio trae algo del estado financiero que se pueda publicar. */
+function traeCifrasEeff(estudio) {
+  const claves = [...RUBROS_ESF.map(([, c]) => c), 't_ap', 't_s', 't_c', 't_op'];
+  return claves.some((c) => num(estudio && estudio[c]) !== null);
+}
+
+/**
+ * Filas del Estado de Situación Financiera para el ANEXO A.
+ *
+ * El A.V. sale de `verticalSobreActivos`, la misma función que usa la Tabla 10. Las
+ * cuentas por pagar se publican porque la ingesta las lee y sostienen el ajuste de capital
+ * de trabajo, pero sin vertical: un pasivo sobre el total de activos no significa nada, y
+ * escribir ahí un porcentaje sería inventarlo.
+ */
+export function filasEsfAnexoA(estudio) {
+  const av = verticalSobreActivos(estudio);
+  const monto = (clave) => {
+    const n = num(estudio && estudio[clave]);
+    return n === null ? SIN_DATO : fmt(n);
+  };
+
+  const filas = RUBROS_ESF.map(([etiqueta, clave]) => [etiqueta, monto(clave), av(estudio[clave])]);
+  filas.push(['PASIVOS', '', '']);
+  filas.push(['Cuentas por pagar comerciales', monto('t_ap'), SIN_DATO]);
+  return filas;
+}
+
+/**
+ * Filas del Estado de Resultados Integral para el ANEXO A.
+ *
+ * La utilidad bruta y los gastos operativos se derivan y no se piden a la ingesta, con el
+ * mismo despeje que documenta `pliOf`: `opex = ventas − costo − utilidad operacional`. Así
+ * el anexo no puede contradecir al indicador de rentabilidad.
+ *
+ * Los costos y gastos excluidos se declaran como línea propia: son lo que sostiene el
+ * margen que el informe publica, y un estado de resultados que no los nombre no cuadra con
+ * el rango de unas páginas más adelante.
+ */
+export function filasEriAnexoA(estudio) {
+  const e = estudio || {};
+  const s = num(e.t_s), c = num(e.t_c), op = num(e.t_op), excluido = num(e.seg_excluido);
+  const val = (n) => (n === null ? SIN_DATO : fmt(n));
+  const bruta = s !== null && c !== null ? s - c : null;
+  const opex = bruta !== null && op !== null ? bruta - op : null;
+
+  const filas = [
+    ['Ingresos de actividades ordinarias', val(s)],
+    ['Costo de ventas', val(c)],
+    ['Utilidad bruta', val(bruta)],
+    ['Gastos operativos', val(opex)],
+    ['Utilidad operacional', val(op)],
+  ];
+  if (excluido !== null && excluido !== 0) {
+    filas.push(['Costos y gastos excluidos de la operación analizada', val(excluido)]);
+  }
+  return filas;
+}
+
+/** El párrafo del encabezado de un anexo, o null si el documento no lo trae. */
+function bloqueDeAnexo(xml, letra, letraSiguiente) {
+  const rx = (l) => new RegExp(
+    '<w:p(?:\\s[^>]*)?>(?:(?!</w:p>)[\\s\\S])*?ANEXO\\s+' + l + '(?:(?!</w:p>)[\\s\\S])*?</w:p>', 'i');
+  const inicio = rx(letra).exec(xml);
+  if (!inicio) return null;
+  const siguiente = letraSiguiente ? rx(letraSiguiente).exec(xml) : null;
+  const fin = siguiente && siguiente.index > inicio.index ? siguiente.index : xml.length;
+  return { inicio: inicio.index, fin };
+}
+
+/**
+ * Llena el ANEXO A con los estados financieros del contribuyente y sus páginas de soporte.
+ *
+ * @param {PizZip} zip
+ * @param {object} estudio
+ * @param {{imagenes?:Array<{dataUrl?:string, datos?:Uint8Array, ext?:string}>}} [opciones]
+ * @returns {{insertadas:number}} cuántas páginas de soporte entraron.
+ */
+export function insertarAnexoA(zip, estudio, opciones = {}) {
+  let xml = zip.file(RUTA_DOC).asText();
+  const bloque = bloqueDeAnexo(xml, 'A', 'B');
+  if (!bloque) return { insertadas: 0 };
+
+  const year = Number(estudio && estudio.anio) || 2025;
+  const entidad = (estudio && estudio.ent) || 'la Compañía';
+
+  let nuevo = '<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr><w:r><w:rPr><w:b/></w:rPr>'
+    + `<w:t>ANEXO A. Estados financieros ${escaparXml(entidad)}</w:t></w:r></w:p>`;
+
+  if (!traeCifrasEeff(estudio)) {
+    /* Mismo aviso que el ANEXO B usa para una comparable sin estado financiero: el hueco
+       tiene que verse. Lo que NO puede quedarse es el anexo del informe anterior. */
+    nuevo += '<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/>'
+      + '<w:b/></w:rPr><w:t>Pendiente: carga el PDF de estados financieros en el paso de '
+      + 'ingesta de cifras para que este anexo se llene.</w:t></w:r></w:p>';
+    xml = xml.slice(0, bloque.inicio) + nuevo + xml.slice(bloque.fin);
+    zip.file(RUTA_DOC, xml);
+    return { insertadas: 0 };
+  }
+
+  nuevo += generarTablaOoxml(
+    `Estado de Situación Financiera a 31 de diciembre de ${year}`,
+    ['Cifras expresadas en pesos colombianos', String(year), 'A.V. ' + year],
+    filasEsfAnexoA(estudio),
+    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
+  );
+  nuevo += generarTablaOoxml(
+    `Estado de Resultados Integral ${year}`,
+    ['Cifras expresadas en pesos colombianos', String(year)],
+    filasEriAnexoA(estudio),
+    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
+  );
+
+  let rels = zip.file(RUTA_RELS).asText();
+  let ct = zip.file(RUTA_CT).asText();
+  let rId = siguienteRId(rels);
+  let idDibujo = siguienteIdDibujo(xml);
+  let insertadas = 0;
+
+  (opciones.imagenes || []).filter(Boolean).forEach((img, i) => {
+    const desde = img.dataUrl ? desdeDataUrl(img.dataUrl) : null;
+    if (!desde && !img.datos) return;
+    const ext = (desde && desde.ext) || img.ext || 'png';
+    const nombre = `anexo_a_${i + 1}.${ext}`;
+
+    const reg = registrarImagen({
+      zip, rels, ct, rId: rId++, nombre, ext,
+      base64: desde ? desde.base64 : null, datos: img.datos,
+    });
+    rels = reg.rels;
+    ct = reg.ct;
+
+    const anchoCm = img.anchoCm || ANCHO_UTIL_CM;
+    const altoCm = img.altoCm || (anchoCm * 297) / 210;
+    nuevo += parrafoConImagen({
+      rId: reg.idRel, id: idDibujo++, nombre,
+      cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
+    });
+    insertadas++;
+  });
+
+  xml = asegurarNamespaceWp(xml.slice(0, bloque.inicio) + nuevo + xml.slice(bloque.fin));
+  zip.file(RUTA_DOC, xml);
+  zip.file(RUTA_RELS, rels);
+  zip.file(RUTA_CT, ct);
+  return { insertadas };
+}
+
 /**
  * Inserta de manera dinámica el Anexo B en el OOXML de la plantilla .docx.
  * Identifica la sección de Anexo B, genera la tabla de Nombre y Descripción de comparables
@@ -1069,26 +1287,18 @@ export function insertarImagenesAnexoB(zip, estudio) {
         const ext = desde.ext || 'png';
         const nombreImg = `anexo_b_${key}_${idx + 1}.${ext}`;
 
-        // Guardar imagen en el zip
-        zip.file(`word/media/${nombreImg}`, desde.base64, { base64: true });
-
-        // Asegurar Content_Type
-        if (!new RegExp(`Extension="${ext}"`).test(ct)) {
-          ct = ct.replace('</Types>',
-            `<Default Extension="${ext}" ContentType="image/${ext}"/></Types>`);
-        }
-
-        // Agregar relación
-        const idRel = `rId${rId++}`;
-        rels = rels.replace('</Relationships>',
-          `<Relationship Id="${idRel}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"`
-          + ` Target="media/${nombreImg}"/></Relationships>`);
+        // Binario, content-type y relación van juntos: olvidar uno corrompe el .docx.
+        const reg = registrarImagen({
+          zip, rels, ct, rId: rId++, nombre: nombreImg, ext, base64: desde.base64,
+        });
+        rels = reg.rels;
+        ct = reg.ct;
 
         // Generar párrafo de dibujo con proporción A4 estándar
         const anchoCm = ANCHO_UTIL_CM;
         const altoCm = (anchoCm * 297) / 210;
         nuevoXmlB += '\n' + parrafoConImagen({
-          rId: idRel, id: idDibujo++, nombre: nombreImg,
+          rId: reg.idRel, id: idDibujo++, nombre: nombreImg,
           cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
         });
 
@@ -1121,6 +1331,12 @@ export function rellenarDocx({
 }) {
   const { zip, camposVacios, avisosTablas } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
   const { insertadas } = insertarImagenes(zip, imagenesAnexo);
+  /* El ANEXO A siempre se rearma —sus tablas salen de la ingesta—, pero las páginas del PDF
+     solo van aquí si el centinela no se las llevó ya: con las dos vías activas el anexo
+     saldría con el escaneo repetido. */
+  const { insertadas: insertadasA } = insertarAnexoA(zip, estudio, {
+    imagenes: insertadas > 0 ? [] : imagenesAnexo,
+  });
   const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
   return {
     salida: zip.generate({
@@ -1129,6 +1345,6 @@ export function rellenarDocx({
     }),
     camposVacios,
     avisosTablas,
-    imagenesInsertadas: insertadas + insertadasB,
+    imagenesInsertadas: insertadas + insertadasA + insertadasB,
   };
 }

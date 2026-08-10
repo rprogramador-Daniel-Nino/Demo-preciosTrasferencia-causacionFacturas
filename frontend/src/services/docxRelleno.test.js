@@ -11,7 +11,11 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
+  insertarAnexoA,
 } from './docxRelleno.js';
+
+/** Donde vive el cuerpo del documento dentro del .docx. */
+const RUTA_DOC_TEST = 'word/document.xml';
 
 
 /* Un PNG de 1×1 válido, para no meter binarios en el repo. */
@@ -309,6 +313,120 @@ test('rellenarDocx entrega un .docx válido con datos, tabla e imágenes', async
   assert.ok(!texto.includes(CENTINELA_ANEXO));
   assert.match(z.file('word/document.xml').asText(), /Garamond/, 'el formato sigue intacto');
   assert.ok(z.file('word/media/anexo_eeff_1.png'), 'y la imagen quedó dentro');
+});
+
+/* ══════════════════ ANEXO A: estados financieros del contribuyente ══════════════════ */
+
+/* Las cifras que la ingesta ya parsea, con los nombres que escribe `eeffParser.js`. */
+const ESTUDIO_EEFF = {
+  ent: 'ACME COLOMBIA S.A.S', anio: 2025,
+  t_cash: 12417756, t_inv_assoc: 1031832388, t_ar: 578289605, t_tax: 388909218,
+  t_act_curr: 2011448966, t_ppe: 114783610, t_intang: 4620815, t_dif: 48626297,
+  t_act_nocurr: 168030721, t_act_tot: 2179479687, t_ap: 27255376,
+  t_s: 5271105507, t_c: 2761202249, t_op: 262820000, seg_excluido: 983180000,
+};
+
+const conAnexoA = () => '<w:p><w:t>VIII. ANEXOS</w:t></w:p>'
+  + '<w:p><w:t>ANEXO A. Estados financieros END GAME INTERACTIVE COLOMBIA</w:t></w:p>'
+  + '<w:p><w:t>páginas del informe anterior</w:t></w:p>'
+  + '<w:p><w:t>ANEXO B. Descripciones de comparables y Estados Financieros</w:t></w:p>'
+  + '<w:p><w:t>fichas de comparables</w:t></w:p>';
+
+async function zipConAnexoA() {
+  const buf = await plantilla([parrafo('x')]);
+  const zip = new PizZip(buf);
+  zip.file(RUTA_DOC_TEST, zip.file(RUTA_DOC_TEST).asText()
+    .replace('</w:body>', conAnexoA() + '</w:body>'));
+  return zip;
+}
+
+test('el ANEXO A se ancla en su encabezado, sin depender del centinela', async () => {
+  /* La plantilla del cliente no trae @@ANEXO_EEFF@@ —verificado: cero ocurrencias en el
+     informe del 2026-08-10—, así que las páginas ingestadas nunca entraban y el anexo se
+     radicaba vacío. El ANEXO B ya se ancla por su encabezado; el A no tenía equivalente. */
+  const zip = await zipConAnexoA();
+  const { insertadas } = insertarAnexoA(zip, ESTUDIO_EEFF, {
+    imagenes: [{ dataUrl: PNG_DATA_URL }, { dataUrl: PNG_DATA_URL }],
+  });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.strictEqual(insertadas, 2, 'las páginas del PDF van como soporte');
+  assert.ok(!texto.includes('páginas del informe anterior'), 'lo viejo del anexo debe irse');
+  assert.match(texto, /ANEXO B\. Descripciones de comparables/, 'y el ANEXO B queda intacto');
+  assert.match(texto, /fichas de comparables/);
+  assert.ok(zip.file('word/media/anexo_a_1.png'), 'la primera página quedó en el paquete');
+});
+
+test('el ANEXO A trae el ESF y el ERI como tablas nativas, no como imagen', async () => {
+  const zip = await zipConAnexoA();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.match(texto, /Estado de Situación Financiera/);
+  assert.match(texto, /Estado de Resultados/);
+  assert.match(texto, /2\.179\.479\.687/, 'el total de activos, formateado en pesos');
+  assert.match(texto, /5\.271\.105\.507/, 'los ingresos del ERI');
+});
+
+test('el A.V. del ANEXO A sale de la misma cuenta que la Tabla 10', async () => {
+  /* Si cada uno calculara su porcentaje, el anexo y el cuerpo del informe publicarían
+     verticales distintos para el mismo estado financiero. */
+  const zip = await zipConAnexoA();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const anexo = textoDe(zip, RUTA_DOC_TEST);
+
+  const tabla10 = actualizarTablasOperacionesOoxml(
+    conTabla('<w:p><w:t>Tabla 10. Activos a 31 de diciembre de 2025</w:t></w:p>'),
+    ESTUDIO_EEFF,
+  );
+  /* 12.417.756 sobre 2.179.479.687 es 0,57 %. */
+  assert.match(tabla10, /0\.57%/, 'la Tabla 10 calcula el vertical sobre el total de activos');
+  assert.match(anexo, /0\.57%/, 'y el anexo tiene que dar lo mismo');
+});
+
+test('el ERI del ANEXO A declara el ajuste excluido', async () => {
+  /* Los $983.180.000 del proyecto CoCrea son lo que sostiene el margen que el informe
+     declara. Un estado de resultados que no los nombre no cuadra con el rango. */
+  const zip = await zipConAnexoA();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.match(texto, /983\.180\.000/);
+});
+
+test('sin cifras parseadas el ANEXO A avisa en vez de salir vacío', async () => {
+  const zip = await zipConAnexoA();
+  const { insertadas } = insertarAnexoA(zip, { ent: 'ACME', anio: 2025 }, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.strictEqual(insertadas, 0);
+  assert.match(texto, /Pendiente/, 'el hueco tiene que verse');
+  assert.ok(!texto.includes('páginas del informe anterior'),
+    'y no conservar el anexo del informe anterior');
+});
+
+test('una plantilla sin ANEXO A no se toca', async () => {
+  const buf = await plantilla([parrafo('Informe sin anexos')]);
+  const zip = new PizZip(buf);
+  const antes = zip.file(RUTA_DOC_TEST).asText();
+  const { insertadas } = insertarAnexoA(zip, ESTUDIO_EEFF, { imagenes: [{ dataUrl: PNG_DATA_URL }] });
+  assert.strictEqual(insertadas, 0);
+  assert.strictEqual(zip.file(RUTA_DOC_TEST).asText(), antes, 'el documento debe quedar igual');
+});
+
+test('rellenarDocx llena el ANEXO A con lo que trae el estudio', async () => {
+  /* La cadena completa: sin centinela en la plantilla, el anexo se llena igual. */
+  const buf = await plantilla([parrafo('Informe de {ent}')]);
+  const zip = new PizZip(buf);
+  zip.file(RUTA_DOC_TEST, zip.file(RUTA_DOC_TEST).asText()
+    .replace('</w:body>', conAnexoA() + '</w:body>'));
+
+  const { salida } = rellenarDocx({
+    binario: zip.generate({ type: 'nodebuffer' }),
+    estudio: ESTUDIO_EEFF,
+    imagenesAnexo: [{ dataUrl: PNG_DATA_URL }],
+    tipoSalida: 'nodebuffer',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+  assert.match(texto, /Estado de Situación Financiera/);
+  assert.ok(!texto.includes('páginas del informe anterior'));
 });
 
 test('el .docx resultante conserva las partes obligatorias del paquete', async () => {
