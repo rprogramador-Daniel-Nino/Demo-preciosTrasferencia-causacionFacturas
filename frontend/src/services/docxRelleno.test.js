@@ -8,6 +8,7 @@ import PizZip from 'pizzip';
 import {
   renderizarDocx, insertarImagenes, rellenarDocx, desdeDataUrl,
   CENTINELA_ANEXO, SIN_DATO, EMU_POR_CM, actualizarTablasMacroOoxml,
+  actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
 } from './docxRelleno.js';
 
@@ -396,5 +397,71 @@ test('coleccionesDelEstudio arma las comparables, razones de rechazo y los accio
   assert.strictEqual(colecciones.accionistas[0].nombre, 'Accionista A');
   assert.strictEqual(colecciones.accionistas[0].acciones, '150.000');
   assert.strictEqual(colecciones.accionistas[0].participacion, '75');
+});
+
+test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', () => {
+  const estudio = {
+    ent: 'END GAME COLOMBIA S.A.S',
+    nit: '901.337.576-6',
+    anio: '2024',
+    vinc: 'END GAME INTERACTIVE INC',
+    vinc_id: '604477955',
+    pais_vinc: 'ESTADOS UNIDOS',
+    vinc_tipo: 'Otros servicios (07)',
+    monto_operacion: 3435357400,
+    pli: 'MO',
+    metodo: 'TU',
+    egreso: false,
+    t_s: 100000000,
+    t_c: 60000000,
+    t_op: 10000000,
+    t_act_tot: 100000000,
+    t_cash: 5000000,
+    accionistas: [
+      { nombre: 'Accionista Principal', pais: 'ESTADOS UNIDOS', acciones: 200000, valor_capital: 200000000, participacion_pct: 100 }
+    ],
+    embudoSeleccion: {
+      evaluadas: 442,
+      seleccionadas: 2,
+      porMotivo: {
+        rigorFuncional: 327,
+        holding: 36,
+        sinDescripcion: 66
+      }
+    },
+    comparables: [
+      { name: 'AKATSUKI INC.', amb: 'Int', s: 1000, c: 600, op: 100 },
+      { name: 'COLOPL, INC.', amb: 'Int', s: 1000, c: 700, op: 200 }
+    ]
+  };
+
+  const xmlOriginal = `
+    <w:p><w:t>Tabla 1. Operaciones de Ingreso</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 1</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 2. Operación analizar</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 2</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 3</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 6</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 10. Activos a 31 de diciembre</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 10</w:t></w:p></w:tc></w:tr></w:tbl>
+  `;
+
+  const xmlActualizado = actualizarTablasOperacionesOoxml(xmlOriginal, estudio);
+
+  assert.ok(xmlActualizado.includes('Tabla 1. Operaciones de Ingreso'), 'No se reemplazó la Tabla 1');
+  assert.ok(xmlActualizado.includes('Otros servicios (07)'), 'Falta el concepto en la Tabla 1');
+  assert.ok(xmlActualizado.includes('3.435.357.400'), 'Falta el monto formateado en la Tabla 1');
+
+  assert.ok(xmlActualizado.includes('Tabla 2. Operación analizar'), 'No se reemplazó la Tabla 2');
+  assert.ok(xmlActualizado.includes('Ingreso (07)'), 'Falta el tipo de operación en la Tabla 2');
+  assert.ok(xmlActualizado.includes('Otros servicios'), 'Falta la descripción en la Tabla 2');
+
+  assert.ok(xmlActualizado.includes('Tabla 3.Transacciones Inter compañía'), 'No se reemplazó la Tabla 3');
+  assert.ok(xmlActualizado.includes('604477955'), 'Falta la identificación fiscal en la Tabla 3');
+
+  assert.ok(xmlActualizado.includes('Tabla 6. Composición accionaria'), 'No se reemplazó la Tabla 6');
+  assert.ok(xmlActualizado.includes('Accionista Principal'), 'Falta el nombre de accionista en la Tabla 6');
+  assert.ok(xmlActualizado.includes('200.000'), 'Falta el número de acciones formateado en la Tabla 6');
+
+  assert.ok(xmlActualizado.includes('Tabla 10. Activos a 31 de diciembre de 2024'), 'No se reemplazó la Tabla 10');
+  assert.ok(xmlActualizado.includes('5.000.000'), 'Falta el valor del efectivo formateado en la Tabla 10');
+  assert.ok(xmlActualizado.includes('5.00%'), 'Falta el análisis vertical de efectivo en la Tabla 10');
 });
 

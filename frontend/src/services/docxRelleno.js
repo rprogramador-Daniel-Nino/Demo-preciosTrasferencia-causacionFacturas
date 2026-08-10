@@ -31,8 +31,10 @@ import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js';
-import { pctf, fmt, num } from '../utils/calculations.js';
+import { pctf, fmt, num, pliOf } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
+import { analizarRango } from './rangoIntercuartil.js';
+import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
 } from './analisisMercado.js';
@@ -310,6 +312,343 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
   return out;
 }
 
+/** Reemplaza quirúrgicamente las catorce tablas operativas en el OOXML del documento de la Fase 3. */
+export function actualizarTablasOperacionesOoxml(xml, estudio) {
+  if (!estudio) return xml;
+  let out = xml;
+  const year = Number(estudio.anio) || 2025;
+  const wrap = (v) => String(v == null || v === '' ? '—' : v);
+
+  const rResult = analizarRango(estudio);
+  const stats = rResult.stats || {};
+  const compFilas = rResult.filas || [];
+
+  // Calcular tPLI (indicador del contribuyente unificado)
+  const seg = num(estudio.seg_excluido) || 0;
+  const tS = num(estudio.t_s), tOp = num(estudio.t_op);
+  const T = {
+    s: tS !== null ? tS - seg : null,
+    c: num(estudio.t_c),
+    op: tOp !== null ? tOp - seg : null,
+    ar: num(estudio.t_ar), inv: num(estudio.t_inv), ap: num(estudio.t_ap),
+  };
+  const tPLI = pliOf(T, estudio.pli || 'MO');
+
+  // Calcular series ordenadas para No Ajustado y Ajustado
+  const activeSeriesNoAjustado = compFilas
+    .map((f) => f.noAjustado)
+    .filter((v) => v !== null && v !== undefined)
+    .sort((a, b) => a - b);
+  const minNoAjustado = activeSeriesNoAjustado.length ? activeSeriesNoAjustado[0] : null;
+  const maxNoAjustado = activeSeriesNoAjustado.length ? activeSeriesNoAjustado[activeSeriesNoAjustado.length - 1] : null;
+  const p25NoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.25);
+  const medNoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.5);
+  const p75NoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.75);
+
+  const activeSeriesAjustado = compFilas
+    .map((f) => f.ajustado)
+    .filter((v) => v !== null && v !== undefined)
+    .sort((a, b) => a - b);
+  const minAjustado = activeSeriesAjustado.length ? activeSeriesAjustado[0] : null;
+  const maxAjustado = activeSeriesAjustado.length ? activeSeriesAjustado[activeSeriesAjustado.length - 1] : null;
+  const p25Ajustado = stats.p25 !== undefined ? stats.p25 : null;
+  const medAjustado = stats.med !== undefined ? stats.med : null;
+  const p75Ajustado = stats.p75 !== undefined ? stats.p75 : null;
+
+  const pStr = (v) => (v === null || v === undefined ? '—' : pctf(v));
+
+  // Helper para extraer código y descripción
+  const extraerCodigoYDesc = (vinc_tipo) => {
+    const s = String(vinc_tipo || '');
+    const m = s.match(/^(.*?)(?:\s*\((\d+)\))?$/);
+    if (!m) return { desc: s, cod: '07' };
+    return { desc: m[1].trim(), cod: m[2] || '07' };
+  };
+
+  // 1. Tabla 1. Operaciones de Ingreso/Egreso
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 1\.\s*Operaciones de (?:Ingreso|Egreso)(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const opTipoTitle = estudio.egreso ? 'Egreso' : 'Ingreso';
+      const tabla = generarTablaOoxml(
+        `Tabla 1. Operaciones de ${opTipoTitle}`,
+        ['Concepto de Operaciones a analizar', 'Nombre vinculado', 'País vinculado', 'Monto de la Operación analizar'],
+        [[
+          wrap(estudio.vinc_tipo),
+          wrap(estudio.vinc),
+          wrap(estudio.pais_vinc),
+          estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—'
+        ]],
+        'Información suministrada por la Administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 2. Tabla 2. Operación analizar
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 2\.\s*Operación(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
+      const tipoOp = estudio.egreso ? 'Egreso' : 'Ingreso';
+      const tabla = generarTablaOoxml(
+        'Tabla 2. Operación analizar',
+        ['No. Operaciones de análisis', 'Descripción'],
+        [[`${tipoOp} (${cod})`, desc]],
+        'Información suministrada por la Administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 3. Tabla 3 / 12. Transacciones Inter compañía
+  {
+    const filas3 = [
+      ['Razón social', wrap(estudio.vinc)],
+      ['Identificación fiscal', wrap(estudio.vinc_id)],
+      ['País - Residencia fiscal', wrap(estudio.pais_vinc)],
+      ['Tipo de vinculación', wrap(estudio.tipo_vinculacion || 'Art 260-1 E-T Inciso 1')],
+      [`Tipo de operaciones (${estudio.egreso ? 'Egreso' : 'Ingreso'})`, wrap(estudio.vinc_tipo)],
+      ['Monto en pesos', estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—']
+    ];
+
+    const rx3 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 3\.\s*Transacciones Inter\s*compañía(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx3.test(out)) {
+      const tabla = generarTablaOoxml('Tabla 3.Transacciones Inter compañía', ['Compañía vinculada', ''], filas3, `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`);
+      out = out.replace(rx3, () => tabla);
+    }
+
+    const rx12 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 12\.\s*Transacciones Inter\s*compañía(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx12.test(out)) {
+      const tabla = generarTablaOoxml('Tabla 12.Transacciones Inter compañía', ['Compañía vinculada', ''], filas3, `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`);
+      out = out.replace(rx12, () => tabla);
+    }
+  }
+
+  // 4. Tabla 4. Método de Precios de Transferencia Aplicable
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 4\.\s*Método de Precios de Transferencia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
+      const tabla = generarTablaOoxml(
+        'Tabla 4.Método de Precios de Transferencia Aplicable',
+        ['Código de Operación', 'Descripción de la operación', 'Método seleccionado', 'Indicador de Rentabilidad'],
+        [[cod, desc, estudio.metodo || 'TU', estudio.pli || 'MO']],
+        'Información suministrada por la Administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 5. Tabla 5. Rango Intercuartil (horizontal)
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 5\.\s*Rango Intercuartil(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const col1 = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+      const tabla = generarTablaOoxml(
+        'Tabla 5. Rango Intercuartil',
+        [col1, 'Percentil 25', 'Mediana', 'Percentil 75'],
+        [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
+        'Información suministrada por la Administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 6. Tabla 6. Composición accionaria
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 6\.\s*Composición accionaria(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const filas = (estudio.accionistas || []).map((a) => [
+        wrap(a.nombre),
+        wrap(a.pais),
+        a.acciones ? fmt(num(a.acciones)) : '—',
+        a.valor_capital ? fmt(num(a.valor_capital)) : '—',
+        a.participacion_pct ? String(a.participacion_pct) + '%' : '—'
+      ]);
+      const totalAcciones = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.acciones) || 0), 0);
+      const totalCapital = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.valor_capital) || 0), 0);
+      filas.push([
+        'Total',
+        '',
+        totalAcciones ? fmt(totalAcciones) : '—',
+        totalCapital ? fmt(totalCapital) : '—',
+        '100%'
+      ]);
+      const tabla = generarTablaOoxml(
+        'Tabla 6. Composición accionaria',
+        ['Accionista', 'País', 'N° Acciones', 'Valor Capital', '% Participación'],
+        filas,
+        'Información suministrada por la administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 7. Tabla 8. Compañías vinculadas al 31 de diciembre de ${year}
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 8\.\s*Compañías vinculadas(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        `Tabla 8. Compañías vinculadas al 31 de diciembre de ${year}`,
+        ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
+        [[wrap(estudio.vinc), wrap(estudio.vinc_id), wrap(estudio.pais_vinc)]],
+        'Información suministrada por la Administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 8. Tabla 9. Criterios de vinculación económica
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 9\.\s*Criterios de vinculación(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Tabla 9. Criterios de vinculación económica',
+        ['Nombre Vinculada', 'País', 'Criterio de vinculación', 'Detalle del Criterio de Vinculación'],
+        [[wrap(estudio.vinc), wrap(estudio.pais_vinc), 'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa']],
+        'Información suministrada por la Administración de la Compañía.'
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 9. Tabla 10. Activos a 31 de diciembre de ${year}
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 10\.\s*Activos a 31 de diciembre(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const totalActivos = num(estudio.t_act_tot) || 1;
+      const av = (v) => {
+        const n = num(v);
+        if (n === null || totalActivos === 1) return '—';
+        return ((n / totalActivos) * 100).toFixed(2) + '%';
+      };
+      const filas10 = [
+        ['Efectivo y equivalentes de efectivo', wrap(estudio.t_cash ? fmt(num(estudio.t_cash)) : null), av(estudio.t_cash)],
+        ['Inversiones asociadas', wrap(estudio.t_inv_assoc ? fmt(num(estudio.t_inv_assoc)) : null), av(estudio.t_inv_assoc)],
+        ['Cuentas por cobrar comerciales y otras cuentas por cobrar', wrap(estudio.t_ar ? fmt(num(estudio.t_ar)) : null), av(estudio.t_ar)],
+        ['Activos por impuestos corrientes', wrap(estudio.t_tax ? fmt(num(estudio.t_tax)) : null), av(estudio.t_tax)],
+        ['Total, Activo corriente', wrap(estudio.t_act_curr ? fmt(num(estudio.t_act_curr)) : null), av(estudio.t_act_curr)],
+        ['Propiedades, planta y equipo', wrap(estudio.t_ppe ? fmt(num(estudio.t_ppe)) : null), av(estudio.t_ppe)],
+        ['Intangibles', wrap(estudio.t_intang ? fmt(num(estudio.t_intang)) : null), av(estudio.t_intang)],
+        ['Diferidos', wrap(estudio.t_dif ? fmt(num(estudio.t_dif)) : null), av(estudio.t_dif)],
+        ['Total, Activos no corrientes', wrap(estudio.t_act_nocurr ? fmt(num(estudio.t_act_nocurr)) : null), av(estudio.t_act_nocurr)],
+        ['Total, Activos', wrap(estudio.t_act_tot ? fmt(num(estudio.t_act_tot)) : null), av(estudio.t_act_tot)],
+      ];
+      const tabla = generarTablaOoxml(
+        `Tabla 10. Activos a 31 de diciembre de ${year}`,
+        ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
+        filas10,
+        `Estados financieros de la Compañía a 31 de diciembre de ${year}.`
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 10. Tabla 16. Razones de rechazo
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 16\.\s*Razones de rechazo(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const { filas: razonesFilas } = filasRazonesRechazo(estudio.embudoSeleccion);
+      const filas16 = (razonesFilas || []).map((f) => [
+        f.etiqueta,
+        f.letra,
+        String(f.cuantas)
+      ]);
+      const totalEvaluadas = estudio.embudoSeleccion ? String(estudio.embudoSeleccion.evaluadas) : '—';
+      filas16.push([
+        'TOTAL, UNIVERSO',
+        '',
+        totalEvaluadas
+      ]);
+      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
+      const tabla = generarTablaOoxml(
+        'Tabla 16. Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)',
+        ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
+        filas16,
+        `Información Base Datos ${dbFuente}.`
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 11. Tabla 17. Muestra Compañías comparables
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 17\.\s*Muestra Compañías comparables(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const compList = filasComparablesInforme(estudio);
+      const filas17 = (compList || []).map((f, idx) => [
+        String(idx + 1),
+        f.nombre,
+        AMBITO[f.amb] || ''
+      ]);
+      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
+      const tabla = generarTablaOoxml(
+        'Tabla 17. Muestra Compañías comparables',
+        ['Número', 'Nombre de la Compañía', 'Ámbito'],
+        filas17,
+        `Información Base Datos ${dbFuente}`
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  // 12. Tabla 18 / 20. Rango Intercuartil / Tabla de rangos (vertical)
+  {
+    const filas18_20 = [
+      ['Mínimo', pStr(minNoAjustado), pStr(minAjustado)],
+      ['Percentil 25', pStr(p25NoAjustado), pStr(p25Ajustado)],
+      ['Mediana', pStr(medNoAjustado), pStr(medAjustado)],
+      ['Percentil 75', pStr(p75NoAjustado), pStr(p75Ajustado)],
+      ['Máximo', pStr(maxNoAjustado), pStr(maxAjustado)],
+      [wrap(estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE'), pStr(tPLI), pStr(tPLI)]
+    ];
+
+    const rx18 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 18\.\s*Rango Intercuartil(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx18.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Tabla 18. Rango Intercuartil',
+        ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
+        filas18_20
+      );
+      out = out.replace(rx18, () => tabla);
+    }
+
+    const rx20 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 20\.\s*Tabla de rangos(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx20.test(out)) {
+      const tabla = generarTablaOoxml(
+        'Tabla 20. Tabla de rangos',
+        ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
+        filas18_20
+      );
+      out = out.replace(rx20, () => tabla);
+    }
+  }
+
+  // 13. Tabla 19. Margen Operacional Compañías Comparables
+  {
+    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 19\.\s*Margen Operacional(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
+    if (rx.test(out)) {
+      const compList = filasComparablesInforme(estudio);
+      const filas19 = (compList || []).map((f) => [
+        f.nombre,
+        pStr(f.noAjustado),
+        pStr(f.ajustado)
+      ]);
+      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      const tabla = generarTablaOoxml(
+        'Tabla 19. Margen Operacional Compañías Comparables',
+        ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
+        filas19,
+        `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
+      );
+      out = out.replace(rx, () => tabla);
+    }
+  }
+
+  return out;
+}
+
 /**
  * Sustituye los marcadores del .docx por los datos del estudio.
  *
@@ -340,6 +679,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year);
+  xml = actualizarTablasOperacionesOoxml(xml, estudio);
   zip.file(RUTA_DOC, xml);
 
   const doc = new Docxtemplater(zip, {
