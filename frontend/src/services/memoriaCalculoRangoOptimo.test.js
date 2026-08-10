@@ -67,14 +67,43 @@ test('el embudo cuenta los siete motivos sobre la columna que escribe el motor',
   });
 });
 
-test('las válidas se restan de las siete exclusiones, no de algunas', () => {
-  /* Si la resta omitiera un motivo, el embudo dejaría de cuadrar en cuanto la
-     curación por IA descartara a alguien. */
+test('las válidas se restan de TODAS las exclusiones, no de algunas', () => {
+  /* Si la resta omitiera una fila, el embudo dejaría de cuadrar en cuanto la
+     curación por IA descartara a alguien. Se comparan contra las filas «(−)» que
+     el propio embudo emite, y no contra un número fijo: son seis desde que los dos
+     motivos de perfil se presentan juntos, y un siete quemado aquí obligaría a
+     tocar el test cada vez que cambie la presentación. */
   const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const exclusiones = sel.celdas.filter((f) => f && f[0] && String(f[0].v || '').startsWith('(−)')).length;
   const f = fila(sel.celdas, '= Válidas');
   assert.ok(f, 'existe la fila de válidas');
   const restas = (f[1].f.match(/-/g) || []).length;
-  assert.strictEqual(restas, 7, `deben restarse los 7 motivos, se restan ${restas}`);
+  assert.strictEqual(restas, exclusiones, `hay ${exclusiones} exclusiones y se restan ${restas}`);
+});
+
+test('los siete motivos del motor quedan contados, aunque se presenten en menos filas', () => {
+  /* La presentación agrupa; la aritmética no puede perder ninguno. Un motivo que el
+     motor escriba y la hoja no cuente descuadra la suma de control: fue exactamente
+     lo que pasó con el descarte de holding por descripción. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  /* Fórmulas de las filas «(−)» del embudo, que son las que restan del universo. */
+  const formulas = sel.celdas
+    .filter((f) => f && f[0] && String(f[0].v || '').startsWith('(−)'))
+    .map((f) => f[1].f)
+    .join(' ');
+  ['controlada', 'holding', 'saldoNegativo', 'perdidaOperativa',
+    'sinDescripcion', 'actividadDistinta', 'rigorFuncional',
+  ].forEach((m) => assert.match(formulas, new RegExp(`COUNTIF\\(N\\d+:N\\d+,"${m}"\\)`), `falta contar ${m}`));
+});
+
+test('la fila de diferencias funcionales suma actividad distinta y rigor funcional', () => {
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const f = fila(sel.celdas, '(−) Diferencias funcionales');
+  assert.ok(f, 'existe la fila unificada');
+  assert.match(f[1].f, /COUNTIF\(N\d+:N\d+,"actividadDistinta"\)\+COUNTIF\(N\d+:N\d+,"rigorFuncional"\)/);
+  assert.match(String(f[2].v), /Perfil no comparable con la parte examinada \(Art\. 260-4\)/);
+  /* Y «Actividad distinta» deja de tener fila propia. */
+  assert.ok(!fila(sel.celdas, '(−) Actividad distinta'), 'ya no se presenta por separado');
 });
 
 test('la suma de control compara rechazadas + válidas contra el universo', () => {

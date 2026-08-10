@@ -152,74 +152,67 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
 }
 
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
-export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
-  let out = xml;
+export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
+  const doc = sustituidorDeTablas(xml, avisos);
+  const reemplazar = (...args) => doc.reemplazar(...args);
 
   const y1 = year - 1, y2 = year, y3 = year + 1;
   const wrap = (v) => String(v == null ? '—' : v);
 
+  /* Estas ocho no llevan «Tabla N.» en la plantilla, así que la numeración nunca fue
+     su problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el
+     título tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso
+     pasan por el mismo localizador, que compara sobre el texto ya reconstruido. */
+
   // 1. PIB Mundial
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?PIB Mundial(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
-        ['Año', 'Crecimiento Mundial (%)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
-          [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    reemplazar('PIB Mundial', () => generarTablaOoxml(
+      'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
+      ['Año', 'Crecimiento Mundial (%)'],
+      [
+        [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
+        [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
+        [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
+      ],
+      fuente
+    ));
   }
 
   // 2. PIB Colombia
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?PIB en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
-        ['Año', 'Crecimiento del PIB (%)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
-          [String(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    reemplazar('PIB en Colombia', () => generarTablaOoxml(
+      'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
+      ['Año', 'Crecimiento del PIB (%)'],
+      [
+        [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
+        [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
+        [String(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
+      ],
+      fuente
+    ));
   }
 
   // 3. Inflación Global
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Inflación Global(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
-        ['Año', 'Tasa de Inflación (%)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
-          [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    reemplazar('Inflación Global', () => generarTablaOoxml(
+      'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
+      ['Año', 'Tasa de Inflación (%)'],
+      [
+        [String(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
+        [String(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
+        [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
+      ],
+      fuente
+    ));
   }
 
   // 4. PIB por Región
   {
     const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?por Región\/País(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
+    reemplazar('por Región/País', () => {
       const porRegion = porAnio[year];
       const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
       let filas = [];
@@ -229,87 +222,72 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
       } else {
         filas = porRegion.map(({ region, valor }) => [region, wrap(valor)]);
       }
-      const tabla = generarTablaOoxml(titulo, ['Región/País', 'Crecimiento Proyectado (%)'], filas, fuente);
-      out = out.replace(rx, () => tabla);
-    }
+      return generarTablaOoxml(titulo, ['Región/País', 'Crecimiento Proyectado (%)'], filas, fuente);
+    });
   }
 
   // 5. Inflación Colombia
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Inflación en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Inflación en Colombia (' + year + ' vs. Meta ' + y3 + ')',
-        ['Indicador', 'Valor (%)'],
-        [
-          ['Inflación ' + year, wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
-          ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    reemplazar('Inflación en Colombia', () => generarTablaOoxml(
+      'Inflación en Colombia (' + year + ' vs. Meta ' + y3 + ')',
+      ['Indicador', 'Valor (%)'],
+      [
+        ['Inflación ' + year, wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
+        ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
+      ],
+      fuente
+    ));
   }
 
   // 6. Tasa de Intervención
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Intervención del Banco(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
+    reemplazar('Intervención del Banco', () => {
       const filas = [y1, y2].map((y) => {
         const obs = S[y];
         return obs
           ? [obs.etiqueta, wrap(obs.valor)]
           : ['Diciembre ' + y, wrap(marcadorPendiente(y, 'la tasa de intervención del Banco de la República'))];
       });
-      const tabla = generarTablaOoxml(
+      return generarTablaOoxml(
         'Tasa de Intervención del Banco de la República (' + filas[0][0] + ' - ' + filas[1][0] + ')',
         ['Fecha', 'Tasa de Intervención (%)'],
         filas,
         fuente
       );
-      out = out.replace(rx, () => tabla);
-    }
+    });
   }
 
   // 7. TRM Promedio
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tasa Representativa del Mercado(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
-        ['Año', 'TRM Promedio ($)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    reemplazar('Tasa Representativa del Mercado', () => generarTablaOoxml(
+      'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
+      ['Año', 'TRM Promedio ($)'],
+      [
+        [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
+        [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
+      ],
+      fuente
+    ));
   }
 
   // 8. Tasa de Desempleo
   {
     const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Desempleo en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + y3 + ')',
-        ['Indicador', 'Valor (%)'],
-        [
-          ['Desempleo ' + year, wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
-          ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    reemplazar('Desempleo en Colombia', () => generarTablaOoxml(
+      'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + y3 + ')',
+      ['Indicador', 'Valor (%)'],
+      [
+        ['Desempleo ' + year, wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
+        ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
+      ],
+      fuente
+    ));
   }
 
-  return out;
+  return doc.xml;
 }
 
 /** Reemplaza quirúrgicamente las catorce tablas operativas en el OOXML del documento de la Fase 3. */
@@ -434,25 +412,43 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
 }
 
+/**
+ * Sustituidor de tablas sobre un `document.xml`.
+ *
+ * Encapsula el XML que va mutando y el registro de las tablas que la plantilla no
+ * trae, para que los dos generadores —el de macroeconomía y el de operaciones—
+ * compartan el mecanismo en vez de llevar cada uno su copia.
+ *
+ * Anotar las ausentes es la mitad del valor: hasta ahora el fallo era mudo y la
+ * tabla se quedaba con los datos del informe anterior, que es la peor forma de
+ * fallar en un documento que se radica ante la DIAN.
+ *
+ * @param xmlInicial  el `document.xml` de partida.
+ * @param avisos      (opcional) arreglo donde se anotan los nombres no encontrados.
+ */
+function sustituidorDeTablas(xmlInicial, avisos) {
+  let out = String(xmlInicial || '');
+  return {
+    /** true si la tabla estaba y se sustituyó. */
+    reemplazar(nombres, generar, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) {
+        if (Array.isArray(avisos)) {
+          avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+        }
+        return false;
+      }
+      out = out.slice(0, bloque.inicio) + generar(bloque) + out.slice(bloque.fin);
+      return true;
+    },
+    get xml() { return out; },
+  };
+}
+
 export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
-  let out = xml;
-
-  /* Sustituye el bloque de la tabla llamada `nombres` por lo que devuelva `generar`.
-     Si no aparece en la plantilla lo anota en `avisos`: hasta ahora el fallo era
-     silencioso y la tabla se quedaba con los datos del informe anterior, que es la
-     peor forma de fallar en un documento que se radica ante la DIAN. */
-  const reemplazar = (nombres, generar, opciones) => {
-    const bloque = localizarBloqueTabla(out, nombres, opciones);
-    if (!bloque) {
-      if (Array.isArray(avisos)) {
-        avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
-      }
-      return false;
-    }
-    out = out.slice(0, bloque.inicio) + generar(bloque) + out.slice(bloque.fin);
-    return true;
-  };
+  const doc = sustituidorDeTablas(xml, avisos);
+  const reemplazar = (...args) => doc.reemplazar(...args);
 
   /* Título de la tabla que se emite. Conserva el número que traía la plantilla en vez
      de imponer el nuestro: si el cliente renumeró, escribir «Tabla 17» sobre lo que su
@@ -739,7 +735,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     );
   }, { numeros: [19] });
 
-  return out;
+  return doc.xml;
 }
 
 /**

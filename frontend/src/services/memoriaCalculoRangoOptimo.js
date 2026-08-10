@@ -469,9 +469,10 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        implementaciones del mismo criterio que se desincronizaban en cuanto el motor
        cambiaba una regla. Ahora la hoja REFLEJA lo que el motor decidió.
 
-       Están las SIETE exclusiones, no solo las de los filtros duros: si faltara
+       Están TODAS las exclusiones, no solo las de los filtros duros: si faltara
        alguna, la resta «Universo − exclusiones = Válidas» dejaría de cuadrar en
-       cuanto la curación por IA descartara a alguien. */
+       cuanto la curación por IA descartara a alguien. Son seis filas para siete
+       motivos del motor, porque los dos de perfil se presentan juntos. */
     sel.push([cTxt('EMBUDO DE SELECCIÓN (Arts. 260-1 y 260-4 E.T.)')]);
     sel.push([cTxt('Etapa'), cTxt('Empresas'), cTxt('Fórmula / criterio')]);
     const fe = {};
@@ -485,15 +486,20 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     etapa('negativo', '(−) Saldos negativos', 'Dato de balance no verosímil');
     etapa('perdida', '(−) Pérdida operativa', 'Criterio conservador DIAN: comparable rentable');
     etapa('sinDesc', '(−) Sin descripción del negocio', 'No hay con qué verificar la actividad');
-    etapa('actividad', '(−) Actividad distinta', 'Curación IA: la descripción no coincide con la actividad');
+    /* «Actividad distinta» y «rigor funcional» van en una sola fila: las dos dicen que
+       el perfil de la compañía no es comparable con el de la parte examinada, una por
+       la descripción del negocio y otra por las funciones, y el informe las sustenta
+       bajo el mismo artículo. El motor los sigue llevando como motivos separados en la
+       columna «Motivo de rechazo», así que la fila se puede desglosar si la DIAN lo
+       pide; lo que se unifica es cómo se presentan. */
     etapa('rigor', '(−) Diferencias funcionales', 'Perfil no comparable con la parte examinada (Art. 260-4)');
-    etapa('validas', '= Válidas tras todos los criterios', 'Universo − las siete exclusiones de arriba');
+    etapa('validas', '= Válidas tras todos los criterios', 'Universo − las exclusiones de arriba');
     etapa('seleccionadas', '= Muestra final seleccionada', 'Comparables usadas en el rango (⊂ válidas)');
     sel.push([]);
 
-    /* Suma de control: los siete motivos y las válidas son mutuamente excluyentes
-       —el motor asigna un solo motivo por candidata, el primero que aplica— y agotan
-       el universo, así que su suma tiene que dar el total exacto. Es la comprobación
+    /* Suma de control: las exclusiones y las válidas son mutuamente excluyentes —el
+       motor asigna un solo motivo por candidata, el primero que aplica— y agotan el
+       universo, así que su suma tiene que dar el total exacto. Es la comprobación
        que permite firmar la hoja. */
     sel.push([cTxt('SUMA DE CONTROL (partición del universo — cada empresa cuenta una vez)')]);
     const sc = {};
@@ -501,7 +507,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sc[clave] = sel.length + 1;
       sel.push([cTxt(etiqueta), null, cTxt(criterio)]);
     };
-    control('rechazadas', 'Total rechazadas', 'Suma de los siete motivos');
+    control('rechazadas', 'Total rechazadas', 'Suma de las exclusiones del embudo');
     control('validas', 'Total válidas', 'Estado = "Válida"');
     control('suma', 'SUMA', 'Rechazadas + válidas');
     control('universo', 'UNIVERSO (Capital IQ)', 'Total de compañías');
@@ -567,21 +573,30 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const cSel = `Q${r0}:Q${rN}`;
     const cComp = `R${r0}:R${rN}`;
 
-    /* Los siete motivos, con la MISMA clave que emite `scoreCandidates`: la hoja no
+    /* Los motivos, con la MISMA clave que emite `scoreCandidates`: la hoja no
        reclasifica nada, cuenta lo que el motor escribió. */
     const MOTIVOS = [
-      ['controlada', 'filtro', 'controlada', `Vinculadas: un accionista alcanza o supera el ${umbralControl} % (Art. 260-1)`],
-      ['holding', 'filtro', 'holding', 'Holdings o grupos, por la razón social (Art. 260-4)'],
-      ['negativo', 'filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil)'],
-      ['perdida', 'filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN)'],
-      ['sinDesc', 'ia', 'sinDescripcion', 'Sin descripción del negocio para verificar la actividad'],
-      ['actividad', 'ia', 'actividadDistinta', 'Curación IA: la descripción no coincide con la actividad'],
-      ['rigor', 'rigor', 'rigorFuncional', 'Diferencias funcionales: perfil no comparable (Art. 260-4)'],
+      ['controlada', 'filtro', ['controlada'], `Vinculadas: un accionista alcanza o supera el ${umbralControl} % (Art. 260-1)`],
+      ['holding', 'filtro', ['holding'], 'Holdings o grupos, por la razón social (Art. 260-4)'],
+      ['negativo', 'filtro', ['saldoNegativo'], 'Saldo negativo en balances (dato no verosímil)'],
+      ['perdida', 'filtro', ['perdidaOperativa'], 'Pérdida operativa (criterio conservador DIAN)'],
+      ['sinDesc', 'ia', ['sinDescripcion'], 'Sin descripción del negocio para verificar la actividad'],
+      /* Una sola fila para los dos motivos de perfil. «Actividad distinta» sale de la
+         descripción del negocio y «rigor funcional» de las funciones, pero las dos
+         concluyen lo mismo —el perfil no es comparable— y el informe las sustenta bajo
+         el mismo artículo. El motor los sigue escribiendo por separado en la columna
+         «Motivo de rechazo», así que la fila se puede desglosar si hace falta. */
+      ['rigor', 'rigor', ['actividadDistinta', 'rigorFuncional'],
+        'Diferencias funcionales: perfil no comparable con la parte examinada (Art. 260-4)'],
     ];
 
+    /* Una fila del embudo puede recoger varios motivos del motor, así que el conteo es
+       la suma de sus COUNTIF y no uno solo. */
+    const contarMotivos = (rango, motivos) => motivos.map((m) => `COUNTIF(${rango},"${m}")`).join('+');
+
     sel[fe.universo - 1][1] = cFor(`COUNTA(${cNombre})`, '#,##0');
-    MOTIVOS.forEach(([clave, , motivo]) => {
-      sel[fe[clave] - 1][1] = cFor(`COUNTIF(${cMotivo},"${motivo}")`, '#,##0');
+    MOTIVOS.forEach(([clave, , motivos]) => {
+      sel[fe[clave] - 1][1] = cFor(contarMotivos(cMotivo, motivos), '#,##0');
     });
     sel[fe.validas - 1][1] = cFor(
       `B${fe.universo}-` + MOTIVOS.map(([clave]) => `B${fe[clave]}`).join('-'), '#,##0');
@@ -596,7 +611,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     sel[sc.seleccionadas - 1][1] = cFor(`COUNTIF(${cSel},"Sí")`, '#,##0');
     sel[sc.difFuncional - 1][1] = cFor(`COUNTIF(${cComp},"Con diferencias funcionales")`, '#,##0');
     /* La muestra y las que quedaron fuera tienen que agotar entre las dos lo que
-       pasó los siete filtros. Si no cuadra, o el motor asignó un motivo que la hoja
+       pasó todos los filtros. Si no cuadra, o el motor asignó un motivo que la hoja
        no cuenta —fue lo que pasó con el descarte por descripción— o el cribado no se
        ha ejecutado y la columna de motivos llegó vacía. */
     sel[sc.checkVal - 1][1] = cForT(
@@ -622,9 +637,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     mtz.push([cTxt('Categoría'), cTxt('Motivo'), cTxt('Descripción'), cTxt('Empresas')]);
     const refMotivo = `'Selección comparables'!${cMotivo}`;
     const mFila0 = mtz.length + 1;
-    MOTIVOS.forEach(([, categoria, motivo, descripcion]) => {
-      mtz.push([cTxt(categoria), cTxt(motivo), cTxt(descripcion),
-        cFor(`COUNTIF(${refMotivo},"${motivo}")`, '#,##0')]);
+    MOTIVOS.forEach(([, categoria, motivos, descripcion]) => {
+      mtz.push([cTxt(categoria), cTxt(motivos.join(' + ')), cTxt(descripcion),
+        cFor(contarMotivos(refMotivo, motivos), '#,##0')]);
     });
     const mFilaN = mFila0 + MOTIVOS.length - 1;
     mtz.push([]);

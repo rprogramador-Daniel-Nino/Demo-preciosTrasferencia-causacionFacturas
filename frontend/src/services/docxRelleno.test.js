@@ -577,3 +577,31 @@ test('las tablas que la plantilla no trae se reportan en vez de fallar en silenc
   assert.ok(!avisos.includes('Operación analizar'), 'y no de la que sí estaba');
   assert.ok(avisos.includes('Muestra Compañías comparables'));
 });
+
+test('una tabla macro se encuentra con el título partido en runs', () => {
+  /* Estas ocho no llevan número, así que la numeración nunca fue su problema; lo que
+     sí las alcanzaba es que el título tuviera que estar contiguo en el XML. */
+  const xml = '<w:p><w:r><w:t>Crecimiento del PIB Mun</w:t></w:r><w:r><w:t>dial</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025);
+  assert.ok(!salida.includes('vieja'), 'la tabla partida en runs debe sustituirse igual');
+  assert.match(salida, /Crecimiento Mundial/);
+});
+
+test('una tabla macro se encuentra sin tildes y en mayúsculas', () => {
+  const xml = '<w:p><w:t>TASAS DE INFLACION GLOBAL</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025);
+  assert.ok(!salida.includes('vieja'));
+});
+
+test('las tablas macro ausentes también se reportan', () => {
+  const avisos = [];
+  actualizarTablasMacroOoxml(
+    '<w:p><w:t>Crecimiento del PIB Mundial</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>v</w:t></w:p></w:tc></w:tr></w:tbl>',
+    null, 2025, avisos,
+  );
+  assert.strictEqual(avisos.length, 7, 'siete de las ocho no están en esta plantilla');
+  assert.ok(!avisos.includes('PIB Mundial'));
+  assert.ok(avisos.includes('Desempleo en Colombia'));
+});
