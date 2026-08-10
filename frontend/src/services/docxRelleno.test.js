@@ -10,6 +10,7 @@ import {
   CENTINELA_ANEXO, SIN_DATO, EMU_POR_CM, actualizarTablasMacroOoxml,
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
+  textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
 } from './docxRelleno.js';
 
 
@@ -453,7 +454,10 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
   assert.ok(xmlActualizado.includes('Ingreso (07)'), 'Falta el tipo de operación en la Tabla 2');
   assert.ok(xmlActualizado.includes('Otros servicios'), 'Falta la descripción en la Tabla 2');
 
-  assert.ok(xmlActualizado.includes('Tabla 3.Transacciones Inter compañía'), 'No se reemplazó la Tabla 3');
+  /* «Tabla 3. Transacciones», con espacio tras el punto: el título de todas las tablas
+     lo compone ahora un solo helper a partir del número que traía la plantilla, así que
+     dejan de convivir dos formatos. */
+  assert.ok(xmlActualizado.includes('Tabla 3. Transacciones Inter compañía'), 'No se reemplazó la Tabla 3');
   assert.ok(xmlActualizado.includes('604477955'), 'Falta la identificación fiscal en la Tabla 3');
 
   assert.ok(xmlActualizado.includes('Tabla 6. Composición accionaria'), 'No se reemplazó la Tabla 6');
@@ -465,3 +469,139 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
   assert.ok(xmlActualizado.includes('5.00%'), 'Falta el análisis vertical de efectivo en la Tabla 10');
 });
 
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Localización de tablas por nombre.
+
+   La numeración de la plantilla no es fiable —cambia de un informe a otro— y el
+   texto de un título viene partido en varios runs. Estos tests fijan las dos cosas
+   que hacen que la tabla se encuentre igual.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+const conTabla = (parrafoXml) =>
+  `${parrafoXml}<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>`;
+
+test('textoPlanoOoxml une los runs en que Word parte una frase', () => {
+  /* Word corta por rsid, por el corrector o por un cambio de formato; el título
+     completo no aparece contiguo en el XML aunque se lea entero en pantalla. */
+  const xml = '<w:p><w:r><w:t>Tabla 1</w:t></w:r><w:r><w:t>7. Muestra Com</w:t></w:r>'
+    + '<w:r><w:t xml:space="preserve">pañías comparables</w:t></w:r></w:p>';
+  assert.strictEqual(textoPlanoOoxml(xml), 'Tabla 17. Muestra Compañías comparables');
+});
+
+test('textoPlanoOoxml deshace las entidades y el espacio duro', () => {
+  const xml = '<w:p><w:t>Ingresos&#160;y&amp;gastos</w:t></w:p>';
+  assert.strictEqual(textoPlanoOoxml(xml), 'Ingresos y&gastos');
+});
+
+test('claveTitulo ignora el número, las tildes y las mayúsculas', () => {
+  const esperada = 'muestra companias comparables';
+  ['Tabla 17. Muestra Compañías comparables',
+    'TABLA 3. MUESTRA COMPAÑIAS COMPARABLES',
+    'Tabla N° 21 – Muestra compañías comparables',
+    'Muestra Compañías Comparables',
+  ].forEach((t) => assert.strictEqual(claveTitulo(t), esperada, t));
+});
+
+test('numeroDeTabla lee el número cuando está y devuelve null cuando no', () => {
+  assert.strictEqual(numeroDeTabla('Tabla 17. Muestra'), 17);
+  assert.strictEqual(numeroDeTabla('Tabla N° 4 – Método'), 4);
+  assert.strictEqual(numeroDeTabla('Muestra Compañías comparables'), null);
+});
+
+test('la tabla se encuentra aunque la plantilla la renumere', () => {
+  /* El mismo nombre con tres numeraciones distintas: es el caso que rompía el
+     patrón anterior, que exigía «Tabla 17» literal. */
+  ['Tabla 17.', 'Tabla 21.', 'Tabla 9.', ''].forEach((prefijo) => {
+    const xml = conTabla(`<w:p><w:t>${prefijo} Muestra Compañías comparables</w:t></w:p>`);
+    const b = localizarBloqueTabla(xml, 'Muestra Compañías comparables', { numeros: [17] });
+    assert.ok(b, `no la encontró con «${prefijo || 'sin número'}»`);
+    assert.strictEqual(b.inicio, 0);
+    assert.ok(xml.slice(b.fin) === '', 'el bloque debe llegar hasta el cierre de la tabla');
+  });
+});
+
+test('la tabla se encuentra aunque el título venga partido en runs', () => {
+  const xml = conTabla('<w:p><w:r><w:t>Tabla 1</w:t></w:r><w:r><w:t>0. Activos a 31 de dic</w:t></w:r>'
+    + '<w:r><w:t>iembre</w:t></w:r></w:p>');
+  const b = localizarBloqueTabla(xml, 'Activos a 31 de diciembre');
+  assert.ok(b, 'el título partido debe localizarse igual');
+  assert.strictEqual(b.numero, 10, 'y conserva el número que traía la plantilla');
+});
+
+test('el número desempata dos tablas con el mismo nombre', () => {
+  const xml = conTabla('<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>')
+    + conTabla('<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>');
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { numeros: [18] }).numero, 18);
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { numeros: [5] }).numero, 5);
+  /* Y si la plantilla renumeró, el nombre sigue mandando en vez de no encontrar nada. */
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { numeros: [99] }).numero, 5);
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { ocurrencia: 1 }).numero, 18);
+});
+
+test('el bloque cierra en la tabla que corresponde, no en una anidada', () => {
+  /* Word admite tablas dentro de una celda. Parar en el primer </w:tbl> partía el
+     bloque por la mitad y dejaba medio esqueleto suelto en el documento. */
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:t>interna</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '</w:tc></w:tr></w:tbl><w:p><w:t>siguiente</w:t></w:p>';
+  const b = localizarBloqueTabla(xml, 'Composición accionaria');
+  assert.ok(b);
+  assert.ok(xml.slice(b.inicio, b.fin).endsWith('</w:tbl></w:tc></w:tr></w:tbl>'),
+    'debe abarcar la tabla externa completa');
+  assert.ok(xml.slice(b.fin).startsWith('<w:p>'), 'y no llevarse el párrafo siguiente');
+});
+
+test('un título sin tabla detrás no se toma por tabla', () => {
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p><w:p><w:t>texto suelto</w:t></w:p>';
+  assert.strictEqual(localizarBloqueTabla(xml, 'Composición accionaria'), null);
+});
+
+test('los párrafos vacíos entre el título y la tabla no rompen la búsqueda', () => {
+  const xml = '<w:p><w:t>Tabla 9. Criterios de vinculación</w:t></w:p><w:p/><w:p><w:t></w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  assert.ok(localizarBloqueTabla(xml, 'Criterios de vinculación'));
+});
+
+test('las tablas que la plantilla no trae se reportan en vez de fallar en silencio', () => {
+  /* Sin este aviso, una tabla que no se encuentra deja en el informe los datos del
+     cliente anterior y nadie se entera hasta que el documento ya está radicado. */
+  const avisos = [];
+  actualizarTablasOperacionesOoxml(
+    conTabla('<w:p><w:t>Tabla 2. Operación analizar</w:t></w:p>'),
+    { anio: 2025, ent: 'ACME', vinc_tipo: 'Otros servicios (07)' },
+    avisos,
+  );
+  assert.ok(avisos.length > 0, 'debería avisar de las que faltan');
+  assert.ok(!avisos.includes('Operación analizar'), 'y no de la que sí estaba');
+  assert.ok(avisos.includes('Muestra Compañías comparables'));
+});
+
+test('una tabla macro se encuentra con el título partido en runs', () => {
+  /* Estas ocho no llevan número, así que la numeración nunca fue su problema; lo que
+     sí las alcanzaba es que el título tuviera que estar contiguo en el XML. */
+  const xml = '<w:p><w:r><w:t>Crecimiento del PIB Mun</w:t></w:r><w:r><w:t>dial</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025);
+  assert.ok(!salida.includes('vieja'), 'la tabla partida en runs debe sustituirse igual');
+  assert.match(salida, /Crecimiento Mundial/);
+});
+
+test('una tabla macro se encuentra sin tildes y en mayúsculas', () => {
+  const xml = '<w:p><w:t>TASAS DE INFLACION GLOBAL</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025);
+  assert.ok(!salida.includes('vieja'));
+});
+
+test('las tablas macro ausentes también se reportan', () => {
+  const avisos = [];
+  actualizarTablasMacroOoxml(
+    '<w:p><w:t>Crecimiento del PIB Mundial</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>v</w:t></w:p></w:tc></w:tr></w:tbl>',
+    null, 2025, avisos,
+  );
+  assert.strictEqual(avisos.length, 7, 'siete de las ocho no están en esta plantilla');
+  assert.ok(!avisos.includes('PIB Mundial'));
+  assert.ok(avisos.includes('Desempleo en Colombia'));
+});
