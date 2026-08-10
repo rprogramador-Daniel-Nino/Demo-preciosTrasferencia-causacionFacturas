@@ -265,7 +265,7 @@ export default function IngestaCifras({ study, updateStudy }) {
             >
               <option value="MO">Margen Operacional (MO = Utilidad Op / Ventas)</option>
               <option value="MB">Margen Bruto (MB = Utilidad Bruta / Ventas)</option>
-              <option value="Berry">Razón Berry (Ventas / Costos Totales)</option>
+              <option value="Berry">Índice de Berry (Utilidad Bruta / Gastos Operativos)</option>
             </select>
           </div>
 

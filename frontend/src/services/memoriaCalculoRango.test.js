@@ -53,6 +53,27 @@ test('los cuartiles publican la posición además del valor', () => {
   assert.strictEqual(m.cuartiles.p75.valor, 0.13);
 });
 
+test('la fórmula publicada del cuartil describe la interpolación que se ejecuta', () => {
+  /* Este texto se imprime en el modal y en el Excel que se radica ante la DIAN. Decía
+     «sin interpolar» mientras el código interpolaba: una afirmación falsa dentro de un
+     documento tributario. El test existe para que no vuelva a divergir del cálculo. */
+  const m = construirMemoriaRango(estudio);
+  assert.match(m.cuartilFormula, /interpolaci[óo]n lineal/i);
+  assert.match(m.cuartilFormula, /QUARTILE\.INC/);
+  assert.doesNotMatch(m.cuartilFormula, /sin interpolar/i);
+});
+
+test('la fórmula publicada del ajuste nombra las dos convenciones de factor', () => {
+  /* `indicadorAjustado` escala CxC y CxP por r/(1+r) e inventario por r, y multiplica
+     cada partida por la base del método. El texto anterior describía un ajuste neto
+     único multiplicado por la tasa, que no es lo que calcula el motor. */
+  const m = construirMemoriaRango({ ...estudio, useadj: true, prime: '7.37' });
+  assert.match(m.ajuste.formula, /r\/\(1\+r\)/);
+  assert.match(m.ajuste.formula, /AjCxC/);
+  assert.match(m.ajuste.formula, /AjInv/);
+  assert.doesNotMatch(m.ajuste.formula, /^Tasa × \[/);
+});
+
 test('el filtro de ámbito deja fuera comparables y lo advierte', () => {
   /* El panel filtra por ámbito y el informe no. Que las dos cifras difieran es
      tolerable; que nadie lo sepa, no. */
@@ -164,9 +185,13 @@ test('el ajuste de capital de trabajo mueve el margen de las comparables', () =>
   );
 });
 
-test('el índice de Berry no admite ajuste de capital de trabajo', () => {
+test('el índice de Berry admite ajuste de capital de trabajo', () => {
+  /* Estuvo exceptuado mientras el sistema lo definía como ventas / costos totales.
+     Con la definición del motor —utilidad bruta / gastos operativos— sí lo admite,
+     igual que la hoja Berry del Excel de soporte. */
   const m = construirMemoriaRango({ ...estudio, pli: 'Berry', useadj: true, prime: 10 });
-  assert.strictEqual(m.ajuste.aplicado, false);
+  assert.strictEqual(m.ajuste.aplicado, true);
+  assert.match(m.indicador.formula, /Gastos operativos/);
 });
 
 /* ══════════════ Hojas del Excel ══════════════ */

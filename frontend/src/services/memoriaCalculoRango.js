@@ -28,7 +28,7 @@ export const INDICADORES = {
   },
   Berry: {
     etiqueta: 'Índice de Berry',
-    formula: 'Ingresos operacionales ÷ (Costo de ventas + Gastos operativos)',
+    formula: '(Ingresos operacionales − Costo de ventas) ÷ Gastos operativos',
   },
 };
 
@@ -153,14 +153,30 @@ export function construirMemoriaRango(estudio) {
     ambito: { modo, etiqueta: AMBITOS[modo] || AMBITOS.all },
     parteExaminada: { cifras: T, pli: pliContribuyente, razones: razonesT },
     ajuste: {
-      aplicado: !!useAdj && clave !== 'Berry',
+      /* Berry dejó de estar exceptuado: con la definición del motor —utilidad bruta
+         sobre gastos operativos— sí admite el ajuste, y la hoja Berry del Excel ya
+         lo venía calculando con sus siete escenarios. */
+      aplicado: !!useAdj,
       tasa,
+      /* El texto que se publica tiene que ser el que ejecuta `indicadorAjustado`. La
+         versión anterior describía un ajuste neto único multiplicado por la tasa, que
+         no es lo que calcula el motor: cada partida escala por la base del método, y
+         CxC y CxP llevan el factor de valor presente r/(1+r) mientras inventario y
+         PP&E llevan la tasa directa. */
       formula:
-        'Tasa × [(CxC/Ventas − CxC/Ventas c) + (Inventario/Ventas − Inventario/Ventas c) ' +
-        '− (CxP/Costos − CxP/Costos c)]',
+        'Por comparable, con r = tasa y d = r/(1+r), y Base = la base del método ' +
+        '(ventas en MO y MB, gastos operativos en Berry, costo en Cost Plus, ' +
+        'costo + gastos en NCP):\n' +
+        '  AjCxC = (CxC c/Base c − CxC e/Base e) × Base c × d\n' +
+        '  AjCxP = (CxP c/Base c − CxP e/Base e) × Base c × d\n' +
+        '  AjInv = (Inv c/Base c − Inv e/Base e) × Base c × r\n' +
+        'Indicador ajustado = (Utilidad − AjCxC + AjCxP − AjInv) / Denominador, donde el ' +
+        'denominador es la base descontando AjCxC cuando la base es ventas',
       nota:
-        'Compara los ratios de capital de trabajo de la parte examinada con los de cada ' +
-        'comparable. El índice de Berry no admite este ajuste.',
+        'Compara los ratios de capital de trabajo de la parte examinada (e) con los de cada ' +
+        'comparable (c). Se reporta el escenario CxC + CxP + Inventario. Las dos convenciones ' +
+        'de factor —r/(1+r) para las partidas monetarias y r directa para las de existencias— ' +
+        'vienen del modelo Excel validado y son deliberadas.',
     },
     comparables,
     serie,
@@ -175,7 +191,10 @@ export function construirMemoriaRango(estudio) {
         : null,
       formulaAjuste: '(Mediana − Indicador del contribuyente) × Ingresos operacionales',
     },
-    cuartilFormula: 'Valor en la posición ⌊p × (n − 1)⌋ de la serie ordenada de menor a mayor, sin interpolar',
+    cuartilFormula:
+      'Interpolación lineal en la posición p × (n − 1) de la serie ordenada de menor a mayor, ' +
+      'equivalente a QUARTILE.INC de Excel: cuando la posición no cae sobre un dato, el valor ' +
+      'se interpola entre ese dato y el siguiente',
     advertencias,
   };
 }

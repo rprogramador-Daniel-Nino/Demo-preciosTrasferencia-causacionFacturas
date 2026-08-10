@@ -224,13 +224,10 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
   return denom ? numerador / denom : null;
 }
 
-/* Cuartil por interpolación lineal, equivalente a QUARTILE.INC de Excel.
-
-   IMPORTANTE: difiere a propósito de `quart` en calculations.js, que toma el
-   elemento en la posición truncada sin interpolar. El modelo Excel de rangos
-   usa QUARTILE.INC, y para que el rango ajustado que publica el sistema coincida
-   con el que el consultor validó en la hoja, este módulo interpola. La ruta sin
-   ajuste sigue usando `quart` heredado; sólo el rango ajustado usa este. */
+/* Cuartil por interpolación lineal, equivalente a QUARTILE.INC de Excel, y desde
+   agosto de 2026 el único del sistema: `quart` (posición truncada, sin interpolar)
+   convivía en calculations.js y sobre la misma serie daba otro rango. El modelo Excel
+   de rangos usa QUARTILE.INC, así que se conservó esta y se retiró aquella. */
 export function cuartilInterpolado(serieOrdenada, p) {
   const n = serieOrdenada.length;
   if (n === 0) return null;

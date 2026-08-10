@@ -135,13 +135,22 @@ test('el filtro de ámbito llega al rango del informe, no solo al de la pantalla
   assert.strictEqual(soloInt.filas.length, 4, 'las filas siguen trayendo toda la muestra');
 });
 
-test('Berry conserva su definición del sistema y sigue sin ajuste', () => {
-  /* El sistema define Berry como ventas / costos totales; el motor OCDE lo define
-     como utilidad bruta / gastos operativos. Mientras esa diferencia no se resuelva,
-     Berry no se enruta al motor y su margen no se ajusta. */
+test('Berry usa la definición del motor y sí admite ajuste', () => {
+  /* El sistema definía Berry como «ventas / costos totales» y el motor como
+     «utilidad bruta / gastos operativos». Convivían las dos y el informe y su Excel
+     de soporte publicaban cifras distintas para el mismo estudio. Se adoptó la del
+     motor —la del Anexo del Cap. III de las Guías OCDE, y la que replica el modelo
+     Excel validado—, así que Berry entra por la misma ruta que MO y MB.
+
+     Con la comparable del fixture (ventas 1000, costo 600, utilidad operacional 100)
+     los gastos operativos son 1000 − 600 − 100 = 300, y Berry = 400 / 300. */
   const r = analizarRango({ ...conAjuste, pli: 'Berry' });
-  r.filas.forEach((f) => assert.strictEqual(f.ajustado, f.noAjustado));
   const uno = r.filas[0];
-  assert.ok(Math.abs(uno.noAjustado - (1000 / (600 + (1000 - 600 - 100)))) < 1e-12,
-    `Berry = ventas / costos totales, dio ${uno.noAjustado}`);
+  assert.ok(Math.abs(uno.noAjustado - (400 / 300)) < 1e-12,
+    `Berry = utilidad bruta / gastos operativos, dio ${uno.noAjustado}`);
+
+  /* Y deja de estar exceptuado del ajuste de capital de trabajo: la hoja Berry del
+     Excel ya lo venía calculando con sus siete escenarios. */
+  assert.notStrictEqual(uno.ajustado, uno.noAjustado,
+    'con useadj activo el margen de Berry tiene que moverse');
 });
