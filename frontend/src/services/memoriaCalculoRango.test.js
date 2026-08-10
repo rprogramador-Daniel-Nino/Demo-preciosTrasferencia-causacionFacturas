@@ -81,8 +81,28 @@ test('con el contribuyente fuera del rango se propone el ajuste hasta la mediana
   const m = construirMemoriaRango(estudio);
   assert.strictEqual(m.resultado.dentro, false);
   assert.strictEqual(m.resultado.dir, 'por debajo', '7,5 % está por debajo del P25 de 10 %');
-  /* (0,10 − 0,075) × 4000 = 100 */
-  assert.ok(Math.abs(m.resultado.ajustePropuesto - 100) < 1e-9);
+  /* Serie 0,10 · 0,10 · 0,13 · 0,13. La mediana cae entre el segundo y el tercero, así
+     que interpola a 0,115 —QUARTILE.INC, la misma que usa el Excel de soporte—.
+     (0,115 − 0,075) × 4000 = 160. Con la fórmula truncada anterior daba 0,10 y 100. */
+  assert.ok(Math.abs(m.resultado.ajustePropuesto - 160) < 1e-9, `ajuste=${m.resultado.ajustePropuesto}`);
+});
+
+test('la memoria avisa cuándo un cuartil salió de interpolar entre dos datos', () => {
+  /* Quien rehace la cuenta a mano busca el número en la serie de al lado; si el cuartil
+     cayó entre dos posiciones, no lo va a encontrar y tiene que saber por qué. */
+  const m = construirMemoriaRango(estudio);
+  assert.strictEqual(m.cuartiles.mediana.valor, 0.115, 'entre 0,10 y 0,13');
+  /* Con cuatro datos las tres posiciones caen fraccionarias (0,75 · 1,5 · 2,25). */
+  assert.strictEqual(m.cuartiles.mediana.interpolado, true);
+  assert.strictEqual(m.cuartiles.p25.interpolado, true);
+
+  /* Con cinco, el P25 cae justo sobre el segundo dato: 0,25 × 4 = 1. */
+  const cinco = construirMemoriaRango({
+    ...estudio,
+    comparables: [...estudio.comparables, { name: 'QUINTA S.A.', amb: 'Int', s: 5000, c: 4000, op: 750 }],
+  });
+  assert.strictEqual(cinco.cuartiles.p25.interpolado, false);
+  assert.strictEqual(cinco.cuartiles.p25.posicion, 1);
 });
 
 test('con el contribuyente dentro del rango no hay ajuste que proponer', () => {

@@ -7,12 +7,14 @@
    reconstruirla comparable por comparable.
 
    No calcula nada por su cuenta: reutiliza `analizarRango` para el margen de cada
-   comparable y `quart` para los cuartiles, que son las mismas funciones que alimentan el
-   informe y el panel. Duplicar aquí una fórmula produciría una memoria de cálculo que no
-   explica el número que se está mostrando, que es peor que no tener memoria. */
+   comparable y `cuartilInterpolado` para los cuartiles, que son las mismas funciones que
+   alimentan el informe, el panel y el Excel de soporte. Duplicar aquí una fórmula
+   produciría una memoria de cálculo que no explica el número que se está mostrando, que
+   es peor que no tener memoria. */
 
-import { num, pliOf, ratios, quart } from '../utils/calculations.js';
+import { num, pliOf, ratios } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
+import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 
 /** Indicadores de rentabilidad admitidos, con la fórmula tal como la aplica `pliOf`. */
 export const INDICADORES = {
@@ -85,16 +87,23 @@ export function construirMemoriaRango(estudio) {
   const serie = comparables.filter((c) => c.incluida).map((c) => c.ajustado).sort((a, b) => a - b);
   const n = serie.length;
 
-  /* Misma fórmula que `quart`: el valor en la posición truncada de la serie ordenada.
-     Se publica la posición además del valor porque es lo que permite rehacer la cuenta
-     a mano sobre la tabla de al lado. */
+  /* Cuartiles por interpolación lineal —QUARTILE.INC—, los mismos que calculan el
+     rango del informe y las hojas del Excel de soporte. La memoria existe para
+     explicar ese número: si aquí se usara otra fórmula, explicaría uno distinto.
+
+     Se publica además la posición porque es lo que permite rehacer la cuenta a mano
+     sobre la tabla de al lado. Es la del elemento inferior del par: cuando el cuartil
+     no cae justo sobre un dato, el valor está interpolado entre esa posición y la
+     siguiente, y `interpolado` lo señala para que nadie busque la cifra en la lista. */
   const posicion = (p) => (n ? Math.floor(p * (n - 1)) : null);
+  const interpola = (p) => (n ? (p * (n - 1)) % 1 !== 0 : false);
+  const cuartil = (p) => ({
+    valor: cuartilInterpolado(serie, p),
+    posicion: posicion(p),
+    interpolado: interpola(p),
+  });
   const cuartiles = n
-    ? {
-        p25: { valor: quart(serie, 0.25), posicion: posicion(0.25) },
-        mediana: { valor: quart(serie, 0.5), posicion: posicion(0.5) },
-        p75: { valor: quart(serie, 0.75), posicion: posicion(0.75) },
-      }
+    ? { p25: cuartil(0.25), mediana: cuartil(0.5), p75: cuartil(0.75) }
     : null;
 
   /* El panel exige al menos una comparable con margen; el informe exige tres. Cuando el
@@ -110,10 +119,13 @@ export function construirMemoriaRango(estudio) {
   const advertencias = [];
   const excluidasPorAmbito = comparables.filter((c) => c.excluida === 'fuera del filtro de ámbito').length;
   if (excluidasPorAmbito) {
+    /* El informe ya calcula el rango con el mismo filtro —antes lo ignoraba y las dos
+       cifras no coincidían—, así que el aviso pasó de anunciar una discrepancia a
+       recordar que la muestra publicada es más chica que la cargada. */
     advertencias.push(
       `El filtro «${AMBITOS[modo]}» deja fuera ${excluidasPorAmbito} comparable(s) de este ` +
-      'rango. El informe en Word calcula el rango con todas, así que las dos cifras no ' +
-      'van a coincidir mientras el filtro esté puesto.'
+      'rango. El informe en Word aplica el mismo filtro, así que publicará esta cifra y ' +
+      'una muestra más corta que la cargada.'
     );
   }
   const sinCifras = comparables.filter((c) => c.excluida === 'sin estados financieros cargados').length;
