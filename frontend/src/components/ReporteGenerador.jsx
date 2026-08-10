@@ -829,6 +829,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     binario: binarioMarcado,
     estudio: study,
     datosMacro: analisisMercado,
+    analisisSector: analisisSector,
     colecciones: coleccionesDelEstudio(study),
     imagenesAnexo: (study.eeffImages || []).map((img) => ({
       dataUrl: typeof img === 'string' ? img : (img && (img.dataUrl || img.src)),

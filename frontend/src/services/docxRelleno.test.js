@@ -8,6 +8,7 @@ import PizZip from 'pizzip';
 import {
   renderizarDocx, insertarImagenes, rellenarDocx, desdeDataUrl,
   CENTINELA_ANEXO, SIN_DATO, EMU_POR_CM, actualizarTablasMacroOoxml,
+  coleccionesDelEstudio,
 } from './docxRelleno.js';
 
 
@@ -368,3 +369,32 @@ test('actualización de tablas macroeconómicas en el OOXML de docxRelleno', asy
   assert.ok(xmlActualizado.includes('3.3'), 'Falta el valor 3.3 en la tabla de PIB mundial');
   assert.ok(xmlActualizado.includes('2.8'), 'Falta el valor 2.8 en la tabla de PIB mundial');
 });
+
+test('coleccionesDelEstudio arma las comparables, razones de rechazo y los accionistas correctamente', () => {
+  const estudioConAccionistas = {
+    embudoSeleccion: {
+      evaluadas: 10,
+      seleccionadas: 2,
+      porMotivo: { holding: 8 }
+    },
+    comparables: [
+      { name: 'Comp A', amb: 'Int', s: 1000, c: 800, op: 100 },
+      { name: 'Comp B', amb: 'Nac', s: 2000, c: 1500, op: 200 }
+    ],
+    accionistas: [
+      { nombre: 'Accionista A', pais: 'USA', acciones: 150000, valor_capital: 150000000, participacion_pct: 75 },
+      { nombre: 'Accionista B', pais: 'COLOMBIA', acciones: 50000, valor_capital: 50000000, participacion_pct: 25 }
+    ]
+  };
+
+  const colecciones = coleccionesDelEstudio(estudioConAccionistas);
+  assert.ok(Array.isArray(colecciones.comparables), 'Debe tener la colección comparables');
+  assert.ok(Array.isArray(colecciones.razonesRechazo), 'Debe tener la colección razonesRechazo');
+  assert.ok(Array.isArray(colecciones.accionistas), 'Debe tener la colección accionistas de la Fase 2');
+
+  assert.strictEqual(colecciones.accionistas.length, 2);
+  assert.strictEqual(colecciones.accionistas[0].nombre, 'Accionista A');
+  assert.strictEqual(colecciones.accionistas[0].acciones, '150.000');
+  assert.strictEqual(colecciones.accionistas[0].participacion, '75');
+});
+

@@ -31,7 +31,7 @@ import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js';
-import { pctf } from '../utils/calculations.js';
+import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
@@ -86,7 +86,16 @@ export function coleccionesDelEstudio(estudio) {
     cantidad: String(f.cuantas),
   }));
 
-  return { comparables, razonesRechazo };
+  const accionistas = (study.accionistas || []).map((a, i) => ({
+    n: String(i + 1),
+    nombre: a.nombre || '',
+    pais: a.pais || '',
+    acciones: a.acciones ? fmt(num(a.acciones)) : '',
+    valorCapital: a.valor_capital ? fmt(num(a.valor_capital)) : '',
+    participacion: a.participacion_pct ? String(a.participacion_pct) : '',
+  }));
+
+  return { comparables, razonesRechazo, accionistas };
 }
 
 function escaparXml(s) {
@@ -322,7 +331,7 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
  *          campos salieron sin dato, para poder avisarlo antes de radicar.
  */
 export function renderizarDocx(binario, estudio, opciones = {}) {
-  const { datosMacro, colecciones = {}, delimitadores } = opciones;
+  const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
   const camposVacios = new Set();
 
   const zip = new PizZip(binario);
@@ -343,7 +352,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
            fila de comparables es del comparable, no del estudio. */
         if (scope && Object.prototype.hasOwnProperty.call(scope, tag)) return scope[tag];
         if (Object.prototype.hasOwnProperty.call(colecciones, tag)) return colecciones[tag];
-        const v = valorDeCampo(estudio, tag);
+        const v = valorDeCampo(estudio, tag, { datosMacro, analisisSector });
         if (v === null || v === undefined || v === '') { camposVacios.add(tag); return null; }
         return v;
       },
@@ -587,9 +596,9 @@ export function insertarImagenesAnexoB(zip, estudio) {
  * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
  */
 export function rellenarDocx({
-  binario, estudio, datosMacro, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
+  binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
 }) {
-  const { zip, camposVacios } = renderizarDocx(binario, estudio, { datosMacro, colecciones, delimitadores });
+  const { zip, camposVacios } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
   const { insertadas } = insertarImagenes(zip, imagenesAnexo);
   const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
   return {
