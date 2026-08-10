@@ -148,6 +148,73 @@ export function construirMemoriaRango(estudio) {
     );
   }
 
+  /* ── Calidad del dato de entrada ──
+     Cuatro comprobaciones que salieron de la auditoría del modelo Excel del cliente y que
+     el sistema no hacía. No bloquean el cálculo: avisan de que el número que va a salir
+     se sostiene en cifras que conviene mirar antes de radicar. Se leen de
+     `study.comparables` y no de `filas` porque miran las cifras crudas, no el margen. */
+  const crudas = Array.isArray(study.comparables) ? study.comparables : [];
+  const razonPPE = T.s ? (num(study.t_ppe) || 0) / T.s : null;
+
+  /* Una comparable con activo fijo desproporcionado hace que el ajuste de PP&E supere su
+     propia utilidad operacional. En los datos reales del cliente, Oriental Pearl tenía
+     PP&E por el 124,8 % de sus ventas frente al 2,18 % de la parte examinada. El umbral
+     es doble a propósito: diez veces la intensidad de la examinada Y al menos media venta,
+     para no disparar el aviso cuando la examinada casi no tiene activo fijo. */
+  const desproporcionadas = crudas.filter((c) => {
+    const s = num(c && c.s), ppe = num(c && c.ppe);
+    if (!s || ppe === null) return false;
+    const razon = ppe / s;
+    return razon > 0.5 && (razonPPE === null || razon > 10 * razonPPE);
+  });
+  if (desproporcionadas.length) {
+    advertencias.push(
+      `PP&E desproporcionado en ${desproporcionadas.map((c) => c.name).join(', ')}: su activo ` +
+      'fijo sobre ventas supera con mucho el de la parte examinada, así que los escenarios ' +
+      'con PP&E desbordan el resultado. El informe reporta CxC + CxP + Inventario, que no ' +
+      'se ve afectado.'
+    );
+  }
+
+  /* Costo de ventas casi nulo: el margen bruto se confunde con el operacional y los
+     métodos que dividen por costo o por utilidad bruta dejan de discriminar. */
+  const sinCosto = crudas.filter((c) => {
+    const s = num(c && c.s), co = num(c && c.c);
+    return s && co !== null && co / s < 0.05;
+  });
+  if (sinCosto.length) {
+    advertencias.push(
+      `${sinCosto.map((c) => c.name).join(', ')} reportan un costo de ventas por debajo del ` +
+      '5 % de sus ventas. Margen Bruto, Cost Plus e Índice de Berry no son defendibles con ' +
+      'esas comparables dentro; conviene descartarlas al seleccionar el mejor método.'
+    );
+  }
+
+  /* Cost Plus divide sobre costo depurado de cuentas por pagar: si sale negativo, el
+     indicador cambia de signo y deja de significar nada. */
+  const costPlusNegativo = crudas.filter((c) => {
+    const co = num(c && c.c), ap = num(c && c.ap);
+    return co !== null && ap !== null && co - ap < 0;
+  });
+  if (costPlusNegativo.length) {
+    advertencias.push(
+      `El denominador de Cost Plus (costo − cuentas por pagar) sale negativo en ` +
+      `${costPlusNegativo.map((c) => c.name).join(', ')}. Ese método no es utilizable con ` +
+      'esta muestra.'
+    );
+  }
+
+  /* Cuentas por pagar demasiado bajas en la parte examinada: en los datos del cliente
+     equivalían a 3,6 días de costo, lo que sugiere pasivo comercial clasificado en otra
+     cuenta. Si es así, el ajuste de CxP se está calculando sobre un saldo incompleto. */
+  if (T.s && T.ap !== null && T.ap / T.s < 0.01) {
+    advertencias.push(
+      'Las cuentas por pagar de la parte examinada son menos del 1 % de sus ventas: pocos ' +
+      'días de costo. Verifique si hay pasivo comercial clasificado en otras cuentas antes ' +
+      'de sostener el ajuste de CxP.'
+    );
+  }
+
   return {
     indicador: { clave, ...indicador },
     ambito: { modo, etiqueta: AMBITOS[modo] || AMBITOS.all },

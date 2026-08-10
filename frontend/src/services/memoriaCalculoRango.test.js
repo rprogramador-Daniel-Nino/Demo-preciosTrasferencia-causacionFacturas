@@ -192,6 +192,64 @@ test('el índice de Berry admite ajuste de capital de trabajo', () => {
   assert.match(m.indicador.formula, /Gastos operativos/);
 });
 
+/* ══════════════ Calidad del dato de entrada ══════════════
+   Las cuatro salen de la auditoría del modelo Excel del cliente: eran advertencias que
+   un humano escribió a mano y que el sistema no sabía detectar. */
+
+test('avisa de la comparable con PP&E desproporcionado', () => {
+  const m = construirMemoriaRango({
+    ...estudio,
+    t_ppe: 40, // 1 % de las ventas de la parte examinada
+    comparables: [
+      ...estudio.comparables,
+      { name: 'PESADA S.A.', amb: 'Int', s: 1000, c: 800, op: 100, ppe: 1300 },
+    ],
+  });
+  assert.ok(
+    m.advertencias.some((a) => /PESADA S\.A\./.test(a) && /PP&E/.test(a)),
+    'debe nombrar la comparable y el activo fijo'
+  );
+});
+
+test('avisa de comparables sin costo de ventas relevante', () => {
+  const m = construirMemoriaRango({
+    ...estudio,
+    comparables: [
+      ...estudio.comparables,
+      { name: 'SIN COSTO LTD', amb: 'Int', s: 1000, c: 5, op: 100 },
+    ],
+  });
+  assert.ok(
+    m.advertencias.some((a) => /SIN COSTO LTD/.test(a) && /Berry/.test(a)),
+    'debe decir qué métodos deja de sostener'
+  );
+});
+
+test('avisa cuando el denominador de Cost Plus queda negativo', () => {
+  const m = construirMemoriaRango({
+    ...estudio,
+    comparables: [
+      ...estudio.comparables,
+      { name: 'DEBE MAS LTD', amb: 'Int', s: 1000, c: 300, op: 100, ap: 500 },
+    ],
+  });
+  assert.ok(m.advertencias.some((a) => /DEBE MAS LTD/.test(a) && /Cost Plus/.test(a)));
+});
+
+test('avisa de cuentas por pagar demasiado bajas en la parte examinada', () => {
+  /* En los datos reales equivalían a 3,6 días de costo. */
+  const m = construirMemoriaRango({ ...estudio, t_ap: 10 }); // 0,25 % de 4000
+  assert.ok(m.advertencias.some((a) => /cuentas por pagar/i.test(a) && /1 %/.test(a)));
+});
+
+test('el estudio limpio no emite ninguna advertencia de calidad', () => {
+  const m = construirMemoriaRango(estudio);
+  assert.ok(
+    !m.advertencias.some((a) => /PP&E|costo de ventas|Cost Plus|cuentas por pagar/i.test(a)),
+    'salió una advertencia de calidad sobre datos que están bien: ' + m.advertencias.join(' / ')
+  );
+});
+
 /* ══════════════ Nombre del archivo ══════════════ */
 
 test('el nombre del archivo lleva contribuyente y año, sin caracteres prohibidos', () => {
