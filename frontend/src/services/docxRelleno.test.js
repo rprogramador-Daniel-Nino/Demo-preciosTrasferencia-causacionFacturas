@@ -504,6 +504,14 @@ test('claveTitulo ignora el número, las tildes y las mayúsculas', () => {
   ].forEach((t) => assert.strictEqual(claveTitulo(t), esperada, t));
 });
 
+test('claveTitulo solo descarta el prefijo cuando trae número', () => {
+  /* «Tabla de rangos» es el NOMBRE de una tabla del informe, no un prefijo numerado.
+     Quitarle la palabra «Tabla» dejaba la clave en «de rangos», que no es comparable con
+     nada de forma exacta y solo funcionaba por inclusión. */
+  assert.strictEqual(claveTitulo('Tabla de rangos'), 'tabla de rangos');
+  assert.strictEqual(claveTitulo('Tabla 20. Tabla de rangos'), 'tabla de rangos');
+});
+
 test('numeroDeTabla lee el número cuando está y devuelve null cuando no', () => {
   assert.strictEqual(numeroDeTabla('Tabla 17. Muestra'), 17);
   assert.strictEqual(numeroDeTabla('Tabla N° 4 – Método'), 4);
@@ -553,6 +561,42 @@ test('el bloque cierra en la tabla que corresponde, no en una anidada', () => {
   assert.ok(xml.slice(b.fin).startsWith('<w:p>'), 'y no llevarse el párrafo siguiente');
 });
 
+test('la tabla se encuentra cuando su título es la primera fila, y no un párrafo aparte', () => {
+  /* Es como la plantilla de End Game trae la «Tabla 20. Tabla de rangos» del final: el
+     título no precede a la tabla, vive dentro de su primera fila. Con el localizador que
+     exigía «párrafo de título + <w:tbl>» esa tabla era inalcanzable y se radicaba con los
+     percentiles del informe anterior. Verificado contra su word/document.xml. */
+  const xml = '<w:p><w:t>texto previo</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>Percentil 25</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:p><w:t>siguiente</w:t></w:p>';
+  const b = localizarBloqueTabla(xml, 'Tabla de rangos');
+  assert.ok(b, 'debe encontrarla con el título embebido en la primera fila');
+  assert.strictEqual(b.numero, 20, 'y conservar el número que traía la plantilla');
+  assert.ok(xml.slice(b.inicio).startsWith('<w:tbl>'), 'el bloque empieza en la tabla');
+  assert.ok(xml.slice(b.fin).startsWith('<w:p><w:t>siguiente'),
+    'y termina al cerrar la tabla, sin llevarse lo que sigue');
+});
+
+test('el rótulo embebido exige el nombre exacto y no una celda que lo contenga', () => {
+  /* La plantilla trae una tabla de definiciones cuya primera fila es «MO | Margen
+     operacional de utilidad o rentabilidad operacional». Si al rótulo embebido le bastara
+     con contener el nombre, esa tabla se haría pasar por la «Tabla 19. Margen Operacional
+     Compañías Comparables» y la sustitución borraría las definiciones del método. */
+  const xml = '<w:tbl><w:tr><w:tc><w:p><w:t>MO</w:t></w:p></w:tc>'
+    + '<w:tc><w:p><w:t>Margen operacional de utilidad o rentabilidad operacional</w:t></w:p>'
+    + '</w:tc></w:tr></w:tbl>';
+  assert.strictEqual(localizarBloqueTabla(xml, 'Margen Operacional'), null);
+});
+
+test('un título dentro de una fila que no es la primera no se toma por título de la tabla', () => {
+  /* Si valiera cualquier fila, una celda que mencione el nombre —el cuerpo de la matriz de
+     rechazo lo hace— secuestraría la sustitución de la tabla entera. */
+  const xml = '<w:tbl><w:tr><w:tc><w:p><w:t>cabecera</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>Tabla de rangos</w:t></w:p></w:tc></w:tr></w:tbl>';
+  assert.strictEqual(localizarBloqueTabla(xml, 'Tabla de rangos'), null);
+});
+
 test('un título sin tabla detrás no se toma por tabla', () => {
   const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p><w:p><w:t>texto suelto</w:t></w:p>';
   assert.strictEqual(localizarBloqueTabla(xml, 'Composición accionaria'), null);
@@ -576,6 +620,43 @@ test('las tablas que la plantilla no trae se reportan en vez de fallar en silenc
   assert.ok(avisos.length > 0, 'debería avisar de las que faltan');
   assert.ok(!avisos.includes('Operación analizar'), 'y no de la que sí estaba');
   assert.ok(avisos.includes('Muestra Compañías comparables'));
+});
+
+test('renderizarDocx publica qué tablas no trae la plantilla', async () => {
+  /* `sustituidorDeTablas` sabe anotar las que faltan, pero `renderizarDocx` llamaba a los
+     dos actualizadores sin pasarles el arreglo: el aviso se calculaba y se tiraba. Una tabla
+     no sustituida se radica con los datos del cliente anterior, que es justo el fallo que
+     ese mecanismo existe para evitar. */
+  const binario = await plantilla([parrafo('Informe de {ent}')]);
+  const { avisosTablas } = renderizarDocx(binario, ESTUDIO);
+  assert.ok(Array.isArray(avisosTablas), 'debe devolver la lista de tablas no encontradas');
+  assert.ok(avisosTablas.includes('Muestra Compañías comparables'),
+    'una plantilla sin tablas debe reportarlas todas');
+  assert.ok(avisosTablas.includes('PIB Mundial'), 'también las de macroeconomía');
+});
+
+test('rellenarDocx propaga los avisos de tablas hasta quien genera el informe', async () => {
+  const binario = await plantilla([parrafo('Informe de {ent}')]);
+  const { avisosTablas } = rellenarDocx({ binario, estudio: ESTUDIO, tipoSalida: 'nodebuffer' });
+  assert.ok(avisosTablas && avisosTablas.length > 0, 'el aviso tiene que llegar a la UI');
+});
+
+test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
+  /* La plantilla trae el rango vertical dos veces: la «Tabla 18. Rango Intercuartil» de
+     los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones, esta última con
+     el rótulo dentro de su primera fila. El código elegía una de las dos con un if/else,
+     así que la otra se radicaba con los percentiles del informe anterior. */
+  const xml = '<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>horizontal vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vertical vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>conclusiones vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' });
+  assert.ok(!salida.includes('vertical vieja'), 'la Tabla 18 debe actualizarse');
+  assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
+  assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
+    'deben quedar las dos tablas verticales regeneradas');
 });
 
 test('una tabla macro se encuentra con el título partido en runs', () => {

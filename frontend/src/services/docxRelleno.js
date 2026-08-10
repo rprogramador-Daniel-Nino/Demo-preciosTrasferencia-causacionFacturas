@@ -334,7 +334,10 @@ export function claveTitulo(texto) {
   return String(texto || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .toLowerCase()
-    .replace(/^\s*tabla\s*n?[°º]?\s*\.?\s*\d*\s*[.:)\-–—]*\s*/, '')
+    /* El número es obligatorio para descartar el prefijo. Sin él se le arrancaba la palabra
+       «Tabla» a la tabla que SE LLAMA «Tabla de rangos», y su clave quedaba en «de rangos»:
+       incomparable de forma exacta y dependiente de la coincidencia por inclusión. */
+    .replace(/^\s*tabla\s*n?[°º]?\s*\.?\s*\d+\s*[.:)\-–—]*\s*/, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
@@ -356,6 +359,69 @@ function finDeTabla(xml, desde) {
     if (nivel === 0) return m.index + m[0].length;
   }
   return -1;
+}
+
+/** Fin del `<w:tr>` que empieza en `desde`, contando anidamiento. -1 si no cierra. */
+function finDeFila(xml, desde) {
+  const rx = /<w:tr(?:\s[^>]*)?>|<\/w:tr>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '</w:tr>' ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/**
+ * Tablas cuyo título no las precede, sino que es su PRIMERA FILA.
+ *
+ * Así trae la plantilla de referencia la «Tabla 20. Tabla de rangos» del final del informe:
+ * el rótulo es una celda de la fila de arriba, no un párrafo aparte. Para el localizador
+ * clásico —«párrafo de título seguido de `<w:tbl>`»— esa tabla era inalcanzable, y se
+ * radicaba con los percentiles del informe anterior.
+ *
+ * Solo la primera fila cuenta. Si valiera cualquiera, una celda del cuerpo que mencione el
+ * nombre —la matriz de rechazo lo hace— secuestraría la sustitución de la tabla completa.
+ *
+ * El bloque devuelto abarca la tabla entera, rótulo incluido: lo que se emite en su lugar
+ * ya trae su propio párrafo de título.
+ *
+ * La coincidencia es EXACTA, no por inclusión como en el localizador por párrafo. Un rótulo
+ * es exactamente el nombre de la tabla; una celda cualquiera, no. La plantilla trae una
+ * tabla de definiciones cuya primera fila es «MO | Margen operacional de utilidad o
+ * rentabilidad operacional»: por inclusión se haría pasar por la tabla de márgenes de las
+ * comparables, y sustituirla borraría las definiciones del método.
+ */
+function candidatosPorFilaTitulo(texto, claves) {
+  const encontrados = [];
+  let cursor = 0;
+  for (;;) {
+    const inicio = texto.indexOf('<w:tbl', cursor);
+    if (inicio === -1) break;
+    const fin = finDeTabla(texto, inicio);
+    if (fin < 0) break;
+    /* Desde `fin` y no desde el interior: así las tablas anidadas no se analizan por
+       separado —su rótulo, si lo tienen, es de la celda que las contiene—. */
+    cursor = fin;
+
+    const iFila = texto.indexOf('<w:tr', inicio);
+    if (iFila === -1 || iFila > fin) continue;
+    const finFila = finDeFila(texto, iFila);
+    if (finFila < 0 || finFila > fin) continue;
+
+    const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+    const primeraFila = texto.slice(iFila, finFila);
+    let p;
+    while ((p = rxParrafo.exec(primeraFila)) !== null) {
+      const titulo = textoPlanoOoxml(p[0]);
+      const clave = claveTitulo(titulo);
+      if (!clave || !claves.some((c) => clave === c)) continue;
+      encontrados.push({ inicio, fin, titulo, numero: numeroDeTabla(titulo) });
+      break;
+    }
+  }
+  return encontrados;
 }
 
 /**
@@ -400,6 +466,11 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
     if (fin < 0) continue;
     candidatos.push({ inicio: p.index, fin, titulo, numero: numeroDeTabla(titulo) });
   }
+
+  /* Las del rótulo embebido se añaden y todo se ordena por posición en el documento, que es
+     sobre lo que `ocurrencia` cuenta: «la primera» tiene que ser la primera que se lee. */
+  candidatos.push(...candidatosPorFilaTitulo(texto, claves));
+  candidatos.sort((a, b) => a.inicio - b.inicio);
 
   if (!candidatos.length) return null;
 
@@ -693,10 +764,18 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     );
   }, { numeros: [17] });
 
-  /* 12. Rango intercuartil en vertical. La plantilla lo titula «Rango Intercuartil»
-     —igual que el horizontal— o «Tabla de rangos», y lo numera 18 o 20. Se busca por
-     los dos nombres; si sale el homónimo del horizontal, la segunda ocurrencia es
-     esta, que va después en el documento. */
+  /* 12. Rango intercuartil en vertical. La plantilla lo trae DOS VECES —la «Tabla 18. Rango
+     Intercuartil» de los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones,
+     esta última con el rótulo dentro de su primera fila— y las dos tienen que quedar con
+     los mismos percentiles. Antes se elegía una con un if/else y la otra se radicaba con
+     los datos del informe anterior.
+
+     Qué tablas existen se decide sobre el `xml` de ENTRADA, antes de que los bloques
+     anteriores hayan escrito nada: las tablas que este módulo emite llevan «RANGO
+     INTERCUARTIL» en su cabecera, así que preguntar después las haría pasar por tablas de
+     la plantilla y una sustitución acabaría pisando a la otra.
+
+     De atrás hacia adelante, como en Transacciones Inter compañía. */
   {
     const filas18_20 = [
       ['Mínimo', pStr(minNoAjustado), pStr(minAjustado)],
@@ -711,10 +790,17 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
       filas18_20
     );
-    if (!reemplazar('Tabla de rangos', tablaRangos, { numeros: [20] })) {
-      /* Sin «Tabla de rangos» en la plantilla, el vertical es el segundo «Rango
-         Intercuartil»: el primero ya lo consumió el bloque 5. */
-      reemplazar('Rango Intercuartil', tablaRangos, { numeros: [18], ocurrencia: 1 });
+    const OPC_TABLA_RANGOS = { numeros: [20] };
+    /* Sin «Tabla de rangos» en la plantilla, el vertical es el segundo «Rango
+       Intercuartil»: el primero ya lo consumió el bloque 5. */
+    const OPC_RANGO_VERTICAL = { numeros: [18], ocurrencia: 1 };
+    const traeTablaRangos = !!localizarBloqueTabla(xml, 'Tabla de rangos', OPC_TABLA_RANGOS);
+    const traeRangoVertical = !!localizarBloqueTabla(xml, 'Rango Intercuartil', OPC_RANGO_VERTICAL);
+
+    if (traeTablaRangos) reemplazar('Tabla de rangos', tablaRangos, OPC_TABLA_RANGOS);
+    if (traeRangoVertical) reemplazar('Rango Intercuartil', tablaRangos, OPC_RANGO_VERTICAL);
+    if (!traeTablaRangos && !traeRangoVertical && Array.isArray(avisos)) {
+      avisos.push('Tabla de rangos');
     }
   }
 
@@ -755,20 +841,26 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
  * @param {object} estudio
  * @param {{colecciones?:object, delimitadores?:{abrir:string,cerrar:string}}} [opciones]
  *        `colecciones` alimenta los bucles de tabla (`{#comparables}…{/comparables}`).
- * @returns {{zip:PizZip, camposVacios:string[]}} el zip listo para generar, y qué
- *          campos salieron sin dato, para poder avisarlo antes de radicar.
+ * @returns {{zip:PizZip, camposVacios:string[], avisosTablas:string[]}} el zip listo para
+ *          generar, qué campos salieron sin dato y qué tablas no se encontraron en la
+ *          plantilla, para poder avisar de ambas cosas antes de radicar.
  */
 export function renderizarDocx(binario, estudio, opciones = {}) {
   const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
   const camposVacios = new Set();
 
   const zip = new PizZip(binario);
-  
+
+  /* Las tablas que la plantilla no trae se recogen aquí y se devuelven. Sin el arreglo, el
+     sustituidor calcula el aviso y nadie lo lee: la tabla se queda con los datos del cliente
+     anterior y el informe se radica así. */
+  const avisosTablas = [];
+
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
-  xml = actualizarTablasMacroOoxml(xml, datosMacro, year);
-  xml = actualizarTablasOperacionesOoxml(xml, estudio);
+  xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
+  xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   zip.file(RUTA_DOC, xml);
 
   const doc = new Docxtemplater(zip, {
@@ -790,7 +882,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   });
 
   doc.render(colecciones);
-  return { zip: doc.getZip(), camposVacios: [...camposVacios] };
+  return { zip: doc.getZip(), camposVacios: [...camposVacios], avisosTablas };
 }
 
 /** El mayor rId ya usado, para no repetir ninguno al añadir relaciones. */
@@ -914,7 +1006,7 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
  * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
  *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
- * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
+ * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
  */
 /**
  * Inserta de manera dinámica el Anexo B en el OOXML de la plantilla .docx.
@@ -1022,12 +1114,12 @@ export function insertarImagenesAnexoB(zip, estudio) {
  * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
  *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
- * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
+ * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
  */
 export function rellenarDocx({
   binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
 }) {
-  const { zip, camposVacios } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
+  const { zip, camposVacios, avisosTablas } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
   const { insertadas } = insertarImagenes(zip, imagenesAnexo);
   const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
   return {
@@ -1036,6 +1128,7 @@ export function rellenarDocx({
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
     camposVacios,
+    avisosTablas,
     imagenesInsertadas: insertadas + insertadasB,
   };
 }

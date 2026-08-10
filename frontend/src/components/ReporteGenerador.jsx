@@ -1012,7 +1012,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
         const marcado = await leerDocxMarcado(plantillaActiva.id);
         if (!marcado) throw new Error('No se encontró la plantilla marcada. Vuelve a subirla.');
-        const { salida, camposVacios, imagenesInsertadas } = construirDocxDelEstudio(marcado, 'blob');
+        const { salida, camposVacios, avisosTablas, imagenesInsertadas } = construirDocxDelEstudio(marcado, 'blob');
         const enlace = document.createElement('a');
         enlace.href = URL.createObjectURL(salida);
         enlace.download = 'Informe_Local_PT_' + (study.ent || 'Empresa') + '_' +
@@ -1027,6 +1027,16 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
             texto: 'Salen sin dato ' + camposVacios.length + ' campo(s) marcado(s) (' +
               camposVacios.join(', ') + '): en el documento aparecen como «—». ' +
               'Complétalos antes de radicar.',
+          });
+        }
+        /* Las tablas que el motor no encontró en la plantilla. Sin este aviso se radican con
+           las cifras del informe del que salió la plantilla, y nadie se entera. */
+        if (avisosTablas && avisosTablas.length) {
+          nuevos.push({
+            nivel: 'aviso', origen: 'docx',
+            texto: 'No se encontraron en tu plantilla ' + avisosTablas.length + ' tabla(s) (' +
+              avisosTablas.join(', ') + '), así que conservan el contenido que ya traían. ' +
+              'Revísalas una por una antes de radicar.',
           });
         }
         if ((study.eeffImages || []).length && imagenesInsertadas === 0) {
