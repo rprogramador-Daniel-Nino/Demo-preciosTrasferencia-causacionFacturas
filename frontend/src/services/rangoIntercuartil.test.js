@@ -61,18 +61,87 @@ test('la comparable sin cifras aparece en filas con margen nulo', () => {
   assert.strictEqual(r.filas[0].amb, 'Int', 'sin ámbito declarado se asume internacional');
 });
 
-test('los cuartiles no cambiaron al extraer las filas', () => {
-  /* Red de seguridad del refactor: `stats` se calculaba antes recorriendo
-     `comparables` directamente y ahora se deriva de `filas`. */
+test('los márgenes salen en el orden del estudio y los cuartiles interpolan', () => {
   const r = analizarRango(conComparables);
   assert.deepStrictEqual(
     r.filas.map((f) => f.ajustado),
     [0.1, 0.13, 0.1, 0.13],
     'los márgenes por comparable deben salir en el orden en que están en el estudio'
   );
-  /* Serie ordenada: 0,10 · 0,10 · 0,13 · 0,13. `quart` no interpola —toma el elemento
-     en la posición truncada (`calculations.js:158`)—, así que la mediana es 0,10. Se
-     fija el valor que da hoy, que es el punto de este test: el refactor no movió el
-     rango de ningún informe ya generado. */
-  assert.strictEqual(r.stats.med, 0.1);
+  /* Serie ordenada: 0,10 · 0,10 · 0,13 · 0,13.
+
+     La mediana es 0,115, no 0,10. Antes este módulo usaba `quart`, que toma el
+     elemento en la posición truncada; ahora usa la interpolación de QUARTILE.INC,
+     que es la que calcula el Excel de soporte. Los dos documentos publicaban
+     cuartiles distintos sobre la misma serie, y esta línea era la que fijaba el
+     comportamiento divergente. */
+  assert.strictEqual(r.stats.med, 0.115);
+  assert.strictEqual(r.stats.p25, 0.1);
+  assert.strictEqual(r.stats.p75, 0.13);
+});
+
+/* ─── El ajuste de capital de trabajo, que no tenía ninguna cobertura aquí ─── */
+
+const conAjuste = {
+  pli: 'MO', t_s: 100000, t_c: 60000, t_op: 20000,
+  t_ar: 12000, t_inv: 5000, t_ap: 8000,
+  useadj: true, prime: 7.37,
+  comparables: [
+    { name: 'Uno', s: 1000, c: 600, op: 100, ar: 300, inv: 100, ap: 50 },
+    { name: 'Dos', s: 2000, c: 1600, op: 260, ar: 200, inv: 20, ap: 400 },
+    { name: 'Tres', s: 3000, c: 2400, op: 300, ar: 90, inv: 0, ap: 120 },
+  ],
+};
+
+test('el ajuste solo corre con useadj y mueve el margen de cada comparable', () => {
+  const con = analizarRango(conAjuste);
+  const sin = analizarRango({ ...conAjuste, useadj: false });
+
+  con.filas.forEach((f, i) => {
+    assert.notStrictEqual(f.ajustado, f.noAjustado, `${f.nombre}: el ajuste no movió nada`);
+    assert.strictEqual(f.noAjustado, sin.filas[i].ajustado,
+      `${f.nombre}: sin useadj el ajustado debe ser el margen crudo`);
+  });
+});
+
+test('con la tasa en cero el ajuste no mueve nada aunque useadj esté activo', () => {
+  /* Es el escenario silencioso que dejaba el campo vacío: el informe decía
+     «ajustado» y publicaba exactamente el margen sin ajustar. */
+  const r = analizarRango({ ...conAjuste, prime: 0 });
+  r.filas.forEach((f) => assert.strictEqual(f.ajustado, f.noAjustado));
+});
+
+test('la tasa va en porcentaje: 7,37 no es lo mismo que 0,0737', () => {
+  const enPorcentaje = analizarRango(conAjuste);
+  const enFraccion = analizarRango({ ...conAjuste, prime: 0.0737 });
+  assert.notStrictEqual(enPorcentaje.stats.med, enFraccion.stats.med,
+    'si alguien pasa la tasa ya dividida, el rango tiene que salir distinto');
+});
+
+test('el filtro de ámbito llega al rango del informe, no solo al de la pantalla', () => {
+  /* Cuatro comparables para que, al dejar fuera la nacional, sigan quedando las tres
+     que el rango necesita como mínimo. */
+  const conAmbito = {
+    ...conAjuste,
+    comparables: [
+      { name: 'Local', amb: 'Nac', s: 5000, c: 3000, op: 1500, ar: 400, inv: 50, ap: 200 },
+      ...conAjuste.comparables.map((c) => ({ ...c, amb: 'Int' })),
+    ],
+  };
+  const todas = analizarRango({ ...conAmbito, cmode: 'all' });
+  const soloInt = analizarRango({ ...conAmbito, cmode: 'intl' });
+  assert.ok(todas.stats && soloInt.stats, 'ambos filtros deberían dar rango');
+  assert.notStrictEqual(todas.stats.med, soloInt.stats.med);
+  assert.strictEqual(soloInt.filas.length, 4, 'las filas siguen trayendo toda la muestra');
+});
+
+test('Berry conserva su definición del sistema y sigue sin ajuste', () => {
+  /* El sistema define Berry como ventas / costos totales; el motor OCDE lo define
+     como utilidad bruta / gastos operativos. Mientras esa diferencia no se resuelva,
+     Berry no se enruta al motor y su margen no se ajusta. */
+  const r = analizarRango({ ...conAjuste, pli: 'Berry' });
+  r.filas.forEach((f) => assert.strictEqual(f.ajustado, f.noAjustado));
+  const uno = r.filas[0];
+  assert.ok(Math.abs(uno.noAjustado - (1000 / (600 + (1000 - 600 - 100)))) < 1e-12,
+    `Berry = ventas / costos totales, dio ${uno.noAjustado}`);
 });

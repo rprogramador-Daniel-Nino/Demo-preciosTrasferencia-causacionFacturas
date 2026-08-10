@@ -284,15 +284,22 @@ export default function IngestaCifras({ study, updateStudy }) {
 
           {study.useadj && (
             <div className="flex flex-col pt-2">
-              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Tasa de Interés Anual (ej: Prime Rate %)</label>
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Tasa de Interés Anual (Prime Rate %)</label>
               <input
                 type="number"
                 step="0.01"
                 value={study.prime || ''}
                 onChange={(e) => handleFieldChange('prime', e.target.value)}
-                placeholder="Ej: 8.5"
+                placeholder="Ej: 7.37"
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100"
               />
+              {/* De dónde sale el valor precargado. Es una sola tasa para toda la muestra:
+                  el ajuste no usa la tasa del país de cada comparable. */}
+              <p className="text-[10px] text-zinc-500 mt-1.5 leading-snug">
+                Bank Prime Loan Rate (Reserva Federal, H.15 · serie FRED RIFSPBLPNA), promedio
+                anual de días hábiles: 2025 = 7,37 %; 2024 = 8,31 %. Se aplica la misma tasa a
+                todas las comparables — ajústala si el año gravable es otro.
+              </p>
             </div>
           )}
         </div>

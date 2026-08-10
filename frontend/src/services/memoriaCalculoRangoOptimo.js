@@ -59,9 +59,12 @@ const D = (celda) => `Datos!${celda}`;
  * Construye las hojas del libro con fórmulas vivas.
  *
  * @param estudio  el estudio con t_s, t_c, t_op(gastos), t_ar, t_inv, t_ap, t_ppe,
- *                 prime y comparables [{name,s,c,op,ar,inv,ap,ppe,tasaEfectiva}].
+ *                 prime y comparables [{name,s,c,op,ar,inv,ap,ppe}].
  *                 IMPORTANTE: `op` y `t_op` deben ser GASTOS operativos
- *                 (usar el normalizador eeffParserNormalizador.js antes).
+ *                 (usar el normalizador eeffParserNormalizador.js antes), y `prime`
+ *                 es la tasa EN PORCENTAJE (7.37, no 0.0737): esta función la divide
+ *                 entre 100 al escribir Datos!B11, así que quien la llame no debe
+ *                 hacerlo antes.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
@@ -114,12 +117,40 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     datos.push([
       cTxt(c.name), cNum(Number(c.s) || 0), cNum(Number(c.c) || 0), cNum(Number(c.op) || 0),
       cNum(Number(c.ar) || 0), cNum(Number(c.inv) || 0), cNum(Number(c.ap) || 0),
-      cNum(Number(c.ppe) || 0), cFor('=$B$11', '0.00%'),
+      cNum(Number(c.ppe) || 0), cFor('$B$11', '0.00%'),
     ]);
   });
+
+  /* ─── Trazabilidad de la tasa, en las columnas K–M ───
+     La tabla de comparables llega hasta la I, así que este bloque cabe al lado sin
+     estorbar. Deja escrito de dónde sale el número, a qué comparables alcanza y con
+     qué convención se aplica: quien audita el libro no debería tener que preguntarlo.
+     La celda editable sigue siendo B11 —una sola—; aquí solo se refleja. */
+  const anotarTasa = (idxFila, etiqueta, valor) => {
+    if (!datos[idxFila]) datos[idxFila] = [];
+    datos[idxFila][10] = cTxt(etiqueta);
+    datos[idxFila][11] = valor;
+  };
+  anotarTasa(2, 'PARÁMETRO — TASA DE INTERÉS DE LOS AJUSTES DE CAPITAL DE TRABAJO', null);
+  anotarTasa(3, 'Tasa aplicada', cFor('$B$11', '0.00%'));
+  datos[3][12] = cTxt('← única celda editable: B11 alimenta a los ' + n + ' comparables');
+  anotarTasa(4, 'Fuente', cTxt(
+    'Board of Governors of the Federal Reserve System, H.15 Selected Interest Rates — '
+    + 'Bank Prime Loan Rate (serie FRED RIFSPBLPNA). Promedio anual de días hábiles: '
+    + '2025 = 7,37 %; 2024 = 8,31 %.'));
+  anotarTasa(5, 'Aplicación', cTxt(
+    'Tasa única para los ' + n + ' comparables: la columna «Tasa» de esta hoja es la '
+    + 'fórmula =$B$11 en todas las filas. La plantilla de Capital IQ traía en su lugar la '
+    + 'tasa del país de cada comparable, que es la fuga que este libro cierra.'));
+  anotarTasa(6, 'Convención', cTxt(
+    'Cuentas por cobrar y cuentas por pagar: r/(1+r). Inventario y propiedad, planta y '
+    + 'equipo: r directo. Son dos convenciones dentro del mismo ajuste, heredadas de la '
+    + 'plantilla; describir esta asimetría en el anexo metodológico del informe.'));
+
   hojas.push({
     nombre: 'Datos', celdas: datos,
-    cols: [{ wch: 34 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 9 }],
+    cols: [{ wch: 34 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+      { wch: 12 }, { wch: 9 }, { wch: 3 }, { wch: 30 }, { wch: 62 }, { wch: 46 }],
   });
 
   // Referencias del contribuyente (celdas fijas en Datos)
@@ -147,10 +178,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       const r = r0 + i;
       const src = filaComp0 + i; // fila en Datos
       // columnas A..I: referencias a Datos (letras A..I = 1..9)
-      const refs = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map((L) => cForT(`${D(`${L}${src}`)}`));
-      // A es texto (nombre), el resto numérico → re-tipar
+      // A es texto (nombre), el resto numérico
       const nombreRef = { t: 's', f: `${D(`A${src}`)}` };
-      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => cFor(`${D(`${L}${src}`)}`, '#,##0.00'));
+      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L) => cFor(`${D(`${L}${src}`)}`, '#,##0.00'));
       const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000');
       // base comparable
       const base = M.base === 'ventas' ? `B${r}` : M.base === 'opex' ? `D${r}`
@@ -158,6 +188,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       const denomDep = M.hoja === 'NCP' ? `((C${r}-G${r})+D${r})` : M.hoja === 'CostPlus' ? `(C${r}-G${r})` : null;
       const baseInv = M.dep ? denomDep : `M${r}`;
       const num = M.num === 'ebit' ? `J${r}` : `K${r}`;
+      /* Denominador de los sabores que NO restan el ajuste de CxC del numerador
+         («solo CxP», «solo inventario» y «solo PP&E»): la base sin corregir. La
+         columna R descuenta ese ajuste y solo corresponde a los sabores que sí lo
+         aplican. Para NCP y Cost Plus R es el denominador depurado (COGS−CxP), que
+         no tiene nada que ver con el ajuste de CxC, así que ahí se mantiene. */
+      const denomSinAR = M.base === 'ventas' ? `M${r}` : `R${r}`;
 
       const fila = [
         nombreRef,                              // A nombre
@@ -170,15 +206,15 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         cFor(`((E${r}/M${r})-(${AR_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // N Aj.CxC
         cFor(`((G${r}/M${r})-(${AP_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // O Aj.CxP
         cFor(`((F${r}/${baseInv})-(${INV_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // P Aj.Inv
-        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*I${r}`, '#,##0.000'),     // Q Aj.PP&E
+        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // Q Aj.PP&E
         cFor(`${M.dep ? denomDep : (M.base === 'ventas' ? `(B${r}-N${r})` : M.base === 'opex' ? `D${r}` : `M${r}`)}`, '#,##0.00'), // R denom ajustado
         cFor(`${num}/M${r}`, M.fmt),            // S sin ajuste
         cFor(`(${num}-N${r})/R${r}`, M.fmt),    // T CxC
-        cFor(`(${num}+O${r})/R${r}`, M.fmt),    // U CxP
-        cFor(`(${num}-P${r})/R${r}`, M.fmt),    // V Inv
+        cFor(`(${num}+O${r})/${denomSinAR}`, M.fmt),  // U CxP
+        cFor(`(${num}-P${r})/${denomSinAR}`, M.fmt),  // V Inv
         cFor(`(${num}-N${r}+O${r}-P${r})/R${r}`, M.fmt),        // W CxC+CxP+Inv
         cFor(`(${num}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt), // X +PP&E
-        cFor(`(${num}-Q${r})/R${r}`, M.fmt),    // Y PP&E
+        cFor(`(${num}-Q${r})/${denomSinAR}`, M.fmt),  // Y PP&E
       ];
       celdas.push(fila);
     }
@@ -230,13 +266,106 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       celdas.push(fila);
     }
 
-    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
+    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, base: M.base, dep: M.dep, r0, rN, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
 
     hojas.push({
       nombre: M.hoja, celdas,
       cols: [{ wch: 28 }].concat(new Array(24).fill({ wch: 11 })),
     });
   });
+
+  /* ─── Hoja «Diagnóstico de datos» ───
+     Las condiciones que invalidan un método o vuelven sospechoso un ajuste no se ven
+     mirando el rango: hay que ir comparable por comparable. Esta hoja las cuenta por
+     fórmula sobre «Datos», así que se actualiza sola cuando se corrige una cifra.
+
+     Cubre las tres observaciones que salieron de la auditoría del libro: métodos
+     inutilizables por costo de ventas casi nulo o denominador depurado negativo,
+     cuentas por pagar de la parte examinada demasiado pequeñas para sostener el
+     ajuste de CxP, y comparables cuyo PP&E desborda su propia utilidad. */
+  if (n > 0) {
+    const filaCompN = filaComp0 + n - 1;
+    const cd = (L) => `Datos!$${L}$${filaComp0}:$${L}$${filaCompN}`;
+    const VEN = cd('B'), COS = cd('C'), GAS = cd('D'), CXP = cd('G');
+
+    const dg = [];
+    dg.push([cTxt('DIAGNÓSTICO DE DATOS — comprobaciones por fórmula sobre la hoja «Datos»')]);
+    dg.push([cTxt('Nada está quemado: al corregir una cifra de entrada, estas comprobaciones se recalculan solas.')]);
+    dg.push([]);
+
+    dg.push([cTxt('1) ¿ES UTILIZABLE CADA MÉTODO CON ESTOS DATOS?')]);
+    dg.push([cTxt('Método'), cTxt('Comparables afectados'), cTxt('Veredicto'), cTxt('Criterio')]);
+    const CHEQUEOS = [
+      ['Margen Bruto', `SUMPRODUCT(--(${COS}<0.05*${VEN}))`,
+        'Costo de ventas por debajo del 5 % de las ventas: el margen bruto se pega al 100 % y deja de discriminar.'],
+      ['Cost Plus', `SUMPRODUCT(--((${COS}-${CXP})<=0))`,
+        'Denominador depurado (Costo − CxP) nulo o negativo: el indicador cambia de signo y no es interpretable.'],
+      ['Índice de Berry', `SUMPRODUCT(--(${GAS}<=0))`,
+        'Gastos operativos nulos o negativos: el índice se indefine.'],
+      ['Net Cost Plus', `SUMPRODUCT(--(((${COS}-${CXP})+${GAS})<=0))`,
+        'Denominador depurado ((Costo − CxP) + Gastos) nulo o negativo.'],
+      ['Margen Operacional', `SUMPRODUCT(--(${VEN}<=0))`,
+        'Ventas nulas o negativas: no hay base sobre la que calcular el margen.'],
+    ];
+    const filaCheq0 = dg.length + 1;
+    CHEQUEOS.forEach(([nombre, formula, criterio], i) => {
+      const r = filaCheq0 + i;
+      dg.push([
+        cTxt(nombre),
+        cFor(formula, '#,##0'),
+        cForT(`IF(B${r}=0,"Utilizable","Revisar: "&B${r}&" de ${n}")`),
+        cTxt(criterio),
+      ]);
+    });
+    dg.push([]);
+
+    dg.push([cTxt('2) PARTE EXAMINADA — tamaño de las partidas de capital de trabajo')]);
+    dg.push([cTxt('Partida'), cTxt('Valor'), cTxt('Unidad'), cTxt('Por qué importa')]);
+    [
+      ['Cuentas por cobrar', 'Datos!$B$7/Datos!$B$4*365', '#,##0.0', 'días de venta',
+        'Sostiene el ajuste de CxC.'],
+      ['Inventarios', 'Datos!$B$8/Datos!$B$5*365', '#,##0.0', 'días de costo',
+        'Sostiene el ajuste de inventario. En cero, el ajuste solo recoge el de las comparables.'],
+      ['Cuentas por pagar', 'Datos!$B$9/Datos!$B$5*365', '#,##0.0', 'días de costo',
+        'Si equivalen a muy pocos días, verificar si hay pasivos comerciales clasificados en otras cuentas antes de sostener el ajuste de CxP.'],
+      ['Cuentas por pagar / Ventas', 'Datos!$B$9/Datos!$B$4', '0.00%', 'porcentaje', ''],
+      ['PP&E / Ventas', 'Datos!$B$10/Datos!$B$4', '0.00%', 'porcentaje',
+        'Se contrasta contra la columna PP&E/Ventas de cada comparable, más abajo.'],
+    ].forEach(([etq, f, z, uni, nota]) => {
+      dg.push([cTxt(etq), cFor(f, z), cTxt(uni), cTxt(nota)]);
+    });
+    dg.push([]);
+
+    /* PP&E comparable por comparable. Las referencias van contra la hoja MO porque
+       ahí ya están calculados el ajuste (columna Q) y la utilidad operacional
+       (columna J): repetir esas fórmulas aquí sería una segunda implementación que
+       se desincroniza en cuanto cambie una. */
+    const mo = infoMetodos.find((M) => M.hoja === 'MO');
+    if (mo) {
+      dg.push([cTxt('3) PP&E POR COMPARABLE — dónde el ajuste de PP&E desborda el resultado')]);
+      dg.push([cTxt('Compañía'), cTxt('PP&E / Ventas'), cTxt('Ajuste PP&E (MO)'), cTxt('Utilidad operacional (MO)'),
+        cTxt('¿El ajuste supera la utilidad?')]);
+      for (let i = 0; i < n; i++) {
+        const rMO = mo.r0 + i;
+        const r = dg.length + 1;
+        dg.push([
+          cForT(`MO!A${rMO}`),
+          cFor(`MO!H${rMO}/MO!B${rMO}`, '0.00%'),
+          cFor(`MO!Q${rMO}`, '#,##0.000'),
+          cFor(`MO!J${rMO}`, '#,##0.00'),
+          cForT(`IF(ABS(C${r})>ABS(D${r}),"Sí — el escenario con PP&E no es defendible para esta compañía","")`),
+        ]);
+      }
+      dg.push([]);
+      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
+      dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+    }
+
+    hojas.unshift({
+      nombre: 'Diagnóstico de datos', celdas: dg,
+      cols: [{ wch: 34 }, { wch: 20 }, { wch: 26 }, { wch: 26 }, { wch: 58 }],
+    });
+  }
 
   /* ─── Hoja Resumen: sensibilidad, referenciando las hojas de método ─── */
   const resumen = [];

@@ -3,7 +3,8 @@ import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
 } from 'lucide-react';
-import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
+import { num, pliOf, ratios, pctf, adjustInfo } from '../utils/calculations';
+import { analizarRango } from '../services/rangoIntercuartil';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso } from '../services/comparablesEngine';
 import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -959,34 +960,29 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const tPLI = pliOf(T, kind);
   const tR = ratios(T);
 
-  const calculatedRows = comparables.map(c => {
-    const rawVal = {
-      s: num(c.s),
-      c: num(c.c),
-      op: num(c.op),
-      ar: num(c.ar),
-      inv: num(c.inv),
-      ap: num(c.ap)
-    };
+  /* El rango lo calcula `analizarRango`, el mismo servicio que alimenta el informe
+     Word y el Excel de soporte. Esta pantalla repetía aquí la fórmula del ajuste, de
+     modo que el tablero, el documento y el libro podían publicar tres rangos
+     distintos sobre las mismas comparables. `comparables` y `cmode` van del estado
+     local y no de `study` porque el efecto que los sincroniza corre después. */
+  const rango = analizarRango({ ...study, comparables, cmode });
 
-    let pliVal = pliOf(rawVal, kind);
-    let adj = 0;
-    const cR = ratios(rawVal);
-
-    if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
-      adj = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-    }
-
-    const adjustedPli = pliVal === null ? null : pliVal + adj;
-    const isIncluded = cmode === 'all' ? true : (cmode === 'intl' ? c.amb === 'Int' : c.amb === 'Nac');
-
+  const calculatedRows = comparables.map((c, idx) => {
+    const fila = rango.filas[idx] || {};
+    const pliVal = fila.noAjustado ?? null;
+    const adjustedPli = fila.ajustado ?? null;
     return {
       ...c,
       pli: pliVal,
-      adj,
-      ratiosComp: cR,
+      /* El ajuste es la diferencia entre las dos columnas, no un tercer cálculo:
+         así lo que se muestra cuadra siempre con lo que se sumó de verdad. */
+      adj: pliVal === null || adjustedPli === null ? 0 : adjustedPli - pliVal,
+      ratiosComp: ratios({
+        s: num(c.s), c: num(c.c), op: num(c.op),
+        ar: num(c.ar), inv: num(c.inv), ap: num(c.ap),
+      }),
       adjustedPli,
-      isIncluded
+      isIncluded: cmode === 'all' ? true : (cmode === 'intl' ? c.amb === 'Int' : c.amb === 'Nac'),
     };
   });
 
@@ -995,11 +991,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     .map(r => r.adjustedPli)
     .sort((a, b) => a - b);
 
-  const stats = activeSeries.length ? {
-    p25: quart(activeSeries, .25),
-    med: quart(activeSeries, .5),
-    p75: quart(activeSeries, .75)
-  } : null;
+  const stats = rango.stats;
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
 
@@ -1019,7 +1011,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       : null;
 
     const datos = {
-      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate },
+      /* `prime` va en porcentaje, tal como lo escribe el usuario: es lo que espera el
+         generador del libro. `interestRate` es el mismo número ya dividido entre 100,
+         que usa el cálculo de esta pantalla; se conserva porque otros consumidores del
+         payload lo leen, pero el Excel no debe tomarlo de ahí. */
+      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate, prime: study.prime },
       examinada: { T, tPLI, tR },
       rango: { stats, activeCount: activeSeries.length, adjustment },
       filtros: { engineConfig, selectionFunnel },

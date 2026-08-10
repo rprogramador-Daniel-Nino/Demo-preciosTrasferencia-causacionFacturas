@@ -1,5 +1,4 @@
 import XLSX from 'xlsx-js-style';
-import { pctf, fmt } from '../utils/calculations.js';
 import { hojasMemoriaRangoOptimo } from './memoriaCalculoRangoOptimo.js';
 import { normalizarEeff } from './eeffParserNormalizador.js';
 
@@ -91,7 +90,12 @@ export function construirLibroSoporte(datos) {
     t_inv: datos.examinada?.T?.inv ?? datos.estudio?.t_inv ?? datos.estudio?.inv,
     t_ap: datos.examinada?.T?.ap ?? datos.estudio?.t_ap ?? datos.estudio?.ap,
     t_ppe: datos.examinada?.T?.ppe ?? datos.estudio?.t_ppe ?? datos.estudio?.ppe,
-    prime: datos.estudio?.interestRate ?? datos.estudio?.prime ?? 0,
+    /* La tasa viaja EN PORCENTAJE (7.37), que es como la escribe el usuario y como la
+       espera `hojasMemoriaRangoOptimo`, que la divide entre 100 al escribir Datos!B11.
+       No leer aquí `estudio.interestRate`: el componente la publica ya dividida para su
+       propio cálculo, y tomarla de ahí la dividía dos veces —el libro salía con 0,0737 %
+       en vez de 7,37 % y ningún comparable recibía ajuste—. */
+    prime: datos.estudio?.prime ?? 0,
     comparables: (datos.comparables || []).map((c) => ({
       name: c.name || c.razonSocial || '',
       s: c.s,
@@ -101,7 +105,6 @@ export function construirLibroSoporte(datos) {
       inv: c.inv,
       ap: c.ap,
       ppe: c.ppe,
-      tasaEfectiva: c.tasaEfectiva,
     })),
   };
 
