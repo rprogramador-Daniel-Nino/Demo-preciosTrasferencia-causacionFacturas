@@ -185,6 +185,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           fuente: result.filename,
           actividad: result.actividad_especifica,
           anio: result.anio_gravable || null,
+          /* La identificación del vinculado del informe anterior es lo que permite
+             detectar que el Tax ID de la contraparte cambió de un año a otro sin
+             explicación. Sin guardarla aquí, ese cotejo no se puede hacer. */
+          vinculado: result.vinculado || null,
           comparables: result.comparables || []
         };
         setEstudioAnteriorInfo(info);

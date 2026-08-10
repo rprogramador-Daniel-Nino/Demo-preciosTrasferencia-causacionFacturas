@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, ArrowRight, Building2, Globe, DollarSign } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, ArrowRight, Building2, Globe, DollarSign, AlertTriangle } from 'lucide-react';
 import { fmt, montoOperacion } from '../utils/calculations';
 import { parseExcelOperations } from '../services/excelOperationsParser';
+import { avisoIdentificacionVinculado } from '../services/cotejoVinculado';
 
 export default function IngestaOperaciones({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
@@ -126,6 +127,17 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           </div>
         )}
       </div>
+
+      {/* El cotejo contra el informe del año anterior va aparte del mensaje de la carga:
+          el estudio anterior se ingiere en el paso 4, después de este, así que cuando
+          llega ya no hay mensaje de carga donde colgarlo. Como se calcula del estudio,
+          aparece en cuanto el dato existe y sigue visible al volver a este paso. */}
+      {avisoIdentificacionVinculado(study) && (
+        <div className="p-4 rounded-xl text-xs flex gap-2 items-start bg-amber-50 dark:bg-amber-950/20 border border-amber-200 text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+          <span className="font-medium text-sm">{avisoIdentificacionVinculado(study)}</span>
+        </div>
+      )}
 
       {/* Tarjeta Detallada de Operación Extraída */}
       {study.vinc_tipo && (
