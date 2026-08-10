@@ -1,60 +1,9 @@
 import XLSX from 'xlsx-js-style';
 import { hojasMemoriaRangoOptimo } from './memoriaCalculoRangoOptimo.js';
-import { normalizarEeff } from './eeffParserNormalizador.js';
+import { obtenerEstudioNormalizadoParaParche } from './estudioNormalizado.js';
 
 const CATEGORIA_RECHAZO = { filtro: 'Filtro (holding/saldo negativo/pérdida)', ia: 'Curación IA', rigor: 'Rigor funcional' };
 const puntaje = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '—');
-
-/**
- * Prepara una copia aislada del estudio para la memoria de cálculo óptima
- * sin tocar ni alterar el objeto 'estudio' original usado por el resto del sistema.
- */
-function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
-  if (!estudioOriginal) return {};
-  const copia = JSON.parse(JSON.stringify(estudioOriginal));
-  const cftNormalizadas = normalizarEeff({
-    ingresos_operacionales: copia.t_s ?? copia.T?.s,
-    costo_ventas: copia.t_c ?? copia.T?.c,
-    utilidad_operacional: copia.t_op ?? copia.T?.op,
-    gastos_operacionales: copia.t_gastos || copia.t_opex,
-    cuentas_por_cobrar: copia.t_ar ?? copia.T?.ar,
-    inventarios: copia.t_inv ?? copia.T?.inv,
-    cuentas_por_pagar: copia.t_ap ?? copia.T?.ap,
-    propiedad_planta_equipo: copia.t_ppe ?? copia.T?.ppe,
-  });
-
-  if (cftNormalizadas.op !== null && cftNormalizadas.op !== undefined) {
-    copia.t_op = cftNormalizadas.op;
-  } else if (copia.t_s != null && copia.t_c != null && copia.t_op != null) {
-    copia.t_op = Number(copia.t_s) - Number(copia.t_c) - Number(copia.t_op);
-  }
-  if (cftNormalizadas.ppe != null) copia.t_ppe = cftNormalizadas.ppe;
-
-  if (Array.isArray(copia.comparables)) {
-    copia.comparables = copia.comparables.map((comp) => {
-      const compNorm = normalizarEeff({
-        ingresos_operacionales: comp.s,
-        costo_ventas: comp.c,
-        utilidad_operacional: comp.op,
-        gastos_operacionales: comp.gastos || comp.opex,
-        cuentas_por_cobrar: comp.ar,
-        inventarios: comp.inv,
-        cuentas_por_pagar: comp.ap,
-        propiedad_planta_equipo: comp.ppe || comp.propiedad_planta_equipo,
-      });
-      let opex = compNorm.op;
-      if ((opex === null || opex === undefined) && comp.s != null && comp.c != null && comp.op != null) {
-        opex = Number(comp.s) - Number(comp.c) - Number(comp.op);
-      }
-      return {
-        ...comp,
-        op: opex !== null && opex !== undefined ? opex : comp.op,
-        ppe: compNorm.ppe !== null && compNorm.ppe !== undefined ? compNorm.ppe : comp.ppe,
-      };
-    });
-  }
-  return copia;
-}
 
 function hojaRechazadas(rechazadas) {
   const headers = ['Razón Social', 'ID', 'SIC', 'País', 'Categoría', 'Motivo de Rechazo'];
