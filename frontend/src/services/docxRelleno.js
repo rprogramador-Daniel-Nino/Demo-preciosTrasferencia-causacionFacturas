@@ -313,9 +313,153 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
 }
 
 /** Reemplaza quirúrgicamente las catorce tablas operativas en el OOXML del documento de la Fase 3. */
-export function actualizarTablasOperacionesOoxml(xml, estudio) {
+/* ─────────────────────────────────────────────────────────────────────────────
+   Localización de tablas en la plantilla: por NOMBRE, no por número.
+
+   La plantilla numera sus tablas, pero esa numeración no es fiable: cambia de un
+   informe a otro según qué secciones lleve. Se ve en la propia plantilla —la de
+   transacciones intercompañía viene como «Tabla 3» o como «Tabla 12», y el rango
+   vertical como «Tabla 18» o como «Tabla 20»—, lo que obligaba a escribir dos
+   patrones para la misma tabla y a no encontrarla con cualquier tercera numeración.
+
+   Lo estable es el nombre. Este localizador:
+
+     · lee el TEXTO VISIBLE de cada párrafo concatenando sus `<w:t>`. Word parte una
+       frase en varios runs sin criterio —«Tabla 1» + «7. Muestra Com» + «pañías»— y
+       un regex contra el XML crudo no la encuentra aunque el texto esté completo. Es
+       el mismo motivo por el que este módulo usa docxtemplater para los marcadores;
+     · normaliza el título: minúsculas, sin tildes y con los espacios colapsados, de
+       modo que «Compañías», «COMPANIAS» y «compañias» cuenten igual;
+     · descarta el prefijo «Tabla N.» antes de comparar, así que el número deja de
+       decidir. Se puede pasar como PISTA para desambiguar dos tablas homónimas —el
+       rango intercuartil aparece dos veces, horizontal y vertical—, pero si no
+       coincide con ninguna, la búsqueda por nombre sigue valiendo;
+     · cierra la tabla contando `<w:tbl>` anidados, en vez de parar en el primer
+       `</w:tbl>`: Word permite tablas dentro de una celda y ahí el patrón anterior
+       cortaba el bloque por la mitad.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Texto visible de un fragmento de OOXML: solo el contenido de los `<w:t>`. */
+export function textoPlanoOoxml(fragmento) {
+  const trozos = String(fragmento || '').match(/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/g) || [];
+  return trozos
+    .map((t) => t.replace(/<[^>]*>/g, ''))
+    .join('')
+    /* Las entidades hay que deshacerlas para comparar contra texto legible; el
+       espacio duro es frecuente en los títulos que el cliente maquetó a mano. */
+    .replace(/&#160;|&nbsp;/gi, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/** Clave de comparación de un título: sin «Tabla N.», sin tildes y sin puntuación. */
+export function claveTitulo(texto) {
+  return String(texto || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/^\s*tabla\s*n?[°º]?\s*\.?\s*\d*\s*[.:)\-–—]*\s*/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** Número que precede al título, si la plantilla lo trae. `null` si no hay. */
+export function numeroDeTabla(texto) {
+  const m = /^\s*tabla\s*n?[°º]?\s*\.?\s*(\d+)/i.exec(
+    String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  return m ? Number(m[1]) : null;
+}
+
+/** Fin del `<w:tbl>` que empieza en `desde`, contando anidamiento. -1 si no cierra. */
+function finDeTabla(xml, desde) {
+  const rx = /<w:tbl(?:\s[^>]*)?>|<\/w:tbl>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '</w:tbl>' ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/**
+ * Bloque «párrafo del título + la tabla que le sigue» cuyo título coincide con
+ * alguno de los nombres dados.
+ *
+ * @param xml       el `document.xml` completo.
+ * @param nombres   nombre canónico de la tabla, o varios sinónimos.
+ * @param opciones  `numeros`: números con los que desambiguar dos tablas homónimas.
+ *                  `ocurrencia`: cuál tomar si quedan varias (0 = la primera).
+ * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
+ */
+export function localizarBloqueTabla(xml, nombres, opciones = {}) {
+  const texto = String(xml || '');
+  const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
+  if (!claves.length) return null;
+
+  const candidatos = [];
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let p;
+  while ((p = rxParrafo.exec(texto)) !== null) {
+    const titulo = textoPlanoOoxml(p[0]);
+    const clave = claveTitulo(titulo);
+    if (!clave || !claves.some((c) => clave.includes(c))) continue;
+
+    /* Entre el título y la tabla la plantilla suele dejar párrafos vacíos. Se saltan
+       los que no tienen texto; en cuanto aparece uno con contenido, el título ya no
+       era el de esta tabla y se descarta. */
+    let cursor = p.index + p[0].length;
+    for (;;) {
+      const resto = texto.slice(cursor);
+      const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
+      if (!hueco) break;
+      if (textoPlanoOoxml(hueco[0]).trim()) break;
+      cursor += hueco[0].length;
+    }
+    const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(cursor));
+    if (!tras) continue;
+
+    const inicioTabla = cursor + tras[0].indexOf('<w:tbl');
+    const fin = finDeTabla(texto, inicioTabla);
+    if (fin < 0) continue;
+    candidatos.push({ inicio: p.index, fin, titulo, numero: numeroDeTabla(titulo) });
+  }
+
+  if (!candidatos.length) return null;
+
+  /* El número solo desempata. Si la plantilla renumeró y ninguno coincide, se sigue
+     con todos los que dio el nombre en vez de no encontrar nada. */
+  const numeros = Array.isArray(opciones.numeros) ? opciones.numeros : [];
+  const porNumero = numeros.length ? candidatos.filter((c) => numeros.includes(c.numero)) : [];
+  const finalistas = porNumero.length ? porNumero : candidatos;
+  const i = Number(opciones.ocurrencia) || 0;
+  return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
   let out = xml;
+
+  /* Sustituye el bloque de la tabla llamada `nombres` por lo que devuelva `generar`.
+     Si no aparece en la plantilla lo anota en `avisos`: hasta ahora el fallo era
+     silencioso y la tabla se quedaba con los datos del informe anterior, que es la
+     peor forma de fallar en un documento que se radica ante la DIAN. */
+  const reemplazar = (nombres, generar, opciones) => {
+    const bloque = localizarBloqueTabla(out, nombres, opciones);
+    if (!bloque) {
+      if (Array.isArray(avisos)) {
+        avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+      }
+      return false;
+    }
+    out = out.slice(0, bloque.inicio) + generar(bloque) + out.slice(bloque.fin);
+    return true;
+  };
+
+  /* Título de la tabla que se emite. Conserva el número que traía la plantilla en vez
+     de imponer el nuestro: si el cliente renumeró, escribir «Tabla 17» sobre lo que su
+     documento llama «Tabla 15» descuadra la referencia en el índice y en el texto. */
+  const tituloDe = (bloque, nombre) => (
+    bloque && bloque.numero != null ? `Tabla ${bloque.numero}. ${nombre}` : nombre
+  );
   const year = Number(estudio.anio) || 2025;
   const wrap = (v) => String(v == null || v === '' ? '—' : v);
 
@@ -365,43 +509,38 @@ export function actualizarTablasOperacionesOoxml(xml, estudio) {
     return { desc: m[1].trim(), cod: m[2] || '07' };
   };
 
-  // 1. Tabla 1. Operaciones de Ingreso/Egreso
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 1\.\s*Operaciones de (?:Ingreso|Egreso)(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const opTipoTitle = estudio.egreso ? 'Egreso' : 'Ingreso';
-      const tabla = generarTablaOoxml(
-        `Tabla 1. Operaciones de ${opTipoTitle}`,
-        ['Concepto de Operaciones a analizar', 'Nombre vinculado', 'País vinculado', 'Monto de la Operación analizar'],
-        [[
-          wrap(estudio.vinc_tipo),
-          wrap(estudio.vinc),
-          wrap(estudio.pais_vinc),
-          estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—'
-        ]],
-        'Información suministrada por la Administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 1. Operaciones de Ingreso/Egreso
+  reemplazar(['Operaciones de Ingreso', 'Operaciones de Egreso'], (b) => {
+    const opTipoTitle = estudio.egreso ? 'Egreso' : 'Ingreso';
+    return generarTablaOoxml(
+      tituloDe(b, `Operaciones de ${opTipoTitle}`),
+      ['Concepto de Operaciones a analizar', 'Nombre vinculado', 'País vinculado', 'Monto de la Operación analizar'],
+      [[
+        wrap(estudio.vinc_tipo),
+        wrap(estudio.vinc),
+        wrap(estudio.pais_vinc),
+        estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—'
+      ]],
+      'Información suministrada por la Administración de la Compañía.'
+    );
+  }, { numeros: [1] });
 
-  // 2. Tabla 2. Operación analizar
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 2\.\s*Operación(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
-      const tipoOp = estudio.egreso ? 'Egreso' : 'Ingreso';
-      const tabla = generarTablaOoxml(
-        'Tabla 2. Operación analizar',
-        ['No. Operaciones de análisis', 'Descripción'],
-        [[`${tipoOp} (${cod})`, desc]],
-        'Información suministrada por la Administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 2. Operación analizar
+  reemplazar('Operación analizar', (b) => {
+    const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
+    const tipoOp = estudio.egreso ? 'Egreso' : 'Ingreso';
+    return generarTablaOoxml(
+      tituloDe(b, 'Operación analizar'),
+      ['No. Operaciones de análisis', 'Descripción'],
+      [[`${tipoOp} (${cod})`, desc]],
+      'Información suministrada por la Administración de la Compañía.'
+    );
+  }, { numeros: [2] });
 
-  // 3. Tabla 3 / 12. Transacciones Inter compañía
+  /* 3. Transacciones Inter compañía. La plantilla la trae dos veces —una en la
+     descripción del vinculado y otra en el análisis— con la misma cabecera y números
+     que cambian según el informe (3 y 12 en la del cliente). Se sustituyen las dos
+     por ocurrencia, sin depender de esos números. */
   {
     const filas3 = [
       ['Razón social', wrap(estudio.vinc)],
@@ -411,112 +550,86 @@ export function actualizarTablasOperacionesOoxml(xml, estudio) {
       [`Tipo de operaciones (${estudio.egreso ? 'Egreso' : 'Ingreso'})`, wrap(estudio.vinc_tipo)],
       ['Monto en pesos', estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—']
     ];
-
-    const rx3 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 3\.\s*Transacciones Inter\s*compañía(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx3.test(out)) {
-      const tabla = generarTablaOoxml('Tabla 3.Transacciones Inter compañía', ['Compañía vinculada', ''], filas3, `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`);
-      out = out.replace(rx3, () => tabla);
-    }
-
-    const rx12 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 12\.\s*Transacciones Inter\s*compañía(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx12.test(out)) {
-      const tabla = generarTablaOoxml('Tabla 12.Transacciones Inter compañía', ['Compañía vinculada', ''], filas3, `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`);
-      out = out.replace(rx12, () => tabla);
-    }
+    const tablaTx = (b) => generarTablaOoxml(
+      tituloDe(b, 'Transacciones Inter compañía'),
+      ['Compañía vinculada', ''], filas3,
+      `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`
+    );
+    /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
+       segunda, y el localizador trabaja sobre posiciones del XML. */
+    reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 1 });
+    reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 0 });
   }
 
-  // 4. Tabla 4. Método de Precios de Transferencia Aplicable
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 4\.\s*Método de Precios de Transferencia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
-      const tabla = generarTablaOoxml(
-        'Tabla 4.Método de Precios de Transferencia Aplicable',
-        ['Código de Operación', 'Descripción de la operación', 'Método seleccionado', 'Indicador de Rentabilidad'],
-        [[cod, desc, estudio.metodo || 'TU', estudio.pli || 'MO']],
-        'Información suministrada por la Administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 4. Método de Precios de Transferencia Aplicable
+  reemplazar('Método de Precios de Transferencia', (b) => {
+    const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
+    return generarTablaOoxml(
+      tituloDe(b, 'Método de Precios de Transferencia Aplicable'),
+      ['Código de Operación', 'Descripción de la operación', 'Método seleccionado', 'Indicador de Rentabilidad'],
+      [[cod, desc, estudio.metodo || 'TU', estudio.pli || 'MO']],
+      'Información suministrada por la Administración de la Compañía.'
+    );
+  }, { numeros: [4] });
 
-  // 5. Tabla 5. Rango Intercuartil (horizontal)
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 5\.\s*Rango Intercuartil(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const col1 = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
-      const tabla = generarTablaOoxml(
-        'Tabla 5. Rango Intercuartil',
-        [col1, 'Percentil 25', 'Mediana', 'Percentil 75'],
-        [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
-        'Información suministrada por la Administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  /* 5. Rango Intercuartil, versión horizontal. El nombre no la distingue de la
+     vertical del análisis —las dos se llaman igual—, así que la primera ocurrencia
+     es la horizontal, que va antes en el documento. */
+  reemplazar('Rango Intercuartil', (b) => {
+    const col1 = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+    return generarTablaOoxml(
+      tituloDe(b, 'Rango Intercuartil'),
+      [col1, 'Percentil 25', 'Mediana', 'Percentil 75'],
+      [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
+      'Información suministrada por la Administración de la Compañía.'
+    );
+  }, { numeros: [5], ocurrencia: 0 });
 
-  // 6. Tabla 6. Composición accionaria
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 6\.\s*Composición accionaria(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const filas = (estudio.accionistas || []).map((a) => [
-        wrap(a.nombre),
-        wrap(a.pais),
-        a.acciones ? fmt(num(a.acciones)) : '—',
-        a.valor_capital ? fmt(num(a.valor_capital)) : '—',
-        a.participacion_pct ? String(a.participacion_pct) + '%' : '—'
-      ]);
-      const totalAcciones = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.acciones) || 0), 0);
-      const totalCapital = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.valor_capital) || 0), 0);
-      filas.push([
-        'Total',
-        '',
-        totalAcciones ? fmt(totalAcciones) : '—',
-        totalCapital ? fmt(totalCapital) : '—',
-        '100%'
-      ]);
-      const tabla = generarTablaOoxml(
-        'Tabla 6. Composición accionaria',
-        ['Accionista', 'País', 'N° Acciones', 'Valor Capital', '% Participación'],
-        filas,
-        'Información suministrada por la administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 6. Composición accionaria
+  reemplazar('Composición accionaria', (b) => {
+    const filas = (estudio.accionistas || []).map((a) => [
+      wrap(a.nombre),
+      wrap(a.pais),
+      a.acciones ? fmt(num(a.acciones)) : '—',
+      a.valor_capital ? fmt(num(a.valor_capital)) : '—',
+      a.participacion_pct ? String(a.participacion_pct) + '%' : '—'
+    ]);
+    const totalAcciones = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.acciones) || 0), 0);
+    const totalCapital = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.valor_capital) || 0), 0);
+    filas.push([
+      'Total',
+      '',
+      totalAcciones ? fmt(totalAcciones) : '—',
+      totalCapital ? fmt(totalCapital) : '—',
+      '100%'
+    ]);
+    return generarTablaOoxml(
+      tituloDe(b, 'Composición accionaria'),
+      ['Accionista', 'País', 'N° Acciones', 'Valor Capital', '% Participación'],
+      filas,
+      'Información suministrada por la administración de la Compañía.'
+    );
+  }, { numeros: [6] });
 
-  // 7. Tabla 8. Compañías vinculadas al 31 de diciembre de ${year}
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 8\.\s*Compañías vinculadas(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        `Tabla 8. Compañías vinculadas al 31 de diciembre de ${year}`,
-        ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
-        [[wrap(estudio.vinc), wrap(estudio.vinc_id), wrap(estudio.pais_vinc)]],
-        'Información suministrada por la Administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 7. Compañías vinculadas al cierre del año gravable
+  reemplazar('Compañías vinculadas', (b) => generarTablaOoxml(
+    tituloDe(b, `Compañías vinculadas al 31 de diciembre de ${year}`),
+    ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
+    [[wrap(estudio.vinc), wrap(estudio.vinc_id), wrap(estudio.pais_vinc)]],
+    'Información suministrada por la Administración de la Compañía.'
+  ), { numeros: [8] });
 
-  // 8. Tabla 9. Criterios de vinculación económica
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 9\.\s*Criterios de vinculación(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tabla 9. Criterios de vinculación económica',
-        ['Nombre Vinculada', 'País', 'Criterio de vinculación', 'Detalle del Criterio de Vinculación'],
-        [[wrap(estudio.vinc), wrap(estudio.pais_vinc), 'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa']],
-        'Información suministrada por la Administración de la Compañía.'
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 8. Criterios de vinculación económica
+  reemplazar('Criterios de vinculación', (b) => generarTablaOoxml(
+    tituloDe(b, 'Criterios de vinculación económica'),
+    ['Nombre Vinculada', 'País', 'Criterio de vinculación', 'Detalle del Criterio de Vinculación'],
+    [[wrap(estudio.vinc), wrap(estudio.pais_vinc), 'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa']],
+    'Información suministrada por la Administración de la Compañía.'
+  ), { numeros: [9] });
 
   // 9. Tabla 10. Activos a 31 de diciembre de ${year}
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 10\.\s*Activos a 31 de diciembre(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
+  reemplazar('Activos a 31 de diciembre', (b) => {
+    {
       const totalActivos = num(estudio.t_act_tot) || 1;
       const av = (v) => {
         const n = num(v);
@@ -535,65 +648,59 @@ export function actualizarTablasOperacionesOoxml(xml, estudio) {
         ['Total, Activos no corrientes', wrap(estudio.t_act_nocurr ? fmt(num(estudio.t_act_nocurr)) : null), av(estudio.t_act_nocurr)],
         ['Total, Activos', wrap(estudio.t_act_tot ? fmt(num(estudio.t_act_tot)) : null), av(estudio.t_act_tot)],
       ];
-      const tabla = generarTablaOoxml(
-        `Tabla 10. Activos a 31 de diciembre de ${year}`,
+      return generarTablaOoxml(
+        tituloDe(b, `Activos a 31 de diciembre de ${year}`),
         ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
         filas10,
         `Estados financieros de la Compañía a 31 de diciembre de ${year}.`
       );
-      out = out.replace(rx, () => tabla);
     }
-  }
+  }, { numeros: [10] });
 
-  // 10. Tabla 16. Razones de rechazo
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 16\.\s*Razones de rechazo(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const { filas: razonesFilas } = filasRazonesRechazo(estudio.embudoSeleccion);
-      const filas16 = (razonesFilas || []).map((f) => [
-        f.etiqueta,
-        f.letra,
-        String(f.cuantas)
-      ]);
-      const totalEvaluadas = estudio.embudoSeleccion ? String(estudio.embudoSeleccion.evaluadas) : '—';
-      filas16.push([
-        'TOTAL, UNIVERSO',
-        '',
-        totalEvaluadas
-      ]);
-      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
-      const tabla = generarTablaOoxml(
-        'Tabla 16. Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)',
-        ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
-        filas16,
-        `Información Base Datos ${dbFuente}.`
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 10. Razones de rechazo
+  reemplazar('Razones de rechazo', (b) => {
+    const { filas: razonesFilas } = filasRazonesRechazo(estudio.embudoSeleccion);
+    const filas16 = (razonesFilas || []).map((f) => [
+      f.etiqueta,
+      f.letra,
+      String(f.cuantas)
+    ]);
+    const totalEvaluadas = estudio.embudoSeleccion ? String(estudio.embudoSeleccion.evaluadas) : '—';
+    filas16.push([
+      'TOTAL, UNIVERSO',
+      '',
+      totalEvaluadas
+    ]);
+    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
+    return generarTablaOoxml(
+      tituloDe(b, 'Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)'),
+      ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
+      filas16,
+      `Información Base Datos ${dbFuente}.`
+    );
+  }, { numeros: [16] });
 
-  // 11. Tabla 17. Muestra Compañías comparables
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 17\.\s*Muestra Compañías comparables(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const compList = filasComparablesInforme(estudio);
-      const filas17 = (compList || []).map((f, idx) => [
-        String(idx + 1),
-        f.nombre,
-        AMBITO[f.amb] || ''
-      ]);
-      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
-      const tabla = generarTablaOoxml(
-        'Tabla 17. Muestra Compañías comparables',
-        ['Número', 'Nombre de la Compañía', 'Ámbito'],
-        filas17,
-        `Información Base Datos ${dbFuente}`
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 11. Muestra Compañías comparables
+  reemplazar('Muestra Compañías comparables', (b) => {
+    const compList = filasComparablesInforme(estudio);
+    const filas17 = (compList || []).map((f, idx) => [
+      String(idx + 1),
+      f.nombre,
+      AMBITO[f.amb] || ''
+    ]);
+    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
+    return generarTablaOoxml(
+      tituloDe(b, 'Muestra Compañías comparables'),
+      ['Número', 'Nombre de la Compañía', 'Ámbito'],
+      filas17,
+      `Información Base Datos ${dbFuente}`
+    );
+  }, { numeros: [17] });
 
-  // 12. Tabla 18 / 20. Rango Intercuartil / Tabla de rangos (vertical)
+  /* 12. Rango intercuartil en vertical. La plantilla lo titula «Rango Intercuartil»
+     —igual que el horizontal— o «Tabla de rangos», y lo numera 18 o 20. Se busca por
+     los dos nombres; si sale el homónimo del horizontal, la segunda ocurrencia es
+     esta, que va después en el documento. */
   {
     const filas18_20 = [
       ['Mínimo', pStr(minNoAjustado), pStr(minAjustado)],
@@ -603,48 +710,34 @@ export function actualizarTablasOperacionesOoxml(xml, estudio) {
       ['Máximo', pStr(maxNoAjustado), pStr(maxAjustado)],
       [wrap(estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE'), pStr(tPLI), pStr(tPLI)]
     ];
-
-    const rx18 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 18\.\s*Rango Intercuartil(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx18.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tabla 18. Rango Intercuartil',
-        ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
-        filas18_20
-      );
-      out = out.replace(rx18, () => tabla);
-    }
-
-    const rx20 = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 20\.\s*Tabla de rangos(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx20.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tabla 20. Tabla de rangos',
-        ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
-        filas18_20
-      );
-      out = out.replace(rx20, () => tabla);
+    const tablaRangos = (b) => generarTablaOoxml(
+      tituloDe(b, /tabla de rangos/i.test(b.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
+      ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
+      filas18_20
+    );
+    if (!reemplazar('Tabla de rangos', tablaRangos, { numeros: [20] })) {
+      /* Sin «Tabla de rangos» en la plantilla, el vertical es el segundo «Rango
+         Intercuartil»: el primero ya lo consumió el bloque 5. */
+      reemplazar('Rango Intercuartil', tablaRangos, { numeros: [18], ocurrencia: 1 });
     }
   }
 
-  // 13. Tabla 19. Margen Operacional Compañías Comparables
-  {
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tabla 19\.\s*Margen Operacional(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const compList = filasComparablesInforme(estudio);
-      const filas19 = (compList || []).map((f) => [
-        f.nombre,
-        pStr(f.noAjustado),
-        pStr(f.ajustado)
-      ]);
-      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
-      const tabla = generarTablaOoxml(
-        'Tabla 19. Margen Operacional Compañías Comparables',
-        ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
-        filas19,
-        `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  // 13. Margen Operacional Compañías Comparables
+  reemplazar('Margen Operacional', (b) => {
+    const compList = filasComparablesInforme(estudio);
+    const filas19 = (compList || []).map((f) => [
+      f.nombre,
+      pStr(f.noAjustado),
+      pStr(f.ajustado)
+    ]);
+    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+    return generarTablaOoxml(
+      tituloDe(b, 'Margen Operacional Compañías Comparables'),
+      ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
+      filas19,
+      `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
+    );
+  }, { numeros: [19] });
 
   return out;
 }
