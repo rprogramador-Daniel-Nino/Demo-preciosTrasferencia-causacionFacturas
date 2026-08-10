@@ -598,8 +598,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      páginas son unas 25 llamadas y basta un 429 para que un tramo entero quede
      sin marcar. Devuelve '' cuando todo salió bien, para no poner un banner que
      no dice nada. */
-  const resumirMarcado = ({ trozosEnviados, trozosFallidos, rechazadasPorVocabulario },
-                          { reintentable = true } = {}) => {
+  const resumirMarcado = ({
+    trozosEnviados, trozosFallidos, rechazadasPorVocabulario,
+    bloqueadasPorZona, bloqueadasPorGuarda,
+  }, { reintentable = true } = {}) => {
     const lineas = [];
     if (trozosFallidos) {
       /* El consejo de reintentar solo vale antes de confirmar. Después, el
@@ -620,6 +622,22 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       lineas.push(rechazadasPorVocabulario + ' propuesta(s) se rechazaron porque el campo no está ' +
                   'en el vocabulario. El modelo estaba señalando un dato del informe de ' +
                   'referencia que ningún campo puede sustituir: revísalo a mano.');
+    }
+    /* Lo que las guardas dejaron fuera. No es un fallo —es lo que evita que el año gravable
+       reescriba una serie histórica o que una cifra del contribuyente aterrice en la ficha
+       de una comparable—, pero se informa: en una plantilla con otra estructura de
+       encabezados podría estar bloqueando texto que sí había que marcar. */
+    if (bloqueadasPorZona) {
+      lineas.push(bloqueadasPorZona + ' aparición(es) no se marcaron por estar en una zona ' +
+                  'donde ese dato no va (anexos, tendencias de la economía, citas). Esas ' +
+                  'secciones se regeneran o son fijas; si tu plantilla las titula de otro ' +
+                  'modo, revísalas a mano.');
+    }
+    if (bloqueadasPorGuarda) {
+      lineas.push(bloqueadasPorGuarda + ' aparición(es) no se marcaron porque el texto no ' +
+                  'identifica el dato por sí solo (una palabra común, un número corto, o un ' +
+                  'año en una fecha que no es el año gravable). Se dejan como están a ' +
+                  'propósito: sustituirlas reescribiría la redacción del informe.');
     }
     return lineas.join('\n');
   };

@@ -141,6 +141,17 @@ razón social sobrevivía 31 veces sin marcar— pero deja de ser ciega:
 —la Fase 3 ya lo hace—, así que marcar sus celdas solo abre la puerta a que un número del
 ANEXO B se convierta en `{t_s}`. El marcado queda limitado a la prosa.
 
+> **Corrección al implementar (2026-08-10).** No hizo falta ningún mecanismo nuevo para esto,
+> y añadirlo habría hecho daño. Las 22 tablas del motor se sustituyen **enteras y antes** de
+> que docxtemplater resuelva los marcadores, así que lo que hubiera dentro de ellas
+> desaparece con la tabla: la regla ya se cumple sin código. Y las tablas que el motor no
+> regenera —Competencia nacional, Fuentes de Información, Códigos SIC— **necesitan** sus
+> marcadores, porque son la única vía por la que se actualizan; prohibir el marcado dentro
+> de toda tabla las habría congelado con los datos del cliente anterior. Los dos riesgos que
+> este punto perseguía quedan cubiertos por lo demás del bloque: las cifras del contribuyente
+> dentro del ANEXO B, por las zonas; los años de las ventanas de búsqueda de los Códigos
+> SIC, por la guarda de contexto del año.
+
 ### Bloque 3 — ANEXO A desde la ingesta
 
 - `insertarAnexoA(zip, estudio)`, con el mismo anclaje por encabezado que ya funciona en

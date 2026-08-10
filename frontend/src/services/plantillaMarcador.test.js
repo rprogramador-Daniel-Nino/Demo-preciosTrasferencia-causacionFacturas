@@ -469,6 +469,152 @@ test('no se extiende un texto al que el modelo dio dos campos distintos', async 
   assert.strictEqual(r.extendidas, 0, 'no debió extender un fragmento ambiguo');
 });
 
+/* --- Zonas del documento --- */
+
+const conZonas = (...parrafos) => parrafos.map((p) => '<p>' + p + '</p>').join('');
+
+test('los campos del contribuyente no se marcan dentro del ANEXO B', async () => {
+  /* En el informe del 2026-08-10 la ficha de COLOPL, INC. salió con las cifras de END GAME:
+     ventas netas 5.271.105.507, activos 2.179.479.687, efectivo 12.417.756. El ANEXO B es
+     de las comparables, y ningún dato del contribuyente puede aterrizar ahí. */
+  const html = conZonas(
+    'En 2025 la compañía tuvo ingresos por 5.271.105.507 con su vinculada.',
+    'ANEXO B. Descripciones de comparables y Estados Financieros',
+    'COLOPL, INC. Ventas netas 5.271.105.507',
+  );
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '5.271.105.507', campo: 'monto_operacion', ocurrencia: 1 }],
+    }),
+  });
+  const ocurrencias = r.marcas.map((m) => m.ocurrencia);
+  assert.deepStrictEqual(ocurrencias, [1], 'la del ANEXO B no debía marcarse');
+  assert.ok(r.bloqueadasPorZona > 0, 'y el bloqueo tiene que reportarse');
+});
+
+test('la tabla de contenido no abre la zona del anexo', async () => {
+  /* El índice del informe lista «ANEXO B. Descripciones de comparables y Estados
+     Financieros55», con el número de página pegado. Si eso abriera la zona, el documento
+     entero quedaría marcado como anexo y no se sustituiría ni un dato. */
+  const html = conZonas(
+    'ANEXO B. Descripciones de comparables y Estados Financieros55',
+    'El estudio de ACME S.A.S para el año gravable 2025.',
+  );
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }],
+    }),
+  });
+  assert.strictEqual(r.marcas.length, 1, 'el cuerpo sigue siendo marcable tras el índice');
+});
+
+test('la sección de tendencias de la economía no se marca', async () => {
+  /* Sus ocho tablas las regenera actualizarTablasMacroOoxml y su prosa viene de
+     ia.economia_*. Marcar ahí es lo que dejó «En 2023 el crecimiento fue 3,2 %. Para 2025
+     se mantuvo en 3,2 %», con la serie histórica falseada. */
+  const html = conZonas(
+    'III. TENDENCIAS DE LA ECONOMÍA',
+    'En 2024 el crecimiento mundial fue del 3,2 %.',
+    'IV. ANÁLISIS ECONÓMICO',
+    'La operación del año 2024 fue de venta de servicios.',
+  );
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '2024', campo: 'anio', ocurrencia: 1 }],
+    }),
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia), [2],
+    'la de la serie histórica no, la del análisis sí');
+});
+
+test('los párrafos de cita no se marcan', async () => {
+  /* «4 Fondo Monetario Internacional (2024). World Economic Outlook…» es una referencia
+     bibliográfica: su año es la fecha de la publicación, no el año gravable. */
+  const html = conZonas(
+    'La operación del año gravable 2024.',
+    '4 Fondo Monetario Internacional (2024). World Economic Outlook: April 2024 Edition.',
+  );
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '2024', campo: 'anio', ocurrencia: 1 }],
+    }),
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia), [1],
+    'solo la del cuerpo; las tres de la cita quedan fuera');
+});
+
+/* --- Guardas de extensión --- */
+
+test('un fragmento no se extiende dentro de una palabra más larga', async () => {
+  /* De aquí salió «CUMPLEn con el propósito fundamental»: el fragmento «cumple» cayó
+     dentro de «cumplen». */
+  const html = conZonas('La compañía cumple con la norma.', 'Las operaciones cumplen la norma.');
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'cumple', campo: 'rango.cumple', ocurrencia: 1 }],
+    }),
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia), [1],
+    'la aparición dentro de «cumplen» no es la palabra «cumple»');
+});
+
+test('una palabra suelta en minúsculas no se extiende', async () => {
+  /* No identifica un dato: es lenguaje. Extenderla reescribe la prosa del informe. */
+  const html = conZonas('La compañía cumple.', 'El vinculado cumple.', 'El grupo cumple.');
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'cumple', campo: 'rango.cumple', ocurrencia: 1 }],
+    }),
+  });
+  assert.strictEqual(r.extendidas, 0, 'no debió extenderse a las otras dos');
+  assert.ok(r.bloqueadasPorGuarda > 0, 'y el bloqueo tiene que reportarse');
+});
+
+test('un año solo se marca donde el contexto lo respalda', async () => {
+  /* «Último estado financiero entre junio de 2024 y mayo de 2025» es una ventana de la
+     búsqueda de comparables, no el año gravable: sustituirla ahí deja «entre junio de 2025
+     y mayo de 2025», que no es ninguna ventana. */
+  const html = conZonas(
+    'Estudio para el año gravable 2024.',
+    'Último estado financiero entre junio de 2024 y mayo de 2025.',
+  );
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '2024', campo: 'anio', ocurrencia: 1 }],
+    }),
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia), [1],
+    'la ventana de búsqueda no lleva el año gravable');
+});
+
+test('el año sí se extiende donde la frase lo sostiene', async () => {
+  /* La otra cara: el año es el campo más repetido del informe. Si no se extiende, el
+     documento se radica con el año del cliente anterior en media docena de sitios. */
+  const html = conZonas(
+    'Estudio para el año gravable 2024.',
+    'Operaciones al 31 de diciembre de 2024.',
+    'PERÍODO FISCAL AL 31 DE DICIEMBRE DE 2024',
+  );
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '2024', campo: 'anio', ocurrencia: 1 }],
+    }),
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia).sort((a, b) => a - b), [1, 2, 3]);
+});
+
+test('la razón social se sigue extendiendo, que es para lo que existe la extensión', async () => {
+  /* Medido con el informe real: sin extender, la razón social sobrevivía 31 veces sin
+     marcar. Las guardas no pueden llevarse por delante el caso que justifica todo esto. */
+  const html = conZonas('ACME INC uno', 'ACME INC dos', 'ACME INC tres');
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'ACME INC', campo: 'vinc', ocurrencia: 1 }],
+    }),
+  });
+  assert.strictEqual(r.extendidas, 2);
+});
+
 test('extender no duplica lo que el modelo ya marcó', async () => {
   const html = '<p>ACME uno</p><p>ACME dos</p>';
   const r = await proponerMarcas(html, {
