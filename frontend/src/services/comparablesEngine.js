@@ -100,6 +100,15 @@ export const COLUMNAS_IQ = {
   ar: { etiqueta: 'Cuentas por cobrar', esencial: false, claves: ['accounts receivable', 'cuentas por cobrar', 'cxc'] },
   inv: { etiqueta: 'Inventarios', esencial: false, claves: ['total inventory', 'inventarios', 'inventario'] },
   ap: { etiqueta: 'Cuentas por pagar', esencial: false, claves: ['accounts payable', 'cuentas por pagar', 'cxp'] },
+  /* PP&E entra por la misma vía que las otras partidas de balance. Sin él, el ajuste
+     de propiedad, planta y equipo se calcula contra cero en todas las comparables y
+     los escenarios que lo incluyen quedan sin sentido. */
+  ppe: {
+    etiqueta: 'Propiedad, planta y equipo',
+    esencial: false,
+    claves: ['net property plant and equipment', 'property plant and equipment', 'net pp&e', 'pp&e', 'ppe',
+      'propiedad planta y equipo', 'propiedad, planta y equipo', 'propiedades planta y equipo'],
+  },
   sic: { etiqueta: 'SIC', esencial: false, claves: ['primary sic', 'sic', 'ciiu'] },
   id: { etiqueta: 'Identificador de la fuente', esencial: false, claves: ['excel company id', 'capital iq id', 'company id', 'iqid'] },
   desc: { etiqueta: 'Descripción del negocio', esencial: false, claves: ['business description', 'descripción', 'descripcion', 'actividad', 'profile'] },
@@ -203,8 +212,8 @@ export async function importCapitalIQExcel(file, onProgress) {
           throw err;
         }
         const sIdx = idx.s, cIdx = idx.c, opIdx = idx.op, arIdx = idx.ar, invIdx = idx.inv,
-          apIdx = idx.ap, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc, countryIdx = idx.country,
-          holderPctIdx = idx.holderPct, holdersIdx = idx.holders;
+          apIdx = idx.ap, ppeIdx = idx.ppe, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc,
+          countryIdx = idx.country, holderPctIdx = idx.holderPct, holdersIdx = idx.holders;
         const total = json.length - filaEncabezados - 1;
         avisar('Leyendo compañías…', 0, total);
         const rows = [];
@@ -233,6 +242,7 @@ export async function importCapitalIQExcel(file, onProgress) {
           const ar = arIdx >= 0 ? num(row[arIdx]) : null;
           const inv = invIdx >= 0 ? num(row[invIdx]) : null;
           const ap = apIdx >= 0 ? num(row[apIdx]) : null;
+          const ppe = ppeIdx >= 0 ? num(row[ppeIdx]) : null;
           const sic = sicIdx >= 0 ? String(row[sicIdx] || '').trim() : '';
           const idIQ = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
           const desc = descIdx >= 0 ? String(row[descIdx] || '').trim() : '';
@@ -269,6 +279,7 @@ export async function importCapitalIQExcel(file, onProgress) {
             ar,
             inv,
             ap,
+            ppe,
             sic,
             desc,
             holderPct,

@@ -243,6 +243,20 @@ export default function IngestaCifras({ study, updateStudy }) {
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
               />
             </div>
+
+            {/* PP&E no tenía campo: solo entraba si el lector de documentos lo
+                encontraba, y sin él el ajuste de propiedad, planta y equipo se
+                calculaba contra cero sin que nada lo advirtiera. */}
+            <div className="flex flex-col">
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Propiedad, Planta y Equipo</label>
+              <input
+                type="number"
+                value={study.t_ppe || ''}
+                onChange={(e) => handleFieldChange('t_ppe', e.target.value)}
+                placeholder="COP PP&E"
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+              />
+            </div>
           </div>
         </div>
       </div>

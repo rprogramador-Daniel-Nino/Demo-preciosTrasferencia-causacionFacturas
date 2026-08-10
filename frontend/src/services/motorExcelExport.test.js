@@ -78,6 +78,23 @@ test('el .xlsx escrito no lleva ninguna fórmula que Excel rechace', () => {
   });
 });
 
+test('la propiedad, planta y equipo llega al libro, no en cero', () => {
+  /* `T.ppe` no existía en el payload que arma el componente, y el adaptador lo busca
+     ahí primero: el libro salía con PP&E en cero para la parte examinada aunque el
+     estudio la tuviera cargada, y el ajuste de PP&E se calculaba contra nada. */
+  const wb = construirLibroSoporte(PAYLOAD);
+  assert.strictEqual(wb.Sheets.Datos.B10.v, 300, 'PP&E de la parte examinada');
+  assert.strictEqual(wb.Sheets.Datos.A10.v, 'Propiedad, planta y equipo');
+});
+
+test('el PP&E de cada comparable viaja a su fila', () => {
+  const wb = construirLibroSoporte(PAYLOAD);
+  assert.deepStrictEqual(
+    ['H15', 'H16', 'H17'].map((ref) => wb.Sheets.Datos[ref].v),
+    [100, 40, 10],
+  );
+});
+
 test('los gastos operativos se derivan de la utilidad antes de llegar al generador', () => {
   /* `T.op` entra como utilidad operacional (200) y el generador espera gastos:
      1000 − 600 − 200 = 200 en este caso, que coincide por casualidad numérica, así

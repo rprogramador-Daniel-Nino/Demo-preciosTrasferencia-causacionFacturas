@@ -619,6 +619,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       ar: datos.cuentas_por_cobrar || copia[indice].ar,
       inv: datos.inventarios || copia[indice].inv,
       ap: datos.cuentas_por_pagar || copia[indice].ap,
+      /* El parser ya leía PP&E —está en el esquema de los dos prompts, el individual
+         y el de lote—, pero no se volcaba en la fila, así que llegaba en cero al
+         ajuste y al Excel de soporte por más que el documento lo trajera. */
+      ppe: datos.propiedad_planta_equipo || copia[indice].ppe,
       eeffDatos: datos,
       eeffVerificado: verificacion.esValido,
       eeffHallazgos: verificacion.hallazgos,
@@ -929,7 +933,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   const addComparable = () => {
     setComparables([...comparables, {
-      name: '', amb: 'Int', s: '', c: '', op: '', ar: '', inv: '', ap: '', sic: '', id: Date.now().toString()
+      name: '', amb: 'Int', s: '', c: '', op: '', ar: '', inv: '', ap: '', ppe: '', sic: '', id: Date.now().toString()
     }]);
   };
 
@@ -954,7 +958,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     op: tOpNum !== null ? tOpNum - segExcluido : null,
     ar: num(study.t_ar),
     inv: num(study.t_inv),
-    ap: num(study.t_ap)
+    ap: num(study.t_ap),
+    /* PP&E faltaba aquí, y este `T` es el que viaja al Excel de soporte: el libro
+       salía con la propiedad, planta y equipo de la parte examinada en cero aunque
+       el estudio la tuviera cargada. */
+    ppe: num(study.t_ppe),
   };
 
   const tPLI = pliOf(T, kind);
@@ -1952,6 +1960,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">CxC</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">Inv.</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">CxP</th>
+                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">PP&amp;E</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[12%]">PLI Ajustado</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[8%]">Acciones</th>
               </tr>
@@ -2043,6 +2052,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                       value={row.ap}
                       placeholder="0"
                       onChange={(e) => handleRowChange(idx, 'ap', e.target.value)}
+                      className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                    />
+                  </td>
+                  <td className="py-2 px-3 text-right">
+                    <input
+                      type="number"
+                      value={row.ppe ?? ''}
+                      placeholder="0"
+                      onChange={(e) => handleRowChange(idx, 'ppe', e.target.value)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>

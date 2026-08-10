@@ -286,7 +286,8 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   if (n > 0) {
     const filaCompN = filaComp0 + n - 1;
     const cd = (L) => `Datos!$${L}$${filaComp0}:$${L}$${filaCompN}`;
-    const VEN = cd('B'), COS = cd('C'), GAS = cd('D'), CXP = cd('G');
+    const VEN = cd('B'), COS = cd('C'), GAS = cd('D');
+    const CXC = cd('E'), INV = cd('F'), CXP = cd('G'), PPE = cd('H');
 
     const dg = [];
     dg.push([cTxt('DIAGNÓSTICO DE DATOS — comprobaciones por fórmula sobre la hoja «Datos»')]);
@@ -336,13 +337,39 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     });
     dg.push([]);
 
+    /* Una comparable sin cartera, inventario, proveedores ni activo fijo entra al
+       ajuste como si de verdad no tuviera ninguna de esas partidas —no como si
+       faltara el dato—, y arrastra el rango hacia el margen sin ajustar. Es lo que
+       pasa cuando el cribado de Capital IQ no trae las columnas de balance y no se
+       cargaron los estados financieros de esa empresa. */
+    const CERO = [
+      ['Sin ninguna partida de capital de trabajo', `SUMPRODUCT(--((${CXC}=0)*(${INV}=0)*(${CXP}=0)))`,
+        'Ni cartera, ni inventario, ni proveedores: su ajuste será cero por falta de datos, no por su operación.'],
+      ['Sin cuentas por cobrar', `SUMPRODUCT(--(${CXC}=0))`, 'El ajuste de CxC no las mueve.'],
+      ['Sin propiedad, planta y equipo', `SUMPRODUCT(--(${PPE}=0))`,
+        'Los escenarios con PP&E las tratan como empresas sin activo fijo.'],
+    ];
+    dg.push([cTxt('3) COMPARABLES CON PARTIDAS DE BALANCE EN CERO')]);
+    dg.push([cTxt('Situación'), cTxt('Comparables'), cTxt('Veredicto'), cTxt('Qué implica')]);
+    const filaCero0 = dg.length + 1;
+    CERO.forEach(([etq, formula, nota], i) => {
+      const r = filaCero0 + i;
+      dg.push([
+        cTxt(etq),
+        cFor(formula, '#,##0'),
+        cForT(`IF(B${r}=0,"Todas con dato","Revisar: "&B${r}&" de ${n}")`),
+        cTxt(nota),
+      ]);
+    });
+    dg.push([]);
+
     /* PP&E comparable por comparable. Las referencias van contra la hoja MO porque
        ahí ya están calculados el ajuste (columna Q) y la utilidad operacional
        (columna J): repetir esas fórmulas aquí sería una segunda implementación que
        se desincroniza en cuanto cambie una. */
     const mo = infoMetodos.find((M) => M.hoja === 'MO');
     if (mo) {
-      dg.push([cTxt('3) PP&E POR COMPARABLE — dónde el ajuste de PP&E desborda el resultado')]);
+      dg.push([cTxt('4) PP&E POR COMPARABLE — dónde el ajuste de PP&E desborda el resultado')]);
       dg.push([cTxt('Compañía'), cTxt('PP&E / Ventas'), cTxt('Ajuste PP&E (MO)'), cTxt('Utilidad operacional (MO)'),
         cTxt('¿El ajuste supera la utilidad?')]);
       for (let i = 0; i < n; i++) {

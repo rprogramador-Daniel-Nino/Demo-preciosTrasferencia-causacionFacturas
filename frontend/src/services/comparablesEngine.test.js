@@ -576,6 +576,50 @@ test('las columnas esenciales son las que hacen falta para el rango', () => {
   ['ar', 'inv', 'ap'].forEach(k => assert.strictEqual(COLUMNAS_IQ[k].esencial, false, k + ' no debe ser esencial'));
 });
 
+test('importCapitalIQExcel lee la columna de propiedad, planta y equipo', async () => {
+  /* PP&E no estaba en COLUMNAS_IQ, así que aunque el export de Capital IQ la trajera
+     se descartaba en silencio y el ajuste de PP&E se calculaba contra cero en toda la
+     muestra. Se prueban dos encabezados: el de Capital IQ y uno en español. */
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue [FY 2025]', 'Operating Income [FY 2025]',
+      'Net Property Plant And Equipment [FY 2025]'],
+    ['ACME Services PLC', 1000, 100, 250.5],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+  await conFileReader(buf, async () => {
+    const { rows, meta } = await importCapitalIQExcel({ name: 'ppe.xlsx', size: buf.length });
+    assert.strictEqual(rows[0].ppe, 250.5);
+    assert.ok(meta.reconocidas.some((r) => r.clave === 'ppe'), 'la reporta como columna reconocida');
+  });
+
+  const wbEs = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbEs, XLSX.utils.aoa_to_sheet([
+    ['Compañía', 'Ventas', 'Utilidad operacional', 'Propiedad, planta y equipo'],
+    ['Beta S.A.', 500, 40, 77],
+  ]), 'Screening');
+  const bufEs = XLSX.write(wbEs, { bookType: 'xlsx', type: 'buffer' });
+  await conFileReader(bufEs, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'ppe-es.xlsx', size: bufEs.length });
+    assert.strictEqual(rows[0].ppe, 77);
+  });
+});
+
+test('sin columna de PP&E la comparable la deja en null, no en cero', async () => {
+  /* Cero significaría «la empresa no tiene activo fijo» y el ajuste lo tomaría como
+     dato bueno; null dice que no se sabe. */
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue [FY 2025]', 'Operating Income [FY 2025]'],
+    ['ACME Services PLC', 1000, 100],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+  await conFileReader(buf, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'sin-ppe.xlsx', size: buf.length });
+    assert.strictEqual(rows[0].ppe, null);
+  });
+});
+
 test('importCapitalIQExcel explica el fallo en vez de devolver un array vacío', async () => {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['algo', 'otra cosa'], [1, 2]]), 'Hoja1');
