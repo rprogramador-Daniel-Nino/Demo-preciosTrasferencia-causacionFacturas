@@ -73,8 +73,7 @@ test('un campo fuera del vocabulario nunca devuelve valor', () => {
   assert.strictEqual(valorDeCampo({ ...estudio, telefono: '3001234567' }, 'telefono'), null);
 });
 
-/* Los topes UVT son de lo que más muta: cambian cada año gravable y hoy
-   `exactTemplateMapper` los sustituye por valor literal. */
+/* Los topes UVT son de lo que más muta: cambian cada año gravable. */
 test('los topes UVT se calculan contra el año del estudio', () => {
   const de2025 = valorDeCampo({ anio: 2025 }, 'uvt.tope45k');
   const de2024 = valorDeCampo({ anio: 2024 }, 'uvt.tope45k');

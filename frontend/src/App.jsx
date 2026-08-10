@@ -240,7 +240,7 @@ export default function App() {
       const crudo = localStorage.getItem(claveIaMatch(id));
       const iaMatch = crudo ? JSON.parse(crudo) : null;
       /* Y las páginas del ANEXO A desde IndexedDB: sin esto el informe saldría sin los
-         estados financieros adjuntos, que es lo que consume exactTemplateMapper. */
+         estados financieros adjuntos, que es lo que inserta docxRelleno.js. */
       let eeffImages = [];
       try {
         eeffImages = await leerAnexoEeff(id);

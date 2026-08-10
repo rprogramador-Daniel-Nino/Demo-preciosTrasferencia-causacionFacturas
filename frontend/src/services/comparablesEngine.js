@@ -38,8 +38,10 @@ export function elegirHoja(nombresDeHoja) {
  * Extrae los criterios de búsqueda de la hoja "Screen Criteria" del export de
  * Capital IQ —aparte de "Screening" (las candidatas) y "Aggregates"—, para
  * poder reconstruir la Tabla 13 (Códigos SIC utilizados) del informe con la
- * corrida real de este año en vez de arrastrar la del informe anterior (ver
- * frontend/src/services/exactTemplateMapper.js:generarTablaCriteriosScreeningHtml).
+ * corrida real de este año en vez de arrastrar la del informe anterior. El
+ * generador de esa tabla murió con la sustitución por literales; lo que se
+ * parsea aquí queda en `study.criteriosScreening`, a la espera de que la ruta
+ * por campos con nombre lo publique (Fase 2, `plantillaVocabulario.js`).
  *
  * Cada fila de esa hoja es una sola celda de texto, con la forma
  * "N) Etiqueta: valor", "And) Etiqueta: valor" u "Or) Etiqueta: valor" — el

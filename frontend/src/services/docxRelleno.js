@@ -30,7 +30,7 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { filasComparablesInforme, filasRazonesRechazo } from './exactTemplateMapper.js';
+import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js';
 import { pctf } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 import {
@@ -421,7 +421,8 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
 
   /* El párrafo que contiene el centinela, acotado por índice y no por una regex de
      párrafo: `<w:p>` puede venir sin atributos y las regex con lookahead fallan ahí.
-     Es el mismo enfoque que ya usa `reemplazarAnexoB` en exactTemplateMapper. */
+     Era el mismo enfoque de `reemplazarAnexoB`, que vivía en el mapper por literales y
+     se retiró con él; aquí se conserva porque el problema de las regex es el mismo. */
   const inicio = xml.lastIndexOf('<w:p', posicion);
   const cierre = xml.indexOf('</w:p>', posicion);
   if (inicio === -1 || cierre === -1) return { insertadas: 0 };

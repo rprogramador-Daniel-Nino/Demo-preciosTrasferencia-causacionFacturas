@@ -60,13 +60,12 @@ const CAMPOS = new Set(VOCABULARIO.map((v) => v.campo));
 
 export const esCampoValido = (campo) => CAMPOS.has(campo);
 
-/* El cálculo vive en `rangoIntercuartil.js` (Task 0), compartido con
-   `exactTemplateMapper.js`. Aquí solo se decide qué se publica: si no hay
-   rango, el campo sale nulo y el renderizador pondrá un hueco visible. Ojo con
-   la diferencia deliberada respecto al mapper: aquel devuelve 'CUMPLE' cuando
-   no hay comparables —comportamiento heredado que la Task 0 conserva— y esta
-   ruta prefiere el hueco, porque afirmar cumplimiento sin haberlo calculado es
-   justo lo que no debe llegar a un documento que se radica ante la DIAN. */
+/* El cálculo vive en `rangoIntercuartil.js`. Aquí solo se decide qué se publica:
+   si no hay rango, el campo sale nulo y el renderizador pondrá un hueco visible.
+   Ojo con la diferencia deliberada respecto a `analizarRango`: aquel devuelve
+   'CUMPLE' cuando no hay comparables —comportamiento heredado que se conserva— y
+   esta ruta prefiere el hueco, porque afirmar cumplimiento sin haberlo calculado
+   es justo lo que no debe llegar a un documento que se radica ante la DIAN. */
 
 /* Devuelve el valor listo para insertar, o null si el estudio no lo trae.
    Nunca devuelve un valor por defecto: un campo sin dato tiene que verse como

@@ -4,8 +4,7 @@ import React, {
 import axios from 'axios';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle } from 'lucide-react';
 import mammoth from 'mammoth';
-import { MASTER_WORD_TEMPLATE } from '../services/masterTemplate';
-import { hydrateExactWordTemplate, diagnosticarCobertura } from '../services/exactTemplateMapper';
+import { diagnosticarCobertura } from '../services/tablasInforme';
 import { normalizarActividad, claveActividad } from '../services/analisisMercado';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
@@ -39,7 +38,10 @@ import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage
 export default function ReporteGenerador({ study, estudioId, usuario }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
-  const [customTemplateLoaded, setCustomTemplateLoaded] = useState(false);
+  /* `customTemplateLoaded` vivía aquí y se ha retirado: su único cometido era impedir
+     que el efecto de la plantilla maestra sobrescribiera lo recuperado. Sin plantilla
+     maestra no hay nada de lo que defenderse, y con qué plantilla se genera ya lo dice
+     `plantillaActiva`, que es el dato real. */
   const [recursosCargados, setRecursosCargados] = useState([]);
   /* Cifras y narrativa de la Sección III, refrescadas mensualmente por
      `actualizarAnalisisMercadoScheduled`. null mientras carga o si Firestore no
@@ -66,12 +68,12 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      primer instante — indistinguible para el usuario de una corrida que
      nunca se disparó o que falló, cuando en realidad solo estaba en curso. */
   const [sectorEnCurso, setSectorEnCurso] = useState(false);
-  /* Banner para el aviso de hidratación fallida al recargar. No se usa `alert`
-     aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
+  /* Banner de lo que le falta al informe (Sección III, tablas del motor). No se usa
+     `alert` aquí porque el efecto corre en cada montaje: un alert bloqueante cada vez
      que se abre el estudio sería más molesto que informativo. El alert sí se
      conserva en la carga manual del PDF, donde es una reacción directa a la
      acción que el usuario acaba de hacer. */
-  const [avisoHidratacion, setAvisoHidratacion] = useState('');
+  const [avisoCobertura, setAvisoCobertura] = useState('');
 
   /* Marcas propuestas a la espera de revisión humana, y el id de la plantilla a la
      que pertenecen. Mientras esto no sea null, la pantalla muestra el revisor. */
@@ -92,14 +94,6 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
   /* Plantilla vinculada al estudio: `{ id, html, huecos, marcada }`. Se guarda para
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
-
-  /* La hidratación sustituye por literales del informe de End Game 2024. Con
-     el PDF de otro cliente no coincide ninguno y el documento sale con los
-     datos del PDF subido, sin ninguna señal. Se usa el NIT del estudio como
-     testigo: si el estudio tiene NIT y no aparece en el HTML ya hidratado, la
-     sustitución no ocurrió. El arreglo de fondo es el marcado por campos con
-     nombre; esto solo evita que la ruta de respaldo falle en silencio. */
-  const faltaSustitucion = (hydrated) => study?.nit && !hydrated.includes(study.nit);
 
   /* Documento global (no depende de estudioId): una lectura por sesión basta,
      el cron que lo refresca corre una vez al mes. Si falla, se deja null: los
@@ -237,12 +231,13 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
         'quedaron con un marcador que hay que redactar'
       );
     }
-    /* Sin el embudo del motor, la tabla 16 sale con los números del informe de
-       referencia. Es el tipo de dato ajeno que no puede llegar a un documento que se
-       radica, así que se nombra la tabla y qué hacer. */
+    /* Sin el embudo del motor, la tabla 16 se queda con los números que traiga la
+       plantilla, que son los del contribuyente para el que se redactó. Es el tipo de
+       dato ajeno que no puede llegar a un documento que se radica, así que se nombra
+       la tabla y qué hacer. */
     if (!d.razonesRechazoCubiertas) {
       avisos.push(
-        'la tabla 16 de razones de rechazo conserva las cifras del informe de referencia: ' +
+        'la tabla 16 de razones de rechazo conserva las cifras que traía la plantilla: ' +
         'ejecuta la selección del motor de comparables para que se calculen con este estudio'
       );
     }
@@ -252,12 +247,12 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
         'cambió después de la última selección: vuelve a ejecutarla antes de radicar'
       );
     }
-    /* Sin comparables en el estudio, las tablas 17 y 19 salen con las trece compañías
-       del informe de referencia, nombre por nombre y margen por margen. Es la fuga más
-       fácil de ver de todo el documento. */
+    /* Sin comparables en el estudio, las tablas 17 y 19 salen con las de la plantilla,
+       nombre por nombre y margen por margen. Es la fuga más fácil de ver de todo el
+       documento. */
     if (!d.comparablesCubiertas) {
       avisos.push(
-        'las tablas 17 y 19 conservan la muestra de comparables del informe de referencia, ' +
+        'las tablas 17 y 19 conservan la muestra de comparables que traía la plantilla, ' +
         'con sus nombres y sus márgenes: carga las comparables de este estudio en el motor'
       );
     }
@@ -270,26 +265,14 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     return avisos;
   };
 
-  /* Aviso de la ruta de respaldo (mammoth y plantillas sin marcar). Reúne el
-     testigo del NIT y los avisos de la sección III, y se pinta como banner, no
-     con `alert`: al recargar el estudio el efecto corre en cada montaje y un
-     alert bloqueante cada vez sería más molesto que informativo.
-
-     Recibe el HTML sin hidratar además del hidratado porque el diagnóstico de la
-     sección III se hace sobre la plantilla original: es ahí donde se ve si trae
-     el apartado sectorial y qué series le faltan. */
-  const revisarHidratacion = (htmlBase, hydrated) => {
-    const partes = [];
-    if (faltaSustitucion(hydrated)) {
-      partes.push(
-        'no se encontró el NIT del estudio (' + study.nit + ') en el documento hidratado. ' +
-        'Esta plantilla no está marcada por campos, así que la sustitución va por valor ' +
-        'literal: revisa el documento entero antes de radicarlo, porque puede conservar ' +
-        'datos del contribuyente del informe de referencia'
-      );
-    }
-    partes.push(...avisosDeMercado(htmlBase));
-    setAvisoHidratacion(
+  /* Pinta como banner lo que le falta al documento que se acaba de producir. Se
+     alimenta del propio resultado y no de la plantilla en crudo: el diagnóstico
+     mira si el documento trae el apartado del análisis del sector, y ahí es donde
+     se ve. No es un `alert` porque el cálculo corre en cada montaje del estudio y
+     un modal bloqueante cada vez molestaría más de lo que informa. */
+  const revisarCobertura = (htmlDelInforme) => {
+    const partes = avisosDeMercado(htmlDelInforme);
+    setAvisoCobertura(
       partes.length ? 'Revisa antes de radicar — ' + partes.join('. ') + '.' : ''
     );
   };
@@ -311,7 +294,11 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     const valores = valoresDeReferencia(htmlMarcado);
     const nitRef = valores.find((v) => v.campo === 'nit');
     setHtmlContent(r.html);
-    setAvisoHidratacion('');
+    /* La cobertura se mide sobre el render, no sobre la plantilla en crudo: es el
+       documento que se va a radicar. Antes solo se calculaba en la ruta por
+       literales, así que quien trabajaba con plantilla marcada —la ruta buena— no
+       se enteraba de que le faltaban las series macro o el análisis del sector. */
+    revisarCobertura(r.html);
     setAvisos(revisarAntesDeGenerar({
       estudio: study,
       /* Sin NIT de referencia la guarda no opina, que es lo correcto: no hay
@@ -339,11 +326,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          saber que la solución es volver a subir el PDF. */
       faltaPorVersion: loQueFaltaPorVersion(versionDe(htmlMarcado)),
     }));
-    setCustomTemplateLoaded(true);
   };
 
-  /* Rehidratación: sin esto las imágenes del informe de referencia se pierden
-     al recargar la página, que es el fallo que motivó este trabajo. La bandera
+  /* Restauración al abrir el estudio: sin esto la plantilla y sus imágenes se
+     pierden al recargar la página, que es el fallo que motivó este trabajo. La bandera
      `vivo` evita escribir estado si el componente se desmonta antes de que
      IndexedDB responda. */
   useEffect(() => {
@@ -361,7 +347,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       if (!estudioId) return;
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los avisos del anterior. */
-      if (vivo) { setAvisos([]); setAvisoHidratacion(''); }
+      if (vivo) { setAvisos([]); setAvisoCobertura(''); }
       /* `let` porque la restauración desde la nube, más abajo, puede traer los recursos
          del cliente: el resto del efecto renderiza con esta variable —no con el estado, que
          no ha surtido efecto todavía—, así que si no se actualiza aquí las imágenes salen
@@ -376,8 +362,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       /* Sin plantilla en este navegador, se busca la copia del estudio en la nube y se
          deja en IndexedDB antes de seguir. Es lo que evita que el mismo estudio dé un Word
          distinto según el equipo: quien la subió tenía el vínculo y el marcado en su
-         IndexedDB, y quien abría el estudio en otra parte caía a la plantilla maestra
-         incrustada en el código sin que nada se lo advirtiera. */
+         IndexedDB, y quien abría el estudio en otra parte se quedaba sin plantilla. */
       if (!idPlantilla && usuario) {
         try {
           const paquete = await descargarPlantillaDelEstudio({ uid: usuario.uid, estudioId });
@@ -396,23 +381,24 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       if (!idPlantilla) return;
 
       /* Plantilla .docx del cliente: se restaura antes que la de PDF porque su
-         marcado vive en otro almacén. Sin esto, al recargar el estudio se caía a la
-         plantilla maestra y el usuario perdía de vista que había subido la suya. */
+         marcado vive en otro almacén. Es la ruta buena, la única que produce el
+         informe a partir del documento del propio contribuyente. */
       const docxMarcado = await leerDocxMarcado(idPlantilla);
       if (docxMarcado) {
         if (!vivo) return;
         setPlantillaActiva({ id: idPlantilla, tipo: 'docx', huecos: 0, marcada: true });
-        setCustomTemplateLoaded(true);
         await previsualizarDocx(docxMarcado);
         return;
       }
 
       const html = await leerPlantilla(idPlantilla);
 
-      /* Si la plantilla está marcada se renderiza por campo; si no, se cae a
-         la sustitución por literales, que sigue siendo la ruta de las
-         plantillas antiguas. Se resuelve al leer y no al guardar porque el
-         estudio puede cambiar después de haber subido la plantilla. */
+      /* Solo la plantilla marcada por campos produce informe. La que está guardada
+         pero sin marcar ya no se sirve: antes se hidrataba sustituyendo literales del
+         documento de End Game, de modo que en la plantilla de otro cliente no casaba
+         ninguna regla y salía un informe con los datos del contribuyente ajeno.
+         Se resuelve al leer y no al guardar porque el estudio puede cambiar después
+         de haber subido la plantilla. */
       const marcado = await leerMarcado(idPlantilla);
       /* La cuenta de huecos se guardó con la plantilla al subir el PDF: sin
          leerla aquí, al recargar el estudio no habría forma de saber que el
@@ -422,30 +408,29 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       if (vivo && marcado) {
         renderizarYAvisar(marcado, recursos, huecos);
       } else if (vivo && html) {
-        /* Se guarda el HTML crudo del extractor y se hidrata al leerlo, no al
-           guardarlo: el estudio puede cambiar después de haber subido la
-           plantilla, y entonces los valores almacenados quedarían viejos. Sin
-           esta línea, tras recargar se ven las cifras del informe de
-           referencia en vez de las del estudio actual. */
-        const hidratado = hydrateExactWordTemplate(html, study, analisisMercado, analisisSector);
-        /* `recursos` se pasa explícito y no se lee de `recursosCargados`: el
-           setState de arriba no ha surtido efecto todavía dentro de este mismo
-           efecto, y las imágenes saldrían rotas en la primera pintada. */
-        setHtmlContent(conImagenes(hidratado, recursos));
-        revisarHidratacion(html, hidratado);
-        /* El aviso de plantilla vieja vivía sólo en `renderizarYAvisar`, es decir
-           sólo en la ruta marcada. Una plantilla guardada y sin marcar —la ruta de
-           quien subió el PDF y no confirmó las marcas— se seguía sirviendo tal cual,
-           callada, y el documento salía como el lector de entonces lo dejaba. Con la
-           plantilla en IndexedDB y el PDF ya no, no hay forma de que el usuario
-           adivine que lo que tiene que hacer es volver a subirlo. */
-        const falta = loQueFaltaPorVersion(versionDe(html));
-        if (falta.length) {
-          setAvisos(revisarAntesDeGenerar({ faltaPorVersion: falta }));
-        }
-        /* Evita que el efecto de la plantilla maestra sobrescriba lo
-           recuperado. Es lo que hacía fallar la recarga. */
-        setCustomTemplateLoaded(true);
+        /* Plantilla guardada pero SIN MARCAR. Antes se servía hidratada por
+           literales; ahora no se sirve: el previo se deja vacío y se dice qué falta
+           hacer. Servirla sin marcas equivalía a entregar el documento del
+           contribuyente para el que se redactó, con su NIT y sus cifras, bajo el
+           nombre de este cliente. */
+        setHtmlContent('');
+        setAvisoCobertura('');
+        setAvisos([
+          {
+            nivel: 'aviso',
+            texto:
+              'Esta plantilla está guardada pero sin marcar, así que no se puede generar el ' +
+              'informe con ella: sin marcas no hay forma de saber qué texto es un dato del ' +
+              'contribuyente y cuál no, y el documento saldría con los datos del cliente para ' +
+              'el que se redactó la plantilla. Vuelve a subirla y confirma sus marcas.',
+          },
+          /* Qué le falta a esta plantilla por venir de un lector de PDF anterior. Las
+             plantillas se guardan y se reutilizan, así que una extraída hace dos
+             versiones sigue produciendo el documento de entonces —sin la tipografía
+             del informe, por ejemplo— y sin este aviso no hay forma de saberlo ni de
+             saber que la solución es volver a subir el PDF. */
+          ...revisarAntesDeGenerar({ faltaPorVersion: loQueFaltaPorVersion(versionDe(html)) }),
+        ]);
       }
     })();
     return () => { vivo = false; };
@@ -474,25 +459,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       setAvisoNube(await bucketAusente(err)
         ? AVISO_STORAGE_APAGADO
         : 'La plantilla no se pudo guardar en la nube: ' + ((err && err.message) || 'error desconocido') +
-          '. Funciona en este navegador, pero al abrir el estudio en otro equipo el Word saldrá con la plantilla maestra.');
+          '. Funciona en este navegador, pero al abrir el estudio en otro equipo no habrá ' +
+          'plantilla y no se podrá generar el informe hasta volver a subirla.');
     }
   };
-
-  // Carga la plantilla original 100% completa de 27 secciones (End Game 2024) y aplica el reemplazo de variables
-  const loadExactMasterTemplate = () => {
-    const hydrated = hydrateExactWordTemplate(MASTER_WORD_TEMPLATE, study, analisisMercado, analisisSector);
-    setHtmlContent(hydrated);
-    /* Esta es la ruta por defecto de todo estudio que no haya subido plantilla,
-       es decir la de casi todo el mundo hoy, y va por valor literal. Si el NIT
-       del estudio no aparece en la salida, la sustitución no ocurrió. */
-    revisarHidratacion(MASTER_WORD_TEMPLATE, hydrated);
-  };
-
-  useEffect(() => {
-    if (!customTemplateLoaded) {
-      loadExactMasterTemplate();
-    }
-  }, [study, customTemplateLoaded, analisisMercado, analisisSector, motivoFalloSector, sectorEnCurso]);
 
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
@@ -559,7 +529,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
                todavía un render del que calcularlos, y dejarlos puestos
                enseñaría al usuario a ignorar el banner. */
             setAvisos([]);
-            setAvisoHidratacion('');
+            setAvisoCobertura('');
             /* El marcado de un informe de 112 páginas son unos veinte viajes al
                modelo. Sin este avance el spinner se queda quieto minutos y no hay
                forma de distinguirlo de un cuelgue. */
@@ -591,7 +561,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           if (estudioId) await guardarVinculo(estudioId, idPlantilla);
 
           setAvisos([]);
-          setAvisoHidratacion('');
+          setAvisoCobertura('');
           setRecursosCargados([]);
 
           /* El marcado se paga una vez por plantilla: el id es el hash del archivo,
@@ -612,7 +582,6 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
             setMarcasPropuestas(propuestas.marcas);
             setTelemetriaMarcado(propuestas);
           }
-          setCustomTemplateLoaded(true);
         }
       } catch (err) {
         console.error("Error al analizar la plantilla personalizada:", err);
@@ -726,7 +695,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
         }
         await borrarDocxMarcado(plantillaActiva.id);
         setAvisos([]);
-        setAvisoHidratacion('');
+        setAvisoCobertura('');
         const xml = new PizZip(binario).file('word/document.xml').asText();
         const propuestas = await proponerMarcas(htmlParaMarcar(xml), {
           avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
@@ -770,7 +739,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     try {
       await borrarMarcado(plantillaActiva.id);
       setAvisos([]);
-      setAvisoHidratacion('');
+      setAvisoCobertura('');
       const propuestas = await proponerMarcas(plantillaActiva.html, {
         avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
           terminados, total, fallidos,
@@ -878,6 +847,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       const { value } = await mammoth.convertToHtml({ arrayBuffer: salida.buffer.slice(
         salida.byteOffset, salida.byteOffset + salida.byteLength) });
       setHtmlContent(value);
+      /* Lo que le falta al informe (series macro del año, análisis del sector, tablas
+         del motor) se mide aquí y no solo en la ruta de PDF: esta es la ruta con la
+         que se genera de verdad, y era justo la que salía sin ese banner. */
+      revisarCobertura(value);
       const avisos = revisarAntesDeGenerar({
         estudio: study,
         tieneAnexo: true,
@@ -888,7 +861,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       setAvisos(avisos);
     } catch (err) {
       console.error('No se pudo previsualizar la plantilla .docx:', err);
-      setAvisoHidratacion('No se pudo previsualizar la plantilla: ' + err.message);
+      setAvisoCobertura('No se pudo previsualizar la plantilla: ' + err.message);
     }
   };
 
@@ -909,9 +882,9 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       alert(
         'No se aplicó ninguna marca, así que la plantilla NO se guardó como marcada.\n' +
         (resumen ? resumen + '\n' : '') +
-        'El informe se seguirá generando por la ruta antigua, que sustituye por valores ' +
-        'literales y puede dejar datos del contribuyente anterior. Vuelve a subir el PDF ' +
-        'para marcarlo de nuevo.'
+        'Sin marcas no se puede generar el informe con esta plantilla: no habría forma de ' +
+        'distinguir qué texto es un dato del contribuyente, y saldría con los del cliente ' +
+        'para el que se redactó. Vuelve a subir el PDF para marcarlo de nuevo.'
       );
       return;
     }
@@ -1003,7 +976,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [htmlContent]);
 
-  /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— no hay dónde
+  /* Sin páginas marcadas —un .docx pasado por mammoth— no hay dónde
      cortar, así que el documento entero se pinta como una hoja larga. Mejor eso que
      fingir una paginación que Word no va a respetar. */
   const tienePaginas = /class="pagina"|class=pagina/.test(htmlContent);
@@ -1232,7 +1205,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
   /* Confirmación de que el análisis de sector (III.C) de ESTA actividad+año ya
      quedó generado (no solo que la lectura a Firestore respondió, sino que trae
      la corrida de ese año puntual). Se calcula aparte del banner de arriba
-     (`avisoHidratacion`, que solo lista problemas) porque generar toma 60-100+ s
+     (`avisoCobertura`, que solo lista problemas) porque generar toma 60-100+ s
      y el usuario necesita saber que ya terminó sin tener que abrir el Word. */
   const anioEstudio = Number(study && study.anio) || null;
   const sectorListo = !sectorEnCurso && !motivoFalloSector && anioEstudio
@@ -1244,20 +1217,18 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="text-md font-bold text-zinc-950 dark:text-zinc-50">Generador de Informe Final (Fiel 100% al Word Original)</h3>
+            <h3 className="text-md font-bold text-zinc-950 dark:text-zinc-50">Generador de Informe Final (sobre la plantilla del cliente)</h3>
             <span className="bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-              27 Secciones Intactas
+              Formato del cliente intacto
             </span>
           </div>
           <p className="text-xs text-zinc-500 mt-1">
-            Conserva el texto íntegro original del informe (Introducción, FAR, Tendencias, Anexos A-C) e inyecta quirúrgicamente los datos del cliente.
+            Rellena el .docx del propio contribuyente con los datos del estudio: encabezado, pie, estilos, márgenes e índice salen como venían.
           </p>
           {/* Con qué plantilla se está generando. El formato del Word depende de esto más
-              que de cualquier otra cosa, y no se decía en ninguna parte: dos personas con
-              el mismo estudio obtenían documentos distintos —una con la plantilla marcada
-              en su navegador, la otra con la maestra incrustada— sin nada en pantalla que
-              lo explicara. La plantilla vive en IndexedDB, o sea en un solo equipo, así
-              que la diferencia aparece también al cambiar de navegador. */}
+              que de cualquier otra cosa, y no se decía en ninguna parte. La plantilla vive
+              en IndexedDB, o sea en un solo equipo, así que la diferencia aparece también
+              al cambiar de navegador. */}
           {plantillaActiva && plantillaActiva.marcada ? (
             <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1">
               <Check className="w-3 h-3" />
@@ -1266,15 +1237,21 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           ) : plantillaActiva ? (
             <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" />
-              Plantilla cargada pero <strong>sin marcar</strong>: la sustitución va por literales y el
-              formato puede diferir. Márquela para que el Word salga como el de la plantilla.
+              Plantilla cargada pero <strong>sin marcar</strong>: así no se puede generar. Sin marcas no
+              hay forma de saber qué texto es un dato del contribuyente, y el informe saldría con los
+              del cliente para el que se redactó la plantilla. Confirme sus marcas antes de generar.
             </p>
           ) : (
             <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" />
-              Sin plantilla de referencia: se usa la plantilla maestra del sistema, y el formato no
-              coincidirá con el de un estudio que sí la tenga. Súbala con «Subir Otra Plantilla Word»
-              y quedará guardada con el estudio para cualquier equipo.
+              <span>
+                <strong>Falta la plantilla .docx de este cliente</strong>: sin ella no hay informe.
+                Hasta hace poco el sistema caía a un documento de respaldo incrustado en el código,
+                que era el informe de OTRO contribuyente —con su NIT, sus cifras y su vinculada—, y
+                radicarlo bajo el nombre de este cliente es exactamente el fallo que se vino a cerrar.
+                Súbala con «Subir Otra Plantilla Word» y quedará guardada con el estudio para
+                cualquier equipo.
+              </span>
             </p>
           )}
           {avisoNube && (
@@ -1349,7 +1326,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       )}
 
       {/* Estado del análisis de sector (III.C): en curso o ya listo para esta
-          actividad+año. Aparte de `avisoHidratacion` porque ese banner solo lista
+          actividad+año. Aparte de `avisoCobertura` porque ese banner solo lista
           problemas — esto es información de estado, no una advertencia. */}
       {sectorEnCurso && (
         <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
@@ -1368,9 +1345,9 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           ruta de campos marcados, que en este caso no corrió. No es un alert
           porque el componente se monta cada vez que se abre el estudio y un
           modal bloqueante en cada apertura molestaría más de lo que informa. */}
-      {avisoHidratacion && (
+      {avisoCobertura && (
         <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 rounded-xl px-5 py-4 text-xs leading-relaxed">
-          <strong className="font-semibold">⚠ {avisoHidratacion}</strong>
+          <strong className="font-semibold">⚠ {avisoCobertura}</strong>
         </div>
       )}
 

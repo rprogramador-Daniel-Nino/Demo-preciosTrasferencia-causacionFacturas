@@ -1,7 +1,7 @@
 /* Rango intercuartil de las comparables y conclusión de cumplimiento.
-   Vive aparte porque lo usan dos rutas: la sustitución por campos con nombre y
-   `exactTemplateMapper.js`, que queda como respaldo de las plantillas sin
-   marcar. Cuando el mapper se retire, este módulo se queda donde está.
+   Vive aparte porque lo consumen varias rutas: la sustitución por campos con
+   nombre (`plantillaVocabulario.js`), las filas de las tablas del informe
+   (`tablasInforme.js`) y el Excel de soporte.
 
    ─── Sobre el ajuste de capital de trabajo ───
 

@@ -633,8 +633,8 @@ test('importCapitalIQExcel lee un export con el título arriba, como el real', a
 });
 
 /* ══════ Criterios de búsqueda (hoja "Screen Criteria") ══════
-   Alimentan la Tabla 13 del informe — ver
-   frontend/src/services/exactTemplateMapper.js:generarTablaCriteriosScreeningHtml. */
+   Alimentan la Tabla 13 del informe: quedan en `study.criteriosScreening` a la
+   espera de que la ruta por campos con nombre los publique. */
 
 test('parsearCriteriosScreening lee la hoja real, con el conector de cada línea', () => {
   const wb = XLSX.utils.book_new();

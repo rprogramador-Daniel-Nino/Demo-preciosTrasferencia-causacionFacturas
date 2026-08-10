@@ -83,8 +83,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      intercuartil y al informe. Un hueco se ve; una muestra plausible y ajena, no. */
   const [comparables, setComparables] = useState(study.comparables || []);
   /* Imágenes del EEFF de cada comparable para el ANEXO B, por nameKey — ver
-     plantillaStore.js (guardarAnexoBImagenes) y exactTemplateMapper.js
-     (generarBloqueComparableAnexoB). No es parte de `comparables`: pesa demasiado para
+     plantillaStore.js (guardarAnexoBImagenes) y docxRelleno.js
+     (insertarImagenesAnexoB). No es parte de `comparables`: pesa demasiado para
      ir dentro de cada fila del estudio (ver CAMPOS_SOLO_LOCALES). */
   const [eeffImagenesComparables, setEeffImagenesComparables] = useState(study.eeffImagenesComparables || {});
 

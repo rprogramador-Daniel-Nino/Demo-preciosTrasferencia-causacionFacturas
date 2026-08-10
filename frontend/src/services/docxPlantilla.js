@@ -233,10 +233,9 @@ const RX_CELDA = /<w:tc>[\s\S]*?<\/w:tc>/g;
  * Envuelve la fila de datos de una tabla en un bucle de relleno.
  *
  * La tabla se localiza por un texto que la precede —su título, como «Tabla 15» o
- * «Compañías comparables»—, que es la misma estrategia que ya usa
- * `reemplazarTablaMuestraComparables` en `exactTemplateMapper.js`: anclar en el
- * título y no en el enésimo `<w:tbl>`, porque un informe trae decenas de tablas
- * indistinguibles por su marcado.
+ * «Compañías comparables»—: anclar en el título y no en el enésimo `<w:tbl>`,
+ * porque un informe trae decenas de tablas indistinguibles por su marcado. Es la
+ * misma estrategia que usaba la sustitución por literales, ya retirada.
  *
  * La fila modelo es la ÚLTIMA de la tabla cuando hay más de una: las anteriores son
  * el encabezado, y regenerarlo perdería las anclas de Word que puedan colgar de él.
