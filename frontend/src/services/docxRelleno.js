@@ -30,11 +30,12 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js';
-import { pctf, fmt, num, pliOf } from '../utils/calculations.js';
+import {
+  filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
+  filasRangoIntercuartil, ETIQUETAS_RANGO, AMBITO,
+} from './tablasInforme.js';
+import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
-import { analizarRango } from './rangoIntercuartil.js';
-import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
 } from './analisisMercado.js';
@@ -56,7 +57,6 @@ const RUTA_DOC = 'word/document.xml';
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
 
-const AMBITO = { Int: 'INTERNACIONAL', Nac: 'NACIONAL' };
 
 /**
  * Los datos de las tablas que se repiten, con la forma que esperan los bucles.
@@ -549,41 +549,22 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   const year = Number(estudio.anio) || 2025;
   const wrap = (v) => String(v == null || v === '' ? '—' : v);
 
-  const rResult = analizarRango(estudio);
-  const stats = rResult.stats || {};
-  const compFilas = rResult.filas || [];
+  /* Las filas del rango y su cálculo viven en `tablasInforme.js`, que es de donde las toma
+     también la ruta de plantilla PDF (`tablasHtmlInforme.js`). Antes se calculaban aquí, y
+     al añadir esa segunda ruta el cálculo habría quedado duplicado: dos sitios donde
+     computar los percentiles del mismo estudio es la forma de acabar publicando dos rangos
+     distintos, que es lo que ya pasó cuando había dos implementaciones del cuartil. */
+  const rango = filasRangoIntercuartil(estudio);
+  const tPLI = rango.tPLI;
 
-  // Calcular tPLI (indicador del contribuyente unificado)
-  const seg = num(estudio.seg_excluido) || 0;
-  const tS = num(estudio.t_s), tOp = num(estudio.t_op);
-  const T = {
-    s: tS !== null ? tS - seg : null,
-    c: num(estudio.t_c),
-    op: tOp !== null ? tOp - seg : null,
-    ar: num(estudio.t_ar), inv: num(estudio.t_inv), ap: num(estudio.t_ap),
+  /* La versión horizontal del rango (bloque 5) publica solo los percentiles ajustados. */
+  const ajustadoDe = (etiqueta) => {
+    const f = rango.filas.find((x) => x.etiqueta === etiqueta);
+    return f ? f.ajustado : null;
   };
-  const tPLI = pliOf(T, estudio.pli || 'MO');
-
-  // Calcular series ordenadas para No Ajustado y Ajustado
-  const activeSeriesNoAjustado = compFilas
-    .map((f) => f.noAjustado)
-    .filter((v) => v !== null && v !== undefined)
-    .sort((a, b) => a - b);
-  const minNoAjustado = activeSeriesNoAjustado.length ? activeSeriesNoAjustado[0] : null;
-  const maxNoAjustado = activeSeriesNoAjustado.length ? activeSeriesNoAjustado[activeSeriesNoAjustado.length - 1] : null;
-  const p25NoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.25);
-  const medNoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.5);
-  const p75NoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.75);
-
-  const activeSeriesAjustado = compFilas
-    .map((f) => f.ajustado)
-    .filter((v) => v !== null && v !== undefined)
-    .sort((a, b) => a - b);
-  const minAjustado = activeSeriesAjustado.length ? activeSeriesAjustado[0] : null;
-  const maxAjustado = activeSeriesAjustado.length ? activeSeriesAjustado[activeSeriesAjustado.length - 1] : null;
-  const p25Ajustado = stats.p25 !== undefined ? stats.p25 : null;
-  const medAjustado = stats.med !== undefined ? stats.med : null;
-  const p75Ajustado = stats.p75 !== undefined ? stats.p75 : null;
+  const p25Ajustado = ajustadoDe(ETIQUETAS_RANGO.p25);
+  const medAjustado = ajustadoDe(ETIQUETAS_RANGO.med);
+  const p75Ajustado = ajustadoDe(ETIQUETAS_RANGO.p75);
 
   const pStr = (v) => (v === null || v === undefined ? '—' : pctf(v));
 
@@ -763,11 +744,8 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
   // 11. Muestra Compañías comparables
   reemplazar('Muestra Compañías comparables', (b) => {
-    const compList = filasComparablesInforme(estudio);
-    const filas17 = (compList || []).map((f, idx) => [
-      String(idx + 1),
-      f.nombre,
-      AMBITO[f.amb] || ''
+    const filas17 = filasMuestraComparables(estudio).map((f) => [
+      String(f.numero), f.nombre, f.ambito,
     ]);
     const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
     return generarTablaOoxml(
@@ -791,14 +769,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
      De atrás hacia adelante, como en Transacciones Inter compañía. */
   {
-    const filas18_20 = [
-      ['Mínimo', pStr(minNoAjustado), pStr(minAjustado)],
-      ['Percentil 25', pStr(p25NoAjustado), pStr(p25Ajustado)],
-      ['Mediana', pStr(medNoAjustado), pStr(medAjustado)],
-      ['Percentil 75', pStr(p75NoAjustado), pStr(p75Ajustado)],
-      ['Máximo', pStr(maxNoAjustado), pStr(maxAjustado)],
-      [wrap(estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE'), pStr(tPLI), pStr(tPLI)]
-    ];
+    const filas18_20 = rango.filas.map((f) => [
+      wrap(f.etiqueta), pStr(f.noAjustado), pStr(f.ajustado),
+    ]);
     const tablaRangos = (b) => generarTablaOoxml(
       tituloDe(b, /tabla de rangos/i.test(b.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
       ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],

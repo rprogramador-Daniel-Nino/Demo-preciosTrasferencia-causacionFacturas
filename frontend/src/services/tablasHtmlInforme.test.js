@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   localizarTablaHtml, reescribirFilasHtml, envolturaDe, textoPlanoHtml,
-  actualizarTablasMotorHtml, TABLA_MARGENES,
+  actualizarTablasMotorHtml, reescribirCeldaHtml, TABLA_MARGENES,
 } from './tablasHtmlInforme.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
@@ -168,7 +168,7 @@ test('actualizarTablasMotorHtml pone las comparables del estudio en la tabla', (
   assert.ok(!salida.includes('AKATSUKI'), 'y no las del informe anterior');
   assert.ok(!salida.includes('16.557%'), 'ni sus márgenes');
   assert.match(salida, /18\.00%/, 'el margen se calcula con el motor del estudio');
-  assert.deepStrictEqual(avisos, [], 'la tabla estaba: no hay nada que avisar');
+  assert.ok(!avisos.includes(TABLA_MARGENES), 'esa tabla estaba: no hay que avisar de ella');
   assert.ok(salida.includes('<p>siguiente'), 'el resto del documento queda intacto');
 });
 
@@ -176,7 +176,7 @@ test('sin la tabla en la plantilla se avisa y no se toca el documento', () => {
   const html = '<p>Un informe sin esa tabla</p>';
   const avisos = [];
   assert.strictEqual(actualizarTablasMotorHtml(html, ESTUDIO, avisos), html);
-  assert.deepStrictEqual(avisos, [TABLA_MARGENES]);
+  assert.ok(avisos.includes(TABLA_MARGENES));
 });
 
 test('sin comparables en el estudio la tabla no se vacía, y se avisa', () => {
@@ -185,7 +185,150 @@ test('sin comparables en el estudio la tabla no se vacía, y se avisa', () => {
   const avisos = [];
   const salida = actualizarTablasMotorHtml(html, { ...ESTUDIO, comparables: [] }, avisos);
   assert.strictEqual(salida, html);
-  assert.deepStrictEqual(avisos, [TABLA_MARGENES]);
+  assert.ok(avisos.includes(TABLA_MARGENES));
+});
+
+/* ══════ Las demás tablas del motor ══════ */
+
+const TABLA_3COL = (cabecera) => '<table>'
+  + `<tr><th><p>${cabecera[0]}</p></th><th><p>${cabecera[1]}</p></th><th><p>${cabecera[2]}</p></th></tr>`
+  + '<tr><td><p>viejo A</p></td><td><p>viejo B</p></td><td><p>viejo C</p></td></tr>'
+  + '<tr><td><p>viejo D</p></td><td><p>viejo E</p></td><td><p>viejo F</p></td></tr>'
+  + '</table>';
+
+const EMBUDO = {
+  evaluadas: 100, seleccionadas: 4, reserva: 6,
+  porMotivo: { holding: 30, perdidaOperativa: 25, actividadDistinta: 35 },
+};
+
+test('la muestra de comparables se numera y se rellena con el ámbito', () => {
+  const html = '<p>Tabla 17. Muestra Compañías comparables</p>'
+    + TABLA_3COL(['Número', 'Nombre de la Compañía', 'Ámbito']);
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO, []);
+  assert.match(salida, /<td><p>1<\/p><\/td><td><p>ZETA COMPARABLE LTD<\/p><\/td><td><p>INTERNACIONAL<\/p><\/td>/);
+  assert.match(salida, /<td><p>3<\/p><\/td><td><p>DELTA COMPARABLE SA<\/p><\/td><td><p>NACIONAL<\/p><\/td>/);
+  assert.ok(!salida.includes('viejo A'), 'las filas de la plantilla se van');
+});
+
+test('las razones de rechazo salen del embudo y cierran con el universo', () => {
+  const html = '<p>Tabla 16. Razones de rechazo</p>'
+    + TABLA_3COL(['FILTRO APLICADO', 'FILTROS APLICADO', 'N° POR FILTRO']);
+  const salida = actualizarTablasMotorHtml(html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, []);
+  assert.match(salida, /Compañías holding o de grupo/);
+  assert.match(salida, /TOTAL, UNIVERSO/);
+  assert.match(salida, /<td><p>100<\/p><\/td>/, 'el total del universo cierra la tabla');
+  assert.ok(!salida.includes('viejo A'));
+});
+
+test('sin embudo se avisa de las razones de rechazo en vez de inventarlas', () => {
+  const html = '<p>Tabla 16. Razones de rechazo</p>' + TABLA_3COL(['A', 'B', 'C']);
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO, avisos);
+  assert.ok(avisos.includes('Razones de rechazo'));
+  assert.ok(salida.includes('viejo A'), 'la tabla de la plantilla no se toca');
+});
+
+test('el rango vertical se rellena con los percentiles del estudio', () => {
+  const html = '<p>Tabla 18. Rango Intercuartil</p>'
+    + TABLA_3COL(['RANGO INTERCUARTIL', 'RANGE MO NO AJUSTADO', 'RANGE MO AJUSTADO']);
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO, []);
+  ['Mínimo', 'Percentil 25', 'Mediana', 'Percentil 75', 'Máximo'].forEach((e) =>
+    assert.ok(salida.includes(e), `falta la fila ${e}`));
+  assert.match(salida, /ACME COLOMBIA SAS/, 'el contribuyente cierra la tabla');
+  assert.ok(!salida.includes('viejo A'));
+});
+
+test('las TRES apariciones del rango quedan con los mismos percentiles', () => {
+  /* La horizontal de los resultados, la vertical del análisis y la del final con el
+     rótulo dentro de su primera fila. Antes se elegía una y las otras se radicaban con
+     los percentiles del informe anterior. */
+  const horizontal = '<table>'
+    + '<tr><th><p>ACME</p></th><th><p>Percentil 25</p></th><th><p>Mediana</p></th><th><p>Percentil 75</p></th></tr>'
+    + '<tr><td><p>v1</p></td><td><p>v2</p></td><td><p>v3</p></td><td><p>v4</p></td></tr>'
+    + '</table>';
+  const embebida = '<table>'
+    + '<tr><td><p>Tabla de rangos</p></td></tr>'
+    + '<tr><th><p>RANGO INTERCUARTIL</p></th><th><p>NO AJUSTADO</p></th><th><p>AJUSTADO</p></th></tr>'
+    + '<tr><td><p>viejo X</p></td><td><p>viejo Y</p></td><td><p>viejo Z</p></td></tr>'
+    + '</table>';
+  const html = '<p>Tabla 5. Rango Intercuartil</p>' + horizontal
+    + '<p>Tabla 18. Rango Intercuartil</p>'
+    + TABLA_3COL(['RANGO INTERCUARTIL', 'NO AJUSTADO', 'AJUSTADO'])
+    + embebida;
+
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO, avisos);
+
+  assert.ok(!salida.includes('viejo A'), 'la vertical se actualizó');
+  assert.ok(!salida.includes('viejo X'), 'la embebida también');
+  assert.ok(!salida.includes('<p>v1</p>'), 'y la horizontal');
+  assert.match(salida, /Tabla de rangos/, 'el rótulo embebido se conserva');
+  assert.strictEqual((salida.match(/Percentil 75/g) || []).length, 3,
+    'como fila en la vertical y en la embebida, y como encabezado en la horizontal');
+  /* Y el percentil vale lo mismo en las tres: es el punto de esta prueba. */
+  const p75 = /Percentil 75<\/p><\/td><td><p>([^<]+)<\/p>/.exec(salida);
+  assert.ok(p75, 'la fila del P75 tiene que llevar su valor');
+  assert.strictEqual((salida.match(new RegExp(p75[1].replace('.', '\\.'), 'g')) || []).length >= 2,
+    true, 'el mismo valor aparece en las dos verticales');
+  assert.ok(!avisos.includes('Rango Intercuartil'), 'estaban: no hay que avisar');
+});
+
+test('el encabezado de la horizontal deja de nombrar al contribuyente anterior', () => {
+  /* Su primera celda es el nombre del contribuyente: en la plantilla de END GAME dice
+     «END GAME», y dejarlo ahí publica el nombre del cliente anterior en el informe de
+     otro. El resto del encabezado no se toca: es redacción de la plantilla. */
+  const horizontal = '<table>'
+    + '<tr><th><p><strong>END GAME</strong></p></th><th><p>Percentil 25</p></th>'
+    + '<th><p>Mediana</p></th><th><p>Percentil 75</p></th></tr>'
+    + '<tr><td><p>v1</p></td><td><p>v2</p></td><td><p>v3</p></td><td><p>v4</p></td></tr>'
+    + '</table>';
+  const salida = actualizarTablasMotorHtml(
+    '<p>Tabla 5. Rango Intercuartil</p>' + horizontal, ESTUDIO, []);
+
+  assert.ok(!salida.includes('END GAME'), 'el nombre del cliente anterior tiene que irse');
+  assert.match(salida, /<th><p><strong>ACME COLOMBIA SAS<\/strong><\/p><\/th>/,
+    'y el del estudio ocupa su lugar, con el mismo formato');
+  assert.match(salida, /<th><p>Percentil 25<\/p><\/th>/, 'el resto del encabezado intacto');
+});
+
+test('reescribirCeldaHtml solo toca la celda pedida', () => {
+  const tabla = '<table><tr><th><p>A</p></th><th><p>B</p></th></tr>'
+    + '<tr><td><p>C</p></td><td><p>D</p></td></tr></table>';
+  const salida = reescribirCeldaHtml(tabla, 0, 1, 'NUEVO');
+  assert.match(salida, /<th><p>A<\/p><\/th><th><p>NUEVO<\/p><\/th>/);
+  assert.match(salida, /<td><p>C<\/p><\/td><td><p>D<\/p><\/td>/, 'la otra fila no se toca');
+  assert.strictEqual(reescribirCeldaHtml(tabla, 9, 0, 'X'), tabla, 'fila inexistente: sin cambios');
+  assert.strictEqual(reescribirCeldaHtml(tabla, 0, 9, 'X'), tabla, 'celda inexistente: sin cambios');
+});
+
+test('con solo la horizontal se avisa de que falta el rango del análisis', () => {
+  /* La horizontal no lleva los percentiles no ajustados, así que si es la única que trae
+     la plantilla, el rango del análisis se queda con los datos viejos. */
+  const horizontal = '<table>'
+    + '<tr><th><p>ACME</p></th><th><p>P25</p></th><th><p>Med</p></th><th><p>P75</p></th></tr>'
+    + '<tr><td><p>v1</p></td><td><p>v2</p></td><td><p>v3</p></td><td><p>v4</p></td></tr>'
+    + '</table>';
+  const avisos = [];
+  actualizarTablasMotorHtml('<p>Tabla 5. Rango Intercuartil</p>' + horizontal, ESTUDIO, avisos);
+  assert.ok(avisos.includes('Rango Intercuartil'));
+});
+
+test('las cuatro tablas del motor se actualizan en una sola pasada', () => {
+  const html = '<p>Tabla 16. Razones de rechazo</p>' + TABLA_3COL(['A', 'B', 'C'])
+    + '<p>Tabla 17. Muestra Compañías comparables</p>' + TABLA_3COL(['N', 'Nombre', 'Ámbito'])
+    + '<p>Tabla 18. Rango Intercuartil</p>' + TABLA_3COL(['RANGO', 'NO AJ', 'AJ'])
+    + '<p>Tabla 19. Margen Operacional Compañías Comparables</p>' + TABLA_3COL(['COMP', 'NO AJ', 'AJ']);
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(
+    html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, avisos);
+
+  assert.deepStrictEqual(avisos, [], 'las cuatro estaban');
+  assert.ok(!salida.includes('viejo A'), 'ninguna conserva las filas de la plantilla');
+  assert.match(salida, /TOTAL, UNIVERSO/, 'razones de rechazo');
+  assert.match(salida, /INTERNACIONAL/, 'muestra');
+  assert.match(salida, /Percentil 25/, 'rango');
+  assert.strictEqual((salida.match(/ZETA COMPARABLE LTD/g) || []).length, 2,
+    'la comparable aparece en la muestra y en los márgenes');
 });
 
 test('una comparable sin margen calculable sale con un hueco visible, no con un cero', () => {

@@ -17,6 +17,8 @@
 
 import { analizarRango } from './rangoIntercuartil.js';
 import { DATOS_MACRO } from './analisisMercado.js';
+import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
+import { num, pliOf } from '../utils/calculations.js';
 
 /* ══════════════ Razones de rechazo ══════════════
    Cada fila es un criterio del motor. Se omiten las que no descartaron a nadie: un
@@ -115,6 +117,110 @@ export function filasRazonesRechazo(embudo) {
 export function filasComparablesInforme(study) {
   const { filas } = analizarRango(study || {});
   return (filas || []).filter((f) => f.nombre);
+}
+
+/** Cómo se nombra el ámbito de una comparable en el informe. */
+export const AMBITO = { Int: 'INTERNACIONAL', Nac: 'NACIONAL' };
+
+/* Etiquetas de las filas del rango. Se exportan porque hay tablas que publican solo
+   algunos percentiles —la versión horizontal del rango lleva P25, mediana y P75— y
+   buscarlos por un literal repetido en cada consumidor deja de encontrarlos en silencio
+   el día que se reescriba una etiqueta. */
+export const ETIQUETAS_RANGO = {
+  min: 'Mínimo',
+  p25: 'Percentil 25',
+  med: 'Mediana',
+  p75: 'Percentil 75',
+  max: 'Máximo',
+};
+
+/**
+ * Filas de la tabla «Muestra Compañías comparables»: número, razón social y ámbito.
+ *
+ * La numeración es la de la tabla, no un identificador: se recalcula sobre las filas que
+ * quedan, así que retirar una comparable durante la ingesta no deja huecos en la columna.
+ */
+export function filasMuestraComparables(study) {
+  return filasComparablesInforme(study).map((f, i) => ({
+    numero: i + 1,
+    nombre: f.nombre,
+    ambito: AMBITO[f.amb] || '',
+  }));
+}
+
+/**
+ * Filas del rango intercuartil en vertical, con los valores SIN formatear.
+ *
+ * Vivía dentro de `actualizarTablasOperacionesOoxml`, que es la ruta de plantilla .docx.
+ * Se extrajo al añadir la misma tabla a la ruta de PDF (`tablasHtmlInforme.js`): con el
+ * cálculo repetido en cada ruta, las dos podían publicar percentiles distintos para el
+ * mismo estudio, y ese defecto ya se pagó una vez en este repo —había dos
+ * implementaciones del cuartil y el modal mostraba un rango y el informe otro—.
+ *
+ * Los percentiles ajustados salen de `stats`, que es lo que sostiene la conclusión de
+ * cumplimiento; los no ajustados se calculan aquí sobre la serie sin ajuste, con el mismo
+ * `cuartilInterpolado` (QUARTILE.INC) que usa el motor y que emite el Excel de soporte.
+ *
+ * @param {object} study
+ * @returns {{filas:Array<{etiqueta:string, noAjustado:number|null, ajustado:number|null}>,
+ *            tPLI:number|null, pli:string}}
+ */
+export function filasRangoIntercuartil(study) {
+  const estudio = study || {};
+  const r = analizarRango(estudio);
+  const stats = r.stats || {};
+  const compFilas = r.filas || [];
+
+  const serie = (clave) => compFilas
+    .map((f) => f[clave])
+    .filter((v) => v !== null && v !== undefined)
+    .sort((a, b) => a - b);
+
+  const sinAjuste = serie('noAjustado');
+  const conAjuste = serie('ajustado');
+  const extremo = (s, i) => (s.length ? s[i < 0 ? s.length + i : i] : null);
+
+  /* Indicador del contribuyente con el mismo método, descontando el segmento excluido:
+     es la cifra que la conclusión compara contra el rango. */
+  const seg = num(estudio.seg_excluido) || 0;
+  const tS = num(estudio.t_s), tOp = num(estudio.t_op);
+  const T = {
+    s: tS !== null ? tS - seg : null,
+    c: num(estudio.t_c),
+    op: tOp !== null ? tOp - seg : null,
+    ar: num(estudio.t_ar), inv: num(estudio.t_inv), ap: num(estudio.t_ap),
+  };
+  const pli = estudio.pli || 'MO';
+  const tPLI = pliOf(T, pli);
+
+  const nombreContribuyente = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+
+  return {
+    pli,
+    tPLI,
+    filas: [
+      { etiqueta: ETIQUETAS_RANGO.min, noAjustado: extremo(sinAjuste, 0), ajustado: extremo(conAjuste, 0) },
+      {
+        etiqueta: ETIQUETAS_RANGO.p25,
+        noAjustado: cuartilInterpolado(sinAjuste, 0.25),
+        ajustado: stats.p25 !== undefined ? stats.p25 : null,
+      },
+      {
+        etiqueta: ETIQUETAS_RANGO.med,
+        noAjustado: cuartilInterpolado(sinAjuste, 0.5),
+        ajustado: stats.med !== undefined ? stats.med : null,
+      },
+      {
+        etiqueta: ETIQUETAS_RANGO.p75,
+        noAjustado: cuartilInterpolado(sinAjuste, 0.75),
+        ajustado: stats.p75 !== undefined ? stats.p75 : null,
+      },
+      { etiqueta: ETIQUETAS_RANGO.max, noAjustado: extremo(sinAjuste, -1), ajustado: extremo(conAjuste, -1) },
+      /* El contribuyente cierra la tabla y lleva su indicador en las dos columnas: se
+         ajusta contra sí mismo, así que el ajuste es cero. */
+      { etiqueta: nombreContribuyente, noAjustado: tPLI, ajustado: tPLI },
+    ],
+  };
 }
 
 /* ══════════════ Diagnóstico de cobertura ══════════════ */

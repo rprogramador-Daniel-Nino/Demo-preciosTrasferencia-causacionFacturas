@@ -33,7 +33,10 @@
    permitido que las dos rutas publicaran números distintos para el mismo estudio.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { filasComparablesInforme } from './tablasInforme.js';
+import {
+  filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
+  filasRazonesRechazo,
+} from './tablasInforme.js';
 import { claveTitulo } from './docxRelleno.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
@@ -82,10 +85,41 @@ const RX_BLOQUE = /<(p|h[1-6])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi;
  *          la `<table>`; el párrafo del rótulo queda fuera, porque no hay que tocarlo.
  */
 export function localizarTablaHtml(html, nombres) {
+  return localizarTablasHtml(html, nombres)[0] || null;
+}
+
+/**
+ * TODAS las tablas cuyo rótulo coincide, en orden de documento.
+ *
+ * Hace falta porque la plantilla trae el rango intercuartil más de una vez con el mismo
+ * nombre —la versión horizontal de los resultados y la vertical del análisis— y hay que
+ * poder quedarse con la que corresponde. Cada resultado trae `columnas` y `filasDatos`
+ * para distinguirlas por su forma, que es lo único que las separa cuando el número del
+ * rótulo no es de fiar.
+ *
+ * @returns {Array<{inicio:number, fin:number, titulo:string, columnas:number,
+ *          filasDatos:number, embebido:boolean}>}
+ */
+export function localizarTablasHtml(html, nombres) {
   const texto = String(html || '');
   const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
-  if (!claves.length) return null;
+  if (!claves.length) return [];
 
+  const encontradas = [];
+  const vistas = new Set();
+
+  const anotar = (inicio, fin, titulo, embebido) => {
+    if (vistas.has(inicio)) return;
+    vistas.add(inicio);
+    const filas = filasDe(texto.slice(inicio, fin));
+    encontradas.push({
+      inicio, fin, titulo, embebido,
+      columnas: filas.length ? celdasDe(filas[0].xml).length : 0,
+      filasDatos: Math.max(0, filas.length - 1),
+    });
+  };
+
+  /* ── Rótulo en el párrafo anterior ── */
   RX_BLOQUE.lastIndex = 0;
   let b;
   while ((b = RX_BLOQUE.exec(texto)) !== null) {
@@ -110,9 +144,32 @@ export function localizarTablaHtml(html, nombres) {
     const inicio = cursor + tras[0].indexOf('<table');
     const fin = finDeTabla(texto, inicio);
     if (fin < 0) continue;
-    return { inicio, fin, titulo: textoPlanoHtml(b[2]) };
+    anotar(inicio, fin, textoPlanoHtml(b[2]), false);
   }
-  return null;
+
+  /* ── Rótulo DENTRO de la primera fila ── Así trae la plantilla la «Tabla 20. Tabla de
+     rangos» del final. Aquí se exige que la clave de la celda sea EXACTAMENTE el nombre:
+     por inclusión, la tabla de definiciones del método —cuya primera fila dice «Margen
+     operacional de utilidad o rentabilidad operacional»— se haría pasar por la de
+     márgenes, y sustituirla borraría las definiciones. */
+  const rxTabla = /<table(?:\s[^>]*)?>/gi;
+  let t;
+  while ((t = rxTabla.exec(texto)) !== null) {
+    const fin = finDeTabla(texto, t.index);
+    if (fin < 0) break;
+    rxTabla.lastIndex = fin;
+    const filas = filasDe(texto.slice(t.index, fin));
+    if (!filas.length) continue;
+    for (const celda of celdasDe(filas[0].xml)) {
+      const clave = claveTitulo(textoPlanoHtml(celda.contenido));
+      if (clave && claves.includes(clave)) {
+        anotar(t.index, fin, textoPlanoHtml(celda.contenido), true);
+        break;
+      }
+    }
+  }
+
+  return encontradas.sort((x, y) => x.inicio - y.inicio);
 }
 
 /* Las `<tr>` de una tabla, con sus posiciones. */
@@ -203,20 +260,63 @@ export function reescribirFilasHtml(tablaHtml, filas, opciones = {}) {
   return tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
 }
 
-/** Nombre con el que la tabla de márgenes se rotula en las plantillas. */
+/**
+ * Reescribe el texto de una celda concreta, conservando su envoltura.
+ *
+ * Se usa para el encabezado de la versión horizontal del rango, cuya primera celda es el
+ * NOMBRE DEL CONTRIBUYENTE: en la plantilla de END GAME dice «END GAME», y dejarlo ahí
+ * publica el nombre del cliente anterior en el informe de otro. El resto del encabezado no
+ * se toca — «RANGE MO NO AJUSTADO» es redacción de la plantilla y sobrescribirla con la
+ * nuestra es lo contrario de lo que esta ruta existe para conservar.
+ *
+ * @param {string} tablaHtml
+ * @param {number} fila     índice de la fila (0 es la primera).
+ * @param {number} columna  índice de la celda dentro de esa fila.
+ * @param {string} texto
+ */
+export function reescribirCeldaHtml(tablaHtml, fila, columna, texto) {
+  const tabla = String(tablaHtml || '');
+  const filas = filasDe(tabla);
+  if (!filas[fila]) return tabla;
+
+  const filaXml = filas[fila].xml;
+  const celdas = celdasDe(filaXml);
+  if (!celdas[columna]) return tabla;
+
+  /* Se localiza la celda por su posición dentro de la fila y se sustituye solo su
+     contenido, para no tocar los atributos ni las demás celdas. */
+  let vistas = 0;
+  const filaNueva = filaXml.replace(/<(td|th)((?:\s[^>]*)?)>([\s\S]*?)<\/\1\s*>/gi,
+    (todo, etiqueta, atributos, contenido) => {
+      if (vistas++ !== columna) return todo;
+      const { abre, cierra } = envolturaDe(contenido);
+      return '<' + etiqueta + atributos + '>' + abre + escaparHtml(texto) + cierra
+        + '</' + etiqueta + '>';
+    });
+
+  return tabla.slice(0, filas[fila].inicio) + filaNueva + tabla.slice(filas[fila].fin);
+}
+
+/** Nombres con los que las tablas del motor se rotulan en las plantillas. */
 export const TABLA_MARGENES = 'Margen Operacional Compañías Comparables';
+export const TABLA_MUESTRA = 'Muestra Compañías comparables';
+export const TABLA_RANGO = 'Rango Intercuartil';
+export const TABLA_RANGOS_CONCLUSION = 'Tabla de rangos';
+export const TABLA_RAZONES = 'Razones de rechazo';
 
 /**
  * Regenera en el HTML las tablas del motor de comparables.
  *
- * Hoy solo la de márgenes, que es la que se pidió. El localizador y el reescritor son
- * genéricos, así que añadir la muestra de comparables o el rango es declarar su nombre
- * y sus filas — pero cada una necesita comprobarse contra una plantilla real antes de
- * darla por buena, así que no se añaden a ciegas.
+ * Las cuatro que dependen de la muestra: razones de rechazo, muestra de comparables,
+ * márgenes y rango intercuartil. Las ocho de tendencias de la economía NO están: no
+ * salen del motor sino de las series macro, y su generador es otro.
+ *
+ * Cada tabla se sustituye por separado y de ATRÁS HACIA ADELANTE dentro de su grupo,
+ * porque reescribir una mueve los offsets de todo lo que va después.
  *
  * @param {string} html      la plantilla marcada.
- * @param {object} estudio   el estudio con sus comparables.
- * @param {string[]} [avisos]  se anota el nombre de la tabla que la plantilla no trae.
+ * @param {object} estudio   el estudio con sus comparables y su embudo.
+ * @param {string[]} [avisos]  se anota el nombre de las tablas que la plantilla no trae.
  *        Sin este aviso el fallo es mudo y la tabla se radica con los datos del informe
  *        del que salió la plantilla.
  * @returns {string} el HTML con las tablas regeneradas.
@@ -224,26 +324,84 @@ export const TABLA_MARGENES = 'Margen Operacional Compañías Comparables';
 export function actualizarTablasMotorHtml(html, estudio, avisos) {
   let salida = String(html || '');
   const study = estudio || {};
+  const anotar = (nombre) => { if (Array.isArray(avisos)) avisos.push(nombre); };
 
-  const bloque = localizarTablaHtml(salida, TABLA_MARGENES);
-  if (!bloque) {
-    if (Array.isArray(avisos)) avisos.push(TABLA_MARGENES);
-    return salida;
+  /* Sustituye una tabla localizada por su nombre. Devuelve si se pudo. */
+  const sustituir = (nombre, filas, opciones) => {
+    if (!filas || !filas.length) { anotar(nombre); return false; }
+    const bloque = localizarTablaHtml(salida, nombre);
+    if (!bloque) { anotar(nombre); return false; }
+    const tabla = salida.slice(bloque.inicio, bloque.fin);
+    salida = salida.slice(0, bloque.inicio) + reescribirFilasHtml(tabla, filas, opciones)
+      + salida.slice(bloque.fin);
+    return true;
+  };
+
+  /* ── Razones de rechazo ── El total del universo cierra la tabla, como en la ruta
+     .docx: es lo que permite comprobar de un vistazo que la columna suma. */
+  const { filas: razones } = filasRazonesRechazo(study.embudoSeleccion);
+  const filasRazones = (razones || []).map((f) => [f.etiqueta, f.letra, String(f.cuantas)]);
+  if (filasRazones.length) {
+    filasRazones.push([
+      'TOTAL, UNIVERSO', '',
+      study.embudoSeleccion ? String(study.embudoSeleccion.evaluadas) : '—',
+    ]);
   }
+  sustituir(TABLA_RAZONES, filasRazones);
 
-  /* Sin comparables no se toca la tabla: dejarla en blanco es peor que dejar la de la
-     plantilla, porque el aviso de arriba ya no se emitiría y nadie sabría por qué la
-     tabla quedó vacía. Se avisa igual. */
+  /* ── Muestra de comparables ── */
+  sustituir(TABLA_MUESTRA, filasMuestraComparables(study)
+    .map((f) => [String(f.numero), f.nombre, f.ambito]));
+
+  /* ── Márgenes de las comparables ── */
   const comparables = filasComparablesInforme(study);
-  if (!comparables.length) {
-    if (Array.isArray(avisos)) avisos.push(TABLA_MARGENES);
-    return salida;
-  }
+  sustituir(TABLA_MARGENES, comparables
+    .map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]));
 
-  const filas = comparables.map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]);
-  const tabla = salida.slice(bloque.inicio, bloque.fin);
-  return salida.slice(0, bloque.inicio) + reescribirFilasHtml(tabla, filas)
-    + salida.slice(bloque.fin);
+  /* ── Rango intercuartil ── La plantilla lo trae hasta tres veces y con dos formas: la
+     horizontal de los resultados (una fila de datos: el indicador del contribuyente y
+     tres percentiles) y la vertical del análisis, que además se repite al final rotulada
+     «Tabla de rangos» y con el rótulo dentro de su primera fila. Las tres tienen que
+     quedar con los mismos percentiles: antes se elegía una y la otra se radicaba con los
+     del informe anterior.
+
+     Se distinguen por su FORMA y no por el número del rótulo, que se renumera: la
+     vertical tiene tres columnas, la horizontal cuatro. */
+  const rango = filasRangoIntercuartil(study);
+  const filasVertical = rango.filas.map((f) => [f.etiqueta, pct(f.noAjustado), pct(f.ajustado)]);
+  const p = (etq) => {
+    const f = rango.filas.find((x) => x.etiqueta === etq);
+    return f ? pct(f.ajustado) : '—';
+  };
+  const filaHorizontal = [[pct(rango.tPLI), p('Percentil 25'), p('Mediana'), p('Percentil 75')]];
+
+  /* De atrás hacia adelante: cada sustitución mueve lo que va después. */
+  const ocurrencias = [
+    ...localizarTablasHtml(salida, TABLA_RANGO),
+    ...localizarTablasHtml(salida, TABLA_RANGOS_CONCLUSION),
+  ].sort((a, b) => b.inicio - a.inicio);
+
+  if (!ocurrencias.length) anotar(TABLA_RANGO);
+  const nombreContribuyente = rango.filas[rango.filas.length - 1].etiqueta;
+  let verticalesHechas = 0;
+  for (const oc of ocurrencias) {
+    const esHorizontal = oc.columnas >= 4;
+    const filas = esHorizontal ? filaHorizontal : filasVertical;
+    /* La que trae el rótulo embebido lo lleva en su primera fila, así que ahí el
+       encabezado son las DOS primeras: el rótulo y los nombres de columna. */
+    const opciones = { filasEncabezado: oc.embebido ? 2 : 1 };
+    let tabla = reescribirFilasHtml(salida.slice(oc.inicio, oc.fin), filas, opciones);
+    /* En la horizontal la primera celda del encabezado es el nombre del contribuyente. Sin
+       esto el informe sale con el nombre del cliente del que se tomó la plantilla. */
+    if (esHorizontal) tabla = reescribirCeldaHtml(tabla, 0, 0, nombreContribuyente);
+    salida = salida.slice(0, oc.inicio) + tabla + salida.slice(oc.fin);
+    if (!esHorizontal) verticalesHechas++;
+  }
+  /* Si solo se encontró la horizontal, el rango del análisis se queda con los datos de la
+     plantilla y hay que decirlo. */
+  if (ocurrencias.length && !verticalesHechas) anotar(TABLA_RANGO);
+
+  return salida;
 }
 
 /* Mismo formato que la ruta .docx: dos decimales y el signo de porcentaje. Un hueco
