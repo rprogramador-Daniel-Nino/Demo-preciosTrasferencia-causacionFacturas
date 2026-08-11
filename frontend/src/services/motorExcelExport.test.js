@@ -95,7 +95,7 @@ test('la propiedad, planta y equipo llega al libro, no en cero', () => {
      ahí primero: el libro salía con PP&E en cero para la parte examinada aunque el
      estudio la tuviera cargada, y el ajuste de PP&E se calculaba contra nada. */
   const wb = construirLibroSoporte(PAYLOAD);
-  const fila = filaEnHoja(wb.Sheets.Datos, 'Propiedad, planta y equipo');
+  const fila = filaEnHoja(wb.Sheets.Datos, 'Propiedades, planta y equipo');
   assert.strictEqual(wb.Sheets.Datos[`B${fila}`].v, 300, 'PP&E de la parte examinada');
 });
 
@@ -151,4 +151,71 @@ test('el libro recibe el ámbito, el segmento excluido y el amb de cada comparab
   assert.strictEqual(filaNac[9], 'Nac');
   const filaInt = datos.find((f) => f && f[0] === 'Internacional X');
   assert.strictEqual(filaInt[9], 'Int');
+});
+
+/* Los ocho rubros del ESF que la Task 4 añadió a RUBROS_EXAMINADA no llegaban por esta
+   ruta: `estudioBase` no los traía, así que `valorDeRubro` los leía en 0 en TODA
+   exportación del Motor de Comparables y el A.V. dividía sobre un total de activos
+   también en cero —#DIV/0! en las diez celdas—. Estos dos tests cubren el trayecto
+   completo del payload a la celda, igual que el resto del archivo. */
+
+test('construirLibroSoporte escribe los doce rubros del ESF y el A.V. como fórmula', () => {
+  const conEsf = {
+    ...PAYLOAD,
+    examinada: {
+      T: {
+        ...PAYLOAD.examinada.T,
+        cash: 10, inv_assoc: 20, tax: 30, act_curr: 200,
+        intang: 40, dif: 50, act_nocurr: 400, act_tot: 600,
+      },
+    },
+  };
+  const wb = construirLibroSoporte(conEsf);
+  const hoja = wb.Sheets.Datos;
+  const filaTot = filaEnHoja(hoja, 'Total, Activos');
+  assert.ok(filaTot > 0, 'existe la fila de Total, Activos');
+  assert.strictEqual(hoja[`B${filaTot}`].v, 600, 'el total de activos llega, no en cero');
+
+  /* Los diez rubros de balance con A.V.: incluye el primero y el último de la lista
+     —Efectivo y Total, Activos no corrientes—, que es donde un off-by-one en
+     filaDeRubro pasaría desapercibido, y los dos subtotales intermedios. */
+  [
+    ['Efectivo y equivalentes de efectivo', 10],
+    ['Inversiones asociadas', 20],
+    ['Cuentas por cobrar comerciales y otras cuentas por cobrar', 100],
+    ['Inventarios', 50],
+    ['Activos por impuestos corrientes', 30],
+    ['Total, Activo corriente', 200],
+    ['Propiedades, planta y equipo', 300],
+    ['Intangibles', 40],
+    ['Diferidos', 50],
+    ['Total, Activos no corrientes', 400],
+  ].forEach(([etiqueta, valor]) => {
+    const fila = filaEnHoja(hoja, etiqueta);
+    assert.ok(fila > 0, `falta el rubro «${etiqueta}» en la hoja Datos`);
+    assert.strictEqual(hoja[`B${fila}`].v, valor, `${etiqueta} llega con su valor, no en cero`);
+    const av = hoja[`C${fila}`];
+    assert.ok(av && av.f, `${etiqueta} debería llevar el A.V. como fórmula`);
+    assert.ok(av.f.includes(`$B$${filaTot}`), `${etiqueta}: el A.V. divide sobre el total de activos: ${av.f}`);
+  });
+});
+
+test('con t_act_tot ausente, el A.V. queda en blanco y no en #DIV/0!', () => {
+  const sinTotal = {
+    ...PAYLOAD,
+    examinada: { T: { ...PAYLOAD.examinada.T, cash: 10 } },
+  };
+  const wb = construirLibroSoporte(sinTotal);
+  const hoja = wb.Sheets.Datos;
+  const filaTot = filaEnHoja(hoja, 'Total, Activos');
+  const filaCash = filaEnHoja(hoja, 'Efectivo y equivalentes de efectivo');
+  const filaNocurr = filaEnHoja(hoja, 'Total, Activos no corrientes');
+
+  assert.strictEqual(hoja[`B${filaTot}`].v, 0, 'sin dato, el total de activos llega en cero');
+  [filaCash, filaNocurr].forEach((fila) => {
+    const av = hoja[`C${fila}`];
+    assert.ok(av && av.f, 'sigue siendo fórmula, no un valor quemado');
+    assert.ok(av.f.startsWith(`IF($B$${filaTot}=0,"",`), `la guarda evita el #DIV/0!: ${av.f}`);
+    assert.strictEqual(av.v, undefined, 'sin un valor cacheado que finja un resultado');
+  });
 });

@@ -51,27 +51,34 @@ const METODOS = [
    visto desde el libro y desde el ANEXO A, y si divergen el informe publica un
    balance que su propio soporte no reproduce.
 
-   `av: false` marca los rubros que NO llevan análisis vertical: el total de activos,
-   porque sería 100 % por definición, y las cuentas por pagar, porque un pasivo sobre
-   el total de activos no significa nada. Es el criterio que ya aplica
-   `filasEsfAnexoA`. Las tres cifras del estado de resultados —ventas, costo y gastos—
-   tampoco: no son partidas del balance. */
+   `av: false` marca los rubros que NO llevan análisis vertical en esta hoja: el total de
+   activos, porque un 100 % por definición no informa nada —aunque `filasEsfAnexoA` en
+   docxRelleno.js sí lo calcula y lo publica en el ANEXO A, que sale de mapear TODO
+   `RUBROS_ESF` incluido el total—, y las cuentas por pagar, porque un pasivo sobre el
+   total de activos no significa nada (esa sí coincide con el criterio de
+   `filasEsfAnexoA`, que las excluye del `map` y las publica con `SIN_DATO`). Las tres
+   cifras del estado de resultados —ventas, costo y gastos— tampoco llevan A.V.: no son
+   partidas del balance.
+
+   Las etiquetas son las literales de `RUBROS_ESF`, sin abreviar: quien audite el libro
+   contra el ANEXO A tiene que poder mapear cada fila por su texto exacto, sin tener que
+   saber cuáles son fieles y cuáles un alias histórico de la hoja. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas', av: false },
   { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
   { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
   { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
   { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
-  { clave: 't_ar', etiqueta: 'Cuentas por cobrar', av: true },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras cuentas por cobrar', av: true },
   { clave: 't_inv', etiqueta: 'Inventarios', av: true },
   { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes', av: true },
   { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', av: true },
-  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo', av: true },
+  { clave: 't_ppe', etiqueta: 'Propiedades, planta y equipo', av: true },
   { clave: 't_intang', etiqueta: 'Intangibles', av: true },
   { clave: 't_dif', etiqueta: 'Diferidos', av: true },
   { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', av: true },
   { clave: 't_act_tot', etiqueta: 'Total, Activos', av: false },
-  { clave: 't_ap', etiqueta: 'Cuentas por pagar', av: false },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales', av: false },
 ];
 
 /* 1-based: fila 1 título, 2 vacía, 3 «PARTE EXAMINADA», 4 el primer rubro. */
@@ -181,8 +188,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const celdas = [cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))];
     /* A.V. como fórmula y no como número: es lo que hace que corregir una cifra en
        Datos recalcule el vertical del ANEXO A y de la Tabla 10 sin recalcularlo a
-       mano en dos sitios. */
-    if (r.av) celdas.push(cFor(`B${filaDeRubro(r.clave)}/$B$${filaTot}`, '0.00%'));
+       mano en dos sitios. La guarda IF(total=0,"",…) es la misma que aplica
+       `verticalSobreActivos` en docxRelleno.js (ahí devuelve «—» sin total; aquí, con
+       el total en cero, la celda queda en blanco en vez de mostrar #DIV/0!): un
+       estudio que llegue a esta hoja sin `t_act_tot` no debe romper el libro, sea por
+       la ruta del Motor de Comparables o por cualquier otro llamador presente o
+       futuro que no traiga el dato. */
+    if (r.av) {
+      const fila = filaDeRubro(r.clave);
+      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%'));
+    }
     datos.push(celdas);
   });
   datos.push([

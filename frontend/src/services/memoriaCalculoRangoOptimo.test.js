@@ -376,7 +376,7 @@ test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', 
   const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
   const datos = hojas.find((h) => h.nombre === 'Datos');
   const filaDe = (etiqueta) => datos.celdas.findIndex((f) => f && f[0] && f[0].v === etiqueta) + 1;
-  const fPpe = filaDe('Propiedad, planta y equipo');
+  const fPpe = filaDe('Propiedades, planta y equipo');
   const fVentas = filaDe('Ventas netas');
   const fCosto = filaDe('Costo de ventas');
   const fGastos = filaDe('Gastos operativos');
@@ -452,12 +452,15 @@ test('la hoja Datos trae el ESF completo con el A.V. como fórmula viva', () => 
   const datos = hojasMemoriaRangoOptimo(estudio, null).find((h) => h.nombre === 'Datos');
   const fila = (etiqueta) => datos.celdas.find((f) => f && f[0] && f[0].v === etiqueta);
 
-  /* Los doce rubros que la ingesta sabe leer. */
+  /* Los doce rubros que la ingesta sabe leer, con las etiquetas literales de
+     RUBROS_ESF (docxRelleno.js): quien audita el libro contra el ANEXO A tiene que
+     poder mapear cada fila por su texto exacto. */
   ['Efectivo y equivalentes de efectivo', 'Inversiones asociadas',
-    'Cuentas por cobrar', 'Inventarios', 'Activos por impuestos corrientes',
-    'Total, Activo corriente', 'Propiedad, planta y equipo', 'Intangibles',
+    'Cuentas por cobrar comerciales y otras cuentas por cobrar', 'Inventarios',
+    'Activos por impuestos corrientes', 'Total, Activo corriente',
+    'Propiedades, planta y equipo', 'Intangibles',
     'Diferidos', 'Total, Activos no corrientes', 'Total, Activos',
-    'Cuentas por pagar'].forEach((r) => {
+    'Cuentas por pagar comerciales'].forEach((r) => {
     assert.ok(fila(r), `falta el rubro «${r}» en la hoja Datos`);
   });
 
@@ -468,12 +471,31 @@ test('la hoja Datos trae el ESF completo con el A.V. como fórmula viva', () => 
   assert.ok(av.f.includes(`$B$${filaTot}`),
     `el A.V. divide sobre el total de activos: ${av.f}`);
 
-  /* El total de activos no lleva A.V.: sería 100 % por definición y no informa. */
+  /* El total de activos no lleva A.V. en esta hoja: un 100 % por definición no
+     informa nada, aunque filasEsfAnexoA sí lo calcula y lo publica en el ANEXO A. */
   assert.strictEqual(fila('Total, Activos')[2], undefined);
 
   /* Las cuentas por pagar tampoco: un pasivo sobre el total de activos no significa
-     nada, y es el mismo criterio que aplica filasEsfAnexoA en docxRelleno.js. */
-  assert.strictEqual(fila('Cuentas por pagar')[2], undefined);
+     nada, y esta sí es la misma exclusión que aplica filasEsfAnexoA en
+     docxRelleno.js (las publica con SIN_DATO, fuera del `map` de RUBROS_ESF). */
+  assert.strictEqual(fila('Cuentas por pagar comerciales')[2], undefined);
+});
+
+test('el A.V. no revienta en #DIV/0! cuando el total de activos llega en cero', () => {
+  /* Guarda equivalente a la de `verticalSobreActivos` en docxRelleno.js (ahí
+     devuelve «—» sin total). Aquí la celda debe quedar en blanco, no en error, y
+     esto cubre también un subtotal y el último rubro con A.V. de la lista, que es
+     donde un off-by-one en filaDeRubro pasaría desapercibido. */
+  const estudio = { ...ESTUDIO, t_act_tot: 0, t_act_nocurr: 400, t_ap: 80 };
+  const datos = hojasMemoriaRangoOptimo(estudio, null).find((h) => h.nombre === 'Datos');
+  const fila = (etiqueta) => datos.celdas.find((f) => f && f[0] && f[0].v === etiqueta);
+  const filaTot = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Total, Activos') + 1;
+
+  [fila('Efectivo y equivalentes de efectivo'), fila('Total, Activos no corrientes')]
+    .forEach((f) => {
+      assert.ok(f[2] && f[2].f, 'sigue siendo fórmula');
+      assert.ok(f[2].f.startsWith(`IF($B$${filaTot}=0,"",`), `guarda contra división por cero: ${f[2].f}`);
+    });
 });
 
 test('las referencias del contribuyente apuntan al rubro, no a una fila fija', () => {
@@ -492,11 +514,11 @@ test('las referencias del contribuyente apuntan al rubro, no a una fila fija', (
   const ajInv = mo.celdas[2][15].f;
   const ajPpe = mo.celdas[2][16].f;
 
-  assert.ok(ajCxC.includes(`Datos!$B$${filaDe('Cuentas por cobrar')}`),
+  assert.ok(ajCxC.includes(`Datos!$B$${filaDe('Cuentas por cobrar comerciales y otras cuentas por cobrar')}`),
     `Aj.CxC apunta al rubro de CxC: ${ajCxC}`);
   assert.ok(ajInv.includes(`Datos!$B$${filaDe('Inventarios')}`),
     `Aj.Inv apunta al rubro de inventarios: ${ajInv}`);
-  assert.ok(ajPpe.includes(`Datos!$B$${filaDe('Propiedad, planta y equipo')}`),
+  assert.ok(ajPpe.includes(`Datos!$B$${filaDe('Propiedades, planta y equipo')}`),
     `Aj.PP&E apunta al rubro de PP&E: ${ajPpe}`);
 
   /* La columna Tasa de cada comparable apunta a la fila de la tasa. */
