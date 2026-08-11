@@ -32,7 +32,9 @@
    componente MemoriaRangoModal.jsx ya sabe volcar, para no tocar la ruta de descarga.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { analizarRangoAjustado, entraPorAmbito } from './ajusteRangoCapitalTrabajo.js';
+import {
+  analizarRangoAjustado, desgloseAjuste, entraPorAmbito,
+} from './ajusteRangoCapitalTrabajo.js';
 
 /* Métodos y su configuración de fórmulas. `base` indica sobre qué se calcula el
    indicador y se escalan las partidas; `num` el numerador; `dep` si usa el
@@ -119,9 +121,9 @@ const AJUSTES = [
 const cNum = (v, z) => ({ v, t: 'n', z: z || '#,##0.00' });
 const cTxt = (v) => ({ v: v == null ? '' : String(v), t: 's' });
 /* Fórmula numérica. `v` es el valor en caché: la fórmula la recalcula Excel, el valor
-   lo pone el motor. Se omite cuando no hay valor que poner —un intermedio del ajuste
-   que el motor no expone, o una fila que no entra a la serie— y entonces la celda sale
-   como salía antes.
+   lo pone el motor. Se omite cuando no hay valor que poner —una comparable cuyas cifras
+   no le permiten al motor construir el ajuste, o una fila que no entra a la serie— y
+   entonces la celda sale como salía antes.
 
    La guarda `Number.isFinite` no es una cortesía: `{ t:'n', v:'' }` emite `<v></v>` en
    una celda numérica, que es XML inválido y manda el libro a modo reparación. Y un cero
@@ -215,6 +217,15 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const valorDeRubro = (clave) => (clave === 't_s'
     ? (Number(study.t_s) || 0) - segExcluido
     : Number(study[clave]) || 0);
+
+  /* El contribuyente con la forma que espera `desgloseAjuste`. Las ventas salen de
+     `valorDeRubro('t_s')` —la misma función que escribe la celda de Datos— y no de
+     `study.t_s`, que viene en bruto: tomarlas de ahí dejaría los intermedios calculados
+     sobre unas ventas y la celda que los referencia sobre otras. */
+  const contribuyenteDelEstudio = {
+    s: valorDeRubro('t_s'), c: study.t_c, op: study.t_op,
+    ar: study.t_ar, inv: study.t_inv, ap: study.t_ap, ppe: study.t_ppe,
+  };
 
   const filaTot = filaDeRubro('t_act_tot');
   RUBROS_EXAMINADA.forEach((r) => {
@@ -354,23 +365,33 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          no tiene nada que ver con el ajuste de CxC, así que ahí se mantiene. */
       const denomSinAR = M.base === 'ventas' ? `M${r}` : `R${r}`;
 
+      /* Los intermedios, del mismo motor. No dependen del sabor: son los cuatro
+         ajustes completos, y cada columna S–Y elige cuáles aplica.
+
+         `|| {}` deja los nueve campos en `undefined` cuando el motor no puede construir
+         el desglose —comparable sin cifras, base en cero, método sin base—, y entonces
+         `cFor` omite el valor y la celda sale como salía antes: fórmula que Excel
+         resuelve al abrir. Es el mismo criterio que siguen las columnas S–Y. */
+      const dg = desgloseAjuste(comps[i], contribuyenteDelEstudio, M.hoja,
+        (Number(study.prime) || 0) / 100) || {};
+
       const fila = [
         nombreRef,                              // A nombre
         ...numRefs,                             // B..H cifras
         tasaRef,                                // I tasa
-        cFor(`B${r}-C${r}-D${r}`, '#,##0.00'),  // J EBIT
-        cFor(`B${r}-C${r}`, '#,##0.00'),        // K util bruta
-        cFor(`I${r}/(1+I${r})`, '0.00000'),     // L desc
-        cFor(`${base}`, '#,##0.00'),            // M base
-        cFor(`((E${r}/M${r})-(${AR_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // N Aj.CxC
-        cFor(`((G${r}/M${r})-(${AP_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // O Aj.CxP
-        cFor(`((F${r}/${baseInv})-(${INV_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // P Aj.Inv
-        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // Q Aj.PP&E
-        cFor(`${M.dep ? denomDep : (M.base === 'ventas' ? `(B${r}-N${r})` : M.base === 'opex' ? `D${r}` : `M${r}`)}`, '#,##0.00'), // R denom ajustado
+        cFor(`B${r}-C${r}-D${r}`, '#,##0.00', dg.ebit),  // J EBIT
+        cFor(`B${r}-C${r}`, '#,##0.00', dg.utilBruta),    // K util bruta
+        cFor(`I${r}/(1+I${r})`, '0.00000', dg.desc),      // L desc
+        cFor(`${base}`, '#,##0.00', dg.base),             // M base
+        cFor(`((E${r}/M${r})-(${AR_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000', dg.ajusteAR),   // N Aj.CxC
+        cFor(`((G${r}/M${r})-(${AP_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000', dg.ajusteAP),   // O Aj.CxP
+        cFor(`((F${r}/${baseInv})-(${INV_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000', dg.ajusteINV), // P Aj.Inv
+        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000', dg.ajustePPE), // Q Aj.PP&E
+        cFor(`${M.dep ? denomDep : (M.base === 'ventas' ? `(B${r}-N${r})` : M.base === 'opex' ? `D${r}` : `M${r}`)}`, '#,##0.00', dg.denomAjustado), // R denom ajustado
         /* S–Y: el indicador de cada sabor. `porSabor[k]` sigue el orden de AJUSTES,
-           que es el de estas siete columnas. Las J–R de arriba van sin valor a
-           propósito: son los intermedios del ajuste, que el motor no expone, y
-           recalcularlos aquí sería una segunda implementación de su matemática. */
+           que es el de estas siete columnas. Y las J–R de arriba llevan los intermedios
+           del MISMO motor, no un cálculo propio: son el rastro de auditoría que permite
+           seguir de dónde sale cada uno de estos siete números. */
         cFor(`${num}/M${r}`, M.fmt, porSabor[0].filas[i]?.valor),            // S sin ajuste
         cFor(`(${num}-N${r})/R${r}`, M.fmt, porSabor[1].filas[i]?.valor),    // T CxC
         cFor(`(${num}+O${r})/${denomSinAR}`, M.fmt, porSabor[2].filas[i]?.valor),  // U CxP

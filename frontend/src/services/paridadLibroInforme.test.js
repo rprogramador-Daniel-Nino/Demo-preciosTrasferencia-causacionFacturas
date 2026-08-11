@@ -86,8 +86,8 @@ function libroDe(estudioNorm) {
  *
  *  La etiqueta de cada fila de estadística va en la columna R (índice 17) y los siete
  *  valores, uno por sabor, empiezan en AA (índice 26). En las filas de comparable la
- *  columna R es el denominador ajustado, que va sin valor, así que nunca colisiona con
- *  una etiqueta. */
+ *  columna R es el denominador ajustado, cuyo valor es un NÚMERO, así que nunca colisiona
+ *  con una etiqueta —que es una cadena—. */
 function estadisticaDelLibro(estudioNorm, hoja, idxSabor) {
   const h = libroDe(estudioNorm).find((x) => x.nombre === hoja);
   assert.ok(h, `el libro no trae la hoja «${hoja}»`);
@@ -599,6 +599,77 @@ test('una comparable sin cifras no entra en el libro ni en el informe', () => {
   assert.ok(filaHueco[26].f, 'y conserva la fórmula, que Excel resuelve a ""');
   assert.strictEqual(filaHueco[26].v, undefined,
     'la serie del rango deja la celda sin valor, no en cero');
+});
+
+/* Qué columna es cada intermedio del ajuste, por su índice 0-based: J=9 el EBIT, K=10 la
+   utilidad bruta, L=11 el factor de descuento, M=12 la base, N–Q=13–16 los cuatro ajustes
+   y R=17 el denominador ajustado. Las columnas de resultado que reconstruyen: T=19 (CxC),
+   W=22 (CxC+CxP+Inv) y X=23 (+PP&E). */
+const COL = {
+  ebit: 9, utilBruta: 10, desc: 11, base: 12, ajusteAR: 13, ajusteAP: 14, ajusteINV: 15,
+  ajustePPE: 16, denomAjustado: 17,
+};
+/* El numerador de cada método, que es lo único que distingue una reconstrucción correcta
+   de otra igual de creíble: MB, Berry y Cost Plus dividen la utilidad bruta; MO y NCP, el
+   EBIT. Se escribe aquí a mano y no se importa, igual que la tabla de `CONTRIBUYENTE`. */
+const COL_NUM = {
+  MO: COL.ebit, MB: COL.utilBruta, Berry: COL.utilBruta,
+  CostPlus: COL.utilBruta, NCP: COL.ebit,
+};
+
+test('los intermedios del libro reproducen el indicador que publica', () => {
+  const norm = obtenerEstudioNormalizadoParaParche(ESTUDIO_INFORME);
+  const mo = hojasMemoriaRangoOptimo(norm, null).find((h) => h.nombre === 'MO');
+  /* Fila 3 = primera comparable. J=9, N=13, O=14, P=15, R=17, W=22. */
+  const f = mo.celdas[2];
+  const reconstruido = (f[9].v - f[13].v + f[14].v - f[15].v) / f[17].v;
+  assert.ok(Math.abs(reconstruido - f[22].v) < 1e-12,
+    `las columnas intermedias reproducen la W: ${reconstruido} vs ${f[22].v}`);
+});
+
+test('los intermedios reproducen el indicador en los cinco métodos y en toda la muestra', () => {
+  /* La prueba de arriba mira una celda de una hoja. Esta recorre las cinco hojas y las
+     cinco comparables, y reconstruye DOS columnas: la W —el escenario que reporta el
+     informe— y la X, que además resta el ajuste de PP&E. Un intermedio cruzado entre
+     columnas, o un denominador de otro método en la R, sobreviviría a una sola celda de
+     MO y no a esto.
+
+     Se reconstruye a partir de los valores en caché del propio libro, no del motor: es lo
+     que un lector que no recalcula ve, y es ahí donde el rastro de auditoría tiene que
+     cerrar contra el resultado publicado. */
+  const norm = obtenerEstudioNormalizadoParaParche(ESTUDIO_INFORME);
+  const hojas = hojasMemoriaRangoOptimo(norm, null);
+  let reconstruidas = 0;
+  METODOS.forEach((metodo) => {
+    const h = hojas.find((x) => x.nombre === metodo);
+    assert.ok(h, `el libro no trae la hoja «${metodo}»`);
+    const filas = h.celdas.filter((f) => f && f[0] && f[0].f && f[0].f.startsWith('Datos!A'));
+    assert.strictEqual(filas.length, ESTUDIO_INFORME.comparables.length,
+      `${metodo}: una fila por comparable`);
+    filas.forEach((f, i) => {
+      const donde = `${metodo}/comparable ${i}`;
+      /* Los nueve intermedios traen valor: si faltara uno, la reconstrucción daría NaN y
+         la comparación de abajo fallaría, pero el mensaje no diría por qué. */
+      Object.entries(COL).forEach(([campo, col]) => assert.ok(Number.isFinite(f[col].v),
+        `${donde}: la columna ${col} (${campo}) no trae valor`));
+      const numBase = f[COL_NUM[metodo]].v;
+      const ajustado = (numBase - f[COL.ajusteAR].v + f[COL.ajusteAP].v - f[COL.ajusteINV].v)
+        / f[COL.denomAjustado].v;
+      const conPPE = (numBase - f[COL.ajusteAR].v + f[COL.ajusteAP].v - f[COL.ajusteINV].v
+        - f[COL.ajustePPE].v) / f[COL.denomAjustado].v;
+      /* Tolerancia relativa: Cost Plus y Berry publican indicadores del orden de la
+         unidad y MO del orden de la centésima. */
+      const cuadra = (a, b) => Math.abs(a - b) <= Math.abs(b) * 1e-12;
+      assert.ok(cuadra(ajustado, f[22].v),
+        `${donde}: la W no sale de sus intermedios: ${ajustado} vs ${f[22].v}`);
+      assert.ok(cuadra(conPPE, f[23].v),
+        `${donde}: la X no sale de sus intermedios: ${conPPE} vs ${f[23].v}`);
+      reconstruidas += 2;
+    });
+  });
+  /* Cinco métodos × cinco comparables × dos columnas de resultado. */
+  assert.strictEqual(reconstruidas, 5 * ESTUDIO_INFORME.comparables.length * 2,
+    `debería reconstruir 50 indicadores, reconstruyó ${reconstruidas}`);
 });
 
 test('el segmento excluido sale de un solo sitio', () => {

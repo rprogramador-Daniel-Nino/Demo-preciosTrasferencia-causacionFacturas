@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  analizarRangoAjustado, indicadorAjustado, cuartilInterpolado, TIPOS_AJUSTE,
+  analizarRangoAjustado, indicadorAjustado, desgloseAjuste, cuartilInterpolado, TIPOS_AJUSTE,
 } from './ajusteRangoCapitalTrabajo.js';
 
 /* Contribuyente y comparables de END GAME 2025, en el formato del sistema.
@@ -321,6 +321,115 @@ test('cada fila trae también su indicador sin ajustar, para que la diferencia s
     assert.ok(Math.abs(f.noAjustado - sinAjuste.filas[i].valor) < 1e-12,
       `${f.nombre}: noAjustado no coincide con el rango sin ajuste`);
   });
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   El desglose del ajuste: los intermedios que el libro de soporte publica en sus
+   columnas J–R y que son su rastro de auditoría.
+
+   Lo que estas pruebas afirman no es que los intermedios sean «unos números»: es que
+   RECONSTRUYEN el indicador que el motor ya publica. Si el desglose y el resultado no
+   cuadran, uno de los dos está mal, y con esa aserción el desglose no puede mentirle
+   al libro sin que se note aquí.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('el desglose del ajuste expone los intermedios que el libro publica', () => {
+  const contribuyente = { s: 1000, c: 600, op: 200, ar: 100, inv: 50, ap: 80, ppe: 300 };
+  const comp = { s: 500, c: 300, op: 100, ar: 50, inv: 20, ap: 40, ppe: 100 };
+  const d = desgloseAjuste(comp, contribuyente, 'MO', 0.0737);
+
+  assert.strictEqual(d.ebit, 100, 'EBIT = ventas − costo − gastos');
+  assert.strictEqual(d.utilBruta, 200, 'utilidad bruta = ventas − costo');
+  assert.strictEqual(d.desc, 0.0737 / 1.0737, 'factor r/(1+r)');
+  assert.strictEqual(d.base, 500, 'la base de MO son las ventas del comparable');
+
+  /* Los intermedios tienen que reproducir el indicador que ya publica el motor: si el
+     desglose y el resultado no cuadran, uno de los dos está mal. */
+  const reconstruido = (d.ebit - d.ajusteAR + d.ajusteAP - d.ajusteINV) / d.denomAjustado;
+  const delMotor = indicadorAjustado(comp, contribuyente, 'MO', 'aar_aap_inv', 0.0737);
+  assert.ok(Math.abs(reconstruido - delMotor) < 1e-12,
+    `el desglose reconstruye el indicador: ${reconstruido} vs ${delMotor}`);
+});
+
+/* Los tres métodos cuyo numerador es la utilidad bruta; los otros dos van con el EBIT.
+   Se escribe aquí y no se importa del módulo a propósito: es lo único que distingue
+   «Cost Plus divide la utilidad bruta» de «Cost Plus divide el EBIT», dos
+   reconstrucciones igual de creíbles que dan indicadores distintos. */
+const NUMERADOR_BRUTO = new Set(['MB', 'Berry', 'CostPlus']);
+
+test('el desglose reconstruye el indicador en los cinco métodos, comparable por comparable', () => {
+  /* La prueba de arriba solo mira MO, que es el método con el denominador más simple.
+     Los otros cuatro son justamente donde `denomAjustado` deja de ser la base: la venta
+     ajustada en MB, los gastos operativos en Berry y el denominador depurado en Cost
+     Plus y NCP. Un desglose que publicara la base a secas pasaría MO y fallaría aquí. */
+  let comprobadas = 0;
+  for (const metodo of ['MO', 'MB', 'Berry', 'CostPlus', 'NCP']) {
+    for (const c of COMP) {
+      const d = desgloseAjuste(c, SUJ_CORTO, metodo, TASA);
+      assert.ok(d, `${metodo}/${c.name}: el desglose debería existir`);
+      const numBase = NUMERADOR_BRUTO.has(metodo) ? d.utilBruta : d.ebit;
+      const reconstruido = (numBase - d.ajusteAR + d.ajusteAP - d.ajusteINV) / d.denomAjustado;
+      const delMotor = indicadorAjustado(c, SUJ_CORTO, metodo, 'aar_aap_inv', TASA);
+      /* Tolerancia relativa: Cost Plus llega a 14 y una absoluta de 1e-12 sería más
+         estricta ahí que en los márgenes de MO sin que eso signifique nada. */
+      assert.ok(Math.abs(reconstruido - delMotor) <= Math.abs(delMotor) * 1e-12,
+        `${metodo}/${c.name}: ${reconstruido} vs ${delMotor}`);
+      comprobadas++;
+    }
+  }
+  assert.strictEqual(comprobadas, 5 * COMP.length,
+    `debería reconstruir 80 indicadores, reconstruyó ${comprobadas}`);
+});
+
+test('el desglose y el indicador comparten los intermedios: no son dos aritméticas', () => {
+  /* La marca de que el refactor no dejó dos copias: los cuatro ajustes que devuelve el
+     desglose explican EXACTAMENTE la diferencia entre cada sabor y «sin ajuste», en los
+     cinco métodos. Si `indicadorAjustado` recalculara los suyos aparte y una de las dos
+     expresiones se moviera, esta cuenta dejaría de cerrar. */
+  const DIFERENCIA = {
+    aar: (d) => -d.ajusteAR,
+    aap: (d) => d.ajusteAP,
+    inv: (d) => -d.ajusteINV,
+    ppe: (d) => -d.ajustePPE,
+  };
+  let comprobadas = 0;
+  for (const metodo of ['MO', 'MB', 'Berry', 'CostPlus', 'NCP']) {
+    for (const c of COMP) {
+      const d = desgloseAjuste(c, SUJ_CORTO, metodo, TASA);
+      const numBase = NUMERADOR_BRUTO.has(metodo) ? d.utilBruta : d.ebit;
+      for (const [sabor, delta] of Object.entries(DIFERENCIA)) {
+        /* Estos cuatro sabores NO restan el ajuste de CxC del numerador salvo `aar`,
+           y por eso su denominador es la base sin corregir; `aar` sí divide sobre el
+           denominador ajustado. Es la asimetría que el módulo documenta. */
+        const denom = sabor === 'aar' ? d.denomAjustado
+          : (metodo === 'NCP' || metodo === 'CostPlus') ? d.denomAjustado : d.base;
+        const esperado = (numBase + delta(d)) / denom;
+        const v = indicadorAjustado(c, SUJ_CORTO, metodo, sabor, TASA);
+        assert.ok(Math.abs(v - esperado) <= Math.abs(esperado) * 1e-12,
+          `${metodo}/${sabor}/${c.name}: ${v} vs ${esperado}`);
+        comprobadas++;
+      }
+    }
+  }
+  assert.strictEqual(comprobadas, 5 * COMP.length * 4,
+    `debería comprobar 320 combinaciones, comprobó ${comprobadas}`);
+});
+
+test('el desglose devuelve null exactamente donde el indicador no se puede construir', () => {
+  /* Las tres puertas de salida son las mismas, porque son la misma función: sin cifras
+     de la comparable, sin ventas del contribuyente y con un método que este módulo no
+     sabe construir. Si divergieran, el libro publicaría intermedios de un indicador que
+     el informe no publica. */
+  assert.strictEqual(desgloseAjuste({ s: null, c: null, op: null }, SUJ_CORTO, 'MO', TASA), null,
+    'sin cifras de la comparable');
+  assert.strictEqual(desgloseAjuste(COMP[0], { s: 0 }, 'MO', TASA), null,
+    'sin ventas del contribuyente');
+  assert.strictEqual(desgloseAjuste(COMP[0], SUJ_CORTO, 'MCG', TASA), null,
+    'con un método sin base definida aquí');
+  /* Y con la base del comparable en cero: Berry sobre una comparable sin gastos
+     operativos no tiene sobre qué escalar las partidas. */
+  assert.strictEqual(desgloseAjuste({ ...COMP[0], op: 0 }, SUJ_CORTO, 'Berry', TASA), null,
+    'con la base del comparable en cero');
 });
 
 test('un método sin base definida no se ajusta en lugar de calcularse como margen operacional', () => {

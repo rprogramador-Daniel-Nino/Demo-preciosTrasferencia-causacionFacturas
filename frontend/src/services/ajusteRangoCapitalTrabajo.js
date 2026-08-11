@@ -101,13 +101,23 @@ function pliEbit(p) {
   return s - c - op;
 }
 
-/* Núcleo del ajuste: dado un comparable y el contribuyente, devuelve el indicador
-   ajustado para el método y el sabor de ajuste pedidos. Devuelve null si faltan
-   cifras, igual que hace pliOf con las comparables sin datos.
-
-   `tasa` es la tasa efectiva del comparable (la E6 del Excel: la tasa del período
-   ya escalada por el número de años promediados), en tanto por uno. */
-export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
+/**
+ * Los intermedios del ajuste de capital de trabajo, que son el rastro de auditoría que
+ * publica el libro de soporte en sus columnas J–R.
+ *
+ * Se extrajo de `indicadorAjustado`, que ahora lo consume: calcularlos aparte habría
+ * creado una segunda implementación de la misma aritmética, que es exactamente lo que
+ * el diseño de 2026-08-11 retira del sistema. Por eso lo que devuelve no es «parecido»
+ * al indicador: lo RECONSTRUYE, y la prueba que lo afirma es lo que impide que el libro
+ * publique un desglose que no explique el número del informe.
+ *
+ * `tasa` es la tasa del estudio en tanto por uno, igual que en `indicadorAjustado`.
+ *
+ * @returns {null|{ebit:number, utilBruta:number, desc:number, base:number,
+ *   ajusteAR:number, ajusteAP:number, ajusteINV:number, ajustePPE:number,
+ *   denomAjustado:number}}
+ */
+export function desgloseAjuste(comp, contribuyente, metodo, tasa) {
   const c = cifras(comp);
   const s = cifras(contribuyente);
   if (c.s === null || c.ebit === null || !s.s) return null;
@@ -144,7 +154,7 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
      es COGS depurado de CxP —E133 del Excel: (COGS − CxP)—, y ese mismo E133
      aparece en el ratio de inventario de Cost Plus (fila 132). Las demás partidas
      de Cost Plus escalan con COGS puro (E11 = baseC). */
-  const denomNCP = metodo === 'NCP' ? (c.c - c.ap) + c.op
+  const denomDep = metodo === 'NCP' ? (c.c - c.ap) + c.op
     : metodo === 'CostPlus' ? c.c - c.ap
     : null;
 
@@ -156,7 +166,7 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
      depurado (E110 / E133) en lugar de baseC: es la única excepción por partida y
      viene tal cual de las filas 108 y 132. */
   const usaDepurado = metodo === 'NCP' || metodo === 'CostPlus';
-  const baseInvC = usaDepurado ? denomNCP : baseC;
+  const baseInvC = usaDepurado ? denomDep : baseC;
   const ajusteAR = ((c.ar / baseC) - (s.ar / baseS)) * (baseC * desc);
   const ajusteAP = ((c.ap / baseC) - (s.ap / baseS)) * (baseC * desc);
   const ajusteINV = ((c.inv / baseInvC) - (s.inv / baseS)) * (baseC * t);
@@ -172,12 +182,41 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
      el denominador es la base sin corregir, como en Berry. */
   const baseAjustada = base === 'ventas' ? c.s - ajusteAR : baseC;
 
-  /* Numerador según el método:
-       MB / Berry / Cost Plus → utilidad bruta (ventas − costos),
-       MO / NCP               → utilidad operacional (EBIT). */
-  const numBase = (metodo === 'MB' || metodo === 'Berry' || metodo === 'CostPlus')
-    ? c.gp : c.ebit;
+  return {
+    ebit: c.ebit, utilBruta: c.gp, desc, base: baseC,
+    ajusteAR, ajusteAP, ajusteINV, ajustePPE,
+    /* El denominador de la columna R del libro: para NCP y Cost Plus el depurado,
+       para las bases de ventas la venta ajustada, y la base a secas en Berry. */
+    denomAjustado: usaDepurado ? denomDep : baseAjustada,
+    /* Internos, para que indicadorAjustado no los recalcule. No son parte del
+       contrato público: el libro consume los nueve campos de arriba y nada más. */
+    _baseAjustada: baseAjustada, _denomDep: denomDep, _usaDepurado: usaDepurado,
+    /* Numerador según el método:
+         MB / Berry / Cost Plus → utilidad bruta (ventas − costos),
+         MO / NCP               → utilidad operacional (EBIT). */
+    _numBase: (metodo === 'MB' || metodo === 'Berry' || metodo === 'CostPlus') ? c.gp : c.ebit,
+  };
+}
+
+/* Núcleo del ajuste: dado un comparable y el contribuyente, devuelve el indicador
+   ajustado para el método y el sabor de ajuste pedidos. Devuelve null si faltan
+   cifras, igual que hace pliOf con las comparables sin datos.
+
+   La aritmética del ajuste no vive aquí: la calcula `desgloseAjuste`, y esta función
+   solo elige numerador y denominador según el sabor pedido. Tener las dos cosas juntas
+   dejaba al libro de soporte sin poder publicar los intermedios sin recalcularlos por
+   su cuenta, que es la clase de segunda implementación que el sistema viene retirando.
+
+   `tasa` es la tasa efectiva del comparable (la E6 del Excel: la tasa del período
+   ya escalada por el número de años promediados), en tanto por uno. */
+export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
+  const d = desgloseAjuste(comp, contribuyente, metodo, tasa);
+  if (!d) return null;
+  const { ajusteAR, ajusteAP, ajusteINV, ajustePPE } = d;
+  const baseC = d.base;
+  const numBase = d._numBase;
   if (numBase === null) return null;
+  const base = BASES[metodo];
 
   let numerador;
   switch (ajuste) {
@@ -218,8 +257,8 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
      «solo CxP» y «solo inventario» descontaban del denominador un ajuste que
      nunca habían aplicado arriba. No afectaba al escenario que se reporta
      —CxC+CxP+Inv—, pero dejaba dos columnas incoherentes consigo mismas. */
-  const denom = usaDepurado ? denomNCP
-    : base === 'ventas' ? (AJUSTAN_AR.has(ajuste) ? baseAjustada : baseC)
+  const denom = d._usaDepurado ? d._denomDep
+    : base === 'ventas' ? (AJUSTAN_AR.has(ajuste) ? d._baseAjustada : baseC)
     : baseC;
   return denom ? numerador / denom : null;
 }

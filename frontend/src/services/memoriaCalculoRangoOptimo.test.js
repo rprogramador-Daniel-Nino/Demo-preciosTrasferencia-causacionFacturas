@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { hojasMemoriaRangoOptimo, TERMINOS_HOLDING_HOJA } from './memoriaCalculoRangoOptimo.js';
-import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
+import { analizarRangoAjustado, desgloseAjuste } from './ajusteRangoCapitalTrabajo.js';
 import { enriquecerUniverso } from './comparablesEngine.js';
 import { TERMINOS_HOLDING } from './filtrosComparablesPatch.js';
 
@@ -606,8 +606,8 @@ const SABORES = ['ninguno', 'aar', 'aap', 'inv', 'aar_aap_inv', 'aar_aap_inv_ppe
 const hojaDe = (estudio, nombre) => hojasMemoriaRangoOptimo(estudio, null)
   .find((h) => h.nombre === nombre);
 /* La etiqueta de las filas de estadística va en la columna R (índice 17). En las filas
-   de comparable esa columna es el denominador ajustado, que no lleva valor, así que
-   nunca colisiona con una etiqueta. */
+   de comparable esa columna es el denominador ajustado, cuyo valor es un NÚMERO, así que
+   nunca colisiona con una etiqueta —que es una cadena— por más que las dos lleven valor. */
 const filaEtq = (hoja, etq) => hoja.celdas.find((f) => f && f[17] && f[17].v === etq);
 
 test('las celdas derivadas del libro traen el valor calculado junto a la fórmula', () => {
@@ -739,15 +739,63 @@ test('las columnas A–I traen el literal que el emisor ya tiene, sin dejar de s
     `la columna ${k} sigue siendo referencia a la hoja Datos`));
 });
 
-test('los intermedios del ajuste (J–R) siguen sin valor: los deriva Excel', () => {
-  /* Calcularlos aquí sería una segunda implementación de la matemática que este plan
-     retira, que es justo el defecto que viene a matar. El motor no los expone
-     todavía; mientras no lo haga, Excel los deriva al abrir el archivo. */
+test('los intermedios del ajuste (J–R) traen el valor que expone el motor', () => {
+  /* Son el rastro de auditoría del libro: sin valor, las nueve columnas por las que se
+     sigue de dónde sale cada indicador salen vacías en un lector que no recalcule, y el
+     libro se ve completo en los resultados y hueco en la trazabilidad.
+
+     El valor sale de `desgloseAjuste`, el mismo motor que produce los indicadores de
+     S–Y: calcularlo aquí sería la segunda implementación de la misma aritmética que este
+     plan retira. */
   const mo = hojaDe(ESTUDIO_4, 'MO');
+  const CAMPOS = [
+    [9, 'ebit'], [10, 'utilBruta'], [11, 'desc'], [12, 'base'],
+    [13, 'ajusteAR'], [14, 'ajusteAP'], [15, 'ajusteINV'], [16, 'ajustePPE'],
+    [17, 'denomAjustado'],
+  ];
+  let comparadas = 0;
+  ESTUDIO_4.comparables.forEach((c, i) => {
+    const d = desgloseAjuste(c, {
+      s: ESTUDIO_4.t_s, c: ESTUDIO_4.t_c, op: ESTUDIO_4.t_op, ar: ESTUDIO_4.t_ar,
+      inv: ESTUDIO_4.t_inv, ap: ESTUDIO_4.t_ap, ppe: ESTUDIO_4.t_ppe,
+    }, 'MO', ESTUDIO_4.prime / 100);
+    CAMPOS.forEach(([col, campo]) => {
+      const celda = mo.celdas[2 + i][col];
+      assert.ok(celda.f, `la columna ${col} sigue siendo fórmula`);
+      assert.strictEqual(celda.v, d[campo],
+        `la columna ${col} publica el ${campo} del motor (comparable ${i})`);
+      comparadas++;
+    });
+  });
+  assert.strictEqual(comparadas, 4 * 9,
+    `debería comparar 36 intermedios, comparó ${comparadas}`);
+
+  /* Y las nueve columnas son distintas ENTRE SÍ, columna completa contra columna
+     completa: si dos coincidieran, intercambiarlas pasaría inadvertido y la comprobación
+     de arriba no valdría nada. Se comparan vectores y no la primera celda por la misma
+     razón que en las columnas S–Y: «Nacional A» tiene, a propósito, los mismos ratios de
+     CxC y de CxP que el contribuyente, así que en esa fila los dos ajustes son cero y el
+     denominador ajustado coincide con la base. */
+  const porColumna = CAMPOS.map(([col]) => JSON.stringify(
+    ESTUDIO_4.comparables.map((_c, i) => mo.celdas[2 + i][col].v)));
+  assert.strictEqual(new Set(porColumna).size, 9,
+    `las nueve columnas J–R deberían ser distintas entre sí:\n${porColumna.join('\n')}`);
+});
+
+test('sin cifras que lo sostengan, el intermedio sale sin valor y no en cero', () => {
+  /* Un cero fingiría un ajuste calculado sobre un dato que no existe. La celda tiene que
+     quedar como fórmula pelada, que Excel resuelve al abrir. */
+  const conHueco = {
+    ...ESTUDIO_4,
+    comparables: [...ESTUDIO_4.comparables, { name: 'Sin Cifras SA', amb: 'Int' }],
+  };
+  const mo = hojaDe(conHueco, 'MO');
+  const filaHueco = mo.celdas.find((f) => f && f[0] && f[0].v === 'Sin Cifras SA');
+  assert.ok(filaHueco, 'la fila de la comparable sin cifras sí se escribe');
   for (let col = 9; col <= 17; col++) {
-    assert.ok(mo.celdas[2][col].f, `la columna ${col} es fórmula`);
-    assert.strictEqual(mo.celdas[2][col].v, undefined,
-      `la columna ${col} no debe traer valor en caché todavía`);
+    assert.ok(filaHueco[col].f, `la columna ${col} conserva la fórmula`);
+    assert.strictEqual(filaHueco[col].v, undefined,
+      `la columna ${col} no puede publicar un intermedio que el motor no pudo construir`);
   }
 });
 
