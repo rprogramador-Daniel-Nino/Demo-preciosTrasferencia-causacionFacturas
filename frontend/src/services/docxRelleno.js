@@ -34,6 +34,7 @@ import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js
 import { pctf, fmt, num, pliOf } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 import { analizarRango } from './rangoIntercuartil.js';
+import { filasOperacionesDeIngreso, filasOperacionAnalizar } from './tablasOperaciones.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
 } from './analisisMercado.js';
@@ -580,41 +581,25 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
   const pStr = (v) => (v === null || v === undefined ? '—' : pctf(v));
 
-  // Helper para extraer código y descripción
-  const extraerCodigoYDesc = (vinc_tipo) => {
-    const s = String(vinc_tipo || '');
-    const m = s.match(/^(.*?)(?:\s*\((\d+)\))?$/);
-    if (!m) return { desc: s, cod: '07' };
-    return { desc: m[1].trim(), cod: m[2] || '07' };
-  };
+  /* Las Tablas 1 y 2 dicen lo mismo aquí y en la ruta de plantilla PDF, así que sus filas
+     salen de `tablasOperaciones.js` y no se arman dos veces. Ahí vive también el motivo por
+     el que el código de operación puede ser «—»: el que había antes en este archivo lo
+     inventaba, devolvía '07' —el de END GAME 2024— para cualquier tipo sin paréntesis. */
+  const emitir = (b, t) => generarTablaOoxml(tituloDe(b, t.nombre), t.encabezados, t.filas, t.fuente);
 
   // 1. Operaciones de Ingreso/Egreso
-  reemplazar(['Operaciones de Ingreso', 'Operaciones de Egreso'], (b) => {
-    const opTipoTitle = estudio.egreso ? 'Egreso' : 'Ingreso';
-    return generarTablaOoxml(
-      tituloDe(b, `Operaciones de ${opTipoTitle}`),
-      ['Concepto de Operaciones a analizar', 'Nombre vinculado', 'País vinculado', 'Monto de la Operación analizar'],
-      [[
-        wrap(estudio.vinc_tipo),
-        wrap(estudio.vinc),
-        wrap(estudio.pais_vinc),
-        estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—'
-      ]],
-      'Información suministrada por la Administración de la Compañía.'
-    );
-  }, { numeros: [1] });
+  reemplazar(
+    ['Operaciones de Ingreso', 'Operaciones de Egreso'],
+    (b) => emitir(b, filasOperacionesDeIngreso(estudio)),
+    { numeros: [1] }
+  );
 
   // 2. Operación analizar
-  reemplazar('Operación analizar', (b) => {
-    const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
-    const tipoOp = estudio.egreso ? 'Egreso' : 'Ingreso';
-    return generarTablaOoxml(
-      tituloDe(b, 'Operación analizar'),
-      ['No. Operaciones de análisis', 'Descripción'],
-      [[`${tipoOp} (${cod})`, desc]],
-      'Información suministrada por la Administración de la Compañía.'
-    );
-  }, { numeros: [2] });
+  reemplazar(
+    'Operación analizar',
+    (b) => emitir(b, filasOperacionAnalizar(estudio)),
+    { numeros: [2] }
+  );
 
   /* 3. Transacciones Inter compañía. La plantilla la trae dos veces —una en la
      descripción del vinculado y otra en el análisis— con la misma cabecera y números
