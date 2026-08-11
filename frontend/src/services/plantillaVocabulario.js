@@ -5,7 +5,7 @@
    un campo inventado produciría una marca que nunca se resuelve y dejaría el
    valor del cliente anterior en el documento sin que nada lo delate. */
 
-import { fmt, num, UVT_VALUES } from '../utils/calculations.js';
+import { fmt, pctf, num, UVT_VALUES } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
 
 const EEFF = [
@@ -22,7 +22,10 @@ const EEFF = [
   ['t_dif', 'Diferidos'],
   ['t_ap', 'Cuentas por pagar'],
   ['t_c', 'Costos'],
-  ['t_op', 'Gastos operacionales'],
+  /* UTILIDAD y no gastos: `eeffParser.js` lo llena desde `utilidad_operacional` y `pliOf`
+     lo consume como utilidad. La etiqueta viaja en el prompt del marcado, así que decir
+     «gastos» hacía que el modelo señalara la línea equivocada del estado de resultados. */
+  ['t_op', 'Utilidad operacional'],
   ['t_s', 'Ingresos'],
 ];
 
@@ -134,7 +137,9 @@ export function valorDeCampo(estudio, campo, opciones = {}) {
     if (!stats) return null;
     if (campo === 'rango.cumple') return cumple;
     const v = { 'rango.p25': stats.p25, 'rango.mediana': stats.med, 'rango.p75': stats.p75 }[campo];
-    return v === null || v === undefined ? null : fmt(v);
+    /* `pctf` y no `fmt`: los percentiles son fracciones. `fmt` es el formateador de pesos
+       —redondea a entero— y convertía cada percentil en «0» dentro del informe. */
+    return v === null || v === undefined ? null : pctf(v);
   }
 
   if (campo.startsWith('eeff.')) {

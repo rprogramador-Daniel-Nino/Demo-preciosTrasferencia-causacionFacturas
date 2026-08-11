@@ -5,6 +5,12 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+/* La lógica del fallback vive en functions/ porque es lo que Firebase despliega; aquí se
+   requiere desde la raíz para que las dos implementaciones del proxy compartan una sola
+   definición en vez de divergir. Es lógica pura: sin red, sin secretos y sin Firebase. */
+const {
+  debeCaerAGemini, aPeticionGemini, aRespuestaAnthropic, PROVEEDOR_GEMINI, CABECERA_PROVEEDOR,
+} = require('./functions/fallbackGemini');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -108,12 +114,62 @@ app.post('/api/claude', async (req, res) => {
     });
 
     const data = await upstream.json();
+
+    if (debeCaerAGemini(upstream.status, data)) {
+      const respuesta = await atenderConGemini(req.body, data, upstream.status);
+      return res.status(respuesta.status)
+        .set(CABECERA_PROVEEDOR, respuesta.proveedor)
+        .json(respuesta.cuerpo);
+    }
+
+    res.set(CABECERA_PROVEEDOR, 'anthropic');
     res.status(upstream.status).json(data);
   } catch (err) {
     console.error('Error llamando a Anthropic:', err);
     res.status(502).json({ error: 'No se pudo contactar a la API de Claude.', detail: err.message });
   }
 });
+
+/* Atiende con Gemini una petición que venía para Claude, y devuelve la respuesta ya con
+   forma de Anthropic. Si Gemini tampoco puede, se devuelve el error ORIGINAL de Anthropic:
+   es el que explica por qué se llegó hasta aquí, y taparlo con un fallo de Gemini manda a
+   depurar al proveedor equivocado. */
+async function atenderConGemini(cuerpoOriginal, errorAnthropic, statusAnthropic) {
+  const original = {
+    status: statusAnthropic,
+    cuerpo: errorAnthropic,
+    proveedor: 'anthropic',
+  };
+
+  if (!GEMINI_API_KEY) {
+    console.error('Claude no pudo atender y no hay GEMINI_API_KEY para el fallback.');
+    return original;
+  }
+
+  console.warn('[fallback] Claude no pudo atender (HTTP ' + statusAnthropic + '); se atiende con '
+    + GEMINI_MODEL_DEFAULT + '.');
+
+  try {
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_DEFAULT}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+        body: JSON.stringify(aPeticionGemini(cuerpoOriginal)),
+      }
+    );
+    const datos = await upstream.json();
+    const traducida = upstream.ok ? aRespuestaAnthropic(datos, GEMINI_MODEL_DEFAULT) : null;
+    if (!traducida) {
+      console.error('El fallback a Gemini tampoco devolvió texto:', datos);
+      return original;
+    }
+    return { status: 200, cuerpo: traducida, proveedor: PROVEEDOR_GEMINI };
+  } catch (err) {
+    console.error('Error llamando a Gemini como fallback de Claude:', err);
+    return original;
+  }
+}
 
 // Proxy hacia la API de Gemini. El frontend llama a /api/gemini para lectura/OCR
 // de documentos (más económico que Claude para esta tarea), nunca directo a

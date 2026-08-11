@@ -96,6 +96,18 @@ para lectura/OCR de documentos — es notablemente más barato en esa tarea. Los
 extracción de RUT y Cámara de Comercio están **duplicados literalmente** en `server.js`,
 `functions/index.js` y el PHP: al ajustar uno, ajusta los tres.
 
+**Fallback de Claude a Gemini.** Si Anthropic no puede atender —sin saldo (400/402 con
+`credit balance`), con el límite de peticiones alcanzado (429) o sobrecargado (529)—,
+`/api/claude` atiende con Gemini y **devuelve la respuesta con forma de Anthropic**
+(`content[].text`), porque así la leen los catorce llamadores. NO se cae en un 400 por
+petición mal formada ni en un 401 por key inválida: fallarían igual en Gemini y taparlo
+enmascara un defecto propio. Quién atendió se publica en la cabecera `X-Proveedor-IA` y en
+el campo `proveedor` de la respuesta. La lógica es pura y vive en
+`functions/fallbackGemini.js` (probada en `functions/fallbackGemini.test.js`); `server.js`
+la requiere desde ahí, así que esas dos no pueden divergir. El PHP
+(`Cpanel/public_html/api/fallback-gemini.php`) **sí** es un port a mano: al cambiar la
+lógica, cámbialo también.
+
 ### Persistencia
 
 Sin base de datos. Todo vive en el navegador.

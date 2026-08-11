@@ -5,11 +5,62 @@ const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const GEMINI_MODEL_DEFAULT = 'gemini-3.5-flash';
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const {
+  debeCaerAGemini, aPeticionGemini, aRespuestaAnthropic, PROVEEDOR_GEMINI, CABECERA_PROVEEDOR,
+} = require('./fallbackGemini');
+
+/* Atiende con Gemini una petición que venía para Claude y devuelve la respuesta ya con forma
+   de Anthropic. Si Gemini tampoco puede, se devuelve el error ORIGINAL de Anthropic: es el
+   que explica por qué se llegó hasta aquí, y taparlo con un fallo de Gemini manda a depurar
+   al proveedor equivocado.
+
+   Mismo comportamiento que en `server.js`; las dos comparten `fallbackGemini.js`. */
+async function atenderConGemini(cuerpoOriginal, errorAnthropic, statusAnthropic) {
+  const original = { status: statusAnthropic, cuerpo: errorAnthropic, proveedor: 'anthropic' };
+
+  const apiKey = GEMINI_API_KEY.value();
+  if (!apiKey) {
+    console.error('Claude no pudo atender y no hay GEMINI_API_KEY para el fallback.');
+    return original;
+  }
+
+  console.warn(`[fallback] Claude no pudo atender (HTTP ${statusAnthropic}); se atiende con ${GEMINI_MODEL_DEFAULT}.`);
+
+  try {
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_DEFAULT}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify(aPeticionGemini(cuerpoOriginal)),
+        /* El mismo corte que /api/gemini: Hosting tumba el rewrite a los 60 s, y este
+           camino ya gastó tiempo en el intento contra Anthropic. */
+        signal: AbortSignal.timeout(GEMINI_CORTE_MS),
+      }
+    );
+    const datos = await upstream.json();
+    const traducida = upstream.ok ? aRespuestaAnthropic(datos, GEMINI_MODEL_DEFAULT) : null;
+    if (!traducida) {
+      console.error('El fallback a Gemini tampoco devolvió texto:', datos);
+      return original;
+    }
+    return { status: 200, cuerpo: traducida, proveedor: PROVEEDOR_GEMINI };
+  } catch (err) {
+    console.error('Error llamando a Gemini como fallback de Claude:', err);
+    return original;
+  }
+}
 
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
 exports.claude = onRequest(
-  { secrets: [ANTHROPIC_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
+  /* GEMINI_API_KEY también: cuando Anthropic no puede atender —sin saldo, con el límite de
+     peticiones alcanzado o sobrecargado— esta misma función responde con Gemini, y sin el
+     secreto declarado aquí `GEMINI_API_KEY.value()` llega vacío en producción. */
+  {
+    secrets: [ANTHROPIC_API_KEY, GEMINI_API_KEY],
+    region: 'us-central1', cors: true, timeoutSeconds: 180,
+  },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
@@ -42,6 +93,15 @@ exports.claude = onRequest(
       });
 
       const data = await upstream.json();
+
+      if (debeCaerAGemini(upstream.status, data)) {
+        const respuesta = await atenderConGemini(body, data, upstream.status);
+        res.set(CABECERA_PROVEEDOR, respuesta.proveedor);
+        res.status(respuesta.status).json(respuesta.cuerpo);
+        return;
+      }
+
+      res.set(CABECERA_PROVEEDOR, 'anthropic');
       res.status(upstream.status).json(data);
     } catch (err) {
       console.error('Error llamando a Anthropic:', err);
