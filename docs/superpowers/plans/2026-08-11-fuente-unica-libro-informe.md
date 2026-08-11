@@ -960,6 +960,14 @@ El libro no trae ni un número: todas sus celdas derivadas son fórmula sin `<v>
 
 Qué se llena y qué no:
 
+> **Hueco del plan, detectado al implementar (2026-08-11).** Esta tabla acota el alcance a las
+> hojas de método y se olvida de la hoja `Resumen`, cuyas 35 filas son **referencias puras** a
+> las celdas de estadística. Sin valor en caché propio, `Resumen` —la primera hoja que abre el
+> consultor— sigue viéndose vacía en cualquier lector que no recalcule, que es justo la mitad
+> del objetivo de esta tarea. Los valores ya están calculados en `porSabor`; hay que llevarlos
+> a `infoMetodos` para que el bloque de `Resumen`, que corre después del `forEach` de métodos,
+> los tenga a mano. Ver el Step añadido al final de esta tarea.
+
 | Columnas | Valor | De dónde |
 |---|---|---|
 | `A`–`I` | sí | literales que el emisor ya tiene en `study` |
@@ -1258,7 +1266,41 @@ Para lo cual el bucle necesita la comparable. Cambiar `for (let i = 0; i < n; i+
 Run: `node --test frontend/src/services/memoriaCalculoRangoOptimo.test.js`
 Expected: PASS
 
-- [ ] **Step 8: Correr la suite completa y commit**
+- [ ] **Step 8: La hoja `Resumen` también lleva valor**
+
+Sus 35 filas son referencias puras a las celdas de estadística de las hojas de método, así que
+sin valor propio quedan vacías en un lector que no recalcule — y es la primera hoja del libro.
+Los valores ya existen en `porSabor`, pero el bloque de `Resumen` corre **después** del
+`forEach` de métodos, así que hay que llevarlos en `infoMetodos`:
+
+```js
+    /* `porSabor` se lleva a infoMetodos porque la hoja Resumen se arma después de este
+       forEach y sus celdas son referencias puras: sin el valor a mano quedarían vacías en
+       cualquier lector que no recalcule, que es justo lo que esta tarea viene a cerrar. */
+    infoMetodos.push({ hoja: M.hoja, /* …lo que ya llevaba… */, porSabor });
+```
+
+y en el bloque de `Resumen`, cada celda toma su valor del sabor de su fila:
+
+```js
+      const st = M.porSabor[k].stats;
+      resumen.push([
+        cTxt(M.nombre), cTxt(aj.etiqueta),
+        cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt, M.porSabor[k].sujeto),
+        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt, st ? st.min : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt, st ? st.p25 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt, st ? st.med : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt, st ? st.p75 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt, st ? st.max : undefined),
+        cForT(`${M.hoja}!${L}${M.filaConcl}`, st ? M.porSabor[k].cumple : ''),
+      ]);
+```
+
+Con una prueba que afirme que una fila del `Resumen` trae los mismos valores que la celda de
+estadística que referencia — no dos números iguales por casualidad, sino leídos de los dos
+sitios y comparados.
+
+- [ ] **Step 9: Correr la suite completa y commit**
 
 Run: `npm test`
 Expected: PASS
