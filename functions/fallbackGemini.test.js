@@ -20,6 +20,30 @@ test('el crédito agotado de Anthropic dispara el fallback', () => {
   assert.strictEqual(debeCaerAGemini(402, cuerpo), true);
 });
 
+test('el tope de gasto de la cuenta dispara el fallback', () => {
+  /* Copiado literal de lo que devolvió producción el 2026-08-11, cuando la ingesta de EEFF
+     falló al redactar la descripción de una comparable: 400 con el type genérico y sin una
+     palabra sobre el saldo, así que el patrón del crédito agotado no lo reconocía. */
+  const cuerpo = {
+    type: 'error',
+    error: {
+      type: 'invalid_request_error',
+      message: 'You have reached your specified API usage limits. You will regain access on '
+        + '2026-09-01 at 00:00 UTC.',
+    },
+  };
+  assert.strictEqual(debeCaerAGemini(400, cuerpo), true);
+  assert.strictEqual(debeCaerAGemini(402, cuerpo), true);
+});
+
+test('el tope de gasto se reconoce también nombrado como spend limit', () => {
+  const cuerpo = {
+    type: 'error',
+    error: { type: 'invalid_request_error', message: 'Monthly spend limit reached.' },
+  };
+  assert.strictEqual(debeCaerAGemini(400, cuerpo), true);
+});
+
 test('el límite de peticiones y la sobrecarga también caen a Gemini', () => {
   assert.strictEqual(debeCaerAGemini(429, { error: { type: 'rate_limit_error' } }), true);
   assert.strictEqual(debeCaerAGemini(529, { error: { type: 'overloaded_error' } }), true);

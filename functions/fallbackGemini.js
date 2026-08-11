@@ -38,6 +38,15 @@ const CABECERA_PROVEEDOR = 'X-Proveedor-IA';
    petición mal formada: el código de estado no alcanza para distinguirlas. */
 const RX_SIN_CREDITO = /credit balance|insufficient.*credit|billing/i;
 
+/* Y lo que escribe cuando la organización alcanzó el tope de gasto que ella misma fijó en la
+   consola: «You have reached your specified API usage limits. You will regain access on
+   2026-09-01 at 00:00 UTC.» Llega como 400 `invalid_request_error`, igual que el crédito
+   agotado, pero sin nombrar el saldo, así que el patrón de arriba lo dejaba pasar: el
+   2026-08-11 la ingesta de EEFF devolvía 400 al redactar la descripción de cada comparable
+   con el fallback recién desplegado e intacto. Es el mismo caso de fondo —la petición está
+   bien pedida y Anthropic no la va a atender hasta una fecha—, así que se cae a Gemini igual. */
+const RX_TOPE_ALCANZADO = /usage limits?|spend limits?/i;
+
 /**
  * ¿Hay que reintentar esta respuesta de Anthropic contra Gemini?
  *
@@ -53,7 +62,7 @@ function debeCaerAGemini(status, cuerpo) {
   if (status === 400 || status === 402) {
     const error = (cuerpo && cuerpo.error) || {};
     const mensaje = String(error.message || cuerpo && cuerpo.message || '');
-    return RX_SIN_CREDITO.test(mensaje);
+    return RX_SIN_CREDITO.test(mensaje) || RX_TOPE_ALCANZADO.test(mensaje);
   }
 
   return false;
