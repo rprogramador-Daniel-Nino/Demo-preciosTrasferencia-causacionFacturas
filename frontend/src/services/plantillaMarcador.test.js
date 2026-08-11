@@ -508,6 +508,49 @@ test('la tabla de contenido no abre la zona del anexo', async () => {
   assert.strictEqual(r.marcas.length, 1, 'el cuerpo sigue siendo marcable tras el índice');
 });
 
+test('la entrada del índice no abre zona cuando el número de página va en un <span> aparte', async () => {
+  /* Forma REAL de `pdfReferenceExtractor`: el título va en un `<strong>` y el número de
+     página en otro, dentro de un `<span>`. El test de arriba pega el número al título en
+     el mismo nodo de texto («…Financieros55»), forma que el extractor no produce, y por
+     eso pasaba mientras el documento real fallaba.
+
+     Contando por corridas —tramos de texto entre dos etiquetas cualesquiera— el `83` cae
+     en otra corrida y `RX_ENTRADA_INDICE` nunca lo ve: la zona `anexoE` se abría dentro
+     del índice y, como los anexos no se cierran, se arrastraba sobre el RESUMEN EJECUTIVO.
+     Medido en `Archivos Prueba/estudio pasado.pdf`: zona anexoE del offset 12725 al 31096,
+     con las celdas de las Tablas 1 y 2 en el 25347-25873. Ahí es donde el informe se
+     radicaba con el concepto, el vinculado, el país y el monto del año anterior. */
+  const html =
+    '<p><strong> ANEXO E. Legislación Colombiana en materia de Precios de Transferencia </strong>' +
+    '<strong><span style="font-family:\'Times New Roman\'">83</span></strong></p>' +
+    '<h1><strong> RESUMEN EJECUTIVO</strong></h1>' +
+    '<p> El estudio de ACME S.A.S para el año gravable 2025.</p>';
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }],
+    }),
+  });
+  assert.strictEqual(r.marcas.length, 1, 'el RESUMEN EJECUTIVO tiene que seguir siendo marcable');
+  assert.strictEqual(r.bloqueadasPorZona, 0, 'no debe haber bloqueo por zona');
+});
+
+test('el encabezado real de un anexo sí abre zona aunque el título esté en un <strong>', async () => {
+  /* La otra mitad de la guarda: al mirar el bloque completo no se puede perder la
+     detección del anexo de verdad, que es lo que impide que las cifras del contribuyente
+     aterricen en la ficha de una comparable. */
+  const html =
+    '<p> La compañía tuvo ingresos por 5.271.105.507 con su vinculada.</p>' +
+    '<h1><strong> ANEXO B. Descripciones de comparables y Estados Financieros</strong></h1>' +
+    '<p> COLOPL, INC. Ventas netas 5.271.105.507</p>';
+  const r = await proponerMarcas(html, {
+    pedir: async () => JSON.stringify({
+      marcas: [{ fragmento: '5.271.105.507', campo: 'monto_operacion', ocurrencia: 1 }],
+    }),
+  });
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia), [1], 'la del ANEXO B no debía marcarse');
+  assert.ok(r.bloqueadasPorZona > 0, 'y el bloqueo tiene que reportarse');
+});
+
 test('la sección de tendencias de la economía no se marca', async () => {
   /* Sus ocho tablas las regenera actualizarTablasMacroOoxml y su prosa viene de
      ia.economia_*. Marcar ahí es lo que dejó «En 2023 el crecimiento fue 3,2 %. Para 2025

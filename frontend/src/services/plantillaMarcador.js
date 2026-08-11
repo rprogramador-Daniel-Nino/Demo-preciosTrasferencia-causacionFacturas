@@ -97,6 +97,22 @@ export function contarApariciones(html, fragmento) {
   return n;
 }
 
+/* Etiquetas que NO interrumpen un bloque de texto. Word y el extractor de PDF parten una
+   misma frase en varios `<span>`/`<strong>` por cada cambio de formato, así que el texto
+   visible de un párrafo llega troceado y hay preguntas —«¿termina en el número de página?»—
+   que solo se pueden responder sobre el bloque entero. */
+const ETIQUETAS_INLINE = new Set([
+  'span', 'strong', 'b', 'em', 'i', 'u', 'a', 'sub', 'sup', 'br', 'small', 'font',
+]);
+
+/** Nombre de la etiqueta de un segmento de etiqueta, en minúsculas. '' si no se reconoce. */
+function nombreEtiqueta(etiqueta) {
+  const m = /^<\s*\/?\s*([a-z0-9]+)/i.exec(String(etiqueta || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
+const esInline = (etiqueta) => ETIQUETAS_INLINE.has(nombreEtiqueta(etiqueta));
+
 /* Índice del texto visible de un documento SIN MARCAR: una entrada por corrida
    con el desplazamiento del HTML donde empieza. Se calcula una vez por
    documento y se reutiliza para todos los fragmentos y todos los trozos: sin
@@ -105,8 +121,12 @@ export function contarApariciones(html, fragmento) {
 
    Exige HTML sin marcar porque `inicio + posición` solo equivale a un
    desplazamiento del HTML mientras no haya etiquetas insertadas dentro de la
-   corrida. `proponerMarcas` siempre trabaja sobre el documento crudo. */
-function indexarTexto(html) {
+   corrida. `proponerMarcas` siempre trabaja sobre el documento crudo.
+
+   `corta` decide qué etiqueta cierra la acumulación. Por omisión cualquiera, que es lo que
+   necesitan las apariciones: un fragmento no puede cruzar una frontera del HTML. Pasando
+   `(e) => !esInline(e)` se obtienen BLOQUES, donde el texto sí atraviesa los `<span>`. */
+function indexarTexto(html, corta = () => true) {
   const corridas = [];
   let actual = null;
   let offset = 0;
@@ -114,7 +134,7 @@ function indexarTexto(html) {
     if (s.tipo === 'texto') {
       if (!actual) actual = { texto: '', inicio: offset };
       actual.texto += s.valor;
-    } else if (actual) {
+    } else if (actual && corta(s.valor)) {
       corridas.push(actual);
       actual = null;
     }
@@ -202,17 +222,26 @@ function zonaQueAbre(texto) {
  * @returns {Array<{inicio:number, fin:number, zona:string}>}
  */
 export function zonasDelDocumento(html) {
-  const corridas = indexarTexto(String(html || ''));
+  /* Por BLOQUES y no por corridas. El extractor de PDF emite la entrada del índice como
+     `<p><strong> ANEXO E. …Transferencia </strong><strong><span…>83</span></strong></p>`:
+     el número de página va en otro `<span>`, así que por corridas el título termina en
+     espacio, `RX_ENTRADA_INDICE` no lo reconocía como entrada del índice y la zona
+     `anexoE` se abría ahí. Como los anexos no se cierran, se arrastraba sobre todo el
+     RESUMEN EJECUTIVO —donde están las Tablas 1, 2 y 3— y ninguna de sus celdas se podía
+     marcar: el informe se radicaba con el concepto, el vinculado, el país y el monto del
+     año anterior. Con el texto del bloque completo la guarda ve el «83» y funciona como
+     se diseñó. */
+  const bloques = indexarTexto(String(html || ''), (etiqueta) => !esInline(etiqueta));
   const tramos = [];
   let zona = 'cuerpo';
-  for (let i = 0; i < corridas.length; i++) {
-    const c = corridas[i];
-    const abre = zonaQueAbre(c.texto);
+  for (let i = 0; i < bloques.length; i++) {
+    const b = bloques[i];
+    const abre = zonaQueAbre(b.texto);
     if (abre) zona = abre;
     /* La cita es de un solo párrafo: no arrastra a los siguientes. */
-    const suya = RX_CITA.test(c.texto) ? 'cita' : zona;
-    const fin = i + 1 < corridas.length ? corridas[i + 1].inicio : Infinity;
-    tramos.push({ inicio: c.inicio, fin, zona: suya });
+    const suya = RX_CITA.test(b.texto) ? 'cita' : zona;
+    const fin = i + 1 < bloques.length ? bloques[i + 1].inicio : Infinity;
+    tramos.push({ inicio: b.inicio, fin, zona: suya });
   }
   return tramos;
 }
