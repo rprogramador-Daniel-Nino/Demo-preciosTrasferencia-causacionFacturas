@@ -5,6 +5,7 @@
 
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
+import { actualizarTablasMotorHtml } from './tablasHtmlInforme.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -33,7 +34,17 @@ export function renderizar(htmlMarcado, estudio, recursos = []) {
   const vacios = new Set();
   const recursosFaltantes = new Set();
 
-  let html = String(htmlMarcado || '').replace(RX_MARCA, (_, campo) => {
+  /* Las tablas del motor se regeneran ANTES de sustituir las marcas, y no después, por
+     dos razones. Una: las marcas que la IA hubiera puesto dentro de la tabla vieja se van
+     con ella, así que no se cuentan como campos vacíos por un texto que ya no existe.
+     Otra: el número de filas depende del estudio, no de la plantilla, y sustituir marca
+     por marca no puede añadirlas ni quitarlas — es lo que dejaba la tabla de márgenes con
+     las comparables del informe del que salió la plantilla y unas pocas celdas del
+     estudio nuevo. */
+  const avisosTablas = [];
+  let html = actualizarTablasMotorHtml(htmlMarcado, estudio, avisosTablas);
+
+  html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
     if (valor === null) {
       vacios.add(campo);
@@ -85,5 +96,11 @@ export function renderizar(htmlMarcado, estudio, recursos = []) {
     console.warn('[plantillaRenderer] Recursos faltantes: ' + [...recursosFaltantes].join(', '));
   }
 
-  return { html, vacios: [...vacios], recursosFaltantes: [...recursosFaltantes] };
+  return {
+    html, vacios: [...vacios], recursosFaltantes: [...recursosFaltantes],
+    /* Qué tabla del motor no se encontró en la plantilla. Se devuelve para que la UI lo
+       diga: una tabla que no se regenera se radica con los datos del informe del que
+       salió la plantilla, y ese fallo tiene que dejar de ser mudo también aquí. */
+    avisosTablas,
+  };
 }

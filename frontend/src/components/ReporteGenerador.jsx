@@ -299,7 +299,20 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
        literales, así que quien trabajaba con plantilla marcada —la ruta buena— no
        se enteraba de que le faltaban las series macro o el análisis del sector. */
     revisarCobertura(r.html);
-    setAvisos(revisarAntesDeGenerar({
+    /* Las tablas del motor que la plantilla no trae. Mismo aviso que en la ruta .docx:
+       una tabla que no se regenera se queda con los datos del informe del que salió la
+       plantilla, y sin decirlo el fallo llega hasta la radicación. */
+    const avisosDeTablas = (r.avisosTablas || []).length
+      ? [{
+        nivel: 'aviso',
+        origen: 'tablas',
+        texto: 'No se encontró en tu plantilla ' + r.avisosTablas.length + ' tabla(s) del motor (' +
+          r.avisosTablas.join(', ') + '), así que conservan el contenido que ya traían. ' +
+          'Revísalas una por una antes de radicar: si tu plantilla las rotula de otro modo, ' +
+          'dilo para añadir ese nombre.',
+      }]
+      : [];
+    setAvisos(avisosDeTablas.concat(revisarAntesDeGenerar({
       estudio: study,
       /* Sin NIT de referencia la guarda no opina, que es lo correcto: no hay
          con qué comparar. */
@@ -325,7 +338,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          del informe, por ejemplo— y sin este aviso no hay forma de saberlo ni de
          saber que la solución es volver a subir el PDF. */
       faltaPorVersion: loQueFaltaPorVersion(versionDe(htmlMarcado)),
-    }));
+    })));
   };
 
   /* Restauración al abrir el estudio: sin esto la plantilla y sus imágenes se
