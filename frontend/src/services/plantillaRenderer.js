@@ -6,6 +6,7 @@
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
 import { actualizarTablasMotorHtml, actualizarTablasMacroHtml } from './tablasHtmlInforme.js';
+import { actualizarAnexoBHtml } from './anexoBHtml.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -52,6 +53,9 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
   let html = actualizarTablasMotorHtml(htmlMarcado, estudio, avisosTablas);
   html = actualizarTablasMacroHtml(
     html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
+  /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su
+     número depende de la muestra: hay que crear y retirar bloques enteros. */
+  html = actualizarAnexoBHtml(html, estudio, avisosTablas);
 
   html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
