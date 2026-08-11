@@ -35,7 +35,7 @@
 
 import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
-  filasRazonesRechazo, tablasMacroInforme,
+  filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme,
 } from './tablasInforme.js';
 import { claveTitulo, numeroDeTabla } from './docxRelleno.js';
 
@@ -338,6 +338,7 @@ export const TABLA_MUESTRA = 'Muestra Compañías comparables';
 export const TABLA_RANGO = 'Rango Intercuartil';
 export const TABLA_RANGOS_CONCLUSION = 'Tabla de rangos';
 export const TABLA_RAZONES = 'Razones de rechazo';
+export const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 /**
  * Regenera en el HTML las tablas del motor de comparables.
@@ -383,6 +384,27 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
     ]);
   }
   sustituir(TABLA_RAZONES, filasRazones);
+
+  /* ── Criterios de búsqueda ── La plantilla trae «Códigos SIC utilizados» tres veces
+     (Tablas 13, 14 y 15) y el estudio guarda UNA sola corrida de cribado, así que las tres
+     publican los mismos criterios. Es lo mismo que se hace con la ficha del vinculado, que
+     también viene repetida. De atrás hacia adelante porque cada sustitución desplaza los
+     offsets de las siguientes.
+
+     OJO para quien las revise: si esas tres tablas de tu plantilla documentan búsquedas
+     DISTINTAS, esto las iguala. El estudio no tiene hoy dónde guardar más de una corrida. */
+  const criterios = filasCriteriosScreening(study);
+  if (!criterios.length) {
+    anotar(TABLA_CRITERIOS);
+  } else {
+    const bloques = localizarTablasHtml(salida, TABLA_CRITERIOS);
+    if (!bloques.length) anotar(TABLA_CRITERIOS);
+    for (const bloque of [...bloques].reverse()) {
+      salida = salida.slice(0, bloque.inicio)
+        + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
+        + salida.slice(bloque.fin);
+    }
+  }
 
   /* ── Muestra de comparables ── */
   sustituir(TABLA_MUESTRA, filasMuestraComparables(study)

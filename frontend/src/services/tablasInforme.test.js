@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   filasRazonesRechazo, filasComparablesInforme, diagnosticarCobertura,
-  filasRangoIntercuartil,
+  filasRangoIntercuartil, filasCriteriosScreening,
 } from './tablasInforme.js';
 import { analizarRango } from './rangoIntercuartil.js';
 
@@ -280,4 +280,50 @@ test('el apartado sectorial se reconoce aunque el título venga partido en varia
      buscar la cadena en el HTML crudo no la encontraría. */
   const partido = '<strong>Análisis</strong> <em>del</em> <strong>Sector</strong> económico';
   assert.strictEqual(diagnosticarCobertura(partido, otroCliente).sectorialCubierto, true);
+});
+
+/* ══════════════ Criterios de búsqueda (Tablas 13 a 15) ══════════════ */
+
+test('los criterios de búsqueda alternan cada criterio con su conector', () => {
+  /* La plantilla arma esa tabla así: una fila de dos celdas por criterio (etiqueta y
+     valor) y entre ellas una fila de una sola celda con el conector. El primer criterio
+     no lleva conector delante. */
+  const filas = filasCriteriosScreening({
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Código SIC primario', valor: 'Entre 7371 y 7375' },
+      { conector: 'Y', etiqueta: 'Nivel de propiedad', valor: 'Menos del 50%' },
+      { conector: 'O', etiqueta: 'Palabra clave', valor: 'Contiene juegos' },
+    ],
+  });
+  assert.deepStrictEqual(filas, [
+    ['Código SIC primario', 'Entre 7371 y 7375'],
+    ['Y'],
+    ['Nivel de propiedad', 'Menos del 50%'],
+    ['O'],
+    ['Palabra clave', 'Contiene juegos'],
+  ]);
+});
+
+test('un solo criterio no emite ninguna fila de conector', () => {
+  assert.deepStrictEqual(
+    filasCriteriosScreening({ criteriosScreening: [{ conector: null, etiqueta: 'SIC', valor: '7371' }] }),
+    [['SIC', '7371']]
+  );
+});
+
+test('sin criterios ingeridos no se emite ninguna fila', () => {
+  /* La tabla conserva entonces lo que traía la plantilla y el motor lo avisa. Blanquearla
+     sería peor: quien revisa no sabría que el cribado de este año no dejó criterios. */
+  assert.deepStrictEqual(filasCriteriosScreening({}), []);
+  assert.deepStrictEqual(filasCriteriosScreening({ criteriosScreening: [] }), []);
+});
+
+test('el conector se emite como Y cuando el criterio no lo trae', () => {
+  const filas = filasCriteriosScreening({
+    criteriosScreening: [
+      { conector: null, etiqueta: 'A', valor: '1' },
+      { etiqueta: 'B', valor: '2' },
+    ],
+  });
+  assert.deepStrictEqual(filas, [['A', '1'], ['Y'], ['B', '2']]);
 });

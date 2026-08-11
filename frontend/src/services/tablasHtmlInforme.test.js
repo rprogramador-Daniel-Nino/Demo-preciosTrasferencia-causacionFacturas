@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import {
   localizarTablaHtml, reescribirFilasHtml, envolturaDe, textoPlanoHtml,
   actualizarTablasMotorHtml, reescribirCeldaHtml, TABLA_MARGENES,
-  actualizarTablasMacroHtml, reescribirRotuloHtml,
+  actualizarTablasMacroHtml, reescribirRotuloHtml, TABLA_CRITERIOS,
 } from './tablasHtmlInforme.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
@@ -323,7 +323,12 @@ test('las cuatro tablas del motor se actualizan en una sola pasada', () => {
   const salida = actualizarTablasMotorHtml(
     html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, avisos);
 
-  assert.deepStrictEqual(avisos, [], 'las cuatro estaban');
+  /* Las CUATRO que este caso ejercita. No se exige `avisos` vacío del todo porque el motor
+     regenera además los criterios de búsqueda, que esta plantilla de prueba no trae: eso
+     sí tiene que avisarse y no es un fallo de estas cuatro. */
+  assert.deepStrictEqual(
+    avisos.filter((a) => a !== TABLA_CRITERIOS), [], 'las cuatro estaban'
+  );
   assert.ok(!salida.includes('viejo A'), 'ninguna conserva las filas de la plantilla');
   assert.match(salida, /TOTAL, UNIVERSO/, 'razones de rechazo');
   assert.match(salida, /INTERNACIONAL/, 'muestra');
@@ -426,4 +431,40 @@ test('las ocho macro se actualizan sin pisarse entre sí', () => {
 test('textoPlanoHtml deshace etiquetas y entidades', () => {
   assert.strictEqual(textoPlanoHtml('<p><strong>Tabla&nbsp;19.</strong> A &amp; B</p>'),
     'Tabla 19. A & B');
+});
+test('los criterios de búsqueda se regeneran en las tres tablas homónimas', () => {
+  /* La plantilla trae «Códigos SIC utilizados» tres veces (Tablas 13, 14 y 15) y el estudio
+     guarda una sola corrida de cribado, así que las tres publican los mismos criterios.
+     Antes las tres se radicaban con el rango de SIC y la ventana fiscal del año anterior. */
+  const tabla = (n) =>
+    '<p><strong> Tabla ' + n + '. Códigos SIC utilizados</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr>' +
+    '<tr><th><p> Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave:</p></th><td><p> Contiene viejo</p></td></tr></table>';
+  const html = tabla(13) + '<p> Medio.</p>' + tabla(14) + '<p> Medio.</p>' + tabla(15);
+  const estudio = {
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' },
+      { conector: 'O', etiqueta: 'Palabra clave:', valor: 'Contiene juegos' },
+    ],
+  };
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, estudio, avisos);
+  assert.strictEqual((salida.match(/Entre 7371 y 7375/g) || []).length, 3, 'las tres tablas');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'sobrevivió el criterio anterior');
+  assert.ok(!salida.includes('Contiene viejo'), 'sobrevivió la palabra clave anterior');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tablas sí estaban');
+  assert.match(salida, /<p> Medio\.<\/p>/, 'el texto entre ellas sobrevive');
+});
+
+test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () => {
+  const html =
+    '<p><strong> Tabla 13. Códigos SIC utilizados</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr></table>';
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, {}, avisos);
+  assert.strictEqual(salida, html, 'la tabla no debe alterarse');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });

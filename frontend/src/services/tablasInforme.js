@@ -433,3 +433,41 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
     comparablesSinCifras: comparables.filter((f) => f.ajustado === null).length,
   };
 }
+
+/* ══════════════ Criterios de búsqueda (Tablas 13 a 15) ══════════════
+
+   Los criterios con los que se cribó el universo salen de la hoja «Screen Criteria» del
+   export de Capital IQ y `parsearCriteriosScreening` los deja en `study.criteriosScreening`
+   —ver el comentario de esa función en `comparablesEngine.js`, que ya anticipaba esta
+   tabla y la dejó «a la espera de que la ruta por campos con nombre lo publique»—. Hasta
+   ahora nadie los publicaba: el informe se radicaba con los criterios de la corrida del año
+   anterior, incluidos el rango de códigos SIC y la ventana de cierre fiscal.
+
+   La plantilla arma la tabla alternando una fila de dos celdas por criterio (etiqueta y
+   valor) con una fila de una sola celda que lleva el conector. El primer criterio no lleva
+   conector delante, igual que en la hoja de origen. */
+
+/**
+ * Filas de la tabla de criterios de búsqueda, con su conector intercalado.
+ *
+ * Devuelve `[]` cuando el estudio no trae criterios: la tabla conserva entonces lo que
+ * traía la plantilla y el motor lo avisa. Blanquearla sería peor —quien revisa no sabría
+ * que el cribado de este año no dejó criterios— y es el mismo contrato que siguen las
+ * demás tablas del motor.
+ *
+ * @param {object} study
+ * @returns {string[][]}
+ */
+export function filasCriteriosScreening(study) {
+  const criterios = (study && study.criteriosScreening) || [];
+  const filas = [];
+  criterios.forEach((c, i) => {
+    if (!c) return;
+    /* `parsearCriteriosScreening` solo deja null en el primero. Si un estudio guardado trae
+       el conector vacío en medio, la fila que une los dos criterios no puede faltar: se cae
+       a «Y», que es la combinación por defecto de la hoja de origen. */
+    if (i > 0) filas.push([c.conector || 'Y']);
+    filas.push([String(c.etiqueta || ''), String(c.valor || '')]);
+  });
+  return filas;
+}
