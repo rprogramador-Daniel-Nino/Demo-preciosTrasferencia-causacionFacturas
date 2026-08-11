@@ -34,7 +34,6 @@ import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js
 import { pctf, fmt, num, pliOf } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 import { analizarRango } from './rangoIntercuartil.js';
-import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
 } from './analisisMercado.js';
