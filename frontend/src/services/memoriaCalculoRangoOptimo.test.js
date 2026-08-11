@@ -526,3 +526,52 @@ test('las referencias del contribuyente apuntan al rubro, no a una fila fija', (
   const primeraComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Buena SA');
   assert.strictEqual(datos.celdas[primeraComp][8].f, `$B$${filaTasa}`);
 });
+
+test('el cuartil del libro se calcula sobre el universo filtrado, no sobre todas las filas', () => {
+  const estudio = {
+    ...ESTUDIO, cmode: 'nac',
+    comparables: [
+      { name: 'Nacional A', amb: 'Nac', s: 500, c: 300, op: 100, ar: 50, inv: 20, ap: 40, ppe: 100 },
+      { name: 'Internacional X', amb: 'Int', s: 900, c: 100, op: 100, ar: 10, inv: 5, ap: 5, ppe: 10 },
+    ],
+  };
+  const mo = hojasMemoriaRangoOptimo(estudio, null).find((h) => h.nombre === 'MO');
+  const filaCon = (etq) => mo.celdas.find((f) => f && f[17] && f[17].v === etq);
+
+  /* Índice 26 = columna AA, la primera de la serie filtrada (índices 0-25 son A-Z:
+     ver el relleno de `filaEstadistica`). Los índices 25 (Z) y 26 (AA) de más abajo
+     usan el mismo criterio; este es el que faltaba actualizar. */
+  const p25 = filaCon('P25 (cuartil inferior)')[26].f;
+  assert.ok(!/QUARTILE\(S\d+:S\d+/.test(p25),
+    `el cuartil no puede leer la columna S en bruto: ${p25}`);
+  assert.ok(/AA\d+:AA\d+/.test(p25),
+    `el cuartil lee la serie filtrada: ${p25}`);
+
+  /* La guarda de muestra mínima, la misma que aplica el motor en :312. */
+  assert.ok(p25.includes('COUNT('), `falta la guarda de muestra mínima: ${p25}`);
+  assert.ok(p25.includes('<3'), `la guarda tiene que ser de tres observaciones: ${p25}`);
+
+  /* La columna Z resuelve el ámbito leyendo el de la comparable y el de la muestra. */
+  const z = mo.celdas[2][25].f;
+  assert.ok(z && z.includes('Datos!'), `la columna Z lee el ámbito de Datos: ${z}`);
+
+  /* La serie del rango vacía la fila que no entra. */
+  const aa = mo.celdas[2][26].f;
+  assert.ok(aa.includes('Z3') && aa.includes('S3'),
+    `la serie del rango depende del ámbito y del valor: ${aa}`);
+});
+
+test('la hoja Resumen lee la estadística de AA-AG, no de S-Y, tras el traslado de Task 5', () => {
+  /* Las filas de estadística de las hojas de método dejaron en blanco S–Y: si el
+     Resumen sigue apuntando ahí, la hoja que un lector abre primero sale siempre
+     vacía aunque la hoja de método sí traiga el rango. */
+  const [resumen] = hojasMemoriaRangoOptimo(ESTUDIO, null);
+  assert.strictEqual(resumen.nombre, 'Resumen');
+  const filaMO = resumen.celdas.find((f) => f && f[0] && f[0].v === 'Margen Operacional');
+  assert.ok(filaMO, 'existe al menos una fila de MO en el Resumen');
+  ['Contribuyente', 'Mínimo', 'P25', 'Mediana', 'P75', 'Máximo'].forEach((_, i) => {
+    const celda = filaMO[2 + i];
+    assert.match(celda.f, /![A-Z]{2}\d+$/, `la referencia de ${celda.f} debería usar una columna AA-AG`);
+    assert.ok(!/![S-Y]\d+$/.test(celda.f), `no puede seguir leyendo S-Y: ${celda.f}`);
+  });
+});

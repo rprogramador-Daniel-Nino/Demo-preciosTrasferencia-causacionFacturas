@@ -85,10 +85,11 @@ const RUBROS_EXAMINADA = [
 const FILA_RUBRO_0 = 4;
 const filaDeRubro = (clave) => FILA_RUBRO_0
   + RUBROS_EXAMINADA.findIndex((r) => r.clave === clave);
-/* La tasa va inmediatamente después del último rubro. La fila del ámbito de la
-   muestra va después de la tasa, pero no necesita su propia constante: se escribe
-   sola al hacer `push` justo detrás, sin que ninguna fórmula la referencie hoy. */
+/* La tasa va inmediatamente después del último rubro. */
 const FILA_TASA = () => FILA_RUBRO_0 + RUBROS_EXAMINADA.length;
+/* La fila del ámbito de la muestra, que la hoja de método lee para decidir qué filas
+   entran al cuartil. Va detrás de la tasa, que va detrás del último rubro. */
+const FILA_AMBITO = () => FILA_TASA() + 1;
 
 const AJUSTES = [
   { clave: 'ninguno', etiqueta: 'Sin ajuste' },
@@ -271,7 +272,10 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     // encabezado de columnas
     const cols = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inv', 'CxP', 'PP&E', 'Tasa',
       'EBIT', 'Util.bruta', 'desc', 'Base', 'Aj.CxC', 'Aj.CxP', 'Aj.Inv', 'Aj.PP&E', 'Denom.',
-      'Sin ajuste', 'CxC', 'CxP', 'Inv', 'CxC+CxP+Inv', '+PP&E', 'PP&E'];
+      'Sin ajuste', 'CxC', 'CxP', 'Inv', 'CxC+CxP+Inv', '+PP&E', 'PP&E',
+      'Entra por ámbito',
+      'Serie: Sin ajuste', 'Serie: CxC', 'Serie: CxP', 'Serie: Inv',
+      'Serie: CxC+CxP+Inv', 'Serie: +PP&E', 'Serie: PP&E'];
     celdas.push(cols.map(cTxt));
     const filaHdr = celdas.length; // 1-based
     const r0 = filaHdr + 1; // primera fila de comparable
@@ -322,22 +326,62 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         cFor(`(${num}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt), // X +PP&E
         cFor(`(${num}-Q${r})/${denomSinAR}`, M.fmt),  // Y PP&E
       ];
+
+      /* Columna Z: el filtro de ámbito, resuelto por fórmula y a la vista. Es el
+         mismo criterio de `entraPorAmbito` (ajusteRangoCapitalTrabajo.js:245): con
+         'nac' solo las nacionales, con 'intl' solo las internacionales, y con
+         cualquier otro valor todas. Se emite como fórmula y no como una marca ya
+         decidida, igual que el criterio de holding de la hoja de selección: quien
+         audita el libro tiene que poder ver por qué una fila no entró. */
+      const ambitoRef = D(`$B$${FILA_AMBITO()}`);
+      const ambComp = D(`J${src}`);
+      fila.push(cForT(
+        `IF(OR(${ambitoRef}="all",AND(${ambitoRef}="nac",${ambComp}="Nac"),`
+        + `AND(${ambitoRef}="intl",${ambComp}="Int")),"Sí","No")`));
+
+      /* Columnas AA–AG: la serie que de verdad entra al rango, por sabor. Vacía —no
+         cero— cuando la fila no entra o cuando el indicador no es un número: QUARTILE,
+         MIN y MAX ignoran las celdas vacías, y un cero fingiría una observación que no
+         existe y hundiría el rango. */
+      ['S', 'T', 'U', 'V', 'W', 'X', 'Y'].forEach((L) => {
+        fila.push(cFor(`IF(AND(Z${r}="Sí",ISNUMBER(${L}${r})),${L}${r},"")`, M.fmt));
+      });
+
       celdas.push(fila);
     }
 
     const rN = r0 + n - 1; // última fila de comparable
-    // filas de estadísticos del rango (MIN, cuartiles inclusivos, MAX)
-    const RES = ['S', 'T', 'U', 'V', 'W', 'X', 'Y'];
+
+    /* La estadística se calcula sobre la SERIE FILTRADA (AA–AG), no sobre las
+       columnas de indicador (S–Y). Las de indicador se publican íntegras porque las
+       tablas del informe listan también las comparables fuera de ámbito con su
+       margen; lo que no puede es cuartilarlas. */
+    const RES = ['AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'];
+
+    /* Guarda de muestra mínima: el motor no publica estadística con menos de tres
+       observaciones (ajusteRangoCapitalTrabajo.js:312), porque un rango intercuartil
+       sobre dos puntos no es un rango. La hoja no puede insinuar lo contrario.
+       COUNT solo cuenta números, así que cuenta exactamente las filas que entraron. */
+    const conGuarda = (L, expr) => `IF(COUNT(${L}${r0}:${L}${rN})<3,"",${expr})`;
+
+    /* Fila de estadística vacía: índices 0–25 son las columnas A–Z, la etiqueta va en
+       R (índice 17) y los siete valores se empujan a partir del índice 26 (AA). */
+    const filaEstadistica = (etq) => {
+      const fila = new Array(26).fill(cTxt(''));
+      fila[17] = cTxt(etq);
+      return fila;
+    };
+
     const statRow = (etq, fn) => {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt(etq); // columna R (índice 17)
-      RES.forEach((L) => fila.push(cFor(`${fn}(${L}${r0}:${L}${rN})`, M.fmt)));
+      const fila = filaEstadistica(etq);
+      RES.forEach((L) => fila.push(
+        cFor(conGuarda(L, `${fn}(${L}${r0}:${L}${rN})`), M.fmt)));
       return fila;
     };
     const qRow = (etq, q) => {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt(etq); // columna R (índice 17)
-      RES.forEach((L) => fila.push(cFor(`QUARTILE(${L}${r0}:${L}${rN},${q})`, M.fmt)));
+      const fila = filaEstadistica(etq);
+      RES.forEach((L) => fila.push(
+        cFor(conGuarda(L, `QUARTILE(${L}${r0}:${L}${rN},${q})`), M.fmt)));
       return fila;
     };
     celdas.push(statRow('Mínimo', 'MIN'));
@@ -357,18 +401,20 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       : `(${S_s}-${C_s}-${OP_s})/(${C_s}+${OP_s})`;
     const filaTested = celdas.length + 1;
     {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt('Indicador del contribuyente');
+      const fila = filaEstadistica('Indicador del contribuyente');
+      /* `testedFor` no cambia: es la misma fórmula. Lo que cambia es la columna
+         donde se escribe. */
       RES.forEach(() => fila.push(cFor(testedFor, M.fmt)));
       celdas.push(fila);
     }
     // conclusión CUMPLE/NO CUMPLE por ajuste
     {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt('Conclusión');
-      RES.forEach((L) => fila.push(cForT(
-        `IF(AND(${L}${filaTested}>=${L}${filaP25},${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE")`
-      )));
+      /* La conclusión necesita la misma guarda: sin rango, P25 y P75 valen "" y
+         compararlos con >= daría #VALUE! en la celda. */
+      const fila = filaEstadistica('Conclusión');
+      RES.forEach((L) => fila.push(cForT(conGuarda(L,
+        `IF(AND(${L}${filaTested}>=${L}${filaP25},`
+        + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE")`))));
       celdas.push(fila);
     }
 
@@ -376,7 +422,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
     hojas.push({
       nombre: M.hoja, celdas,
-      cols: [{ wch: 28 }].concat(new Array(24).fill({ wch: 11 })),
+      cols: [{ wch: 28 }].concat(new Array(32).fill({ wch: 11 })),
     });
   });
 
@@ -505,7 +551,11 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   resumen.push([cTxt('RESUMEN Y SENSIBILIDAD — todo son referencias a las hojas de método')]);
   resumen.push([]);
   resumen.push(['Método', 'Ajuste', 'Contribuyente', 'Mínimo', 'P25', 'Mediana', 'P75', 'Máximo', 'Conclusión'].map(cTxt));
-  const RES = ['S', 'T', 'U', 'V', 'W', 'X', 'Y'];
+  /* AA–AG, no S–Y: desde que las filas de estadística se mudaron a la serie
+     filtrada, S–Y de esas filas quedan en blanco (son las columnas de indicador
+     por comparable, no de estadístico). Referenciar S–Y aquí dejaría el Resumen
+     —la hoja que un lector abre primero— siempre vacío. */
+  const RES = ['AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'];
   infoMetodos.forEach((M) => {
     AJUSTES.forEach((aj, k) => {
       const L = RES[k];
