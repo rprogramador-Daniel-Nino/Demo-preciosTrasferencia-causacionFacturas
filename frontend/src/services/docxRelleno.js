@@ -564,16 +564,15 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   };
   const tPLI = pliOf(T, estudio.pli || 'MO');
 
-  // Calcular series ordenadas para No Ajustado y Ajustado
-  const activeSeriesNoAjustado = compFilas
-    .map((f) => f.noAjustado)
-    .filter((v) => v !== null && v !== undefined)
-    .sort((a, b) => a - b);
-  const minNoAjustado = activeSeriesNoAjustado.length ? activeSeriesNoAjustado[0] : null;
-  const maxNoAjustado = activeSeriesNoAjustado.length ? activeSeriesNoAjustado[activeSeriesNoAjustado.length - 1] : null;
-  const p25NoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.25);
-  const medNoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.5);
-  const p75NoAjustado = cuartilInterpolado(activeSeriesNoAjustado, 0.75);
+  /* Estadística de las dos columnas, del mismo sitio. Aquí vivía una serie ordenada a
+     mano con `cuartilInterpolado`: era el tercer cálculo del cuartil del sistema y el
+     único que no aplicaba el filtro de ámbito. */
+  const sinAj = rResult.statsNoAjustado || {};
+  const minNoAjustado = sinAj.min !== undefined ? sinAj.min : null;
+  const maxNoAjustado = sinAj.max !== undefined ? sinAj.max : null;
+  const p25NoAjustado = sinAj.p25 !== undefined ? sinAj.p25 : null;
+  const medNoAjustado = sinAj.med !== undefined ? sinAj.med : null;
+  const p75NoAjustado = sinAj.p75 !== undefined ? sinAj.p75 : null;
 
   const activeSeriesAjustado = compFilas
     .map((f) => f.ajustado)

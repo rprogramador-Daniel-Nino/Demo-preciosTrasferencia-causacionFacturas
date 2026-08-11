@@ -154,3 +154,30 @@ test('Berry usa la definición del motor y sí admite ajuste', () => {
   assert.notStrictEqual(uno.ajustado, uno.noAjustado,
     'con useadj activo el margen de Berry tiene que moverse');
 });
+
+test('la estadística sin ajuste respeta el filtro de ámbito, igual que la ajustada', () => {
+  /* Con cmode 'nac' el rango ajustado excluye las internacionales. La estadística
+     sin ajuste tiene que excluirlas también: son las dos columnas de la MISMA
+     tabla del informe, y publicar cada una sobre un universo distinto es la fuga
+     que esta prueba cierra. */
+  const estudio = {
+    pli: 'MO', useadj: true, cmode: 'nac', prime: 7.37,
+    t_s: 1000, t_c: 600, t_op: 200, t_ar: 100, t_inv: 50, t_ap: 80, t_ppe: 300,
+    comparables: [
+      { name: 'Nacional A', amb: 'Nac', s: 500, c: 300, op: 120, ar: 50, inv: 20, ap: 40, ppe: 100 },
+      { name: 'Nacional B', amb: 'Nac', s: 800, c: 500, op: 180, ar: 70, inv: 30, ap: 50, ppe: 120 },
+      { name: 'Nacional C', amb: 'Nac', s: 600, c: 350, op: 150, ar: 60, inv: 25, ap: 45, ppe: 110 },
+      /* Margen deliberadamente extremo: si entra, mueve el mínimo y el máximo. */
+      { name: 'Internacional X', amb: 'Int', s: 900, c: 100, op: 100, ar: 10, inv: 5, ap: 5, ppe: 10 },
+    ],
+  };
+
+  const r = analizarRango(estudio);
+  assert.ok(r.statsNoAjustado, 'se publica la estadística sin ajuste');
+
+  const nacionales = estudio.comparables.filter((c) => c.amb === 'Nac').length;
+  assert.strictEqual(r.statsNoAjustado.n, nacionales,
+    'la serie sin ajuste cuenta solo las nacionales');
+  assert.strictEqual(r.stats.n, r.statsNoAjustado.n,
+    'las dos columnas de la tabla se calculan sobre el mismo universo');
+});

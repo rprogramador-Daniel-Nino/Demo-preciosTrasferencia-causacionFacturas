@@ -74,14 +74,14 @@ export function analizarRango(estudio) {
   };
   const tPLI = pliOf(T, kind);
 
-  const { filas, stats } = porMetodologiaOCDE(study, kind);
+  const { filas, stats, statsNoAjustado } = porMetodologiaOCDE(study, kind);
 
   const adj = stats && tPLI !== null ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
   /* 'CUMPLE' cuando no hay ajuste es comportamiento heredado, no un descuido.
      Ver la nota de la Task 0 del plan antes de cambiarlo. */
   const cumple = adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : 'CUMPLE';
 
-  return { stats, adj, cumple, filas };
+  return { stats, statsNoAjustado, adj, cumple, filas };
 }
 
 /* Ruta unificada: el mismo motor que emite las fórmulas del Excel de soporte.
@@ -90,14 +90,26 @@ export function analizarRango(estudio) {
    de modo que el rango del documento pasa a ser el que se ve en el tablero. */
 function porMetodologiaOCDE(study, kind) {
   const ajuste = study.useadj ? SABOR_INFORME : 'ninguno';
-  const r = analizarRangoAjustado({
+  const preparado = {
     ...study,
     t_op: aConvenioOCDE({ s: study.t_s, c: study.t_c, op: study.t_op }).op,
     comparables: (study.comparables || []).map(aConvenioOCDE),
-  }, kind, ajuste);
+  };
+  const r = analizarRangoAjustado(preparado, kind, ajuste);
+
+  /* La estadística del escenario SIN ajuste, que es la columna «NO AJUSTADO» de las
+     tablas del informe y la columna S del libro de soporte. Se pide al motor en vez
+     de recalcularla: `docxRelleno.js` la ordenaba y la cuartilaba por su cuenta, sin
+     el filtro de ámbito, de modo que las dos columnas de una misma tabla salían sobre
+     universos distintos. Cuando el escenario reportado ya es «ninguno» no hace falta
+     una segunda pasada. */
+  const statsNoAjustado = ajuste === 'ninguno'
+    ? r.stats
+    : analizarRangoAjustado(preparado, kind, 'ninguno').stats;
 
   return {
     stats: r.stats,
+    statsNoAjustado,
     filas: r.filas.map((f) => ({
       nombre: f.nombre,
       amb: f.amb,
