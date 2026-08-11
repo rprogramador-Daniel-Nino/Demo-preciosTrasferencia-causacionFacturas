@@ -91,3 +91,104 @@ export function filasOperacionAnalizar(estudio) {
     fuente: FUENTE,
   };
 }
+
+/**
+ * Tabla 3 — «Transacciones Inter compañía»: la ficha del vinculado, en vertical.
+ *
+ * Cada fila es etiqueta y valor, no una columna de datos. La plantilla la trae DOS veces
+ * —en la descripción del vinculado y otra vez en el análisis— y las dos publican lo mismo.
+ *
+ * @returns {{nombre:string, encabezados:string[], filas:string[][], fuente:string}}
+ */
+export function filasTransaccionesIntercompania(estudio) {
+  const e = estudio || {};
+  return {
+    nombre: 'Transacciones Inter compañía',
+    encabezados: ['Compañía vinculada', ''],
+    filas: [
+      ['Razón social', wrap(e.vinc)],
+      ['Identificación fiscal', wrap(e.vinc_id)],
+      ['País - Residencia fiscal', wrap(e.pais_vinc)],
+      /* El inciso es el del caso más común y el estudio puede corregirlo. No es un dato
+         que se pueda dejar en blanco: la vinculación hay que sustentarla. */
+      ['Tipo de vinculación', wrap(e.tipo_vinculacion || 'Art 260-1 E-T Inciso 1')],
+      ['Tipo de operaciones (' + (e.egreso ? 'Egreso' : 'Ingreso') + ')', wrap(e.vinc_tipo)],
+      ['Monto en pesos', montoDeLaOperacion(e)],
+    ],
+    fuente: 'Información de ' + (e.ent || 'la Compañía') + '.',
+  };
+}
+
+/**
+ * Tabla 4 — «Método de Precios de Transferencia Aplicable».
+ *
+ * Publica el código de operación en su propia columna, así que comparte
+ * `conceptoDeOperacion` con las Tablas 1 y 2: es el mismo dato y no puede diferir entre
+ * dos tablas del mismo informe.
+ *
+ * `nombre` es más corto que `titulo` porque es con lo que se localiza la tabla, y las
+ * plantillas rotulan el título completo.
+ *
+ * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
+ */
+export function filasMetodoAplicable(estudio) {
+  const e = estudio || {};
+  const { desc, cod } = conceptoDeOperacion(e);
+  return {
+    nombre: 'Método de Precios de Transferencia',
+    titulo: 'Método de Precios de Transferencia Aplicable',
+    encabezados: [
+      'Código de Operación', 'Descripción de la operación', 'Método seleccionado',
+      'Indicador de Rentabilidad',
+    ],
+    filas: [[wrap(cod), wrap(desc), e.metodo || 'TU', e.pli || 'MO']],
+    fuente: FUENTE,
+  };
+}
+
+/** El año gravable del estudio. 2025 por omisión, igual que el resto del sistema. */
+const anioDe = (estudio) => Number(estudio && estudio.anio) || 2025;
+
+/**
+ * Tabla 8 — «Compañías vinculadas al 31 de diciembre de {año}».
+ *
+ * El título lleva el año gravable, que es un DATO: la plantilla trae el del informe
+ * anterior y dejarlo publica «al 31 de diciembre de 2024» en el informe de 2025.
+ *
+ * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
+ */
+export function filasCompaniasVinculadas(estudio) {
+  const e = estudio || {};
+  return {
+    nombre: 'Compañías vinculadas',
+    titulo: 'Compañías vinculadas al 31 de diciembre de ' + anioDe(e),
+    encabezados: ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
+    filas: [[wrap(e.vinc), wrap(e.vinc_id), wrap(e.pais_vinc)]],
+    fuente: FUENTE,
+  };
+}
+
+/**
+ * Tabla 9 — «Criterios de vinculación económica».
+ *
+ * El criterio y su detalle son los del caso que el sistema sustenta hoy —vinculación
+ * directa por el numeral 1— y no salen del estudio porque no hay dónde escribirlos.
+ *
+ * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
+ */
+export function filasCriteriosVinculacion(estudio) {
+  const e = estudio || {};
+  return {
+    nombre: 'Criterios de vinculación',
+    titulo: 'Criterios de vinculación económica',
+    encabezados: [
+      'Nombre Vinculada', 'País', 'Criterio de vinculación',
+      'Detalle del Criterio de Vinculación',
+    ],
+    filas: [[
+      wrap(e.vinc), wrap(e.pais_vinc),
+      'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa',
+    ]],
+    fuente: FUENTE,
+  };
+}

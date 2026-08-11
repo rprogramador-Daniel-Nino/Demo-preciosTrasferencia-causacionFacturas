@@ -31,8 +31,16 @@ import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import {
-  filasOperacionesDeIngreso, filasOperacionAnalizar, conceptoDeOperacion,
+  filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
+  filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
 } from './tablasOperaciones.js';
+/* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
+   este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
+import {
+  filasComposicionAccionaria, filasActivos, verticalSobreActivos,
+} from './tablasContribuyente.js';
+
+export { verticalSobreActivos };
 import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
@@ -398,24 +406,6 @@ function sustituidorDeTablas(xmlInicial, avisos) {
   };
 }
 
-/**
- * El análisis vertical de un rubro sobre el total de activos del estudio.
- *
- * Una sola definición para la Tabla 10 del cuerpo y para el ESF del ANEXO A: si cada una
- * llevara su cuenta, el informe publicaría dos verticales distintos para el mismo estado
- * financiero, y el que revisa no tendría forma de saber cuál vale.
- *
- * @param {object} estudio
- * @returns {(valor:*) => string} el porcentaje formateado, o «—» sin total de activos.
- */
-export function verticalSobreActivos(estudio) {
-  const total = num(estudio && estudio.t_act_tot);
-  return (valor) => {
-    const n = num(valor);
-    if (n === null || !total) return '—';
-    return ((n / total) * 100).toFixed(2) + '%';
-  };
-}
 
 export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
@@ -454,7 +444,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      salen de `tablasOperaciones.js` y no se arman dos veces. Ahí vive también el motivo por
      el que el código de operación puede ser «—»: el que había antes en este archivo lo
      inventaba, devolvía '07' —el de END GAME 2024— para cualquier tipo sin paréntesis. */
-  const emitir = (b, t) => generarTablaOoxml(tituloDe(b, t.nombre), t.encabezados, t.filas, t.fuente);
+  /* `titulo` cuando lo trae y `nombre` si no: hay tablas cuyo rótulo es más largo que el
+     nombre con el que se localizan —«Método de Precios de Transferencia Aplicable» frente a
+     «Método de Precios de Transferencia»— o que llevan el año gravable dentro. */
+  const emitir = (b, t) => generarTablaOoxml(
+    tituloDe(b, t.titulo || t.nombre), t.encabezados, t.filas, t.fuente
+  );
 
   // 1. Operaciones de Ingreso/Egreso
   reemplazar(
@@ -475,18 +470,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      que cambian según el informe (3 y 12 en la del cliente). Se sustituyen las dos
      por ocurrencia, sin depender de esos números. */
   {
-    const filas3 = [
-      ['Razón social', wrap(estudio.vinc)],
-      ['Identificación fiscal', wrap(estudio.vinc_id)],
-      ['País - Residencia fiscal', wrap(estudio.pais_vinc)],
-      ['Tipo de vinculación', wrap(estudio.tipo_vinculacion || 'Art 260-1 E-T Inciso 1')],
-      [`Tipo de operaciones (${estudio.egreso ? 'Egreso' : 'Ingreso'})`, wrap(estudio.vinc_tipo)],
-      ['Monto en pesos', estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—']
-    ];
+    const t3 = filasTransaccionesIntercompania(estudio);
     const tablaTx = (b) => generarTablaOoxml(
-      tituloDe(b, 'Transacciones Inter compañía'),
-      ['Compañía vinculada', ''], filas3,
-      `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`
+      tituloDe(b, t3.nombre), t3.encabezados, t3.filas, escaparXml(t3.fuente)
     );
     /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
        segunda, y el localizador trabaja sobre posiciones del XML. */
@@ -495,17 +481,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   }
 
   // 4. Método de Precios de Transferencia Aplicable
-  reemplazar('Método de Precios de Transferencia', (b) => {
-    /* Misma resolución del concepto que las Tablas 1 y 2: esta columna publica el código de
-       operación, y el helper que había aquí lo inventaba cuando el tipo no traía paréntesis. */
-    const { desc, cod } = conceptoDeOperacion(estudio);
-    return generarTablaOoxml(
-      tituloDe(b, 'Método de Precios de Transferencia Aplicable'),
-      ['Código de Operación', 'Descripción de la operación', 'Método seleccionado', 'Indicador de Rentabilidad'],
-      [[wrap(cod), wrap(desc), estudio.metodo || 'TU', estudio.pli || 'MO']],
-      'Información suministrada por la Administración de la Compañía.'
-    );
-  }, { numeros: [4] });
+  reemplazar(
+    'Método de Precios de Transferencia',
+    (b) => emitir(b, filasMetodoAplicable(estudio)),
+    { numeros: [4] }
+  );
 
   /* 5. Rango Intercuartil, versión horizontal. El nombre no la distingue de la
      vertical del análisis —las dos se llaman igual—, así que la primera ocurrencia
@@ -521,71 +501,32 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   }, { numeros: [5], ocurrencia: 0 });
 
   // 6. Composición accionaria
-  reemplazar('Composición accionaria', (b) => {
-    const filas = (estudio.accionistas || []).map((a) => [
-      wrap(a.nombre),
-      wrap(a.pais),
-      a.acciones ? fmt(num(a.acciones)) : '—',
-      a.valor_capital ? fmt(num(a.valor_capital)) : '—',
-      a.participacion_pct ? String(a.participacion_pct) + '%' : '—'
-    ]);
-    const totalAcciones = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.acciones) || 0), 0);
-    const totalCapital = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.valor_capital) || 0), 0);
-    filas.push([
-      'Total',
-      '',
-      totalAcciones ? fmt(totalAcciones) : '—',
-      totalCapital ? fmt(totalCapital) : '—',
-      '100%'
-    ]);
-    return generarTablaOoxml(
-      tituloDe(b, 'Composición accionaria'),
-      ['Accionista', 'País', 'N° Acciones', 'Valor Capital', '% Participación'],
-      filas,
-      'Información suministrada por la administración de la Compañía.'
-    );
-  }, { numeros: [6] });
+  reemplazar(
+    'Composición accionaria',
+    (b) => emitir(b, filasComposicionAccionaria(estudio)),
+    { numeros: [6] }
+  );
 
   // 7. Compañías vinculadas al cierre del año gravable
-  reemplazar('Compañías vinculadas', (b) => generarTablaOoxml(
-    tituloDe(b, `Compañías vinculadas al 31 de diciembre de ${year}`),
-    ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
-    [[wrap(estudio.vinc), wrap(estudio.vinc_id), wrap(estudio.pais_vinc)]],
-    'Información suministrada por la Administración de la Compañía.'
-  ), { numeros: [8] });
+  reemplazar(
+    'Compañías vinculadas',
+    (b) => emitir(b, filasCompaniasVinculadas(estudio)),
+    { numeros: [8] }
+  );
 
   // 8. Criterios de vinculación económica
-  reemplazar('Criterios de vinculación', (b) => generarTablaOoxml(
-    tituloDe(b, 'Criterios de vinculación económica'),
-    ['Nombre Vinculada', 'País', 'Criterio de vinculación', 'Detalle del Criterio de Vinculación'],
-    [[wrap(estudio.vinc), wrap(estudio.pais_vinc), 'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa']],
-    'Información suministrada por la Administración de la Compañía.'
-  ), { numeros: [9] });
+  reemplazar(
+    'Criterios de vinculación',
+    (b) => emitir(b, filasCriteriosVinculacion(estudio)),
+    { numeros: [9] }
+  );
 
-  // 9. Tabla 10. Activos a 31 de diciembre de ${year}
-  reemplazar('Activos a 31 de diciembre', (b) => {
-    {
-      const av = verticalSobreActivos(estudio);
-      const filas10 = [
-        ['Efectivo y equivalentes de efectivo', wrap(estudio.t_cash ? fmt(num(estudio.t_cash)) : null), av(estudio.t_cash)],
-        ['Inversiones asociadas', wrap(estudio.t_inv_assoc ? fmt(num(estudio.t_inv_assoc)) : null), av(estudio.t_inv_assoc)],
-        ['Cuentas por cobrar comerciales y otras cuentas por cobrar', wrap(estudio.t_ar ? fmt(num(estudio.t_ar)) : null), av(estudio.t_ar)],
-        ['Activos por impuestos corrientes', wrap(estudio.t_tax ? fmt(num(estudio.t_tax)) : null), av(estudio.t_tax)],
-        ['Total, Activo corriente', wrap(estudio.t_act_curr ? fmt(num(estudio.t_act_curr)) : null), av(estudio.t_act_curr)],
-        ['Propiedades, planta y equipo', wrap(estudio.t_ppe ? fmt(num(estudio.t_ppe)) : null), av(estudio.t_ppe)],
-        ['Intangibles', wrap(estudio.t_intang ? fmt(num(estudio.t_intang)) : null), av(estudio.t_intang)],
-        ['Diferidos', wrap(estudio.t_dif ? fmt(num(estudio.t_dif)) : null), av(estudio.t_dif)],
-        ['Total, Activos no corrientes', wrap(estudio.t_act_nocurr ? fmt(num(estudio.t_act_nocurr)) : null), av(estudio.t_act_nocurr)],
-        ['Total, Activos', wrap(estudio.t_act_tot ? fmt(num(estudio.t_act_tot)) : null), av(estudio.t_act_tot)],
-      ];
-      return generarTablaOoxml(
-        tituloDe(b, `Activos a 31 de diciembre de ${year}`),
-        ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-        filas10,
-        `Estados financieros de la Compañía a 31 de diciembre de ${year}.`
-      );
-    }
-  }, { numeros: [10] });
+  // 9. Tabla 10. Activos a 31 de diciembre del año gravable
+  reemplazar(
+    'Activos a 31 de diciembre',
+    (b) => emitir(b, filasActivos(estudio)),
+    { numeros: [10] }
+  );
 
   // 10. Razones de rechazo
   reemplazar('Razones de rechazo', (b) => {
