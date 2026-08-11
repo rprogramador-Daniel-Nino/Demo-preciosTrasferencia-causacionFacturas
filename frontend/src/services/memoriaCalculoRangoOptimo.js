@@ -203,7 +203,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     + '2025 = 7,37 %; 2024 = 8,31 %.'));
   anotarTasa(5, 'Aplicación', cTxt(
     'Tasa única para los ' + n + ' comparables: la columna «Tasa» de esta hoja es la '
-    + `fórmula =$${celdaTasa} en todas las filas. La plantilla de Capital IQ traía en su lugar la `
+    + `fórmula =$B$${FILA_TASA()} en todas las filas. La plantilla de Capital IQ traía en su lugar la `
     + 'tasa del país de cada comparable, que es la fuga que este libro cierra.'));
   anotarTasa(6, 'Convención', cTxt(
     'Cuentas por cobrar y cuentas por pagar: r/(1+r). Inventario y propiedad, planta y '

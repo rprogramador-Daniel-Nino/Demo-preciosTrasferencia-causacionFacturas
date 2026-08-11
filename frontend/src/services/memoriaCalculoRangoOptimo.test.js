@@ -343,6 +343,20 @@ test('la hoja Datos documenta de dónde sale la tasa y a quién se aplica', () =
   assert.strictEqual(datos.celdas[3][12].f, '$B$11', 'el bloque refleja la celda editable, no la duplica');
 });
 
+test('el texto de «Aplicación» cita la dirección completa de la tasa, no una a medias', () => {
+  /* Regresión: un literal de plantilla reciclaba `celdaTasa` ("B11", sin el primer
+     "$") dentro de un texto que ya traía un "$" antes de la interpolación. En JS eso
+     NO produce dos signos de dólar seguidos: el primero queda literal y el segundo es
+     el que abre `${...}`, así que salía «=$B11» en vez de «=$B$11». La fórmula real
+     (fila «Tasa aplicada») estaba bien; lo que mentía era el texto que la describe
+     para quien audita el libro. */
+  const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  const direccionTasa = `=${datos.celdas[3][12].f}`; // p.ej. '=$B$11', a partir de la fórmula real
+  const aplicacion = datos.celdas[5][12].v;
+  assert.ok(aplicacion.includes(direccionTasa),
+    `«Aplicación» debería citar la dirección completa ${direccionTasa}: ${aplicacion}`);
+});
+
 test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', () => {
   /* Sin el factor de base, la columna Q salía dividida por el monto de las ventas y
      los escenarios «+PP&E» y «PP&E» reproducían a los que no llevan PP&E. */
