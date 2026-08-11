@@ -219,3 +219,45 @@ test('las tablas ausentes se nombran todas en los avisos', () => {
     'Compañías vinculadas', 'Criterios de vinculación', 'Activos a 31 de diciembre',
   ]);
 });
+
+/* ── Tablas que ningún motor sabe regenerar ── */
+
+test('la tabla de competencia se avisa porque publica los competidores del cliente anterior', () => {
+  /* Ningún motor la regenera: el estudio no tiene dónde guardar los competidores. Lo que no
+     se puede arreglar hay que decirlo — hasta ahora fallaba en silencio, y los competidores
+     de END GAME viajaban al informe de cualquier otro cliente. */
+  const html =
+    '<p><strong> Tabla 7. Competencia nacional e internacional al 31 de diciembre de 2024</strong></p>' +
+    '<table><tr><th><p><strong> NACIONALES</strong></p></th><th><p><strong> INTERNACIONALES</strong></p></th></tr>' +
+    '<tr><th><p> Teravision</p></th><td><p> Supercell</p></td></tr></table>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO, avisos);
+  assert.strictEqual(salida, html, 'no se puede regenerar, así que no se toca');
+  assert.ok(
+    avisos.some((a) => a.includes('Competencia nacional e internacional')),
+    'tiene que nombrarse en los avisos'
+  );
+});
+
+test('no se avisa de la tabla de competencia si la plantilla no la trae', () => {
+  /* Un aviso falso acusa de incompleta a una plantilla que está bien, y así se enseña a la
+     gente a no leer el banner. */
+  const avisos = [];
+  actualizarTablasOperacionesHtml('<p> Sin esa tabla.</p>', ESTUDIO_COMPLETO, avisos);
+  assert.ok(
+    !avisos.some((a) => a.includes('Competencia')),
+    'no debe avisar de una tabla que la plantilla no tiene'
+  );
+});
+
+test('la tabla de fuentes de información no se avisa: no arrastra datos del cliente', () => {
+  /* Sus entradas son instituciones —FMI, Banco de la República, ANDI, DANE— idénticas en
+     todos los informes de la firma. Avisar de ella sería ruido. */
+  const html =
+    '<p><strong> Tabla 11. Fuentes de Información</strong></p>' +
+    '<table><tr><th><p><strong> Fondo Monetario Internacional</strong></p></th></tr>' +
+    '<tr><th><p> Banco de la República</p></th></tr></table>';
+  const avisos = [];
+  actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO, avisos);
+  assert.ok(!avisos.some((a) => a.includes('Fuentes de Información')), 'no debe avisarse');
+});

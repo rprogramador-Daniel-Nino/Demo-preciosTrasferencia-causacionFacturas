@@ -55,6 +55,26 @@ const OBJETIVOS = [
   { nombres: 'Activos a 31 de diciembre', filas: filasActivos, rotulo: true },
 ];
 
+/* Tablas que publican datos DEL CLIENTE y que ningún motor sabe regenerar, porque el
+   estudio no tiene dónde guardar su contenido. No se tocan —no hay con qué— pero se nombran
+   en los avisos: la Tabla 7 lista los competidores del contribuyente, y hasta ahora fallaba
+   en silencio, así que los competidores de END GAME viajaban al informe de cualquier cliente.
+
+   La «Tabla 11. Fuentes de Información» NO está aquí a propósito. Sus entradas son
+   instituciones —FMI, Banco de la República, ANDI, DANE, Datos Abiertos— idénticas en todos
+   los informes de la firma, así que no arrastra ningún dato ajeno. Avisar de ella sería un
+   falso «no cubierto», que es como se enseña a la gente a no leer el banner.
+
+   Cada entrada trae su propia explicación porque el banner mezcla estos avisos con nombres
+   de tabla no encontrada y no puede suponer de qué tipo es cada uno. */
+const SIN_MOTOR = [
+  {
+    nombres: 'Competencia nacional e internacional',
+    aviso: 'Competencia nacional e internacional (el estudio no guarda los competidores, '
+      + 'así que hoy trae los del informe de referencia: complétala a mano)',
+  },
+];
+
 /* Sustituye una ocurrencia: primero las filas y DESPUÉS el rótulo. El orden importa —el
    rótulo está antes en el documento, así que reescribirlo primero movería los offsets del
    bloque que ya se localizó—; es el mismo orden que sigue `actualizarTablasMacroHtml`. */
@@ -108,6 +128,14 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
       continue;
     }
     out = sustituir(out, bloque, tabla, objetivo.rotulo);
+  }
+
+  /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un
+     aviso por una tabla que no existe acusa de incompleta a una plantilla que está bien. */
+  if (Array.isArray(avisos)) {
+    for (const { nombres, aviso } of SIN_MOTOR) {
+      if (localizarTablaHtml(out, nombres)) avisos.push(aviso);
+    }
   }
 
   return out;
