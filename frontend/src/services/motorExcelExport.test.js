@@ -12,6 +12,13 @@ import assert from 'node:assert';
 import XLSX from 'xlsx-js-style';
 import { construirLibroSoporte } from './motorExcelExport.js';
 
+/** Fila 1-based de la hoja cuya columna A empieza por `etiqueta`, para no fijar a
+    mano un número que se mueve cada vez que `RUBROS_EXAMINADA` cambia de tamaño. */
+function filaEnHoja(hoja, etiqueta) {
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, raw: true });
+  return filas.findIndex((f) => f && f[0] === etiqueta) + 1;
+}
+
 /* Payload con la misma forma que arma `handleExportarExcel` en MotorComparables.jsx.
    Ojo con `T.op`: ahí es la utilidad operacional, no los gastos — el adaptador la
    convierte antes de pasarla al generador. */
@@ -34,27 +41,30 @@ const PAYLOAD = {
 };
 
 test('la tasa llega al libro sin dividirse dos veces', () => {
-  /* 7,37 % tiene que aterrizar en Datos!B11 como 0,0737. Si alguien vuelve a leer
+  /* 7,37 % tiene que aterrizar en su celda como 0,0737. Si alguien vuelve a leer
      `interestRate` en el adaptador, aquí sale 0,000737 y el test lo dice. */
   const wb = construirLibroSoporte(PAYLOAD);
-  const b11 = wb.Sheets.Datos.B11;
-  assert.ok(b11, 'Datos!B11 debería existir');
-  assert.ok(Math.abs(b11.v - 0.0737) < 1e-12, `Datos!B11 = ${b11.v}, esperado 0.0737`);
+  const fila = filaEnHoja(wb.Sheets.Datos, 'Tasa de interés de referencia (Prime Rate)');
+  const celda = wb.Sheets.Datos[`B${fila}`];
+  assert.ok(celda, 'la celda de la tasa debería existir');
+  assert.ok(Math.abs(celda.v - 0.0737) < 1e-12, `Datos!B${fila} = ${celda.v}, esperado 0.0737`);
 });
 
 test('un estudio sin tasa no inventa una', () => {
   const sinTasa = { ...PAYLOAD, estudio: { ...PAYLOAD.estudio, prime: undefined } };
   const wb = construirLibroSoporte(sinTasa);
-  assert.strictEqual(wb.Sheets.Datos.B11.v, 0);
+  const fila = filaEnHoja(wb.Sheets.Datos, 'Tasa de interés de referencia (Prime Rate)');
+  assert.strictEqual(wb.Sheets.Datos[`B${fila}`].v, 0);
 });
 
 test('las comparables toman la tasa de la celda única', () => {
   const wb = construirLibroSoporte(PAYLOAD);
-  /* Fila 16 y no 15: la fila «Ámbito de la muestra» se inserta después de la tasa y
-     antes de la sección de comparables, así que el bloque completo baja una fila. */
-  ['I16', 'I17', 'I18'].forEach((ref) => {
-    assert.strictEqual(wb.Sheets.Datos[ref].f, '$B$11', `${ref} debería referenciar B11`);
-  });
+  const filaTasa = filaEnHoja(wb.Sheets.Datos, 'Tasa de interés de referencia (Prime Rate)');
+  const filaHdrComp = filaEnHoja(wb.Sheets.Datos, 'Compañía');
+  for (let i = 0; i < 3; i++) {
+    const ref = `I${filaHdrComp + 1 + i}`;
+    assert.strictEqual(wb.Sheets.Datos[ref].f, `$B$${filaTasa}`, `${ref} debería referenciar la celda única`);
+  }
 });
 
 test('el libro trae las hojas de cálculo y la de diagnóstico', () => {
@@ -66,7 +76,7 @@ test('el libro trae las hojas de cálculo y la de diagnóstico', () => {
 test('el .xlsx escrito no lleva ninguna fórmula que Excel rechace', () => {
   /* La prueba de fuego del bug de la columna «Tasa»: no basta con mirar el objeto
      de celda, hay que ver el XML que acaba dentro del archivo. Una fórmula con «=»
-     delante sale como <f>=$B$11</f>, Excel no la puede parsear y abre el libro en
+     delante sale como <f>=…</f>, Excel no la puede parsear y abre el libro en
      modo reparación descartando la celda. */
   const wb = construirLibroSoporte(PAYLOAD);
   const bytes = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
@@ -85,16 +95,15 @@ test('la propiedad, planta y equipo llega al libro, no en cero', () => {
      ahí primero: el libro salía con PP&E en cero para la parte examinada aunque el
      estudio la tuviera cargada, y el ajuste de PP&E se calculaba contra nada. */
   const wb = construirLibroSoporte(PAYLOAD);
-  assert.strictEqual(wb.Sheets.Datos.B10.v, 300, 'PP&E de la parte examinada');
-  assert.strictEqual(wb.Sheets.Datos.A10.v, 'Propiedad, planta y equipo');
+  const fila = filaEnHoja(wb.Sheets.Datos, 'Propiedad, planta y equipo');
+  assert.strictEqual(wb.Sheets.Datos[`B${fila}`].v, 300, 'PP&E de la parte examinada');
 });
 
 test('el PP&E de cada comparable viaja a su fila', () => {
   const wb = construirLibroSoporte(PAYLOAD);
-  /* Fila 16 y no 15: mismo desplazamiento que introduce la fila «Ámbito de la
-     muestra» antes de la sección de comparables. */
+  const filaHdrComp = filaEnHoja(wb.Sheets.Datos, 'Compañía');
   assert.deepStrictEqual(
-    ['H16', 'H17', 'H18'].map((ref) => wb.Sheets.Datos[ref].v),
+    [1, 2, 3].map((i) => wb.Sheets.Datos[`H${filaHdrComp + i}`].v),
     [100, 40, 10],
   );
 });

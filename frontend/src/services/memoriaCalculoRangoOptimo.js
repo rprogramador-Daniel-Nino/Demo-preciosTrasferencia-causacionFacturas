@@ -44,15 +44,34 @@ const METODOS = [
 
    El comentario evita nombrar una dirección concreta a propósito: el comando de
    verificación del Step 4 busca literales por texto y una mención en prosa se delataría
-   a sí misma. */
+   a sí misma.
+
+   Los doce rubros que la ingesta sabe leer, en orden de balance. El orden y las
+   etiquetas siguen a `RUBROS_ESF` de docxRelleno.js: son el mismo estado financiero
+   visto desde el libro y desde el ANEXO A, y si divergen el informe publica un
+   balance que su propio soporte no reproduce.
+
+   `av: false` marca los rubros que NO llevan análisis vertical: el total de activos,
+   porque sería 100 % por definición, y las cuentas por pagar, porque un pasivo sobre
+   el total de activos no significa nada. Es el criterio que ya aplica
+   `filasEsfAnexoA`. Las tres cifras del estado de resultados —ventas, costo y gastos—
+   tampoco: no son partidas del balance. */
 const RUBROS_EXAMINADA = [
-  { clave: 't_s', etiqueta: 'Ventas netas' },
-  { clave: 't_c', etiqueta: 'Costo de ventas' },
-  { clave: 't_op', etiqueta: 'Gastos operativos' },
-  { clave: 't_ar', etiqueta: 'Cuentas por cobrar' },
-  { clave: 't_inv', etiqueta: 'Inventarios' },
-  { clave: 't_ap', etiqueta: 'Cuentas por pagar' },
-  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
+  { clave: 't_s', etiqueta: 'Ventas netas', av: false },
+  { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
+  { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
+  { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
+  { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar', av: true },
+  { clave: 't_inv', etiqueta: 'Inventarios', av: true },
+  { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes', av: true },
+  { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', av: true },
+  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo', av: true },
+  { clave: 't_intang', etiqueta: 'Intangibles', av: true },
+  { clave: 't_dif', etiqueta: 'Diferidos', av: true },
+  { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', av: true },
+  { clave: 't_act_tot', etiqueta: 'Total, Activos', av: false },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar', av: false },
 ];
 
 /* 1-based: fila 1 título, 2 vacía, 3 «PARTE EXAMINADA», 4 el primer rubro. */
@@ -110,10 +129,11 @@ const HOLDING_FORMULA = (ref) => 'IF(OR('
  *                 IMPORTANTE: `op` y `t_op` deben ser GASTOS operativos
  *                 (usar el normalizador eeffParserNormalizador.js antes), y `prime`
  *                 es la tasa EN PORCENTAJE (7.37, no 0.0737): esta función la divide
- *                 entre 100 al escribir Datos!B11, así que quien la llame no debe
- *                 hacerlo antes. `cmode` y `amb` solo se escriben en la hoja Datos en
- *                 esta versión; el filtrado del cuartil por ámbito lo aplica quien
- *                 llama.
+ *                 entre 100 al escribir la celda de la tasa en la hoja Datos (la fila
+ *                 la fija `FILA_TASA()`, no un número quemado aquí), así que quien la
+ *                 llame no debe hacerlo antes. `cmode` y `amb` solo se escriben en la
+ *                 hoja Datos en esta versión; el filtrado del cuartil por ámbito lo
+ *                 aplica quien llama.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
@@ -156,8 +176,14 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     ? (Number(study.t_s) || 0) - segExcluido
     : Number(study[clave]) || 0);
 
+  const filaTot = filaDeRubro('t_act_tot');
   RUBROS_EXAMINADA.forEach((r) => {
-    datos.push([cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))]);
+    const celdas = [cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))];
+    /* A.V. como fórmula y no como número: es lo que hace que corregir una cifra en
+       Datos recalcule el vertical del ANEXO A y de la Tabla 10 sin recalcularlo a
+       mano en dos sitios. */
+    if (r.av) celdas.push(cFor(`B${filaDeRubro(r.clave)}/$B$${filaTot}`, '0.00%'));
+    datos.push(celdas);
   });
   datos.push([
     cTxt('Tasa de interés de referencia (Prime Rate)'),
@@ -184,8 +210,8 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
      La tabla de comparables llega hasta la J (con la columna de Ámbito), así que este
      bloque cabe al lado sin estorbar. Deja escrito de dónde sale el número, a qué
      comparables alcanza y con qué convención se aplica: quien audita el libro no
-     debería tener que preguntarlo. La celda editable sigue siendo B11 —una sola—; aquí
-     solo se refleja.
+     debería tener que preguntarlo. La celda editable sigue siendo una sola —la fila
+     que calcula `FILA_TASA()`—; aquí solo se refleja.
      Los índices de columna son 11 y 12 (antes 10 y 11): la columna J de Ámbito
      desplazó una posición a este bloque, que vivía en K–M. */
   const anotarTasa = (idxFila, etiqueta, valor) => {

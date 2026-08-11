@@ -277,8 +277,12 @@ test('el universo enriquecido por el motor alimenta el embudo de la hoja', () =>
    consultor: una fórmula que Excel no podía leer y un ajuste que salía en cero.
    ───────────────────────────────────────────────────────────────────────────── */
 
-/* Con 3 comparables el bloque de la hoja Datos ocupa las filas 15, 16 y 17: la
-   parte examinada va en A4:B11 y el encabezado de comparables en la 14. */
+/* Con los doce rubros del ESF más los tres del estado de resultados, la parte
+   examinada ocupa A4:B18, la tasa cae en la 19 y, con 3 comparables, el bloque de
+   comparables ocupa las filas 24, 25 y 26 (encabezado en la 23). Las pruebas de
+   abajo no fijan estos números a mano: los derivan de la propia hoja, con el mismo
+   criterio que la prueba de caracterización de más adelante, para no volver a
+   mentir la próxima vez que `RUBROS_EXAMINADA` cambie de tamaño. */
 const ESTUDIO3 = {
   ...ESTUDIO,
   prime: 7.37,
@@ -309,12 +313,14 @@ test('ninguna fórmula se emite con el «=» delante', () => {
   assert.deepStrictEqual(malas, [], 'fórmulas con «=» inicial: ' + JSON.stringify(malas.slice(0, 3)));
 });
 
-test('la tasa se escribe una sola vez, en Datos!B11, y en porcentaje', () => {
+test('la tasa se escribe una sola vez, en su propia fila, y en porcentaje', () => {
   const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
-  const b11 = datos.celdas[10][1];
-  assert.strictEqual(b11.v, 0.0737, 'prime llega en porcentaje y se divide entre 100 aquí');
-  assert.strictEqual(b11.z, '0.00%');
-  assert.strictEqual(datos.celdas[10][0].v, 'Tasa de interés de referencia (Prime Rate)');
+  const filaTasaIdx = datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === 'Tasa de interés de referencia (Prime Rate)');
+  assert.ok(filaTasaIdx >= 0, 'existe la fila de la tasa');
+  const celda = datos.celdas[filaTasaIdx][1];
+  assert.strictEqual(celda.v, 0.0737, 'prime llega en porcentaje y se divide entre 100 aquí');
+  assert.strictEqual(celda.z, '0.00%');
 });
 
 test('las tres comparables toman la tasa de esa única celda, no una propia', () => {
@@ -322,36 +328,41 @@ test('las tres comparables toman la tasa de esa única celda, no una propia', ()
      como valor fijo: tres tasas distintas en la misma columna, y dos comparables
      con 0 %, es decir, sin ajuste alguno. */
   const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
-  /* Fila 15 y no 14: la fila «Ámbito de la muestra» se inserta después de la tasa y
-     antes de la sección de comparables, así que el bloque completo baja una fila. */
+  const filaTasa = datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === 'Tasa de interés de referencia (Prime Rate)') + 1;
+  const filaHdrComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Compañía');
   for (let i = 0; i < 3; i++) {
-    const tasa = datos.celdas[15 + i][8];
-    assert.strictEqual(tasa.f, '$B$11', `la comparable ${i + 1} debería referenciar la celda única`);
+    const tasa = datos.celdas[filaHdrComp + 1 + i][8];
+    assert.strictEqual(tasa.f, `$B$${filaTasa}`, `la comparable ${i + 1} debería referenciar la celda única`);
     assert.strictEqual(tasa.v, undefined, 'y no traer un valor propio quemado');
   }
 });
 
 test('la hoja Datos documenta de dónde sale la tasa y a quién se aplica', () => {
   const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
-  /* Columna 11 y no 10: la columna «Ámbito» (J) se insertó en la tabla de comparables
-     y empujó una posición a la derecha este bloque de trazabilidad, que vivía en K–M
-     y ahora vive en L–N. */
+  /* El bloque de trazabilidad de la tasa vive en las columnas L–N (índices 11 y 12),
+     anotado siempre en las filas 3ª a 7ª de la hoja (índices 2 a 6): esas filas son
+     fijas y no se mueven al ampliar RUBROS_EXAMINADA, porque el bloque no forma
+     parte de la lista de rubros. */
   const etiquetas = [2, 3, 4, 5, 6].map((r) => datos.celdas[r][11] && datos.celdas[r][11].v);
   assert.ok(etiquetas[0].startsWith('PARÁMETRO'), 'el bloque arranca con su título');
   assert.deepStrictEqual(etiquetas.slice(1), ['Tasa aplicada', 'Fuente', 'Aplicación', 'Convención']);
   assert.match(datos.celdas[4][12].v, /RIFSPBLPNA/, 'la fuente cita la serie, no solo el número');
-  assert.strictEqual(datos.celdas[3][12].f, '$B$11', 'el bloque refleja la celda editable, no la duplica');
+  const filaTasa = datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === 'Tasa de interés de referencia (Prime Rate)') + 1;
+  assert.strictEqual(datos.celdas[3][12].f, `$B$${filaTasa}`,
+    'el bloque refleja la celda editable, no la duplica');
 });
 
 test('el texto de «Aplicación» cita la dirección completa de la tasa, no una a medias', () => {
-  /* Regresión: un literal de plantilla reciclaba `celdaTasa` ("B11", sin el primer
-     "$") dentro de un texto que ya traía un "$" antes de la interpolación. En JS eso
-     NO produce dos signos de dólar seguidos: el primero queda literal y el segundo es
-     el que abre `${...}`, así que salía «=$B11» en vez de «=$B$11». La fórmula real
-     (fila «Tasa aplicada») estaba bien; lo que mentía era el texto que la describe
-     para quien audita el libro. */
+  /* Regresión: un literal de plantilla reciclaba `celdaTasa` (p.ej. "B19", sin el
+     primer "$") dentro de un texto que ya traía un "$" antes de la interpolación. En
+     JS eso NO produce dos signos de dólar seguidos: el primero queda literal y el
+     segundo es el que abre `${...}`, así que salía «=$B19» en vez de «=$B$19». La
+     fórmula real (fila «Tasa aplicada») estaba bien; lo que mentía era el texto que la
+     describe para quien audita el libro. */
   const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
-  const direccionTasa = `=${datos.celdas[3][12].f}`; // p.ej. '=$B$11', a partir de la fórmula real
+  const direccionTasa = `=${datos.celdas[3][12].f}`; // p.ej. '=$B$19', a partir de la fórmula real
   const aplicacion = datos.celdas[5][12].v;
   assert.ok(aplicacion.includes(direccionTasa),
     `«Aplicación» debería citar la dirección completa ${direccionTasa}: ${aplicacion}`);
@@ -359,13 +370,22 @@ test('el texto de «Aplicación» cita la dirección completa de la tasa, no una
 
 test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', () => {
   /* Sin el factor de base, la columna Q salía dividida por el monto de las ventas y
-     los escenarios «+PP&E» y «PP&E» reproducían a los que no llevan PP&E. */
+     los escenarios «+PP&E» y «PP&E» reproducían a los que no llevan PP&E. Las filas
+     se derivan de la propia hoja Datos, no de un número fijo: son las que mueve
+     ampliar RUBROS_EXAMINADA. */
   const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const filaDe = (etiqueta) => datos.celdas.findIndex((f) => f && f[0] && f[0].v === etiqueta) + 1;
+  const fPpe = filaDe('Propiedad, planta y equipo');
+  const fVentas = filaDe('Ventas netas');
+  const fCosto = filaDe('Costo de ventas');
+  const fGastos = filaDe('Gastos operativos');
+
   const mo = hojas.find((h) => h.nombre === 'MO');
-  assert.strictEqual(mo.celdas[2][16].f, '((H3/M3)-(Datos!$B$10/Datos!$B$4))*(M3*I3)');
+  assert.strictEqual(mo.celdas[2][16].f, `((H3/M3)-(Datos!$B$${fPpe}/Datos!$B$${fVentas}))*(M3*I3)`);
   const ncp = hojas.find((h) => h.nombre === 'NCP');
   assert.strictEqual(ncp.celdas[2][16].f,
-    '((H3/((C3-G3)+D3))-(Datos!$B$10/(Datos!$B$5+Datos!$B$6)))*(M3*I3)',
+    `((H3/((C3-G3)+D3))-(Datos!$B$${fPpe}/(Datos!$B$${fCosto}+Datos!$B$${fGastos})))*(M3*I3)`,
     'NCP toma el ratio sobre el denominador depurado pero escala con la base del método');
 });
 
@@ -392,9 +412,15 @@ test('el libro trae una hoja de diagnóstico con las comprobaciones sobre los da
   assert.ok(dg, 'debería existir la hoja de diagnóstico');
   const texto = JSON.stringify(dg.celdas);
   assert.match(texto, /SUMPRODUCT/, 'los conteos son fórmulas, no valores calculados en JS');
-  /* Fila 16 y no 15: la fila «Ámbito de la muestra» corre la sección de comparables
-     una posición hacia abajo en la hoja Datos. */
-  assert.match(texto, /Datos!\$C\$16:\$C\$18/, 'y apuntan al rango real de comparables');
+  /* El rango de comparables se deriva de la hoja Datos —la tabla de comparables es
+     lo último que se escribe ahí— y no de un número fijo: son las filas que ampliar
+     RUBROS_EXAMINADA corre hacia abajo. */
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const filaHdrComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Compañía') + 1;
+  const filaComp0 = filaHdrComp + 1;
+  const filaCompN = datos.celdas.length;
+  assert.match(texto, new RegExp(`Datos!\\$C\\$${filaComp0}:\\$C\\$${filaCompN}`),
+    'y apuntan al rango real de comparables');
   /* Una fila por comparable en la sección de PP&E, referida a la hoja MO para no
      reimplementar el ajuste una segunda vez. */
   assert.match(texto, /MO!Q3/);
@@ -415,6 +441,39 @@ test('el emisor descuenta el segmento excluido, no el llamador', () => {
   ).find((h) => h.nombre === 'Datos');
   const ventas = datos.celdas.find((f) => f && f[0] && f[0].v === 'Ventas netas');
   assert.strictEqual(ventas[1].v, 880);
+});
+
+test('la hoja Datos trae el ESF completo con el A.V. como fórmula viva', () => {
+  const estudio = {
+    ...ESTUDIO,
+    t_cash: 10, t_inv_assoc: 20, t_tax: 30, t_act_curr: 200,
+    t_intang: 40, t_dif: 50, t_act_nocurr: 400, t_act_tot: 600,
+  };
+  const datos = hojasMemoriaRangoOptimo(estudio, null).find((h) => h.nombre === 'Datos');
+  const fila = (etiqueta) => datos.celdas.find((f) => f && f[0] && f[0].v === etiqueta);
+
+  /* Los doce rubros que la ingesta sabe leer. */
+  ['Efectivo y equivalentes de efectivo', 'Inversiones asociadas',
+    'Cuentas por cobrar', 'Inventarios', 'Activos por impuestos corrientes',
+    'Total, Activo corriente', 'Propiedad, planta y equipo', 'Intangibles',
+    'Diferidos', 'Total, Activos no corrientes', 'Total, Activos',
+    'Cuentas por pagar'].forEach((r) => {
+    assert.ok(fila(r), `falta el rubro «${r}» en la hoja Datos`);
+  });
+
+  /* El A.V. es fórmula sobre el total de activos, no un número ya cocinado. */
+  const filaTot = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Total, Activos') + 1;
+  const av = fila('Efectivo y equivalentes de efectivo')[2];
+  assert.ok(av && av.f, 'el A.V. se emite como fórmula');
+  assert.ok(av.f.includes(`$B$${filaTot}`),
+    `el A.V. divide sobre el total de activos: ${av.f}`);
+
+  /* El total de activos no lleva A.V.: sería 100 % por definición y no informa. */
+  assert.strictEqual(fila('Total, Activos')[2], undefined);
+
+  /* Las cuentas por pagar tampoco: un pasivo sobre el total de activos no significa
+     nada, y es el mismo criterio que aplica filasEsfAnexoA en docxRelleno.js. */
+  assert.strictEqual(fila('Cuentas por pagar')[2], undefined);
 });
 
 test('las referencias del contribuyente apuntan al rubro, no a una fila fija', () => {
