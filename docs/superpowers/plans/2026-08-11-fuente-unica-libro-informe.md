@@ -1487,6 +1487,26 @@ test('el segmento excluido sale de un solo sitio', () => {
 });
 ```
 
+> **Refuerzos exigidos al implementar (2026-08-11), y el porqué.** El código de prueba de arriba
+> **pasa en verde con el filtro de ámbito roto**: solo compara valores en caché, y esos siguen
+> viniendo del motor pase lo que pase con la serie que el libro escribe. Es la tautología que
+> esta tarea tiene que evitar por encima de todo, y estaba en el plan. Hacen falta tres cosas
+> más, todas verificadas en la ejecución real:
+>
+> 1. **Que el libro reproduzca su estadística desde su PROPIA serie.** Leer las celdas de serie
+>    del libro, ordenarlas y comprobar que el cuartil sale igual que el que publica. Eso es lo
+>    que cae cuando el emisor deja de filtrar por ámbito, y lo que el valor en caché tapa.
+> 2. **Cotejar las FÓRMULAS emitidas, no solo los valores.** Cruzar los argumentos de `QUARTILE`
+>    entre mediana y P75 no lo detectaba ninguna prueba del repositorio. Y el cotejo tiene que
+>    cubrir **también** la fórmula del indicador del contribuyente (`testedFor`) y la de la
+>    Conclusión: si solo se cotejan los cinco estadísticos, cambiar la definición del indicador
+>    de MB —o cruzar `filaP25` con `filaP75` en la Conclusión— pasa en verde, porque el valor en
+>    caché sigue siendo el del motor y la discrepancia solo aparece al recalcular en Excel.
+> 3. **Pisos en cada bucle**: afirmar cuántas comparaciones se hicieron y que todas tenían
+>    valor. Un bucle que itera en vacío pasa sin comprobar nada.
+>
+> Y comprobar la prueba **por mutación**: romper algo real, ver el rojo, deshacerlo a mano.
+
 - [ ] **Step 2: Correr las pruebas**
 
 Run: `node --test frontend/src/services/paridadLibroInforme.test.js`
