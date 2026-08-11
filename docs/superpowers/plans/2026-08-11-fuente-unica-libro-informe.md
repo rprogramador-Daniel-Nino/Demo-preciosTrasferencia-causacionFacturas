@@ -653,7 +653,7 @@ Expected: PASS
 
 ```bash
 git add frontend/src/services/memoriaCalculoRangoOptimo.js frontend/src/services/memoriaCalculoRangoOptimo.test.js
-git commit -m "feat: la hoja Datos trae el ESF completo con el analisis vertical por formula"
+git commit -m "feat: la hoja Datos trae el ESF completo con el análisis vertical por fórmula"
 ```
 
 ---
@@ -839,7 +839,7 @@ Expected: PASS
 
 ```bash
 git add frontend/src/services/memoriaCalculoRangoOptimo.js frontend/src/services/memoriaCalculoRangoOptimo.test.js
-git commit -m "fix: el cuartil del libro respeta el ambito y la muestra minima del motor"
+git commit -m "fix: el cuartil del libro respeta el ámbito y la muestra mínima del motor"
 ```
 
 ---
@@ -1155,7 +1155,7 @@ Expected: PASS
 
 ```bash
 git add frontend/src/services/memoriaCalculoRangoOptimo.js frontend/src/services/memoriaCalculoRangoOptimo.test.js
-git commit -m "feat: el libro de soporte emite el valor calculado junto a cada formula"
+git commit -m "feat: el libro de soporte emite el valor calculado junto a cada fórmula"
 ```
 
 ---
