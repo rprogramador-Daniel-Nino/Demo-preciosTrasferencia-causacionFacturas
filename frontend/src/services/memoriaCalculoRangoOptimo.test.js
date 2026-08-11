@@ -402,3 +402,32 @@ test('el emisor descuenta el segmento excluido, no el llamador', () => {
   const ventas = datos.celdas.find((f) => f && f[0] && f[0].v === 'Ventas netas');
   assert.strictEqual(ventas[1].v, 880);
 });
+
+test('las referencias del contribuyente apuntan al rubro, no a una fila fija', () => {
+  /* Esta prueba pasa antes y después del refactor: es la red que impide que ampliar
+     la hoja Datos deje las hojas de método apuntando al rubro equivocado, que es un
+     fallo que no revienta —da un número creíble y falso—. */
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const mo = hojas.find((h) => h.nombre === 'MO');
+
+  const filaDe = (etiqueta) => datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === etiqueta) + 1;
+
+  /* Fila 3 de la hoja MO = primera comparable; índice 13 = columna N = Aj.CxC. */
+  const ajCxC = mo.celdas[2][13].f;
+  const ajInv = mo.celdas[2][15].f;
+  const ajPpe = mo.celdas[2][16].f;
+
+  assert.ok(ajCxC.includes(`Datos!$B$${filaDe('Cuentas por cobrar')}`),
+    `Aj.CxC apunta al rubro de CxC: ${ajCxC}`);
+  assert.ok(ajInv.includes(`Datos!$B$${filaDe('Inventarios')}`),
+    `Aj.Inv apunta al rubro de inventarios: ${ajInv}`);
+  assert.ok(ajPpe.includes(`Datos!$B$${filaDe('Propiedad, planta y equipo')}`),
+    `Aj.PP&E apunta al rubro de PP&E: ${ajPpe}`);
+
+  /* La columna Tasa de cada comparable apunta a la fila de la tasa. */
+  const filaTasa = filaDe('Tasa de interés de referencia (Prime Rate)');
+  const primeraComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Buena SA');
+  assert.strictEqual(datos.celdas[primeraComp][8].f, `$B$${filaTasa}`);
+});
