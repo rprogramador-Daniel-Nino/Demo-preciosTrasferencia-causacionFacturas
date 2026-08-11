@@ -241,8 +241,14 @@ export function cuartilInterpolado(serieOrdenada, p) {
 
 /* Un comparable entra en la serie según el filtro de ámbito del estudio, el mismo
    `cmode` que aplica el panel: 'intl' solo internacionales, 'nac' solo nacionales,
-   cualquier otro valor las toma todas. */
-const entraPorAmbito = (amb, modo) => (
+   cualquier otro valor las toma todas.
+
+   Se exporta porque el emisor del libro (memoriaCalculoRangoOptimo.js) necesita el
+   mismo criterio para poner el valor en caché de su columna de ámbito. Replicarlo allá
+   habría dejado tres copias del criterio —esta, la del libro y la fórmula de Excel— y
+   la fórmula ya es una copia irreducible: está en otro lenguaje. Dos son el mínimo;
+   tres eran una de más. */
+export const entraPorAmbito = (amb, modo) => (
   modo === 'intl' ? amb === 'Int' : modo === 'nac' ? amb === 'Nac' : true
 );
 

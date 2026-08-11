@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { hojasMemoriaRangoOptimo, TERMINOS_HOLDING_HOJA } from './memoriaCalculoRangoOptimo.js';
+import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
 import { enriquecerUniverso } from './comparablesEngine.js';
 import { TERMINOS_HOLDING } from './filtrosComparablesPatch.js';
 
@@ -559,6 +560,188 @@ test('el cuartil del libro se calcula sobre el universo filtrado, no sobre todas
   const aa = mo.celdas[2][26].f;
   assert.ok(aa.includes('Z3') && aa.includes('S3'),
     `la serie del rango depende del ámbito y del valor: ${aa}`);
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   El valor en caché de cada celda derivada.
+
+   Hasta agosto de 2026 el libro no traía ni un número: todas sus celdas derivadas
+   eran fórmula sin valor, así que cualquier lector que no recalcule —un visor, un
+   convertidor a PDF, la propia librería al releerlo— veía el archivo vacío. Peor: la
+   matemática del libro y la del informe eran dos implementaciones distintas de lo
+   mismo y nada cotejaba que coincidieran.
+
+   Estas pruebas fijan las dos cosas a la vez: que la celda trae valor Y que ese valor
+   es EL DEL MOTOR —el mismo `analizarRangoAjustado` que alimenta las tablas del
+   .docx—, no un número parecido calculado aparte.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Cuatro comparables: tres nacionales y una internacional de margen extremo, para
+   que el filtro de ámbito cambie el resultado de forma observable. */
+const ESTUDIO_4 = {
+  t_s: 1000, t_c: 600, t_op: 200, t_ar: 100, t_inv: 50, t_ap: 80, t_ppe: 300,
+  prime: 7.37, cmode: 'all', seg_excluido: 0,
+  comparables: [
+    { name: 'Nacional A', amb: 'Nac', s: 500, c: 300, op: 100, ar: 50, inv: 20, ap: 40, ppe: 100 },
+    { name: 'Nacional B', amb: 'Nac', s: 800, c: 500, op: 180, ar: 70, inv: 30, ap: 50, ppe: 120 },
+    { name: 'Nacional C', amb: 'Nac', s: 600, c: 350, op: 150, ar: 60, inv: 25, ap: 45, ppe: 110 },
+    { name: 'Internacional X', amb: 'Int', s: 900, c: 100, op: 100, ar: 10, inv: 5, ap: 5, ppe: 10 },
+  ],
+};
+
+/* Los siete sabores en el orden que fija `AJUSTES` dentro del módulo, que ES el orden
+   de las columnas S–Y de las hojas de método y el de las filas de la hoja Resumen.
+   Se escribe aquí a propósito: reordenar `AJUSTES` cruzaría los valores en caché con
+   las fórmulas y el libro saldría con cifras creíbles en el sitio errado sin que nada
+   reventara. Este literal es lo único que lo delata. */
+const SABORES = ['ninguno', 'aar', 'aap', 'inv', 'aar_aap_inv', 'aar_aap_inv_ppe', 'ppe'];
+
+const hojaDe = (estudio, nombre) => hojasMemoriaRangoOptimo(estudio, null)
+  .find((h) => h.nombre === nombre);
+/* La etiqueta de las filas de estadística va en la columna R (índice 17). En las filas
+   de comparable esa columna es el denominador ajustado, que no lleva valor, así que
+   nunca colisiona con una etiqueta. */
+const filaEtq = (hoja, etq) => hoja.celdas.find((f) => f && f[17] && f[17].v === etq);
+
+test('las celdas derivadas del libro traen el valor calculado junto a la fórmula', () => {
+  const mo = hojasMemoriaRangoOptimo(ESTUDIO_4, null).find((h) => h.nombre === 'MO');
+  const filaCon = (etq) => mo.celdas.find((f) => f && f[17] && f[17].v === etq);
+
+  /* Indicador por comparable: fila 3, columna S (índice 18). */
+  const sinAjuste = mo.celdas[2][18];
+  assert.ok(sinAjuste.f, 'sigue siendo fórmula: el libro tiene que poder recalcularse');
+  assert.strictEqual(typeof sinAjuste.v, 'number',
+    'y trae el valor, para que no salga vacío en un lector que no recalcule');
+
+  /* Estadística. */
+  const p25 = filaCon('P25 (cuartil inferior)')[26];
+  assert.ok(p25.f && typeof p25.v === 'number', 'el P25 trae fórmula y valor');
+
+  /* Y el valor es el del motor, no otro. */
+  const esperado = analizarRangoAjustado(ESTUDIO_4, 'MO', 'ninguno');
+  assert.strictEqual(p25.v, esperado.stats.p25);
+  assert.strictEqual(mo.celdas[2][18].v, esperado.filas[0].valor);
+
+  /* Conclusión: fórmula de texto con su valor. */
+  const concl = filaCon('Conclusión')[26];
+  assert.ok(concl.f, 'la conclusión sigue siendo fórmula');
+  assert.strictEqual(concl.v, esperado.cumple);
+});
+
+test('sin muestra suficiente el libro no publica estadística ni conclusión', () => {
+  const dos = { ...ESTUDIO_4, comparables: ESTUDIO_4.comparables.slice(0, 2) };
+  const mo = hojasMemoriaRangoOptimo(dos, null).find((h) => h.nombre === 'MO');
+  const filaCon = (etq) => mo.celdas.find((f) => f && f[17] && f[17].v === etq);
+  /* El P25 es una celda NUMÉRICA: sin rango sale sin valor, no con la cadena vacía.
+     Verificado contra xlsx-js-style: `{t:'n', f, v:''}` emite `<v></v>`, que en una
+     celda numérica es XML inválido y manda el libro a modo reparación. Sin `v` la
+     celda queda `<c><f>…</f></c>` y Excel resuelve la guarda a "" al abrir. */
+  const p25 = filaCon('P25 (cuartil inferior)')[26];
+  assert.ok(p25.f, 'la fórmula con guarda sigue ahí');
+  assert.strictEqual(p25.v, undefined);
+  /* La conclusión sí es celda de TEXTO, y ahí la cadena vacía es un valor legítimo. */
+  assert.strictEqual(filaCon('Conclusión')[26].v, '');
+});
+
+test('cada columna S–Y trae el valor del sabor que le corresponde, en el orden de AJUSTES', () => {
+  const mo = hojaDe(ESTUDIO_4, 'MO');
+  SABORES.forEach((sabor, k) => {
+    const esperado = analizarRangoAjustado(ESTUDIO_4, 'MO', sabor);
+    ESTUDIO_4.comparables.forEach((_, i) => {
+      const celda = mo.celdas[2 + i][18 + k];
+      assert.ok(celda.f, `columna ${18 + k} (${sabor}): sigue siendo fórmula`);
+      assert.strictEqual(celda.v, esperado.filas[i].valor,
+        `columna ${18 + k}, comparable ${i}, sabor ${sabor}`);
+    });
+  });
+  /* Y las siete columnas son distintas ENTRE SÍ, columna completa contra columna
+     completa: si dos coincidieran, intercambiarlas pasaría inadvertido y la
+     comprobación de arriba no valdría nada. Se comparan los vectores y no la primera
+     celda porque «Nacional A» tiene, a propósito, los mismos ratios de CxC y de CxP que
+     el contribuyente, así que en esa fila «sin ajuste», «CxC» y «CxP» dan el mismo
+     número —el ajuste es exactamente cero— y no distinguirían nada. */
+  const porColumna = SABORES.map((_, k) => JSON.stringify(
+    ESTUDIO_4.comparables.map((_c, i) => mo.celdas[2 + i][18 + k].v)));
+  assert.strictEqual(new Set(porColumna).size, 7,
+    `las siete columnas S–Y deberían ser distintas entre sí:\n${porColumna.join('\n')}`);
+});
+
+test('la estadística del libro es la del motor, sabor por sabor', () => {
+  const mo = hojaDe(ESTUDIO_4, 'MO');
+  const ESTADISTICOS = [
+    ['Mínimo', 'min'], ['P25 (cuartil inferior)', 'p25'], ['Mediana (P50)', 'med'],
+    ['P75 (cuartil superior)', 'p75'], ['Máximo', 'max'],
+  ];
+  SABORES.forEach((sabor, k) => {
+    const esperado = analizarRangoAjustado(ESTUDIO_4, 'MO', sabor);
+    ESTADISTICOS.forEach(([etq, clave]) => {
+      const celda = filaEtq(mo, etq)[26 + k];
+      assert.ok(celda.f, `${etq} / ${sabor}: sigue siendo fórmula`);
+      assert.strictEqual(celda.v, esperado.stats[clave], `${etq} / ${sabor}`);
+    });
+    /* El indicador del contribuyente y la conclusión, del mismo sabor. */
+    assert.strictEqual(filaEtq(mo, 'Indicador del contribuyente')[26 + k].v, esperado.sujeto,
+      `Indicador del contribuyente / ${sabor}`);
+    assert.strictEqual(filaEtq(mo, 'Conclusión')[26 + k].v, esperado.cumple,
+      `Conclusión / ${sabor}`);
+  });
+});
+
+test('el indicador del contribuyente sale del motor también en Cost Plus y NCP', () => {
+  /* `pliOf` solo conoce MO, MB y Berry; el motor sabe construir los cinco. Por esta vía
+     las hojas de Cost Plus y NCP también publican el indicador del contribuyente. */
+  ['MO', 'MB', 'Berry', 'CostPlus', 'NCP'].forEach((hoja) => {
+    const h = hojaDe(ESTUDIO_4, hoja);
+    const celda = filaEtq(h, 'Indicador del contribuyente')[26];
+    const esperado = analizarRangoAjustado(ESTUDIO_4, hoja, 'ninguno');
+    assert.ok(celda.f, `${hoja}: sigue siendo fórmula`);
+    assert.strictEqual(typeof celda.v, 'number', `${hoja}: trae valor`);
+    assert.strictEqual(celda.v, esperado.sujeto, `${hoja}: el valor es el del motor`);
+  });
+});
+
+test('la columna de ámbito y la serie filtrada traen el criterio ya resuelto', () => {
+  const estudio = { ...ESTUDIO_4, cmode: 'nac' };
+  const mo = hojaDe(estudio, 'MO');
+  const esperado = analizarRangoAjustado(estudio, 'MO', 'ninguno');
+  /* Índice 25 = Z (entra por ámbito), 26 = AA (serie del sabor «sin ajuste»). Las tres
+     primeras comparables son nacionales; la cuarta —fila de índice 5—, internacional. */
+  assert.strictEqual(mo.celdas[2][25].v, 'Sí');
+  assert.strictEqual(mo.celdas[5][25].v, 'No', 'la internacional no entra con cmode nac');
+  assert.strictEqual(mo.celdas[2][26].v, esperado.filas[0].valor);
+  /* La fila excluida va SIN valor: ni cero —fingiría una observación que no existe y
+     hundiría el rango— ni cadena vacía, que en una celda numérica es XML inválido. */
+  assert.strictEqual(mo.celdas[5][26].v, undefined);
+  assert.ok(mo.celdas[5][26].f, 'pero conserva la fórmula, que Excel resuelve a ""');
+  /* Su indicador SÍ se publica en S: las tablas del informe listan también las
+     comparables fuera de ámbito con su margen; lo que no puede es cuartilarlas. */
+  assert.strictEqual(mo.celdas[5][18].v, esperado.filas[3].valor);
+});
+
+test('las columnas A–I traen el literal que el emisor ya tiene, sin dejar de ser referencia', () => {
+  const mo = hojaDe(ESTUDIO_4, 'MO');
+  const c0 = ESTUDIO_4.comparables[0];
+  const f = mo.celdas[2];
+  assert.strictEqual(f[0].v, 'Nacional A');
+  assert.deepStrictEqual(f.slice(1, 8).map((c) => c.v),
+    [c0.s, c0.c, c0.op, c0.ar, c0.inv, c0.ap, c0.ppe],
+    'B–H en el orden de la tabla de Datos: ventas, costo, gastos, CxC, inv, CxP, PP&E');
+  assert.strictEqual(f[8].v, ESTUDIO_4.prime / 100,
+    'la tasa viaja en porcentaje y el emisor la divide entre 100');
+  f.slice(0, 9).forEach((c, k) => assert.ok(c.f && c.f.startsWith('Datos!'),
+    `la columna ${k} sigue siendo referencia a la hoja Datos`));
+});
+
+test('los intermedios del ajuste (J–R) siguen sin valor: los deriva Excel', () => {
+  /* Calcularlos aquí sería una segunda implementación de la matemática que este plan
+     retira, que es justo el defecto que viene a matar. El motor no los expone
+     todavía; mientras no lo haga, Excel los deriva al abrir el archivo. */
+  const mo = hojaDe(ESTUDIO_4, 'MO');
+  for (let col = 9; col <= 17; col++) {
+    assert.ok(mo.celdas[2][col].f, `la columna ${col} es fórmula`);
+    assert.strictEqual(mo.celdas[2][col].v, undefined,
+      `la columna ${col} no debe traer valor en caché todavía`);
+  }
 });
 
 test('la hoja Resumen lee la estadística de AA-AG, no de S-Y, tras el traslado de Task 5', () => {
