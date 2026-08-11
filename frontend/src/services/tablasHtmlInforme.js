@@ -179,16 +179,21 @@ export function localizarTablasHtml(html, nombres) {
   return encontradas.sort((x, y) => x.inicio - y.inicio);
 }
 
-/* Las `<tr>` de una tabla, con sus posiciones. */
-function filasDe(tablaHtml) {
-  return [...tablaHtml.matchAll(/<tr(?:\s[^>]*)?>[\s\S]*?<\/tr\s*>/gi)]
+/** Las `<tr>` de una tabla, con sus posiciones. Sirve igual con `<thead>`/`<tbody>`. */
+export function filasDe(tablaHtml) {
+  return [...String(tablaHtml || '').matchAll(/<tr(?:\s[^>]*)?>[\s\S]*?<\/tr\s*>/gi)]
     .map((m) => ({ xml: m[0], inicio: m.index, fin: m.index + m[0].length }));
 }
 
-/* Las celdas de una fila: su etiqueta, sus atributos y su contenido. */
-function celdasDe(filaHtml) {
-  return [...filaHtml.matchAll(/<(td|th)((?:\s[^>]*)?)>([\s\S]*?)<\/\1\s*>/gi)]
+/** Las celdas de una fila: su etiqueta, sus atributos y su contenido. */
+export function celdasDe(filaHtml) {
+  return [...String(filaHtml || '').matchAll(/<(td|th)((?:\s[^>]*)?)>([\s\S]*?)<\/\1\s*>/gi)]
     .map((m) => ({ etiqueta: m[1], atributos: m[2] || '', contenido: m[3] }));
+}
+
+/** Escapa texto para insertarlo en el HTML de la plantilla. */
+export function escaparTextoHtml(texto) {
+  return escaparHtml(texto);
 }
 
 /**

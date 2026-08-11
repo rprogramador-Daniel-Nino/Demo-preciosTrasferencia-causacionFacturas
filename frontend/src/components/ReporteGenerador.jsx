@@ -309,10 +309,13 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       ? [{
         nivel: 'aviso',
         origen: 'tablas',
-        texto: 'No se encontró en tu plantilla ' + r.avisosTablas.length + ' tabla(s) del motor (' +
-          r.avisosTablas.join(', ') + '), así que conservan el contenido que ya traían. ' +
-          'Revísalas una por una antes de radicar: si tu plantilla las rotula de otro modo, ' +
-          'dilo para añadir ese nombre.',
+        /* La lista mezcla nombres de tabla y avisos que ya traen su propia explicación —el
+           del ANEXO B nombra las comparables a las que falta el estado financiero—, así que
+           el encabezado no puede dar por hecho que todo sea «una tabla no encontrada». */
+        texto: 'Esto no se actualizó con los datos del estudio: ' + r.avisosTablas.join(' · ') +
+          '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
+          'revísalo antes de radicar; si alguna tabla está rotulada de otro modo, dilo para ' +
+          'añadir ese nombre.',
       }]
       : [];
     setAvisos(avisosDeTablas.concat(revisarAntesDeGenerar({
