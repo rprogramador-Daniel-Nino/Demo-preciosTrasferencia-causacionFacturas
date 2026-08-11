@@ -707,6 +707,40 @@ test('el rótulo embebido exige el nombre exacto y no una celda que lo contenga'
   assert.strictEqual(localizarBloqueTabla(xml, 'Margen Operacional'), null);
 });
 
+/* Prosa real de la plantilla de End Game: el párrafo va seguido de la tabla de definiciones
+   del método TU, 79 000 caracteres antes del rótulo verdadero de la tabla de márgenes. */
+const PROSA_METODO = '<w:p><w:t>Para el análisis del método TU se consideró que el indicador '
+  + 'financiero de rentabilidad más apropiado es el Margen Operacional (MO).</w:t></w:p>';
+
+test('la tabla de márgenes se localiza por su nombre, sea cual sea el prefijo del rótulo', () => {
+  /* El nombre de la tabla es lo único estable: el prefijo se renumera al reordenar el informe y
+     hay plantillas que lo rotulan sin número. La clave corta «Margen Operacional», en cambio,
+     casa por inclusión con la prosa del método —que también va seguida de una tabla— y esa
+     prosa está antes en el documento, así que gana por posición en cuanto el número no
+     desempata. Verificado contra el word/document.xml de End Game. */
+  const completo = 'Margen Operacional Compañías Comparables';
+  const conRotulo = (rotulo) => conTabla(PROSA_METODO)
+    + `<w:p><w:t>${rotulo}</w:t></w:p>`
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  for (const rotulo of [
+    'Tabla 19. Margen Operacional Compañías Comparables',
+    'Tabla 21. Margen Operacional Compañías Comparables',
+    'Margen Operacional Compañías Comparables',
+    'TABLA N° 7: MARGEN OPERACIONAL COMPAÑÍAS COMPARABLES',
+  ]) {
+    const xml = conRotulo(rotulo);
+    const b = localizarBloqueTabla(xml, completo);
+    assert.ok(b, `debe encontrarla con el rótulo «${rotulo}»`);
+    assert.strictEqual(xml.slice(b.inicio, b.fin).includes('márgenes viejos'), true,
+      `el bloque de «${rotulo}» debe abarcar la tabla de márgenes y no otra`);
+    /* Y el nombre corto se lleva la prosa en su lugar, que es el fallo que esto cierra. */
+    assert.ok(localizarBloqueTabla(xml, 'Margen Operacional', { numeros: [19] })
+      .titulo.startsWith('Para el análisis') || /Tabla 19\./.test(rotulo),
+      `con «${rotulo}» el nombre corto se queda con la prosa`);
+  }
+});
+
 test('un título dentro de una fila que no es la primera no se toma por título de la tabla', () => {
   /* Si valiera cualquier fila, una celda que mencione el nombre —el cuerpo de la matriz de
      rechazo lo hace— secuestraría la sustitución de la tabla entera. */
@@ -775,6 +809,46 @@ test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
   assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
   assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
     'deben quedar las dos tablas verticales regeneradas');
+});
+
+test('la tabla de márgenes se actualiza con cualquier prefijo, sin tocar las definiciones', () => {
+  /* El caso que se reportó el 2026-08-11: la tabla del informe salía con los márgenes del
+     cliente anterior. Con la clave corta, la prosa del método ganaba por posición y se llevaba
+     la sustitución, dejando además destruida la tabla de definiciones: dos tablas mal. */
+  for (const rotulo of [
+    'Tabla 21. Margen Operacional Compañías Comparables',
+    'Margen Operacional Compañías Comparables',
+  ]) {
+    const xml = conTabla(PROSA_METODO)
+      + `<w:p><w:t>${rotulo}</w:t></w:p>`
+      + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+    const avisos = [];
+    const salida = actualizarTablasOperacionesOoxml(xml, {
+      anio: 2025, ent: 'ACME', pli: 'MO',
+      comparables: [{ name: 'Alfa SA', s: 1000, c: 700, op: 200 }],
+    }, avisos);
+
+    assert.ok(!salida.includes('márgenes viejos'), `con «${rotulo}» debe actualizarse`);
+    assert.ok(salida.includes('vieja'), 'y la tabla de definiciones del método quedar intacta');
+    assert.match(salida, /MO NO AJUSTADO/, 'la tabla regenerada es la de márgenes');
+    assert.ok(salida.includes('Alfa SA'), 'con los comparables del estudio');
+    assert.ok(!avisos.includes('Margen Operacional Compañías Comparables'),
+      'no debe reportarse como ausente una tabla que sí estaba');
+  }
+});
+
+test('sin el rótulo de la tabla de márgenes se avisa, en vez de sustituir la prosa del método', () => {
+  /* Antes el nombre corto encontraba la prosa y sustituía ahí: se perdían las definiciones del
+     método y los márgenes seguían siendo los del informe anterior, en silencio. Avisar deja el
+     documento intacto y el panel lo dice antes de radicar. */
+  const xml = conTabla(PROSA_METODO);
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+
+  assert.ok(salida.includes('vieja'), 'la tabla que sigue a la prosa no se toca');
+  assert.ok(!/MO NO AJUSTADO/.test(salida), 'y no se emite la tabla de márgenes donde no va');
+  assert.ok(avisos.includes('Margen Operacional Compañías Comparables'),
+    'la ausencia tiene que llegar al aviso');
 });
 
 test('una tabla macro se encuentra con el título partido en runs', () => {

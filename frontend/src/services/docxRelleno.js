@@ -818,22 +818,48 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     }
   }
 
-  // 13. Margen Operacional Compañías Comparables
-  reemplazar('Margen Operacional', (b) => {
-    const compList = filasComparablesInforme(estudio);
-    const filas19 = (compList || []).map((f) => [
-      f.nombre,
-      pStr(f.noAjustado),
-      pStr(f.ajustado)
-    ]);
-    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
-    return generarTablaOoxml(
-      tituloDe(b, 'Margen Operacional Compañías Comparables'),
-      ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
-      filas19,
-      `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
-    );
-  }, { numeros: [19] });
+  /* 13. Margen Operacional Compañías Comparables.
+
+     Se localiza por el nombre COMPLETO, no por «Margen Operacional» a secas. La clave corta
+     casa por inclusión con la prosa del propio informe: en la plantilla de End Game, el
+     párrafo «Para el análisis del método TU se consideró que el indicador financiero de
+     rentabilidad más apropiado es el Margen Operacional…» va seguido de la tabla de
+     definiciones del método, y está 79 000 caracteres ANTES del rótulo verdadero. Mientras la
+     plantilla numere la tabla como la 19 el desempate de `numeros` lo tapa; en cuanto un
+     cliente la renumera, `numeros` no filtra nada, gana el primer candidato por posición y el
+     generador sustituye la tabla de definiciones mientras la de márgenes se queda con las
+     cifras del informe anterior —el fallo que se reportó el 2026-08-11—.
+
+     El nombre de la tabla es lo único estable: el prefijo se renumera al reordenar el informe,
+     y hay plantillas que lo rotulan sin número. Por eso se busca solo por el nombre. */
+  {
+    const generarTabla19 = (b) => {
+      const compList = filasComparablesInforme(estudio);
+      const filas19 = (compList || []).map((f) => [
+        f.nombre,
+        pStr(f.noAjustado),
+        pStr(f.ajustado)
+      ]);
+      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      return generarTablaOoxml(
+        tituloDe(b, 'Margen Operacional Compañías Comparables'),
+        ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
+        filas19,
+        `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
+      );
+    };
+    /* Sin `numeros`: el prefijo «Tabla N.» cambia de una plantilla a otra —y hay plantillas que
+       rotulan la tabla sin número—, así que el número no es criterio de nada. El nombre
+       completo, en cambio, es único en el documento: se buscó sobre el word/document.xml de End
+       Game y de los trece párrafos que mencionan «margen operacional» solo uno tiene esa clave.
+
+       Tampoco se cae al nombre corto cuando no aparece. Con la clave corta el único candidato
+       que queda es la prosa, y sustituir ahí destruye la tabla de definiciones del método sin
+       tocar la de márgenes: dos tablas mal en vez de una. Si el rótulo no está, `reemplazar`
+       anota la tabla en los avisos y el panel lo dice antes de radicar, que es lo que este
+       mecanismo existe para hacer. */
+    reemplazar('Margen Operacional Compañías Comparables', generarTabla19);
+  }
 
   return doc.xml;
 }
