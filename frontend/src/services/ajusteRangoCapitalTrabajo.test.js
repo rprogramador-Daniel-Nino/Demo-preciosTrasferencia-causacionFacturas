@@ -415,6 +415,46 @@ test('el desglose y el indicador comparten los intermedios: no son dos aritméti
     `debería comprobar 320 combinaciones, comprobó ${comprobadas}`);
 });
 
+test('el contrato del desglose es todo público: ni un campo interno filtrado', () => {
+  /* La primera versión de esta función devolvía cuatro campos con prefijo `_`
+     —`_baseAjustada`, `_denomDep`, `_usaDepurado`, `_numBase`— que existían solo para que
+     `indicadorAjustado` no recalculara. Sobraban: `denomAjustado` ya resuelve los tres
+     denominadores (en Berry la venta ajustada colapsa a la base), `usaDepurado` es
+     legítimamente público —dice si `denomAjustado` rige para los siete sabores o solo para
+     los tres que restan CxC— y el numerador se elige con el criterio de método que vive
+     arriba del módulo. Esta prueba impide que vuelvan a filtrarse: un contrato con campos
+     internos es uno que el libro de soporte no puede consumir sin adivinar cuáles puede
+     mirar. */
+  const d = desgloseAjuste(COMP[0], SUJ_CORTO, 'NCP', TASA);
+  assert.deepStrictEqual(Object.keys(d).sort(), [
+    'ajusteAP', 'ajusteAR', 'ajusteINV', 'ajustePPE',
+    'base', 'denomAjustado', 'desc', 'ebit', 'usaDepurado', 'utilBruta',
+  ], 'el desglose publica exactamente estos diez campos');
+  assert.strictEqual(Object.keys(d).filter((k) => k.startsWith('_')).length, 0,
+    'y ninguno interno');
+});
+
+test('usaDepurado dice cuándo el denominador ajustado rige para los siete sabores', () => {
+  /* Es el único campo del contrato que no es una cifra, y sin él el llamador no puede
+     saber si `denomAjustado` es el depurado del método —que rige siempre— o la venta
+     ajustada, que solo rige donde se resta el ajuste de CxC. Se afirma método por método
+     y se contrasta contra el efecto observable: con denominador depurado, «solo CxP»
+     divide sobre el MISMO denominador que «CxC+CxP+Inv»; con base de ventas, no. */
+  const ESPERADO = { MO: false, MB: false, Berry: false, CostPlus: true, NCP: true };
+  for (const [metodo, esperado] of Object.entries(ESPERADO)) {
+    const c = COMP.find((x) => x.name.startsWith('Happinet')); // CxC grandes: se nota
+    const d = desgloseAjuste(c, SUJ_CORTO, metodo, TASA);
+    assert.strictEqual(d.usaDepurado, esperado, `${metodo}: usaDepurado`);
+
+    const numBase = NUMERADOR_BRUTO.has(metodo) ? d.utilBruta : d.ebit;
+    const soloCxP = indicadorAjustado(c, SUJ_CORTO, metodo, 'aap', TASA);
+    const denomEsperado = esperado ? d.denomAjustado : d.base;
+    assert.ok(Math.abs(soloCxP - (numBase + d.ajusteAP) / denomEsperado)
+      <= Math.abs(soloCxP) * 1e-12,
+      `${metodo}: «solo CxP» divide sobre ${esperado ? 'el depurado' : 'la base'}`);
+  }
+});
+
 test('el desglose devuelve null exactamente donde el indicador no se puede construir', () => {
   /* Las tres puertas de salida son las mismas, porque son la misma función: sin cifras
      de la comparable, sin ventas del contribuyente y con un método que este módulo no

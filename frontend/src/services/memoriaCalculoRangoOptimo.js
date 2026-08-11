@@ -35,6 +35,13 @@
 import {
   analizarRangoAjustado, desgloseAjuste, entraPorAmbito,
 } from './ajusteRangoCapitalTrabajo.js';
+/* El MISMO conversor que usa el motor (`cifras` lo aplica a cada cifra que recibe). Este
+   emisor usaba `Number(...) || 0`, que sobre las cadenas formateadas que escriben los
+   analistas y traen los archivos —«5.271.105.507», «(1.500)», «7,37 %»— da `NaN` y cae a
+   cero, mientras el motor las lee bien: el libro publicaba un contribuyente en cero y el
+   informe el correcto. Dos procedencias para el mismo dato, que es el defecto que el
+   diseño de 2026-08-11 retira. */
+import { num } from '../utils/calculations.js';
 
 /* Métodos y su configuración de fórmulas. `base` indica sobre qué se calcula el
    indicador y se escalan las partidas; `num` el numerador; `dep` si usa el
@@ -212,11 +219,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
      Va aquí y no en `motorExcelExport` porque este emisor es el único punto por el que
      pasan las dos rutas de descarga del libro: la del motor y la del modal
-     (MemoriaRangoModal.jsx:93). */
-  const segExcluido = Number(study.seg_excluido) || 0;
+     (MemoriaRangoModal.jsx:93).
+
+     El `|| 0` va DESPUÉS de `num`, no en lugar de él: `num` devuelve null en el rubro que
+     el estudio no trae, y ahí el cero es lo que corresponde —la hoja publica el balance
+     completo y una fila en blanco rompería el análisis vertical—. Lo que cambia es que
+     ahora una cifra en cadena formateada llega como la cifra y no como cero. */
+  const segExcluido = num(study.seg_excluido) || 0;
   const valorDeRubro = (clave) => (clave === 't_s'
-    ? (Number(study.t_s) || 0) - segExcluido
-    : Number(study[clave]) || 0);
+    ? (num(study.t_s) || 0) - segExcluido
+    : num(study[clave]) || 0);
 
   /* El contribuyente con la forma que espera `desgloseAjuste`. Las ventas salen de
      `valorDeRubro('t_s')` —la misma función que escribe la celda de Datos— y no de
@@ -244,9 +256,14 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     }
     datos.push(celdas);
   });
+  /* La tasa del estudio en tanto por uno, calculada UNA vez. La escriben tres sitios —la
+     celda de esta hoja, la columna «Tasa» de cada hoja de método y la llamada al motor que
+     produce los intermedios del ajuste— y dividir entre 100 por separado en cada uno es lo
+     que hace que dos de ellos puedan quedarse atrás de un arreglo del tercero. */
+  const tasaDelEstudio = (num(study.prime) || 0) / 100;
   datos.push([
     cTxt('Tasa de interés de referencia (Prime Rate)'),
-    cNum((Number(study.prime) || 0) / 100, '0.00%'),
+    cNum(tasaDelEstudio, '0.00%'),
   ]);
   /* El ámbito de la muestra, escrito como dato y no como decisión ya aplicada: la
      hoja de método lo lee para decidir qué filas entran al cuartil. */
@@ -258,9 +275,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const filaComp0 = datos.length + 1; // 1-based fila de la primera comparable
   comps.forEach((c) => {
     datos.push([
-      cTxt(c.name), cNum(Number(c.s) || 0), cNum(Number(c.c) || 0), cNum(Number(c.op) || 0),
-      cNum(Number(c.ar) || 0), cNum(Number(c.inv) || 0), cNum(Number(c.ap) || 0),
-      cNum(Number(c.ppe) || 0), cFor(`$B$${FILA_TASA()}`, '0.00%'),
+      cTxt(c.name), cNum(num(c.s) || 0), cNum(num(c.c) || 0), cNum(num(c.op) || 0),
+      cNum(num(c.ar) || 0), cNum(num(c.inv) || 0), cNum(num(c.ap) || 0),
+      cNum(num(c.ppe) || 0), cFor(`$B$${FILA_TASA()}`, '0.00%'),
       cTxt(c.amb === 'Nac' ? 'Nac' : 'Int'),
     ]);
   });
@@ -347,17 +364,19 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       const nombreRef = { t: 's', f: `${D(`A${src}`)}`, v: String(c.name || '') };
       const cifras = [c.s, c.c, c.op, c.ar, c.inv, c.ap, c.ppe];
       const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => cFor(
-        `${D(`${L}${src}`)}`, '#,##0.00', Number(cifras[k]) || 0));
-      /* La tasa es la única del estudio y viaja en porcentaje: se divide entre 100 con
-         la misma expresión que escribió la celda de la hoja Datos, para que las dos den
-         exactamente el mismo doble. */
-      const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000', (Number(study.prime) || 0) / 100);
+        `${D(`${L}${src}`)}`, '#,##0.00', num(cifras[k]) || 0));
+      /* La tasa es la única del estudio y viaja en porcentaje: es el mismo doble que
+         escribió la celda de la hoja Datos, porque es literalmente el mismo valor. */
+      const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000', tasaDelEstudio);
       // base comparable
       const base = M.base === 'ventas' ? `B${r}` : M.base === 'opex' ? `D${r}`
         : M.base === 'cogs' ? `C${r}` : `(C${r}+D${r})`;
       const denomDep = M.hoja === 'NCP' ? `((C${r}-G${r})+D${r})` : M.hoja === 'CostPlus' ? `(C${r}-G${r})` : null;
       const baseInv = M.dep ? denomDep : `M${r}`;
-      const num = M.num === 'ebit' ? `J${r}` : `K${r}`;
+      /* La celda del numerador del método: la J (EBIT) o la K (utilidad bruta). Se llama
+         `celdaNum` y no `num` porque `num` es ahora el conversor de cifras importado
+         arriba, y la constante local lo sombreaba dentro de este bucle. */
+      const celdaNum = M.num === 'ebit' ? `J${r}` : `K${r}`;
       /* Denominador de los sabores que NO restan el ajuste de CxC del numerador
          («solo CxP», «solo inventario» y «solo PP&E»): la base sin corregir. La
          columna R descuenta ese ajuste y solo corresponde a los sabores que sí lo
@@ -373,7 +392,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          `cFor` omite el valor y la celda sale como salía antes: fórmula que Excel
          resuelve al abrir. Es el mismo criterio que siguen las columnas S–Y. */
       const dg = desgloseAjuste(comps[i], contribuyenteDelEstudio, M.hoja,
-        (Number(study.prime) || 0) / 100) || {};
+        tasaDelEstudio) || {};
 
       const fila = [
         nombreRef,                              // A nombre
@@ -392,13 +411,13 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
            que es el de estas siete columnas. Y las J–R de arriba llevan los intermedios
            del MISMO motor, no un cálculo propio: son el rastro de auditoría que permite
            seguir de dónde sale cada uno de estos siete números. */
-        cFor(`${num}/M${r}`, M.fmt, porSabor[0].filas[i]?.valor),            // S sin ajuste
-        cFor(`(${num}-N${r})/R${r}`, M.fmt, porSabor[1].filas[i]?.valor),    // T CxC
-        cFor(`(${num}+O${r})/${denomSinAR}`, M.fmt, porSabor[2].filas[i]?.valor),  // U CxP
-        cFor(`(${num}-P${r})/${denomSinAR}`, M.fmt, porSabor[3].filas[i]?.valor),  // V Inv
-        cFor(`(${num}-N${r}+O${r}-P${r})/R${r}`, M.fmt, porSabor[4].filas[i]?.valor),        // W CxC+CxP+Inv
-        cFor(`(${num}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt, porSabor[5].filas[i]?.valor), // X +PP&E
-        cFor(`(${num}-Q${r})/${denomSinAR}`, M.fmt, porSabor[6].filas[i]?.valor),  // Y PP&E
+        cFor(`${celdaNum}/M${r}`, M.fmt, porSabor[0].filas[i]?.valor),            // S sin ajuste
+        cFor(`(${celdaNum}-N${r})/R${r}`, M.fmt, porSabor[1].filas[i]?.valor),    // T CxC
+        cFor(`(${celdaNum}+O${r})/${denomSinAR}`, M.fmt, porSabor[2].filas[i]?.valor),  // U CxP
+        cFor(`(${celdaNum}-P${r})/${denomSinAR}`, M.fmt, porSabor[3].filas[i]?.valor),  // V Inv
+        cFor(`(${celdaNum}-N${r}+O${r}-P${r})/R${r}`, M.fmt, porSabor[4].filas[i]?.valor),        // W CxC+CxP+Inv
+        cFor(`(${celdaNum}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt, porSabor[5].filas[i]?.valor), // X +PP&E
+        cFor(`(${celdaNum}-Q${r})/${denomSinAR}`, M.fmt, porSabor[6].filas[i]?.valor),  // Y PP&E
       ];
 
       /* Columna Z: el filtro de ámbito, resuelto por fórmula y a la vista. Es el

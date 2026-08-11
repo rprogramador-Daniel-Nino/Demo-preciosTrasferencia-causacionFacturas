@@ -740,13 +740,19 @@ test('las columnas A–I traen el literal que el emisor ya tiene, sin dejar de s
 });
 
 test('los intermedios del ajuste (J–R) traen el valor que expone el motor', () => {
-  /* Son el rastro de auditoría del libro: sin valor, las nueve columnas por las que se
-     sigue de dónde sale cada indicador salen vacías en un lector que no recalcule, y el
-     libro se ve completo en los resultados y hueco en la trazabilidad.
+  /* ─── Esta prueba afirmaba lo contrario, y no se relajó: cambió el mundo ───
 
-     El valor sale de `desgloseAjuste`, el mismo motor que produce los indicadores de
-     S–Y: calcularlo aquí sería la segunda implementación de la misma aritmética que este
-     plan retira. */
+     Hasta agosto de 2026 decía «los intermedios del ajuste (J–R) siguen sin valor: los
+     deriva Excel», y su razón escrita era «el motor no los expone todavía». Dejó de ser
+     cierto: `ajusteRangoCapitalTrabajo.js` extrajo el cálculo a `desgloseAjuste` y ahora
+     los publica, así que el emisor los pide en vez de dejar nueve columnas vacías. Lo que
+     la prueba prohibía —que el libro invente los intermedios por su cuenta— sigue
+     prohibido, y por la misma vía: el valor que exige es el de `desgloseAjuste`, campo por
+     campo, no «algún número».
+
+     Son el rastro de auditoría del libro: sin valor, las nueve columnas por las que se
+     sigue de dónde sale cada indicador salen vacías en un lector que no recalcule, y el
+     libro se ve completo en los resultados y hueco en la trazabilidad. */
   const mo = hojaDe(ESTUDIO_4, 'MO');
   const CAMPOS = [
     [9, 'ebit'], [10, 'utilBruta'], [11, 'desc'], [12, 'base'],
@@ -780,6 +786,74 @@ test('los intermedios del ajuste (J–R) traen el valor que expone el motor', ()
     ESTUDIO_4.comparables.map((_c, i) => mo.celdas[2 + i][col].v)));
   assert.strictEqual(new Set(porColumna).size, 9,
     `las nueve columnas J–R deberían ser distintas entre sí:\n${porColumna.join('\n')}`);
+});
+
+test('una cifra en cadena formateada parte del mismo número en el libro y en el motor', () => {
+  /* El defecto que esto cierra: el emisor leía sus cifras con `Number(x) || 0` y el motor
+     con `num(x)`, el conversor que entiende lo que escriben los analistas y lo que traen
+     los archivos. Sobre «1.000» —mil con separador de miles— `Number` no falla, que es lo
+     peor que podía pasar: devuelve 1. Así que la celda de Datos decía 1, los nueve
+     intermedios se calculaban con unas ventas de 1 y las columnas S–Y traían el rango que
+     el motor había calculado sobre 1.000. El libro publicaba un contribuyente en cero (o
+     en 1) y el informe el correcto, con la fórmula tapándolo en cuanto alguien recalculara.
+
+     `t_s` es el único rubro del fixture cuya cadena se lee distinto según el conversor, y
+     es a propósito: aísla el defecto en el dato del que cuelgan los cuatro ratios del
+     contribuyente. La comparable trae las suyas con separador de miles por el mismo
+     motivo, para cubrir las columnas B–H. */
+  const conCadenas = {
+    ...ESTUDIO_4,
+    t_s: '1.000', t_c: '600', t_op: '200',
+    t_ar: '100', t_inv: '50', t_ap: '80', t_ppe: '300', seg_excluido: '0',
+    comparables: [
+      { name: 'Con Cadenas SA', amb: 'Nac', s: '1.500', c: '900', op: '300', ar: '150', inv: '60', ap: '120', ppe: '300' },
+      ...ESTUDIO_4.comparables.slice(1),
+    ],
+  };
+  const hojas = hojasMemoriaRangoOptimo(conCadenas, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const mo = hojas.find((h) => h.nombre === 'MO');
+
+  /* 1) La celda de Datos trae la cifra, no el 1 que daría `Number('1.000')`. */
+  const ventas = datos.celdas.find((f) => f && f[0] && f[0].v === 'Ventas netas');
+  assert.strictEqual(ventas[1].v, 1000,
+    'la celda de Datos lee «1.000» como mil, igual que el motor');
+
+  /* 2) Y las cifras de la comparable, que alimentan las columnas B–H. */
+  const filaComp = datos.celdas.find((f) => f && f[0] && f[0].v === 'Con Cadenas SA');
+  assert.deepStrictEqual(filaComp.slice(1, 8).map((c) => c.v), [1500, 900, 300, 150, 60, 120, 300],
+    'la tabla de comparables de Datos lee las cadenas con separador de miles');
+  assert.deepStrictEqual(mo.celdas[2].slice(1, 8).map((c) => c.v), [1500, 900, 300, 150, 60, 120, 300],
+    'y la hoja de método publica las mismas, no otras');
+
+  /* 3) El indicador del contribuyente del libro es el del motor: las dos rutas parten de
+        las mismas ventas. Es la aserción que el coordinador pidió. */
+  const delMotor = analizarRangoAjustado(conCadenas, 'MO', 'ninguno');
+  assert.strictEqual(filaEtq(mo, 'Indicador del contribuyente')[26].v, delMotor.sujeto);
+  assert.strictEqual(filaEtq(mo, 'P25 (cuartil inferior)')[26].v, delMotor.stats.p25,
+    'y el rango también');
+
+  /* 4) Y los nueve intermedios, que es lo que esta tarea añadió al radio del defecto: sus
+        cuatro ajustes se escalan contra los ratios del contribuyente, así que con las
+        ventas en 1 habrían salido todos disparados. */
+  const d = desgloseAjuste(conCadenas.comparables[0],
+    { s: 1000, c: 600, op: 200, ar: 100, inv: 50, ap: 80, ppe: 300 },
+    'MO', ESTUDIO_4.prime / 100);
+  const CAMPOS = [
+    [9, 'ebit'], [10, 'utilBruta'], [11, 'desc'], [12, 'base'],
+    [13, 'ajusteAR'], [14, 'ajusteAP'], [15, 'ajusteINV'], [16, 'ajustePPE'],
+    [17, 'denomAjustado'],
+  ];
+  CAMPOS.forEach(([col, campo]) => assert.strictEqual(mo.celdas[2][col].v, d[campo],
+    `la columna ${col} (${campo}) se calculó sobre las ventas de verdad`));
+
+  /* 5) Y el fixture DISCRIMINA: un estudio cuyas ventas de verdad fueran 1 publica otro
+        indicador. Sin esto, todo lo anterior pasaría también con el defecto puesto. */
+  const conVentasEnUno = hojasMemoriaRangoOptimo({ ...conCadenas, t_s: 1 }, null)
+    .find((h) => h.nombre === 'MO');
+  assert.notStrictEqual(filaEtq(conVentasEnUno, 'Indicador del contribuyente')[26].v,
+    filaEtq(mo, 'Indicador del contribuyente')[26].v,
+    'leer «1.000» como 1 daría otro indicador, que es lo que el defecto publicaba');
 });
 
 test('sin cifras que lo sostengan, el intermedio sale sin valor y no en cero', () => {
