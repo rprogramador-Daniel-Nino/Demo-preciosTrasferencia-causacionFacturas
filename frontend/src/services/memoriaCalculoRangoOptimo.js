@@ -75,12 +75,17 @@ const HOLDING_FORMULA = (ref) => 'IF(OR('
  * Construye las hojas del libro con fórmulas vivas.
  *
  * @param estudio  el estudio con t_s, t_c, t_op(gastos), t_ar, t_inv, t_ap, t_ppe,
- *                 prime y comparables [{name,s,c,op,ar,inv,ap,ppe}].
+ *                 prime, cmode (ámbito de la muestra: 'nac', 'intl' o cualquier otro
+ *                 valor para todas), seg_excluido (ingreso de una operación no
+ *                 controlada que se descuenta de t_s) y comparables
+ *                 [{name,s,c,op,ar,inv,ap,ppe,amb}], con `amb` en 'Nac' o 'Int'.
  *                 IMPORTANTE: `op` y `t_op` deben ser GASTOS operativos
  *                 (usar el normalizador eeffParserNormalizador.js antes), y `prime`
  *                 es la tasa EN PORCENTAJE (7.37, no 0.0737): esta función la divide
  *                 entre 100 al escribir Datos!B11, así que quien la llame no debe
- *                 hacerlo antes.
+ *                 hacerlo antes. `cmode` y `amb` solo se escriben en la hoja Datos en
+ *                 esta versión; el filtrado del cuartil por ámbito lo aplica quien
+ *                 llama.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
@@ -109,8 +114,19 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   datos.push([cTxt('DATOS DE ENTRADA — editar aquí recalcula todo el libro')]);
   datos.push([]);
   datos.push([cTxt('PARTE EXAMINADA')]);
+  /* Las ventas del libro descuentan el segmento excluido, con el mismo criterio del
+     motor (`ajusteRangoCapitalTrabajo.js:271-276`): solo de las ventas y no de `t_op`,
+     porque aquí `t_op` son GASTOS y restarlo también movería la utilidad operacional
+     dos veces.
+
+     Va aquí y no en `motorExcelExport` porque este emisor es el único punto por el que
+     pasan las dos rutas de descarga del libro: la del motor y la del modal
+     (MemoriaRangoModal.jsx:93). */
+  const segExcluido = Number(study.seg_excluido) || 0;
+  const ventasNetas = (Number(study.t_s) || 0) - segExcluido;
+
   const tp = [
-    ['Ventas netas', study.t_s], ['Costo de ventas', study.t_c],
+    ['Ventas netas', ventasNetas], ['Costo de ventas', study.t_c],
     ['Gastos operativos', study.t_op], ['Cuentas por cobrar', study.t_ar],
     ['Inventarios', study.t_inv], ['Cuentas por pagar', study.t_ap],
     ['Propiedad, planta y equipo', study.t_ppe],
@@ -124,9 +140,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     }
   });
   // filas Datos: 4=Ventas B4, 5=Costo B5, 6=Gastos B6, 7=CxC B7, 8=Inv B8, 9=CxP B9, 10=PPE B10, 11=Prime B11
+  /* El ámbito de la muestra, escrito como dato y no como decisión ya aplicada: la
+     hoja de método lo lee para decidir qué filas entran al cuartil. */
+  datos.push([cTxt('Ámbito de la muestra'), cTxt(study.cmode || 'all')]);
   datos.push([]);
   datos.push([cTxt('COMPARABLES')]);
-  const hdr = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inventario', 'CxP', 'PP&E', 'Tasa'];
+  const hdr = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inventario', 'CxP', 'PP&E', 'Tasa', 'Ámbito'];
   datos.push(hdr.map(cTxt));
   const filaComp0 = datos.length + 1; // 1-based fila de la primera comparable
   comps.forEach((c) => {
@@ -134,22 +153,26 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       cTxt(c.name), cNum(Number(c.s) || 0), cNum(Number(c.c) || 0), cNum(Number(c.op) || 0),
       cNum(Number(c.ar) || 0), cNum(Number(c.inv) || 0), cNum(Number(c.ap) || 0),
       cNum(Number(c.ppe) || 0), cFor('$B$11', '0.00%'),
+      cTxt(c.amb === 'Nac' ? 'Nac' : 'Int'),
     ]);
   });
 
-  /* ─── Trazabilidad de la tasa, en las columnas K–M ───
-     La tabla de comparables llega hasta la I, así que este bloque cabe al lado sin
-     estorbar. Deja escrito de dónde sale el número, a qué comparables alcanza y con
-     qué convención se aplica: quien audita el libro no debería tener que preguntarlo.
-     La celda editable sigue siendo B11 —una sola—; aquí solo se refleja. */
+  /* ─── Trazabilidad de la tasa, en las columnas L–N ───
+     La tabla de comparables llega hasta la J (con la columna de Ámbito), así que este
+     bloque cabe al lado sin estorbar. Deja escrito de dónde sale el número, a qué
+     comparables alcanza y con qué convención se aplica: quien audita el libro no
+     debería tener que preguntarlo. La celda editable sigue siendo B11 —una sola—; aquí
+     solo se refleja.
+     Los índices de columna son 11 y 12 (antes 10 y 11): la columna J de Ámbito
+     desplazó una posición a este bloque, que vivía en K–M. */
   const anotarTasa = (idxFila, etiqueta, valor) => {
     if (!datos[idxFila]) datos[idxFila] = [];
-    datos[idxFila][10] = cTxt(etiqueta);
-    datos[idxFila][11] = valor;
+    datos[idxFila][11] = cTxt(etiqueta);
+    datos[idxFila][12] = valor;
   };
   anotarTasa(2, 'PARÁMETRO — TASA DE INTERÉS DE LOS AJUSTES DE CAPITAL DE TRABAJO', null);
   anotarTasa(3, 'Tasa aplicada', cFor('$B$11', '0.00%'));
-  datos[3][12] = cTxt('← única celda editable: B11 alimenta a los ' + n + ' comparables');
+  datos[3][13] = cTxt('← única celda editable: B11 alimenta a los ' + n + ' comparables');
   anotarTasa(4, 'Fuente', cTxt(
     'Board of Governors of the Federal Reserve System, H.15 Selected Interest Rates — '
     + 'Bank Prime Loan Rate (serie FRED RIFSPBLPNA). Promedio anual de días hábiles: '
@@ -166,7 +189,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   hojas.push({
     nombre: 'Datos', celdas: datos,
     cols: [{ wch: 34 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
-      { wch: 12 }, { wch: 9 }, { wch: 3 }, { wch: 30 }, { wch: 62 }, { wch: 46 }],
+      { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 3 }, { wch: 30 }, { wch: 62 }, { wch: 46 }],
   });
 
   // Referencias del contribuyente (celdas fijas en Datos)
