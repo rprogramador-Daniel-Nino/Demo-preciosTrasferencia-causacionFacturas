@@ -904,7 +904,32 @@ también se escriben ahora en `AA`–`AG`. Sustituir los dos bloques por:
 la conclusión los referencia sobre las columnas `AA`–`AG`, que es donde ahora viven los
 cuartiles.
 
-- [ ] **Step 5: Ampliar los anchos de columna de las hojas de método**
+- [ ] **Step 5: La hoja `Resumen` tiene que seguir a la estadística**
+
+> **Hueco del plan, detectado al implementar (2026-08-11).** Este paso no existía y sin él la
+> tarea rompía la hoja `Resumen` en silencio.
+
+`Resumen` es la hoja que un lector abre primero: 35 filas —cinco métodos por siete ajustes—
+que **no calculan nada**, solo referencian las celdas de estadística de las hojas de método
+(`MO!S19`, `MO!S24`…). Al mudar la estadística de `S`–`Y` a `AA`–`AG`, esas referencias apuntan
+a celdas que ahora están en blanco, así que el Resumen sale **entero vacío** y ninguna prueba
+lo nota: las fórmulas siguen siendo válidas, solo señalan a la nada.
+
+Cambiar su arreglo de columnas al mismo que usan las filas de estadística:
+
+```js
+  /* AA–AG, no S–Y: desde que las filas de estadística se mudaron a la serie filtrada,
+     S–Y de esas filas quedan en blanco (son las columnas de indicador por comparable,
+     no de estadístico). Referenciar S–Y aquí dejaría el Resumen —la hoja que un lector
+     abre primero— siempre vacío. */
+  const RES = ['AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'];
+```
+
+Con una prueba de regresión: que las fórmulas de la hoja `Resumen` referencien las mismas
+columnas en que se escriben los estadísticos, derivadas de la misma constante y no escritas a
+mano en dos sitios.
+
+- [ ] **Step 6: Ampliar los anchos de columna de las hojas de método**
 
 `:289` fija `[{wch:28}].concat(new Array(24).fill({wch:11}))` — 25 columnas. Ahora son 33:
 
