@@ -8,6 +8,7 @@ const {
   parsearRespuestaRedaccion,
   armarDocumentoFirestore,
 } = require('./analisisMercadoPrompts');
+const { redactarConFallback } = require('./redaccionConFallback');
 
 if (!getApps().length) initializeApp();
 
@@ -37,26 +38,17 @@ async function buscarCifras(geminiApiKey, anioActual) {
   return parsearRespuestaBusqueda(texto, groundingChunks);
 }
 
-async function redactarNarrativa(claudeApiKey, series, anioActual) {
-  const prompt = construirPromptRedaccion(series, anioActual);
-  const respuesta = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': claudeApiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+/* Con respaldo en Gemini: esta función llama a Anthropic directamente y no pasa por
+   `/api/claude`, así que hasta el 2026-08-11 se quedaba sin el fallback del proxy. Con el
+   tope de uso de la cuenta alcanzado, la redacción fallaba y la corrida entera se perdía
+   —y esta corre una vez al mes—. `extraerJSON` escanea llaves balanceadas, así que tolera
+   igual el JSON que Gemini suele envolver en markdown. */
+async function redactarNarrativa(claudeApiKey, geminiApiKey, series, anioActual) {
+  const { texto } = await redactarConFallback({
+    prompt: construirPromptRedaccion(series, anioActual),
+    claudeApiKey, geminiApiKey,
+    modeloClaude: CLAUDE_MODEL, modeloGemini: GEMINI_MODEL,
   });
-  const data = await respuesta.json();
-  if (!respuesta.ok || !data.content || !data.content[0]) {
-    throw new Error('Claude no devolvió una respuesta usable: ' + JSON.stringify(data).slice(0, 500));
-  }
-  const texto = data.content.map((b) => b.text || '').join('');
   return parsearRespuestaRedaccion(texto);
 }
 
@@ -78,7 +70,7 @@ async function actualizarAnalisisMercado({ geminiApiKey, claudeApiKey, anioActua
     throw new Error('Ninguna serie trajo un dato confiable esta corrida; se conserva la anterior.');
   }
 
-  const narrativa = await redactarNarrativa(claudeApiKey, seriesConfiables, anioActual);
+  const narrativa = await redactarNarrativa(claudeApiKey, geminiApiKey, seriesConfiables, anioActual);
 
   const ahora = Timestamp.now();
   const documento = armarDocumentoFirestore({ series: seriesConfiables, narrativa, ahora });
