@@ -576,8 +576,15 @@ test('el cuartil del libro se calcula sobre el universo filtrado, no sobre todas
    .docx—, no un número parecido calculado aparte.
    ───────────────────────────────────────────────────────────────────────────── */
 
-/* Cuatro comparables: tres nacionales y una internacional de margen extremo, para
-   que el filtro de ámbito cambie el resultado de forma observable. */
+/* Cuatro comparables: tres nacionales y una internacional de margen extremo, con el
+   ámbito en 'all' —que no excluye a nadie— para que cada prueba lo fije según lo que
+   quiera medir. La de ámbito trabaja sobre una copia con `cmode: 'nac'`, que es donde
+   el filtro cambia el resultado de forma observable.
+
+   «Nacional A» tiene, a propósito, los mismos ratios de CxC y de CxP que el
+   contribuyente: en esa fila los dos ajustes son exactamente cero, y eso es lo que hace
+   que la comprobación del orden de las columnas tenga que comparar vectores completos y
+   no una sola celda. */
 const ESTUDIO_4 = {
   t_s: 1000, t_c: 600, t_op: 200, t_ar: 100, t_inv: 50, t_ap: 80, t_ppe: 300,
   prime: 7.37, cmode: 'all', seg_excluido: 0,
@@ -742,6 +749,83 @@ test('los intermedios del ajuste (J–R) siguen sin valor: los deriva Excel', ()
     assert.strictEqual(mo.celdas[2][col].v, undefined,
       `la columna ${col} no debe traer valor en caché todavía`);
   }
+});
+
+/* Índice de columna a partir de sus letras: A→0, Z→25, AA→26, AG→32. Se usa para
+   resolver a mano la referencia que emite el Resumen y llegar a la celda que apunta. */
+const colAIndice = (letras) => [...letras].reduce(
+  (acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+
+test('cada celda del Resumen trae el mismo valor que la celda de método que referencia', () => {
+  /* No se comparan dos números calculados por separado —eso podría coincidir por
+     casualidad—: se lee la fórmula del Resumen, se resuelve a qué celda de qué hoja
+     apunta, y se comprueba que el valor en caché de las dos es el mismo. Así un cruce de
+     columnas o el intercambio de `med` con `p75` sale a la luz, porque el Resumen
+     publicaría un número que su propia referencia desmiente. */
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO_4, null);
+  const resumen = hojas.find((h) => h.nombre === 'Resumen');
+  const porNombre = Object.fromEntries(hojas.map((h) => [h.nombre, h]));
+
+  let comparadas = 0;
+  let conValor = 0;
+  resumen.celdas.forEach((f, r) => {
+    (f || []).forEach((celda, col) => {
+      if (!celda || !celda.f) return;
+      const m = /^([A-Za-z&]+)!([A-Z]+)(\d+)$/.exec(celda.f);
+      assert.ok(m, `la celda ${r + 1}:${col} del Resumen debería ser una referencia simple: ${celda.f}`);
+      const [, hoja, letras, fila] = m;
+      const destino = porNombre[hoja];
+      assert.ok(destino, `el Resumen referencia una hoja que no existe: ${hoja}`);
+      const apuntada = (destino.celdas[Number(fila) - 1] || [])[colAIndice(letras)];
+      assert.ok(apuntada, `${celda.f} apunta a una celda vacía de la hoja ${hoja}`);
+      assert.strictEqual(celda.v, apuntada.v,
+        `${celda.f}: el Resumen dice ${celda.v} y la hoja ${hoja} dice ${apuntada.v}`);
+      comparadas++;
+      if (celda.v !== undefined) conValor++;
+    });
+  });
+  /* Cinco métodos × siete sabores × siete columnas de valor. Sin este piso, una hoja
+     Resumen vacía —o un `find` que no encontrara nada— haría pasar la prueba sin
+     comparar nada. */
+  assert.strictEqual(comparadas, 5 * 7 * 7, `debería comparar 245 celdas, comparó ${comparadas}`);
+  assert.strictEqual(conValor, comparadas, 'y todas tienen que traer valor con este fixture');
+});
+
+test('el Resumen no cruza la mediana con el P75 ni el mínimo con el máximo', () => {
+  /* La prueba de arriba lo detectaría, pero solo si los cinco estadísticos son números
+     distintos: con dos iguales, intercambiarlos no se notaría en ninguna de las dos.
+     Esto fija que el fixture de verdad los distingue, para todos los sabores de MO. */
+  const resumen = hojaDe(ESTUDIO_4, 'Resumen');
+  const filasMO = resumen.celdas.filter((f) => f && f[0] && f[0].v === 'Margen Operacional');
+  assert.strictEqual(filasMO.length, 7, 'una fila por sabor');
+  filasMO.forEach((f, k) => {
+    /* Columnas 3..7 = Mínimo, P25, Mediana, P75, Máximo. */
+    const stats = f.slice(3, 8).map((c) => c.v);
+    assert.strictEqual(new Set(stats).size, 5,
+      `los cinco estadísticos del sabor ${SABORES[k]} deberían ser distintos: ${stats.join(', ')}`);
+    /* Y en el orden que anuncia el encabezado, que es el mismo del motor. */
+    const esperado = analizarRangoAjustado(ESTUDIO_4, 'MO', SABORES[k]).stats;
+    assert.deepStrictEqual(stats,
+      [esperado.min, esperado.p25, esperado.med, esperado.p75, esperado.max],
+      `orden de los estadísticos del sabor ${SABORES[k]}`);
+    /* Monótonos, que es lo que un cruce rompería de forma visible. */
+    assert.ok(stats[0] <= stats[1] && stats[1] <= stats[2] && stats[2] <= stats[3]
+      && stats[3] <= stats[4], `los estadísticos no van en orden: ${stats.join(', ')}`);
+  });
+});
+
+test('sin muestra suficiente el Resumen deja el hueco, igual que la hoja de método', () => {
+  const dos = { ...ESTUDIO_4, comparables: ESTUDIO_4.comparables.slice(0, 2) };
+  const resumen = hojaDe(dos, 'Resumen');
+  const filaMO = resumen.celdas.find((f) => f && f[0] && f[0].v === 'Margen Operacional');
+  /* Los cinco estadísticos, sin valor: son celdas numéricas y `<v></v>` sería inválido. */
+  filaMO.slice(3, 8).forEach((c, i) => {
+    assert.ok(c.f, `la referencia ${i} sigue ahí`);
+    assert.strictEqual(c.v, undefined);
+  });
+  /* El indicador del contribuyente sí existe sin rango, y la conclusión queda en ''. */
+  assert.strictEqual(typeof filaMO[2].v, 'number');
+  assert.strictEqual(filaMO[8].v, '');
 });
 
 test('la hoja Resumen lee la estadística de AA-AG, no de S-Y, tras el traslado de Task 5', () => {

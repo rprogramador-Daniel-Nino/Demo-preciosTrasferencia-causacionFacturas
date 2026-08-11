@@ -513,7 +513,11 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       celdas.push(fila);
     }
 
-    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, base: M.base, dep: M.dep, r0, rN, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
+    /* `porSabor` viaja a infoMetodos porque la hoja Resumen se arma después de este
+       forEach y sus celdas son referencias puras: sin el valor a mano quedarían vacías en
+       cualquier lector que no recalcule, que es justo lo que esta tarea viene a cerrar.
+       Y el Resumen es la primera hoja del libro, la que se abre sola. */
+    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, base: M.base, dep: M.dep, r0, rN, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length, porSabor });
 
     hojas.push({
       nombre: M.hoja, celdas,
@@ -641,7 +645,13 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     });
   }
 
-  /* ─── Hoja Resumen: sensibilidad, referenciando las hojas de método ─── */
+  /* ─── Hoja Resumen: sensibilidad, referenciando las hojas de método ───
+     Las referencias siguen siendo referencias —quien audite puede seguirlas hasta la
+     celda de la hoja de método—, pero además llevan el valor en caché del motor. Sin él
+     esta hoja, que es la primera del libro y la que Excel abre sola, saldría vacía en
+     cualquier lector que no recalcule, y la mitad del objetivo de esta tarea quedaría
+     sin cumplir. El valor sale del mismo `porSabor` que alimentó la hoja de método, así
+     que las dos celdas publican por construcción el mismo número. */
   const resumen = [];
   resumen.push([cTxt('RESUMEN Y SENSIBILIDAD — todo son referencias a las hojas de método')]);
   resumen.push([]);
@@ -654,15 +664,23 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   infoMetodos.forEach((M) => {
     AJUSTES.forEach((aj, k) => {
       const L = RES[k];
+      /* Cuidado con el orden: esta hoja referencia la mediana como `filaP25 + 1` y el
+         P75 como `filaP25 + 2`, así que los valores tienen que ir `med` y luego `p75`,
+         en ese mismo orden. Cruzarlos daría cifras creíbles en el sitio errado sin que
+         nada reventara, igual que reordenar AJUSTES. */
+      const st = M.porSabor[k].stats;
       resumen.push([
         cTxt(M.nombre), cTxt(aj.etiqueta),
-        cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt),
-        cForT(`${M.hoja}!${L}${M.filaConcl}`),
+        cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt, M.porSabor[k].sujeto),
+        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt, st ? st.min : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt, st ? st.p25 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt, st ? st.med : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt, st ? st.p75 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt, st ? st.max : undefined),
+        /* Sin rango, la celda de conclusión de la hoja de método queda en '' y esta
+           tiene que decir lo mismo: es la única celda donde el libro se aparta del
+           motor a propósito (ver la nota de la conclusión más arriba). */
+        cForT(`${M.hoja}!${L}${M.filaConcl}`, st ? M.porSabor[k].cumple : ''),
       ]);
     });
   });
