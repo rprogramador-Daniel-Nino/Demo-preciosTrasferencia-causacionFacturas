@@ -1,7 +1,7 @@
 # Tablas 1 y 2 de operaciones en la ruta HTML
 
 **Fecha:** 2026-08-11
-**Estado:** aprobado, en implementación
+**Estado:** implementado (995 pruebas en verde, sin errores de lint)
 
 ## Problema
 
@@ -149,6 +149,17 @@ Se quitan los cuatro `'Otros servicios (07)'`. Cuando la columna `Cod` está dil
 que ya existe lo recoge sin añadir ningún campo nuevo al estudio. Sin `Cod` y sin
 coincidencia en el catálogo, `vinc_tipo` queda como el texto crudo del Excel y la Tabla 2
 sale `Ingreso (—)` con aviso.
+
+### 5 bis. La Tabla 4 compartía el defecto (hallado al implementar)
+
+`extraerCodigoYDesc` no lo usaban solo las Tablas 1 y 2: la Tabla 4 («Método de Precios de
+Transferencia Aplicable», `docxRelleno.js`) publica el código de operación en su propia
+columna «Código de Operación» y salía con el mismo `07` inventado. Pasa a resolverlo con
+`conceptoDeOperacion`, y sin código publica «—».
+
+Lo delató `npm run lint`, no las pruebas: al borrar el helper quedó una referencia viva que
+ninguna prueba cubría, así que esa ruta habría lanzado `ReferenceError` en tiempo de
+ejecución. Se le añadió prueba.
 
 ### 6. Manejo de ausencias
 
