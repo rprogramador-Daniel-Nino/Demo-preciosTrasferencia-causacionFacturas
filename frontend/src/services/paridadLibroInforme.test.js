@@ -356,14 +356,48 @@ const ESTADISTICOS = [
   ['Máximo', 'MAX', null],
 ];
 
-test('la fórmula de cada estadístico apunta a su propia columna y a su propio cuartil', () => {
+/* El indicador del contribuyente de cada método, en función de las tres referencias de la
+   hoja Datos: ventas, costo y gastos operativos. Es la misma tabla que construye
+   `testedFor` en el emisor, escrita aquí a mano a propósito: es lo único que distingue
+   «MB divide la utilidad bruta» de «MB divide el EBIT», dos fórmulas igual de creíbles que
+   publican indicadores distintos. Las referencias NO se escriben con su dirección: se
+   derivan de la etiqueta del rubro en la hoja Datos, igual que hace el emisor, para que
+   insertar un rubro no vuelva falsa esta prueba. */
+const CONTRIBUYENTE = {
+  MO: (S, C, OP) => `(${S}-${C}-${OP})/${S}`,
+  MB: (S, C) => `(${S}-${C})/${S}`,
+  Berry: (S, C, OP) => `(${S}-${C})/${OP}`,
+  CostPlus: (S, C) => `(${S}-${C})/${C}`,
+  NCP: (S, C, OP) => `(${S}-${C}-${OP})/(${C}+${OP})`,
+};
+
+test('la fórmula de cada fila de estadística apunta a su propia columna y a su propio cuartil', () => {
   /* El otro punto ciego del valor en caché: la fórmula. Intercambiar los argumentos de
-     QUARTILE entre la fila de la mediana y la del P75, o apuntar la fórmula a la columna
-     de otro sabor, deja los valores en caché intactos —siguen siendo los del informe— y
-     el libro pasaría a publicar otro número en cuanto Excel recalculara. Aquí se exige
-     que la fórmula emitida sea exactamente la del estadístico de esa fila sobre la
-     columna de ese sabor y sobre el rango de filas de las comparables. */
+     QUARTILE entre la fila de la mediana y la del P75, apuntar la fórmula a la columna de
+     otro sabor, hacer que el indicador del contribuyente de MB divida el EBIT en vez de la
+     utilidad bruta, o cruzar el P25 con el P75 dentro de la comparación de la Conclusión:
+     todas dejan los valores en caché intactos —siguen siendo los del motor, así que el
+     .docx y el .xlsx sin recalcular coinciden— y el libro pasa a publicar otro número, otro
+     indicador o otro veredicto en cuanto alguien pulsa Ctrl+Alt+F9. Nada más en el
+     repositorio mira el CONTENIDO de estas fórmulas: las pruebas del emisor comprueban que
+     la celda tiene fórmula, no cuál.
+
+     Se revisan las SIETE filas de estadística, no solo los cinco estadísticos: el indicador
+     del contribuyente y la Conclusión son las dos que el informe también publica. */
   const norm = obtenerEstudioNormalizadoParaParche(ESTUDIO_INFORME);
+
+  /* Las tres referencias del contribuyente, derivadas de la etiqueta del rubro. */
+  const datos = libroDe(norm).find((x) => x.nombre === 'Datos');
+  assert.ok(datos, 'el libro trae la hoja Datos');
+  const refRubro = (etiqueta) => {
+    const i = datos.celdas.findIndex((f) => f && f[0] && f[0].v === etiqueta);
+    assert.ok(i >= 0, `la hoja Datos no trae el rubro «${etiqueta}»`);
+    return `Datos!$B$${i + 1}`;
+  };
+  const S = refRubro('Ventas netas');
+  const C = refRubro('Costo de ventas');
+  const OP = refRubro('Gastos operativos');
+
   let revisadas = 0;
   METODOS.forEach((metodo) => {
     const h = libroDe(norm).find((x) => x.nombre === metodo);
@@ -376,22 +410,54 @@ test('la fórmula de cada estadístico apunta a su propia columna y a su propio 
       `${metodo}: una fila por comparable`);
     const primera = filasComp[0].fila;
     const ultima = filasComp[filasComp.length - 1].fila;
+    /* La fila 1-based de cada etiqueta, derivada de la hoja. Si el emisor cruzara los
+       índices que escribe en la fórmula de la Conclusión, discreparían de estos. */
+    const filaDe = (etq) => {
+      const i = h.celdas.findIndex((f) => f && f[17] && f[17].v === etq);
+      assert.ok(i >= 0, `${metodo}: el libro no trae la fila «${etq}»`);
+      return i + 1;
+    };
+    const celdaDe = (etq, k) => h.celdas[filaDe(etq) - 1][26 + k];
+
     ESTADISTICOS.forEach(([etq, fn, q]) => {
-      const fila = h.celdas.find((f) => f && f[17] && f[17].v === etq);
-      assert.ok(fila, `${metodo}: el libro no trae la fila «${etq}»`);
       LETRAS_SERIE.forEach((L, k) => {
         const rango = `${L}${primera}:${L}${ultima}`;
         /* La guarda de muestra mínima es parte de la fórmula, no un adorno: sin ella la
            celda daría un rango sobre dos observaciones. */
         const esperada = `IF(COUNT(${rango})<3,"",${fn}(${rango}${q ? `,${q}` : ''}))`;
-        assert.strictEqual(fila[26 + k].f, esperada,
+        assert.strictEqual(celdaDe(etq, k).f, esperada,
           `${metodo}/${etq}/${SABORES[k]}: la fórmula emitida no es la de este estadístico`);
         revisadas++;
       });
     });
+
+    /* El indicador del contribuyente: la misma fórmula en las siete columnas —el
+       contribuyente se ajusta contra sí mismo y sus ratios se anulan—, y la del método. */
+    const esperadaSujeto = CONTRIBUYENTE[metodo](S, C, OP);
+    LETRAS_SERIE.forEach((L, k) => {
+      assert.strictEqual(celdaDe('Indicador del contribuyente', k).f, esperadaSujeto,
+        `${metodo}/${SABORES[k]}: la fórmula del indicador del contribuyente no es la del método`);
+      revisadas++;
+    });
+
+    /* La Conclusión: el contribuyente dentro del rango, con el P25 abajo y el P75 arriba,
+       en esa dirección y sobre la columna de su propio sabor. */
+    const filaTested = filaDe('Indicador del contribuyente');
+    const filaP25 = filaDe('P25 (cuartil inferior)');
+    const filaP75 = filaDe('P75 (cuartil superior)');
+    LETRAS_SERIE.forEach((L, k) => {
+      const rango = `${L}${primera}:${L}${ultima}`;
+      const esperada = `IF(COUNT(${rango})<3,"",IF(AND(${L}${filaTested}>=${L}${filaP25},`
+        + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE"))`;
+      assert.strictEqual(celdaDe('Conclusión', k).f, esperada,
+        `${metodo}/${SABORES[k]}: la fórmula de la Conclusión no compara el contribuyente `
+        + 'contra su propio P25 y P75');
+      revisadas++;
+    });
   });
-  /* Cinco métodos × cinco estadísticos × siete sabores. */
-  assert.strictEqual(revisadas, 5 * 5 * 7, `debería revisar 175 fórmulas, revisó ${revisadas}`);
+  /* Cinco métodos × siete sabores × siete filas (cinco estadísticos, el indicador del
+     contribuyente y la Conclusión). */
+  assert.strictEqual(revisadas, 5 * 7 * 7, `debería revisar 245 fórmulas, revisó ${revisadas}`);
 });
 
 test('con menos de tres observaciones ni el libro ni el informe publican rango, y solo ahí difieren', () => {
@@ -437,6 +503,17 @@ test('con menos de tres observaciones ni el libro ni el informe publican rango, 
   /* Cinco métodos × siete sabores × cinco estadísticos, y una conclusión por par. */
   assert.strictEqual(sinPublicar, 5 * 7 * 5, `debería revisar 175 celdas, revisó ${sinPublicar}`);
   assert.strictEqual(enBlanco, 5 * 7, `debería revisar 35 conclusiones, revisó ${enBlanco}`);
+
+  /* Y la punta real: el INFORME tampoco publica rango. `porMetodologiaOCDE` arma su propio
+     `preparado` (rangoIntercuartil.js:93-98) y podría pisar `cmode` por el camino; si lo
+     hiciera, el informe publicaría un rango sobre las cinco comparables que su libro no
+     respalda. Comparar solo contra `analizarRangoAjustado` no lo vería, porque ese es el
+     motor y no la ruta del informe. */
+  const delInforme = analizarRango(soloNac);
+  assert.strictEqual(delInforme.stats, null,
+    'el informe respeta el ámbito y no publica rango con una sola nacional');
+  assert.strictEqual(delInforme.statsNoAjustado, null,
+    'ni en su columna sin ajuste');
 });
 
 test('con ámbito internacional el libro cuartila el mismo subconjunto que el informe', () => {
@@ -468,6 +545,25 @@ test('con ámbito internacional el libro cuartila el mismo subconjunto que el in
   /* Observable también en el libro, no solo en el conteo del motor. */
   assert.notStrictEqual(delLibro.p25, estadisticaDelLibro(normTodas, 'MO', IDX_SIN_AJUSTE).p25,
     'y el libro publica otro P25 cuando el ámbito cambia');
+
+  /* Y la punta real, que es donde de verdad importa: el INFORME sobre el mismo ámbito.
+     `porMetodologiaOCDE` arma su propio `preparado` (rangoIntercuartil.js:93-98); si ahí se
+     perdiera `cmode`, el informe cuartilaría las cinco comparables y el libro cuatro, y solo
+     este cotejo lo vería. Se comprueban las dos columnas de la Tabla 18. */
+  const delInforme = analizarRango(soloIntl);
+  const libroAjustado = estadisticaDelLibro(norm, 'MO', IDX_SABOR_INFORME);
+  assert.ok(delInforme.stats, 'el informe publica rango con cuatro internacionales');
+  let deLasDosPuntas = 0;
+  CLAVES.forEach((k) => {
+    assert.ok(Number.isFinite(libroAjustado[k]), `el libro no publica ${k} ajustado con 'intl'`);
+    assert.strictEqual(libroAjustado[k], delInforme.stats[k],
+      `el ${k} de la Tabla 18 con ámbito internacional`);
+    assert.strictEqual(delLibro[k], delInforme.statsNoAjustado[k],
+      `el ${k} sin ajuste de la Tabla 18 con ámbito internacional`);
+    deLasDosPuntas += 2;
+  });
+  assert.strictEqual(deLasDosPuntas, 10,
+    `debería cotejar 10 estadísticos contra el informe, cotejó ${deLasDosPuntas}`);
 });
 
 test('una comparable sin cifras no entra en el libro ni en el informe', () => {
@@ -533,4 +629,24 @@ test('el segmento excluido sale de un solo sitio', () => {
     'descontar el segmento excluido mueve el indicador del contribuyente');
   assert.notStrictEqual(delLibro.p25, libroSinSeg.p25,
     'y mueve el P25, porque los ajustes se escalan contra los ratios del contribuyente');
+
+  /* Y la punta real. Es el otro sitio donde la ruta del informe hace trabajo propio:
+     `analizarRango` descuenta el segmento de sus `T` y `porMetodologiaOCDE` arma su propio
+     `preparado` (rangoIntercuartil.js:93-98) —donde `t_op` se deriva de las ventas SIN
+     descontar, igual que en `obtenerEstudioNormalizadoParaParche`—. Si una de las dos rutas
+     descontara el segmento y la otra no, o lo descontara dos veces, aquí saldría, y contra
+     `analizarRangoAjustado` no: ese es el motor, no el informe. */
+  const delInforme = analizarRango(conSeg);
+  assert.ok(delInforme.stats, 'el informe publica rango con el segmento descontado');
+  let deLasDosPuntas = 0;
+  CLAVES.forEach((k) => {
+    assert.strictEqual(delLibro[k], delInforme.stats[k],
+      `el ${k} de la Tabla 18 con segmento excluido`);
+    assert.strictEqual(estadisticaDelLibro(norm, 'MO', IDX_SIN_AJUSTE)[k],
+      delInforme.statsNoAjustado[k],
+      `el ${k} sin ajuste de la Tabla 18 con segmento excluido`);
+    deLasDosPuntas += 2;
+  });
+  assert.strictEqual(deLasDosPuntas, 10,
+    `debería cotejar 10 estadísticos contra el informe, cotejó ${deLasDosPuntas}`);
 });
