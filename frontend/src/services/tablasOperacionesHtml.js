@@ -19,17 +19,59 @@
    tabla» divergiendo en el mismo documento.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { localizarTablaHtml, reescribirFilasHtml } from './tablasHtmlInforme.js';
-import { filasOperacionesDeIngreso, filasOperacionAnalizar } from './tablasOperaciones.js';
+import {
+  localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml,
+} from './tablasHtmlInforme.js';
+import {
+  filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
+  filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+} from './tablasOperaciones.js';
+import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 
-/* Nombres con los que las plantillas rotulan estas dos tablas. La de operaciones se
-   llama de ingreso o de egreso según el sentido de la operación del contribuyente, y la
-   plantilla trae el que le corresponde: se buscan los dos. */
+/* La tabla de operaciones se llama de ingreso o de egreso según el sentido de la operación
+   del contribuyente, y la plantilla trae el rótulo que le corresponde: se buscan los dos. */
 export const TABLA_OPERACIONES = ['Operaciones de Ingreso', 'Operaciones de Egreso'];
-export const TABLA_OPERACION_ANALIZAR = 'Operación analizar';
 
 /**
- * Reescribe las Tablas 1 y 2 del informe en HTML con los datos ingeridos del estudio.
+ * Las tablas que este motor regenera, con lo que cada una necesita de la plantilla.
+ *
+ * `todas`: la ficha del vinculado viene DOS veces en la plantilla —rotulada «Tabla 3.» y
+ * «Tabla 12.», una en la descripción del vinculado y otra en el análisis— y las dos
+ * publican lo mismo. Sustituir solo la primera deja la segunda con el vinculado anterior.
+ *
+ * `rotulo`: solo cuando el título lleva un dato. El de los activos y el de las compañías
+ * vinculadas llevan el año gravable, y la plantilla trae el del informe anterior: sin
+ * reescribirlo, el informe de 2025 rotula «al 31 de diciembre de 2024». En las demás el
+ * título no contiene datos y no se toca, que es el criterio de las tablas del motor.
+ */
+const OBJETIVOS = [
+  { nombres: TABLA_OPERACIONES, filas: filasOperacionesDeIngreso },
+  { nombres: 'Operación analizar', filas: filasOperacionAnalizar },
+  { nombres: 'Transacciones Inter compañía', filas: filasTransaccionesIntercompania, todas: true },
+  { nombres: 'Método de Precios de Transferencia', filas: filasMetodoAplicable },
+  { nombres: 'Composición accionaria', filas: filasComposicionAccionaria },
+  { nombres: 'Compañías vinculadas', filas: filasCompaniasVinculadas, rotulo: true },
+  { nombres: 'Criterios de vinculación', filas: filasCriteriosVinculacion },
+  { nombres: 'Activos a 31 de diciembre', filas: filasActivos, rotulo: true },
+];
+
+/* Sustituye una ocurrencia: primero las filas y DESPUÉS el rótulo. El orden importa —el
+   rótulo está antes en el documento, así que reescribirlo primero movería los offsets del
+   bloque que ya se localizó—; es el mismo orden que sigue `actualizarTablasMacroHtml`. */
+function sustituir(html, bloque, tabla, conRotulo) {
+  let out = html.slice(0, bloque.inicio)
+    + reescribirFilasHtml(html.slice(bloque.inicio, bloque.fin), tabla.filas)
+    + html.slice(bloque.fin);
+
+  if (conRotulo && bloque.rotulo) {
+    const nuevo = reescribirRotuloHtml(bloque.rotulo.xml, tabla.titulo || tabla.nombre);
+    out = out.slice(0, bloque.rotulo.inicio) + nuevo + out.slice(bloque.rotulo.fin);
+  }
+  return out;
+}
+
+/**
+ * Reescribe con los datos del estudio las tablas del informe que el marcado no alcanza.
  *
  * @param {string} html     la plantilla marcada.
  * @param {object} estudio
@@ -37,25 +79,35 @@ export const TABLA_OPERACION_ANALIZAR = 'Operación analizar';
  *        Sin el aviso, una tabla ausente conserva las cifras del informe de referencia y
  *        nadie se entera. Es el mismo arreglo que llenan los otros dos motores de tablas,
  *        así que el banner de `ReporteGenerador` las reporta todas por un solo canal.
- * @returns {string} el informe con las dos tablas actualizadas.
+ * @returns {string} el informe con las tablas actualizadas.
  */
 export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
   let out = String(html || '');
   if (!estudio) return out;
 
-  const objetivos = [
-    { nombres: TABLA_OPERACIONES, tabla: filasOperacionesDeIngreso(estudio) },
-    { nombres: TABLA_OPERACION_ANALIZAR, tabla: filasOperacionAnalizar(estudio) },
-  ];
+  for (const objetivo of OBJETIVOS) {
+    const tabla = objetivo.filas(estudio);
 
-  for (const { nombres, tabla } of objetivos) {
-    const donde = localizarTablaHtml(out, nombres);
-    if (!donde) {
+    if (objetivo.todas) {
+      /* De atrás hacia adelante: sustituir una desplaza los offsets de las que van después.
+         Es la misma razón por la que la ruta OOXML recorre sus dos ocurrencias al revés. */
+      const bloques = localizarTablasHtml(out, objetivo.nombres);
+      if (!bloques.length) {
+        if (Array.isArray(avisos)) avisos.push(tabla.nombre);
+        continue;
+      }
+      for (const bloque of [...bloques].reverse()) {
+        out = sustituir(out, bloque, tabla, objetivo.rotulo);
+      }
+      continue;
+    }
+
+    const bloque = localizarTablaHtml(out, objetivo.nombres);
+    if (!bloque) {
       if (Array.isArray(avisos)) avisos.push(tabla.nombre);
       continue;
     }
-    const nueva = reescribirFilasHtml(out.slice(donde.inicio, donde.fin), tabla.filas);
-    out = out.slice(0, donde.inicio) + nueva + out.slice(donde.fin);
+    out = sustituir(out, bloque, tabla, objetivo.rotulo);
   }
 
   return out;

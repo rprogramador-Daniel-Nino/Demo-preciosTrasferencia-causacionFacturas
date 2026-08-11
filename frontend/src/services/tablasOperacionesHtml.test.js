@@ -101,12 +101,13 @@ test('el texto entre las dos tablas sobrevive intacto', () => {
   assert.match(salida, /<p> Las anteriores operaciones fueron realizadas con intercompañías\.<\/p>/);
 });
 
-test('una tabla que la plantilla no trae se reporta en los avisos', () => {
+test('una plantilla sin estas tablas no se altera en absoluto', () => {
   /* Sin el aviso la tabla se queda con los datos del informe de referencia y nadie se
-     entera: es el mismo contrato que `sustituidorDeTablas` de la ruta OOXML. */
+     entera: es el mismo contrato que `sustituidorDeTablas` de la ruta OOXML. La lista
+     completa de nombres la comprueba el test del final. */
   const avisos = [];
   const salida = actualizarTablasOperacionesHtml('<p> Un informe sin esas tablas.</p>', ESTUDIO, avisos);
-  assert.deepStrictEqual(avisos, ['Operaciones de Ingreso', 'Operación analizar']);
+  assert.ok(avisos.includes('Operaciones de Ingreso'), 'la Tabla 1 tiene que avisarse');
   assert.strictEqual(salida, '<p> Un informe sin esas tablas.</p>', 'el documento no debe cambiar');
 });
 
@@ -139,4 +140,82 @@ test('un estudio sin datos deja huecos visibles y no los datos de la plantilla',
   assert.ok(!texto.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
   assert.ok(!texto.includes('3.435.357.400'), 'sobrevivió el monto anterior');
   assert.match(texto, /—/);
+});
+
+/* ── Las cuatro tablas restantes del vinculado y del contribuyente ── */
+
+const ESTUDIO_COMPLETO = {
+  ...ESTUDIO, anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc_id: '444444001',
+  accionistas: [{ nombre: 'ACME HOLDINGS LLC', pais: 'ESTADOS UNIDOS', acciones: 1000, valor_capital: 10000, participacion_pct: 100 }],
+  t_cash: 500, t_act_tot: 1000,
+};
+
+test('la ficha del vinculado se sustituye en TODAS sus ocurrencias', () => {
+  /* La plantilla la trae dos veces —rotulada «Tabla 3.» y «Tabla 12.»—, y las dos publican
+     la misma ficha. Sustituir solo la primera deja la segunda con el vinculado anterior. */
+  const ficha = (n) =>
+    '<p><strong> Tabla ' + n + '.Transacciones Inter compañía</strong></p>' +
+    '<table><tr><th><p><strong> Compañía vinculada</strong></p></th></tr>' +
+    '<tr><th><p><strong> Razón social</strong></p></th><td><p> END GAME INTERACTIVE INC</p></td></tr></table>';
+  const html = ficha(3) + '<p> Texto intermedio.</p>' + ficha(12);
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.ok(!salida.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
+  assert.strictEqual((salida.match(/Razón social/g) || []).length, 2, 'las dos fichas siguen ahí');
+  assert.strictEqual(
+    (salida.match(/ACME INTERACTIVE LLC/g) || []).length, 2,
+    'el vinculado del estudio tiene que quedar en las dos fichas'
+  );
+  assert.match(salida, /<p> Texto intermedio\.<\/p>/, 'el texto entre las dos sobrevive');
+});
+
+test('el rótulo con el año se reescribe con el año gravable del estudio', () => {
+  /* La plantilla rotula «Activos a 31 de diciembre de 2024». El año es un dato, no
+     redacción: dejarlo publica el encabezado del año anterior. El número de la plantilla
+     se conserva, porque renumerar descuadra su índice. */
+  const html =
+    '<p><strong> Tabla 10. Activos a 31 de diciembre de 2024</strong></p>' +
+    '<table><tr><th><p><strong> Cifras</strong></p></th><th><p><strong> 2024</strong></p></th>' +
+    '<th><p><strong> A.V. 2024</strong></p></th></tr>' +
+    '<tr><th><p> Efectivo y equivalentes de efectivo</p></th><td><p> 1</p></td><td><p> 1%</p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.match(salida, /Tabla 10\. Activos a 31 de diciembre de 2025/);
+  assert.ok(!salida.includes('de 2024'), 'sobrevivió el año de la plantilla');
+});
+
+test('el método aplicable se localiza por su nombre corto y se rotula con el largo', () => {
+  const html =
+    '<p><strong> Tabla 4.Método de Precios de Transferencia Aplicable</strong></p>' +
+    '<table><tr><th><p><strong> Código</strong></p></th><th><p><strong> Descripción</strong></p></th>' +
+    '<th><p><strong> Método</strong></p></th><th><p><strong> Indicador</strong></p></th></tr>' +
+    '<tr><th><p> 07</p></th><td><p> Otros servicios</p></td><td><p> TU</p></td><td><p> MO</p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.match(salida, /<td><p>VENTA SERVICIOS<\/p><\/td>/);
+  assert.ok(!salida.includes('<p> Otros servicios</p>'), 'sobrevivió la descripción anterior');
+});
+
+test('la composición accionaria y los criterios de vinculación también se regeneran', () => {
+  const html =
+    '<p><strong> Tabla 6. Composición accionaria</strong></p>' +
+    '<table><tr><th><p><strong> Accionista</strong></p></th><th><p><strong> País</strong></p></th>' +
+    '<th><p><strong> Acciones</strong></p></th><th><p><strong> Capital</strong></p></th>' +
+    '<th><p><strong> %</strong></p></th></tr>' +
+    '<tr><th><p> VIEJO ACCIONISTA</p></th><td><p> JAPÓN</p></td><td><p> 1</p></td><td><p> 1</p></td><td><p> 1%</p></td></tr></table>' +
+    '<p><strong> Tabla 9. Criterios de vinculación económica</strong></p>' +
+    '<table><tr><th><p><strong> Vinculada</strong></p></th><th><p><strong> País</strong></p></th>' +
+    '<th><p><strong> Criterio</strong></p></th><th><p><strong> Detalle</strong></p></th></tr>' +
+    '<tr><th><p> END GAME INTERACTIVE INC</p></th><td><p> ESTADOS UNIDOS</p></td><td><p> x</p></td><td><p> y</p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.ok(!salida.includes('VIEJO ACCIONISTA'), 'sobrevivió el accionista de la plantilla');
+  assert.match(salida, /ACME HOLDINGS LLC/);
+  assert.match(salida, /Vinculación Directa/);
+});
+
+test('las tablas ausentes se nombran todas en los avisos', () => {
+  const avisos = [];
+  actualizarTablasOperacionesHtml('<p> Un informe pelado.</p>', ESTUDIO_COMPLETO, avisos);
+  assert.deepStrictEqual(avisos, [
+    'Operaciones de Ingreso', 'Operación analizar', 'Transacciones Inter compañía',
+    'Método de Precios de Transferencia', 'Composición accionaria',
+    'Compañías vinculadas', 'Criterios de vinculación', 'Activos a 31 de diciembre',
+  ]);
 });
