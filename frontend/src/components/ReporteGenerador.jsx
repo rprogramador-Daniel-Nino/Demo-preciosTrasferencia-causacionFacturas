@@ -22,7 +22,6 @@ import {
   MOTIVO_NO_APARECE, MOTIVO_SOLAPE, MOTIVO_SIN_APARICION_LIBRE,
 } from '../services/plantillaMarcador.js';
 import { renderizar } from '../services/plantillaRenderer.js';
-import { actualizarTablasOperacionesHtml } from '../services/tablasOperacionesHtml.js';
 import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
 import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
@@ -271,18 +270,8 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      mira si el documento trae el apartado del análisis del sector, y ahí es donde
      se ve. No es un `alert` porque el cálculo corre en cada montaje del estudio y
      un modal bloqueante cada vez molestaría más de lo que informa. */
-  const revisarCobertura = (htmlDelInforme, tablasAusentes = []) => {
+  const revisarCobertura = (htmlDelInforme) => {
     const partes = avisosDeMercado(htmlDelInforme);
-    /* Una tabla de operaciones que no está en la plantilla se queda con las cifras del
-       informe de referencia. Es el mismo aviso que da la ruta OOXML con `avisosTablas`:
-       callarlo es radicar el concepto y el monto del cliente anterior sin señal alguna. */
-    if (tablasAusentes.length) {
-      partes.push(
-        'no se encontraron en tu plantilla las tablas de operaciones (' +
-        tablasAusentes.join(', ') + '), así que conservan las cifras del informe de ' +
-        'referencia: revísalas una por una'
-      );
-    }
     setAvisoCobertura(
       partes.length ? 'Revisa antes de radicar — ' + partes.join('. ') + '.' : ''
     );
@@ -296,14 +285,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
 
      `huecos` es cuántos huecos de anexo dejó el extractor en esta plantilla. */
   const renderizarYAvisar = (htmlMarcado, recursos, huecos = 0) => {
-    const r = renderizar(htmlMarcado, study, recursos);
-    /* Las Tablas 1 y 2 se regeneran aquí, después de sustituir por campo y no por marcado.
-       Sus celdas no llevan marca —«Ingreso (07)» y «Otros servicios» no corresponden a
-       ningún campo del vocabulario—, así que por esta ruta se radicaban con el concepto, el
-       vinculado, el país y el monto del cliente anterior. Va DESPUÉS de `renderizar` a
-       propósito: así pisa también lo que el marcado haya acertado a medias ahí. */
-    const tablasAusentes = [];
-    const htmlFinal = actualizarTablasOperacionesHtml(r.html, study, tablasAusentes);
+    /* `analisisMercado` alimenta las ocho tablas de tendencias de la economía. La ruta
+       .docx ya lo recibía (`construirDocxDelEstudio`); esta se quedaba sin él y esas tablas
+       salían con las series del informe del que se tomó la plantilla. */
+    const r = renderizar(htmlMarcado, study, recursos, { datosMacro: analisisMercado });
     /* Los valores que traía el informe de referencia salen del propio HTML
        marcado: el marcado envuelve el texto original sin alterarlo, así que el
        contenido de una marca `data-campo="nit"` es literalmente el NIT del
@@ -311,13 +296,26 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
        comprueba de verdad el objetivo de todo este trabajo. */
     const valores = valoresDeReferencia(htmlMarcado);
     const nitRef = valores.find((v) => v.campo === 'nit');
-    setHtmlContent(htmlFinal);
+    setHtmlContent(r.html);
     /* La cobertura se mide sobre el render, no sobre la plantilla en crudo: es el
        documento que se va a radicar. Antes solo se calculaba en la ruta por
        literales, así que quien trabajaba con plantilla marcada —la ruta buena— no
        se enteraba de que le faltaban las series macro o el análisis del sector. */
-    revisarCobertura(htmlFinal, tablasAusentes);
-    setAvisos(revisarAntesDeGenerar({
+    revisarCobertura(r.html);
+    /* Las tablas del motor que la plantilla no trae. Mismo aviso que en la ruta .docx:
+       una tabla que no se regenera se queda con los datos del informe del que salió la
+       plantilla, y sin decirlo el fallo llega hasta la radicación. */
+    const avisosDeTablas = (r.avisosTablas || []).length
+      ? [{
+        nivel: 'aviso',
+        origen: 'tablas',
+        texto: 'No se encontró en tu plantilla ' + r.avisosTablas.length + ' tabla(s) del motor (' +
+          r.avisosTablas.join(', ') + '), así que conservan el contenido que ya traían. ' +
+          'Revísalas una por una antes de radicar: si tu plantilla las rotula de otro modo, ' +
+          'dilo para añadir ese nombre.',
+      }]
+      : [];
+    setAvisos(avisosDeTablas.concat(revisarAntesDeGenerar({
       estudio: study,
       /* Sin NIT de referencia la guarda no opina, que es lo correcto: no hay
          con qué comparar. */
@@ -335,9 +333,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          cuando ya está subido. */
       tieneAnexo: huecos === 0 || (study.eeffImages || []).length > 0,
       recursosFaltantes: r.recursosFaltantes,
-      /* El documento que se va a generar, con las tablas de operaciones ya regeneradas: las
-         guardas tienen que opinar sobre lo que se radica, no sobre un paso intermedio. */
-      htmlRenderizado: htmlFinal,
+      htmlRenderizado: r.html,
       valores,
       /* Qué le falta a esta plantilla por venir de un lector de PDF anterior. Las
          plantillas se guardan y se reutilizan, así que una extraída hace dos
@@ -345,7 +341,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          del informe, por ejemplo— y sin este aviso no hay forma de saberlo ni de
          saber que la solución es volver a subir el PDF. */
       faltaPorVersion: loQueFaltaPorVersion(versionDe(htmlMarcado)),
-    }));
+    })));
   };
 
   /* Restauración al abrir el estudio: sin esto la plantilla y sus imágenes se

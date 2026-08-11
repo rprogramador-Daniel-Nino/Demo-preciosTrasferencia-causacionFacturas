@@ -69,21 +69,31 @@ test('el rótulo de la tabla no se toca', () => {
 
 test('las filas emitidas llevan la forma td/th que docxWriter sabe convertir', () => {
   /* `docxWriter.js` recoge los hijos `td`/`th` de cada `tr` y descarta lo demás, y cada
-     celda tiene que traer su `<p>`: un texto suelto en la celda no se emite. */
+     celda tiene que traer su `<p>`: un texto suelto en la celda no se emite. La etiqueta,
+     los atributos y la envoltura salen de la fila molde de la plantilla —lo hace
+     `reescribirFilasHtml`—, así que la primera celda sigue siendo `<th>` porque así la
+     trae el informe del cliente. */
   const salida = actualizarTablasOperacionesHtml(INFORME, ESTUDIO);
   assert.match(
     salida,
-    /<tr><th><p><span class="pt-valor">VENTA SERVICIOS<\/span><\/p><\/th><td><p><span class="pt-valor">ACME INTERACTIVE LLC<\/span><\/p><\/td>/
+    /<tr><th><p>VENTA SERVICIOS<\/p><\/th><td><p>ACME INTERACTIVE LLC<\/p><\/td><td><p>MÉXICO<\/p><\/td><td><p>3\.433\.542\.684<\/p><\/td><\/tr>/
   );
 });
 
-test('cada valor sustituido se resalta como los demás de la ruta HTML', () => {
-  /* `plantillaRenderer` envuelve en `.pt-valor` todo lo que sustituye, y el previo lo pinta
-     por CSS. Sin esto, las celdas de estas dos tablas serían las únicas que no se
-     distinguirían de lo que venía en la plantilla. */
-  const salida = actualizarTablasOperacionesHtml(INFORME, ESTUDIO);
-  const resaltados = salida.match(/<span class="pt-valor">/g) || [];
-  assert.strictEqual(resaltados.length, 6, 'cuatro celdas de la Tabla 1 y dos de la Tabla 2');
+test('se conserva el énfasis con el que la plantilla escribe la celda', () => {
+  /* La razón de ser de esta ruta es conservar la presentación del informe del cliente. Si
+     su fila de datos va en negrita, la nueva también: el valor cambia, el formato no. */
+  const html =
+    '<p><strong> Tabla 2. Operación analizar</strong></p>' +
+    '<table><tr><th><p><strong> No. Operaciones de análisis</strong></p></th>' +
+    '<th><p><strong> Descripción</strong></p></th></tr>' +
+    '<tr><th><p><strong> Ingreso (07)</strong></p></th>' +
+    '<td><p><strong> Otros servicios</strong></p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO);
+  assert.match(
+    salida,
+    /<tr><th><p><strong>Ingreso \(—\)<\/strong><\/p><\/th><td><p><strong>VENTA SERVICIOS<\/strong><\/p><\/td><\/tr>/
+  );
 });
 
 test('el texto entre las dos tablas sobrevive intacto', () => {

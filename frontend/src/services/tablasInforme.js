@@ -16,7 +16,11 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { analizarRango } from './rangoIntercuartil.js';
-import { DATOS_MACRO } from './analisisMercado.js';
+import {
+  DATOS_MACRO, resolverSerie, valorODisponible, marcadorPendiente,
+} from './analisisMercado.js';
+import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
+import { num, pliOf } from '../utils/calculations.js';
 
 /* ══════════════ Razones de rechazo ══════════════
    Cada fila es un criterio del motor. Se omiten las que no descartaron a nadie: un
@@ -71,12 +75,25 @@ export function filasRazonesRechazo(embudo) {
      examinada. */
   const reserva = Number(e.reserva) || 0;
 
+  /* Las que se retiraron de la muestra en la ingesta del paso 4 porque su estado
+     financiero no traía cifras con las que calcular el margen (`eeffSuficiencia.js`).
+     Van al mismo sitio que la reserva y por la misma razón: superaron los filtros
+     objetivos y no integran la muestra. El motivo real —falta el documento con las
+     cifras— no es un criterio de comparabilidad que se sostenga ante quien revise el
+     informe, y sí lo es no ser funcionalmente comparable con la parte examinada.
+
+     Tiene que estar aquí para que la tabla cuadre: el componente baja `seleccionadas`
+     al retirarlas, así que sin recogerlas en alguna fila la suma dejaría de dar el
+     universo evaluado y el generador avisaría de un descuadre que no existe. */
+  const sinEeff = Number(e.sinEeff) || 0;
+
   const filas = [];
   RAZONES_RECHAZO.forEach(([clave, etiqueta]) => {
     /* La reserva se suma ANTES de descartar los ceros. Un estudio que no rechazó a
        nadie por rigor funcional pero dejó reserva necesita igual esta fila: omitirla
        dejaría la columna sin sumar el universo. */
-    const cuantas = (Number(porMotivo[clave]) || 0) + (clave === 'rigorFuncional' ? reserva : 0);
+    const cuantas = (Number(porMotivo[clave]) || 0)
+      + (clave === 'rigorFuncional' ? reserva + sinEeff : 0);
     if (cuantas > 0) filas.push({ clave, etiqueta, cuantas });
   });
 
@@ -102,6 +119,250 @@ export function filasRazonesRechazo(embudo) {
 export function filasComparablesInforme(study) {
   const { filas } = analizarRango(study || {});
   return (filas || []).filter((f) => f.nombre);
+}
+
+/** Cómo se nombra el ámbito de una comparable en el informe. */
+export const AMBITO = { Int: 'INTERNACIONAL', Nac: 'NACIONAL' };
+
+/* Etiquetas de las filas del rango. Se exportan porque hay tablas que publican solo
+   algunos percentiles —la versión horizontal del rango lleva P25, mediana y P75— y
+   buscarlos por un literal repetido en cada consumidor deja de encontrarlos en silencio
+   el día que se reescriba una etiqueta. */
+export const ETIQUETAS_RANGO = {
+  min: 'Mínimo',
+  p25: 'Percentil 25',
+  med: 'Mediana',
+  p75: 'Percentil 75',
+  max: 'Máximo',
+};
+
+/**
+ * Filas de la tabla «Muestra Compañías comparables»: número, razón social y ámbito.
+ *
+ * La numeración es la de la tabla, no un identificador: se recalcula sobre las filas que
+ * quedan, así que retirar una comparable durante la ingesta no deja huecos en la columna.
+ */
+export function filasMuestraComparables(study) {
+  return filasComparablesInforme(study).map((f, i) => ({
+    numero: i + 1,
+    nombre: f.nombre,
+    ambito: AMBITO[f.amb] || '',
+  }));
+}
+
+/**
+ * Filas del rango intercuartil en vertical, con los valores SIN formatear.
+ *
+ * Vivía dentro de `actualizarTablasOperacionesOoxml`, que es la ruta de plantilla .docx.
+ * Se extrajo al añadir la misma tabla a la ruta de PDF (`tablasHtmlInforme.js`): con el
+ * cálculo repetido en cada ruta, las dos podían publicar percentiles distintos para el
+ * mismo estudio, y ese defecto ya se pagó una vez en este repo —había dos
+ * implementaciones del cuartil y el modal mostraba un rango y el informe otro—.
+ *
+ * Los percentiles ajustados salen de `stats`, que es lo que sostiene la conclusión de
+ * cumplimiento; los no ajustados se calculan aquí sobre la serie sin ajuste, con el mismo
+ * `cuartilInterpolado` (QUARTILE.INC) que usa el motor y que emite el Excel de soporte.
+ *
+ * @param {object} study
+ * @returns {{filas:Array<{etiqueta:string, noAjustado:number|null, ajustado:number|null}>,
+ *            tPLI:number|null, pli:string}}
+ */
+export function filasRangoIntercuartil(study) {
+  const estudio = study || {};
+  const r = analizarRango(estudio);
+  const stats = r.stats || {};
+  const compFilas = r.filas || [];
+
+  const serie = (clave) => compFilas
+    .map((f) => f[clave])
+    .filter((v) => v !== null && v !== undefined)
+    .sort((a, b) => a - b);
+
+  const sinAjuste = serie('noAjustado');
+  const conAjuste = serie('ajustado');
+  const extremo = (s, i) => (s.length ? s[i < 0 ? s.length + i : i] : null);
+
+  /* Indicador del contribuyente con el mismo método, descontando el segmento excluido:
+     es la cifra que la conclusión compara contra el rango. */
+  const seg = num(estudio.seg_excluido) || 0;
+  const tS = num(estudio.t_s), tOp = num(estudio.t_op);
+  const T = {
+    s: tS !== null ? tS - seg : null,
+    c: num(estudio.t_c),
+    op: tOp !== null ? tOp - seg : null,
+    ar: num(estudio.t_ar), inv: num(estudio.t_inv), ap: num(estudio.t_ap),
+  };
+  const pli = estudio.pli || 'MO';
+  const tPLI = pliOf(T, pli);
+
+  const nombreContribuyente = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+
+  return {
+    pli,
+    tPLI,
+    filas: [
+      { etiqueta: ETIQUETAS_RANGO.min, noAjustado: extremo(sinAjuste, 0), ajustado: extremo(conAjuste, 0) },
+      {
+        etiqueta: ETIQUETAS_RANGO.p25,
+        noAjustado: cuartilInterpolado(sinAjuste, 0.25),
+        ajustado: stats.p25 !== undefined ? stats.p25 : null,
+      },
+      {
+        etiqueta: ETIQUETAS_RANGO.med,
+        noAjustado: cuartilInterpolado(sinAjuste, 0.5),
+        ajustado: stats.med !== undefined ? stats.med : null,
+      },
+      {
+        etiqueta: ETIQUETAS_RANGO.p75,
+        noAjustado: cuartilInterpolado(sinAjuste, 0.75),
+        ajustado: stats.p75 !== undefined ? stats.p75 : null,
+      },
+      { etiqueta: ETIQUETAS_RANGO.max, noAjustado: extremo(sinAjuste, -1), ajustado: extremo(conAjuste, -1) },
+      /* El contribuyente cierra la tabla y lleva su indicador en las dos columnas: se
+         ajusta contra sí mismo, así que el ajuste es cero. */
+      { etiqueta: nombreContribuyente, noAjustado: tPLI, ajustado: tPLI },
+    ],
+  };
+}
+
+/* ══════════════ Tablas de tendencias de la economía ══════════════
+
+   Las ocho salen de las series macro y no del motor de comparables. Se describen aquí —qué
+   se busca en la plantilla, qué título llevan, qué columnas y qué filas— para que las dos
+   rutas del informe emitan lo mismo: la de plantilla .docx las escribe como OOXML y la de
+   PDF reescribe las filas del HTML. Antes la definición vivía dentro del generador de
+   OOXML, así que llevarla a la otra ruta habría significado copiar ocho tablas y sus
+   fuentes, y cualquier corrección en una habría dejado a la otra atrás. */
+
+/**
+ * Descriptores de las ocho tablas macro, ya resueltos contra las series.
+ *
+ * @param {object} datosMacro  el análisis de mercado del estudio, o null para usar las
+ *        series de respaldo de `analisisMercado.js`.
+ * @param {number} year  año gravable.
+ * @returns {Array<{nombre:string, titulo:string, cabeceras:string[],
+ *          filas:Array<string[]>, fuente:string}>} `nombre` es lo que se busca en la
+ *          plantilla; el resto es el contenido que debe quedar.
+ */
+export function tablasMacroInforme(datosMacro, year) {
+  const y = Number(year) || 2025;
+  const y1 = y - 1, y2 = y, y3 = y + 1;
+  const wrap = (v) => String(v == null ? '—' : v);
+  const serie = (clave) => resolverSerie(datosMacro, clave);
+
+  const porAnios = (clave, concepto, cabecera, titulo, etiquetaProyeccion) => {
+    const { valores: S, fuente } = serie(clave);
+    return {
+      titulo, fuente, cabeceras: ['Año', cabecera],
+      filas: [
+        [String(y1), wrap(valorODisponible(S, y1, concepto))],
+        [String(y2), wrap(valorODisponible(S, y2, concepto))],
+        [String(y3) + etiquetaProyeccion, wrap(valorODisponible(S, y3, 'la proyección de ' + concepto))],
+      ],
+    };
+  };
+
+  const tablas = [];
+
+  tablas.push({
+    nombre: 'PIB Mundial',
+    ...porAnios('pib_mundial', 'el crecimiento del PIB mundial', 'Crecimiento Mundial (%)',
+      'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')', ' (Proyección)'),
+  });
+
+  tablas.push({
+    nombre: 'PIB en Colombia',
+    ...porAnios('pib_colombia', 'el crecimiento del PIB de Colombia', 'Crecimiento del PIB (%)',
+      'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')', ' (Proyección OCDE)'),
+  });
+
+  tablas.push({
+    nombre: 'Inflación Global',
+    ...porAnios('inflacion_global', 'la inflación global', 'Tasa de Inflación (%)',
+      'Tasas de Inflación Global (' + y1 + '-' + y3 + ')', ' (Proyección)'),
+  });
+
+  /* Proyecciones por región: las filas dependen de lo que traiga la serie del año, así que
+     cuando falta se emiten las cinco regiones del informe con su marcador de pendiente en
+     vez de una tabla vacía. */
+  {
+    const { valores: porAnio, fuente } = serie('crecimiento_por_region');
+    const porRegion = porAnio[y];
+    const filas = (!porRegion || !porRegion.length)
+      ? ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)']
+        .map((r) => [r, wrap(marcadorPendiente(y, 'la proyección de crecimiento de ' + r))])
+      : porRegion.map(({ region, valor }) => [region, wrap(valor)]);
+    tablas.push({
+      nombre: 'por Región/País',
+      titulo: 'Proyecciones de Crecimiento del PIB por Región/País (' + y + ')',
+      cabeceras: ['Región/País', 'Crecimiento Proyectado (%)'],
+      filas, fuente,
+    });
+  }
+
+  {
+    const { valores: S, fuente } = serie('inflacion_colombia');
+    tablas.push({
+      nombre: 'Inflación en Colombia',
+      titulo: 'Inflación en Colombia (' + y + ' vs. Meta ' + y3 + ')',
+      cabeceras: ['Indicador', 'Valor (%)'],
+      filas: [
+        ['Inflación ' + y, wrap(valorODisponible(S, y, 'la inflación de Colombia'))],
+        ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
+      ],
+      fuente,
+    });
+  }
+
+  /* Tasa de intervención: la serie trae su propia etiqueta de fecha («Diciembre 2024»),
+     que además da el título. */
+  {
+    const { valores: S, fuente } = serie('tasa_intervencion');
+    const filas = [y1, y2].map((anio) => {
+      const obs = S[anio];
+      return obs
+        ? [obs.etiqueta, wrap(obs.valor)]
+        : ['Diciembre ' + anio,
+          wrap(marcadorPendiente(anio, 'la tasa de intervención del Banco de la República'))];
+    });
+    tablas.push({
+      nombre: 'Intervención del Banco',
+      titulo: 'Tasa de Intervención del Banco de la República ('
+        + filas[0][0] + ' - ' + filas[1][0] + ')',
+      cabeceras: ['Fecha', 'Tasa de Intervención (%)'],
+      filas, fuente,
+    });
+  }
+
+  {
+    const { valores: S, fuente } = serie('trm_promedio');
+    tablas.push({
+      nombre: 'Tasa Representativa del Mercado',
+      titulo: 'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
+      cabeceras: ['Año', 'TRM Promedio ($)'],
+      filas: [
+        [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
+        [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
+      ],
+      fuente,
+    });
+  }
+
+  {
+    const { valores: S, fuente } = serie('desempleo_colombia');
+    tablas.push({
+      nombre: 'Desempleo en Colombia',
+      titulo: 'Tasa de Desempleo en Colombia (' + y + ' vs. Proyección ' + y3 + ')',
+      cabeceras: ['Indicador', 'Valor (%)'],
+      filas: [
+        ['Desempleo ' + y, wrap(valorODisponible(S, y, 'la tasa de desempleo'))],
+        ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
+      ],
+      fuente,
+    });
+  }
+
+  return tablas;
 }
 
 /* ══════════════ Diagnóstico de cobertura ══════════════ */

@@ -17,9 +17,10 @@ define('GEMINI_MODEL_FALLBACK', 'gemini-3.5-flash');
 /**
  * ¿Hay que reintentar esta respuesta de Anthropic contra Gemini?
  *
- * Solo cuando Anthropic no puede atender algo que sí está bien pedido: sin saldo, con el
- * límite de peticiones alcanzado o sobrecargado. Un 400 por petición mal formada o un 401
- * por key inválida fallarían igual en Gemini, y caer ahí enmascara un defecto propio.
+ * Solo cuando Anthropic no puede atender algo que sí está bien pedido: sin saldo, con el tope
+ * de gasto de la cuenta alcanzado, con el límite de peticiones alcanzado o sobrecargado. Un
+ * 400 por petición mal formada o un 401 por key inválida fallarían igual en Gemini, y caer
+ * ahí enmascara un defecto propio.
  */
 function debeCaerAGemini($status, $cuerpo) {
     if ($status === 429 || $status === 529) {
@@ -28,8 +29,12 @@ function debeCaerAGemini($status, $cuerpo) {
     if ($status === 400 || $status === 402) {
         // Se compara sobre el mensaje porque el `type` es el genérico
         // `invalid_request_error`, el mismo de una petición mal formada.
+        // El segundo patrón es el tope de gasto que la propia organización fijó en la
+        // consola («You have reached your specified API usage limits»): mismo 400 y mismo
+        // type que el crédito agotado, pero sin nombrar el saldo.
         $mensaje = $cuerpo['error']['message'] ?? ($cuerpo['message'] ?? '');
-        return (bool) preg_match('/credit balance|insufficient.*credit|billing/i', (string) $mensaje);
+        return (bool) preg_match('/credit balance|insufficient.*credit|billing/i', (string) $mensaje)
+            || (bool) preg_match('/usage limits?|spend limits?/i', (string) $mensaje);
     }
     return false;
 }
@@ -69,16 +74,18 @@ function aPeticionGemini($cuerpo) {
 
     $salida = ['contents' => $contents];
 
-    $generationConfig = [];
+    // El pensamiento de Gemini se desactiva porque `max_tokens` de Anthropic cuenta solo el
+    // texto, y `maxOutputTokens` de Gemini cuenta también el razonamiento: traducirlo 1:1 con
+    // el pensamiento activo devuelve el párrafo cortado a media frase. Ver el detalle medido
+    // en functions/fallbackGemini.js.
+    $generationConfig = ['thinkingConfig' => ['thinkingBudget' => 0]];
     if (isset($cuerpo['max_tokens'])) {
         $generationConfig['maxOutputTokens'] = $cuerpo['max_tokens'];
     }
     if (isset($cuerpo['temperature'])) {
         $generationConfig['temperature'] = $cuerpo['temperature'];
     }
-    if (!empty($generationConfig)) {
-        $salida['generationConfig'] = $generationConfig;
-    }
+    $salida['generationConfig'] = $generationConfig;
 
     $system = textoDeContenidoAnthropic($cuerpo['system'] ?? '');
     if ($system !== '') {

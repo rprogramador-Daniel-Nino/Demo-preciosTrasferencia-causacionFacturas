@@ -20,6 +20,30 @@ test('el crédito agotado de Anthropic dispara el fallback', () => {
   assert.strictEqual(debeCaerAGemini(402, cuerpo), true);
 });
 
+test('el tope de gasto de la cuenta dispara el fallback', () => {
+  /* Copiado literal de lo que devolvió producción el 2026-08-11, cuando la ingesta de EEFF
+     falló al redactar la descripción de una comparable: 400 con el type genérico y sin una
+     palabra sobre el saldo, así que el patrón del crédito agotado no lo reconocía. */
+  const cuerpo = {
+    type: 'error',
+    error: {
+      type: 'invalid_request_error',
+      message: 'You have reached your specified API usage limits. You will regain access on '
+        + '2026-09-01 at 00:00 UTC.',
+    },
+  };
+  assert.strictEqual(debeCaerAGemini(400, cuerpo), true);
+  assert.strictEqual(debeCaerAGemini(402, cuerpo), true);
+});
+
+test('el tope de gasto se reconoce también nombrado como spend limit', () => {
+  const cuerpo = {
+    type: 'error',
+    error: { type: 'invalid_request_error', message: 'Monthly spend limit reached.' },
+  };
+  assert.strictEqual(debeCaerAGemini(400, cuerpo), true);
+});
+
 test('el límite de peticiones y la sobrecarga también caen a Gemini', () => {
   assert.strictEqual(debeCaerAGemini(429, { error: { type: 'rate_limit_error' } }), true);
   assert.strictEqual(debeCaerAGemini(529, { error: { type: 'overloaded_error' } }), true);
@@ -99,6 +123,26 @@ test('la petición traducida no arrastra campos que Gemini no entiende', () => {
   assert.ok(!('max_tokens' in g), 'va dentro de generationConfig');
   assert.ok(!('messages' in g), 'se llaman contents');
   assert.strictEqual(g.generationConfig.temperature, 0.2);
+});
+
+test('la petición traducida desactiva el pensamiento de Gemini', () => {
+  /* `max_tokens` de Anthropic cuenta solo el texto; `maxOutputTokens` de Gemini cuenta además
+     el razonamiento. Con el pensamiento activo, los 500 tokens del párrafo de una comparable
+     se gastaban en pensar (477 medidos en producción) y el texto salía cortado a media frase.
+     Si esta aserción falla, el fallback volvió a truncar descripciones en silencio. */
+  const g = aPeticionGemini({
+    model: 'claude-haiku-4-5-20251001', max_tokens: 500,
+    messages: [{ role: 'user', content: 'Redacta la descripción de ACME.' }],
+  });
+  assert.deepStrictEqual(g.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+  assert.strictEqual(g.generationConfig.maxOutputTokens, 500);
+});
+
+test('el pensamiento se desactiva incluso sin max_tokens ni temperature', () => {
+  /* Anthropic exige `max_tokens`, así que este caso no llega desde los llamadores reales,
+     pero el generationConfig ya no es opcional: si se omitiera aquí, Gemini razonaría. */
+  const g = aPeticionGemini({ messages: [{ role: 'user', content: 'x' }] });
+  assert.deepStrictEqual(g.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
 });
 
 /* ── Traducción de la respuesta ── */

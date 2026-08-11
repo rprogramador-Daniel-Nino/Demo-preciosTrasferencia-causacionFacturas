@@ -8,6 +8,9 @@ import { analizarRango } from '../services/rangoIntercuartil';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso } from '../services/comparablesEngine';
 import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
+import {
+  separarPorSuficiencia, partidasFaltantes, motivoSinInformacionFinanciera, retirarFilas,
+} from '../services/eeffSuficiencia';
 import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
@@ -639,6 +642,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return copia;
   };
 
+  /* El embudo tiene que seguir cuadrando: la tabla de razones de rechazo del informe
+     comprueba que rechazos + aceptadas dé el universo evaluado. Bajar `seleccionadas`
+     sin anotar las retiradas en ningún sitio haría fallar esa comprobación, así que
+     van a `sinEeff`, que `filasRazonesRechazo` suma a las diferencias funcionales
+     —el mismo destino que la reserva, y por la misma razón—.
+
+     Si no hay embudo (estudio con comparables cargadas a mano, sin correr el motor del
+     paso 3) no hay nada que ajustar. */
+  const anotarRetiradasEnEmbudo = (cuantas) => {
+    if (!cuantas) return;
+    setSelectionFunnel((prev) => (prev ? {
+      ...prev,
+      seleccionadas: Math.max(0, (Number(prev.seleccionadas) || 0) - cuantas),
+      sinEeff: (Number(prev.sinEeff) || 0) + cuantas,
+    } : prev));
+  };
+
   /* Guarda las páginas rasterizadas de esta comparable para el ANEXO B. Se combina con
      lo que ya había: dos cargas sucesivas sobre comparables distintas no deben
      pisarse entre sí. */
@@ -791,6 +811,27 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         return;
       }
 
+      /* Mismo criterio que en la carga en lote, y por la misma razón: un documento sin
+         cifras con las que calcular el margen no sostiene a la comparable, y aplicarlo
+         dejaría en la fila las de Capital IQ como si este documento las respaldara. */
+      const faltantes = partidasFaltantes(result.data);
+      if (faltantes.length) {
+        const nombre = (destino && destino.name) || (result.data && result.data.nombre);
+        const { filas: filasFinales } = retirarFilas(comparables, new Set([compIndex]));
+        setComparables(filasFinales);
+        anotarRetiradasEnEmbudo(1);
+        setResultadoCarga({
+          aplicadas: [],
+          rechazadas: [],
+          retiradas: [{
+            archivo: file.name,
+            comparable: nombre || 'la comparable',
+            motivo: motivoSinInformacionFinanciera(nombre, faltantes, file.name),
+          }],
+        });
+        return;
+      }
+
       const cruceEfectivo = traeNombre
         ? cruce
         : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
@@ -891,17 +932,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setCargaEeff({ etapa: 'Cruzando ' + entradas.length + ' empresa(s) con las comparables…', hechas: lista.length, total: lista.length });
       const { aplicadas, rechazadas } = repartir(entradas, comparables);
 
+      /* Las que cruzaron pero cuyo documento no trae con qué calcular el margen salen de
+         la muestra en vez de aplicarse. Volcarlas dejaría en la fila las cifras que ya
+         traía de Capital IQ como si este documento las respaldara, y la comparable
+         seguiría en el rango sin soporte. */
+      const { conCifras, sinCifras } = separarPorSuficiencia(aplicadas);
+
       /* Se acumulan todas las filas antes de un único setComparables: un set por
          empresa se sobrescribiría entre iteraciones y solo entraría la última. */
       let filas = comparables;
-      aplicadas.forEach((a) => {
+      conCifras.forEach((a) => {
         filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
       });
 
       /* Imágenes por empresa, recortadas del PDF de lote al que pertenecen. Se hace
          después de aplicar las cifras: la clave (nameKey) sale del nombre ya asentado
          en la fila, que puede diferir en mayúsculas/acentos del que trajo el documento. */
-      aplicadas.forEach((a) => {
+      conCifras.forEach((a) => {
         const clave = nameKey(filas[a.indice].name || '');
         const imagenesArchivo = a._imagenesDelArchivo || [];
         if (!imagenesArchivo.length) {
@@ -915,14 +962,37 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         }
       });
 
-      if (aplicadas.length) {
-        setComparables(filas);
-        await publicarEeff(filas, aplicadas.map(a => a.indice));
-        redactarDescripcionesDeFilas(filas, aplicadas.map((a) => a.indice)).catch((err) =>
+      /* El retiro va después de aplicar y de recortar las imágenes, que trabajan sobre
+         los índices originales, y antes de publicar y de pedir las descripciones, que
+         reciben ya los nuevos. */
+      const retiradas = sinCifras.map((a) => ({
+        archivo: a.archivo,
+        comparable: (filas[a.indice] && filas[a.indice].name)
+          || (a.datos && a.datos.nombre) || 'la comparable',
+        motivo: motivoSinInformacionFinanciera(
+          (filas[a.indice] && filas[a.indice].name) || (a.datos && a.datos.nombre),
+          a.faltantes, a.archivo,
+        ),
+      }));
+      const aRetirar = new Set(sinCifras.map((a) => a.indice));
+      const { filas: filasFinales, nuevoIndice } = retirarFilas(filas, aRetirar);
+      const indicesAplicados = conCifras
+        .map((a) => (nuevoIndice ? nuevoIndice.get(a.indice) : a.indice))
+        .filter((i) => i != null);
+
+      if (conCifras.length || aRetirar.size) setComparables(filasFinales);
+      anotarRetiradasEnEmbudo(aRetirar.size);
+      if (indicesAplicados.length) {
+        await publicarEeff(filasFinales, indicesAplicados);
+        redactarDescripcionesDeFilas(filasFinales, indicesAplicados).catch((err) =>
           console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
         );
       }
-      setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
+      setResultadoCarga({
+        aplicadas: conCifras,
+        rechazadas: [...rechazadas, ...fallosLectura],
+        retiradas,
+      });
     } finally {
       setUploadingEEFF(false);
       setCargaEeff(null);
@@ -1801,7 +1871,38 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 </div>
               ))}
 
-              {!resultadoCarga.aplicadas.length && !resultadoCarga.rechazadas.length && (
+              {/* Comparables retiradas de la muestra porque su EEFF no traía cifras. Es un
+                  estado distinto de «rechazado»: ahí no se aplicó un documento, aquí se
+                  quitó una comparable del estudio, y eso cambia el tamaño de la muestra.
+                  Este aviso vive solo en pantalla: no se escribe en el Excel de soporte
+                  —donde la compañía aparece contada entre las diferencias funcionales— ni
+                  en el informe. */}
+              {(resultadoCarga.retiradas || []).length > 0 && (
+                <div className="rounded-lg px-4 py-3 text-xs border bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900 text-orange-800 dark:text-orange-300">
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-semibold">
+                        {resultadoCarga.retiradas.length === 1
+                          ? '1 comparable salió de la muestra por falta de información financiera'
+                          : `${resultadoCarga.retiradas.length} comparables salieron de la muestra por falta de información financiera`}
+                        {selectionFunnel ? ` · la muestra queda en ${selectionFunnel.seleccionadas}` : ''}
+                      </div>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {resultadoCarga.retiradas.map((r, i) => (
+                          <li key={'ret' + i}>
+                            <span className="font-semibold">{r.comparable}</span>
+                            <span className="block leading-relaxed">{r.motivo}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!resultadoCarga.aplicadas.length && !resultadoCarga.rechazadas.length
+                && !(resultadoCarga.retiradas || []).length && (
                 <div className="text-xs text-zinc-500">No se encontró ningún estado financiero en los documentos.</div>
               )}
             </div>
