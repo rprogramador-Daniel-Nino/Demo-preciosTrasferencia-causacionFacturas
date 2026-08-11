@@ -1,7 +1,8 @@
 # Tablas 1 y 2 de operaciones en la ruta HTML
 
 **Fecha:** 2026-08-11
-**Estado:** implementado (995 pruebas en verde, sin errores de lint)
+**Estado:** implementado e integrado con `origin/antoniodev` (1055 pruebas en verde, sin
+errores de lint, build limpio)
 
 ## Problema
 
@@ -178,6 +179,31 @@ ejecución. Se le añadió prueba.
   aviso, y forma `td`/`th` que `docxWriter` sabe leer.
 - `excelOperationsParser.test.js`: sin `(07)` fingido; `Cod` diligenciada compone el código.
 - `npm test` al 100 %.
+
+## Cómo quedó tras integrar con `origin/antoniodev`
+
+`pablo-barreto` construyó en paralelo el mismo mecanismo: `tablasHtmlInforme.js`, con la
+misma arquitectura y los mismos nombres (`textoPlanoHtml`, `localizarTablaHtml`,
+`reescribirFilasHtml`), para la tabla de márgenes, las cuatro del motor y las ocho de
+macroeconomía. Lo detectó `/revisar-ramas-equipo` al cerrar, no al empezar: cuando se corrió
+al arrancar, esos commits todavía no estaban publicados.
+
+Se resolvió plegando estas dos tablas a **su** motor, no dejando los dos conviviendo:
+
+- `tablasOperacionesHtml.js` pierde su localizador —duplicaba el suyo— y usa
+  `localizarTablaHtml` y `reescribirFilasHtml`. Con eso gana lo que su versión hace mejor:
+  copia etiqueta, atributos y envoltura de énfasis de la fila molde de la plantilla, así que
+  conserva el formato del cliente en vez de imponer un `<th><p><span class="pt-valor">`. Y
+  localiza por nombre y no por número del rótulo (criterio del usuario, 2026-08-11).
+- Las dos tablas se registran dentro de `renderizar()` en `plantillaRenderer.js`, junto a los
+  otros dos motores y compartiendo su arreglo `avisosTablas`. El enganche en
+  `ReporteGenerador.jsx` que describe el punto 4 sobra: su banner ya reporta por un solo canal
+  las tablas que la plantilla no trae.
+- `docxRelleno.js` toma su versión del rango, que unifica el cálculo en `tablasInforme.js`.
+
+El resto se conserva entero porque no se solapa: la corrección de zona —que su trabajo
+también necesitaba, porque el RESUMEN EJECUTIVO estaba bloqueado para ellos igual—,
+`tablasOperaciones.js` y `tiposOperacionDian.js`.
 
 ## Fuera de alcance
 
