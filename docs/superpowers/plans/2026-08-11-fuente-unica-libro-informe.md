@@ -1631,12 +1631,28 @@ export function desgloseAjuste(comp, contribuyente, metodo, tasa) {
     /* El denominador de la columna R del libro: para NCP y Cost Plus el depurado,
        para las bases de ventas la venta ajustada, y la base a secas en Berry. */
     denomAjustado: usaDepurado ? denomDep : baseAjustada,
-    /* Internos, para que indicadorAjustado no los recalcule. */
-    _baseAjustada: baseAjustada, _denomDep: denomDep, _usaDepurado: usaDepurado,
-    _numBase: (metodo === 'MB' || metodo === 'Berry' || metodo === 'CostPlus') ? c.gp : c.ebit,
+    usaDepurado,
   };
 }
 ```
+
+> **Decisión al implementar (2026-08-11).** Una versión anterior de este paso devolvía además
+> cuatro campos con prefijo `_` (`_baseAjustada`, `_denomDep`, `_usaDepurado`, `_numBase`) que
+> existían solo para que `indicadorAjustado` no recalculara. Se retiran: filtraban internos en un
+> contrato público sin necesidad, porque los campos públicos ya los determinan.
+>
+> El denominador se reconstruye en `indicadorAjustado` así:
+>
+> ```js
+>   const denom = (d.usaDepurado || AJUSTAN_AR.has(ajuste)) ? d.denomAjustado : d.base;
+> ```
+>
+> Equivalente al original en los cinco casos, verificado uno a uno: con denominador depurado
+> (NCP y Cost Plus) `denomAjustado` **es** el depurado; con base de ventas y un sabor que resta
+> el ajuste de CxC, **es** la venta ajustada; con base de ventas sin ese sabor, y con base
+> distinta de ventas en cualquiera de los dos casos, `denomAjustado` colapsa a la base, que es lo
+> que el original devolvía. El numerador sale de elegir entre `d.ebit` y `d.utilBruta` con el
+> mismo criterio de método que ya estaba escrito.
 
 Y `indicadorAjustado` arranca con:
 
