@@ -1,7 +1,7 @@
-# Tablas 1 y 2 de operaciones en la ruta HTML
+# Tablas del informe en la ruta de plantilla PDF
 
 **Fecha:** 2026-08-11
-**Estado:** implementado e integrado con `origin/antoniodev` (1055 pruebas en verde, sin
+**Estado:** cerrado — paridad de las dos rutas en las 22 tablas (1078 pruebas en verde, sin
 errores de lint, build limpio)
 
 ## Problema
@@ -204,6 +204,29 @@ Se resolvió plegando estas dos tablas a **su** motor, no dejando los dos conviv
 El resto se conserva entero porque no se solapa: la corrección de zona —que su trabajo
 también necesitaba, porque el RESUMEN EJECUTIVO estaba bloqueado para ellos igual—,
 `tablasOperaciones.js` y `tiposOperacionDian.js`.
+
+## Cierre: paridad de las dos rutas
+
+Tras integrar, quedaban seis tablas que la ruta OOXML regeneraba y la de plantilla PDF no,
+así que se radicaban con los datos del informe del que salió la plantilla: **3** (ficha del
+vinculado), **4** (método aplicable), **6** (composición accionaria), **8** (compañías
+vinculadas), **9** (criterios de vinculación) y **10** (activos). Se cerraron con el mismo
+patrón: extraer las filas a un módulo compartido —`tablasOperaciones.js` las cuatro del
+vinculado, nuevo `tablasContribuyente.js` la accionaria y los activos— y registrarlas en el
+motor HTML.
+
+La plantilla real obligó a resolver dos cosas que no se ven en el código de la ruta OOXML:
+
+- **La ficha del vinculado viene dos veces**, rotulada «Tabla 3.» y «Tabla 12.», y las dos
+  publican lo mismo. Se sustituyen todas las ocurrencias, de atrás hacia adelante porque
+  cada una desplaza los offsets de las siguientes.
+- **Las Tablas 8 y 10 llevan el año gravable en el rótulo** y la plantilla dice 2024. Sin
+  reescribirlo, el informe de 2025 rotula «Activos a 31 de diciembre de 2024». Se reescribe
+  con `reescribirRotuloHtml`, que conserva el número de la plantilla para no descuadrar su
+  índice. En las demás el título no contiene datos y no se toca.
+
+Auditado contra el código: las dos rutas regeneran las mismas **22 tablas**, ninguna
+pendiente.
 
 ## Fuera de alcance
 
