@@ -50,7 +50,9 @@ test('un estudio sin tasa no inventa una', () => {
 
 test('las comparables toman la tasa de la celda única', () => {
   const wb = construirLibroSoporte(PAYLOAD);
-  ['I15', 'I16', 'I17'].forEach((ref) => {
+  /* Fila 16 y no 15: la fila «Ámbito de la muestra» se inserta después de la tasa y
+     antes de la sección de comparables, así que el bloque completo baja una fila. */
+  ['I16', 'I17', 'I18'].forEach((ref) => {
     assert.strictEqual(wb.Sheets.Datos[ref].f, '$B$11', `${ref} debería referenciar B11`);
   });
 });
@@ -89,8 +91,10 @@ test('la propiedad, planta y equipo llega al libro, no en cero', () => {
 
 test('el PP&E de cada comparable viaja a su fila', () => {
   const wb = construirLibroSoporte(PAYLOAD);
+  /* Fila 16 y no 15: mismo desplazamiento que introduce la fila «Ámbito de la
+     muestra» antes de la sección de comparables. */
   assert.deepStrictEqual(
-    ['H15', 'H16', 'H17'].map((ref) => wb.Sheets.Datos[ref].v),
+    ['H16', 'H17', 'H18'].map((ref) => wb.Sheets.Datos[ref].v),
     [100, 40, 10],
   );
 });
@@ -105,4 +109,37 @@ test('los gastos operativos se derivan de la utilidad antes de llegar al generad
   };
   const wb = construirLibroSoporte(otro);
   assert.strictEqual(wb.Sheets.Datos.B6.v, 250, 'gastos = ventas − costo − utilidad operacional');
+});
+
+test('el libro recibe el ámbito, el segmento excluido y el amb de cada comparable', () => {
+  /* Sin estos tres campos el libro calcula su rango sobre las 16 filas y sobre unas
+     ventas sin descontar, mientras el informe filtra por ámbito y descuenta: dos
+     rangos distintos para el mismo estudio, y el libro se radica como su soporte. */
+  const wb = construirLibroSoporte({
+    estudio: {
+      t_s: 1000, t_c: 600, t_op: 200, t_ar: 100, t_inv: 50, t_ap: 80, t_ppe: 300,
+      prime: 7.37, cmode: 'nac', seg_excluido: 120,
+    },
+    comparables: [
+      { name: 'Nacional A', amb: 'Nac', s: 500, c: 300, op: 380 },
+      { name: 'Internacional X', amb: 'Int', s: 900, c: 100, op: 700 },
+    ],
+  });
+
+  const datos = XLSX.utils.sheet_to_json(wb.Sheets.Datos, { header: 1, raw: true });
+  /* B4 son las ventas de la parte examinada: 1000 − 120 de segmento excluido. */
+  const filaVentas = datos.find((f) => f && f[0] === 'Ventas netas');
+  assert.strictEqual(filaVentas[1], 880, 'las ventas del libro descuentan seg_excluido');
+
+  const filaAmbito = datos.find((f) => f && f[0] === 'Ámbito de la muestra');
+  assert.ok(filaAmbito, 'el libro declara el ámbito de la muestra');
+  assert.strictEqual(filaAmbito[1], 'nac');
+
+  /* La columna J de cada comparable lleva su ámbito. */
+  const hdr = datos.find((f) => f && f[0] === 'Compañía');
+  assert.strictEqual(hdr[9], 'Ámbito');
+  const filaNac = datos.find((f) => f && f[0] === 'Nacional A');
+  assert.strictEqual(filaNac[9], 'Nac');
+  const filaInt = datos.find((f) => f && f[0] === 'Internacional X');
+  assert.strictEqual(filaInt[9], 'Int');
 });

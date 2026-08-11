@@ -55,8 +55,18 @@ export default function IngestaOperaciones({ study, updateStudy }) {
             `por COP $ ${fmt(egresos.monto)}: el estudio solo suma las operaciones de ingreso`
           );
         }
+        /* El parser ya no rellena el tipo con «Otros servicios (07)» cuando el archivo no
+           lo trae, así que aquí puede llegar vacío. Decirlo es la mitad del trabajo: la
+           Tabla 1 del informe saldrá con el concepto en blanco y hay que completarlo. */
+        if (!res.vinc_tipo) {
+          avisos.push(
+            '⚠ el archivo no trae el tipo de operación (columna «Tipo de operación»): ' +
+            'el concepto de la Tabla 1 saldrá en blanco, complételo antes de radicar'
+          );
+        }
         const aviso = avisos.length ? ' · ' + avisos.join(' · ') : '';
-        setExcelMsg(`✅ Operaciones procesadas con éxito: ${res.vinc_tipo} por COP $ ${fmt(valMonto)}${aviso}`);
+        const concepto = res.vinc_tipo || 'sin tipo de operación';
+        setExcelMsg(`✅ Operaciones procesadas con éxito: ${concepto} por COP $ ${fmt(valMonto)}${aviso}`);
       } else {
         setExcelMsg('⚠ No se encontraron las hojas u operaciones esperadas en este Excel. Verifique la estructura o ingrese los datos manualmente.');
       }
@@ -139,8 +149,11 @@ export default function IngestaOperaciones({ study, updateStudy }) {
         </div>
       )}
 
-      {/* Tarjeta Detallada de Operación Extraída */}
-      {study.vinc_tipo && (
+      {/* Tarjeta Detallada de Operación Extraída. La condición no puede ser solo
+          `study.vinc_tipo`: desde que el parser dejó de inventarlo, un archivo sin la
+          columna «Tipo de operación» escondía la tarjeta entera —vinculado, país y monto
+          incluidos— justo cuando hay más que revisar. */}
+      {(study.vinc_tipo || study.vinc || montoOperacion(study) !== null) && (
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
           <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2">
             Resumen de Operación Extraída
@@ -149,7 +162,7 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-4 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 space-y-1">
               <span className="text-xs text-zinc-500 font-semibold uppercase tracking-wider block">Concepto de Operación</span>
-              <span className="text-base font-bold text-zinc-900 dark:text-zinc-100">{study.vinc_tipo}</span>
+              <span className="text-base font-bold text-zinc-900 dark:text-zinc-100">{study.vinc_tipo || '—'}</span>
             </div>
 
             <div className="p-4 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/10 border border-emerald-200 dark:border-emerald-900/30 space-y-1">

@@ -322,8 +322,10 @@ test('las tres comparables toman la tasa de esa única celda, no una propia', ()
      como valor fijo: tres tasas distintas en la misma columna, y dos comparables
      con 0 %, es decir, sin ajuste alguno. */
   const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  /* Fila 15 y no 14: la fila «Ámbito de la muestra» se inserta después de la tasa y
+     antes de la sección de comparables, así que el bloque completo baja una fila. */
   for (let i = 0; i < 3; i++) {
-    const tasa = datos.celdas[14 + i][8];
+    const tasa = datos.celdas[15 + i][8];
     assert.strictEqual(tasa.f, '$B$11', `la comparable ${i + 1} debería referenciar la celda única`);
     assert.strictEqual(tasa.v, undefined, 'y no traer un valor propio quemado');
   }
@@ -331,11 +333,28 @@ test('las tres comparables toman la tasa de esa única celda, no una propia', ()
 
 test('la hoja Datos documenta de dónde sale la tasa y a quién se aplica', () => {
   const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
-  const etiquetas = [2, 3, 4, 5, 6].map((r) => datos.celdas[r][10] && datos.celdas[r][10].v);
+  /* Columna 11 y no 10: la columna «Ámbito» (J) se insertó en la tabla de comparables
+     y empujó una posición a la derecha este bloque de trazabilidad, que vivía en K–M
+     y ahora vive en L–N. */
+  const etiquetas = [2, 3, 4, 5, 6].map((r) => datos.celdas[r][11] && datos.celdas[r][11].v);
   assert.ok(etiquetas[0].startsWith('PARÁMETRO'), 'el bloque arranca con su título');
   assert.deepStrictEqual(etiquetas.slice(1), ['Tasa aplicada', 'Fuente', 'Aplicación', 'Convención']);
-  assert.match(datos.celdas[4][11].v, /RIFSPBLPNA/, 'la fuente cita la serie, no solo el número');
-  assert.strictEqual(datos.celdas[3][11].f, '$B$11', 'el bloque refleja la celda editable, no la duplica');
+  assert.match(datos.celdas[4][12].v, /RIFSPBLPNA/, 'la fuente cita la serie, no solo el número');
+  assert.strictEqual(datos.celdas[3][12].f, '$B$11', 'el bloque refleja la celda editable, no la duplica');
+});
+
+test('el texto de «Aplicación» cita la dirección completa de la tasa, no una a medias', () => {
+  /* Regresión: un literal de plantilla reciclaba `celdaTasa` ("B11", sin el primer
+     "$") dentro de un texto que ya traía un "$" antes de la interpolación. En JS eso
+     NO produce dos signos de dólar seguidos: el primero queda literal y el segundo es
+     el que abre `${...}`, así que salía «=$B11» en vez de «=$B$11». La fórmula real
+     (fila «Tasa aplicada») estaba bien; lo que mentía era el texto que la describe
+     para quien audita el libro. */
+  const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  const direccionTasa = `=${datos.celdas[3][12].f}`; // p.ej. '=$B$11', a partir de la fórmula real
+  const aplicacion = datos.celdas[5][12].v;
+  assert.ok(aplicacion.includes(direccionTasa),
+    `«Aplicación» debería citar la dirección completa ${direccionTasa}: ${aplicacion}`);
 });
 
 test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', () => {
@@ -373,7 +392,9 @@ test('el libro trae una hoja de diagnóstico con las comprobaciones sobre los da
   assert.ok(dg, 'debería existir la hoja de diagnóstico');
   const texto = JSON.stringify(dg.celdas);
   assert.match(texto, /SUMPRODUCT/, 'los conteos son fórmulas, no valores calculados en JS');
-  assert.match(texto, /Datos!\$C\$15:\$C\$17/, 'y apuntan al rango real de comparables');
+  /* Fila 16 y no 15: la fila «Ámbito de la muestra» corre la sección de comparables
+     una posición hacia abajo en la hoja Datos. */
+  assert.match(texto, /Datos!\$C\$16:\$C\$18/, 'y apuntan al rango real de comparables');
   /* Una fila por comparable en la sección de PP&E, referida a la hoja MO para no
      reimplementar el ajuste una segunda vez. */
   assert.match(texto, /MO!Q3/);
@@ -383,4 +404,44 @@ test('el libro trae una hoja de diagnóstico con las comprobaciones sobre los da
 test('sin comparables no se arma la hoja de diagnóstico', () => {
   const hojas = hojasMemoriaRangoOptimo({ ...ESTUDIO, comparables: [] }, null);
   assert.ok(!hojas.some((h) => h.nombre === 'Diagnóstico de datos'));
+});
+
+test('el emisor descuenta el segmento excluido, no el llamador', () => {
+  /* MemoriaRangoModal.jsx:93 llama aquí directo. Si el descuento viviera en
+     motorExcelExport, el libro del modal saldría con las ventas sin descontar y el del
+     motor con ellas descontadas: dos libros distintos para el mismo estudio. */
+  const datos = hojasMemoriaRangoOptimo(
+    { ...ESTUDIO, t_s: 1000, seg_excluido: 120 }, null,
+  ).find((h) => h.nombre === 'Datos');
+  const ventas = datos.celdas.find((f) => f && f[0] && f[0].v === 'Ventas netas');
+  assert.strictEqual(ventas[1].v, 880);
+});
+
+test('las referencias del contribuyente apuntan al rubro, no a una fila fija', () => {
+  /* Esta prueba pasa antes y después del refactor: es la red que impide que ampliar
+     la hoja Datos deje las hojas de método apuntando al rubro equivocado, que es un
+     fallo que no revienta —da un número creíble y falso—. */
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const mo = hojas.find((h) => h.nombre === 'MO');
+
+  const filaDe = (etiqueta) => datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === etiqueta) + 1;
+
+  /* Fila 3 de la hoja MO = primera comparable; índice 13 = columna N = Aj.CxC. */
+  const ajCxC = mo.celdas[2][13].f;
+  const ajInv = mo.celdas[2][15].f;
+  const ajPpe = mo.celdas[2][16].f;
+
+  assert.ok(ajCxC.includes(`Datos!$B$${filaDe('Cuentas por cobrar')}`),
+    `Aj.CxC apunta al rubro de CxC: ${ajCxC}`);
+  assert.ok(ajInv.includes(`Datos!$B$${filaDe('Inventarios')}`),
+    `Aj.Inv apunta al rubro de inventarios: ${ajInv}`);
+  assert.ok(ajPpe.includes(`Datos!$B$${filaDe('Propiedad, planta y equipo')}`),
+    `Aj.PP&E apunta al rubro de PP&E: ${ajPpe}`);
+
+  /* La columna Tasa de cada comparable apunta a la fila de la tasa. */
+  const filaTasa = filaDe('Tasa de interés de referencia (Prime Rate)');
+  const primeraComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Buena SA');
+  assert.strictEqual(datos.celdas[primeraComp][8].f, `$B$${filaTasa}`);
 });

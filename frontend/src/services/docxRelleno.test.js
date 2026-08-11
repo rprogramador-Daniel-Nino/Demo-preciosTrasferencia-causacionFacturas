@@ -878,3 +878,25 @@ test('las tablas macro ausentes también se reportan', () => {
   assert.ok(!avisos.includes('PIB Mundial'));
   assert.ok(avisos.includes('Desempleo en Colombia'));
 });
+
+test('la Tabla 4 declara el código de operación y no lo inventa cuando no se puede resolver', async () => {
+  /* La Tabla 4 («Método de Precios de Transferencia Aplicable») publica el código de
+     operación en su propia columna. Compartía el helper que devolvía '07' fijo, así que un
+     tipo en texto libre —«VENTA SERVICIOS», lo que trae el Excel de 2025— salía declarado
+     ante la DIAN como el 07 de END GAME 2024. */
+  const xml = '<w:p><w:t>Tabla 4. Método de Precios de Transferencia Aplicable</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old Table 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const conCodigo = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, vinc_tipo: 'Otros servicios (07)', metodo: 'TU', pli: 'MO',
+  });
+  assert.ok(conCodigo.includes('07'), 'el código escrito en el tipo tiene que publicarse');
+  assert.ok(conCodigo.includes('Otros servicios'), 'y la descripción sin el código');
+
+  const sinCodigo = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, vinc_tipo: 'VENTA SERVICIOS', metodo: 'TU', pli: 'MO',
+  });
+  assert.ok(!sinCodigo.includes('Old Table 4'), 'la Tabla 4 tiene que haberse reemplazado');
+  assert.ok(sinCodigo.includes('VENTA SERVICIOS'), 'la descripción es la del estudio');
+  assert.ok(!sinCodigo.includes('>07<'), 'no debe inventar el código 07');
+});

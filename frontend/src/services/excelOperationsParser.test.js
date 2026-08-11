@@ -309,3 +309,34 @@ test('un código de país desconocido no se inventa', async () => {
   const res = await parseExcelOperations(workbookToFakeFile(wb));
   assert.strictEqual(res.pais_vinc, '999');
 });
+
+test('el tipo de operación en texto libre no se completa con un código inventado', async () => {
+  /* El Excel de referencia de 2025 trae «VENTA SERVICIOS» con la columna «Cod» vacía. El
+     parser devolvía «Otros servicios (07)» por defecto —el concepto de END GAME 2024— y ese
+     código viajaba al informe de cualquier contribuyente que dejara la columna en blanco. */
+  const wb = conEncabezado([
+    ['END GAME INTERACTIVE INC', '444444001', '249', 'BELLEVUE', 'VENTA SERVICIOS', '', '', '1007', '4001', '', 3432402110],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.vinc_tipo, 'VENTA SERVICIOS');
+});
+
+test('la columna Cod diligenciada compone el tipo con su código a dos dígitos', async () => {
+  /* Así el concepto queda como lo escribe el informe —«Otros servicios (07)»— sin añadir
+     ningún campo nuevo al estudio: `conceptoDeOperacion` ya sabe leer el paréntesis. */
+  const wb = conEncabezado([
+    ['ACME LLC', '900123456', '249', 'MIAMI', 'Otros servicios', '7', '', '1007', '4001', '', 1000],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.vinc_tipo, 'Otros servicios (07)');
+});
+
+test('sin tipo de operación en ninguna fila el concepto queda vacío y no por defecto', async () => {
+  /* Un hueco visible en la Tabla 1 se corrige; un «Otros servicios (07)» plausible y
+     equivocado se radica. */
+  const wb = conEncabezado([
+    ['ACME LLC', '900123456', '249', 'MIAMI', '', '', '', '1007', '4001', '', 1000],
+  ]);
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+  assert.strictEqual(res.vinc_tipo, null);
+});

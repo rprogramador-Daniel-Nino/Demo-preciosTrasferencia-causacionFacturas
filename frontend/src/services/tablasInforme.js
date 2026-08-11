@@ -19,7 +19,6 @@ import { analizarRango } from './rangoIntercuartil.js';
 import {
   DATOS_MACRO, resolverSerie, valorODisponible, marcadorPendiente,
 } from './analisisMercado.js';
-import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 import { num, pliOf } from '../utils/calculations.js';
 
 /* ══════════════ Razones de rechazo ══════════════
@@ -159,9 +158,9 @@ export function filasMuestraComparables(study) {
  * mismo estudio, y ese defecto ya se pagó una vez en este repo —había dos
  * implementaciones del cuartil y el modal mostraba un rango y el informe otro—.
  *
- * Los percentiles ajustados salen de `stats`, que es lo que sostiene la conclusión de
- * cumplimiento; los no ajustados se calculan aquí sobre la serie sin ajuste, con el mismo
- * `cuartilInterpolado` (QUARTILE.INC) que usa el motor y que emite el Excel de soporte.
+ * Las dos columnas se le piden al motor: `stats` para la ajustada —la que sostiene la
+ * conclusión de cumplimiento— y `statsNoAjustado` para la otra. Ninguna se calcula aquí, así
+ * que las dos salen del mismo universo y con el mismo filtro de ámbito.
  *
  * @param {object} study
  * @returns {{filas:Array<{etiqueta:string, noAjustado:number|null, ajustado:number|null}>,
@@ -171,16 +170,18 @@ export function filasRangoIntercuartil(study) {
   const estudio = study || {};
   const r = analizarRango(estudio);
   const stats = r.stats || {};
-  const compFilas = r.filas || [];
+  /* La estadística del escenario SIN ajuste se le pide al motor (`statsNoAjustado`) en vez
+     de ordenar la serie aquí. Ordenarla a mano fue el defecto que Juan corrigió el
+     2026-08-11 en `rangoIntercuartil.js`: ese cálculo propio no aplicaba el filtro de
+     ámbito (`cmode`), así que el mínimo, el máximo y los percentiles de la columna «NO
+     AJUSTADO» contaban comparables que el ámbito excluye, y las dos columnas de una misma
+     tabla salían sobre universos distintos.
 
-  const serie = (clave) => compFilas
-    .map((f) => f[clave])
-    .filter((v) => v !== null && v !== undefined)
-    .sort((a, b) => a - b);
-
-  const sinAjuste = serie('noAjustado');
-  const conAjuste = serie('ajustado');
-  const extremo = (s, i) => (s.length ? s[i < 0 ? s.length + i : i] : null);
+     Al extraer esta función de `docxRelleno.js` esa mañana el cálculo a mano vino con ella,
+     de modo que al integrar las dos ramas su arreglo se quedaba sin consumidor y el defecto
+     habría vuelto sin que git marcara nada. */
+  const sinAjuste = r.statsNoAjustado || {};
+  const valor = (o, clave) => (o && o[clave] !== undefined ? o[clave] : null);
 
   /* Indicador del contribuyente con el mismo método, descontando el segmento excluido:
      es la cifra que la conclusión compara contra el rango. */
@@ -201,23 +202,11 @@ export function filasRangoIntercuartil(study) {
     pli,
     tPLI,
     filas: [
-      { etiqueta: ETIQUETAS_RANGO.min, noAjustado: extremo(sinAjuste, 0), ajustado: extremo(conAjuste, 0) },
-      {
-        etiqueta: ETIQUETAS_RANGO.p25,
-        noAjustado: cuartilInterpolado(sinAjuste, 0.25),
-        ajustado: stats.p25 !== undefined ? stats.p25 : null,
-      },
-      {
-        etiqueta: ETIQUETAS_RANGO.med,
-        noAjustado: cuartilInterpolado(sinAjuste, 0.5),
-        ajustado: stats.med !== undefined ? stats.med : null,
-      },
-      {
-        etiqueta: ETIQUETAS_RANGO.p75,
-        noAjustado: cuartilInterpolado(sinAjuste, 0.75),
-        ajustado: stats.p75 !== undefined ? stats.p75 : null,
-      },
-      { etiqueta: ETIQUETAS_RANGO.max, noAjustado: extremo(sinAjuste, -1), ajustado: extremo(conAjuste, -1) },
+      { etiqueta: ETIQUETAS_RANGO.min, noAjustado: valor(sinAjuste, 'min'), ajustado: valor(stats, 'min') },
+      { etiqueta: ETIQUETAS_RANGO.p25, noAjustado: valor(sinAjuste, 'p25'), ajustado: valor(stats, 'p25') },
+      { etiqueta: ETIQUETAS_RANGO.med, noAjustado: valor(sinAjuste, 'med'), ajustado: valor(stats, 'med') },
+      { etiqueta: ETIQUETAS_RANGO.p75, noAjustado: valor(sinAjuste, 'p75'), ajustado: valor(stats, 'p75') },
+      { etiqueta: ETIQUETAS_RANGO.max, noAjustado: valor(sinAjuste, 'max'), ajustado: valor(stats, 'max') },
       /* El contribuyente cierra la tabla y lleva su indicador en las dos columnas: se
          ajusta contra sí mismo, así que el ajuste es cero. */
       { etiqueta: nombreContribuyente, noAjustado: tPLI, ajustado: tPLI },

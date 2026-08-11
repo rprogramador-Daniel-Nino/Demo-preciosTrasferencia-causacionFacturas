@@ -6,6 +6,7 @@
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
 import { actualizarTablasMotorHtml, actualizarTablasMacroHtml } from './tablasHtmlInforme.js';
+import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
@@ -51,6 +52,11 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      informe del que salió la plantilla y unas pocas celdas del estudio nuevo. */
   const avisosTablas = [];
   let html = actualizarTablasMotorHtml(htmlMarcado, estudio, avisosTablas);
+  /* Las Tablas 1 y 2 —las de la operación con el vinculado— por el mismo motivo que las
+     del motor: sus celdas no corresponden a ningún campo del vocabulario, así que el
+     marcado no las alcanza y se radicaban con el concepto, el vinculado, el país y el
+     monto del cliente anterior. */
+  html = actualizarTablasOperacionesHtml(html, estudio, avisosTablas);
   html = actualizarTablasMacroHtml(
     html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
   /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su

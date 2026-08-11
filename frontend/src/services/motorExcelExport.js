@@ -33,6 +33,14 @@ export function construirLibroSoporte(datos) {
 
   const estudioBase = {
     t_s: datos.examinada?.T?.s ?? datos.estudio?.t_s ?? datos.estudio?.s,
+    /* Viaja al lado de `t_s` en bruto y lo descuenta `hojasMemoriaRangoOptimo`, que es
+       por donde pasan las DOS rutas de descarga del libro —esta y la del modal, que
+       llama al emisor directo (MemoriaRangoModal.jsx:93)—. Descontarlo aquí dejaría al
+       modal publicando unas ventas y al motor otras. */
+    seg_excluido: Number(datos.estudio?.seg_excluido) || 0,
+    /* El filtro de ámbito del tablero. Sin él el libro cuartilaba las 16 filas
+       mientras el informe cuartilaba solo las del ámbito elegido. */
+    cmode: datos.estudio?.cmode || 'all',
     t_c: datos.examinada?.T?.c ?? datos.estudio?.t_c ?? datos.estudio?.c,
     t_op: datos.examinada?.T?.op ?? datos.estudio?.t_op ?? datos.estudio?.op,
     t_ar: datos.examinada?.T?.ar ?? datos.estudio?.t_ar ?? datos.estudio?.ar,
@@ -47,6 +55,9 @@ export function construirLibroSoporte(datos) {
     prime: datos.estudio?.prime ?? 0,
     comparables: (datos.comparables || []).map((c) => ({
       name: c.name || c.razonSocial || '',
+      /* Mismo criterio que `analizarRangoAjustado:296`: lo que no está marcado como
+         nacional es internacional. */
+      amb: c.amb === 'Nac' ? 'Nac' : 'Int',
       s: c.s,
       c: c.c,
       op: c.op,
