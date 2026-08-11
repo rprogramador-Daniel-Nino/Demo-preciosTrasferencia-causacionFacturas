@@ -71,12 +71,25 @@ export function filasRazonesRechazo(embudo) {
      examinada. */
   const reserva = Number(e.reserva) || 0;
 
+  /* Las que se retiraron de la muestra en la ingesta del paso 4 porque su estado
+     financiero no traía cifras con las que calcular el margen (`eeffSuficiencia.js`).
+     Van al mismo sitio que la reserva y por la misma razón: superaron los filtros
+     objetivos y no integran la muestra. El motivo real —falta el documento con las
+     cifras— no es un criterio de comparabilidad que se sostenga ante quien revise el
+     informe, y sí lo es no ser funcionalmente comparable con la parte examinada.
+
+     Tiene que estar aquí para que la tabla cuadre: el componente baja `seleccionadas`
+     al retirarlas, así que sin recogerlas en alguna fila la suma dejaría de dar el
+     universo evaluado y el generador avisaría de un descuadre que no existe. */
+  const sinEeff = Number(e.sinEeff) || 0;
+
   const filas = [];
   RAZONES_RECHAZO.forEach(([clave, etiqueta]) => {
     /* La reserva se suma ANTES de descartar los ceros. Un estudio que no rechazó a
        nadie por rigor funcional pero dejó reserva necesita igual esta fila: omitirla
        dejaría la columna sin sumar el universo. */
-    const cuantas = (Number(porMotivo[clave]) || 0) + (clave === 'rigorFuncional' ? reserva : 0);
+    const cuantas = (Number(porMotivo[clave]) || 0)
+      + (clave === 'rigorFuncional' ? reserva + sinEeff : 0);
     if (cuantas > 0) filas.push({ clave, etiqueta, cuantas });
   });
 

@@ -65,6 +65,34 @@ test('la fila de diferencias funcionales aparece aunque solo la sostenga la rese
   assert.ok(cuadra, '12 + 8 = 20');
 });
 
+test('las retiradas por no traer EEFF se cuentan en las diferencias funcionales', () => {
+  /* Al cargar los estados financieros, una comparable cuyo documento no trae cifras sale
+     de la muestra: el componente baja `seleccionadas` y anota `sinEeff`. Si esta fila no
+     las recogiera, la suma dejaría de dar el universo y el generador avisaría de un
+     descuadre inexistente. */
+  const conRetiradas = { ...embudoReal, seleccionadas: 6, sinEeff: 2 };
+  const { filas, cuadra } = filasRazonesRechazo(conRetiradas);
+  assert.ok(!filas.some(f => f.clave === 'sinEeff'), 'no puede tener fila propia en el informe');
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.cuantas, 19, '5 por rigor + 12 de reserva + 2 sin EEFF');
+  assert.ok(cuadra, 'la suma sigue dando el universo evaluado');
+});
+
+test('la fila de diferencias funcionales aparece aunque solo la sostengan las retiradas', () => {
+  const soloSinEeff = { evaluadas: 10, seleccionadas: 9, reserva: 0, sinEeff: 1, porMotivo: {} };
+  const { filas, cuadra } = filasRazonesRechazo(soloSinEeff);
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.ok(rigor, 'la fila tiene que aparecer');
+  assert.strictEqual(rigor.cuantas, 1);
+  assert.ok(cuadra, '1 + 9 = 10');
+});
+
+test('un embudo sin `sinEeff` sigue cuadrando igual', () => {
+  /* Los estudios guardados antes de este cambio no traen la clave. */
+  const { cuadra } = filasRazonesRechazo(embudoReal);
+  assert.ok(cuadra);
+});
+
 test('filasRazonesRechazo cuadra la suma con el universo evaluado', () => {
   /* 30+5+15+25 rechazos + (5 de rigor + 12 de reserva) + 8 aceptadas = 100 */
   const { cuadra, suma, total } = filasRazonesRechazo(embudoReal);
