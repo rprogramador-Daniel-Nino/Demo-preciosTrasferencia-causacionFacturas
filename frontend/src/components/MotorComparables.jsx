@@ -11,6 +11,7 @@ import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/ee
 import {
   separarPorSuficiencia, partidasFaltantes, motivoSinInformacionFinanciera, retirarFilas,
 } from '../services/eeffSuficiencia';
+import { matrizDeRechazo } from '../services/anexoCHtml';
 import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
@@ -160,6 +161,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       comparables,
       cmode,
       criteriosScreening,
+      /* La matriz del ANEXO C: qué compañía quedó en cada motivo, solo los nombres. El
+         generador del informe no puede calcularla —necesita el universo enriquecido, y
+         `universo` no viaja con el estudio—, así que se guarda ya agrupada. Va en
+         CAMPOS_SOLO_LOCALES: son miles de nombres y no caben en el documento de Firestore. */
+      matrizRechazo,
       /* Conteos de la última selección: alimentan la tabla 14 del informe. */
       embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
@@ -170,7 +176,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       iaMatch,
       eeffImagenesComparables,
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables, matrizRechazo]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -1099,6 +1105,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     );
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
   }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
+
+  /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
+     —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
+     generador del informe no tiene con qué recalcularla: `universo` no viaja con el estudio.
+     Solo los nombres, que es lo que el anexo publica. */
+  const matrizRechazo = useMemo(() => {
+    if (!Array.isArray(universo) || !universo.length) return null;
+    return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
+  }, [universo, comparables, auditoria]);
 
   /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
      rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de

@@ -49,6 +49,12 @@ const RAZONES_RECHAZO = [
 
 const LETRAS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
+/** Etiqueta de cada motivo, para quien necesite nombrar uno que el embudo no declara. */
+export const ETIQUETAS_MOTIVO = Object.freeze({
+  ...Object.fromEntries(RAZONES_RECHAZO),
+  aceptadas: 'Compañías comparables aceptadas',
+});
+
 /**
  * Filas de la tabla de razones de rechazo, ya con su letra y su conteo.
  *

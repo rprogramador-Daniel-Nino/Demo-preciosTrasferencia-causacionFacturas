@@ -74,28 +74,46 @@ export const RUBROS_BALANCE = [
 ];
 
 /**
- * Dónde empieza y acaba la sección del ANEXO B.
+ * Dónde empieza y acaba la sección de un anexo.
  *
- * Del encabezado del anexo al del ANEXO C, o al final del documento si no lo hay. Se
- * descartan las entradas del índice.
+ * Del encabezado del anexo al del siguiente, o al final del documento si no hay otro. Se
+ * descartan las entradas del índice, donde el título llega con el número de página pegado.
  *
- * @returns {{inicio:number, fin:number, titulo:string}|null}
+ * @param {string} html
+ * @param {string} letra  la del anexo: 'b', 'c', …
+ * @returns {{inicio:number, fin:number, titulo:string}|null} `inicio` queda DESPUÉS del
+ *          encabezado, que no hay que tocar.
  */
-export function localizarAnexoB(html) {
+export function localizarAnexo(html, letra) {
   const texto = String(html || '');
+  const buscada = String(letra || '').trim().toLowerCase();
+  if (!/^[a-z]$/.test(buscada)) return null;
+
+  const rxAbre = new RegExp('^anexo\\s*' + buscada + '\\b', 'i');
+  /* Cualquier anexo con letra POSTERIOR cierra el que se busca. Se compara la letra en vez
+     de fijar un rango en la expresión: así vale para cualquiera sin escribir uno por uno. */
+  const cierra = (t) => {
+    const m = /^anexo\s*([a-z])\b/i.exec(t);
+    return !!m && m[1].toLowerCase() > buscada;
+  };
+
   RX_BLOQUE_TEXTO.lastIndex = 0;
   let inicio = -1, titulo = '', fin = texto.length, m;
   while ((m = RX_BLOQUE_TEXTO.exec(texto)) !== null) {
     const t = textoPlanoHtml(m[2]);
     if (!t || RX_ENTRADA_INDICE.test(t)) continue;
     if (inicio < 0) {
-      if (/^anexo\s*b\b/i.test(t)) { inicio = m.index + m[0].length; titulo = t; }
+      if (rxAbre.test(t)) { inicio = m.index + m[0].length; titulo = t; }
       continue;
     }
-    /* Cualquier anexo posterior cierra el B. */
-    if (/^anexo\s*[c-z]\b/i.test(t)) { fin = m.index; break; }
+    if (cierra(t)) { fin = m.index; break; }
   }
   return inicio < 0 ? null : { inicio, fin, titulo };
+}
+
+/** La sección del ANEXO B. */
+export function localizarAnexoB(html) {
+  return localizarAnexo(html, 'b');
 }
 
 /**

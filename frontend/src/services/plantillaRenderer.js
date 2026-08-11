@@ -8,6 +8,7 @@ import { resaltarValor } from './estiloDocumento.js';
 import { actualizarTablasMotorHtml, actualizarTablasMacroHtml } from './tablasHtmlInforme.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
+import { actualizarAnexoCHtml } from './anexoCHtml.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -62,6 +63,11 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
   /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su
      número depende de la muestra: hay que crear y retirar bloques enteros. */
   html = actualizarAnexoBHtml(html, estudio, avisosTablas);
+  /* El ANEXO C, por lo mismo: una tabla por motivo que descartó a alguien, y su
+     tabla-resumen no tiene rótulo del que agarrarse —va pegada al encabezado del anexo—, así
+     que el localizador de tablas no la alcanzaba y se radicaba con los conteos del informe
+     del que salió la plantilla, contradiciendo a la Tabla 16 del cuerpo. */
+  html = actualizarAnexoCHtml(html, estudio, avisosTablas);
 
   html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
