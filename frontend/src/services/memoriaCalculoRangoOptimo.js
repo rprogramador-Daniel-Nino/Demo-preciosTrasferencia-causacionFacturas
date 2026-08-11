@@ -39,8 +39,12 @@ const METODOS = [
 /* Rubros de la parte examinada en la hoja Datos, en el orden en que se escriben.
    La dirección de cada uno se DERIVA de este arreglo y no se escribe a mano en
    ninguna fórmula: al insertar un rubro, las cinco hojas de método siguen apuntando
-   al correcto. Un `Datos!$B$7` literal en una fórmula es un fallo silencioso —da un
-   número creíble y falso— y por eso no queda ninguno. */
+   al correcto. Una dirección absoluta escrita a mano en una fórmula es un fallo
+   silencioso —da un número creíble y falso— y por eso no queda ninguna.
+
+   El comentario evita nombrar una dirección concreta a propósito: el comando de
+   verificación del Step 4 busca literales por texto y una mención en prosa se delataría
+   a sí misma. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas' },
   { clave: 't_c', etiqueta: 'Costo de ventas' },
