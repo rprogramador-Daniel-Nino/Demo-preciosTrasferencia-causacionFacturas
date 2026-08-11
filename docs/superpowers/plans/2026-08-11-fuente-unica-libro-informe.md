@@ -457,8 +457,12 @@ Encima de `hojasMemoriaRangoOptimo`, junto a `METODOS` y `AJUSTES`:
 /* Rubros de la parte examinada en la hoja Datos, en el orden en que se escriben.
    La dirección de cada uno se DERIVA de este arreglo y no se escribe a mano en
    ninguna fórmula: al insertar un rubro, las cinco hojas de método siguen apuntando
-   al correcto. Un `Datos!$B$7` literal en una fórmula es un fallo silencioso —da un
-   número creíble y falso— y por eso no queda ninguno. */
+   al correcto. Una dirección absoluta escrita a mano en una fórmula es un fallo
+   silencioso —da un número creíble y falso— y por eso no queda ninguna.
+
+   El comentario evita nombrar una dirección concreta a propósito: el comando de
+   verificación del Step 4 busca literales por texto y una mención en prosa se delataría
+   a sí misma. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas' },
   { clave: 't_c', etiqueta: 'Costo de ventas' },
@@ -475,9 +479,12 @@ const filaDeRubro = (clave) => FILA_RUBRO_0
   + RUBROS_EXAMINADA.findIndex((r) => r.clave === clave);
 /* La tasa va inmediatamente después del último rubro. */
 const FILA_TASA = () => FILA_RUBRO_0 + RUBROS_EXAMINADA.length;
-/* Y el ámbito de la muestra después de la tasa. */
-const FILA_AMBITO = () => FILA_TASA() + 1;
 ```
+
+**No declares aquí `FILA_AMBITO`.** La fila del ámbito de la muestra existe desde la Task 2,
+pero ninguna fórmula la referencia todavía: declararla ahora deja un identificador sin usar y
+el linter lo marca, que las restricciones del proyecto prohíben. La declara la **Task 5**,
+que es la primera que la necesita.
 
 - [ ] **Step 4: Usarlas en la escritura de `Datos` y en las referencias**
 
@@ -641,12 +648,30 @@ Sustituir el `forEach` de la Task 3 por este. `valorDeRubro` se conserva tal com
   });
 ```
 
-- [ ] **Step 5: Correr la prueba y confirmar que pasa**
+- [ ] **Step 5: Actualizar la prosa que nombra filas concretas**
+
+Ampliar `RUBROS_EXAMINADA` mueve la fila de la tasa de la 11 a la 16, y hay texto que la
+nombra a mano y quedaría mintiendo. Estos sitios **no** son fórmulas, así que la guarda de
+literales del Step 4 de la Task 3 no los ve:
+
+- El comentario que resume el mapa de filas de `Datos` (nombra `B4`…`B11` en prosa).
+- La docstring de `hojasMemoriaRangoOptimo`, que menciona `Datos!B11` como la celda donde se
+  escribe la tasa.
+- Cualquier otro texto de la hoja o del código que diga `B11`.
+
+Buscarlos y corregirlos para que nombren la fila derivada o dejen de nombrar una fila
+concreta. Un texto de trazabilidad que describe mal su propia mecánica es un defecto en un
+documento que se radica ante la DIAN, y este es exactamente el momento en que se vuelve falso.
+
+Run: `npm run lint --prefix frontend` y una búsqueda de `B11` en el archivo; no debe quedar
+ninguna mención que afirme una fila que ya no es.
+
+- [ ] **Step 6: Correr la prueba y confirmar que pasa**
 
 Run: `node --test frontend/src/services/memoriaCalculoRangoOptimo.test.js`
 Expected: PASS, incluida la prueba de caracterización de la Task 3 — que ahora demuestra su valor: las referencias de `Aj.CxC`, `Aj.Inv` y `Aj.PP&E` apuntan a las filas nuevas sin que se haya tocado ninguna hoja de método.
 
-- [ ] **Step 6: Correr la suite completa y commit**
+- [ ] **Step 7: Correr la suite completa y commit**
 
 Run: `npm test`
 Expected: PASS
@@ -669,7 +694,16 @@ La hoja gana dos cosas: una columna `Z` con el ámbito resuelto y siete columnas
 - Test: `frontend/src/services/memoriaCalculoRangoOptimo.test.js`
 
 **Interfaces:**
-- Consumes: `FILA_AMBITO()` de la Task 3, la columna `Ámbito` de `Datos` de la Task 2.
+- Consumes: la columna `Ámbito` de `Datos` (Task 2) y `FILA_TASA()` / `filaDeRubro` (Task 3).
+- **Declara aquí `FILA_AMBITO`**, que la Task 3 deliberadamente no dejó: hasta esta tarea
+  ninguna fórmula referenciaba la fila del ámbito y un identificador sin usar hace fallar el
+  linter. La fila va inmediatamente después de la tasa:
+
+```js
+/* La fila del ámbito de la muestra, que la hoja de método lee para decidir qué filas
+   entran al cuartil. Va detrás de la tasa, que va detrás del último rubro. */
+const FILA_AMBITO = () => FILA_TASA() + 1;
+```
 - Produces: en cada hoja de método, columna `Z` = «Entra por ámbito», columnas `AA`–`AG` = «Serie del rango» por sabor. Las filas de estadística leen `AA`–`AG`. La Task 6 escribe el valor en caché de todas ellas.
 
 - [ ] **Step 1: Escribir la prueba que falla**
