@@ -139,6 +139,16 @@ Expected: PASS
 
 - [ ] **Step 5: Consumirla en `docxRelleno.js`**
 
+> **Corrección al implementar (2026-08-11).** Este paso decía solo «el bloque de NO
+> AJUSTADO», y con eso el arreglo quedaba a medias. El bloque de justo debajo
+> (`:576-584`) tiene el mismo defecto **dentro de una sola columna**: `minAjustado` y
+> `maxAjustado` salen de `compFilas` ordenado a mano —y `porMetodologiaOCDE` no propaga
+> `incluida`, así que recorre todas las comparables— mientras `p25Ajustado`,
+> `medAjustado` y `p75Ajustado` vienen de `stats`, que sí filtra por ámbito. Con `cmode`
+> en `'nac'` o `'intl'`, la columna «AJUSTADO» publica su mínimo y su máximo sobre un
+> universo y sus percentiles sobre otro. Lo encontró la revisión de la tarea; el paso
+> ahora cubre los dos bloques.
+
 Borrar el bloque `:567-576` completo —las seis constantes `activeSeriesNoAjustado`, `minNoAjustado`, `maxNoAjustado`, `p25NoAjustado`, `medNoAjustado`, `p75NoAjustado`— y sustituirlo por:
 
 ```js
@@ -153,10 +163,27 @@ Borrar el bloque `:567-576` completo —las seis constantes `activeSeriesNoAjust
   const p75NoAjustado = sinAj.p75 !== undefined ? sinAj.p75 : null;
 ```
 
-Retirar `cuartilInterpolado` del `import` de la línea 37 **solo si no queda ningún otro uso** en el archivo. Comprobar con:
+Y el bloque de `AJUSTADO` (`:576-584`) pierde también su serie ordenada a mano. `stats` ya
+trae `.min` y `.max` (`ajusteRangoCapitalTrabajo.js:317-318`), así que las cinco cifras de
+la columna salen del mismo objeto:
 
-Run: `node -e "const s=require('fs').readFileSync('frontend/src/services/docxRelleno.js','utf8');console.log((s.match(/cuartilInterpolado/g)||[]).length)"`
-Si imprime `1`, es solo el import y hay que quitarlo. Si imprime más, dejarlo.
+```js
+  const minAjustado = stats.min !== undefined ? stats.min : null;
+  const maxAjustado = stats.max !== undefined ? stats.max : null;
+  const p25Ajustado = stats.p25 !== undefined ? stats.p25 : null;
+  const medAjustado = stats.med !== undefined ? stats.med : null;
+  const p75Ajustado = stats.p75 !== undefined ? stats.p75 : null;
+```
+
+`activeSeriesAjustado` queda sin usos: borrarlo y confirmar con
+`npm run lint --prefix frontend` que no queda ningún identificador muerto nuevo.
+
+Retirar `cuartilInterpolado` del `import` de la línea 37 **solo si no queda ningún otro uso** en el archivo. Preguntárselo al linter del repo, que es quien sabe distinguir un uso de una mención:
+
+Run: `npm run lint --prefix frontend 2>&1 | grep "docxRelleno.*cuartilInterpolado"`
+Si sale `Identifier 'cuartilInterpolado' is imported but never used`, quitar el import.
+
+No contar apariciones del identificador con `grep` ni con `match`: el comentario que este mismo paso añade lo nombra, así que el conteo da un uso de más y deja el import muerto en el archivo. Y **no** limpiar el `FUENTES_MACRO` de la línea 39, que el linter marca igual: ese ya estaba muerto antes de esta tarea y no es de su alcance.
 
 - [ ] **Step 6: Correr la suite completa**
 
