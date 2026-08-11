@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   localizarTablaHtml, reescribirFilasHtml, envolturaDe, textoPlanoHtml,
   actualizarTablasMotorHtml, reescribirCeldaHtml, TABLA_MARGENES,
+  actualizarTablasMacroHtml, reescribirRotuloHtml,
 } from './tablasHtmlInforme.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
@@ -341,6 +342,85 @@ test('una comparable sin margen calculable sale con un hueco visible, no con un 
   );
   assert.ok(salida.includes('SIN VENTAS SA'));
   assert.ok(salida.includes('—'), 'el margen ausente se publica como hueco');
+});
+
+/* ══════ Tablas de tendencias de la economía ══════ */
+
+const TABLA_MACRO = '<table>'
+  + '<tr><th><p><strong>Año</strong></p></th><th><p><strong>Crecimiento Mundial (%)</strong></p></th></tr>'
+  + '<tr><td><p>2022</p></td><td><p>3,4%</p></td></tr>'
+  + '<tr><td><p>2023</p></td><td><p>3,1%</p></td></tr>'
+  + '<tr><td><p>2024 (Proyección)</p></td><td><p>2,9%</p></td></tr>'
+  + '</table>';
+
+test('la tabla del PIB mundial se rellena con las series y el año del estudio', () => {
+  const html = '<p>Crecimiento del PIB Mundial (2022-2024)</p>' + TABLA_MACRO;
+  const avisos = [];
+  const salida = actualizarTablasMacroHtml(html, null, 2025, avisos);
+
+  assert.ok(!avisos.includes('PIB Mundial'), 'la tabla estaba');
+  assert.match(salida, /<td><p>2024<\/p><\/td>/, 'el año anterior al gravable');
+  assert.match(salida, /2026 \(Proyección\)/, 'y la proyección del siguiente');
+  assert.ok(!salida.includes('<p>2022</p>'), 'los años del informe anterior se van');
+});
+
+test('el rótulo de una tabla macro se actualiza porque lleva los años', () => {
+  /* «Crecimiento del PIB Mundial (2022-2024)» en un informe de 2025 publica el rango de
+     años del informe del que salió la plantilla. El título es un dato aquí, no redacción. */
+  const html = '<p>Crecimiento del PIB Mundial (2022-2024)</p>' + TABLA_MACRO;
+  const salida = actualizarTablasMacroHtml(html, null, 2025, []);
+  assert.match(salida, /<p>Crecimiento del PIB Mundial \(2024-2026\)<\/p>/);
+  assert.ok(!salida.includes('(2022-2024)'));
+});
+
+test('el rótulo conserva el número que traía la plantilla', () => {
+  /* Imponer nuestra numeración descuadraría el índice del cliente y las referencias del
+     texto. */
+  const html = '<p>Tabla 24. Crecimiento del PIB Mundial (2022-2024)</p>' + TABLA_MACRO;
+  const salida = actualizarTablasMacroHtml(html, null, 2025, []);
+  assert.match(salida, /Tabla 24\. Crecimiento del PIB Mundial \(2024-2026\)/);
+});
+
+test('reescribirRotuloHtml conserva la etiqueta y el énfasis del párrafo', () => {
+  assert.strictEqual(
+    reescribirRotuloHtml('<h4><strong>Inflación Global (2020-2022)</strong></h4>', 'Nuevo título'),
+    '<h4><strong>Nuevo título</strong></h4>');
+  /* Lo que no es un párrafo se devuelve tal cual: mejor no tocar nada que romper el markup. */
+  assert.strictEqual(reescribirRotuloHtml('<table></table>', 'X'), '<table></table>');
+});
+
+test('las macro que la plantilla no trae se avisan una por una', () => {
+  const avisos = [];
+  actualizarTablasMacroHtml('<p>Un informe sin tablas macro</p>', null, 2025, avisos);
+  assert.strictEqual(avisos.length, 8, 'son ocho tablas');
+  assert.ok(avisos.includes('PIB Mundial'));
+  assert.ok(avisos.includes('Desempleo en Colombia'));
+});
+
+test('las ocho macro se actualizan sin pisarse entre sí', () => {
+  /* Cada sustitución mueve los offsets de lo que va después, así que se localizan de una en
+     una sobre la salida ya modificada. */
+  const dosColumnas = (a, b) => '<table>'
+    + `<tr><th><p>${a}</p></th><th><p>${b}</p></th></tr>`
+    + '<tr><td><p>viejo 1</p></td><td><p>viejo 2</p></td></tr></table>';
+  const html = '<p>Crecimiento del PIB Mundial (2022-2024)</p>' + dosColumnas('Año', 'Mundial')
+    + '<p>Crecimiento del PIB en Colombia (2022-2024)</p>' + dosColumnas('Año', 'PIB')
+    + '<p>Tasas de Inflación Global (2022-2024)</p>' + dosColumnas('Año', 'Inflación')
+    + '<p>Proyecciones de Crecimiento del PIB por Región/País (2024)</p>' + dosColumnas('Región/País', 'Crec')
+    + '<p>Inflación en Colombia (2024 vs. Meta 2025)</p>' + dosColumnas('Indicador', 'Valor')
+    + '<p>Tasa de Intervención del Banco de la República (Dic 2023 - Dic 2024)</p>' + dosColumnas('Fecha', 'Tasa')
+    + '<p>Tasa Representativa del Mercado (TRM) Promedio (2023-2024)</p>' + dosColumnas('Año', 'TRM')
+    + '<p>Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)</p>' + dosColumnas('Indicador', 'Valor');
+
+  const avisos = [];
+  const salida = actualizarTablasMacroHtml(html, null, 2025, avisos);
+
+  assert.deepStrictEqual(avisos, [], 'las ocho estaban');
+  assert.ok(!salida.includes('viejo 1'), 'ninguna conserva las filas de la plantilla');
+  assert.strictEqual((salida.match(/\(2024-2026\)/g) || []).length, 3,
+    'los tres rótulos por años quedan con el rango del estudio');
+  assert.match(salida, /Meta Inflación 2026/);
+  assert.match(salida, /Desempleo Proyectado 2026/);
 });
 
 test('textoPlanoHtml deshace etiquetas y entidades', () => {

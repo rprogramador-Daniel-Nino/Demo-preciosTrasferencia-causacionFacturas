@@ -16,7 +16,9 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { analizarRango } from './rangoIntercuartil.js';
-import { DATOS_MACRO } from './analisisMercado.js';
+import {
+  DATOS_MACRO, resolverSerie, valorODisponible, marcadorPendiente,
+} from './analisisMercado.js';
 import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 import { num, pliOf } from '../utils/calculations.js';
 
@@ -221,6 +223,146 @@ export function filasRangoIntercuartil(study) {
       { etiqueta: nombreContribuyente, noAjustado: tPLI, ajustado: tPLI },
     ],
   };
+}
+
+/* ══════════════ Tablas de tendencias de la economía ══════════════
+
+   Las ocho salen de las series macro y no del motor de comparables. Se describen aquí —qué
+   se busca en la plantilla, qué título llevan, qué columnas y qué filas— para que las dos
+   rutas del informe emitan lo mismo: la de plantilla .docx las escribe como OOXML y la de
+   PDF reescribe las filas del HTML. Antes la definición vivía dentro del generador de
+   OOXML, así que llevarla a la otra ruta habría significado copiar ocho tablas y sus
+   fuentes, y cualquier corrección en una habría dejado a la otra atrás. */
+
+/**
+ * Descriptores de las ocho tablas macro, ya resueltos contra las series.
+ *
+ * @param {object} datosMacro  el análisis de mercado del estudio, o null para usar las
+ *        series de respaldo de `analisisMercado.js`.
+ * @param {number} year  año gravable.
+ * @returns {Array<{nombre:string, titulo:string, cabeceras:string[],
+ *          filas:Array<string[]>, fuente:string}>} `nombre` es lo que se busca en la
+ *          plantilla; el resto es el contenido que debe quedar.
+ */
+export function tablasMacroInforme(datosMacro, year) {
+  const y = Number(year) || 2025;
+  const y1 = y - 1, y2 = y, y3 = y + 1;
+  const wrap = (v) => String(v == null ? '—' : v);
+  const serie = (clave) => resolverSerie(datosMacro, clave);
+
+  const porAnios = (clave, concepto, cabecera, titulo, etiquetaProyeccion) => {
+    const { valores: S, fuente } = serie(clave);
+    return {
+      titulo, fuente, cabeceras: ['Año', cabecera],
+      filas: [
+        [String(y1), wrap(valorODisponible(S, y1, concepto))],
+        [String(y2), wrap(valorODisponible(S, y2, concepto))],
+        [String(y3) + etiquetaProyeccion, wrap(valorODisponible(S, y3, 'la proyección de ' + concepto))],
+      ],
+    };
+  };
+
+  const tablas = [];
+
+  tablas.push({
+    nombre: 'PIB Mundial',
+    ...porAnios('pib_mundial', 'el crecimiento del PIB mundial', 'Crecimiento Mundial (%)',
+      'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')', ' (Proyección)'),
+  });
+
+  tablas.push({
+    nombre: 'PIB en Colombia',
+    ...porAnios('pib_colombia', 'el crecimiento del PIB de Colombia', 'Crecimiento del PIB (%)',
+      'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')', ' (Proyección OCDE)'),
+  });
+
+  tablas.push({
+    nombre: 'Inflación Global',
+    ...porAnios('inflacion_global', 'la inflación global', 'Tasa de Inflación (%)',
+      'Tasas de Inflación Global (' + y1 + '-' + y3 + ')', ' (Proyección)'),
+  });
+
+  /* Proyecciones por región: las filas dependen de lo que traiga la serie del año, así que
+     cuando falta se emiten las cinco regiones del informe con su marcador de pendiente en
+     vez de una tabla vacía. */
+  {
+    const { valores: porAnio, fuente } = serie('crecimiento_por_region');
+    const porRegion = porAnio[y];
+    const filas = (!porRegion || !porRegion.length)
+      ? ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)']
+        .map((r) => [r, wrap(marcadorPendiente(y, 'la proyección de crecimiento de ' + r))])
+      : porRegion.map(({ region, valor }) => [region, wrap(valor)]);
+    tablas.push({
+      nombre: 'por Región/País',
+      titulo: 'Proyecciones de Crecimiento del PIB por Región/País (' + y + ')',
+      cabeceras: ['Región/País', 'Crecimiento Proyectado (%)'],
+      filas, fuente,
+    });
+  }
+
+  {
+    const { valores: S, fuente } = serie('inflacion_colombia');
+    tablas.push({
+      nombre: 'Inflación en Colombia',
+      titulo: 'Inflación en Colombia (' + y + ' vs. Meta ' + y3 + ')',
+      cabeceras: ['Indicador', 'Valor (%)'],
+      filas: [
+        ['Inflación ' + y, wrap(valorODisponible(S, y, 'la inflación de Colombia'))],
+        ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
+      ],
+      fuente,
+    });
+  }
+
+  /* Tasa de intervención: la serie trae su propia etiqueta de fecha («Diciembre 2024»),
+     que además da el título. */
+  {
+    const { valores: S, fuente } = serie('tasa_intervencion');
+    const filas = [y1, y2].map((anio) => {
+      const obs = S[anio];
+      return obs
+        ? [obs.etiqueta, wrap(obs.valor)]
+        : ['Diciembre ' + anio,
+          wrap(marcadorPendiente(anio, 'la tasa de intervención del Banco de la República'))];
+    });
+    tablas.push({
+      nombre: 'Intervención del Banco',
+      titulo: 'Tasa de Intervención del Banco de la República ('
+        + filas[0][0] + ' - ' + filas[1][0] + ')',
+      cabeceras: ['Fecha', 'Tasa de Intervención (%)'],
+      filas, fuente,
+    });
+  }
+
+  {
+    const { valores: S, fuente } = serie('trm_promedio');
+    tablas.push({
+      nombre: 'Tasa Representativa del Mercado',
+      titulo: 'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
+      cabeceras: ['Año', 'TRM Promedio ($)'],
+      filas: [
+        [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
+        [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
+      ],
+      fuente,
+    });
+  }
+
+  {
+    const { valores: S, fuente } = serie('desempleo_colombia');
+    tablas.push({
+      nombre: 'Desempleo en Colombia',
+      titulo: 'Tasa de Desempleo en Colombia (' + y + ' vs. Proyección ' + y3 + ')',
+      cabeceras: ['Indicador', 'Valor (%)'],
+      filas: [
+        ['Desempleo ' + y, wrap(valorODisponible(S, y, 'la tasa de desempleo'))],
+        ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
+      ],
+      fuente,
+    });
+  }
+
+  return tablas;
 }
 
 /* ══════════════ Diagnóstico de cobertura ══════════════ */

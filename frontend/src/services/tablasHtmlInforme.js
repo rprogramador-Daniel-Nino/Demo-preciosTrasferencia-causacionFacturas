@@ -35,9 +35,9 @@
 
 import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
-  filasRazonesRechazo,
+  filasRazonesRechazo, tablasMacroInforme,
 } from './tablasInforme.js';
-import { claveTitulo } from './docxRelleno.js';
+import { claveTitulo, numeroDeTabla } from './docxRelleno.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
 export function textoPlanoHtml(fragmento) {
@@ -108,12 +108,17 @@ export function localizarTablasHtml(html, nombres) {
   const encontradas = [];
   const vistas = new Set();
 
-  const anotar = (inicio, fin, titulo, embebido) => {
+  const anotar = (inicio, fin, titulo, embebido, rotulo) => {
     if (vistas.has(inicio)) return;
     vistas.add(inicio);
     const filas = filasDe(texto.slice(inicio, fin));
     encontradas.push({
       inicio, fin, titulo, embebido,
+      /* Dónde está el párrafo del rótulo, para poder reescribirlo. Las tablas macro lo
+         necesitan: su título lleva los años («Crecimiento del PIB Mundial (2023-2025)») y
+         dejarlo como venía publica el rango de años del informe anterior. `null` cuando el
+         rótulo vive dentro de la propia tabla. */
+      rotulo: rotulo || null,
       columnas: filas.length ? celdasDe(filas[0].xml).length : 0,
       filasDatos: Math.max(0, filas.length - 1),
     });
@@ -144,7 +149,9 @@ export function localizarTablasHtml(html, nombres) {
     const inicio = cursor + tras[0].indexOf('<table');
     const fin = finDeTabla(texto, inicio);
     if (fin < 0) continue;
-    anotar(inicio, fin, textoPlanoHtml(b[2]), false);
+    anotar(inicio, fin, textoPlanoHtml(b[2]), false, {
+      inicio: b.index, fin: b.index + b[0].length, xml: b[0], etiqueta: b[1],
+    });
   }
 
   /* ── Rótulo DENTRO de la primera fila ── Así trae la plantilla la «Tabla 20. Tabla de
@@ -297,6 +304,29 @@ export function reescribirCeldaHtml(tablaHtml, fila, columna, texto) {
   return tabla.slice(0, filas[fila].inicio) + filaNueva + tabla.slice(filas[fila].fin);
 }
 
+/**
+ * Reescribe el texto del párrafo del rótulo, conservando su formato y su número.
+ *
+ * Solo se usa en las tablas macro, y por una razón concreta: su título lleva el rango de
+ * años («Crecimiento del PIB Mundial (2023-2025)»), que es un dato del informe y no una
+ * preferencia de redacción. Dejarlo como venía publica los años del informe del que salió
+ * la plantilla. En las tablas del motor el rótulo no se toca, porque ahí el título no
+ * contiene datos.
+ *
+ * El prefijo «Tabla N.» de la plantilla se conserva: si el cliente renumeró, imponer
+ * nuestra numeración descuadraría su índice y las referencias del texto.
+ */
+export function reescribirRotuloHtml(rotuloXml, titulo) {
+  const xml = String(rotuloXml || '');
+  const m = /^(<(p|h[1-6])(?:\s[^>]*)?>)([\s\S]*)(<\/\2\s*>)$/i.exec(xml);
+  if (!m) return xml;
+
+  const numero = numeroDeTabla(textoPlanoHtml(m[3]));
+  const texto = numero != null ? 'Tabla ' + numero + '. ' + titulo : titulo;
+  const { abre, cierra } = envolturaDe(m[3]);
+  return m[1] + abre + escaparHtml(texto) + cierra + m[4];
+}
+
 /** Nombres con los que las tablas del motor se rotulan en las plantillas. */
 export const TABLA_MARGENES = 'Margen Operacional Compañías Comparables';
 export const TABLA_MUESTRA = 'Muestra Compañías comparables';
@@ -400,6 +430,49 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   /* Si solo se encontró la horizontal, el rango del análisis se queda con los datos de la
      plantilla y hay que decirlo. */
   if (ocurrencias.length && !verticalesHechas) anotar(TABLA_RANGO);
+
+  return salida;
+}
+
+/**
+ * Regenera en el HTML las ocho tablas de tendencias de la economía.
+ *
+ * Salen de `tablasMacroInforme`, el mismo descriptor que emite la ruta .docx, así que las
+ * dos publican las mismas series y las mismas fuentes.
+ *
+ * A diferencia de las del motor, aquí SÍ se reescribe el rótulo: su título lleva el rango
+ * de años, que es un dato. Se procesan de atrás hacia adelante porque cada sustitución
+ * mueve los offsets de lo que va después.
+ *
+ * @param {string} html
+ * @param {object} datosMacro  el análisis de mercado del estudio, o null para las series
+ *        de respaldo.
+ * @param {number} year  año gravable.
+ * @param {string[]} [avisos]  se anotan las que la plantilla no trae.
+ * @returns {string}
+ */
+export function actualizarTablasMacroHtml(html, datosMacro, year, avisos) {
+  let salida = String(html || '');
+
+  /* Cada tabla se localiza sobre la salida ya modificada, de una en una, en vez de calcular
+     todas las posiciones de golpe: los nombres son distintos entre sí, así que reescribir
+     una no cambia dónde está la siguiente, pero sus offsets sí se desplazan. */
+  tablasMacroInforme(datosMacro, year).forEach((t) => {
+    const bloque = localizarTablaHtml(salida, t.nombre);
+    if (!bloque) {
+      if (Array.isArray(avisos)) avisos.push(t.nombre);
+      return;
+    }
+    const tabla = reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), t.filas);
+    salida = salida.slice(0, bloque.inicio) + tabla + salida.slice(bloque.fin);
+
+    /* El rótulo va después de la tabla en el orden de escritura porque está ANTES en el
+       documento: reescribirlo primero movería el bloque que acabamos de localizar. */
+    if (bloque.rotulo) {
+      const nuevo = reescribirRotuloHtml(bloque.rotulo.xml, t.titulo);
+      salida = salida.slice(0, bloque.rotulo.inicio) + nuevo + salida.slice(bloque.rotulo.fin);
+    }
+  });
 
   return salida;
 }

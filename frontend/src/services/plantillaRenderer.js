@@ -5,7 +5,7 @@
 
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
-import { actualizarTablasMotorHtml } from './tablasHtmlInforme.js';
+import { actualizarTablasMotorHtml, actualizarTablasMacroHtml } from './tablasHtmlInforme.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -30,19 +30,28 @@ const resaltar = resaltarValor;
 
 const RX_MARCA = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
 
-export function renderizar(htmlMarcado, estudio, recursos = []) {
+/**
+ * @param {string} htmlMarcado
+ * @param {object} estudio
+ * @param {Array} [recursos]
+ * @param {{datosMacro?:object}} [opciones]  `datosMacro` alimenta las ocho tablas de
+ *        tendencias de la economía; sin él se usan las series de respaldo de
+ *        `analisisMercado.js`, igual que en la ruta .docx.
+ */
+export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
   const vacios = new Set();
   const recursosFaltantes = new Set();
 
-  /* Las tablas del motor se regeneran ANTES de sustituir las marcas, y no después, por
-     dos razones. Una: las marcas que la IA hubiera puesto dentro de la tabla vieja se van
-     con ella, así que no se cuentan como campos vacíos por un texto que ya no existe.
-     Otra: el número de filas depende del estudio, no de la plantilla, y sustituir marca
-     por marca no puede añadirlas ni quitarlas — es lo que dejaba la tabla de márgenes con
-     las comparables del informe del que salió la plantilla y unas pocas celdas del
-     estudio nuevo. */
+  /* Las tablas se regeneran ANTES de sustituir las marcas, y no después, por dos razones.
+     Una: las marcas que la IA hubiera puesto dentro de la tabla vieja se van con ella, así
+     que no se cuentan como campos vacíos por un texto que ya no existe. Otra: el número de
+     filas depende del estudio, no de la plantilla, y sustituir marca por marca no puede
+     añadirlas ni quitarlas — es lo que dejaba la tabla de márgenes con las comparables del
+     informe del que salió la plantilla y unas pocas celdas del estudio nuevo. */
   const avisosTablas = [];
   let html = actualizarTablasMotorHtml(htmlMarcado, estudio, avisosTablas);
+  html = actualizarTablasMacroHtml(
+    html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
 
   html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);

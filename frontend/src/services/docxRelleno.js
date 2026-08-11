@@ -32,13 +32,10 @@ import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
-  filasRangoIntercuartil, ETIQUETAS_RANGO, AMBITO,
+  filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
 } from './tablasInforme.js';
 import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
-import {
-  DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
-} from './analisisMercado.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -154,141 +151,23 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
 export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
   const doc = sustituidorDeTablas(xml, avisos);
-  const reemplazar = (...args) => doc.reemplazar(...args);
 
-  const y1 = year - 1, y2 = year, y3 = year + 1;
-  const wrap = (v) => String(v == null ? '—' : v);
+  /* Qué tabla es cada una y con qué contenido lo describe `tablasMacroInforme`, que es de
+     donde las toma también la ruta de plantilla PDF. Antes la definición de las ocho vivía
+     aquí, y llevarlas a la otra ruta habría significado copiarlas con sus series y sus
+     fuentes: dos definiciones de la misma tabla que se separan en la primera corrección.
 
-  /* Estas ocho no llevan «Tabla N.» en la plantilla, así que la numeración nunca fue
-     su problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el
-     título tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso
-     pasan por el mismo localizador, que compara sobre el texto ya reconstruido. */
-
-  // 1. PIB Mundial
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
-    reemplazar('PIB Mundial', () => generarTablaOoxml(
-      'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
-      ['Año', 'Crecimiento Mundial (%)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
-        [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 2. PIB Colombia
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
-    reemplazar('PIB en Colombia', () => generarTablaOoxml(
-      'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
-      ['Año', 'Crecimiento del PIB (%)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
-        [String(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 3. Inflación Global
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
-    reemplazar('Inflación Global', () => generarTablaOoxml(
-      'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
-      ['Año', 'Tasa de Inflación (%)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
-        [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 4. PIB por Región
-  {
-    const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
-    reemplazar('por Región/País', () => {
-      const porRegion = porAnio[year];
-      const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
-      let filas = [];
-      if (!porRegion || !porRegion.length) {
-        const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
-        filas = regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]);
-      } else {
-        filas = porRegion.map(({ region, valor }) => [region, wrap(valor)]);
-      }
-      return generarTablaOoxml(titulo, ['Región/País', 'Crecimiento Proyectado (%)'], filas, fuente);
-    });
-  }
-
-  // 5. Inflación Colombia
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
-    reemplazar('Inflación en Colombia', () => generarTablaOoxml(
-      'Inflación en Colombia (' + year + ' vs. Meta ' + y3 + ')',
-      ['Indicador', 'Valor (%)'],
-      [
-        ['Inflación ' + year, wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
-        ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
-      ],
-      fuente
-    ));
-  }
-
-  // 6. Tasa de Intervención
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
-    reemplazar('Intervención del Banco', () => {
-      const filas = [y1, y2].map((y) => {
-        const obs = S[y];
-        return obs
-          ? [obs.etiqueta, wrap(obs.valor)]
-          : ['Diciembre ' + y, wrap(marcadorPendiente(y, 'la tasa de intervención del Banco de la República'))];
-      });
-      return generarTablaOoxml(
-        'Tasa de Intervención del Banco de la República (' + filas[0][0] + ' - ' + filas[1][0] + ')',
-        ['Fecha', 'Tasa de Intervención (%)'],
-        filas,
-        fuente
-      );
-    });
-  }
-
-  // 7. TRM Promedio
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
-    reemplazar('Tasa Representativa del Mercado', () => generarTablaOoxml(
-      'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
-      ['Año', 'TRM Promedio ($)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 8. Tasa de Desempleo
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
-    reemplazar('Desempleo en Colombia', () => generarTablaOoxml(
-      'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + y3 + ')',
-      ['Indicador', 'Valor (%)'],
-      [
-        ['Desempleo ' + year, wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
-        ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
-      ],
-      fuente
-    ));
-  }
+     Estas ocho no llevan «Tabla N.» en la plantilla, así que la numeración nunca fue su
+     problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el título
+     tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso pasan por
+     el mismo localizador, que compara sobre el texto ya reconstruido. */
+  tablasMacroInforme(datosMacro, year).forEach((t) => {
+    doc.reemplazar(t.nombre, () => generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente));
+  });
 
   return doc.xml;
 }
+
 
 /** Reemplaza quirúrgicamente las catorce tablas operativas en el OOXML del documento de la Fase 3. */
 /* ─────────────────────────────────────────────────────────────────────────────
