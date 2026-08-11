@@ -34,7 +34,9 @@ import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js
 import { pctf, fmt, num, pliOf } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 import { analizarRango } from './rangoIntercuartil.js';
-import { filasOperacionesDeIngreso, filasOperacionAnalizar } from './tablasOperaciones.js';
+import {
+  filasOperacionesDeIngreso, filasOperacionAnalizar, conceptoDeOperacion,
+} from './tablasOperaciones.js';
 import {
   DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
 } from './analisisMercado.js';
@@ -627,11 +629,13 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
   // 4. Método de Precios de Transferencia Aplicable
   reemplazar('Método de Precios de Transferencia', (b) => {
-    const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
+    /* Misma resolución del concepto que las Tablas 1 y 2: esta columna publica el código de
+       operación, y el helper que había aquí lo inventaba cuando el tipo no traía paréntesis. */
+    const { desc, cod } = conceptoDeOperacion(estudio);
     return generarTablaOoxml(
       tituloDe(b, 'Método de Precios de Transferencia Aplicable'),
       ['Código de Operación', 'Descripción de la operación', 'Método seleccionado', 'Indicador de Rentabilidad'],
-      [[cod, desc, estudio.metodo || 'TU', estudio.pli || 'MO']],
+      [[wrap(cod), wrap(desc), estudio.metodo || 'TU', estudio.pli || 'MO']],
       'Información suministrada por la Administración de la Compañía.'
     );
   }, { numeros: [4] });
