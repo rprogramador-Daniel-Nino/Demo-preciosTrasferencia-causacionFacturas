@@ -550,7 +550,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
   const rResult = analizarRango(estudio);
   const stats = rResult.stats || {};
-  const compFilas = rResult.filas || [];
 
   // Calcular tPLI (indicador del contribuyente unificado)
   const seg = num(estudio.seg_excluido) || 0;
@@ -573,12 +572,8 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   const medNoAjustado = sinAj.med !== undefined ? sinAj.med : null;
   const p75NoAjustado = sinAj.p75 !== undefined ? sinAj.p75 : null;
 
-  const activeSeriesAjustado = compFilas
-    .map((f) => f.ajustado)
-    .filter((v) => v !== null && v !== undefined)
-    .sort((a, b) => a - b);
-  const minAjustado = activeSeriesAjustado.length ? activeSeriesAjustado[0] : null;
-  const maxAjustado = activeSeriesAjustado.length ? activeSeriesAjustado[activeSeriesAjustado.length - 1] : null;
+  const minAjustado = stats.min !== undefined ? stats.min : null;
+  const maxAjustado = stats.max !== undefined ? stats.max : null;
   const p25Ajustado = stats.p25 !== undefined ? stats.p25 : null;
   const medAjustado = stats.med !== undefined ? stats.med : null;
   const p75Ajustado = stats.p75 !== undefined ? stats.p75 : null;
