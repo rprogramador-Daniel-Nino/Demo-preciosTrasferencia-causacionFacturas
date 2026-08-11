@@ -96,12 +96,21 @@ function aPeticionGemini(cuerpo) {
     parts: [{ text: textoDeContenido(m && m.content) }],
   }));
 
-  const generationConfig = {};
+  /* El pensamiento de Gemini se desactiva porque `max_tokens` de Anthropic cuenta SOLO el
+     texto de la respuesta, mientras que `maxOutputTokens` de Gemini cuenta también los tokens
+     de razonamiento. Traducirlo 1:1 con el pensamiento activo no es equivalente: es un recorte.
+     Medido contra producción el 2026-08-11 con `gemini-3.5-flash`, pidiendo un párrafo de 80 a
+     120 palabras con max_tokens 500 — el caso real de descripcionComparables.js:
+       sin thinkingConfig   → 477 tokens de pensamiento, 19 de texto, finishReason MAX_TOKENS,
+                              7 palabras: un párrafo cortado a media frase.
+       thinkingBudget en 0  → 135 tokens de texto, finishReason STOP, 105 palabras.
+     Un párrafo truncado entra al informe y nadie se entera, que es la misma clase de fallo
+     silencioso que `aRespuestaAnthropic` evita al devolver null en lugar de «». */
+  const generationConfig = { thinkingConfig: { thinkingBudget: 0 } };
   if (origen.max_tokens != null) generationConfig.maxOutputTokens = origen.max_tokens;
   if (origen.temperature != null) generationConfig.temperature = origen.temperature;
 
-  const salida = { contents };
-  if (Object.keys(generationConfig).length) salida.generationConfig = generationConfig;
+  const salida = { contents, generationConfig };
 
   const system = textoDeContenido(origen.system);
   if (system) salida.systemInstruction = { parts: [{ text: system }] };

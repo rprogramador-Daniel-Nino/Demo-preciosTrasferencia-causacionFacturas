@@ -125,6 +125,26 @@ test('la petición traducida no arrastra campos que Gemini no entiende', () => {
   assert.strictEqual(g.generationConfig.temperature, 0.2);
 });
 
+test('la petición traducida desactiva el pensamiento de Gemini', () => {
+  /* `max_tokens` de Anthropic cuenta solo el texto; `maxOutputTokens` de Gemini cuenta además
+     el razonamiento. Con el pensamiento activo, los 500 tokens del párrafo de una comparable
+     se gastaban en pensar (477 medidos en producción) y el texto salía cortado a media frase.
+     Si esta aserción falla, el fallback volvió a truncar descripciones en silencio. */
+  const g = aPeticionGemini({
+    model: 'claude-haiku-4-5-20251001', max_tokens: 500,
+    messages: [{ role: 'user', content: 'Redacta la descripción de ACME.' }],
+  });
+  assert.deepStrictEqual(g.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+  assert.strictEqual(g.generationConfig.maxOutputTokens, 500);
+});
+
+test('el pensamiento se desactiva incluso sin max_tokens ni temperature', () => {
+  /* Anthropic exige `max_tokens`, así que este caso no llega desde los llamadores reales,
+     pero el generationConfig ya no es opcional: si se omitiera aquí, Gemini razonaría. */
+  const g = aPeticionGemini({ messages: [{ role: 'user', content: 'x' }] });
+  assert.deepStrictEqual(g.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
+});
+
 /* ── Traducción de la respuesta ── */
 
 test('la respuesta de Gemini sale con la forma de Anthropic', () => {

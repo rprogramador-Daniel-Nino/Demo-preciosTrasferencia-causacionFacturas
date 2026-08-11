@@ -74,16 +74,18 @@ function aPeticionGemini($cuerpo) {
 
     $salida = ['contents' => $contents];
 
-    $generationConfig = [];
+    // El pensamiento de Gemini se desactiva porque `max_tokens` de Anthropic cuenta solo el
+    // texto, y `maxOutputTokens` de Gemini cuenta también el razonamiento: traducirlo 1:1 con
+    // el pensamiento activo devuelve el párrafo cortado a media frase. Ver el detalle medido
+    // en functions/fallbackGemini.js.
+    $generationConfig = ['thinkingConfig' => ['thinkingBudget' => 0]];
     if (isset($cuerpo['max_tokens'])) {
         $generationConfig['maxOutputTokens'] = $cuerpo['max_tokens'];
     }
     if (isset($cuerpo['temperature'])) {
         $generationConfig['temperature'] = $cuerpo['temperature'];
     }
-    if (!empty($generationConfig)) {
-        $salida['generationConfig'] = $generationConfig;
-    }
+    $salida['generationConfig'] = $generationConfig;
 
     $system = textoDeContenidoAnthropic($cuerpo['system'] ?? '');
     if ($system !== '') {
