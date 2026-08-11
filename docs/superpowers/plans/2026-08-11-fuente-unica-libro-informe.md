@@ -608,29 +608,42 @@ Sustituir el arreglo de la Task 3 por este. El orden es el de balance y **tiene 
    visto desde el libro y desde el ANEXO A, y si divergen el informe publica un
    balance que su propio soporte no reproduce.
 
-   `av: false` marca los rubros que NO llevan análisis vertical: el total de activos,
-   porque sería 100 % por definición, y las cuentas por pagar, porque un pasivo sobre
-   el total de activos no significa nada. Es el criterio que ya aplica
-   `filasEsfAnexoA`. Las tres cifras del estado de resultados —ventas, costo y gastos—
-   tampoco: no son partidas del balance. */
+   `av: false` marca los rubros que NO llevan análisis vertical:
+
+   - Las cuentas por pagar, porque un pasivo sobre el total de activos no significa nada.
+     Esta sí es la exclusión que aplica `filasEsfAnexoA`: las añade fuera del `map`, con
+     `SIN_DATO` en la columna del vertical.
+   - El total de activos, porque su vertical es 100 % por definición y no informa. **Ojo:
+     esto NO lo hace `filasEsfAnexoA`**, que mapea `RUBROS_ESF` completo y sí publica ese
+     100 % en el ANEXO A y en la Tabla 10. Es una decisión propia del libro, defendible por
+     sí misma, y no hay que atribuirla a código ajeno: quien lea el comentario para auditar
+     confiaría en una premisa falsa.
+   - Las tres cifras del estado de resultados —ventas, costo y gastos—, que no son
+     partidas del balance. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas', av: false },
   { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
   { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
   { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
   { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
-  { clave: 't_ar', etiqueta: 'Cuentas por cobrar', av: true },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras cuentas por cobrar', av: true },
   { clave: 't_inv', etiqueta: 'Inventarios', av: true },
   { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes', av: true },
   { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', av: true },
-  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo', av: true },
+  { clave: 't_ppe', etiqueta: 'Propiedades, planta y equipo', av: true },
   { clave: 't_intang', etiqueta: 'Intangibles', av: true },
   { clave: 't_dif', etiqueta: 'Diferidos', av: true },
   { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', av: true },
   { clave: 't_act_tot', etiqueta: 'Total, Activos', av: false },
-  { clave: 't_ap', etiqueta: 'Cuentas por pagar', av: false },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales', av: false },
 ];
 ```
+
+Las etiquetas de `t_ar`, `t_ppe` y `t_ap` son las **literales de `RUBROS_ESF`** —incluido el
+plural de «Propiedades»—, no las formas cortas que traía el emisor. Mezclar unas y otras en la
+misma hoja es peor que cualquiera de las dos opciones consistente: quien audita el libro contra
+el ANEXO A no puede mapear por etiqueta si no sabe de antemano cuáles filas son fieles y cuáles
+un alias histórico. Cambiarlas obliga a revisar las pruebas que localizan la fila por su texto.
 
 - [ ] **Step 4: Escribir el A.V. en la columna C**
 
@@ -642,13 +655,51 @@ Sustituir el `forEach` de la Task 3 por este. `valorDeRubro` se conserva tal com
     const celdas = [cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))];
     /* A.V. como fórmula y no como número: es lo que hace que corregir una cifra en
        Datos recalcule el vertical del ANEXO A y de la Tabla 10 sin recalcularlo a
-       mano en dos sitios. */
-    if (r.av) celdas.push(cFor(`B${filaDeRubro(r.clave)}/$B$${filaTot}`, '0.00%'));
+       mano en dos sitios.
+
+       Con guarda de divisor cero. Sin ella, un estudio sin `t_act_tot` —y son la mayoría:
+       ver el Step 5— deja las diez celdas del vertical en `#DIV/0!`. Es la misma guarda
+       que ya aplica `verticalSobreActivos` en docxRelleno.js (`if (!total) return '—'`),
+       traducida a fórmula, y el mismo patrón de `IF(...=0,"",...)` que este archivo ya
+       usa en otras celdas. Un hueco visible es preferible a un error de Excel en un
+       documento que se radica. */
+    if (r.av) {
+      const fila = filaDeRubro(r.clave);
+      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%'));
+    }
     datos.push(celdas);
   });
 ```
 
-- [ ] **Step 5: Actualizar la prosa que nombra filas concretas**
+- [ ] **Step 5: `motorExcelExport` tiene que ENTREGAR los ocho rubros nuevos**
+
+Sin esto la tarea no entrega nada por su ruta principal. `construirLibroSoporte` arma
+`estudioBase` con una **lista explícita de claves** (`motorExcelExport.js:34-56`) que no
+incluye ninguno de los ocho rubros nuevos, así que `valorDeRubro('t_act_tot')` devuelve
+`Number(undefined) || 0` = `0` en **toda** exportación por el Motor de Comparables: los once
+rubros del ESF saldrían en cero y el vertical entero en `#DIV/0!` (o en blanco, con la guarda
+del Step 4). El libro no sustentaría ni la Tabla 10 ni el ANEXO A, que es el objetivo
+declarado de esta tarea.
+
+Añadir las ocho claves con el mismo patrón de respaldo que ya usan las demás:
+
+```js
+    t_cash: datos.examinada?.T?.cash ?? datos.estudio?.t_cash,
+    t_inv_assoc: datos.examinada?.T?.inv_assoc ?? datos.estudio?.t_inv_assoc,
+    t_tax: datos.examinada?.T?.tax ?? datos.estudio?.t_tax,
+    t_act_curr: datos.examinada?.T?.act_curr ?? datos.estudio?.t_act_curr,
+    t_intang: datos.examinada?.T?.intang ?? datos.estudio?.t_intang,
+    t_dif: datos.examinada?.T?.dif ?? datos.estudio?.t_dif,
+    t_act_nocurr: datos.examinada?.T?.act_nocurr ?? datos.estudio?.t_act_nocurr,
+    t_act_tot: datos.examinada?.T?.act_tot ?? datos.estudio?.t_act_tot,
+```
+
+Con una prueba que lo cubra: `construirLibroSoporte` con un estudio que traiga los doce
+rubros los escribe todos en la hoja `Datos`, y el vertical sale como fórmula con su valor.
+Y otra con `t_act_tot` ausente que confirme que las celdas del vertical quedan en blanco y
+no en `#DIV/0!`.
+
+- [ ] **Step 6: Actualizar la prosa que nombra filas concretas**
 
 Ampliar `RUBROS_EXAMINADA` mueve la fila de la tasa de la 11 a la 16, y hay texto que la
 nombra a mano y quedaría mintiendo. Estos sitios **no** son fórmulas, así que la guarda de
