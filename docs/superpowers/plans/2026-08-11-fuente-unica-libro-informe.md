@@ -367,7 +367,15 @@ git commit -m "fix: el libro de soporte recibe el ambito y el segmento excluido 
 
 `memoriaCalculoRangoOptimo.js:173-174` fija las referencias del contribuyente como literales: `Datos!$B$4` … `Datos!$B$10`. La Task 4 inserta rubros en medio de esas filas, y con literales las cinco hojas de método apuntarían al rubro equivocado sin que nada falle.
 
-Esta tarea es un **refactor sin cambio de comportamiento**: las direcciones que salen son las mismas. La prueba se escribe para pasar antes y después — es la red que hace segura la Task 4, no una prueba de un defecto. Dejarlo claro en el mensaje de commit.
+Esta tarea es un **refactor sin cambio de comportamiento**: las direcciones que salen son las mismas.
+
+> **Esta tarea NO tiene fase roja, y es a propósito.** Su prueba pasa antes y después del
+> cambio: es una prueba de caracterización, la red que hace segura la Task 4. No hay defecto
+> que reproducir todavía —el desalineamiento lo *introduciría* la Task 4 si nadie lo sujeta—,
+> así que exigir un test que falle aquí obligaría a inventar uno. Quien revise esta tarea debe
+> tratar la ausencia de fase roja como cumplimiento del plan, no como defecto; lo que sí debe
+> exigir es que la prueba falle si se rompe la derivación (comprobable revirtiendo el Step 4 a
+> mano). Dejarlo claro también en el mensaje de commit.
 
 **Files:**
 - Modify: `frontend/src/services/memoriaCalculoRangoOptimo.js:107-135, 172-174`
@@ -974,8 +982,9 @@ bloque que las empuja por este —es el mismo, con el tercer argumento de `cFor`
 
 ```js
       /* Solo la parte del ámbito: la del valor finito la pone ISNUMBER en la propia
-         hoja, y así el criterio queda partido igual en los dos lados. */
-      const entraAmbito = entraPorAmbitoLibro(porSabor[0].filas[i]?.amb, study.cmode);
+         hoja, y así el criterio queda partido igual en los dos lados. La función es la
+         del motor, importada: ver el Step siguiente. */
+      const entraAmbito = entraPorAmbito(porSabor[0].filas[i]?.amb, study.cmode);
 
       const ambitoRef = D(`$B$${FILA_AMBITO()}`);
       const ambComp = D(`J${src}`);
@@ -994,16 +1003,26 @@ bloque que las empuja por este —es el mismo, con el tercer argumento de `cFor`
       });
 ```
 
-Y añadir el ayudante del ámbito junto a los demás del módulo:
+El criterio de ámbito **no se replica en JS**. `entraPorAmbito` ya existe en
+`ajusteRangoCapitalTrabajo.js:245` como `const` de módulo sin exportar. Exportarlo:
 
 ```js
-/* Mismo criterio que `entraPorAmbito` (ajusteRangoCapitalTrabajo.js:245), replicado
-   para poder poner el valor en caché de la columna Z. El test de paridad de la Task 7
-   afirma que los dos coinciden. */
-const entraPorAmbitoLibro = (amb, modo) => (
-  modo === 'nac' ? amb === 'Nac' : modo === 'intl' ? amb === 'Int' : true
+/* Se exporta porque el emisor del libro necesita el mismo criterio para poner el valor
+   en caché de su columna de ámbito. Replicarlo allá habría dejado tres copias del
+   criterio —esta, la del libro y la fórmula de Excel— y la fórmula ya es una copia
+   irreducible: está en otro lenguaje. Dos son el mínimo; tres eran una de más. */
+export const entraPorAmbito = (amb, modo) => (
+  modo === 'intl' ? amb === 'Int' : modo === 'nac' ? amb === 'Nac' : true
 );
 ```
+
+e importarlo en `memoriaCalculoRangoOptimo.js` junto a `analizarRangoAjustado`:
+
+```js
+import { analizarRangoAjustado, entraPorAmbito } from './ajusteRangoCapitalTrabajo.js';
+```
+
+En el bloque anterior, `entraPorAmbitoLibro(...)` pasa a ser `entraPorAmbito(...)`.
 
 **Nota sobre las celdas de serie vacías:** cuando la fila no entra, la fórmula devuelve `""` y el valor en caché correcto es la cadena vacía, no un número. `cFor` no la escribe porque exige `Number.isFinite`. Es lo correcto: una celda numérica con `<v></v>` es inválida. La celda sale como fórmula sin valor y Excel la resuelve a `""` al abrir. Dejarlo comentado en el código.
 
