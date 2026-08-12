@@ -34,7 +34,7 @@
    aunque el embudo guardado venga de una corrida anterior.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { filasRazonesRechazo, ETIQUETAS_MOTIVO } from './tablasInforme.js';
+import { filasRazonesRechazo, ETIQUETAS_MOTIVO, FUNDIDOS_EN_RIGOR } from './tablasInforme.js';
 import { textoPlanoHtml, filasDe, celdasDe } from './tablasHtmlInforme.js';
 import { localizarAnexo } from './anexoBHtml.js';
 import { reescribirFilasHtml } from './tablasHtmlInforme.js';
@@ -121,8 +121,22 @@ export function gruposDelAnexoC(estudio) {
   const grupos = [];
   const vistas = new Set();
   filas.forEach((f) => {
-    const companias = Array.isArray(porMotivo[f.clave]) ? porMotivo[f.clave] : [];
+    let companias = Array.isArray(porMotivo[f.clave]) ? porMotivo[f.clave] : [];
     vistas.add(f.clave);
+
+    /* La fila que el informe funde arrastra aquí las compañías de todos los motivos que
+       recoge. Sin esto, la Tabla 16 declara un número —1.389— y el anexo lista bajo esa
+       misma letra solo una parte, mientras el resto aparece en un grupo al final con una
+       letra que el cuerpo del informe no menciona: el anexo dejaría de sustentar la tabla
+       que viene a respaldar. Se marcan como vistas para que el rescate de abajo no las
+       publique otra vez. */
+    if (f.clave === 'rigorFuncional') {
+      FUNDIDOS_EN_RIGOR.forEach((k) => {
+        vistas.add(k);
+        if (Array.isArray(porMotivo[k])) companias = companias.concat(porMotivo[k]);
+      });
+    }
+
     if (companias.length) grupos.push({ clave: f.clave, etiqueta: f.etiqueta, companias });
   });
 

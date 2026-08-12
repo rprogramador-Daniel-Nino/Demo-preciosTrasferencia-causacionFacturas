@@ -34,15 +34,26 @@ test('filasRazonesRechazo omite los criterios que no descartaron a nadie', () =>
 });
 
 test('filasRazonesRechazo asigna letras corridas sobre las filas que quedan', () => {
-  /* Cinco criterios con descartes (el de «sin descripción» quedó en cero y se omite)
-     más las aceptadas: seis filas, letras A a F sin huecos. La reserva ya no es una
-     fila propia. */
+  /* Cuatro criterios con descartes más las aceptadas: cinco filas, letras A a E sin
+     huecos. Ni la reserva ni los motivos que se funden en «Diferencias funcionales»
+     tienen fila propia. */
   const { filas } = filasRazonesRechazo(embudoReal);
-  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F']);
+  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E']);
   assert.deepStrictEqual(filas.map(f => f.clave), [
-    'rigorFuncional', 'actividadDistinta', 'holding', 'perdidaOperativa', 'saldoNegativo',
-    'aceptadas',
+    'rigorFuncional', 'holding', 'perdidaOperativa', 'saldoNegativo', 'aceptadas',
   ]);
+});
+
+test('la actividad distinta no tiene fila propia: va en las diferencias funcionales', () => {
+  /* El informe tiene que declarar la misma cifra que la hoja «Matriz de rechazo» del
+     libro de soporte, que presenta los tres motivos de comparabilidad funcional juntos
+     (`memoriaCalculoRangoOptimo.js:885`). Con filas separadas, el documento publicaba
+     dos cifras donde el Excel publica una sola. */
+  const { filas } = filasRazonesRechazo(embudoReal);
+  assert.ok(!filas.some(f => f.clave === 'actividadDistinta'), 'no puede tener fila propia');
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.etiqueta, 'Diferencias funcionales');
+  assert.strictEqual(rigor.cuantas, 42, '5 por rigor + 25 por actividad + 12 de reserva');
 });
 
 test('la reserva se cuenta dentro de las diferencias funcionales', () => {
@@ -53,7 +64,7 @@ test('la reserva se cuenta dentro de las diferencias funcionales', () => {
   const { filas } = filasRazonesRechazo(embudoReal);
   assert.ok(!filas.some(f => f.clave === 'reserva'), 'la reserva no puede tener fila propia');
   const rigor = filas.find(f => f.clave === 'rigorFuncional');
-  assert.strictEqual(rigor.cuantas, 17, '5 por rigor + 12 de reserva');
+  assert.strictEqual(rigor.cuantas, 42, '5 por rigor + 25 por actividad distinta + 12 de reserva');
 });
 
 test('la fila de diferencias funcionales aparece aunque solo la sostenga la reserva', () => {
@@ -76,7 +87,7 @@ test('las retiradas por no traer EEFF se cuentan en las diferencias funcionales'
   const { filas, cuadra } = filasRazonesRechazo(conRetiradas);
   assert.ok(!filas.some(f => f.clave === 'sinEeff'), 'no puede tener fila propia en el informe');
   const rigor = filas.find(f => f.clave === 'rigorFuncional');
-  assert.strictEqual(rigor.cuantas, 19, '5 por rigor + 12 de reserva + 2 sin EEFF');
+  assert.strictEqual(rigor.cuantas, 44, '5 por rigor + 25 por actividad + 12 de reserva + 2 sin EEFF');
   assert.ok(cuadra, 'la suma sigue dando el universo evaluado');
 });
 
@@ -172,7 +183,8 @@ test('filasRazonesRechazo cuenta las vinculadas aparte de las holding', () => {
   assert.strictEqual(controlada.cuantas, 20);
   assert.ok(filas.find(f => f.clave === 'holding'), 'y no desplaza a la de holding');
   assert.strictEqual(cuadra, true, `los conteos deben sumar el universo (${suma} vs ${total})`);
-  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+  /* Seis filas, no siete: la actividad distinta va dentro de «Diferencias funcionales». */
+  assert.deepStrictEqual(filas.map(f => f.letra), ['A', 'B', 'C', 'D', 'E', 'F']);
 });
 
 test('un estudio guardado antes del cambio sigue cuadrando sin la clave controlada', () => {
