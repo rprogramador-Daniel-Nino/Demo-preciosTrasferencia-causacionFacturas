@@ -329,7 +329,12 @@ exports.extraerCamara = onRequest(
 // docs/superpowers/specs/2026-08-03-analisis-mercado-ia-design.md.
 exports.actualizarAnalisisMercadoScheduled = onSchedule(
   {
-    schedule: '0 6 1 * *',
+    /* Día 10 y no día 1: las cifras que busca esta corrida son las del mes que acaba de
+       cerrar, y el día 1 todavía no están publicadas —el DANE saca la inflación hacia el
+       día 5 y el desempleo al filo del cierre—. Arrancando el día 1, el informe se
+       radicaba con las series del mes anterior al anterior sin que nada lo señalara.
+       Sigue siendo una corrida al mes: lo que cambia es que caiga donde ya hay dato. */
+    schedule: '0 6 10 * *',
     timeZone: 'America/Bogota',
     region: 'us-central1',
     secrets: [GEMINI_API_KEY, ANTHROPIC_API_KEY],
