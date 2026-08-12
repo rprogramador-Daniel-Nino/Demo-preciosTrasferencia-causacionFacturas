@@ -97,11 +97,21 @@ export function anioValido(valor) {
  */
 export const SELLO_ESTUDIO = '_estudioId';
 
-/* `matrizRechazo` se suma a los solo-locales por el mismo motivo que `universo`: es un
-   nombre por cada compañía evaluada —miles en un cribado normal— y aunque pesa mucho menos
-   que el universo entero (no lleva descripciones de negocio), sigue siendo demasiado para el
-   documento de Firestore. Se recalcula solo al abrir el paso 3 con el cribado cargado. */
-export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', 'matrizRechazo', SELLO_ESTUDIO];
+/* `matrizRechazo` VIAJA a Firestore, y esta lista es justamente donde no debe estar.
+   Estuvo aquí por un motivo que no se sostiene al medirlo: un nombre por cada compañía
+   evaluada pesa 154 KB para un universo de 3.000 —el 15 % de `TOPE_DOCUMENTO`—, porque son
+   solo razones sociales, sin las descripciones de negocio que hacen enorme al universo.
+
+   Y quedarse fuera del documento no la mandaba a ninguna otra parte: al contrario del
+   `iaMatch` (localStorage) o de las imágenes de los anexos (IndexedDB), nadie la guardaba,
+   así que se descartaba en cada guardado. El estudio la calculaba al correr el motor, la
+   usaba en pantalla y la perdía; el ANEXO C del informe salía entonces con la matriz que
+   trajera la plantilla —la del año anterior— sin que nada lo delatara.
+
+   Si algún día un cribado la hiciera desbordar el documento, `verificarTamano` lo dice con
+   el campo señalado antes de gastar la escritura, y el sitio al que movería es Cloud
+   Storage, por donde ya viaja el cribado de Capital IQ. No localStorage. */
+export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO];
 
 /** Máximo que admite un documento de Firestore. */
 export const TOPE_DOCUMENTO = 1048576;
