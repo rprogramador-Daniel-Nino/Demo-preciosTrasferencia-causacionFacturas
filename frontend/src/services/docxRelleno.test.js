@@ -11,8 +11,9 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA,
+  insertarAnexoA, insertarAnexoC,
 } from './docxRelleno.js';
+import { filasRazonesRechazo } from './tablasInforme.js';
 
 /** Donde vive el cuerpo del documento dentro del .docx. */
 const RUTA_DOC_TEST = 'word/document.xml';
@@ -899,4 +900,89 @@ test('la Tabla 4 declara el código de operación y no lo inventa cuando no se p
   assert.ok(!sinCodigo.includes('Old Table 4'), 'la Tabla 4 tiene que haberse reemplazado');
   assert.ok(sinCodigo.includes('VENTA SERVICIOS'), 'la descripción es la del estudio');
   assert.ok(!sinCodigo.includes('>07<'), 'no debe inventar el código 07');
+});
+
+/* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */
+
+const ESTUDIO_ANEXO_C = {
+  embudoSeleccion: {
+    evaluadas: 12, seleccionadas: 2, reserva: 0,
+    porMotivo: { rigorFuncional: 2, actividadDistinta: 4, holding: 3, perdidaOperativa: 1 },
+  },
+  matrizRechazo: {
+    universo: 12,
+    porMotivo: {
+      rigorFuncional: ['RIGOR UNO', 'RIGOR DOS'],
+      actividadDistinta: ['ACT UNO', 'ACT DOS', 'ACT TRES', 'ACT CUATRO'],
+      holding: ['HOLD UNO', 'HOLD DOS', 'HOLD TRES'],
+      perdidaOperativa: ['PERD UNO'],
+      aceptadas: ['OK UNO', 'OK DOS'],
+    },
+  },
+};
+
+/* Una plantilla con las DOS menciones del anexo que trae un informe real: la del índice,
+   al principio, y la del cuerpo. */
+async function zipConAnexoC() {
+  const buf = await plantilla([
+    parrafo('ANEXO C. Matriz de Rechazo . 88'),
+    parrafo('Cuerpo del informe que no se puede perder.'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+    parrafo('MATRIZ VIEJA DEL AÑO PASADO'),
+    parrafo('Diferencias funcionales 327'),
+  ]);
+  return new PizZip(buf);
+}
+
+test('el ANEXO C se rehace con la matriz del estudio', async () => {
+  const zip = await zipConAnexoC();
+  const r = insertarAnexoC(zip, ESTUDIO_ANEXO_C);
+  assert.strictEqual(r.reescrito, true);
+  assert.strictEqual(r.grupos, 4, 'diferencias funcionales, holding, pérdidas y aceptadas');
+
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.ok(!texto.includes('MATRIZ VIEJA'), 'la matriz de la plantilla tiene que irse');
+  assert.ok(!texto.includes('327'), 'y con ella sus conteos del año pasado');
+  assert.ok(texto.includes('Diferencias funcionales'), 'el resumen lleva la fila fundida');
+  ['ACT UNO', 'RIGOR UNO', 'HOLD UNO', 'PERD UNO', 'OK UNO'].forEach((c) =>
+    assert.ok(texto.includes(c), `la compañía ${c} tiene que aparecer en su listado`));
+});
+
+test('el ANEXO C no se lleva por delante el índice ni la maquetación', async () => {
+  /* «ANEXO C» sale también en la tabla de contenidos. Cortar por la PRIMERA aparición
+     borraría el informe entero, y perder el `<w:sectPr>` del final deja el documento con
+     el tamaño de página por defecto. */
+  const zip = await zipConAnexoC();
+  insertarAnexoC(zip, ESTUDIO_ANEXO_C);
+
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  assert.ok(textoDe(zip, RUTA_DOC_TEST).includes('Cuerpo del informe que no se puede perder'),
+    'lo que va entre el índice y el anexo se conserva');
+  assert.ok(xml.includes('<w:sectPr'), 'las propiedades de sección siguen en el documento');
+  assert.ok(xml.includes('</w:body>'), 'el cuerpo queda bien cerrado');
+});
+
+test('sin matriz en el estudio el ANEXO C se deja como estaba, con aviso', async () => {
+  /* Vaciarlo sería peor que dejarlo: el informe perdería el respaldo de la Tabla 16 sin
+     que nada lo señale. */
+  const zip = await zipConAnexoC();
+  const r = insertarAnexoC(zip, { embudoSeleccion: ESTUDIO_ANEXO_C.embudoSeleccion });
+  assert.strictEqual(r.reescrito, false);
+  assert.match(r.aviso, /ANEXO C/);
+  assert.ok(textoDe(zip, RUTA_DOC_TEST).includes('MATRIZ VIEJA'), 'no se toca la plantilla');
+});
+
+test('las letras del ANEXO C son las de la Tabla 16', async () => {
+  /* El anexo es el respaldo nominal de esa tabla: si una compañía figura bajo «B» en el
+     anexo y su motivo es «C» en el cuerpo, el informe no se puede cotejar. */
+  const zip = await zipConAnexoC();
+  insertarAnexoC(zip, ESTUDIO_ANEXO_C);
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  const { filas } = filasRazonesRechazo(ESTUDIO_ANEXO_C.embudoSeleccion);
+  const letraDe = (clave) => (filas.find((f) => f.clave === clave) || {}).letra;
+  /* La primera compañía de cada grupo va seguida de la letra que la tabla le da. */
+  assert.ok(texto.includes('RIGOR UNO' + letraDe('rigorFuncional')), 'diferencias funcionales');
+  assert.ok(texto.includes('HOLD UNO' + letraDe('holding')), 'holding');
+  assert.ok(texto.includes('OK UNO' + letraDe('aceptadas')), 'aceptadas');
 });

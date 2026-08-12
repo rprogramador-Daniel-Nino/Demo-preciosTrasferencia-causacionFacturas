@@ -45,6 +45,11 @@ import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
 } from './tablasInforme.js';
+/* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
+   definición de la matriz para las dos salidas del informe. */
+import {
+  gruposDelAnexoC, filasResumenAnexoC, tituloDeGrupoAnexoC, NOMBRE_ANEXO_C,
+} from './anexoCHtml.js';
 import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 
@@ -1034,6 +1039,77 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
   return { insertadas };
 }
 
+/* Cabeceras del ANEXO C, tal como las trae la plantilla. Las del resumen son las MISMAS
+   que las de la Tabla 16 —el anexo es el respaldo nominal de esa tabla— y las del listado
+   son las que la plantilla escribe encima de cada grupo de compañías. */
+const CAB_RESUMEN_ANEXO_C = ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'];
+const CAB_LISTADO_ANEXO_C = ['Nº', 'NOMBRE DE LA COMPAÑÍA', 'FILTRO'];
+
+/**
+ * Reescribe el ANEXO C —matriz de rechazo— con el universo del estudio.
+ *
+ * La ruta .docx no lo llenaba: el anexo salía tal cual de la plantilla, así que un informe
+ * de 2025 se radicaba con la matriz del año anterior —sus conteos, sus letras y sus
+ * compañías—, contradiciendo a la Tabla 16 que sí se rellena unas páginas antes. La ruta
+ * HTML sí lo hacía (`anexoCHtml.js`), de modo que el mismo estudio salía distinto según
+ * por dónde se generara.
+ *
+ * Los grupos, sus letras y los conteos se le piden a `anexoCHtml.js`, que es de donde los
+ * toma también la otra ruta: aquí solo se los pasa a OOXML.
+ *
+ * Sin matriz en el estudio NO se toca nada. Vaciar el anexo por falta de datos sería peor
+ * que dejarlo: el documento perdería el respaldo sin que nadie lo note, mientras que la
+ * matriz vieja al menos se ve. Se devuelve el aviso para que el generador lo publique.
+ *
+ * @param {PizZip} zip
+ * @param {object} estudio
+ * @returns {{reescrito:boolean, grupos:number, aviso:string|null}}
+ */
+export function insertarAnexoC(zip, estudio) {
+  const study = estudio || {};
+  const grupos = gruposDelAnexoC(study);
+  if (!grupos.length) {
+    return {
+      reescrito: false,
+      grupos: 0,
+      aviso: NOMBRE_ANEXO_C + ': el estudio no trae la matriz del universo evaluado, así que el '
+        + 'anexo se deja como estaba. Abre el paso 3 del motor de comparables con el cribado de '
+        + 'Capital IQ cargado para que se calcule.',
+    };
+  }
+
+  const xml = zip.file(RUTA_DOC).asText();
+
+  /* La ÚLTIMA aparición, no la primera: «ANEXO C» sale también en la tabla de contenidos,
+     que va al principio del documento. Cortar ahí se llevaría por delante el informe
+     entero. */
+  const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO\s+C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
+  let inicio = -1;
+  for (let m = rx.exec(xml); m; m = rx.exec(xml)) inicio = m.index;
+  if (inicio < 0) {
+    return { reescrito: false, grupos: 0, aviso: NOMBRE_ANEXO_C };
+  }
+
+  /* El anexo cierra el documento, pero `<w:sectPr>` —el tamaño de página y los márgenes del
+     cuerpo— vive al final y hay que conservarlo: sin él Word abre el archivo con la
+     configuración por defecto y la maquetación del informe se pierde. */
+  const sect = xml.indexOf('<w:sectPr', inicio);
+  const fin = sect >= 0 ? sect : xml.lastIndexOf('</w:body>');
+
+  const universo = Number(study.matrizRechazo && study.matrizRechazo.universo) || 0;
+
+  let nuevo = '<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr>'
+    + `<w:r><w:rPr><w:b/></w:rPr><w:t>${escaparXml(NOMBRE_ANEXO_C)}</w:t></w:r></w:p>`;
+  nuevo += '\n' + generarTablaOoxml('', CAB_RESUMEN_ANEXO_C, filasResumenAnexoC(grupos, universo));
+  grupos.forEach((g) => {
+    const filas = g.companias.map((nombre, i) => [String(i + 1), nombre, g.letra]);
+    nuevo += '\n' + generarTablaOoxml(tituloDeGrupoAnexoC(g), CAB_LISTADO_ANEXO_C, filas);
+  });
+
+  zip.file(RUTA_DOC, xml.slice(0, inicio) + nuevo + xml.slice(fin));
+  return { reescrito: true, grupos: grupos.length, aviso: null };
+}
+
 /**
  * Inserta de manera dinámica el Anexo B en el OOXML de la plantilla .docx.
  * Identifica la sección de Anexo B, genera la tabla de Nombre y Descripción de comparables
@@ -1146,6 +1222,14 @@ export function rellenarDocx({
     imagenes: insertadas > 0 ? [] : imagenesAnexo,
   });
   const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
+
+  /* Después del ANEXO B: aquel delimita su sección buscando dónde empieza el ANEXO C, así
+     que reescribir el C antes le movería el corte. Su aviso viaja con los de las tablas
+     —es el mismo canal que ya publica el generador— para que un anexo sin rehacer no pase
+     inadvertido. */
+  const anexoC = insertarAnexoC(zip, estudio);
+  if (anexoC.aviso) avisosTablas.push(anexoC.aviso);
+
   return {
     salida: zip.generate({
       type: tipoSalida,
