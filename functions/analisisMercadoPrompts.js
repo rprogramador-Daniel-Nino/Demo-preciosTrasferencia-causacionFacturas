@@ -41,10 +41,21 @@ function construirPromptBusqueda(anioActual) {
   const anios = [anioActual - 2, anioActual - 1, anioActual, anioActual + 1];
   const lista = SERIES_MACRO.map((s) => '- "' + s.clave + '": ' + s.pregunta + '.').join('\n');
 
+  /* «Responde ÚNICAMENTE con un objeto JSON» era lo que rompía esta corrida: con esa
+     exigencia de formato el modelo se salta la búsqueda y contesta de memoria. Devolvía las
+     ocho series completas y bien formadas, pero con `groundingChunks` vacío, y como la
+     confiabilidad se mide justo por ahí, la corrida entera se descartaba
+     (`analisisMercadoActualizar.js`). Ahora se le pide primero que busque y cite, y el JSON
+     se admite acompañado de texto: `extraerJSON` escanea llaves balanceadas, así que
+     tolera prosa y markdown alrededor. */
   return (
-    'Usa la búsqueda de Google para encontrar el valor más reciente y verificable de estas series ' +
-    'macroeconómicas, para los años ' + anios.join(', ') + ':\n\n' + lista + '\n\n' +
-    'Responde ÚNICAMENTE con un objeto JSON (sin texto adicional, sin marcas markdown) con esta forma:\n' +
+    'Busca en la web, una por una, cada serie macroeconómica de la lista. NO respondas con ' +
+    'cifras que recuerdes: cada valor tiene que salir de una página que hayas consultado en ' +
+    'esta misma respuesta, y quiero ver citadas esas fuentes.\n\n' +
+    'Series, para los años ' + anios.join(', ') + ':\n\n' + lista + '\n\n' +
+    'Cuando termines de buscar, incluye en tu respuesta un objeto JSON con esta forma (puede ' +
+    'ir acompañado del texto y las citas que necesites; lo que importa es que el JSON esté ' +
+    'completo y bien formado):\n' +
     '{\n' +
     '  "pib_mundial": { "valores": { "2025": "3.2", "2026": "3.2" }, "fuente": "Fondo Monetario Internacional, WEO", "fuenteUrl": "https://..." },\n' +
     '  "tasa_intervencion": { "valores": { "2026": { "etiqueta": "Agosto 2026", "valor": "12.00" } }, "fuente": "...", "fuenteUrl": "..." },\n' +
