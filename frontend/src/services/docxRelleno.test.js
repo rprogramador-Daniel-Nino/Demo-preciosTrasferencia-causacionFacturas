@@ -13,6 +13,7 @@ import {
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
+  localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -146,11 +147,13 @@ test('un bucle genera una fila por elemento conservando el formato', async () =>
     }),
   ]);
   const { zip } = renderizarDocx(buf, ESTUDIO, {
-    colecciones: { comparables: [
-      { nombre: 'Alpha SA', margen: '12,5 %' },
-      { nombre: 'Beta Ltd', margen: '7,1 %' },
-      { nombre: 'Gamma SAS', margen: '3,4 %' },
-    ] },
+    colecciones: {
+      comparables: [
+        { nombre: 'Alpha SA', margen: '12,5 %' },
+        { nombre: 'Beta Ltd', margen: '7,1 %' },
+        { nombre: 'Gamma SAS', margen: '3,4 %' },
+      ]
+    },
   });
   const xml = zip.file('word/document.xml').asText();
   const texto = textoDe(zip, 'word/document.xml');
@@ -161,10 +164,12 @@ test('un bucle genera una fila por elemento conservando el formato', async () =>
 
 test('un bucle sin elementos no deja filas ni marcadores', async () => {
   const buf = await plantilla([
-    new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
-      new TableRow({ children: [new TableCell({ children: [new Paragraph('Compañía')] })] }),
-      new TableRow({ children: [new TableCell({ children: [new Paragraph('{#comparables}{nombre}{/comparables}')] })] }),
-    ] }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+        new TableRow({ children: [new TableCell({ children: [new Paragraph('Compañía')] })] }),
+        new TableRow({ children: [new TableCell({ children: [new Paragraph('{#comparables}{nombre}{/comparables}')] })] }),
+      ]
+    }),
   ]);
   const { zip } = renderizarDocx(buf, ESTUDIO, { colecciones: { comparables: [] } });
   const texto = textoDe(zip, 'word/document.xml');
@@ -289,9 +294,11 @@ test('una imagen ilegible se salta sin tumbar el anexo', async () => {
 test('rellenarDocx entrega un .docx válido con datos, tabla e imágenes', async () => {
   const buf = await plantilla([
     parrafo({ text: 'Informe de {ent} — {anio}', font: 'Garamond' }),
-    new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
-      new TableRow({ children: [new TableCell({ children: [new Paragraph('{#comparables}{nombre}{/comparables}')] })] }),
-    ] }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
+        new TableRow({ children: [new TableCell({ children: [new Paragraph('{#comparables}{nombre}{/comparables}')] })] }),
+      ]
+    }),
     parrafo(CENTINELA_ANEXO),
     parrafo('Representante: {representante}'),
   ]);
@@ -921,10 +928,14 @@ const parrafoConCifras = (cifras) => new Paragraph({
 
 const tablaRango = () => new Table({
   rows: [
-    new TableRow({ children: ['RANGO', 'Percentil 25', 'Mediana', 'Percentil 75'].map(
-      (t) => new TableCell({ children: [new Paragraph(t)] })) }),
-    new TableRow({ children: ['5.58%', '1.78%', '2.34%', '8.80%'].map(
-      (t) => new TableCell({ children: [new Paragraph(t)] })) }),
+    new TableRow({
+      children: ['RANGO', 'Percentil 25', 'Mediana', 'Percentil 75'].map(
+        (t) => new TableCell({ children: [new Paragraph(t)] }))
+    }),
+    new TableRow({
+      children: ['5.58%', '1.78%', '2.34%', '8.80%'].map(
+        (t) => new TableCell({ children: [new Paragraph(t)] }))
+    }),
   ],
 });
 
@@ -1229,9 +1240,16 @@ test('actualizarApartadosMacroOoxml reemplaza la prosa de mundial y colombia con
     parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
     parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
     parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
     parrafoXml('B. Análisis del panorama de la economía colombiana'),
     parrafoXml('Texto de END GAME sobre Colombia, 2024.'),
     parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+    parrafoXml('Inflación en Colombia (2024 vs. Meta 2025)'),
+    parrafoXml('Tasa de Intervención del Banco de la República (Marzo 2023 - Diciembre 2024)'),
+    parrafoXml('Tasa Representativa del Mercado (TRM) Promedio (2023-2024)'),
+    parrafoXml('Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)'),
+    parrafoXml('Análisis del Sector de la industria del software'),
   ].join('');
 
   const datosMacro = {
@@ -1262,5 +1280,208 @@ test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narra
 
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
+  assert.ok(avisos.length >= 1);
+});
+
+test('localizarHitos encuentra los encabezados en orden y da el fin de cada uno', () => {
+  const xml = [
+    parrafoXml('Uno'),
+    parrafoXml('Dos'),
+    parrafoXml('Tres'),
+  ].join('');
+  const hitos = localizarHitos(xml, ['Uno', 'Tres']);
+  assert.equal(hitos.length, 2);
+  assert.ok(hitos[0]);
+  assert.ok(hitos[1]);
+  assert.ok(hitos[0].inicio < hitos[0].finPropio);
+  assert.ok(hitos[0].finPropio <= hitos[1].inicio);
+});
+
+test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanzar', () => {
+  const xml = parrafoXml('Uno') + parrafoXml('Tres');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres']);
+  assert.ok(hitos[0]);
+  assert.equal(hitos[1], null);
+});
+
+test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {
+  const entradaToc = '<w:p><w:r><w:t>Uno</w:t></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
+  const xml = entradaToc + parrafoXml('Uno') + parrafoXml('Dos');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos']);
+  assert.ok(hitos[0].inicio > entradaToc.length - 1);
+});
+
+test('reemplazarPorHitos reemplaza el hueco cuando la función de contenido devuelve texto', () => {
+  const xml = [
+    parrafoXml('Encabezado A'),
+    parrafoXml('Prosa vieja que debe irse.'),
+    parrafoXml('Encabezado B'),
+  ].join('');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => parrafoXml('Prosa nueva.')], []);
+  assert.match(doc.xml, /Prosa nueva\./);
+  assert.doesNotMatch(doc.xml, /Prosa vieja/);
+  assert.match(doc.xml, /Encabezado A/);
+  assert.match(doc.xml, /Encabezado B/);
+});
+
+test('reemplazarPorHitos no toca el hueco cuando la función de contenido devuelve null', () => {
+  const xml = [
+    parrafoXml('Encabezado A'),
+    parrafoXml('Tabla que no hay que tocar.'),
+    parrafoXml('Encabezado B'),
+  ].join('');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => null], []);
+  assert.match(doc.xml, /Tabla que no hay que tocar\./);
+});
+
+test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () => {
+  const xml = parrafoXml('Encabezado A');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => 'nunca se usa'], avisos, 'III.A');
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0], /III\.A/);
+});
+
+test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto de END GAME sobre Colombia, 2024.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+    parrafoXml('Inflación en Colombia (2024 vs. Meta 2025)'),
+    parrafoXml('Política Monetaria'),
+    parrafoXml('La tasa de intervención descendió desde el 13,25 % hasta el 9,50 % en 2024, texto viejo de referencia.'),
+    parrafoXml('Tasa de Intervención del Banco de la República (Marzo 2023 - Diciembre 2024)'),
+    parrafoXml('Tasa de Cambio (TRM)'),
+    parrafoXml('La TRM promedió $4.062 en 2024, texto viejo de referencia.'),
+    parrafoXml('Tasa Representativa del Mercado (TRM) Promedio (2023-2024)'),
+    parrafoXml('Mercado Laboral'),
+    parrafoXml('El desempleo bajó a 9,7 % en 2024, texto viejo de referencia.'),
+    parrafoXml('Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)'),
+    parrafoXml('CONCLUSIONES'),
+    parrafoXml('La economía mundial se encuentra en desaceleración, texto viejo de referencia.'),
+    parrafoXml('Análisis del Sector de la industria del software'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa real del mundo.</p>',
+      colombia: '<p>Narrativa real de Colombia.</p>',
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.match(salida, /Narrativa real del mundo\./);
+  assert.match(salida, /Narrativa real de Colombia\./);
+  assert.doesNotMatch(salida, /texto viejo de referencia/);
+  assert.doesNotMatch(salida, /13,25 %/);
+  /* Los propios títulos de tabla —los hitos— nunca se tocan; los subtítulos que había
+     ENTRE dos hitos ("Política Monetaria", "CONCLUSIONES") caen dentro del hueco que
+     se reemplaza, junto con la prosa que describían: es la forma robusta de que
+     funcione igual sin importar cómo cada plantilla titule ese hueco intermedio. */
+  assert.match(salida, /Tasa de Intervención del Banco de la República/);
+  assert.match(salida, /Tasa de Desempleo en Colombia/);
+  /* 4 huecos con prosa sustancial en este fixture: Política Monetaria, Tasa de Cambio,
+     Mercado Laboral y CONCLUSIONES. El de "INFLACIÓN COLOMBIA" no lleva prosa en este
+     fixture (va directo del título de la tabla anterior al de la siguiente), así que
+     queda bajo el umbral y no se marca — es el mismo caso que prueba el siguiente test. */
+  const marcador = 'Este párrafo del informe de referencia se retiró';
+  assert.equal((salida.match(new RegExp(marcador, 'g')) || []).length, 4, 'los cuatro huecos con prosa real quedan marcados');
+});
+
+test('actualizarApartadosMacroOoxml no toca un hueco intermedio corto (sin prosa real)', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Narrativa que sí se reemplaza.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('INFLACIÓN MUNDIAL'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Narrativa real.</p>' } };
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, []);
+  assert.match(salida, /INFLACIÓN MUNDIAL/);
+  assert.doesNotMatch(salida, /\[Este párrafo del informe de referencia/);
+});
+
+const tablaXml = (texto) => `<w:tbl><w:tr><w:tc><w:p><w:t>${texto}</w:t></w:p></w:tc></w:tr></w:tbl>`;
+
+test('actualizarApartadoSectorialOoxml reemplaza los cuatro bloques de prosa y la tabla de datos clave', () => {
+  const xml = [
+    parrafoXml('Análisis del Sector de la industria del software y de los videojuegos'),
+    parrafoXml('Comportamiento del Sector de la Industria del Software y de los Videojuegos en 2024 y Comparación con 2023'),
+    parrafoXml('Texto viejo de comportamiento, referencia 2024.'),
+    parrafoXml('Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)'),
+    tablaXml('fila vieja'),
+    parrafoXml('Importaciones y exportaciones del sector de la industria del software y de los videojuegos'),
+    parrafoXml('Texto viejo de comercio exterior, referencia 2024.'),
+    parrafoXml('¿Qué se proyecta para el sector de la industria del software y de los videojuegos en 2025?'),
+    parrafoXml('Texto viejo de proyección, referencia 2024.'),
+    parrafoXml('Conclusiones y Perspectivas'),
+    parrafoXml('Texto viejo de conclusiones, referencia 2024.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2026: {
+        tituloSector: 'Software y Videojuegos',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real 2026.</p>',
+          comercioExterior: '<p>Comercio exterior real 2026.</p>',
+          proyeccion: '<p>Proyección real 2026.</p>',
+          conclusiones: '<p>Conclusiones reales 2026.</p>',
+        },
+        datosClaveTabla: [
+          { indicador: 'Empleo', valorAnterior: '250.000', valorActual: '260.000' },
+        ],
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2026 }, 2026, avisos);
+
+  assert.match(salida, /Comportamiento real 2026\./);
+  assert.match(salida, /Comercio exterior real 2026\./);
+  assert.match(salida, /Proyección real 2026\./);
+  assert.match(salida, /Conclusiones reales 2026\./);
+  assert.doesNotMatch(salida, /Texto viejo/);
+  assert.match(salida, /260\.000/);
+  assert.doesNotMatch(salida, /fila vieja/);
+});
+
+test('actualizarApartadoSectorialOoxml usa el marcador de pendiente si no hay corrida para ese año', () => {
+  const xml = [
+    parrafoXml('Análisis del Sector de la industria del software y de los videojuegos'),
+    parrafoXml('Comportamiento del Sector de la Industria del Software y de los Videojuegos en 2024 y Comparación con 2023'),
+    parrafoXml('Texto viejo de comportamiento, referencia 2024.'),
+    parrafoXml('Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)'),
+    tablaXml('fila vieja'),
+    parrafoXml('Importaciones y exportaciones del sector de la industria del software y de los videojuegos'),
+    parrafoXml('Texto viejo de comercio, referencia 2024.'),
+    parrafoXml('¿Qué se proyecta para el sector de la industria del software y de los videojuegos en 2025?'),
+    parrafoXml('Texto viejo de proyección, referencia 2024.'),
+    parrafoXml('Conclusiones y Perspectivas'),
+    parrafoXml('Texto viejo de conclusiones, referencia 2024.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialOoxml(xml, null, { anio: 2026 }, 2026, avisos);
+
+  assert.doesNotMatch(salida, /Texto viejo/);
+  assert.match(salida, /\[Actualizar con el análisis del comportamiento del sector/);
   assert.ok(avisos.length >= 1);
 });

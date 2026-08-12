@@ -189,29 +189,168 @@ function marcadorApartadoPendiente(tema, year) {
  *        quedaron con el marcador de pendiente por falta de narrativa.
  * @returns {string}
  */
+/** Marcador genérico para un hueco intermedio (entre dos tablas) que tenía prosa
+ *  sustancial del informe de referencia y no hay una narrativa específica de ese
+ *  tema para reemplazarla — a diferencia del hueco líder de cada apartado, que sí
+ *  tiene la narrativa completa de Firestore. */
+function marcadorContenidoRetirado() {
+  return '[Este párrafo del informe de referencia se retiró porque describía cifras y ' +
+    'hechos de otro contribuyente. Redáctelo con información propia de este año antes ' +
+    'de radicar.]';
+}
+
+/** Longitud de texto plano a partir de la cual un hueco intermedio se considera
+ *  "con prosa real" y se reemplaza. Los huecos vacíos de la plantilla —un
+ *  subtítulo sin narrativa antes de la tabla— quedan bajo este umbral y no se
+ *  tocan: no hay nada del cliente de referencia que retirar ahí. */
+const UMBRAL_HUECO_CON_PROSA = 50;
+
+/** Contenido para un hueco intermedio: el marcador SOLO si había prosa sustancial
+ *  que retirar; si el hueco ya estaba vacío o casi vacío, no se toca. */
+function contenidoHuecoIntermedio(textoHueco) {
+  if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) {
+    console.log('[docxRelleno] hueco corto (' + textoHueco.trim().length + ' car.), se deja como está: '
+      + JSON.stringify(textoHueco.trim().slice(0, 40)));
+    return null;
+  }
+  return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorContenidoRetirado())}</w:t></w:r></w:p>`;
+}
+
 export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
   const doc = sustituidorDeTablas(xml, null);
-  const apartados = [
-    { inicio: 'Análisis del Panorama de la Economía Mundial', fin: ['PIB Mundial'], tema: 'mundial', clave: 'mundial' },
-    { inicio: 'Análisis del panorama de la economía colombiana', fin: ['PIB en Colombia'], tema: 'colombiana', clave: 'colombia' },
+
+  const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
+  const tituloColombia = 'Análisis del panorama de la economía colombiana';
+  const narrativaMundial = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
+  const narrativaColombia = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
+  console.log('[docxRelleno] actualizarApartadosMacroOoxml: año ' + year
+    + ', narrativa mundial: ' + (narrativaMundial ? 'sí' : 'no (marcador)')
+    + ', narrativa colombia: ' + (narrativaColombia ? 'sí' : 'no (marcador)'));
+
+  const primerHueco = (narrativaHtml, tema) => () => (
+    narrativaHtml
+      ? parrafosOoxmlDesdeHtml(narrativaHtml)
+      : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(tema, year))}</w:t></w:r></w:p>`
+  );
+
+  reemplazarPorHitos(
+    doc,
+    [tituloMundial, 'PIB Mundial', 'Inflación Global', 'por Región/País', tituloColombia],
+    [
+      primerHueco(narrativaMundial, 'mundial'),
+      contenidoHuecoIntermedio,
+      contenidoHuecoIntermedio,
+    ],
+    avisos,
+    tituloMundial
+  );
+
+  reemplazarPorHitos(
+    doc,
+    [
+      tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
+      'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
+    ],
+    [
+      primerHueco(narrativaColombia, 'colombiana'),
+      contenidoHuecoIntermedio,
+      contenidoHuecoIntermedio,
+      contenidoHuecoIntermedio,
+      contenidoHuecoIntermedio,
+      contenidoHuecoIntermedio,
+    ],
+    avisos,
+    tituloColombia
+  );
+
+  if (!narrativaMundial && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloMundial);
+  if (!narrativaColombia && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloColombia);
+
+  return doc.xml;
+}
+
+/** Mismo texto que `marcadorApartadoPendiente`, pero para un tema puntual de III.C
+ *  en vez de todo el apartado de III.A/III.B. */
+function marcadorTemaSectorPendiente(tema, year) {
+  return '[Actualizar con el análisis del ' + tema + ' del sector para el año gravable ' +
+    year + ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
+}
+
+/** Fila de la tabla "Datos Clave del Sector", en la forma que espera `generarTablaOoxml`. */
+function filasDatosClaveSector(datosClaveTabla) {
+  return (datosClaveTabla || []).map((f) => [
+    String(f.indicador || ''),
+    f.valorAnterior ? String(f.valorAnterior) : '—',
+    String(f.valorActual || ''),
+  ]);
+}
+
+/**
+ * Reemplaza los cuatro bloques de prosa de III.C (Comportamiento, Importaciones y
+ * exportaciones, Proyección, Conclusiones y Perspectivas) y la tabla "Datos Clave del
+ * Sector", localizándolos por sus encabezados — mismo mecanismo de
+ * `actualizarApartadosMacroOoxml`, aplicado a III.C, que hoy no se toca en absoluto:
+ * depende enteramente del marcado con IA, y esta plantilla no lo trajo marcado.
+ *
+ * @param {string} xml
+ * @param {object|null} analisisSector  el documento `analisisSector/{claveActividad}`.
+ * @param {object} estudio
+ * @param {number} year
+ * @param {string[]} [avisos]
+ * @returns {string}
+ */
+export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisos) {
+  const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
+  console.log('[docxRelleno] actualizarApartadoSectorialOoxml: año ' + year
+    + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
+  const doc = sustituidorDeTablas(xml, null);
+
+  const titulos = [
+    'Análisis del Sector',
+    'Comportamiento del Sector',
+    'Datos Clave del Sector',
+    'Importaciones y exportaciones del sector',
+    '¿Qué se proyecta para el sector',
+    'Conclusiones y Perspectivas',
+    'ANÁLISIS ECONÓMICO',
   ];
 
-  apartados.forEach((a) => {
-    const narrativaHtml = datosMacro && datosMacro.narrativa && datosMacro.narrativa[a.clave];
-    doc.aplicar((actual) => {
-      const bloque = localizarBloqueProsa(actual, a.inicio, a.fin);
-      if (!bloque) {
-        if (Array.isArray(avisos)) avisos.push('prosa de ' + a.inicio);
-        return actual;
-      }
-      const tituloParrafo = actual.slice(bloque.inicio, actual.indexOf('</w:p>', bloque.inicio) + '</w:p>'.length);
-      const cuerpo = narrativaHtml
-        ? parrafosOoxmlDesdeHtml(narrativaHtml)
-        : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(a.tema, year))}</w:t></w:r></w:p>`;
-      if (!narrativaHtml && Array.isArray(avisos)) avisos.push('narrativa de ' + a.inicio);
-      return actual.slice(0, bloque.inicio) + tituloParrafo + cuerpo + actual.slice(bloque.fin);
-    });
-  });
+  const bloque = (narrativaHtml, tema) => () => (
+    narrativaHtml
+      ? parrafosOoxmlDesdeHtml(narrativaHtml)
+      : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaSectorPendiente(tema, year))}</w:t></w:r></w:p>`
+  );
+
+  reemplazarPorHitos(
+    doc,
+    titulos,
+    [
+      contenidoHuecoIntermedio,
+      bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
+      () => null,
+      bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
+      bloque(entrada && entrada.narrativa.proyeccion, 'proyección del sector'),
+      bloque(entrada && entrada.narrativa.conclusiones, 'conclusiones del sector'),
+    ],
+    avisos,
+    'Análisis del Sector'
+  );
+
+  if (entrada && entrada.datosClaveTabla && entrada.datosClaveTabla.length) {
+    const encontrada = doc.reemplazar('Datos Clave del Sector', () => generarTablaOoxml(
+      'Datos Clave del Sector de la Industria ' + (entrada.tituloSector || '') + ' en Colombia (' +
+        (year - 1) + ' vs. ' + year + ')',
+      ['Indicador Clave', String(year - 1), String(year)],
+      filasDatosClaveSector(entrada.datosClaveTabla),
+      null
+    ));
+    console.log('[docxRelleno] tabla "Datos Clave del Sector": '
+      + (encontrada ? 'regenerada con ' + entrada.datosClaveTabla.length + ' fila(s)' : 'NO se encontró en la plantilla'));
+  } else {
+    console.log('[docxRelleno] tabla "Datos Clave del Sector": sin datos de la corrida de este año, se deja como está');
+    if (Array.isArray(avisos)) avisos.push('tabla de Datos Clave del Sector');
+  }
 
   return doc.xml;
 }
@@ -343,7 +482,7 @@ function finDeFila(xml, desde) {
 function candidatosPorFilaTitulo(texto, claves) {
   const encontrados = [];
   let cursor = 0;
-  for (;;) {
+  for (; ;) {
     const inicio = texto.indexOf('<w:tbl', cursor);
     if (inicio === -1) break;
     const fin = finDeTabla(texto, inicio);
@@ -398,7 +537,7 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
        los que no tienen texto; en cuanto aparece uno con contenido, el título ya no
        era el de esta tabla y se descarta. */
     let cursor = p.index + p[0].length;
-    for (;;) {
+    for (; ;) {
       const resto = texto.slice(cursor);
       const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
       if (!hueco) break;
@@ -428,6 +567,24 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   const finalistas = porNumero.length ? porNumero : candidatos;
   const i = Number(opciones.ocurrencia) || 0;
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+/* Si justo después de `cursor` viene una tabla —saltando párrafos vacíos, marcas de
+   libro y avisos del corrector, igual que `localizarBloqueTabla`—, el índice donde
+   termina esa tabla; si no, -1. */
+function finDeTablaInmediata(texto, cursor) {
+  let c = cursor;
+  for (; ;) {
+    const resto = texto.slice(c);
+    const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
+    if (!hueco) break;
+    if (textoPlanoOoxml(hueco[0]).trim()) break;
+    c += hueco[0].length;
+  }
+  const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(c));
+  if (!tras) return -1;
+  const inicioTabla = c + tras[0].indexOf('<w:tbl');
+  return finDeTabla(texto, inicioTabla);
 }
 
 /**
@@ -469,6 +626,99 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
     }
   }
   return null;
+}
+
+/**
+ * Los `titulos`, en el orden en que deben aparecer en el documento, con dónde empieza
+ * y dónde termina el párrafo de cada uno. Sirve para delimitar TODOS los huecos entre
+ * un encabezado y el siguiente en un solo recorrido — `localizarBloqueProsa` resuelve
+ * un único hueco; esta es su generalización a una cadena de encabezados.
+ *
+ * Se exige que aparezcan en ESE orden: en cuanto se encuentra el título `i`, la
+ * búsqueda del título `i+1` empieza después de él, nunca antes ni desde el principio
+ * del documento — así una tabla que se llame igual que un encabezado posterior no se
+ * confunde con él.
+ *
+ * @param {string} xml
+ * @param {string[]} titulos
+ * @returns {Array<{inicio:number, finPropio:number}|null>}
+ */
+export function localizarHitos(xml, titulos) {
+  const texto = String(xml || '');
+  const claves = (titulos || []).map(claveTitulo);
+  const resultado = new Array(claves.length).fill(null);
+  if (!claves.length) return resultado;
+
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let objetivo = 0;
+  let m;
+  while (objetivo < claves.length && (m = rxParrafo.exec(texto)) !== null) {
+    if (m[0].includes('PAGEREF')) continue;
+    const textoParrafo = textoPlanoOoxml(m[0]);
+    /* Un párrafo de prosa puede mencionar de pasada el nombre de un hito posterior
+       -"la inflación global ha venido descendiendo..."- y un includes() sobre
+       texto largo lo confundiría con el título real. Los títulos de esta lista
+       (encabezados de apartado, nombres de tabla) siempre son cortos; se descarta
+       cualquier candidato que no lo sea y se sigue buscando uno más adelante. */
+    if (textoParrafo.length > 160) continue;
+    const clave = claveTitulo(textoParrafo);
+    if (clave.includes(claves[objetivo])) {
+      /* Si el hito es el título de una tabla —caso normal para los nombres de
+         `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
+         no justo tras el título: si no, la tabla completa (y su "FUENTE:") cae dentro
+         del hueco que se reemplaza, y `actualizarTablasMacroOoxml` deja de encontrar
+         el título para regenerarla en el siguiente paso. */
+      let finPropio = m.index + m[0].length;
+      const finTabla = finDeTablaInmediata(texto, finPropio);
+      if (finTabla >= 0) finPropio = finTabla;
+      resultado[objetivo] = { inicio: m.index, finPropio };
+      objetivo += 1;
+    }
+  }
+  return resultado;
+}
+
+/**
+ * Reemplaza, uno por uno, los huecos entre una lista ordenada de encabezados. Cada
+ * hueco es el texto entre el final del párrafo de un hito y el inicio del párrafo del
+ * siguiente — el propio encabezado nunca se toca.
+ *
+ * @param {{aplicar:(f:(s:string)=>string)=>void}} doc  un `sustituidorDeTablas`.
+ * @param {string[]} titulos
+ * @param {Array<(textoHueco:string)=>(string|null)>} contenidos  longitud
+ *        `titulos.length - 1`; recibe el texto plano ya existente en ese hueco (para
+ *        decidir si hace falta tocarlo) y devuelve el OOXML nuevo, o `null` para
+ *        dejarlo como está.
+ * @param {string[]} [avisos]
+ * @param {string} [nombreParaAvisos]
+ */
+export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaAvisos) {
+  doc.aplicar((actual) => {
+    const hitos = localizarHitos(actual, titulos);
+    console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
+      + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+    let salida = actual;
+    for (let i = contenidos.length - 1; i >= 0; i -= 1) {
+      const hitoActual = hitos[i];
+      const hitoSiguiente = hitos[i + 1];
+      if (!hitoActual || !hitoSiguiente) {
+        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
+        console.warn('[docxRelleno] ' + aviso);
+        if (Array.isArray(avisos)) avisos.push(aviso);
+        continue;
+      }
+      const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+      const nuevo = contenidos[i](textoHueco);
+      if (nuevo === null) {
+        console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": sin tocar');
+        continue;
+      }
+      console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
+        + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+      salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
+    }
+    return salida;
+  });
 }
 
 /** Texto de un fragmento de HTML de narrativa (sin sus etiquetas), con las entidades
@@ -926,6 +1176,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
   xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas);
+  xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   zip.file(RUTA_DOC, xml);
