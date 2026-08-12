@@ -608,29 +608,42 @@ Sustituir el arreglo de la Task 3 por este. El orden es el de balance y **tiene 
    visto desde el libro y desde el ANEXO A, y si divergen el informe publica un
    balance que su propio soporte no reproduce.
 
-   `av: false` marca los rubros que NO llevan análisis vertical: el total de activos,
-   porque sería 100 % por definición, y las cuentas por pagar, porque un pasivo sobre
-   el total de activos no significa nada. Es el criterio que ya aplica
-   `filasEsfAnexoA`. Las tres cifras del estado de resultados —ventas, costo y gastos—
-   tampoco: no son partidas del balance. */
+   `av: false` marca los rubros que NO llevan análisis vertical:
+
+   - Las cuentas por pagar, porque un pasivo sobre el total de activos no significa nada.
+     Esta sí es la exclusión que aplica `filasEsfAnexoA`: las añade fuera del `map`, con
+     `SIN_DATO` en la columna del vertical.
+   - El total de activos, porque su vertical es 100 % por definición y no informa. **Ojo:
+     esto NO lo hace `filasEsfAnexoA`**, que mapea `RUBROS_ESF` completo y sí publica ese
+     100 % en el ANEXO A y en la Tabla 10. Es una decisión propia del libro, defendible por
+     sí misma, y no hay que atribuirla a código ajeno: quien lea el comentario para auditar
+     confiaría en una premisa falsa.
+   - Las tres cifras del estado de resultados —ventas, costo y gastos—, que no son
+     partidas del balance. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas', av: false },
   { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
   { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
   { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
   { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
-  { clave: 't_ar', etiqueta: 'Cuentas por cobrar', av: true },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras cuentas por cobrar', av: true },
   { clave: 't_inv', etiqueta: 'Inventarios', av: true },
   { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes', av: true },
   { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', av: true },
-  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo', av: true },
+  { clave: 't_ppe', etiqueta: 'Propiedades, planta y equipo', av: true },
   { clave: 't_intang', etiqueta: 'Intangibles', av: true },
   { clave: 't_dif', etiqueta: 'Diferidos', av: true },
   { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', av: true },
   { clave: 't_act_tot', etiqueta: 'Total, Activos', av: false },
-  { clave: 't_ap', etiqueta: 'Cuentas por pagar', av: false },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales', av: false },
 ];
 ```
+
+Las etiquetas de `t_ar`, `t_ppe` y `t_ap` son las **literales de `RUBROS_ESF`** —incluido el
+plural de «Propiedades»—, no las formas cortas que traía el emisor. Mezclar unas y otras en la
+misma hoja es peor que cualquiera de las dos opciones consistente: quien audita el libro contra
+el ANEXO A no puede mapear por etiqueta si no sabe de antemano cuáles filas son fieles y cuáles
+un alias histórico. Cambiarlas obliga a revisar las pruebas que localizan la fila por su texto.
 
 - [ ] **Step 4: Escribir el A.V. en la columna C**
 
@@ -642,13 +655,51 @@ Sustituir el `forEach` de la Task 3 por este. `valorDeRubro` se conserva tal com
     const celdas = [cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))];
     /* A.V. como fórmula y no como número: es lo que hace que corregir una cifra en
        Datos recalcule el vertical del ANEXO A y de la Tabla 10 sin recalcularlo a
-       mano en dos sitios. */
-    if (r.av) celdas.push(cFor(`B${filaDeRubro(r.clave)}/$B$${filaTot}`, '0.00%'));
+       mano en dos sitios.
+
+       Con guarda de divisor cero. Sin ella, un estudio sin `t_act_tot` —y son la mayoría:
+       ver el Step 5— deja las diez celdas del vertical en `#DIV/0!`. Es la misma guarda
+       que ya aplica `verticalSobreActivos` en docxRelleno.js (`if (!total) return '—'`),
+       traducida a fórmula, y el mismo patrón de `IF(...=0,"",...)` que este archivo ya
+       usa en otras celdas. Un hueco visible es preferible a un error de Excel en un
+       documento que se radica. */
+    if (r.av) {
+      const fila = filaDeRubro(r.clave);
+      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%'));
+    }
     datos.push(celdas);
   });
 ```
 
-- [ ] **Step 5: Actualizar la prosa que nombra filas concretas**
+- [ ] **Step 5: `motorExcelExport` tiene que ENTREGAR los ocho rubros nuevos**
+
+Sin esto la tarea no entrega nada por su ruta principal. `construirLibroSoporte` arma
+`estudioBase` con una **lista explícita de claves** (`motorExcelExport.js:34-56`) que no
+incluye ninguno de los ocho rubros nuevos, así que `valorDeRubro('t_act_tot')` devuelve
+`Number(undefined) || 0` = `0` en **toda** exportación por el Motor de Comparables: los once
+rubros del ESF saldrían en cero y el vertical entero en `#DIV/0!` (o en blanco, con la guarda
+del Step 4). El libro no sustentaría ni la Tabla 10 ni el ANEXO A, que es el objetivo
+declarado de esta tarea.
+
+Añadir las ocho claves con el mismo patrón de respaldo que ya usan las demás:
+
+```js
+    t_cash: datos.examinada?.T?.cash ?? datos.estudio?.t_cash,
+    t_inv_assoc: datos.examinada?.T?.inv_assoc ?? datos.estudio?.t_inv_assoc,
+    t_tax: datos.examinada?.T?.tax ?? datos.estudio?.t_tax,
+    t_act_curr: datos.examinada?.T?.act_curr ?? datos.estudio?.t_act_curr,
+    t_intang: datos.examinada?.T?.intang ?? datos.estudio?.t_intang,
+    t_dif: datos.examinada?.T?.dif ?? datos.estudio?.t_dif,
+    t_act_nocurr: datos.examinada?.T?.act_nocurr ?? datos.estudio?.t_act_nocurr,
+    t_act_tot: datos.examinada?.T?.act_tot ?? datos.estudio?.t_act_tot,
+```
+
+Con una prueba que lo cubra: `construirLibroSoporte` con un estudio que traiga los doce
+rubros los escribe todos en la hoja `Datos`, y el vertical sale como fórmula con su valor.
+Y otra con `t_act_tot` ausente que confirme que las celdas del vertical quedan en blanco y
+no en `#DIV/0!`.
+
+- [ ] **Step 6: Actualizar la prosa que nombra filas concretas**
 
 Ampliar `RUBROS_EXAMINADA` mueve la fila de la tasa de la 11 a la 16, y hay texto que la
 nombra a mano y quedaría mintiendo. Estos sitios **no** son fórmulas, así que la guarda de
@@ -853,7 +904,32 @@ también se escriben ahora en `AA`–`AG`. Sustituir los dos bloques por:
 la conclusión los referencia sobre las columnas `AA`–`AG`, que es donde ahora viven los
 cuartiles.
 
-- [ ] **Step 5: Ampliar los anchos de columna de las hojas de método**
+- [ ] **Step 5: La hoja `Resumen` tiene que seguir a la estadística**
+
+> **Hueco del plan, detectado al implementar (2026-08-11).** Este paso no existía y sin él la
+> tarea rompía la hoja `Resumen` en silencio.
+
+`Resumen` es la hoja que un lector abre primero: 35 filas —cinco métodos por siete ajustes—
+que **no calculan nada**, solo referencian las celdas de estadística de las hojas de método
+(`MO!S19`, `MO!S24`…). Al mudar la estadística de `S`–`Y` a `AA`–`AG`, esas referencias apuntan
+a celdas que ahora están en blanco, así que el Resumen sale **entero vacío** y ninguna prueba
+lo nota: las fórmulas siguen siendo válidas, solo señalan a la nada.
+
+Cambiar su arreglo de columnas al mismo que usan las filas de estadística:
+
+```js
+  /* AA–AG, no S–Y: desde que las filas de estadística se mudaron a la serie filtrada,
+     S–Y de esas filas quedan en blanco (son las columnas de indicador por comparable,
+     no de estadístico). Referenciar S–Y aquí dejaría el Resumen —la hoja que un lector
+     abre primero— siempre vacío. */
+  const RES = ['AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'];
+```
+
+Con una prueba de regresión: que las fórmulas de la hoja `Resumen` referencien las mismas
+columnas en que se escriben los estadísticos, derivadas de la misma constante y no escritas a
+mano en dos sitios.
+
+- [ ] **Step 6: Ampliar los anchos de columna de las hojas de método**
 
 `:289` fija `[{wch:28}].concat(new Array(24).fill({wch:11}))` — 25 columnas. Ahora son 33:
 
@@ -883,6 +959,14 @@ git commit -m "fix: el cuartil del libro respeta el ámbito y la muestra mínima
 El libro no trae ni un número: todas sus celdas derivadas son fórmula sin `<v>`. `memoriaCalculoRangoOptimo.js` pasa a pedirle a `analizarRangoAjustado` el valor de cada celda y a escribirlo junto a la fórmula.
 
 Qué se llena y qué no:
+
+> **Hueco del plan, detectado al implementar (2026-08-11).** Esta tabla acota el alcance a las
+> hojas de método y se olvida de la hoja `Resumen`, cuyas 35 filas son **referencias puras** a
+> las celdas de estadística. Sin valor en caché propio, `Resumen` —la primera hoja que abre el
+> consultor— sigue viéndose vacía en cualquier lector que no recalcule, que es justo la mitad
+> del objetivo de esta tarea. Los valores ya están calculados en `porSabor`; hay que llevarlos
+> a `infoMetodos` para que el bloque de `Resumen`, que corre después del `forEach` de métodos,
+> los tenga a mano. Ver el Step añadido al final de esta tarea.
 
 | Columnas | Valor | De dónde |
 |---|---|---|
@@ -1182,7 +1266,41 @@ Para lo cual el bucle necesita la comparable. Cambiar `for (let i = 0; i < n; i+
 Run: `node --test frontend/src/services/memoriaCalculoRangoOptimo.test.js`
 Expected: PASS
 
-- [ ] **Step 8: Correr la suite completa y commit**
+- [ ] **Step 8: La hoja `Resumen` también lleva valor**
+
+Sus 35 filas son referencias puras a las celdas de estadística de las hojas de método, así que
+sin valor propio quedan vacías en un lector que no recalcule — y es la primera hoja del libro.
+Los valores ya existen en `porSabor`, pero el bloque de `Resumen` corre **después** del
+`forEach` de métodos, así que hay que llevarlos en `infoMetodos`:
+
+```js
+    /* `porSabor` se lleva a infoMetodos porque la hoja Resumen se arma después de este
+       forEach y sus celdas son referencias puras: sin el valor a mano quedarían vacías en
+       cualquier lector que no recalcule, que es justo lo que esta tarea viene a cerrar. */
+    infoMetodos.push({ hoja: M.hoja, /* …lo que ya llevaba… */, porSabor });
+```
+
+y en el bloque de `Resumen`, cada celda toma su valor del sabor de su fila:
+
+```js
+      const st = M.porSabor[k].stats;
+      resumen.push([
+        cTxt(M.nombre), cTxt(aj.etiqueta),
+        cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt, M.porSabor[k].sujeto),
+        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt, st ? st.min : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt, st ? st.p25 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt, st ? st.med : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt, st ? st.p75 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt, st ? st.max : undefined),
+        cForT(`${M.hoja}!${L}${M.filaConcl}`, st ? M.porSabor[k].cumple : ''),
+      ]);
+```
+
+Con una prueba que afirme que una fila del `Resumen` trae los mismos valores que la celda de
+estadística que referencia — no dos números iguales por casualidad, sino leídos de los dos
+sitios y comparados.
+
+- [ ] **Step 9: Correr la suite completa y commit**
 
 Run: `npm test`
 Expected: PASS
@@ -1369,6 +1487,26 @@ test('el segmento excluido sale de un solo sitio', () => {
 });
 ```
 
+> **Refuerzos exigidos al implementar (2026-08-11), y el porqué.** El código de prueba de arriba
+> **pasa en verde con el filtro de ámbito roto**: solo compara valores en caché, y esos siguen
+> viniendo del motor pase lo que pase con la serie que el libro escribe. Es la tautología que
+> esta tarea tiene que evitar por encima de todo, y estaba en el plan. Hacen falta tres cosas
+> más, todas verificadas en la ejecución real:
+>
+> 1. **Que el libro reproduzca su estadística desde su PROPIA serie.** Leer las celdas de serie
+>    del libro, ordenarlas y comprobar que el cuartil sale igual que el que publica. Eso es lo
+>    que cae cuando el emisor deja de filtrar por ámbito, y lo que el valor en caché tapa.
+> 2. **Cotejar las FÓRMULAS emitidas, no solo los valores.** Cruzar los argumentos de `QUARTILE`
+>    entre mediana y P75 no lo detectaba ninguna prueba del repositorio. Y el cotejo tiene que
+>    cubrir **también** la fórmula del indicador del contribuyente (`testedFor`) y la de la
+>    Conclusión: si solo se cotejan los cinco estadísticos, cambiar la definición del indicador
+>    de MB —o cruzar `filaP25` con `filaP75` en la Conclusión— pasa en verde, porque el valor en
+>    caché sigue siendo el del motor y la discrepancia solo aparece al recalcular en Excel.
+> 3. **Pisos en cada bucle**: afirmar cuántas comparaciones se hicieron y que todas tenían
+>    valor. Un bucle que itera en vacío pasa sin comprobar nada.
+>
+> Y comprobar la prueba **por mutación**: romper algo real, ver el rojo, deshacerlo a mano.
+
 - [ ] **Step 2: Correr las pruebas**
 
 Run: `node --test frontend/src/services/paridadLibroInforme.test.js`
@@ -1493,12 +1631,28 @@ export function desgloseAjuste(comp, contribuyente, metodo, tasa) {
     /* El denominador de la columna R del libro: para NCP y Cost Plus el depurado,
        para las bases de ventas la venta ajustada, y la base a secas en Berry. */
     denomAjustado: usaDepurado ? denomDep : baseAjustada,
-    /* Internos, para que indicadorAjustado no los recalcule. */
-    _baseAjustada: baseAjustada, _denomDep: denomDep, _usaDepurado: usaDepurado,
-    _numBase: (metodo === 'MB' || metodo === 'Berry' || metodo === 'CostPlus') ? c.gp : c.ebit,
+    usaDepurado,
   };
 }
 ```
+
+> **Decisión al implementar (2026-08-11).** Una versión anterior de este paso devolvía además
+> cuatro campos con prefijo `_` (`_baseAjustada`, `_denomDep`, `_usaDepurado`, `_numBase`) que
+> existían solo para que `indicadorAjustado` no recalculara. Se retiran: filtraban internos en un
+> contrato público sin necesidad, porque los campos públicos ya los determinan.
+>
+> El denominador se reconstruye en `indicadorAjustado` así:
+>
+> ```js
+>   const denom = (d.usaDepurado || AJUSTAN_AR.has(ajuste)) ? d.denomAjustado : d.base;
+> ```
+>
+> Equivalente al original en los cinco casos, verificado uno a uno: con denominador depurado
+> (NCP y Cost Plus) `denomAjustado` **es** el depurado; con base de ventas y un sabor que resta
+> el ajuste de CxC, **es** la venta ajustada; con base de ventas sin ese sabor, y con base
+> distinta de ventas en cualquiera de los dos casos, `denomAjustado` colapsa a la base, que es lo
+> que el original devolvía. El numerador sale de elegir entre `d.ebit` y `d.utilBruta` con el
+> mismo criterio de método que ya estaba escrito.
 
 Y `indicadorAjustado` arranca con:
 

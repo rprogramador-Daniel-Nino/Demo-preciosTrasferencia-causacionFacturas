@@ -20,10 +20,28 @@
    La metodología de ajuste es la del parche `ajusteRangoCapitalTrabajo.js`
    (Anexo Cap. III de las Directrices OCDE), traducida a fórmulas de Excel.
 
-   No calcula nada en JS salvo el layout: los números los pone Excel. Devuelve la
-   misma estructura { nombre, celdas, cols, merges, autofiltro } que el componente
-   MemoriaRangoModal.jsx ya sabe volcar, para no tocar la ruta de descarga.
+   Desde agosto de 2026 emite ADEMÁS el valor en caché de cada celda derivada, y lo
+   pide a `ajusteRangoCapitalTrabajo.js` —el mismo motor que alimenta las tablas del
+   .docx—. No es que el libro haya dejado de ser recalculable: la fórmula sigue ahí y
+   Excel la recalcula al abrir. Lo que cambia es que el número que el libro publica y
+   el que publica el informe son el mismo objeto y no dos cálculos parecidos, y que el
+   .xlsx deja de verse vacío en cualquier lector que no recalcule. Si una fórmula y el
+   motor discrepan, Excel mueve la celda al abrir y la discrepancia queda a la vista.
+
+   Devuelve la misma estructura { nombre, celdas, cols, merges, autofiltro } que el
+   componente MemoriaRangoModal.jsx ya sabe volcar, para no tocar la ruta de descarga.
    ───────────────────────────────────────────────────────────────────────────── */
+
+import {
+  analizarRangoAjustado, desgloseAjuste, entraPorAmbito,
+} from './ajusteRangoCapitalTrabajo.js';
+/* El MISMO conversor que usa el motor (`cifras` lo aplica a cada cifra que recibe). Este
+   emisor usaba `Number(...) || 0`, que sobre las cadenas formateadas que escriben los
+   analistas y traen los archivos —«5.271.105.507», «(1.500)», «7,37 %»— da `NaN` y cae a
+   cero, mientras el motor las lee bien: el libro publicaba un contribuyente en cero y el
+   informe el correcto. Dos procedencias para el mismo dato, que es el defecto que el
+   diseño de 2026-08-11 retira. */
+import { num } from '../utils/calculations.js';
 
 /* Métodos y su configuración de fórmulas. `base` indica sobre qué se calcula el
    indicador y se escalan las partidas; `num` el numerador; `dep` si usa el
@@ -44,26 +62,58 @@ const METODOS = [
 
    El comentario evita nombrar una dirección concreta a propósito: el comando de
    verificación del Step 4 busca literales por texto y una mención en prosa se delataría
-   a sí misma. */
+   a sí misma.
+
+   Los doce rubros que la ingesta sabe leer, en orden de balance. El orden y las
+   etiquetas siguen a `RUBROS_ESF` de docxRelleno.js: son el mismo estado financiero
+   visto desde el libro y desde el ANEXO A, y si divergen el informe publica un
+   balance que su propio soporte no reproduce.
+
+   `av: false` marca los rubros que NO llevan análisis vertical en esta hoja: el total de
+   activos, porque un 100 % por definición no informa nada —aunque `filasEsfAnexoA` en
+   docxRelleno.js sí lo calcula y lo publica en el ANEXO A, que sale de mapear TODO
+   `RUBROS_ESF` incluido el total—, y las cuentas por pagar, porque un pasivo sobre el
+   total de activos no significa nada (esa sí coincide con el criterio de
+   `filasEsfAnexoA`, que las excluye del `map` y las publica con `SIN_DATO`). Las tres
+   cifras del estado de resultados —ventas, costo y gastos— tampoco llevan A.V.: no son
+   partidas del balance.
+
+   Las etiquetas son las literales de `RUBROS_ESF`, sin abreviar: quien audite el libro
+   contra el ANEXO A tiene que poder mapear cada fila por su texto exacto, sin tener que
+   saber cuáles son fieles y cuáles un alias histórico de la hoja. */
 const RUBROS_EXAMINADA = [
-  { clave: 't_s', etiqueta: 'Ventas netas' },
-  { clave: 't_c', etiqueta: 'Costo de ventas' },
-  { clave: 't_op', etiqueta: 'Gastos operativos' },
-  { clave: 't_ar', etiqueta: 'Cuentas por cobrar' },
-  { clave: 't_inv', etiqueta: 'Inventarios' },
-  { clave: 't_ap', etiqueta: 'Cuentas por pagar' },
-  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
+  { clave: 't_s', etiqueta: 'Ventas netas', av: false },
+  { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
+  { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
+  { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
+  { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras cuentas por cobrar', av: true },
+  { clave: 't_inv', etiqueta: 'Inventarios', av: true },
+  { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes', av: true },
+  { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', av: true },
+  { clave: 't_ppe', etiqueta: 'Propiedades, planta y equipo', av: true },
+  { clave: 't_intang', etiqueta: 'Intangibles', av: true },
+  { clave: 't_dif', etiqueta: 'Diferidos', av: true },
+  { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', av: true },
+  { clave: 't_act_tot', etiqueta: 'Total, Activos', av: false },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales', av: false },
 ];
 
 /* 1-based: fila 1 título, 2 vacía, 3 «PARTE EXAMINADA», 4 el primer rubro. */
 const FILA_RUBRO_0 = 4;
 const filaDeRubro = (clave) => FILA_RUBRO_0
   + RUBROS_EXAMINADA.findIndex((r) => r.clave === clave);
-/* La tasa va inmediatamente después del último rubro. La fila del ámbito de la
-   muestra va después de la tasa, pero no necesita su propia constante: se escribe
-   sola al hacer `push` justo detrás, sin que ninguna fórmula la referencie hoy. */
+/* La tasa va inmediatamente después del último rubro. */
 const FILA_TASA = () => FILA_RUBRO_0 + RUBROS_EXAMINADA.length;
+/* La fila del ámbito de la muestra, que la hoja de método lee para decidir qué filas
+   entran al cuartil. Va detrás de la tasa, que va detrás del último rubro. */
+const FILA_AMBITO = () => FILA_TASA() + 1;
 
+/* El orden de este arreglo ES el orden de las columnas S–Y de las hojas de método y
+   el de las filas de la hoja Resumen. Reordenarlo cruza los valores en caché con las
+   fórmulas sin que nada reviente: el libro saldría con cifras creíbles en el sitio
+   errado. Lo sujeta la prueba «cada columna S–Y trae el valor del sabor que le
+   corresponde», que repite este orden como literal. */
 const AJUSTES = [
   { clave: 'ninguno', etiqueta: 'Sin ajuste' },
   { clave: 'aar', etiqueta: 'CxC' },
@@ -77,8 +127,26 @@ const AJUSTES = [
 /* Celdas tipadas para xlsx-js-style. */
 const cNum = (v, z) => ({ v, t: 'n', z: z || '#,##0.00' });
 const cTxt = (v) => ({ v: v == null ? '' : String(v), t: 's' });
-const cFor = (f, z) => ({ t: 'n', f, z: z || '0.00%' }); // fórmula numérica
-const cForT = (f) => ({ t: 's', f }); // fórmula de texto (conclusión)
+/* Fórmula numérica. `v` es el valor en caché: la fórmula la recalcula Excel, el valor
+   lo pone el motor. Se omite cuando no hay valor que poner —una comparable cuyas cifras
+   no le permiten al motor construir el ajuste, o una fila que no entra a la serie— y
+   entonces la celda sale como salía antes.
+
+   La guarda `Number.isFinite` no es una cortesía: `{ t:'n', v:'' }` emite `<v></v>` en
+   una celda numérica, que es XML inválido y manda el libro a modo reparación. Y un cero
+   fingiría una observación que no existe y hundiría el rango. */
+const cFor = (f, z, v) => {
+  const celda = { t: 'n', f, z: z || '0.00%' };
+  if (v !== undefined && v !== null && Number.isFinite(v)) celda.v = v;
+  return celda;
+};
+/* Fórmula de texto (la conclusión y la marca de ámbito). Aquí la cadena vacía SÍ es un
+   valor legítimo: sale como `t="str"` con `<v></v>`, que es un texto vacío válido. */
+const cForT = (f, v) => {
+  const celda = { t: 's', f };
+  if (v !== undefined && v !== null) celda.v = String(v);
+  return celda;
+};
 
 /* Referencia a una celda de la hoja Datos. */
 const D = (celda) => `Datos!${celda}`;
@@ -110,10 +178,11 @@ const HOLDING_FORMULA = (ref) => 'IF(OR('
  *                 IMPORTANTE: `op` y `t_op` deben ser GASTOS operativos
  *                 (usar el normalizador eeffParserNormalizador.js antes), y `prime`
  *                 es la tasa EN PORCENTAJE (7.37, no 0.0737): esta función la divide
- *                 entre 100 al escribir Datos!B11, así que quien la llame no debe
- *                 hacerlo antes. `cmode` y `amb` solo se escriben en la hoja Datos en
- *                 esta versión; el filtrado del cuartil por ámbito lo aplica quien
- *                 llama.
+ *                 entre 100 al escribir la celda de la tasa en la hoja Datos (la fila
+ *                 la fija `FILA_TASA()`, no un número quemado aquí), así que quien la
+ *                 llame no debe hacerlo antes. `cmode` y `amb` solo se escriben en la
+ *                 hoja Datos en esta versión; el filtrado del cuartil por ámbito lo
+ *                 aplica quien llama.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
@@ -150,18 +219,51 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
      Va aquí y no en `motorExcelExport` porque este emisor es el único punto por el que
      pasan las dos rutas de descarga del libro: la del motor y la del modal
-     (MemoriaRangoModal.jsx:93). */
-  const segExcluido = Number(study.seg_excluido) || 0;
-  const valorDeRubro = (clave) => (clave === 't_s'
-    ? (Number(study.t_s) || 0) - segExcluido
-    : Number(study[clave]) || 0);
+     (MemoriaRangoModal.jsx:93).
 
+     El `|| 0` va DESPUÉS de `num`, no en lugar de él: `num` devuelve null en el rubro que
+     el estudio no trae, y ahí el cero es lo que corresponde —la hoja publica el balance
+     completo y una fila en blanco rompería el análisis vertical—. Lo que cambia es que
+     ahora una cifra en cadena formateada llega como la cifra y no como cero. */
+  const segExcluido = num(study.seg_excluido) || 0;
+  const valorDeRubro = (clave) => (clave === 't_s'
+    ? (num(study.t_s) || 0) - segExcluido
+    : num(study[clave]) || 0);
+
+  /* El contribuyente con la forma que espera `desgloseAjuste`. Las ventas salen de
+     `valorDeRubro('t_s')` —la misma función que escribe la celda de Datos— y no de
+     `study.t_s`, que viene en bruto: tomarlas de ahí dejaría los intermedios calculados
+     sobre unas ventas y la celda que los referencia sobre otras. */
+  const contribuyenteDelEstudio = {
+    s: valorDeRubro('t_s'), c: study.t_c, op: study.t_op,
+    ar: study.t_ar, inv: study.t_inv, ap: study.t_ap, ppe: study.t_ppe,
+  };
+
+  const filaTot = filaDeRubro('t_act_tot');
   RUBROS_EXAMINADA.forEach((r) => {
-    datos.push([cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))]);
+    const celdas = [cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))];
+    /* A.V. como fórmula y no como número: es lo que hace que corregir una cifra en
+       Datos recalcule el vertical del ANEXO A y de la Tabla 10 sin recalcularlo a
+       mano en dos sitios. La guarda IF(total=0,"",…) es la misma que aplica
+       `verticalSobreActivos` en docxRelleno.js (ahí devuelve «—» sin total; aquí, con
+       el total en cero, la celda queda en blanco en vez de mostrar #DIV/0!): un
+       estudio que llegue a esta hoja sin `t_act_tot` no debe romper el libro, sea por
+       la ruta del Motor de Comparables o por cualquier otro llamador presente o
+       futuro que no traiga el dato. */
+    if (r.av) {
+      const fila = filaDeRubro(r.clave);
+      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%'));
+    }
+    datos.push(celdas);
   });
+  /* La tasa del estudio en tanto por uno, calculada UNA vez. La escriben tres sitios —la
+     celda de esta hoja, la columna «Tasa» de cada hoja de método y la llamada al motor que
+     produce los intermedios del ajuste— y dividir entre 100 por separado en cada uno es lo
+     que hace que dos de ellos puedan quedarse atrás de un arreglo del tercero. */
+  const tasaDelEstudio = (num(study.prime) || 0) / 100;
   datos.push([
     cTxt('Tasa de interés de referencia (Prime Rate)'),
-    cNum((Number(study.prime) || 0) / 100, '0.00%'),
+    cNum(tasaDelEstudio, '0.00%'),
   ]);
   /* El ámbito de la muestra, escrito como dato y no como decisión ya aplicada: la
      hoja de método lo lee para decidir qué filas entran al cuartil. */
@@ -173,9 +275,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const filaComp0 = datos.length + 1; // 1-based fila de la primera comparable
   comps.forEach((c) => {
     datos.push([
-      cTxt(c.name), cNum(Number(c.s) || 0), cNum(Number(c.c) || 0), cNum(Number(c.op) || 0),
-      cNum(Number(c.ar) || 0), cNum(Number(c.inv) || 0), cNum(Number(c.ap) || 0),
-      cNum(Number(c.ppe) || 0), cFor(`$B$${FILA_TASA()}`, '0.00%'),
+      cTxt(c.name), cNum(num(c.s) || 0), cNum(num(c.c) || 0), cNum(num(c.op) || 0),
+      cNum(num(c.ar) || 0), cNum(num(c.inv) || 0), cNum(num(c.ap) || 0),
+      cNum(num(c.ppe) || 0), cFor(`$B$${FILA_TASA()}`, '0.00%'),
       cTxt(c.amb === 'Nac' ? 'Nac' : 'Int'),
     ]);
   });
@@ -184,8 +286,8 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
      La tabla de comparables llega hasta la J (con la columna de Ámbito), así que este
      bloque cabe al lado sin estorbar. Deja escrito de dónde sale el número, a qué
      comparables alcanza y con qué convención se aplica: quien audita el libro no
-     debería tener que preguntarlo. La celda editable sigue siendo B11 —una sola—; aquí
-     solo se refleja.
+     debería tener que preguntarlo. La celda editable sigue siendo una sola —la fila
+     que calcula `FILA_TASA()`—; aquí solo se refleja.
      Los índices de columna son 11 y 12 (antes 10 y 11): la columna J de Ámbito
      desplazó una posición a este bloque, que vivía en K–M. */
   const anotarTasa = (idxFila, etiqueta, valor) => {
@@ -225,12 +327,25 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   /* ─── Una hoja por método, con fórmulas por comparable ─── */
   const infoMetodos = [];
   METODOS.forEach((M) => {
+    /* El valor de cada celda derivada, pedido al motor una vez por sabor. Siete
+       llamadas por método sobre un puñado de comparables: el coste es despreciable y
+       lo que compra es que el libro no pueda discrepar del informe.
+
+       Se le pasa `study` tal cual: `analizarRangoAjustado` descuenta el segmento
+       excluido y divide `prime` entre 100 por su cuenta (:276 y :285), y `op`/`t_op`
+       son GASTOS operativos en los dos lados. Convertir algo aquí sería introducir
+       justo la desviación que esta tarea viene a cerrar. */
+    const porSabor = AJUSTES.map((aj) => analizarRangoAjustado(study, M.hoja, aj.clave));
+
     const celdas = [];
     celdas.push([cTxt(`${M.nombre} — fórmulas vivas y trazables`)]);
     // encabezado de columnas
     const cols = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inv', 'CxP', 'PP&E', 'Tasa',
       'EBIT', 'Util.bruta', 'desc', 'Base', 'Aj.CxC', 'Aj.CxP', 'Aj.Inv', 'Aj.PP&E', 'Denom.',
-      'Sin ajuste', 'CxC', 'CxP', 'Inv', 'CxC+CxP+Inv', '+PP&E', 'PP&E'];
+      'Sin ajuste', 'CxC', 'CxP', 'Inv', 'CxC+CxP+Inv', '+PP&E', 'PP&E',
+      'Entra por ámbito',
+      'Serie: Sin ajuste', 'Serie: CxC', 'Serie: CxP', 'Serie: Inv',
+      'Serie: CxC+CxP+Inv', 'Serie: +PP&E', 'Serie: PP&E'];
     celdas.push(cols.map(cTxt));
     const filaHdr = celdas.length; // 1-based
     const r0 = filaHdr + 1; // primera fila de comparable
@@ -240,19 +355,28 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       : M.base === 'cogs' ? C_s : `(${C_s}+${OP_s})`;
 
     for (let i = 0; i < n; i++) {
+      const c = comps[i];
       const r = r0 + i;
       const src = filaComp0 + i; // fila en Datos
-      // columnas A..I: referencias a Datos (letras A..I = 1..9)
-      // A es texto (nombre), el resto numérico
-      const nombreRef = { t: 's', f: `${D(`A${src}`)}` };
-      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L) => cFor(`${D(`${L}${src}`)}`, '#,##0.00'));
-      const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000');
+      /* Columnas A..I: referencias a Datos (letras A..I = 1..9). A es texto (nombre),
+         el resto numérico. El valor en caché es el literal que el emisor ya tiene en
+         `study`, en el mismo orden en que escribió la tabla de la hoja Datos. */
+      const nombreRef = { t: 's', f: `${D(`A${src}`)}`, v: String(c.name || '') };
+      const cifras = [c.s, c.c, c.op, c.ar, c.inv, c.ap, c.ppe];
+      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => cFor(
+        `${D(`${L}${src}`)}`, '#,##0.00', num(cifras[k]) || 0));
+      /* La tasa es la única del estudio y viaja en porcentaje: es el mismo doble que
+         escribió la celda de la hoja Datos, porque es literalmente el mismo valor. */
+      const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000', tasaDelEstudio);
       // base comparable
       const base = M.base === 'ventas' ? `B${r}` : M.base === 'opex' ? `D${r}`
         : M.base === 'cogs' ? `C${r}` : `(C${r}+D${r})`;
       const denomDep = M.hoja === 'NCP' ? `((C${r}-G${r})+D${r})` : M.hoja === 'CostPlus' ? `(C${r}-G${r})` : null;
       const baseInv = M.dep ? denomDep : `M${r}`;
-      const num = M.num === 'ebit' ? `J${r}` : `K${r}`;
+      /* La celda del numerador del método: la J (EBIT) o la K (utilidad bruta). Se llama
+         `celdaNum` y no `num` porque `num` es ahora el conversor de cifras importado
+         arriba, y la constante local lo sombreaba dentro de este bucle. */
+      const celdaNum = M.num === 'ebit' ? `J${r}` : `K${r}`;
       /* Denominador de los sabores que NO restan el ajuste de CxC del numerador
          («solo CxP», «solo inventario» y «solo PP&E»): la base sin corregir. La
          columna R descuenta ese ajuste y solo corresponde a los sabores que sí lo
@@ -260,53 +384,135 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          no tiene nada que ver con el ajuste de CxC, así que ahí se mantiene. */
       const denomSinAR = M.base === 'ventas' ? `M${r}` : `R${r}`;
 
+      /* Los intermedios, del mismo motor. No dependen del sabor: son los cuatro
+         ajustes completos, y cada columna S–Y elige cuáles aplica.
+
+         `|| {}` deja los nueve campos en `undefined` cuando el motor no puede construir
+         el desglose —comparable sin cifras, base en cero, método sin base—, y entonces
+         `cFor` omite el valor y la celda sale como salía antes: fórmula que Excel
+         resuelve al abrir. Es el mismo criterio que siguen las columnas S–Y. */
+      const dg = desgloseAjuste(comps[i], contribuyenteDelEstudio, M.hoja,
+        tasaDelEstudio) || {};
+
       const fila = [
         nombreRef,                              // A nombre
         ...numRefs,                             // B..H cifras
         tasaRef,                                // I tasa
-        cFor(`B${r}-C${r}-D${r}`, '#,##0.00'),  // J EBIT
-        cFor(`B${r}-C${r}`, '#,##0.00'),        // K util bruta
-        cFor(`I${r}/(1+I${r})`, '0.00000'),     // L desc
-        cFor(`${base}`, '#,##0.00'),            // M base
-        cFor(`((E${r}/M${r})-(${AR_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // N Aj.CxC
-        cFor(`((G${r}/M${r})-(${AP_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // O Aj.CxP
-        cFor(`((F${r}/${baseInv})-(${INV_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // P Aj.Inv
-        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // Q Aj.PP&E
-        cFor(`${M.dep ? denomDep : (M.base === 'ventas' ? `(B${r}-N${r})` : M.base === 'opex' ? `D${r}` : `M${r}`)}`, '#,##0.00'), // R denom ajustado
-        cFor(`${num}/M${r}`, M.fmt),            // S sin ajuste
-        cFor(`(${num}-N${r})/R${r}`, M.fmt),    // T CxC
-        cFor(`(${num}+O${r})/${denomSinAR}`, M.fmt),  // U CxP
-        cFor(`(${num}-P${r})/${denomSinAR}`, M.fmt),  // V Inv
-        cFor(`(${num}-N${r}+O${r}-P${r})/R${r}`, M.fmt),        // W CxC+CxP+Inv
-        cFor(`(${num}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt), // X +PP&E
-        cFor(`(${num}-Q${r})/${denomSinAR}`, M.fmt),  // Y PP&E
+        cFor(`B${r}-C${r}-D${r}`, '#,##0.00', dg.ebit),  // J EBIT
+        cFor(`B${r}-C${r}`, '#,##0.00', dg.utilBruta),    // K util bruta
+        cFor(`I${r}/(1+I${r})`, '0.00000', dg.desc),      // L desc
+        cFor(`${base}`, '#,##0.00', dg.base),             // M base
+        cFor(`((E${r}/M${r})-(${AR_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000', dg.ajusteAR),   // N Aj.CxC
+        cFor(`((G${r}/M${r})-(${AP_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000', dg.ajusteAP),   // O Aj.CxP
+        cFor(`((F${r}/${baseInv})-(${INV_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000', dg.ajusteINV), // P Aj.Inv
+        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000', dg.ajustePPE), // Q Aj.PP&E
+        cFor(`${M.dep ? denomDep : (M.base === 'ventas' ? `(B${r}-N${r})` : M.base === 'opex' ? `D${r}` : `M${r}`)}`, '#,##0.00', dg.denomAjustado), // R denom ajustado
+        /* S–Y: el indicador de cada sabor. `porSabor[k]` sigue el orden de AJUSTES,
+           que es el de estas siete columnas. Y las J–R de arriba llevan los intermedios
+           del MISMO motor, no un cálculo propio: son el rastro de auditoría que permite
+           seguir de dónde sale cada uno de estos siete números. */
+        cFor(`${celdaNum}/M${r}`, M.fmt, porSabor[0].filas[i]?.valor),            // S sin ajuste
+        cFor(`(${celdaNum}-N${r})/R${r}`, M.fmt, porSabor[1].filas[i]?.valor),    // T CxC
+        cFor(`(${celdaNum}+O${r})/${denomSinAR}`, M.fmt, porSabor[2].filas[i]?.valor),  // U CxP
+        cFor(`(${celdaNum}-P${r})/${denomSinAR}`, M.fmt, porSabor[3].filas[i]?.valor),  // V Inv
+        cFor(`(${celdaNum}-N${r}+O${r}-P${r})/R${r}`, M.fmt, porSabor[4].filas[i]?.valor),        // W CxC+CxP+Inv
+        cFor(`(${celdaNum}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt, porSabor[5].filas[i]?.valor), // X +PP&E
+        cFor(`(${celdaNum}-Q${r})/${denomSinAR}`, M.fmt, porSabor[6].filas[i]?.valor),  // Y PP&E
       ];
+
+      /* Columna Z: el filtro de ámbito, resuelto por fórmula y a la vista. Es el
+         mismo criterio de `entraPorAmbito` (ajusteRangoCapitalTrabajo.js:245): con
+         'nac' solo las nacionales, con 'intl' solo las internacionales, y con
+         cualquier otro valor todas. Se emite como fórmula y no como una marca ya
+         decidida, igual que el criterio de holding de la hoja de selección: quien
+         audita el libro tiene que poder ver por qué una fila no entró.
+
+         El valor en caché es solo la parte del ámbito: la del valor finito la pone
+         ISNUMBER en la propia hoja, y así el criterio queda partido igual en los dos
+         lados. La función es la del motor, importada, no una copia. */
+      const entraAmbito = entraPorAmbito(porSabor[0].filas[i]?.amb, study.cmode);
+
+      const ambitoRef = D(`$B$${FILA_AMBITO()}`);
+      const ambComp = D(`J${src}`);
+      fila.push(cForT(
+        `IF(OR(${ambitoRef}="all",AND(${ambitoRef}="nac",${ambComp}="Nac"),`
+        + `AND(${ambitoRef}="intl",${ambComp}="Int")),"Sí","No")`,
+        entraAmbito ? 'Sí' : 'No'));
+
+      /* Columnas AA–AG: la serie que de verdad entra al rango, por sabor. Vacía —no
+         cero— cuando la fila no entra o cuando el indicador no es un número: QUARTILE,
+         MIN y MAX ignoran las celdas vacías, y un cero fingiría una observación que no
+         existe y hundiría el rango.
+
+         Cuando la fila no entra, la fórmula devuelve "" y el valor en caché correcto es
+         la cadena vacía, no un número; `cFor` no la escribe porque exige
+         `Number.isFinite`, y es lo que corresponde: una celda numérica con `<v></v>` es
+         XML inválido. La celda sale como fórmula sin valor y Excel la resuelve a "" al
+         abrir. Es la misma razón por la que las filas de estadística sin rango también
+         salen sin valor. */
+      ['S', 'T', 'U', 'V', 'W', 'X', 'Y'].forEach((L, k) => {
+        const v = porSabor[k].filas[i]?.valor;
+        const entraSerie = entraAmbito && Number.isFinite(v);
+        fila.push(cFor(
+          `IF(AND(Z${r}="Sí",ISNUMBER(${L}${r})),${L}${r},"")`,
+          M.fmt,
+          entraSerie ? v : undefined));
+      });
+
       celdas.push(fila);
     }
 
     const rN = r0 + n - 1; // última fila de comparable
-    // filas de estadísticos del rango (MIN, cuartiles inclusivos, MAX)
-    const RES = ['S', 'T', 'U', 'V', 'W', 'X', 'Y'];
-    const statRow = (etq, fn) => {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt(etq); // columna R (índice 17)
-      RES.forEach((L) => fila.push(cFor(`${fn}(${L}${r0}:${L}${rN})`, M.fmt)));
+
+    /* La estadística se calcula sobre la SERIE FILTRADA (AA–AG), no sobre las
+       columnas de indicador (S–Y). Las de indicador se publican íntegras porque las
+       tablas del informe listan también las comparables fuera de ámbito con su
+       margen; lo que no puede es cuartilarlas. */
+    const RES = ['AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'];
+
+    /* Guarda de muestra mínima: el motor no publica estadística con menos de tres
+       observaciones (ajusteRangoCapitalTrabajo.js:312), porque un rango intercuartil
+       sobre dos puntos no es un rango. La hoja no puede insinuar lo contrario.
+       COUNT solo cuenta números, así que cuenta exactamente las filas que entraron. */
+    const conGuarda = (L, expr) => `IF(COUNT(${L}${r0}:${L}${rN})<3,"",${expr})`;
+
+    /* Fila de estadística vacía: índices 0–25 son las columnas A–Z, la etiqueta va en
+       R (índice 17) y los siete valores se empujan a partir del índice 26 (AA). */
+    const filaEstadistica = (etq) => {
+      const fila = new Array(26).fill(cTxt(''));
+      fila[17] = cTxt(etq);
       return fila;
     };
-    const qRow = (etq, q) => {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt(etq); // columna R (índice 17)
-      RES.forEach((L) => fila.push(cFor(`QUARTILE(${L}${r0}:${L}${rN},${q})`, M.fmt)));
+
+    /* Los estadísticos salen del sabor de cada columna. `stats` es null cuando el motor
+       no publica rango —menos de tres observaciones—, y entonces la celda va sin valor,
+       igual que su fórmula con guarda devolverá "" al abrir. */
+    const statRow = (etq, fn, clave) => {
+      const fila = filaEstadistica(etq);
+      RES.forEach((L, k) => {
+        const st = porSabor[k].stats;
+        fila.push(cFor(conGuarda(L, `${fn}(${L}${r0}:${L}${rN})`), M.fmt,
+          st ? st[clave] : undefined));
+      });
       return fila;
     };
-    celdas.push(statRow('Mínimo', 'MIN'));
+    const qRow = (etq, q, clave) => {
+      const fila = filaEstadistica(etq);
+      RES.forEach((L, k) => {
+        const st = porSabor[k].stats;
+        fila.push(cFor(conGuarda(L, `QUARTILE(${L}${r0}:${L}${rN},${q})`), M.fmt,
+          st ? st[clave] : undefined));
+      });
+      return fila;
+    };
+    celdas.push(statRow('Mínimo', 'MIN', 'min'));
     const filaMin = celdas.length; // 1-based
     const filaP25 = celdas.length + 1;
-    celdas.push(qRow('P25 (cuartil inferior)', 1));
-    celdas.push(qRow('Mediana (P50)', 2));
-    celdas.push(qRow('P75 (cuartil superior)', 3));
+    celdas.push(qRow('P25 (cuartil inferior)', 1, 'p25'));
+    celdas.push(qRow('Mediana (P50)', 2, 'med'));
+    celdas.push(qRow('P75 (cuartil superior)', 3, 'p75'));
     const filaP75 = celdas.length; // 1-based de P75 (ya empujada)
-    celdas.push(statRow('Máximo', 'MAX'));
+    celdas.push(statRow('Máximo', 'MAX', 'max'));
     const filaMax = celdas.length; // 1-based
     // indicador del contribuyente (mismo con cualquier ajuste)
     const testedFor = M.base === 'ventas'
@@ -316,26 +522,46 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       : `(${S_s}-${C_s}-${OP_s})/(${C_s}+${OP_s})`;
     const filaTested = celdas.length + 1;
     {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt('Indicador del contribuyente');
-      RES.forEach(() => fila.push(cFor(testedFor, M.fmt)));
+      const fila = filaEstadistica('Indicador del contribuyente');
+      /* `testedFor` no cambia: es la misma fórmula. Lo que cambia es la columna
+         donde se escribe.
+
+         El valor sale de `sujeto`, el indicador del contribuyente contra sí mismo, que
+         es el mismo para los siete sabores porque sus ratios de ajuste se anulan. Se
+         toma del motor y no de `pliOf`, que solo conoce MO, MB y Berry: por esta vía las
+         hojas de Cost Plus y NCP también traen su valor. */
+      RES.forEach((L, k) => fila.push(cFor(testedFor, M.fmt, porSabor[k].sujeto)));
       celdas.push(fila);
     }
     // conclusión CUMPLE/NO CUMPLE por ajuste
     {
-      const fila = new Array(17).fill(cTxt(''));
-      fila[17] = cTxt('Conclusión');
-      RES.forEach((L) => fila.push(cForT(
-        `IF(AND(${L}${filaTested}>=${L}${filaP25},${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE")`
-      )));
+      /* La conclusión necesita la misma guarda: sin rango, P25 y P75 valen "" y
+         compararlos con >= daría #VALUE! en la celda. */
+      const fila = filaEstadistica('Conclusión');
+      RES.forEach((L, k) => {
+        /* Sin rango el motor devuelve 'CUMPLE' por comportamiento heredado
+           (rangoIntercuartil.js:81). El libro NO lo repite: un soporte que declara
+           CUMPLE sin un rango que lo sustente es peor que uno que deja el hueco. Es la
+           única celda donde el libro y el informe difieren a propósito, y la prueba de
+           paridad entre ambos la excluye por este motivo. */
+        const st = porSabor[k].stats;
+        fila.push(cForT(conGuarda(L,
+          `IF(AND(${L}${filaTested}>=${L}${filaP25},`
+          + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE")`),
+          st ? porSabor[k].cumple : ''));
+      });
       celdas.push(fila);
     }
 
-    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, base: M.base, dep: M.dep, r0, rN, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
+    /* `porSabor` viaja a infoMetodos porque la hoja Resumen se arma después de este
+       forEach y sus celdas son referencias puras: sin el valor a mano quedarían vacías en
+       cualquier lector que no recalcule, que es justo lo que esta tarea viene a cerrar.
+       Y el Resumen es la primera hoja del libro, la que se abre sola. */
+    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, base: M.base, dep: M.dep, r0, rN, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length, porSabor });
 
     hojas.push({
       nombre: M.hoja, celdas,
-      cols: [{ wch: 28 }].concat(new Array(24).fill({ wch: 11 })),
+      cols: [{ wch: 28 }].concat(new Array(32).fill({ wch: 11 })),
     });
   });
 
@@ -459,24 +685,42 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     });
   }
 
-  /* ─── Hoja Resumen: sensibilidad, referenciando las hojas de método ─── */
+  /* ─── Hoja Resumen: sensibilidad, referenciando las hojas de método ───
+     Las referencias siguen siendo referencias —quien audite puede seguirlas hasta la
+     celda de la hoja de método—, pero además llevan el valor en caché del motor. Sin él
+     esta hoja, que es la primera del libro y la que Excel abre sola, saldría vacía en
+     cualquier lector que no recalcule, y la mitad del objetivo de esta tarea quedaría
+     sin cumplir. El valor sale del mismo `porSabor` que alimentó la hoja de método, así
+     que las dos celdas publican por construcción el mismo número. */
   const resumen = [];
   resumen.push([cTxt('RESUMEN Y SENSIBILIDAD — todo son referencias a las hojas de método')]);
   resumen.push([]);
   resumen.push(['Método', 'Ajuste', 'Contribuyente', 'Mínimo', 'P25', 'Mediana', 'P75', 'Máximo', 'Conclusión'].map(cTxt));
-  const RES = ['S', 'T', 'U', 'V', 'W', 'X', 'Y'];
+  /* AA–AG, no S–Y: desde que las filas de estadística se mudaron a la serie
+     filtrada, S–Y de esas filas quedan en blanco (son las columnas de indicador
+     por comparable, no de estadístico). Referenciar S–Y aquí dejaría el Resumen
+     —la hoja que un lector abre primero— siempre vacío. */
+  const RES = ['AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'];
   infoMetodos.forEach((M) => {
     AJUSTES.forEach((aj, k) => {
       const L = RES[k];
+      /* Cuidado con el orden: esta hoja referencia la mediana como `filaP25 + 1` y el
+         P75 como `filaP25 + 2`, así que los valores tienen que ir `med` y luego `p75`,
+         en ese mismo orden. Cruzarlos daría cifras creíbles en el sitio errado sin que
+         nada reventara, igual que reordenar AJUSTES. */
+      const st = M.porSabor[k].stats;
       resumen.push([
         cTxt(M.nombre), cTxt(aj.etiqueta),
-        cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt),
-        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt),
-        cForT(`${M.hoja}!${L}${M.filaConcl}`),
+        cFor(`${M.hoja}!${L}${M.filaTested}`, M.fmt, M.porSabor[k].sujeto),
+        cFor(`${M.hoja}!${L}${M.filaMin}`, M.fmt, st ? st.min : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25}`, M.fmt, st ? st.p25 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 1}`, M.fmt, st ? st.med : undefined),
+        cFor(`${M.hoja}!${L}${M.filaP25 + 2}`, M.fmt, st ? st.p75 : undefined),
+        cFor(`${M.hoja}!${L}${M.filaMax}`, M.fmt, st ? st.max : undefined),
+        /* Sin rango, la celda de conclusión de la hoja de método queda en '' y esta
+           tiene que decir lo mismo: es la única celda donde el libro se aparta del
+           motor a propósito (ver la nota de la conclusión más arriba). */
+        cForT(`${M.hoja}!${L}${M.filaConcl}`, st ? M.porSabor[k].cumple : ''),
       ]);
     });
   });

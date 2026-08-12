@@ -47,8 +47,25 @@ export function construirLibroSoporte(datos) {
     t_inv: datos.examinada?.T?.inv ?? datos.estudio?.t_inv ?? datos.estudio?.inv,
     t_ap: datos.examinada?.T?.ap ?? datos.estudio?.t_ap ?? datos.estudio?.ap,
     t_ppe: datos.examinada?.T?.ppe ?? datos.estudio?.t_ppe ?? datos.estudio?.ppe,
+    /* Los ocho rubros del ESF que la Task 4 añadió a `RUBROS_EXAMINADA` y que hasta
+       ahora no llegaban por esta ruta: `hojasMemoriaRangoOptimo` los escribía en la
+       hoja Datos, pero como `estudioBase` no los traía, `valorDeRubro` los leía como
+       0 en toda exportación del Motor de Comparables —los once rubros del ESF salían
+       en cero y el A.V. dividía sobre un total de activos también en cero—. No tienen
+       alias corto conocido en `estudio` (a diferencia de `s`/`c`/`op`/`ar`/`inv`/`ap`/
+       `ppe`, que son legado de antes de este ESF), así que solo llevan los dos
+       primeros niveles de respaldo. */
+    t_cash: datos.examinada?.T?.cash ?? datos.estudio?.t_cash,
+    t_inv_assoc: datos.examinada?.T?.inv_assoc ?? datos.estudio?.t_inv_assoc,
+    t_tax: datos.examinada?.T?.tax ?? datos.estudio?.t_tax,
+    t_act_curr: datos.examinada?.T?.act_curr ?? datos.estudio?.t_act_curr,
+    t_intang: datos.examinada?.T?.intang ?? datos.estudio?.t_intang,
+    t_dif: datos.examinada?.T?.dif ?? datos.estudio?.t_dif,
+    t_act_nocurr: datos.examinada?.T?.act_nocurr ?? datos.estudio?.t_act_nocurr,
+    t_act_tot: datos.examinada?.T?.act_tot ?? datos.estudio?.t_act_tot,
     /* La tasa viaja EN PORCENTAJE (7.37), que es como la escribe el usuario y como la
-       espera `hojasMemoriaRangoOptimo`, que la divide entre 100 al escribir Datos!B11.
+       espera `hojasMemoriaRangoOptimo`, que la divide entre 100 al escribir la celda de
+       la tasa en la hoja Datos (la fila la deriva `FILA_TASA()`, no una fija).
        No leer aquí `estudio.interestRate`: el componente la publica ya dividida para su
        propio cálculo, y tomarla de ahí la dividía dos veces —el libro salía con 0,0737 %
        en vez de 7,37 % y ningún comparable recibía ajuste—. */
