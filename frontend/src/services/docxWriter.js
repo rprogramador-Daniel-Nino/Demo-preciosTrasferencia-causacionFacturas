@@ -13,6 +13,7 @@ import {
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
+  Bookmark, InternalHyperlink,
 } from 'docx';
 import {
   HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
@@ -112,6 +113,43 @@ const familiaDeEstilo = (estilo) => {
    raro y se ve al revisar. */
 const RX_ENTRADA_INDICE = /^(.*?\S)\s+\.+\s*(\d+)\s*$/;
 
+/* Normaliza el texto de una entrada de índice o cabecera para poder compararlos de forma
+   robusta. Remueve tildes, convierte a minúsculas, quita numeración inicial (como 1., 1.1) y
+   cualquier carácter especial que no sea letra o número. */
+function normalizarTextoParaComparar(texto) {
+  return String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Quita tildes
+    .replace(/^\s*(?:\d+\.)+\s*/g, '') // Quita numeraciones tipo 1.1, 1.2
+    .replace(/^\s*\d+\s*/g, '') // Quita numeración tipo 1
+    .replace(/[^a-z0-9]/g, ''); // Deja solo letras y números
+}
+
+/* Escanea de forma recursiva todo el árbol de HTML buscando los elementos que corresponden a
+   cabeceras (h1-h6) y les asigna un identificador de marcador (bookmark) único. */
+function escanearCabeceras(arbol) {
+  const cabeceras = [];
+  let contador = 1;
+  const buscar = (n) => {
+    if (n.texto !== undefined) return;
+    if (NIVELES[n.etiqueta]) {
+      const texto = textoDe(n).trim();
+      if (texto) {
+        const normalized = normalizarTextoParaComparar(texto);
+        // ID de marcador válido para Word (sin números ni caracteres especiales)
+        const id = 'heading_ref_' + contador++;
+        cabeceras.push({ id, texto, normalized, nodo: n });
+      }
+    }
+    for (const h of n.hijos || []) {
+      buscar(h);
+    }
+  };
+  buscar(arbol);
+  return cabeceras;
+}
+
 /* Ancho de la caja de texto: la hoja menos los dos márgenes. Las tablas del informe la ocupan
    entera. */
 const CAJA_TEXTO = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
@@ -124,7 +162,7 @@ const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
    último parámetro de las cinco— se descartó a propósito: es más ruido que un cierre y hay que
    tocar las cinco firmas dos veces, una ahora y otra en la tarea 10. Se llama una vez por
    documento desde `construirDocumento`. */
-function traductor({ porId, anexo = [], tamanoBase = 24 }) {
+function traductor({ porId, anexo = [], tamanoBase = 24, cabeceras = [] }) {
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -217,9 +255,13 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
   }
 
   /* El título y el número, con el tabulador de Word en medio. Es lo que mantiene la fila de
-     puntos pegada al margen derecho cuando la métrica de la fuente cambia. */
-  const parrafoDeIndice = (titulo, numero) => new Paragraph({
-    children: [new TextRun({
+     puntos pegada al margen derecho cuando la métrica de la fuente cambia.
+     Y con redirección (InternalHyperlink) al marcador (Bookmark) de la sección correspondiente. */
+  const parrafoDeIndice = (titulo, numero) => {
+    const normalizedTOC = normalizarTextoParaComparar(titulo);
+    const cabeceraMatch = cabeceras.find((c) => c.normalized === normalizedTOC);
+
+    const runs = [new TextRun({
       children: [
         titulo,
         new PositionalTab({
@@ -230,9 +272,18 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
         numero,
       ],
       bold: true,
-    })],
-    spacing: { before: 0, after: 0, line: 276 },
-  });
+    })];
+
+    return new Paragraph({
+      children: cabeceraMatch
+        ? [new InternalHyperlink({
+            anchor: cabeceraMatch.id,
+            children: runs,
+          })]
+        : runs,
+      spacing: { before: 0, after: 0, line: 276 },
+    });
+  };
 
   function parrafoDe(nodo, runs = runsDe(nodo)) {
     const nivel = NIVELES[nodo.etiqueta];
@@ -243,6 +294,19 @@ function traductor({ porId, anexo = [], tamanoBase = 24 }) {
     if (!nivel) {
       const m = RX_ENTRADA_INDICE.exec(textoDe(nodo));
       if (m && m[1].trim()) return parrafoDeIndice(m[1].trim(), m[2]);
+    }
+
+    // Si es una cabecera/sección, la envolvemos en un Bookmark con su ID correspondiente
+    if (nivel) {
+      const cabeceraMatch = cabeceras.find((c) => c.nodo === nodo);
+      if (cabeceraMatch) {
+        runs = [
+          new Bookmark({
+            id: cabeceraMatch.id,
+            children: runs,
+          })
+        ];
+      }
     }
 
     return new Paragraph({
@@ -488,10 +552,15 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
       totalHuecos + ' hueco(s) en el informe: sobran ' + (anexo.length - totalHuecos) +
       ' página(s) que no se usan.');
   }
+
+  /* Escaneamos todas las secciones/cabeceras reales del documento para poder referenciarlas
+     desde el índice (tabla de contenido) con marcadores (Bookmarks) e hipervínculos internos. */
+  const cabeceras = escanearCabeceras(arbol);
+
   /* El cuerpo base se pasa al traductor porque de él sale el tamaño reducido de las tablas:
      el mismo 0,9 que la vista previa aplica por CSS. */
   const { bloquesDe, runsDe } = traductor({
-    porId, anexo, tamanoBase: mediosPuntos(base.tamano),
+    porId, anexo, tamanoBase: mediosPuntos(base.tamano), cabeceras,
   });
 
   const cabecera = enc
