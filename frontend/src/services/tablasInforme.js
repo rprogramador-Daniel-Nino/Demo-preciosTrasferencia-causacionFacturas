@@ -47,6 +47,26 @@ const RAZONES_RECHAZO = [
   ['saldoNegativo', 'Saldos negativos en balances: cifras no verosímiles'],
 ];
 
+/* Los tres motivos de comparabilidad funcional van en UNA sola fila de la tabla, no en
+   una cada uno. Es como los presenta la hoja «Matriz de rechazo» del libro de soporte
+   (`memoriaCalculoRangoOptimo.js:885`), y el informe tiene que declarar la misma cifra
+   que el libro que lo sustenta: con las filas separadas, el documento publicaba 85 y
+   1.304 donde el Excel publica 1.389.
+
+   Se unifica solo la PRESENTACIÓN: las claves siguen separadas en el motor, que es
+   donde cada compañía conserva el motivo exacto por el que salió. El desglose fino vive
+   en la columna «Motivo de rechazo» de la base de datos, igual que en el libro.
+
+   Se exporta porque el ANEXO C tiene que fundir los mismos motivos bajo la misma letra
+   (`anexoCHtml.js`): si la tabla declara 1.389 en «A» y el anexo lista ahí otra cifra,
+   el anexo deja de sustentar la tabla. Una sola definición para los dos. */
+export const FUNDIDOS_EN_RIGOR = ['actividadDistinta', 'sinDescripcion'];
+
+/* La fila fundida se nombra en corto, como en el libro y como en los informes de años
+   anteriores: la coletilla «perfil no comparable con la parte examinada» describía solo
+   uno de los tres motivos que ahora recoge. */
+const ETIQUETA_RIGOR = 'Diferencias funcionales';
+
 const LETRAS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 /** Etiqueta de cada motivo, para quien necesite nombrar uno que el embudo no declara. */
@@ -94,12 +114,21 @@ export function filasRazonesRechazo(embudo) {
 
   const filas = [];
   RAZONES_RECHAZO.forEach(([clave, etiqueta]) => {
+    /* Sin fila propia: su conteo se suma al de «Diferencias funcionales», más abajo. */
+    if (FUNDIDOS_EN_RIGOR.includes(clave)) return;
+
+    const esRigor = clave === 'rigorFuncional';
+
     /* La reserva se suma ANTES de descartar los ceros. Un estudio que no rechazó a
        nadie por rigor funcional pero dejó reserva necesita igual esta fila: omitirla
-       dejaría la columna sin sumar el universo. */
+       dejaría la columna sin sumar el universo. Los motivos fundidos entran por la
+       misma puerta y por el mismo motivo. */
     const cuantas = (Number(porMotivo[clave]) || 0)
-      + (clave === 'rigorFuncional' ? reserva + sinEeff : 0);
-    if (cuantas > 0) filas.push({ clave, etiqueta, cuantas });
+      + (esRigor
+        ? reserva + sinEeff
+          + FUNDIDOS_EN_RIGOR.reduce((acc, k) => acc + (Number(porMotivo[k]) || 0), 0)
+        : 0);
+    if (cuantas > 0) filas.push({ clave, etiqueta: esRigor ? ETIQUETA_RIGOR : etiqueta, cuantas });
   });
 
   const aceptadas = Number(e.seleccionadas) || 0;
