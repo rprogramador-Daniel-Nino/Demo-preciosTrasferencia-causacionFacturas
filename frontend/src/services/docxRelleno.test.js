@@ -12,7 +12,7 @@ import {
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
-  localizarBloqueProsa,
+  localizarBloqueProsa, parrafosOoxmlDesdeHtml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -1181,4 +1181,27 @@ test('localizarBloqueProsa devuelve null si no encuentra el encabezado de inicio
 test('localizarBloqueProsa devuelve null si el encabezado de inicio existe pero ningún tituloFin aparece después', () => {
   const xml = parrafoXml('A. Análisis del Panorama de la Economía Mundial') + parrafoXml('Cierre sin tabla');
   assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
+});
+
+test('parrafosOoxmlDesdeHtml convierte cada <p> en un párrafo y <strong> en negrita', () => {
+  const html = '<p>Primer párrafo con <strong>énfasis</strong> normal.</p><p>Segundo párrafo.</p>';
+  const xml = parrafosOoxmlDesdeHtml(html);
+
+  assert.equal((xml.match(/<w:p>/g) || []).length, 2);
+  assert.match(xml, /<w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">énfasis<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">Primer párrafo con <\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve"> normal\.<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">Segundo párrafo\.<\/w:t>/);
+});
+
+test('parrafosOoxmlDesdeHtml aplana enlaces a su texto visible, sin dejar el <a>', () => {
+  const html = '<p>Fuente: <a href="https://dane.gov.co">DANE</a>.</p>';
+  const xml = parrafosOoxmlDesdeHtml(html);
+  assert.match(xml, /<w:t xml:space="preserve">Fuente: DANE\.<\/w:t>/);
+  assert.doesNotMatch(xml, /<a /);
+});
+
+test('parrafosOoxmlDesdeHtml devuelve cadena vacía si el HTML no trae <p>', () => {
+  assert.equal(parrafosOoxmlDesdeHtml(''), '');
+  assert.equal(parrafosOoxmlDesdeHtml(null), '');
 });

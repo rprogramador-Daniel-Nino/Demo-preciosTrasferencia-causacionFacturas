@@ -413,6 +413,47 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
   return null;
 }
 
+/** Texto de un fragmento de HTML de narrativa (sin sus etiquetas), con las entidades
+ *  básicas deshechas — misma lista que `escaparXml` invierte, porque este texto vuelve
+ *  a pasar por `escaparXml` al escribirse en el run. */
+function textoPlanoDeNarrativa(fragmento) {
+  return String(fragmento || '')
+    .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/**
+ * La narrativa de III.A/III.B que redacta Claude (HTML simple: `<p>`, `<strong>`, `<a>`)
+ * convertida a párrafos OOXML, para insertarla en el `.docx` sin depender del marcado.
+ *
+ * Solo entiende `<strong>` (negrita) y `<a>` (se aplana a su texto): es lo único que el
+ * prompt de redacción produce (`functions/analisisMercadoPrompts.js`, "Cada apartado en
+ * HTML, como una serie de párrafos <p>...</p>, sin encabezados ni tablas").
+ *
+ * @param {string} html
+ * @returns {string} OOXML, una cadena vacía si `html` no trae ningún `<p>`.
+ */
+export function parrafosOoxmlDesdeHtml(html) {
+  const bloques = String(html || '').match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) || [];
+  return bloques.map((bloque) => {
+    const interior = bloque.replace(/^<p\b[^>]*>/i, '').replace(/<\/p>\s*$/i, '');
+    const runs = [];
+    const rx = /<strong>([\s\S]*?)<\/strong>|([^<]+(?:<a\b[^>]*>[\s\S]*?<\/a>[^<]*)*)/gi;
+    let m;
+    while ((m = rx.exec(interior)) !== null) {
+      if (m[1] !== undefined) {
+        const texto = textoPlanoDeNarrativa(m[1]);
+        if (texto) runs.push(`<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r>`);
+      } else if (m[2] !== undefined) {
+        const texto = textoPlanoDeNarrativa(m[2]);
+        if (texto) runs.push(`<w:r><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r>`);
+      }
+    }
+    return `<w:p>${runs.join('')}</w:p>`;
+  }).join('');
+}
+
 /* Un `<w:t>` que es SOLO una cifra: «2.05%», «-3.001%», «1,780 %». Es lo que Word deja
    cuando la plantilla escribe un número entre paréntesis dentro de una frase, y es lo que
    permite cambiarlo sin tocar una letra del resto. */
