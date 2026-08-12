@@ -332,10 +332,16 @@ test('las tres comparables toman la tasa de esa única celda, no una propia', ()
   const filaTasa = datos.celdas.findIndex(
     (f) => f && f[0] && f[0].v === 'Tasa de interés de referencia (Prime Rate)') + 1;
   const filaHdrComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Compañía');
+  /* El valor de la celda editable. Las tres comparables tienen que traer ESE y no otro:
+     la aserción pedía `undefined` mientras la columna salía sin valor en caché, y su
+     propósito —que ninguna traiga una tasa propia— se defiende mejor exigiendo que las
+     tres publiquen la misma cifra que la celda que referencian. */
+  const tasaUnica = datos.celdas[filaTasa - 1][1].v;
   for (let i = 0; i < 3; i++) {
     const tasa = datos.celdas[filaHdrComp + 1 + i][8];
     assert.strictEqual(tasa.f, `$B$${filaTasa}`, `la comparable ${i + 1} debería referenciar la celda única`);
-    assert.strictEqual(tasa.v, undefined, 'y no traer un valor propio quemado');
+    assert.strictEqual(tasa.v, tasaUnica,
+      `la comparable ${i + 1} debe publicar la tasa de esa celda, no una propia`);
   }
 });
 
