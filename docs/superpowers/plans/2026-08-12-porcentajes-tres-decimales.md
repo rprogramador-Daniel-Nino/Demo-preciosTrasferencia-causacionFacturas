@@ -443,6 +443,49 @@ git commit -m "fix: un solo formateador de porcentajes en el monolito"
 
 ---
 
+---
+
+### Task 5: Una sola tabla de códigos SIC, la de la fuente que se usa
+
+Pedida por el usuario el 2026-08-12, ya empezada la ejecución del plan. **Es un cambio
+independiente del de los porcentajes** —otros archivos, y borrar tablas de un documento es más
+delicado que reformatear cifras—, así que va al final y con su propio ciclo de prueba.
+
+**Lo que se verificó en `brain_estudio_pasado.txt:1114-1160`.** La plantilla trae «Códigos SIC
+utilizados» tres veces, y **no son copias: es una por base de datos**, distinguidas por su pie
+de fuente:
+
+| Tabla | Fuente declarada en el pie |
+|---|---|
+| 13 | «Búsqueda en la base de datos mundial de empresas privadas… por Ryan, LLC» |
+| 14 | «Búsqueda de Capital IQ, publicado en septiembre de 2025 por Standard & Poor's» |
+| 15 | «Búsqueda de fundamentos de Refinitiv… por Refinitiv» |
+
+Hoy solo se usa **Capital IQ**, así que sobran la 13 y la 15.
+
+**Y hay un defecto de fondo, no solo tablas de más.** `tablasHtmlInforme.js` regenera las
+**tres** con los criterios de la única corrida que guarda el estudio, que es la de Capital IQ
+—su propia prueba lo declara: «las tres publican los mismos criterios»—. El informe que se
+radica atribuye por tanto a Ryan LLC y a Refinitiv un cribado que no hicieron. Eso es una
+atribución falsa de fuente en un documento que se presenta ante la DIAN, y es la razón por la
+que este cambio no es cosmético.
+
+**Preguntas que hay que resolver antes de implementar** (no se implementa a ciegas):
+
+1. **La numeración.** Al borrar la 13 y la 15 queda «Tabla 14» sola, y el documento pasa a
+   numerar 12, 14, 16. ¿Se renumera —lo que arrastra el índice y las referencias en la prosa—
+   o se acepta el hueco? El repo ya decidió una vez conservar la numeración de la plantilla
+   (`tituloDe` en `docxRelleno.js`), y esa decisión apunta a aceptar el hueco.
+2. **El índice del `.docx`.** Puede tener entradas y anclas a las tablas borradas. Hay que
+   comprobarlo antes: un índice que apunta a nada es peor que una tabla de más.
+3. **La prosa alrededor.** El párrafo anterior dice «debimos depurar **las bases de datos**»,
+   en plural, y el siguiente «a partir del anterior **criterio** de búsqueda». Con una sola
+   fuente, el plural deja de ser cierto.
+4. **Las dos rutas.** La de plantilla `.docx` y la HTML tienen cada una su sustituidor, y las
+   dos publican estas tablas. El cambio va en las dos o el informe sale distinto según la ruta.
+
+Sin esas respuestas la tarea no tiene pasos: se resuelven con el usuario y entonces se escriben.
+
 ## Al cerrar
 
 `npm test` al 100 % (piso 1170), `npm run lint --prefix frontend` sin advertencias nuevas, y
