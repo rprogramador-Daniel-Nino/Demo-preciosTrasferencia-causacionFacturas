@@ -81,7 +81,11 @@ export function analizarRango(estudio) {
      Ver la nota de la Task 0 del plan antes de cambiarlo. */
   const cumple = adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : 'CUMPLE';
 
-  return { stats, statsNoAjustado, statsAjustado, adj, cumple, filas };
+  /* `tPLI` sale del retorno porque el informe lo nombra en prosa —«obtuvo una rentabilidad
+     de (X)»— y hasta ahora no había forma de que esa cifra se actualizara: no existía campo
+     para el indicador de la parte examinada, así que la frase se radicaba con el del
+     contribuyente anterior. Ya se calculaba aquí; solo faltaba publicarlo. */
+  return { stats, statsNoAjustado, statsAjustado, tPLI, adj, cumple, filas };
 }
 
 /* Ruta unificada: el mismo motor que emite las fórmulas del Excel de soporte.

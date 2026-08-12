@@ -61,6 +61,11 @@ export const VOCABULARIO = [
   { campo: 'rango.mediana', etiqueta: 'Mediana', grupo: 'Rango' },
   { campo: 'rango.p75', etiqueta: 'Cuartil superior', grupo: 'Rango' },
   { campo: 'rango.cumple', etiqueta: 'Conclusión de cumplimiento', grupo: 'Rango' },
+  /* El indicador de la parte examinada. Faltaba, y el informe lo nombra en prosa —«la
+     empresa obtuvo una rentabilidad de (X)»— justo debajo de la tabla que lo publica: sin
+     campo no había dónde marcarlo, así que esa frase se radicaba con el porcentaje del
+     contribuyente anterior. */
+  { campo: 'rango.indicador', etiqueta: 'Indicador de la parte examinada', grupo: 'Rango' },
   { campo: 'uvt.valor', etiqueta: 'Valor de la UVT', grupo: 'Topes' },
   { campo: 'uvt.tope45k', etiqueta: 'Tope de 45.000 UVT', grupo: 'Topes' },
   { campo: 'uvt.tope10k', etiqueta: 'Tope de 10.000 UVT', grupo: 'Topes' },
@@ -133,9 +138,15 @@ export function valorDeCampo(estudio, campo, opciones = {}) {
   }
 
   if (campo.startsWith('rango.')) {
-    const { stats, statsAjustado, cumple } = analizarRango(estudio);
+    const { stats, statsAjustado, tPLI, cumple } = analizarRango(estudio);
     if (!stats) return null;
     if (campo === 'rango.cumple') return cumple;
+    /* El indicador del contribuyente NO se ajusta: se compara contra sí mismo, así que su
+       ajuste es cero. Es la misma cifra que la tabla del rango publica en su primera
+       columna. */
+    if (campo === 'rango.indicador') {
+      return tPLI === null || tPLI === undefined ? null : pctf(tPLI);
+    }
     /* `statsAjustado` y no `stats`: estos campos rellenan la frase que va DEBAJO de la tabla
        del rango —«se ubica entre el percentil 25 (X) y (Y)…»— y la tabla publica el rango
        ajustado. `stats` es el escenario que sostiene la conclusión, el que elige `useadj`,
