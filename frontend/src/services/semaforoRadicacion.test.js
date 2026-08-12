@@ -11,7 +11,10 @@ const DIAGNOSTICO_LIMPIO = {
 test('evaluarRadicacion bloquea si hay fugas del informe de referencia', () => {
   const veredicto = evaluarRadicacion({
     diagnostico: DIAGNOSTICO_LIMPIO,
-    fugasReferencia: [{ campo: 'vinc', valor: 'END GAME INTERACTIVE', cuenta: 69 }],
+    fugasReferencia: [{
+      campo: 'vinc', cuenta: 69,
+      texto: 'El dato del informe de referencia "END GAME INTERACTIVE" (vinc) sobrevive 69 vez(ces) en el documento generado, sin marcar. Debía ser "ACME INC": esas apariciones se van a radicar con el dato del contribuyente anterior.',
+    }],
     avisosTablas: [],
     camposVacios: [],
   });

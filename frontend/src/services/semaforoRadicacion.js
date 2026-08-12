@@ -17,8 +17,9 @@
 /**
  * @param {object} args
  * @param {object} args.diagnostico        salida de `diagnosticarCobertura`.
- * @param {Array<{campo:string, valor:string, cuenta:number}>} [args.fugasReferencia]
- *        salida de `revisarSalidaRenderizada` (avisos con `campo`, `valor`, `cuenta`).
+ * @param {Array<{campo:string, cuenta:number, texto:string}>} [args.fugasReferencia]
+ *        salida de `revisarSalidaRenderizada` — el `texto` ya trae redactado el valor
+ *        de referencia, cuántas veces sobrevive y cuál debía ser.
  * @param {string[]} [args.avisosTablas]   tablas que no se encontraron en la plantilla.
  * @param {string[]} [args.camposVacios]   campos marcados sin dato del estudio.
  * @returns {{listo:boolean, bloqueantes:string[], advertencias:string[]}}
@@ -29,10 +30,7 @@ export function evaluarRadicacion({ diagnostico, fugasReferencia, avisosTablas, 
   const advertencias = [];
 
   (fugasReferencia || []).forEach((f) => {
-    bloqueantes.push(
-      'El valor "' + f.valor + '" del informe de referencia (campo "' + f.campo + '") sobrevive ' +
-      f.cuenta + ' vez/veces sin marcar en el documento.'
-    );
+    bloqueantes.push(f.texto);
   });
 
   if (!d.comparablesCubiertas) {
