@@ -11,7 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
+  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioEnProsa,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
@@ -1263,4 +1263,62 @@ test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narra
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
   assert.ok(avisos.length >= 1);
+});
+
+/* ══════════════════ año gravable en la prosa ══════════════════ */
+
+test('el año gravable se actualiza en la prosa que sigue a la tabla', async () => {
+  /* «…del margen operacional ajustado durante el 2024» salía con el año del informe
+     anterior junto a las cifras del actual. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 18. Rango Intercuartil'),
+    tablaRango(),
+    parrafo('De acuerdo a los resultados obtenidos durante el 2024, la compañía cumplió.'),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+  const salida = actualizarAnioEnProsa(xml, 'Rango Intercuartil', 2025);
+  const texto = textoPlanoOoxml(salida);
+  assert.ok(texto.includes('durante el 2025'), 'el año pasa a ser el gravable');
+  assert.ok(!texto.includes('2024'), 'y el anterior se va');
+});
+
+test('el año NO se toca fuera de la prosa de esa tabla', async () => {
+  /* Lo que hace seguro a esto. En el informe real hay años legítimos que no son el
+     gravable: los encabezados del ANEXO B son los estados financieros disponibles de las
+     comparables —del año anterior— y las citas de fuentes llevan su propia fecha. Un
+     reemplazo global los falsearía. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 18. Rango Intercuartil'),
+    tablaRango(),
+    parrafo('Resultados del 2024 para la compañía.'),
+    new Paragraph('ANEXO B. Descripciones de comparables'),
+    new Table({
+      rows: [new TableRow({ children: ['Descripción', '2024'].map(
+        (t) => new TableCell({ children: [new Paragraph(t)] })) })],
+    }),
+    parrafo('Fondo Monetario Internacional (2023). World Economic Outlook, April 2022.'),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+  const salida = actualizarAnioEnProsa(xml, 'Rango Intercuartil', 2025);
+  const texto = textoPlanoOoxml(salida);
+
+  assert.ok(texto.includes('Resultados del 2025'), 'la prosa de la tabla sí se actualiza');
+  assert.ok(texto.includes('April 2022'), 'la fecha de la fuente citada NO se toca');
+  assert.ok(texto.includes('(2023)'), 'ni el año de la publicación');
+  /* El encabezado del ANEXO B es una celda de tabla, fuera del alcance. */
+  assert.strictEqual((texto.match(/2024/g) || []).length, 1,
+    'solo queda el 2024 legítimo del ANEXO B');
+});
+
+test('sin año en la prosa se avisa en vez de callar', async () => {
+  const avisos = [];
+  const buf = await plantilla([
+    new Paragraph('Tabla 18. Rango Intercuartil'),
+    tablaRango(),
+    parrafo('Una conclusión que no menciona ningún año.'),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+  actualizarAnioEnProsa(xml, 'Rango Intercuartil', 2025, avisos);
+  assert.strictEqual(avisos.length, 1);
+  assert.match(avisos[0], /revísalo a mano/);
 });
