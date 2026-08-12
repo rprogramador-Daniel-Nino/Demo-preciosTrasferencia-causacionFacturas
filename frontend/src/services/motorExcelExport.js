@@ -1,9 +1,10 @@
 import XLSX from 'xlsx-js-style';
 import { hojasMemoriaRangoOptimo } from './memoriaCalculoRangoOptimo.js';
 import { obtenerEstudioNormalizadoParaParche } from './estudioNormalizado.js';
+import { pctf } from '../utils/calculations.js';
 
 const CATEGORIA_RECHAZO = { filtro: 'Filtro (holding/saldo negativo/pérdida)', ia: 'Curación IA', rigor: 'Rigor funcional' };
-const puntaje = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '—');
+const puntaje = (v) => (typeof v === 'number' ? pctf(v) : '—');
 
 function hojaRechazadas(rechazadas) {
   const headers = ['Razón Social', 'ID', 'SIC', 'País', 'Categoría', 'Motivo de Rechazo'];

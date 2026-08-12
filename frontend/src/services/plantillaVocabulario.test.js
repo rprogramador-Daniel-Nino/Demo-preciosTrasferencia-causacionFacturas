@@ -127,7 +127,11 @@ test('los percentiles del rango salen como porcentaje y no como pesos redondeado
   };
   for (const campo of ['rango.p25', 'rango.mediana', 'rango.p75']) {
     const v = valorDeCampo(conComparables, campo);
-    assert.match(v, /^-?\d+\.\d{2}%$/, campo + ' debe salir como porcentaje, no como «' + v + '»');
+    /* Coma decimal, TRES decimales y espacio antes del signo: es el formato de `pctf` desde
+       que se unificó con el del monolito. Lo que esta prueba defiende no ha cambiado —que el
+       percentil salga como porcentaje y no como un peso redondeado, que era el defecto de
+       formatear con `fmt`—; solo se actualizó el formato que espera. */
+    assert.match(v, /^-?[\d.]+,\d{3} %$/, campo + ' debe salir como porcentaje, no como «' + v + '»');
     assert.notStrictEqual(v, '0', campo + ' no puede colapsar a cero');
   }
 });

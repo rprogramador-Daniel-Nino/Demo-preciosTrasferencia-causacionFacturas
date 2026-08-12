@@ -1979,7 +1979,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                           Por confirmar: se leyó «{comp.eeffCruce.nombreLeido || '(sin razón social)'}»
                           {comp.eeffCruce.modo === 'manual'
                             ? ' y el documento no permitía verificarlo'
-                            : ' · ' + Math.round((comp.eeffCruce.punt || 0) * 100) + '% de coincidencia'}
+                            : ' · ' + pctf(comp.eeffCruce.punt || 0) + ' de coincidencia'}
                         </div>
                       )}
                     </td>

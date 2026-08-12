@@ -132,6 +132,26 @@ test('el motivo de rechazo en fila nombra las dos empresas y no culpa al usuario
   assert.ok(/carga masiva/.test(motivo), 'no ofrece la salida al usuario');
 });
 
+test('la coincidencia se multiplica por 100 una sola vez y no duplica el signo', () => {
+  /* Dos errores que el enrutado a `pctf` puede introducir, y los dos dan una cadena creíble:
+     dejar el `* 100` que había imprime «10.000,000 %», y dejar el « %» del literal imprime
+     «100,000 % %». Un documento cargado en su propia fila coincide al 100 %. */
+  const motivo = motivoRechazoEnFila({ nombre: 'GLOBANT S.A.' }, COMPARABLES[0], 'x.pdf');
+  assert.ok(motivo.includes('100,000 % de coincidencia'),
+    `esperaba «100,000 % de coincidencia» y salió: ${motivo}`);
+  assert.ok(!motivo.includes('% %'), `el signo se duplicó: ${motivo}`);
+  assert.ok(!motivo.includes('10.000'), `se multiplicó dos veces: ${motivo}`);
+});
+
+test('el umbral del cruce sale con el mismo formato que la coincidencia', () => {
+  const c = cruzar({ nombre: 'BANCOLOMBIA S.A.' }, 'bancolombia.pdf', COMPARABLES);
+  const motivo = motivoCruce(c, { nombre: 'BANCOLOMBIA S.A.' }, 'bancolombia.pdf');
+  if (motivo.includes('que se exige')) {
+    assert.match(motivo, /\d+,\d{3} % que se exige/, `el umbral no lleva tres decimales: ${motivo}`);
+    assert.ok(!motivo.includes('% %'), `el signo se duplicó: ${motivo}`);
+  }
+});
+
 /* ─── Reparto de un lote ─── */
 
 test('reparte cada empresa a su fila y rechaza las ajenas con motivo', () => {

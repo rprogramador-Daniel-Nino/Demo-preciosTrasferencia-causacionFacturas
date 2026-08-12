@@ -321,7 +321,7 @@ test('la tasa se escribe una sola vez, en su propia fila, y en porcentaje', () =
   assert.ok(filaTasaIdx >= 0, 'existe la fila de la tasa');
   const celda = datos.celdas[filaTasaIdx][1];
   assert.strictEqual(celda.v, 0.0737, 'prime llega en porcentaje y se divide entre 100 aquí');
-  assert.strictEqual(celda.z, '0.00%');
+  assert.strictEqual(celda.z, '0.000%');
 });
 
 test('las tres comparables toman la tasa de esa única celda, no una propia', () => {
@@ -969,4 +969,26 @@ test('la hoja Resumen lee la estadística de AA-AG, no de S-Y, tras el traslado 
     assert.match(celda.f, /![A-Z]{2}\d+$/, `la referencia de ${celda.f} debería usar una columna AA-AG`);
     assert.ok(!/![S-Y]\d+$/.test(celda.f), `no puede seguir leyendo S-Y: ${celda.f}`);
   });
+});
+
+test('las celdas de porcentaje llevan tres decimales y las de razón se quedan en cuatro', () => {
+  /* Las dos cosas en la misma prueba a propósito: Berry y Cost Plus son RAZONES sin signo de
+     porcentaje —un Berry de 1,25 no es «125 %»— y ampliar el cambio de los decimales no debe
+     llevárselas por delante. */
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO_4, null);
+  const conFormato = (hoja, z) => hojas.find((h) => h.nombre === hoja)
+    .celdas.flat().filter((c) => c && c.z === z).length;
+
+  ['MO', 'MB', 'NCP'].forEach((m) => {
+    assert.ok(conFormato(m, '0.000%') > 0, `${m} debería traer celdas con formato 0.000%`);
+    assert.strictEqual(conFormato(m, '0.00%'), 0, `${m} no debería traer ninguna con 0.00%`);
+  });
+
+  ['Berry', 'CostPlus'].forEach((m) => {
+    assert.ok(conFormato(m, '0.0000') > 0, `${m} conserva sus cuatro decimales sin signo %`);
+  });
+
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  assert.ok(datos.celdas.flat().some((c) => c && c.z === '0.000%'),
+    'la hoja Datos también: el A.V. y la tasa son porcentajes');
 });

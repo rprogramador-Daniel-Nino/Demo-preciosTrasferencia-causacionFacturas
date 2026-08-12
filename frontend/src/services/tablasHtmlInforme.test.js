@@ -206,7 +206,7 @@ test('actualizarTablasMotorHtml pone las comparables del estudio en la tabla', (
     assert.ok(salida.includes(n), `debe aparecer ${n}`));
   assert.ok(!salida.includes('AKATSUKI'), 'y no las del informe anterior');
   assert.ok(!salida.includes('16.557%'), 'ni sus márgenes');
-  assert.match(salida, /18\.00%/, 'el margen se calcula con el motor del estudio');
+  assert.match(salida, /18,000 %/, 'el margen se calcula con el motor del estudio');
   assert.ok(!avisos.includes(TABLA_MARGENES), 'esa tabla estaba: no hay que avisar de ella');
   assert.ok(salida.includes('<p>siguiente'), 'el resto del documento queda intacto');
 });
@@ -470,10 +470,10 @@ test('textoPlanoHtml deshace etiquetas y entidades', () => {
   assert.strictEqual(textoPlanoHtml('<p><strong>Tabla&nbsp;19.</strong> A &amp; B</p>'),
     'Tabla 19. A & B');
 });
-test('los criterios de búsqueda se regeneran en las tres tablas homónimas', () => {
-  /* La plantilla trae «Códigos SIC utilizados» tres veces (Tablas 13, 14 y 15) y el estudio
-     guarda una sola corrida de cribado, así que las tres publican los mismos criterios.
-     Antes las tres se radicaban con el rango de SIC y la ventana fiscal del año anterior. */
+test('los criterios de búsqueda eliminan las tablas 13 y 15 redundantes y conservan la 14', () => {
+  /* La plantilla trae «Códigos SIC utilizados» tres veces (Tablas 13, 14 y 15) correspondientes
+     a las bases de datos de Ryan LLC, Capital IQ y Refinitiv. En este momento el sistema utiliza
+     únicamente Capital IQ, por lo que las tablas 13 y 15 se eliminan del reporte final. */
   const tabla = (n) =>
     '<p><strong> Tabla ' + n + '. Códigos SIC utilizados</strong></p>' +
     '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
@@ -489,7 +489,13 @@ test('los criterios de búsqueda se regeneran en las tres tablas homónimas', ()
   };
   const avisos = [];
   const salida = actualizarTablasMotorHtml(html, estudio, avisos);
-  assert.strictEqual((salida.match(/Entre 7371 y 7375/g) || []).length, 3, 'las tres tablas');
+  
+  // Ahora solo queda la Tabla 14 (Capital IQ):
+  assert.strictEqual((salida.match(/Entre 7371 y 7375/g) || []).length, 1, 'solo queda la tabla 14 con los criterios');
+  assert.ok(!salida.includes('Tabla 13. Códigos SIC utilizados'), 'se eliminó la tabla 13');
+  assert.ok(!salida.includes('Tabla 15. Códigos SIC utilizados'), 'se eliminó la tabla 15');
+  assert.ok(salida.includes('Tabla 14. Códigos SIC utilizados'), 'se conservó la tabla 14');
+  
   assert.ok(!salida.includes('Entre 1111 y 2222'), 'sobrevivió el criterio anterior');
   assert.ok(!salida.includes('Contiene viejo'), 'sobrevivió la palabra clave anterior');
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tablas sí estaban');
