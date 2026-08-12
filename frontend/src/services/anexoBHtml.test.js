@@ -237,7 +237,8 @@ test('formatearCifra respeta el separador y marca el hueco', () => {
   assert.strictEqual(formatearCifra(null, ','), '—');
   assert.strictEqual(formatearCifra('', ','), '—');
   assert.strictEqual(formatearCifra('no es número', ','), '—');
-  assert.strictEqual(formatearCifra(1234.6, ','), '1,235', 'se redondea al entero');
+  assert.strictEqual(formatearCifra(1234.6, ','), '1,234.6', 'no se redondea: conserva el decimal');
+  assert.strictEqual(formatearCifra(1234.6, '.'), '1.234,6', 'con separador de punto el decimal usa coma');
 });
 
 test('los rubros cubren las dos tablas del anexo', () => {

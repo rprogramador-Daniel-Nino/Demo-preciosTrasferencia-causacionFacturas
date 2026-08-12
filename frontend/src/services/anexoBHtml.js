@@ -156,17 +156,24 @@ function separadorDeMiles(bloqueHtml) {
   return null;
 }
 
-/** Formatea un entero con el separador indicado; «—» cuando no hay dato. */
+/**
+ * Formatea una cifra con el separador indicado, sin redondear: el anexo en tabla debe
+ * mostrar el dato tal como lo leyó el parser, no una versión truncada al entero. «—»
+ * cuando no hay dato.
+ */
 export function formatearCifra(valor, separador) {
   if (valor === null || valor === undefined || valor === '') return '—';
   const n = Number(valor);
   if (!Number.isFinite(n)) return '—';
-  const entero = Math.round(n);
-  const conComas = Math.abs(entero).toLocaleString('en-US');
-  const cuerpo = separador === '.' ? conComas.replace(/,/g, '.')
+  const negativo = n < 0;
+  const [enteroStr, decStr] = Math.abs(n).toString().split('.');
+  const conComas = Number(enteroStr).toLocaleString('en-US');
+  const parteEntera = separador === '.' ? conComas.replace(/,/g, '.')
     : separador === ',' ? conComas
-      : Math.abs(entero).toLocaleString('es-CO');
-  return (entero < 0 ? '-' : '') + cuerpo;
+      : Number(enteroStr).toLocaleString('es-CO');
+  const separadorDecimal = separador === '.' ? ',' : '.';
+  const cuerpo = decStr ? parteEntera + separadorDecimal + decStr : parteEntera;
+  return (negativo ? '-' : '') + cuerpo;
 }
 
 /* La etiqueta con la que la plantilla nombra un rubro, si la trae; si no, la del informe. */
