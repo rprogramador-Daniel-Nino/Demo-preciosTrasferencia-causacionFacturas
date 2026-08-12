@@ -378,6 +378,89 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
 }
 
+/* Un `<w:t>` que es SOLO una cifra: «2.05%», «-3.001%», «1,780 %». Es lo que Word deja
+   cuando la plantilla escribe un número entre paréntesis dentro de una frase, y es lo que
+   permite cambiarlo sin tocar una letra del resto. */
+const RX_SOLO_CIFRA = /^\s*\(?\s*-?[\d]+(?:[.,][\d]+)?\s*%\s*\)?\s*$/;
+
+/**
+ * Actualiza las cifras del párrafo que describe una tabla, conservando su redacción.
+ *
+ * Las tablas del informe se rehacen con los datos del estudio, pero el párrafo que las
+ * comenta seguía siendo el de la plantilla: la tabla decía que el rango va de 1,780 % a
+ * 8,800 % y la frase debajo hablaba de -3,001 % y 6,418 %, cifras del informe del año
+ * anterior. En un documento que se radica, esa contradicción la ve quien lo revise.
+ *
+ * Se sustituyen SOLO los números y en el orden en que los espera `cifras`, dejando intactas
+ * la redacción, la puntuación y el formato: cada valor vive en su propio `<w:t>`, así que
+ * cambiarlo no toca los runs vecinos.
+ *
+ * Si el párrafo no trae exactamente tantas cifras como se esperan, no se toca nada y se
+ * anota el aviso. Es deliberado: una frase con más números de los previstos —o con ellos en
+ * otro orden— se corrompería en silencio, y publicar una cifra en el sitio equivocado es
+ * peor que dejar la de la plantilla, que al menos se nota que no cuadra con la tabla.
+ *
+ * @param {string} xml
+ * @param {string|string[]} nombres  nombre de la tabla, como lo busca `localizarBloqueTabla`.
+ * @param {string[]} cifras  los valores ya formateados, en el orden en que aparecen.
+ * @param {string[]} [avisos]
+ * @returns {string} el XML, con la prosa actualizada donde se pudo.
+ */
+export function actualizarProsaTrasTabla(xml, nombres, cifras, avisos) {
+  let salida = String(xml || '');
+  const esperadas = (cifras || []).filter((c) => c !== null && c !== undefined);
+  if (esperadas.length !== (cifras || []).length || !esperadas.length) return salida;
+
+  /* Todas las apariciones de la tabla: el rango intercuartil sale dos veces en el informe
+     —en el resumen y en el desarrollo— y las dos llevan su propia frase debajo. */
+  for (let ocurrencia = 0; ocurrencia < 6; ocurrencia += 1) {
+    const bloque = localizarBloqueTabla(salida, nombres, { ocurrencia });
+    if (!bloque) break;
+    /* `localizarBloqueTabla` devuelve la última cuando se le piden más de las que hay, así
+       que sin esto la misma tabla se procesaría en bucle. */
+    if (ocurrencia > 0) {
+      const previo = localizarBloqueTabla(salida, nombres, { ocurrencia: ocurrencia - 1 });
+      if (previo && previo.inicio === bloque.inicio) break;
+    }
+
+    /* El primer párrafo CON TEXTO después de la tabla es su descripción. Los vacíos que la
+       plantilla deja en medio se saltan. */
+    const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+    rxParrafo.lastIndex = bloque.fin;
+    let parrafo = null;
+    for (let m = rxParrafo.exec(salida); m; m = rxParrafo.exec(salida)) {
+      if (!textoPlanoOoxml(m[0]).trim()) continue;
+      parrafo = m;
+      break;
+    }
+    if (!parrafo) continue;
+
+    const trozos = [...parrafo[0].matchAll(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g)];
+    const conCifra = trozos.filter((t) => RX_SOLO_CIFRA.test(t[2]));
+    if (conCifra.length !== esperadas.length) {
+      if (Array.isArray(avisos) && conCifra.length) {
+        avisos.push(`la descripción de «${bloque.titulo || nombres}» trae ${conCifra.length} `
+          + `cifra(s) y se esperaban ${esperadas.length}, así que se dejó como estaba`);
+      }
+      continue;
+    }
+
+    /* De atrás hacia adelante: cada sustitución mueve los índices de lo que va después. */
+    let nuevo = parrafo[0];
+    for (let i = conCifra.length - 1; i >= 0; i -= 1) {
+      const t = conCifra[i];
+      /* Se conservan los paréntesis que la plantilla ponga dentro del propio `<w:t>`. */
+      const abre = /^\s*\(/.test(t[2]) ? '(' : '';
+      const cierra = /\)\s*$/.test(t[2]) ? ')' : '';
+      nuevo = nuevo.slice(0, t.index) + t[1] + escaparXml(abre + esperadas[i] + cierra) + t[3]
+        + nuevo.slice(t.index + t[0].length);
+    }
+    salida = salida.slice(0, parrafo.index) + nuevo + salida.slice(parrafo.index + parrafo[0].length);
+  }
+
+  return salida;
+}
+
 /**
  * Sustituidor de tablas sobre un `document.xml`.
  *
@@ -604,6 +687,17 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       avisos.push('Tabla de rangos');
     }
   }
+
+  /* La frase que comenta el rango, debajo de la tabla: «…se ubica entre el percentil 25
+     (X) y (Y) percentil 75, la mediana con (Z)». La tabla se rehacía con el estudio y la
+     frase se quedaba con las cifras del informe anterior, contradiciéndola en el mismo
+     documento. El orden —P25, P75, mediana— es el de la redacción de la plantilla, no el
+     de la tabla, que lista la mediana en medio. */
+  xml = actualizarProsaTrasTabla(
+    xml, 'Rango Intercuartil',
+    [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
+    avisos,
+  );
 
   /* 13. Margen Operacional Compañías Comparables.
 
@@ -1126,18 +1220,24 @@ export function insertarImagenesAnexoB(zip, estudio) {
 
   let xml = zip.file(RUTA_DOC).asText();
 
-  // Encontrar sección ANEXO B y ANEXO C de forma insensible a mayúsculas
-  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
-  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
+  /* La sección del ANEXO B en el CUERPO, que es la ÚLTIMA aparición y no la primera: el
+     título sale también en la tabla de contenidos, al principio del documento. Con la
+     primera, `inicioB` y `finB` caían los dos dentro del índice —a 300 caracteres uno del
+     otro— y este relleno escribía las descripciones y los estados financieros ahí,
+     destruyendo la entrada del índice y dejando el ANEXO B de verdad con lo que trajera la
+     plantilla: el del año anterior. Se veía como si el anexo no se generara. */
+  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
+  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
 
-  const mB = rxB.exec(xml);
-  if (!mB) return { insertadas: 0 };
-  const inicioB = mB.index;
+  let inicioB = -1;
+  for (let m = rxB.exec(xml); m; m = rxB.exec(xml)) inicioB = m.index;
+  if (inicioB < 0) return { insertadas: 0 };
 
-  const mC = rxC.exec(xml);
+  /* Y el corte, en la primera mención del ANEXO C que venga DESPUÉS del cuerpo del B:
+     las del índice quedan detrás y tomarlas dejaría `finB` por delante de `inicioB`. */
   let finB = xml.length;
-  if (mC && mC.index > inicioB) {
-    finB = mC.index;
+  for (let m = rxC.exec(xml); m; m = rxC.exec(xml)) {
+    if (m.index > inicioB) { finB = m.index; break; }
   }
 
   let rels = zip.file(RUTA_RELS).asText();
