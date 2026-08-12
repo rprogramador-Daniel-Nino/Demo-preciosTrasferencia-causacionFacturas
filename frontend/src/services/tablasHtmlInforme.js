@@ -395,23 +395,42 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   sustituir(TABLA_RAZONES, filasRazones);
 
   /* ── Criterios de búsqueda ── La plantilla trae «Códigos SIC utilizados» tres veces
-     (Tablas 13, 14 y 15) y el estudio guarda UNA sola corrida de cribado, así que las tres
-     publican los mismos criterios. Es lo mismo que se hace con la ficha del vinculado, que
-     también viene repetida. De atrás hacia adelante porque cada sustitución desplaza los
-     offsets de las siguientes.
+     (Tablas 13, 14 y 15) correspondientes a las bases de datos de Ryan LLC, Capital IQ
+     y Refinitiv. En este momento, el sistema utiliza únicamente Capital IQ (Tabla 14)
+     como fuente de datos de la búsqueda.
 
-     OJO para quien las revise: si esas tres tablas de tu plantilla documentan búsquedas
-     DISTINTAS, esto las iguala. El estudio no tiene hoy dónde guardar más de una corrida. */
+     Por solicitud del usuario (2026-08-12), eliminamos las Tablas 13 y 15 para evitar
+     la duplicación de tablas redundantes y la atribución falsa de fuentes que no se
+     utilizaron, conservando únicamente la Tabla 14 (Capital IQ) reescrita con los
+     criterios del estudio. */
   const criterios = filasCriteriosScreening(study);
   if (!criterios.length) {
     anotar(TABLA_CRITERIOS);
   } else {
     const bloques = localizarTablasHtml(salida, TABLA_CRITERIOS);
-    if (!bloques.length) anotar(TABLA_CRITERIOS);
-    for (const bloque of [...bloques].reverse()) {
-      salida = salida.slice(0, bloque.inicio)
-        + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
-        + salida.slice(bloque.fin);
+    if (!bloques.length) {
+      anotar(TABLA_CRITERIOS);
+    } else {
+      /* De atrás hacia adelante para no alterar los offsets al eliminar o modificar */
+      for (const bloque of [...bloques].reverse()) {
+        const num = numeroDeTabla(bloque.titulo);
+        const idxOriginal = bloques.indexOf(bloque);
+
+        // Determinamos si es la Tabla 13 o 15 para borrarla. Si no tiene número pero hay 3,
+        // borramos la primera (índice 0, correspondiente a la 13) y la tercera (índice 2, a la 15).
+        const esParaEliminar = num === 13 || num === 15 || (num !== 14 && bloques.length === 3 && (idxOriginal === 0 || idxOriginal === 2));
+
+        if (esParaEliminar) {
+          // Eliminamos la tabla entera incluyendo el párrafo de su rótulo si existe
+          const inicioEliminar = bloque.rotulo ? bloque.rotulo.inicio : bloque.inicio;
+          salida = salida.slice(0, inicioEliminar) + salida.slice(bloque.fin);
+        } else {
+          // Conservamos la Tabla 14 (Capital IQ) y la reescribimos con los criterios reales
+          salida = salida.slice(0, bloque.inicio)
+            + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
+            + salida.slice(bloque.fin);
+        }
+      }
     }
   }
 
