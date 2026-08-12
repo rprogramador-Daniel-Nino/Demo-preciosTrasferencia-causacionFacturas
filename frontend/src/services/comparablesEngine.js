@@ -789,7 +789,7 @@ export function enriquecerUniverso(universo, comparables = [], auditoria = null)
  * frecuencia. Quitar las vallas y hacer JSON.parse falla en cuanto el modelo
  * añade una frase después del objeto, y entonces la curación se descartaba
  * entera. Aquí se escanean llaves balanceadas respetando las cadenas, que es lo
- * que hace `extraerJSONDeRespuestaIA` en el monolito.
+ * que hacía `extraerJSONDeRespuestaIA` en el monolito `index.html`, ya retirado.
  */
 export function extraerJSON(texto) {
   const s = String(texto || '');
