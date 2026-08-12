@@ -126,7 +126,7 @@ export async function extraerReferencia(datos) {
     /* Los items marcadores no traen `str`; sin el `|| ''` se colarían literales
        "undefined" en el texto de las páginas sin etiquetar. */
     const textoPlano = texto.items
-      .map((i) => (i.hasEOL ? ' ' : '') + (i.str || ''))
+      .map((i) => (i.hasEOL ? ' ' : '') + normalizarCaracteresMatematicos(i.str || ''))
       .join('')
       .trim();
 
@@ -603,6 +603,7 @@ function textoPorId(items, estilos = new Map()) {
       continue;
     }
     if (item.str) {
+      const strLimpia = normalizarCaracteresMatematicos(item.str);
       const id = pilaMarcas[pilaMarcas.length - 1];
       if (id) {
         const runs = porId.get(id) || [];
@@ -628,9 +629,9 @@ function textoPorId(items, estilos = new Map()) {
         /* Runs contiguos con el mismo estilo se funden: el PDF corta el texto en
            cada cambio de fuente y sin fundir saldría un `<strong>` por sílaba. */
         if (ultimo && mismoEstilo(ultimo, estilo)) {
-          ultimo.texto += separador + item.str;
+          ultimo.texto += separador + strLimpia;
         } else {
-          runs.push({ ...estilo, texto: separador + item.str });
+          runs.push({ ...estilo, texto: separador + strLimpia });
         }
       }
       saltoPendiente = false;
@@ -747,4 +748,59 @@ function emparejar(figuras, dibujosDePagina, tolerancia = 2) {
     }
     return null;
   });
+}
+
+/**
+ * Traduce un caracter alfanumérico matemático especializado (cursiva, negrita, monospace)
+ * de vuelta a su letra estándar equivalente (A-Z, a-z).
+ */
+function demath(char) {
+  const code = char.codePointAt(0);
+  if (!code) return char;
+
+  // Mayúsculas Negrita Matemática (U+1D400 - U+1D419) -> A-Z (65 - 90)
+  if (code >= 0x1D400 && code <= 0x1D419) return String.fromCharCode(65 + (code - 0x1D400));
+  // Minúsculas Negrita Matemática (U+1D41A - U+1D433) -> a-z (97 - 122)
+  if (code >= 0x1D41A && code <= 0x1D433) return String.fromCharCode(97 + (code - 0x1D41A));
+
+  // Mayúsculas Cursiva Matemática (U+1D434 - U+1D44D) -> A-Z (65 - 90)
+  if (code >= 0x1D434 && code <= 0x1D44D) return String.fromCharCode(65 + (code - 0x1D434));
+  // Minúsculas Cursiva Matemática (U+1D44E - U+1D467) -> a-z (97 - 122)
+  if (code >= 0x1D44E && code <= 0x1D467) return String.fromCharCode(97 + (code - 0x1D44E));
+
+  // Mayúsculas Negrita Cursiva (U+1D468 - U+1D481) -> A-Z (65 - 90)
+  if (code >= 0x1D468 && code <= 0x1D481) return String.fromCharCode(65 + (code - 0x1D468));
+  // Minúsculas Negrita Cursiva (U+1D482 - U+1D49B) -> a-z (97 - 122)
+  if (code >= 0x1D482 && code <= 0x1D49B) return String.fromCharCode(97 + (code - 0x1D482));
+
+  // Mayúsculas Caligráficas (Script) (U+1D49C - U+1D4B5) -> A-Z (65 - 90)
+  if (code >= 0x1D49C && code <= 0x1D4B5) return String.fromCharCode(65 + (code - 0x1D49C));
+  // Minúsculas Caligráficas (Script) (U+1D4B6 - U+1D4CF) -> a-z (97 - 122)
+  if (code >= 0x1D4B6 && code <= 0x1D4CF) return String.fromCharCode(97 + (code - 0x1D4B6));
+
+  // Mayúsculas Sans-serif Regular (U+1D5A0 - U+1D5B9) -> A-Z (65 - 90)
+  if (code >= 0x1D5A0 && code <= 0x1D5B9) return String.fromCharCode(65 + (code - 0x1D5A0));
+  // Minúsculas Sans-serif Regular (U+1D5BA - U+1D5D3) -> a-z (97 - 122)
+  if (code >= 0x1D5BA && code <= 0x1D5D3) return String.fromCharCode(97 + (code - 0x1D5BA));
+
+  // Mayúsculas Sans-serif (U+1D5D4 - U+1D5ED) -> A-Z (65 - 90)
+  if (code >= 0x1D5D4 && code <= 0x1D5ED) return String.fromCharCode(65 + (code - 0x1D5D4));
+  // Minúsculas Sans-serif (U+1D5EE - U+1D607) -> a-z (97 - 122)
+  if (code >= 0x1D5EE && code <= 0x1D607) return String.fromCharCode(97 + (code - 0x1D5EE));
+
+  // Mayúsculas Monoespacio (U+1D670 - U+1D689) -> A-Z (65 - 90)
+  if (code >= 0x1D670 && code <= 0x1D689) return String.fromCharCode(65 + (code - 0x1D670));
+  // Minúsculas Monoespacio (U+1D68A - U+1D6A3) -> a-z (97 - 122)
+  if (code >= 0x1D68A && code <= 0x1D6A3) return String.fromCharCode(97 + (code - 0x1D68A));
+
+  return char;
+}
+
+/**
+ * Normaliza una cadena de texto, traduciendo cualquier caracter matemático corrupto
+ * (procedente de fórmulas de LaTeX o editores de ecuaciones) a su letra ASCII equivalente legible.
+ */
+export function normalizarCaracteresMatematicos(str) {
+  if (typeof str !== 'string') return str;
+  return [...str].map(demath).join('');
 }
