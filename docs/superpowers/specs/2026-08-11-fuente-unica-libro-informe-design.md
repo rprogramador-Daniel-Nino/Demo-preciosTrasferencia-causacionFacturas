@@ -65,9 +65,34 @@ limitación está en `pliOf` (`utils/calculations.js:152`), que solo conoce `MO`
 
 No hace falta tocar `pliOf`: `indicadorAjustado(contribuyente, contribuyente, metodo,
 'ninguno', tasa)` devuelve el indicador propio del contribuyente para cualquiera de los
-cinco métodos, porque con `comp === contribuyente` los cuatro ratios de ajuste se anulan y
-la rama `'ninguno'` (`:202-207`) devuelve `numBase / baseC`. Eso cubre las filas 24
-(«Indicador del contribuyente») y 25 («Conclusión») de las cinco hojas de método.
+cinco métodos, porque la rama `'ninguno'` devuelve `numBase / baseC` **antes** de mirar
+ninguna partida de capital de trabajo. Eso cubre las filas 24 («Indicador del
+contribuyente») y 25 («Conclusión») de las cinco hojas de método.
+
+**Cuidado con generalizarlo a los otros seis sabores: con `comp === contribuyente` NO se
+anulan los cuatro ratios de ajuste, solo dos.** Verificado sobre
+`ajusteRangoCapitalTrabajo.js`, en el bloque donde se calculan las cuatro partidas:
+
+- `ajusteAR` y `ajusteAP` **sí** se anulan siempre. Los dos ratios —el del comparable y el
+  del contribuyente— dividen por la misma base (`baseC` y `baseS`, que con
+  `comp === contribuyente` son el mismo número), así que la resta da cero en los cinco
+  métodos.
+- `ajusteINV` y `ajustePPE` **no** se anulan en NCP ni en Cost Plus. El ratio del
+  comparable divide por `baseInvC`, que en esos dos métodos es el denominador depurado
+  (`(COGS − CxP) + opex` en NCP, `COGS − CxP` en Cost Plus), mientras que el del
+  contribuyente sigue dividiendo por `baseS`. Son denominadores distintos, así que la resta
+  no da cero. En MO, MB y Berry sí, porque ahí `baseInvC === baseC`.
+
+Y hay una segunda consecuencia en los mismos dos métodos: el denominador del indicador es
+`(usaDepurado || AJUSTAN_AR.has(ajuste)) ? denomAjustado : baseC`, y `usaDepurado` es cierto
+en NCP y Cost Plus, de modo que **los seis sabores ajustados dividen por el depurado
+`(COGS − CxP)` y no por `COGS`**. Sumadas las dos cosas, el indicador del contribuyente en
+NCP y en Cost Plus **cambia de un sabor a otro**: no es una sola cifra repetida siete veces.
+Medido sobre el fixture de END GAME, la diferencia contra `(S−C)/C` es del orden del 1 %
+—`0.918051` contra `0.908989` en Cost Plus—, suficiente para mover el veredicto de la fila
+«Conclusión». Cualquier hoja, tabla o prueba que emita una sola fórmula para las siete
+columnas del indicador del contribuyente es correcta en MO, MB y Berry y falsa en los otros
+dos.
 
 ### Qué tablas del informe puede alimentar el libro
 

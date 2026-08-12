@@ -364,12 +364,37 @@ const ESTADISTICOS = [
    derivan de la etiqueta del rubro en la hoja Datos, igual que hace el emisor, para que
    insertar un rubro no vuelva falsa esta prueba. */
 const CONTRIBUYENTE = {
-  MO: (S, C, OP) => `(${S}-${C}-${OP})/${S}`,
-  MB: (S, C) => `(${S}-${C})/${S}`,
-  Berry: (S, C, OP) => `(${S}-${C})/${OP}`,
-  CostPlus: (S, C) => `(${S}-${C})/${C}`,
-  NCP: (S, C, OP) => `(${S}-${C}-${OP})/(${C}+${OP})`,
+  MO: (R) => `(${R.S}-${R.C}-${R.OP})/${R.S}`,
+  MB: (R) => `(${R.S}-${R.C})/${R.S}`,
+  Berry: (R) => `(${R.S}-${R.C})/${R.OP}`,
+  /* Cost Plus y NCP dependen del sabor, y esa es la razón por la que esta tabla existe.
+     Con el contribuyente contra sí mismo, `ajusteAR` y `ajusteAP` se anulan —sus dos
+     ratios dividen por la misma base— pero `ajusteINV` y `ajustePPE` NO, porque el ratio
+     del comparable divide por el denominador depurado y el del contribuyente por la base.
+     Y `usaDepurado` hace que los seis sabores ajustados dividan por el depurado.
+
+     El libro publicaba aquí la fórmula de «sin ajuste» en las siete columnas con el valor
+     del motor al lado: doce celdas cuyo número no era el que su propia fórmula calculaba,
+     y que cambiaban al pulsar Ctrl+Alt+F9. Esta tabla es lo que impide que vuelva a pasar,
+     así que se escribe a mano y no se deriva del emisor. */
+  CostPlus: (R, clave) => tested(R, clave, `(${R.S}-${R.C})`, R.C, `(${R.C}-${R.AP})`),
+  NCP: (R, clave) => tested(R, clave, `(${R.S}-${R.C}-${R.OP})`,
+    `(${R.C}+${R.OP})`, `((${R.C}-${R.AP})+${R.OP})`),
 };
+
+/* La fórmula del indicador del contribuyente para un método con denominador depurado.
+   `num` es el numerador del método, `base` su base y `dep` el denominador depurado. */
+function tested(R, clave, num, base, dep) {
+  if (clave === 'ninguno') return `${num}/${base}`;
+  const aj = (p) => `((${p}/${dep})-(${p}/${base}))*(${base}*${R.T})`;
+  const restas = [];
+  if (clave === 'inv' || clave === 'aar_aap_inv' || clave === 'aar_aap_inv_ppe') {
+    restas.push(aj(R.INV));
+  }
+  if (clave === 'aar_aap_inv_ppe' || clave === 'ppe') restas.push(aj(R.PPE));
+  const numerador = restas.length ? `(${num}-${restas.join('-')})` : num;
+  return `${numerador}/${dep}`;
+}
 
 test('la fórmula de cada fila de estadística apunta a su propia columna y a su propio cuartil', () => {
   /* El otro punto ciego del valor en caché: la fórmula. Intercambiar los argumentos de
@@ -394,9 +419,20 @@ test('la fórmula de cada fila de estadística apunta a su propia columna y a su
     assert.ok(i >= 0, `la hoja Datos no trae el rubro «${etiqueta}»`);
     return `Datos!$B$${i + 1}`;
   };
-  const S = refRubro('Ventas netas');
-  const C = refRubro('Costo de ventas');
-  const OP = refRubro('Gastos operativos');
+  /* Las referencias del contribuyente. Las cinco de rubro se derivan de su etiqueta; la
+     de la tasa, de la fila donde el emisor la escribe, que va detrás del último rubro. */
+  const filaTasa = datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === 'Tasa de interés de referencia (Prime Rate)') + 1;
+  assert.ok(filaTasa > 0, 'la hoja Datos trae la fila de la tasa');
+  const R = {
+    S: refRubro('Ventas netas'),
+    C: refRubro('Costo de ventas'),
+    OP: refRubro('Gastos operativos'),
+    AP: refRubro('Cuentas por pagar comerciales'),
+    INV: refRubro('Inventarios'),
+    PPE: refRubro('Propiedades, planta y equipo'),
+    T: `Datos!$B$${filaTasa}`,
+  };
 
   let revisadas = 0;
   METODOS.forEach((metodo) => {
@@ -431,11 +467,11 @@ test('la fórmula de cada fila de estadística apunta a su propia columna y a su
       });
     });
 
-    /* El indicador del contribuyente: la misma fórmula en las siete columnas —el
-       contribuyente se ajusta contra sí mismo y sus ratios se anulan—, y la del método. */
-    const esperadaSujeto = CONTRIBUYENTE[metodo](S, C, OP);
+    /* El indicador del contribuyente: la del método, y en Cost Plus y NCP la de su sabor.
+       En MO, MB y Berry sí es la misma en las siete columnas. */
     LETRAS_SERIE.forEach((L, k) => {
-      assert.strictEqual(celdaDe('Indicador del contribuyente', k).f, esperadaSujeto,
+      assert.strictEqual(celdaDe('Indicador del contribuyente', k).f,
+        CONTRIBUYENTE[metodo](R, SABORES[k]),
         `${metodo}/${SABORES[k]}: la fórmula del indicador del contribuyente no es la del método`);
       revisadas++;
     });
@@ -670,6 +706,193 @@ test('los intermedios reproducen el indicador en los cinco métodos y en toda la
   /* Cinco métodos × cinco comparables × dos columnas de resultado. */
   assert.strictEqual(reconstruidas, 5 * ESTUDIO_INFORME.comparables.length * 2,
     `debería reconstruir 50 indicadores, reconstruyó ${reconstruidas}`);
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   La novena forma de separar el libro del informe: que la FÓRMULA no calcule lo que
+   dice su propio VALOR.
+
+   El resto de este archivo coteja dos cosas: que el valor en caché sea el del motor, y
+   que el TEXTO de las fórmulas de estadística sea el que una tabla escrita a mano dice
+   que debe ser. Ninguna de las dos evalúa la fórmula. Entre las dos queda un hueco por
+   el que cabe una celda que publique el número correcto —el del informe— con una
+   fórmula que, al abrir el .xlsx, lo cambie por otro. El lector que no recalcula ve el
+   número del informe; el que recalcula ve otro, y la fila «Conclusión», que compara la
+   FÓRMULA y no el valor, puede cambiar de veredicto entre uno y otro.
+
+   Por ahí se coló el defecto del indicador del contribuyente de Cost Plus y NCP, donde
+   la hoja emitía `(S−C)/C` en las siete columnas mientras el motor devolvía, para los
+   seis sabores ajustados, un número calculado sobre el denominador depurado.
+
+   El evaluador de abajo cubre solo las fórmulas ARITMÉTICAS —referencias, `+ − * / ( )`
+   y números— y las recalcula a partir de los valores en caché de las celdas que
+   referencian. Las que llevan función (`IF`, `QUARTILE`, `COUNT`, `SUMPRODUCT`,
+   `COUNTIF`…) quedan fuera de su alcance a propósito: de esas se ocupa la prueba que
+   rehace MIN, MAX y QUARTILE.INC sobre la serie de la propia hoja.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Índice 0-based de una columna a partir de sus letras: A→0, Z→25, AA→26, AG→32. */
+const indiceDeColumna = (letras) => [...letras].reduce(
+  (acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+
+/* Una referencia con hoja opcional: `Datos!$B$4`, `MO!AA30`, `'Selección comparables'!B9`
+   o `AA30` a secas. El `$` es indiferente aquí: no hay copiado de celdas que lo use. */
+const REF = /^(?:(?:'([^']+)'|([A-Za-z][A-Za-z0-9]*))!)?\$?([A-Z]{1,3})\$?(\d+)/;
+const NUMERO = /^\d+(?:\.\d+)?/;
+
+/* Fuera de alcance: la fórmula lleva una función, un rango o una comparación, o
+   referencia una celda que no trae valor en caché. Se distingue de un fallo real. */
+const FUERA_DE_ALCANCE = Symbol('fuera de alcance');
+
+/** Recalcula toda fórmula aritmética del libro a partir de los valores en caché de las
+ *  celdas que referencia, y la compara con el valor en caché de la propia celda.
+ *  Devuelve { evaluadas, discrepancias }, ambas con la celda localizada por hoja, fila
+ *  1-based y columna, para que el mensaje diga dónde está el problema. */
+function cotejarFormulaContraValor(hojas) {
+  const porNombre = new Map(hojas.map((h) => [h.nombre, h.celdas || []]));
+
+  const valorDe = (hojaActual, ref) => {
+    const celdas = porNombre.get(ref.hoja || hojaActual);
+    const f = celdas && celdas[ref.fila - 1];
+    const celda = f && f[ref.col];
+    if (!celda || typeof celda.v !== 'number' || !Number.isFinite(celda.v)) throw FUERA_DE_ALCANCE;
+    return celda.v;
+  };
+
+  const tokenizar = (formula) => {
+    const tokens = [];
+    let resto = formula;
+    while (resto.length) {
+      const ref = REF.exec(resto);
+      if (ref) {
+        tokens.push({ tipo: 'ref', hoja: ref[1] || ref[2] || null,
+          col: indiceDeColumna(ref[3]), fila: Number(ref[4]) });
+        resto = resto.slice(ref[0].length);
+        continue;
+      }
+      const numero = NUMERO.exec(resto);
+      if (numero) {
+        tokens.push({ tipo: 'num', valor: Number(numero[0]) });
+        resto = resto.slice(numero[0].length);
+        continue;
+      }
+      if ('+-*/()'.includes(resto[0])) {
+        tokens.push({ tipo: resto[0] });
+        resto = resto.slice(1);
+        continue;
+      }
+      return null; // función, rango, texto o comparación: no es aritmética pura
+    }
+    return tokens;
+  };
+
+  /* Descenso recursivo con la precedencia de Excel para los cuatro operadores, y de
+     izquierda a derecha dentro de cada nivel, que es el mismo orden en que el motor
+     encadena sus restas: `numBase − AR + AP − INV`. */
+  const evaluar = (tokens, hojaActual) => {
+    let i = 0;
+    const siguiente = () => tokens[i];
+    const factor = () => {
+      const t = siguiente();
+      if (!t) throw FUERA_DE_ALCANCE;
+      if (t.tipo === '-') { i += 1; return -factor(); }
+      if (t.tipo === '+') { i += 1; return factor(); }
+      if (t.tipo === '(') {
+        i += 1;
+        const v = expresion();
+        if (!siguiente() || siguiente().tipo !== ')') throw FUERA_DE_ALCANCE;
+        i += 1;
+        return v;
+      }
+      if (t.tipo === 'num') { i += 1; return t.valor; }
+      if (t.tipo === 'ref') { i += 1; return valorDe(hojaActual, t); }
+      throw FUERA_DE_ALCANCE;
+    };
+    const termino = () => {
+      let v = factor();
+      while (siguiente() && (siguiente().tipo === '*' || siguiente().tipo === '/')) {
+        const op = tokens[i].tipo;
+        i += 1;
+        const d = factor();
+        v = op === '*' ? v * d : v / d;
+      }
+      return v;
+    };
+    const expresion = () => {
+      let v = termino();
+      while (siguiente() && (siguiente().tipo === '+' || siguiente().tipo === '-')) {
+        const op = tokens[i].tipo;
+        i += 1;
+        const d = termino();
+        v = op === '+' ? v + d : v - d;
+      }
+      return v;
+    };
+    const v = expresion();
+    if (i !== tokens.length) throw FUERA_DE_ALCANCE;
+    return v;
+  };
+
+  const evaluadas = [];
+  const discrepancias = [];
+  hojas.forEach((h) => (h.celdas || []).forEach((fila, r) => (fila || []).forEach((celda, col) => {
+    /* Solo las celdas que hacen las DOS afirmaciones: traen fórmula y traen valor. Una
+       celda sin valor no afirma nada que se pueda contradecir. */
+    if (!celda || !celda.f || celda.t !== 'n' || !Number.isFinite(celda.v)) return;
+    const tokens = tokenizar(String(celda.f));
+    if (!tokens) return;
+    let calculado;
+    try {
+      calculado = evaluar(tokens, h.nombre);
+    } catch (e) {
+      if (e === FUERA_DE_ALCANCE) return;
+      throw e;
+    }
+    const donde = {
+      celda: `${h.nombre}!fila ${r + 1}, columna ${col}`, formula: celda.f,
+      enCache: celda.v, recalculado: calculado,
+    };
+    evaluadas.push(donde);
+    /* Tolerancia relativa con un piso absoluto: las columnas de ajuste van en cientos de
+       millones y los indicadores en centésimas. La aritmética es la misma y en la misma
+       secuencia que la del motor, así que lo normal es la coincidencia exacta; el margen
+       está para que un reordenamiento inocuo no dé un falso positivo, no para tapar una
+       diferencia real —las que esta prueba busca son del orden del uno por ciento—. */
+    if (Math.abs(calculado - celda.v) > 1e-9 * Math.max(1, Math.abs(celda.v))) {
+      discrepancias.push(donde);
+    }
+  })));
+  return { evaluadas, discrepancias };
+}
+
+test('cada fórmula aritmética del libro calcula el valor que la propia celda publica', () => {
+  const norm = obtenerEstudioNormalizadoParaParche(ESTUDIO_INFORME);
+  const { evaluadas, discrepancias } = cotejarFormulaContraValor(libroDe(norm));
+
+  /* Piso de la evaluación, para que la prueba no pueda pasar sin evaluar nada: solo las
+     cinco hojas de método ya traen, por cada una de las cinco comparables, las siete
+     cifras de A–I, la tasa, los nueve intermedios J–R y los siete indicadores S–Y. Es un
+     piso y no una igualdad porque añadir una columna con valor es una mejora, no una
+     regresión, y no debería obligar a tocar esta cuenta. */
+  assert.ok(evaluadas.length >= 5 * 5 * 24,
+    `debería evaluar al menos 600 fórmulas del libro, evaluó ${evaluadas.length}`);
+
+  /* Y las siete columnas del indicador del contribuyente de las cinco hojas están DENTRO
+     del conjunto evaluado. Es la guarda que impide que esta prueba quede verde por haber
+     dejado fuera justo la fila donde vivía el defecto: son fórmulas aritméticas puras
+     —referencias a la hoja Datos y los cuatro operadores—, así que tienen que aparecer
+     las 35. */
+  const delContribuyente = evaluadas.filter(
+    (c) => METODOS.some((m) => c.celda.startsWith(`${m}!`))
+      && SABORES.some((_, k) => c.celda.endsWith(`columna ${26 + k}`)));
+  assert.strictEqual(delContribuyente.length, 5 * 7,
+    'las 35 celdas del indicador del contribuyente entran en el cotejo, '
+    + `entraron ${delContribuyente.length}`);
+
+  assert.deepStrictEqual(discrepancias, [],
+    `${discrepancias.length} de ${evaluadas.length} fórmulas no calculan el valor que su `
+    + `celda publica:\n${discrepancias.map((d) => `  ${d.celda}: ${d.formula}\n`
+      + `    en caché ${d.enCache} · la fórmula da ${d.recalculado}`).join('\n')}`);
 });
 
 test('el segmento excluido sale de un solo sitio', () => {
