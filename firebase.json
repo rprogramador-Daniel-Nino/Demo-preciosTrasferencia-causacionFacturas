@@ -31,6 +31,20 @@
         ]
       },
       {
+        "//": "Las dos entradas de la aplicación llegan por rewrite y su URL no termina en .html, así que el patrón de arriba NO las cubre: las cabeceras se resuelven contra la ruta pedida, no contra el archivo de destino. Sin esto quedaban con el max-age por defecto de una hora, que es justo el escenario que el comentario anterior dice evitar —el navegador conserva el HTML viejo y sigue pidiendo un bundle que ya no existe—, y fue lo que ocurrió el 2026-08-12 tras desplegar el gestor.",
+        "source": "/gestor-reportes-inicio",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "//": "La raíz sirve el Sistema PT por el rewrite ** y tiene el mismo problema que la ruta de arriba.",
+        "source": "/",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
         "//": "Los assets llevan el hash del contenido en el nombre, así que si cambian cambia la URL y se pueden cachear indefinidamente.",
         "source": "/gestor-reportes/assets/**",
         "headers": [
