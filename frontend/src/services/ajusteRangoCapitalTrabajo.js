@@ -383,10 +383,25 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
     };
   }
 
-  /* Indicador del contribuyente con el mismo método y ajuste, para la conclusión.
-     El contribuyente se ajusta contra sí mismo: los ratios se cancelan y el
-     ajuste es cero, así que su indicador ajustado es el de siempre. Se calcula
-     igual por la vía general para no duplicar fórmulas. */
+  /* Indicador del contribuyente con el mismo método y ajuste, para la conclusión. Se
+     calcula por la vía general —el contribuyente contra sí mismo— para no duplicar
+     fórmulas, y por esa vía sale bien en los cinco métodos.
+
+     No es cierto, y durante un tiempo estuvo escrito aquí que sí, que ajustar el
+     contribuyente contra sí mismo anule los cuatro ratios y deje el indicador de siempre:
+     solo se anulan DOS de las cuatro partidas.
+
+       · `ajusteAR` y `ajusteAP` se anulan siempre: los dos ratios de la resta dividen por
+         la misma base (`baseC` y `baseS` son el mismo número cuando comp es el
+         contribuyente).
+       · `ajusteINV` y `ajustePPE` NO se anulan en NCP ni en Cost Plus: el ratio del
+         comparable divide por `baseInvC` —el denominador depurado— y el del contribuyente
+         por `baseS`. En MO, MB y Berry sí se anulan, porque ahí `baseInvC === baseC`.
+
+     Y en esos dos mismos métodos `usaDepurado` hace que los seis sabores ajustados dividan
+     por el depurado y no por la base. Así que aquí `sujeto` DEPENDE del sabor en NCP y en
+     Cost Plus, y es una sola cifra solo en los otros tres. Quien publique este número tiene
+     que publicarlo sabor por sabor. */
   const sujeto = indicadorAjustado(contribuyente, contribuyente, kind, tipo, tasaEstudio);
 
   let cumple = 'CUMPLE'; // comportamiento heredado: sin rango, CUMPLE

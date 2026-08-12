@@ -99,6 +99,44 @@ test('envolturaDe reproduce la envoltura del molde', () => {
   assert.strictEqual(span.abre, '<span style="font-size:9pt">');
 });
 
+test('envolturaDe descarta el span de marca y conserva el resto de la envoltura', () => {
+  /* El marcador de la IA envuelve la cifra del informe de referencia en
+     `<span data-campo>`. Si el molde lo reproduce, `plantillaRenderer` rellena esa marca
+     en TODAS las filas nuevas con el mismo campo. */
+  assert.deepStrictEqual(envolturaDe('<p><span data-campo="t_cash">9.999</span></p>'),
+    { abre: '<p>', cierra: '</p>' });
+  assert.deepStrictEqual(envolturaDe('<span data-campo="t_cash">9.999</span>'),
+    { abre: '', cierra: '' });
+  /* Un span de ESTILO no es una marca y sigue conservándose. */
+  assert.strictEqual(envolturaDe('<span style="font-size:9pt">Fuente</span>').abre,
+    '<span style="font-size:9pt">');
+});
+
+test('el marcador del molde no se reproduce en las filas nuevas (Tabla 10)', () => {
+  /* Regresión de la Tabla 10 «Activos a 31 de diciembre»: la primera fila de datos de la
+     plantilla trae la marca `t_cash` sobre el efectivo, así que las diez filas heredaban
+     esa marca y el informe publicaba el efectivo repetido en los diez rubros —con el
+     análisis vertical correcto al lado, que es lo que delataba que las dos columnas no
+     salían del mismo sitio. */
+  const tabla = '<table>'
+    + '<tr><th><p>Cifras Expresadas en pesos colombianos</p></th><th><p>2024</p></th><th><p>A.V. 2024</p></th></tr>'
+    + '<tr><td><p>Efectivo y equivalentes de efectivo</p></td>'
+    + '<td><p><span data-campo="t_cash">9.999</span></p></td><td><p>0.50%</p></td></tr>'
+    + '<tr><td><p>Inversiones asociadas</p></td><td><p>888</p></td><td><p>47.00%</p></td></tr>'
+    + '</table>';
+
+  const salida = reescribirFilasHtml(tabla, [
+    ['Efectivo y equivalentes de efectivo', '12.417.756', '0.57%'],
+    ['Inversiones asociadas', '1.031.278.520', '47.34%'],
+    ['Total, Activos', '2.178.554.000', '100.00%'],
+  ]);
+
+  assert.ok(!/data-campo/.test(salida), 'ninguna fila nueva conserva la marca del molde');
+  assert.match(salida, /<td><p>12\.417\.756<\/p><\/td>/, 'cada fila publica su propia cifra');
+  assert.match(salida, /<td><p>1\.031\.278\.520<\/p><\/td>/);
+  assert.match(salida, /<td><p>2\.178\.554\.000<\/p><\/td>/);
+});
+
 test('el párrafo de dentro de la celda se conserva', () => {
   /* Medido sobre la plantilla de END GAME: sus celdas son `<td><p>AKATSUKI INC.</p></td>`.
      El CSS del previo estiliza `td p`, así que emitir `<td>` a secas cambiaba el

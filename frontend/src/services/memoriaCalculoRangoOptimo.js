@@ -180,9 +180,16 @@ const HOLDING_FORMULA = (ref) => 'IF(OR('
  *                 es la tasa EN PORCENTAJE (7.37, no 0.0737): esta función la divide
  *                 entre 100 al escribir la celda de la tasa en la hoja Datos (la fila
  *                 la fija `FILA_TASA()`, no un número quemado aquí), así que quien la
- *                 llame no debe hacerlo antes. `cmode` y `amb` solo se escriben en la
- *                 hoja Datos en esta versión; el filtrado del cuartil por ámbito lo
- *                 aplica quien llama.
+ *                 llame no debe hacerlo antes.
+ *
+ *                 `cmode` y `amb` NO son un dato decorativo de la hoja Datos: el
+ *                 filtrado del cuartil por ámbito lo aplica ESTA función. `cmode` se
+ *                 escribe en la fila que fija `FILA_AMBITO()` y el `amb` de cada
+ *                 comparable en la columna «Ámbito» de la tabla; la hoja de método los
+ *                 lee en su columna «Entra por ámbito» (Z), y las siete columnas de
+ *                 serie (AA–AG) —las únicas que cuartilan MIN, MAX y QUARTILE— solo
+ *                 dejan pasar las filas que entran. Quien llama no tiene que filtrar
+ *                 nada antes ni después: pasar la muestra completa es lo correcto.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
@@ -240,6 +247,10 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   };
 
   const filaTot = filaDeRubro('t_act_tot');
+  /* El total de activos, calculado una vez: lo escribe la celda de su propio rubro y
+     lo divide el A.V. de los otros diez. Leerlo dos veces del estudio abriría la
+     puerta a que la celda y el valor en caché partieran de cifras distintas. */
+  const totalActivos = valorDeRubro('t_act_tot');
   RUBROS_EXAMINADA.forEach((r) => {
     const celdas = [cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))];
     /* A.V. como fórmula y no como número: es lo que hace que corregir una cifra en
@@ -249,10 +260,19 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        el total en cero, la celda queda en blanco en vez de mostrar #DIV/0!): un
        estudio que llegue a esta hoja sin `t_act_tot` no debe romper el libro, sea por
        la ruta del Motor de Comparables o por cualquier otro llamador presente o
-       futuro que no traiga el dato. */
+       futuro que no traiga el dato.
+
+       Y con su valor en caché, que es el mismo cociente que publica
+       `verticalSobreActivos` en el ANEXO A. Sin él las diez celdas del vertical salían
+       vacías para cualquier lector que no recalcule, que es justo lo que este libro
+       dejó de hacer en el resto de sus hojas. La guarda del valor es la MISMA que la de
+       la fórmula: con el total en cero la fórmula devuelve "" y aquí no se escribe
+       valor, porque un cero fingiría un vertical calculado sobre un balance que no
+       llegó. */
     if (r.av) {
       const fila = filaDeRubro(r.clave);
-      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%'));
+      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%',
+        totalActivos ? valorDeRubro(r.clave) / totalActivos : undefined));
     }
     datos.push(celdas);
   });
@@ -277,7 +297,13 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     datos.push([
       cTxt(c.name), cNum(num(c.s) || 0), cNum(num(c.c) || 0), cNum(num(c.op) || 0),
       cNum(num(c.ar) || 0), cNum(num(c.inv) || 0), cNum(num(c.ap) || 0),
-      cNum(num(c.ppe) || 0), cFor(`$B$${FILA_TASA()}`, '0.00%'),
+      cNum(num(c.ppe) || 0),
+      /* La tasa sigue siendo la REFERENCIA a la celda única —esa es la fuga que este
+         libro cierra: la plantilla de Capital IQ traía aquí la tasa del país de cada
+         comparable—, y además su valor en caché, que es el de esa misma celda y no uno
+         propio. Sin él la columna salía vacía en cualquier lector que no recalcule, y
+         de ella cuelga la columna I de las cinco hojas de método. */
+      cFor(`$B$${FILA_TASA()}`, '0.00%', tasaDelEstudio),
       cTxt(c.amb === 'Nac' ? 'Nac' : 'Int'),
     ]);
   });
@@ -297,7 +323,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   };
   const celdaTasa = `B${FILA_TASA()}`;
   anotarTasa(2, 'PARÁMETRO — TASA DE INTERÉS DE LOS AJUSTES DE CAPITAL DE TRABAJO', null);
-  anotarTasa(3, 'Tasa aplicada', cFor(`$B$${FILA_TASA()}`, '0.00%'));
+  /* También con valor: es la celda que un auditor mira primero para saber con qué tasa
+     se armaron los ajustes, y refleja la editable en vez de duplicarla. */
+  anotarTasa(3, 'Tasa aplicada', cFor(`$B$${FILA_TASA()}`, '0.00%', tasaDelEstudio));
   datos[3][13] = cTxt(`← única celda editable: ${celdaTasa} alimenta a los ` + n + ' comparables');
   anotarTasa(4, 'Fuente', cTxt(
     'Board of Governors of the Federal Reserve System, H.15 Selected Interest Rates — '
@@ -514,23 +542,70 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const filaP75 = celdas.length; // 1-based de P75 (ya empujada)
     celdas.push(statRow('Máximo', 'MAX', 'max'));
     const filaMax = celdas.length; // 1-based
-    // indicador del contribuyente (mismo con cualquier ajuste)
-    const testedFor = M.base === 'ventas'
-      ? (M.num === 'ebit' ? `(${S_s}-${C_s}-${OP_s})/${S_s}` : `(${S_s}-${C_s})/${S_s}`)
-      : M.base === 'opex' ? `(${S_s}-${C_s})/${OP_s}`
-      : M.base === 'cogs' ? `(${S_s}-${C_s})/${C_s}`
-      : `(${S_s}-${C_s}-${OP_s})/(${C_s}+${OP_s})`;
+    /* ─── Indicador del contribuyente, sabor por sabor ───
+       En MO, MB y Berry es UNA cifra para los siete sabores: los cuatro ajustes del
+       contribuyente contra sí mismo se anulan y el denominador es la base en todos.
+
+       En Cost Plus y NCP NO. Es el defecto que la revisión de esta rama encontró
+       midiendo el libro: la hoja emitía la fórmula de «sin ajuste» en las siete columnas
+       y le adosaba el valor del motor, que no es ese. Dos cosas lo rompen, las dos en
+       `desgloseAjuste`:
+
+         · `ajusteINV` y `ajustePPE` no se anulan, porque el ratio del comparable divide
+           por el denominador depurado y el del contribuyente por la base. Los de CxC y
+           CxP sí, que dividen los dos por la base.
+         · `usaDepurado` hace que los seis sabores ajustados dividan por el depurado.
+
+       Así que la fórmula se construye por sabor, replicando lo que hace el motor. El
+       número bueno es el del motor —es el que el informe publica y contra el que se
+       cuartilan las comparables de estos métodos—, así que es la FÓRMULA la que se
+       corrige para alcanzarlo, nunca el valor: al revés se rompería la paridad
+       libro↔informe, que es lo único que este libro existe para garantizar. */
+    const T_s = D(`$B$${FILA_TASA()}`);
+    const baseTested = M.base === 'ventas' ? S_s
+      : M.base === 'opex' ? OP_s
+      : M.base === 'cogs' ? C_s
+      : `(${C_s}+${OP_s})`;
+    const numTested = M.num === 'ebit'
+      ? `(${S_s}-${C_s}-${OP_s})`
+      : `(${S_s}-${C_s})`;
+    /* Denominador depurado del contribuyente: el mismo `(COGS−CxP)` de Cost Plus y
+       `(COGS−CxP)+opex` de NCP, sobre las celdas de la hoja Datos. */
+    const depTested = M.hoja === 'CostPlus' ? `(${C_s}-${AP_s})`
+      : M.hoja === 'NCP' ? `((${C_s}-${AP_s})+${OP_s})`
+      : null;
+    /* Los dos ajustes que sobreviven, en la forma exacta de `desgloseAjuste`:
+       ((partida / depurado) − (partida / base)) × (base × tasa). */
+    const ajTested = (partida) => `((${partida}/${depTested})-(${partida}/${baseTested}))`
+      + `*(${baseTested}*${T_s})`;
+    const testedPorSabor = (clave) => {
+      if (!M.dep) return `${numTested}/${baseTested}`;
+      if (clave === 'ninguno') return `${numTested}/${baseTested}`;
+      const restas = [];
+      if (clave === 'inv' || clave === 'aar_aap_inv' || clave === 'aar_aap_inv_ppe') {
+        restas.push(ajTested(INV_s));
+      }
+      if (clave === 'aar_aap_inv_ppe' || clave === 'ppe') restas.push(ajTested(PPE_s));
+      const numerador = restas.length ? `(${numTested}-${restas.join('-')})` : numTested;
+      return `${numerador}/${depTested}`;
+    };
     const filaTested = celdas.length + 1;
     {
       const fila = filaEstadistica('Indicador del contribuyente');
       /* `testedFor` no cambia: es la misma fórmula. Lo que cambia es la columna
          donde se escribe.
 
-         El valor sale de `sujeto`, el indicador del contribuyente contra sí mismo, que
-         es el mismo para los siete sabores porque sus ratios de ajuste se anulan. Se
-         toma del motor y no de `pliOf`, que solo conoce MO, MB y Berry: por esta vía las
-         hojas de Cost Plus y NCP también traen su valor. */
-      RES.forEach((L, k) => fila.push(cFor(testedFor, M.fmt, porSabor[k].sujeto)));
+         El valor sale de `sujeto`, que el motor calcula por la vía general —el
+         contribuyente contra sí mismo— y que en Cost Plus y NCP **depende del sabor**.
+         Se toma del motor y no de `pliOf`, que solo conoce MO, MB y Berry: por esta vía
+         las hojas de esos dos métodos también traen su valor.
+
+         La fórmula la construye `testedPorSabor`, que replica lo que el motor hace para
+         ese sabor. Fórmula y valor tienen que decir lo mismo: la prueba de paridad
+         recalcula cada fórmula aritmética del libro y compara con el valor publicado, así
+         que una discrepancia aquí sale en rojo. */
+      RES.forEach((L, k) => fila.push(
+        cFor(testedPorSabor(AJUSTES[k].clave), M.fmt, porSabor[k].sujeto)));
       celdas.push(fila);
     }
     // conclusión CUMPLE/NO CUMPLE por ajuste
