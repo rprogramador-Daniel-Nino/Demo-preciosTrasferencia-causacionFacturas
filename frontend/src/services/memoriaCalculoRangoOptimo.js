@@ -47,11 +47,11 @@ import { num } from '../utils/calculations.js';
    indicador y se escalan las partidas; `num` el numerador; `dep` si usa el
    denominador depurado (COGS−CxP [+opex]) para NCP y Cost Plus. */
 const METODOS = [
-  { hoja: 'MO', nombre: 'Margen Operacional', base: 'ventas', num: 'ebit', dep: false, fmt: '0.00%' },
-  { hoja: 'MB', nombre: 'Margen Bruto', base: 'ventas', num: 'gp', dep: false, fmt: '0.00%' },
+  { hoja: 'MO', nombre: 'Margen Operacional', base: 'ventas', num: 'ebit', dep: false, fmt: '0.000%' },
+  { hoja: 'MB', nombre: 'Margen Bruto', base: 'ventas', num: 'gp', dep: false, fmt: '0.000%' },
   { hoja: 'Berry', nombre: 'Índice de Berry', base: 'opex', num: 'gp', dep: false, fmt: '0.0000' },
   { hoja: 'CostPlus', nombre: 'Cost Plus', base: 'cogs', num: 'gp', dep: true, fmt: '0.0000' },
-  { hoja: 'NCP', nombre: 'Net Cost Plus', base: 'costos', num: 'ebit', dep: true, fmt: '0.00%' },
+  { hoja: 'NCP', nombre: 'Net Cost Plus', base: 'costos', num: 'ebit', dep: true, fmt: '0.000%' },
 ];
 
 /* Rubros de la parte examinada en la hoja Datos, en el orden en que se escriben.
@@ -136,7 +136,7 @@ const cTxt = (v) => ({ v: v == null ? '' : String(v), t: 's' });
    una celda numérica, que es XML inválido y manda el libro a modo reparación. Y un cero
    fingiría una observación que no existe y hundiría el rango. */
 const cFor = (f, z, v) => {
-  const celda = { t: 'n', f, z: z || '0.00%' };
+  const celda = { t: 'n', f, z: z || '0.000%' };
   if (v !== undefined && v !== null && Number.isFinite(v)) celda.v = v;
   return celda;
 };
@@ -271,7 +271,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        llegó. */
     if (r.av) {
       const fila = filaDeRubro(r.clave);
-      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.00%',
+      celdas.push(cFor(`IF($B$${filaTot}=0,"",B${fila}/$B$${filaTot})`, '0.000%',
         totalActivos ? valorDeRubro(r.clave) / totalActivos : undefined));
     }
     datos.push(celdas);
@@ -283,7 +283,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const tasaDelEstudio = (num(study.prime) || 0) / 100;
   datos.push([
     cTxt('Tasa de interés de referencia (Prime Rate)'),
-    cNum(tasaDelEstudio, '0.00%'),
+    cNum(tasaDelEstudio, '0.000%'),
   ]);
   /* El ámbito de la muestra, escrito como dato y no como decisión ya aplicada: la
      hoja de método lo lee para decidir qué filas entran al cuartil. */
@@ -303,7 +303,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          comparable—, y además su valor en caché, que es el de esa misma celda y no uno
          propio. Sin él la columna salía vacía en cualquier lector que no recalcule, y
          de ella cuelga la columna I de las cinco hojas de método. */
-      cFor(`$B$${FILA_TASA()}`, '0.00%', tasaDelEstudio),
+      cFor(`$B$${FILA_TASA()}`, '0.000%', tasaDelEstudio),
       cTxt(c.amb === 'Nac' ? 'Nac' : 'Int'),
     ]);
   });
@@ -325,7 +325,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   anotarTasa(2, 'PARÁMETRO — TASA DE INTERÉS DE LOS AJUSTES DE CAPITAL DE TRABAJO', null);
   /* También con valor: es la celda que un auditor mira primero para saber con qué tasa
      se armaron los ajustes, y refleja la editable en vez de duplicarla. */
-  anotarTasa(3, 'Tasa aplicada', cFor(`$B$${FILA_TASA()}`, '0.00%', tasaDelEstudio));
+  anotarTasa(3, 'Tasa aplicada', cFor(`$B$${FILA_TASA()}`, '0.000%', tasaDelEstudio));
   datos[3][13] = cTxt(`← única celda editable: ${celdaTasa} alimenta a los ` + n + ' comparables');
   anotarTasa(4, 'Fuente', cTxt(
     'Board of Governors of the Federal Reserve System, H.15 Selected Interest Rates — '
@@ -695,8 +695,8 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         'Sostiene el ajuste de inventario. En cero, el ajuste solo recoge el de las comparables.'],
       ['Cuentas por pagar', `${AP_s}/${C_s}*365`, '#,##0.0', 'días de costo',
         'Si equivalen a muy pocos días, verificar si hay pasivos comerciales clasificados en otras cuentas antes de sostener el ajuste de CxP.'],
-      ['Cuentas por pagar / Ventas', `${AP_s}/${S_s}`, '0.00%', 'porcentaje', ''],
-      ['PP&E / Ventas', `${PPE_s}/${S_s}`, '0.00%', 'porcentaje',
+      ['Cuentas por pagar / Ventas', `${AP_s}/${S_s}`, '0.000%', 'porcentaje', ''],
+      ['PP&E / Ventas', `${PPE_s}/${S_s}`, '0.000%', 'porcentaje',
         'Se contrasta contra la columna PP&E/Ventas de cada comparable, más abajo.'],
     ].forEach(([etq, f, z, uni, nota]) => {
       dg.push([cTxt(etq), cFor(f, z), cTxt(uni), cTxt(nota)]);
@@ -743,7 +743,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         const r = dg.length + 1;
         dg.push([
           cForT(`MO!A${rMO}`),
-          cFor(`MO!H${rMO}/MO!B${rMO}`, '0.00%'),
+          cFor(`MO!H${rMO}/MO!B${rMO}`, '0.000%'),
           cFor(`MO!Q${rMO}`, '#,##0.000'),
           cFor(`MO!J${rMO}`, '#,##0.00'),
           cForT(`IF(ABS(C${r})>ABS(D${r}),"Sí — el escenario con PP&E no es defendible para esta compañía","")`),
