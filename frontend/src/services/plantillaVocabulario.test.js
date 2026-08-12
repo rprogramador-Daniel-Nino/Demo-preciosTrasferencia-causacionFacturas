@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { VOCABULARIO, esCampoValido, valorDeCampo } from './plantillaVocabulario.js';
+import { filasRangoIntercuartil } from './tablasInforme.js';
+import { pctf } from '../utils/calculations.js';
 
 /* Estudio de un cliente que no es End Game, con los campos tal y como los
    escriben hoy DatosContribuyente.jsx e IngestaCifras.jsx. */
@@ -250,3 +252,34 @@ test('las narrativas e información de la IA se resuelven y limpian el HTML de f
   );
 });
 
+
+test('el indicador de la parte examinada es un campo, y es el de la tabla del rango', () => {
+  /* El informe lo nombra en prosa —«la empresa obtuvo una rentabilidad de (X)»— justo
+     debajo de la tabla que lo publica. No existía campo para él, así que esa frase no tenía
+     forma de actualizarse y se radicaba con el porcentaje del contribuyente ANTERIOR: en el
+     caso reportado, 4,985 % donde la tabla de encima decía 5,582 %. */
+  const conComparables = {
+    ...estudio,
+    pli: 'MO', cmode: 'all',
+    t_s: 1000000, t_c: 800000, t_op: 100000,
+    comparables: [
+      { s: 1000, c: 800, op: 100 }, { s: 2000, c: 1600, op: 260 },
+      { s: 3000, c: 2400, op: 300 }, { s: 4000, c: 3200, op: 520 },
+    ],
+  };
+  const indicador = valorDeCampo(conComparables, 'rango.indicador');
+  assert.ok(indicador, 'el campo tiene que dar valor');
+  assert.match(indicador, /%/, 'y venir formateado como porcentaje');
+
+  /* La misma cifra que la primera columna de la tabla del rango, que sale de `filas`. */
+  const { filas } = filasRangoIntercuartil(conComparables);
+  const filaContribuyente = filas[filas.length - 1];
+  assert.strictEqual(indicador, pctf(filaContribuyente.ajustado),
+    'la prosa y la tabla no pueden publicar cifras distintas del mismo indicador');
+});
+
+test('sin cifras del contribuyente el indicador no inventa un 0 %', () => {
+  /* `pliOf` sobre cifras ausentes devuelve null, y un 0 % en un informe fiscal es una cifra
+     falsa, no un dato faltante. */
+  assert.strictEqual(valorDeCampo({ ...estudio, comparables: [] }, 'rango.indicador'), null);
+});
