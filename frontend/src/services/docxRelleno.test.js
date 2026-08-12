@@ -12,7 +12,7 @@ import {
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
-  localizarBloqueProsa, parrafosOoxmlDesdeHtml,
+  localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -1204,4 +1204,45 @@ test('parrafosOoxmlDesdeHtml aplana enlaces a su texto visible, sin dejar el <a>
 test('parrafosOoxmlDesdeHtml devuelve cadena vacía si el HTML no trae <p>', () => {
   assert.equal(parrafosOoxmlDesdeHtml(''), '');
   assert.equal(parrafosOoxmlDesdeHtml(null), '');
+});
+
+test('actualizarApartadosMacroOoxml reemplaza la prosa de mundial y colombia con la narrativa de Firestore', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto de END GAME sobre Colombia, 2024.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa real del mundo para este cliente.</p>',
+      colombia: '<p>Narrativa real de Colombia para este cliente.</p>',
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.match(salida, /Narrativa real del mundo para este cliente\./);
+  assert.match(salida, /Narrativa real de Colombia para este cliente\./);
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.equal(avisos.length, 0);
+});
+
+test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narrativa, y avisa', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, null, 2026, avisos);
+
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
+  assert.ok(avisos.length >= 1);
 });

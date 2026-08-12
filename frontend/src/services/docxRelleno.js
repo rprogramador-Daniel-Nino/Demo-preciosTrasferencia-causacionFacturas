@@ -164,6 +164,58 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
   return xml;
 }
 
+/** Mismo texto y misma referencia normativa que `marcadorPendiente` de
+ *  `analisisMercado.js` — no se importa de ahí para no acoplar la ruta .docx a la
+ *  ruta HTML por un solo texto; si cambia la redacción legal, cambia en los dos sitios
+ *  a propósito. */
+function marcadorApartadoPendiente(tema, year) {
+  return '[Actualizar con el análisis del panorama de la economía ' + tema + ' del año gravable ' +
+    year + ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
+}
+
+/**
+ * Reemplaza la PROSA (no las tablas) de III.A y III.B, localizándola por su encabezado,
+ * para que deje de depender de que el marcado con IA la haya marcado como
+ * `ia.economia_mundial`/`ia.economia_colombia` (`plantillaVocabulario.js`).
+ *
+ * Las tablas de cada apartado quedan intactas aquí — las sigue actualizando
+ * `actualizarTablasMacroOoxml` después, por su propio encabezado.
+ *
+ * @param {string} xml
+ * @param {object|null} datosMacro  el documento `analisisMercado/actual` de Firestore.
+ * @param {number} year
+ * @param {string[]} [avisos]  nombres de apartado que no se pudieron localizar o que
+ *        quedaron con el marcador de pendiente por falta de narrativa.
+ * @returns {string}
+ */
+export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
+  const doc = sustituidorDeTablas(xml, null);
+  const apartados = [
+    { inicio: 'Análisis del Panorama de la Economía Mundial', fin: ['PIB Mundial'], tema: 'mundial', clave: 'mundial' },
+    { inicio: 'Análisis del panorama de la economía colombiana', fin: ['PIB en Colombia'], tema: 'colombiana', clave: 'colombia' },
+  ];
+
+  apartados.forEach((a) => {
+    const narrativaHtml = datosMacro && datosMacro.narrativa && datosMacro.narrativa[a.clave];
+    doc.aplicar((actual) => {
+      const bloque = localizarBloqueProsa(actual, a.inicio, a.fin);
+      if (!bloque) {
+        if (Array.isArray(avisos)) avisos.push('prosa de ' + a.inicio);
+        return actual;
+      }
+      const tituloParrafo = actual.slice(bloque.inicio, actual.indexOf('</w:p>', bloque.inicio) + '</w:p>'.length);
+      const cuerpo = narrativaHtml
+        ? parrafosOoxmlDesdeHtml(narrativaHtml)
+        : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(a.tema, year))}</w:t></w:r></w:p>`;
+      if (!narrativaHtml && Array.isArray(avisos)) avisos.push('narrativa de ' + a.inicio);
+      return actual.slice(0, bloque.inicio) + tituloParrafo + cuerpo + actual.slice(bloque.fin);
+    });
+  });
+
+  return doc.xml;
+}
+
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
 export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
   const doc = sustituidorDeTablas(xml, avisos);
@@ -867,6 +919,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
+  xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   zip.file(RUTA_DOC, xml);
