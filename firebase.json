@@ -38,7 +38,7 @@
         ]
       },
       {
-        "//": "La raíz sirve el Sistema PT por el rewrite ** y tiene el mismo problema que la ruta de arriba.",
+        "//": "La raíz sirve el Gestor de Reportes por el rewrite ** y tiene el mismo problema que la ruta de arriba.",
         "source": "/",
         "headers": [
           { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
@@ -83,7 +83,7 @@
       },
       {
         "source": "**",
-        "destination": "/index.html"
+        "destination": "/gestor-reportes/index.html"
       }
     ]
   }

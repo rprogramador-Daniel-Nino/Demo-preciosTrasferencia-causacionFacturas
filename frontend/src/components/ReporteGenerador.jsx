@@ -2,7 +2,7 @@ import React, {
   useState, useEffect, useMemo, useRef,
 } from 'react';
 import axios from 'axios';
-import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle } from 'lucide-react';
+import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle, RefreshCw } from 'lucide-react';
 import mammoth from 'mammoth';
 import { diagnosticarCobertura } from '../services/tablasInforme';
 import { normalizarActividad, claveActividad } from '../services/analisisMercado';
@@ -22,7 +22,8 @@ import {
   MOTIVO_NO_APARECE, MOTIVO_SOLAPE, MOTIVO_SIN_APARICION_LIBRE,
 } from '../services/plantillaMarcador.js';
 import { renderizar } from '../services/plantillaRenderer.js';
-import { revisarAntesDeGenerar, valoresDeReferencia } from '../services/plantillaGuardas.js';
+import { revisarAntesDeGenerar, valoresDeReferencia, revisarSalidaRenderizada } from '../services/plantillaGuardas.js';
+import { evaluarRadicacion } from '../services/semaforoRadicacion.js';
 import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
 } from '../services/estiloDocumento.js';
@@ -73,7 +74,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      que se abre el estudio sería más molesto que informativo. El alert sí se
      conserva en la carga manual del PDF, donde es una reacción directa a la
      acción que el usuario acaba de hacer. */
-  const [avisoCobertura, setAvisoCobertura] = useState('');
+  const [veredictoRadicacion, setVeredictoRadicacion] = useState(null);
 
   /* Marcas propuestas a la espera de revisión humana, y el id de la plantilla a la
      que pertenecen. Mientras esto no sea null, la pantalla muestra el revisor. */
@@ -265,16 +266,31 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     return avisos;
   };
 
-  /* Pinta como banner lo que le falta al documento que se acaba de producir. Se
-     alimenta del propio resultado y no de la plantilla en crudo: el diagnóstico
+  /* Semáforo de "¿listo para radicar?" sobre el documento que se acaba de producir.
+     Se alimenta del propio resultado y no de la plantilla en crudo: el diagnóstico
      mira si el documento trae el apartado del análisis del sector, y ahí es donde
      se ve. No es un `alert` porque el cálculo corre en cada montaje del estudio y
-     un modal bloqueante cada vez molestaría más de lo que informa. */
-  const revisarCobertura = (htmlDelInforme) => {
-    const partes = avisosDeMercado(htmlDelInforme);
-    setAvisoCobertura(
-      partes.length ? 'Revisa antes de radicar — ' + partes.join('. ') + '.' : ''
-    );
+     un modal bloqueante cada vez molestaría más de lo que informa — el semáforo es
+     un banner, no un `window.confirm`: se ve, no se impone.
+
+     `avisosDeMercado` sigue dando las advertencias detalladas de la Sección III
+     (series faltantes, sector sin generar); `evaluarRadicacion` las junta con las
+     fugas del informe de referencia (`revisarSalidaRenderizada`) y con lo que no se
+     encontró en la plantilla, y decide si algo de eso es BLOQUEANTE —dato de otro
+     contribuyente con aspecto de estar completo— o solo ADVERTENCIA —un marcador
+     visible que hay que completar—. */
+  const revisarCobertura = (htmlDelInforme, { valores = [], avisosTablas = [], camposVacios = [] } = {}) => {
+    const d = diagnosticarCobertura(htmlDelInforme, study, analisisMercado, analisisSector);
+    const fugasReferencia = revisarSalidaRenderizada({
+      estudio: study, htmlRenderizado: htmlDelInforme, valores,
+    });
+    const veredicto = evaluarRadicacion({ diagnostico: d, fugasReferencia, avisosTablas, camposVacios });
+    /* `avisosDeMercado` da avisos que dependen de estado en vivo (si el sector se está
+       generando en este momento, cuántos días tiene la última corrida del cron) que
+       `diagnosticarCobertura` no calcula por sí solo — se agregan aparte, como
+       advertencias, no como bloqueantes: ninguno implica un dato de otro cliente. */
+    veredicto.advertencias = veredicto.advertencias.concat(avisosDeMercado(htmlDelInforme));
+    setVeredictoRadicacion(veredicto);
   };
 
   /* Renderiza la plantilla marcada contra el estudio activo y calcula los
@@ -301,7 +317,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
        documento que se va a radicar. Antes solo se calculaba en la ruta por
        literales, así que quien trabajaba con plantilla marcada —la ruta buena— no
        se enteraba de que le faltaban las series macro o el análisis del sector. */
-    revisarCobertura(r.html);
+    revisarCobertura(r.html, { valores, avisosTablas: r.avisosTablas, camposVacios: r.vacios });
     /* Las tablas del motor que la plantilla no trae. Mismo aviso que en la ruta .docx:
        una tabla que no se regenera se queda con los datos del informe del que salió la
        plantilla, y sin decirlo el fallo llega hasta la radicación. */
@@ -366,7 +382,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       if (!estudioId) return;
       /* Se asigna siempre, también cuando viene vacío: si no, al cambiar de
          estudio quedarían los avisos del anterior. */
-      if (vivo) { setAvisos([]); setAvisoCobertura(''); }
+      if (vivo) { setAvisos([]); setVeredictoRadicacion(null); }
       /* `let` porque la restauración desde la nube, más abajo, puede traer los recursos
          del cliente: el resto del efecto renderiza con esta variable —no con el estado, que
          no ha surtido efecto todavía—, así que si no se actualiza aquí las imágenes salen
@@ -433,7 +449,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
            contribuyente para el que se redactó, con su NIT y sus cifras, bajo el
            nombre de este cliente. */
         setHtmlContent('');
-        setAvisoCobertura('');
+        setVeredictoRadicacion(null);
         setAvisos([
           {
             nivel: 'aviso',
@@ -548,7 +564,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
                todavía un render del que calcularlos, y dejarlos puestos
                enseñaría al usuario a ignorar el banner. */
             setAvisos([]);
-            setAvisoCobertura('');
+            setVeredictoRadicacion(null);
             /* El marcado de un informe de 112 páginas son unos veinte viajes al
                modelo. Sin este avance el spinner se queda quieto minutos y no hay
                forma de distinguirlo de un cuelgue. */
@@ -580,7 +596,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           if (estudioId) await guardarVinculo(estudioId, idPlantilla);
 
           setAvisos([]);
-          setAvisoCobertura('');
+          setVeredictoRadicacion(null);
           setRecursosCargados([]);
 
           /* El marcado se paga una vez por plantilla: el id es el hash del archivo,
@@ -732,7 +748,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
         }
         await borrarDocxMarcado(plantillaActiva.id);
         setAvisos([]);
-        setAvisoCobertura('');
+        setVeredictoRadicacion(null);
         const xml = new PizZip(binario).file('word/document.xml').asText();
         const propuestas = await proponerMarcas(htmlParaMarcar(xml), {
           avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
@@ -776,7 +792,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     try {
       await borrarMarcado(plantillaActiva.id);
       setAvisos([]);
-      setAvisoCobertura('');
+      setVeredictoRadicacion(null);
       const propuestas = await proponerMarcas(plantillaActiva.html, {
         avisar: ({ terminados, total, fallidos }) => setProgresoMarcado({
           terminados, total, fallidos,
@@ -881,14 +897,19 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      que importa. */
   const previsualizarDocx = async (binarioMarcado) => {
     try {
-      const { salida, camposVacios } = construirDocxDelEstudio(binarioMarcado, 'uint8array');
+      const { salida, camposVacios, avisosTablas } = construirDocxDelEstudio(binarioMarcado, 'uint8array');
       const { value } = await mammoth.convertToHtml({ arrayBuffer: salida.buffer.slice(
         salida.byteOffset, salida.byteOffset + salida.byteLength) });
       setHtmlContent(value);
       /* Lo que le falta al informe (series macro del año, análisis del sector, tablas
          del motor) se mide aquí y no solo en la ruta de PDF: esta es la ruta con la
-         que se genera de verdad, y era justo la que salía sin ese banner. */
-      revisarCobertura(value);
+         que se genera de verdad, y era justo la que salía sin ese banner.
+
+         Sin `valores`: esta ruta parte de un `.docx` binario, no de HTML marcado con
+         `data-campo`, así que `revisarSalidaRenderizada` no tiene con qué comparar
+         todavía — queda pendiente el mismo barrido de fugas que ya existe para la
+         ruta de plantilla marcada. */
+      revisarCobertura(value, { avisosTablas, camposVacios });
       const avisos = revisarAntesDeGenerar({
         estudio: study,
         tieneAnexo: true,
@@ -899,7 +920,11 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       setAvisos(avisos);
     } catch (err) {
       console.error('No se pudo previsualizar la plantilla .docx:', err);
-      setAvisoCobertura('No se pudo previsualizar la plantilla: ' + err.message);
+      setVeredictoRadicacion({
+        listo: false,
+        bloqueantes: ['No se pudo previsualizar la plantilla: ' + err.message],
+        advertencias: [],
+      });
     }
   };
 
@@ -1036,6 +1061,59 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      obsoleto el resto de la sesión. Un `useRef` se lee y se escribe de inmediato, sin esperar a
      un repintado, así que cierra la ventana del todo y no sólo el caso normal. */
   const generandoDocxRef = useRef(false);
+  /* Actualización de lo que no vive en el estudio: ver `actualizarInformacion`. */
+  const [actualizando, setActualizando] = useState(false);
+  const actualizandoRef = useRef(false);
+
+  /* Rehace el informe con lo que hay AHORA, sin volver a montar la pantalla ni rehacer el
+     estudio.
+
+     Hacía falta porque parte de lo que alimenta el documento no vive en el estudio y solo se
+     leía una vez, al abrir esta pantalla: el análisis de mercado (las tablas de la Sección
+     III y la narrativa de III.A/III.B) y el del sector (III.C). Si el cron los refrescaba
+     —o alguien los generaba— después de que abrieras el gestor, el informe seguía saliendo
+     con el contenido de la plantilla y la única salida era recargar la página entera sin
+     saber que había que hacerlo.
+
+     Lo que este botón NO puede recuperar es el universo de Capital IQ, del que se deriva la
+     matriz del ANEXO C: eso lo restaura el paso 4 al montarse, descargando el cribado. Si
+     falta, el aviso de cobertura lo dice y manda ahí. */
+  const actualizarInformacion = async () => {
+    if (actualizandoRef.current) return;
+    actualizandoRef.current = true;
+    setActualizando(true);
+    try {
+      const macro = await leerAnalisisMercado();
+      setAnalisisMercado(macro);
+
+      /* El del sector se rehace solo si el estudio trae con qué buscarlo, y se lee con la
+         misma clave que la carga inicial —solo la actividad normalizada—. Si no hay una
+         corrida guardada se deja el que ya estuviera: este botón actualiza, no dispara
+         generaciones que cuestan una llamada de IA. */
+      const actividadTexto = ((study && (study.actividad_especifica || study.objeto)) || '').trim();
+      if (actividadTexto) {
+        const sector = await leerAnalisisSector(claveActividad(normalizarActividad(actividadTexto)));
+        if (sector) setAnalisisSector(sector);
+      }
+
+      /* Y la vista previa, que es donde se comprueba si el documento quedó completo: se
+         rehace con la plantilla marcada del estudio, igual que la descarga. */
+      if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
+        const marcado = await leerDocxMarcado(plantillaActiva.id);
+        if (marcado) await previsualizarDocx(marcado);
+      }
+    } catch (err) {
+      console.error('[generador] no se pudo actualizar la información', err);
+      setVeredictoRadicacion({
+        listo: false,
+        bloqueantes: ['No se pudo actualizar la información: ' + (err && err.message ? err.message : 'error desconocido')],
+        advertencias: [],
+      });
+    } finally {
+      actualizandoRef.current = false;
+      setActualizando(false);
+    }
+  };
 
   const descargarDocx = async () => {
     if (generandoDocxRef.current) return;
@@ -1253,8 +1331,8 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
 
   /* Confirmación de que el análisis de sector (III.C) de ESTA actividad+año ya
      quedó generado (no solo que la lectura a Firestore respondió, sino que trae
-     la corrida de ese año puntual). Se calcula aparte del banner de arriba
-     (`avisoCobertura`, que solo lista problemas) porque generar toma 60-100+ s
+     la corrida de ese año puntual). Se calcula aparte del semáforo de abajo
+     (`veredictoRadicacion`, que solo lista problemas) porque generar toma 60-100+ s
      y el usuario necesita saber que ya terminó sin tener que abrir el Word. */
   const anioEstudio = Number(study && study.anio) || null;
   const sectorListo = !sectorEnCurso && !motivoFalloSector && anioEstudio
@@ -1344,6 +1422,18 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
               Volver a marcar
             </button>
           )}
+          {/* Rehace el informe con los datos actuales sin recargar la página ni rehacer el
+              estudio: relee el análisis de mercado y el del sector —que solo se cargaban al
+              abrir esta pantalla— y regenera la vista previa. */}
+          <button
+            onClick={actualizarInformacion}
+            disabled={actualizando || generandoDocx}
+            title="Vuelve a leer el análisis de mercado y del sector, y rehace la vista previa con los datos actuales del estudio"
+            className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={'w-3.5 h-3.5' + (actualizando ? ' animate-spin' : '')} />
+            {actualizando ? 'Actualizando…' : 'Actualizar información'}
+          </button>
           <button
             onClick={descargarDocx}
             disabled={generandoDocx}
@@ -1375,7 +1465,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       )}
 
       {/* Estado del análisis de sector (III.C): en curso o ya listo para esta
-          actividad+año. Aparte de `avisoCobertura` porque ese banner solo lista
+          actividad+año. Aparte del semáforo de abajo porque ese banner solo lista
           problemas — esto es información de estado, no una advertencia. */}
       {sectorEnCurso && (
         <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
@@ -1394,9 +1484,39 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           ruta de campos marcados, que en este caso no corrió. No es un alert
           porque el componente se monta cada vez que se abre el estudio y un
           modal bloqueante en cada apertura molestaría más de lo que informa. */}
-      {avisoCobertura && (
-        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 rounded-xl px-5 py-4 text-xs leading-relaxed">
-          <strong className="font-semibold">⚠ {avisoCobertura}</strong>
+      {/* Semáforo de "¿listo para radicar?": rojo si hay dato de otro contribuyente con
+          aspecto de estar completo (bloqueante), ámbar si solo faltan marcadores
+          visibles por completar (advertencia), verde si no hay nada pendiente. No es un
+          `window.confirm` — la decisión de descargar sigue siendo de quien usa la app,
+          pero ya no puede no verlo. */}
+      {veredictoRadicacion && (veredictoRadicacion.bloqueantes.length > 0 || veredictoRadicacion.advertencias.length > 0) && (
+        <div className={
+          'rounded-xl px-5 py-4 text-xs leading-relaxed border ' + (
+            veredictoRadicacion.bloqueantes.length > 0
+              ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300'
+              : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300'
+          )
+        }>
+          <strong className="font-semibold block mb-2">
+            {veredictoRadicacion.bloqueantes.length > 0
+              ? '⛔ No listo para radicar'
+              : '⚠ Listo para radicar, con pendientes por completar'}
+          </strong>
+          {veredictoRadicacion.bloqueantes.length > 0 && (
+            <ul className="space-y-1 mb-2">
+              {veredictoRadicacion.bloqueantes.map((b, i) => <li key={'b' + i}>• {b}</li>)}
+            </ul>
+          )}
+          {veredictoRadicacion.advertencias.length > 0 && (
+            <ul className="space-y-1 opacity-90">
+              {veredictoRadicacion.advertencias.map((a, i) => <li key={'a' + i}>• {a}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+      {veredictoRadicacion && veredictoRadicacion.bloqueantes.length === 0 && veredictoRadicacion.advertencias.length === 0 && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300 rounded-xl px-5 py-3 text-xs leading-relaxed">
+          <strong className="font-semibold">✓ Listo para radicar.</strong>
         </div>
       )}
 

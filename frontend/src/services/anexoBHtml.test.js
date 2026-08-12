@@ -188,9 +188,17 @@ test('el anexo queda con un bloque por comparable de la muestra', () => {
   assert.match(salida, /ANEXO A\. Estados financieros/, 'y lo que va antes también');
 });
 
-test('una comparable sin estado financiero deja el anexo intacto y lo avisa', () => {
-  /* Todo o nada: un anexo con unos bloques del estudio y otros del informe anterior es la
-     peor forma de fallar en un documento que se radica. */
+test('una comparable sin estado financiero sale con las cifras en blanco, no cancela el anexo', () => {
+  /* Antes era todo o nada: una sola comparable sin cifras y el anexo se dejaba como estaba,
+     es decir con las comparables y los estados financieros del contribuyente ANTERIOR. Eso
+     no es quedarse corto, es radicar datos de otro cliente, y encima con aspecto de estar
+     completo. La regla ahora es que del informe de referencia no sobreviva nada: salen todas
+     las comparables del estudio, y las que no traen cifras van en blanco con el aviso
+     nombrándolas.
+
+     Ojo con el motivo por el que se eligió «todo o nada» en su día —no mezclar bloques del
+     estudio con bloques del informe anterior—: ya no aplica, porque se emiten TODOS los
+     bloques del estudio y ninguno del anterior. */
   const avisos = [];
   const estudio = {
     ...ESTUDIO,
@@ -198,10 +206,17 @@ test('una comparable sin estado financiero deja el anexo intacto y lo avisa', ()
   };
   const salida = actualizarAnexoBHtml(PLANTILLA, estudio, avisos);
 
-  assert.strictEqual(salida, PLANTILLA, 'no se toca nada');
+  assert.notStrictEqual(salida, PLANTILLA, 'el anexo tiene que rehacerse');
+  assert.ok(salida.includes('SIN EEFF SA'), 'la comparable sin cifras aparece igual');
+  assert.ok(salida.includes(ESTUDIO.comparables[0].name), 'y la que sí las trae');
+  ['AKATSUKI INC.', 'COLOPL, INC.', 'IGG INC'].forEach((viejo) =>
+    assert.ok(!salida.includes(viejo), `la comparable ${viejo} del informe anterior tiene que irse`));
+  assert.ok(!salida.includes('23,652,000,000'), 'ni sus cifras');
+
   assert.strictEqual(avisos.length, 1);
   assert.match(avisos[0], /SIN EEFF SA/, 'el aviso nombra la comparable');
   assert.match(avisos[0], /paso 4/, 'y dice qué hacer');
+  assert.match(avisos[0], /en blanco/, 'y que salió en blanco, no que se omitió el anexo');
 });
 
 test('sin comparables en el estudio se avisa y no se vacía el anexo', () => {

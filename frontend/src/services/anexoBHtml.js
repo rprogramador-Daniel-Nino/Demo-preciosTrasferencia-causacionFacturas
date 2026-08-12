@@ -315,12 +315,20 @@ export function actualizarAnexoBHtml(html, estudio, avisos) {
   const comparables = (study.comparables || []).filter((c) => c && String(c.name || '').trim());
   if (!comparables.length) { anotar(NOMBRE_ANEXO_B); return salida; }
 
+  /* Las que no traen cifras NO cancelan el anexo: salen con sus casillas en blanco y el
+     aviso dice cuáles faltan.
+
+     Antes se descartaba el anexo entero —una sola comparable sin estado financiero bastaba—
+     y el documento se radicaba con el ANEXO B de la plantilla, es decir con las comparables
+     y las cifras del contribuyente anterior. Un anexo con casillas vacías se ve y se
+     completa; uno con los datos del año pasado se radica sin que nadie lo note. Entre
+     quedarse corto y quedarse equivocado, corto. */
   const sinCifras = comparables.filter((c) => !c.eeffDatos);
   if (sinCifras.length) {
-    anotar(NOMBRE_ANEXO_B + ': ' + sinCifras.length + ' comparable(s) sin estado financiero leído ('
-      + sinCifras.map((c) => c.name).join(', ') + '), así que el anexo se deja como estaba. '
-      + 'Carga sus EEFF en el paso 4 del motor de comparables.');
-    return salida;
+    anotar(NOMBRE_ANEXO_B + ': ' + sinCifras.length + ' de ' + comparables.length
+      + ' comparable(s) sin estado financiero leído (' + sinCifras.map((c) => c.name).join(', ')
+      + '). Salen en el anexo con las cifras en blanco: carga sus EEFF en el paso 4 del motor '
+      + 'de comparables y vuelve a generar.');
   }
 
   const year = Number(study.anio) || 2025;

@@ -70,28 +70,57 @@ test('idEeff identifica una empresa por año gravable', () => {
 
 test('separarEstudio deja fuera de la nube los campos pesados', () => {
   /* Todos son grandes y no se comparten: el universo son miles de filas con descripción de
-     negocio, el veredicto un dictamen por candidata, eeffImages las páginas del PDF de
+     negocio, el veredicto un dictamen por candidata, y eeffImages las páginas del PDF de
      estados financieros en base64 —3,4 MB en un caso real, más del triple del techo de 1 MiB
-     por documento— y `matrizRechazo` un nombre por cada compañía evaluada, medido en 93 KB
-     con un cribado de 2.986 candidatas. */
+     por documento—. */
   const study = {
     ent: 'Acme', comparables: [],
     universo: [{ id: 1 }, { id: 2 }],
     iaMatch: { porId: { A: {} } },
     eeffImages: ['data:image/png;base64,AAAA'],
     eeffImagenesComparables: { ACME_COMP: ['data:image/png;base64,BBBB'] },
-    matrizRechazo: { porMotivo: { holding: ['UNO SA'] }, universo: 1 },
   };
   const { nube, local } = separarEstudio(study);
   assert.deepStrictEqual(Object.keys(nube).sort(), ['comparables', 'ent']);
   assert.deepStrictEqual(
     Object.keys(local).sort(),
-    ['eeffImagenesComparables', 'eeffImages', 'iaMatch', 'matrizRechazo', 'universo'],
+    ['eeffImagenesComparables', 'eeffImages', 'iaMatch', 'universo'],
   );
   assert.deepStrictEqual(
     CAMPOS_SOLO_LOCALES,
-    ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', 'matrizRechazo', SELLO_ESTUDIO],
+    ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO],
   );
+});
+
+test('la matriz del ANEXO C viaja a la nube con el estudio', () => {
+  /* No estaba en ninguna parte: fuera del documento de Firestore por un peso que no tiene
+     —154 KB para un universo de 3.000, el 15 % del tope— y sin nadie que la guardara en el
+     navegador, así que se descartaba en cada guardado y el ANEXO C del informe salía con la
+     matriz de la plantilla. Es además el único sitio donde queda constancia de qué compañía
+     se descartó por qué motivo, que es lo que sustenta la Tabla 16 ante la DIAN. */
+  const matriz = { porMotivo: { holding: ['UNO SA'] }, universo: 1 };
+  const { nube, local } = separarEstudio({ ent: 'Acme', matrizRechazo: matriz });
+  assert.deepStrictEqual(nube.matrizRechazo, matriz, 'va en el documento');
+  assert.ok(!('matrizRechazo' in local), 'y no se queda en el navegador');
+});
+
+test('la matriz de un universo de 3.000 compañías cabe en el documento', () => {
+  /* La medición que justifica el cambio de arriba. Si un cribado la desbordara,
+     `verificarTamano` lo dice antes de gastar la escritura. */
+  const nombre = (i) => `COMPAÑIA INTERNACIONAL DE PRUEBA NUMERO ${i} S.A.`;
+  const lista = (n, off) => Array.from({ length: n }, (_, i) => nombre(i + off));
+  const peso = pesoAproximado({
+    matrizRechazo: {
+      universo: 2986,
+      porMotivo: {
+        rigorFuncional: lista(85, 0), actividadDistinta: lista(1304, 100),
+        holding: lista(389, 2000), controlada: lista(279, 3000),
+        perdidaOperativa: lista(914, 4000), aceptadas: lista(15, 5000),
+      },
+    },
+  });
+  assert.ok(peso < TOPE_DOCUMENTO / 4,
+    `la matriz debe ocupar bastante menos que el tope; midió ${(peso / 1024).toFixed(1)} KB`);
 });
 
 test('separarEstudio no inventa campos locales que el estudio no traía', () => {
@@ -460,6 +489,32 @@ test('docEeff acota los hallazgos contables al tope de las reglas', () => {
   assert.strictEqual(doc.hallazgos.length, 50);
 });
 
+test('docEeff persiste eeffDatos, la matriz completa que consume el ANEXO B', () => {
+  const eeffDatos = { ingresos_operacionales: 28.81, costo_ventas: 0.15, unidad_origen: '' };
+  const doc = docEeff({
+    comparable: { name: 'QubicGames', nameKey: 'qubicgames', s: 1000, eeffDatos },
+    anio: 2024, usuario: USUARIO, marcaDeTiempo: AHORA,
+  });
+  assert.deepStrictEqual(doc.eeffDatos, eeffDatos);
+});
+
+test('docEeff conserva el eeffDatos previo si esta carga no trae uno nuevo', () => {
+  const previo = { creadoPor: 'uid-juan', creadoEn: 'F', eeffDatos: { ingresos_operacionales: 28.81 } };
+  const doc = docEeff({
+    comparable: { name: 'QubicGames', nameKey: 'qubicgames', s: 1000 },
+    anio: 2024, usuario: USUARIO, previo, marcaDeTiempo: AHORA,
+  });
+  assert.deepStrictEqual(doc.eeffDatos, { ingresos_operacionales: 28.81 });
+});
+
+test('docEeff persiste propiedadPlantaEquipo (ppe), igual que las demás cifras cortas', () => {
+  const doc = docEeff({
+    comparable: { name: 'Acme', nameKey: 'acme', s: 1000, ppe: 250 },
+    anio: 2024, usuario: USUARIO, marcaDeTiempo: AHORA,
+  });
+  assert.strictEqual(doc.propiedadPlantaEquipo, 250);
+});
+
 /* ══════ reutilización de estados financieros ══════ */
 
 /* La clave se calcula con la función real: `nameKey` quita los sufijos societarios y
@@ -519,6 +574,29 @@ test('aplicarEeffGuardadoEnFila conserva las cifras que el registro no trae', ()
   const filas = [{ name: 'Acme', nameKey: CLAVE_ACME, s: '', ar: 123 }];
   const nuevas = aplicarEeffGuardadoEnFila(filas, 0, EEFF_GUARDADO[CLAVE_ACME]);
   assert.strictEqual(nuevas[0].ar, 123, 'el registro no trae cartera y la de la fila se mantiene');
+});
+
+test('aplicarEeffGuardadoEnFila también refresca eeffDatos y ppe, no solo las cifras cortas', () => {
+  const eeffDatos = { ingresos_operacionales: 28.81, costo_ventas: 0.15 };
+  const guardado = { ...EEFF_GUARDADO[CLAVE_ACME], eeffDatos, propiedadPlantaEquipo: 250 };
+  const filas = [{
+    name: 'Acme Corp', nameKey: CLAVE_ACME, s: '', ppe: 999,
+    eeffDatos: { ingresos_operacionales: 999999999 },
+  }];
+  const nuevas = aplicarEeffGuardadoEnFila(filas, 0, guardado);
+  assert.deepStrictEqual(nuevas[0].eeffDatos, eeffDatos,
+    'el ANEXO B debe leer la matriz del registro reutilizado, no la vieja de la fila');
+  assert.strictEqual(nuevas[0].ppe, 250);
+});
+
+test('aplicarEeffGuardadoEnFila deja el eeffDatos y ppe de la fila si el registro reutilizado no los trae (documento guardado antes de este fix)', () => {
+  const filas = [{
+    name: 'Acme Corp', nameKey: CLAVE_ACME, s: '', ppe: 999,
+    eeffDatos: { ingresos_operacionales: 12345 },
+  }];
+  const nuevas = aplicarEeffGuardadoEnFila(filas, 0, EEFF_GUARDADO[CLAVE_ACME]);
+  assert.deepStrictEqual(nuevas[0].eeffDatos, { ingresos_operacionales: 12345 });
+  assert.strictEqual(nuevas[0].ppe, 999);
 });
 
 /* ══════ consulta del catálogo ══════ */

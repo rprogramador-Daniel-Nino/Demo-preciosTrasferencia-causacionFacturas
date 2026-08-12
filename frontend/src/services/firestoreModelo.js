@@ -97,11 +97,21 @@ export function anioValido(valor) {
  */
 export const SELLO_ESTUDIO = '_estudioId';
 
-/* `matrizRechazo` se suma a los solo-locales por el mismo motivo que `universo`: es un
-   nombre por cada compañía evaluada —miles en un cribado normal— y aunque pesa mucho menos
-   que el universo entero (no lleva descripciones de negocio), sigue siendo demasiado para el
-   documento de Firestore. Se recalcula solo al abrir el paso 3 con el cribado cargado. */
-export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', 'matrizRechazo', SELLO_ESTUDIO];
+/* `matrizRechazo` VIAJA a Firestore, y esta lista es justamente donde no debe estar.
+   Estuvo aquí por un motivo que no se sostiene al medirlo: un nombre por cada compañía
+   evaluada pesa 154 KB para un universo de 3.000 —el 15 % de `TOPE_DOCUMENTO`—, porque son
+   solo razones sociales, sin las descripciones de negocio que hacen enorme al universo.
+
+   Y quedarse fuera del documento no la mandaba a ninguna otra parte: al contrario del
+   `iaMatch` (localStorage) o de las imágenes de los anexos (IndexedDB), nadie la guardaba,
+   así que se descartaba en cada guardado. El estudio la calculaba al correr el motor, la
+   usaba en pantalla y la perdía; el ANEXO C del informe salía entonces con la matriz que
+   trajera la plantilla —la del año anterior— sin que nada lo delatara.
+
+   Si algún día un cribado la hiciera desbordar el documento, `verificarTamano` lo dice con
+   el campo señalado antes de gastar la escritura, y el sitio al que movería es Cloud
+   Storage, por donde ya viaja el cribado de Capital IQ. No localStorage. */
+export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO];
 
 /** Máximo que admite un documento de Firestore. */
 export const TOPE_DOCUMENTO = 1048576;
@@ -414,7 +424,12 @@ export function docEeff({ comparable, anio, usuario, previo = null, marcaDeTiemp
   };
 
   /* Nombres de campo del gestor -> nombres del documento. Solo se escribe lo que es
-     un número: un null explícito borraría una cifra ya guardada. */
+     un número: un null explícito borraría una cifra ya guardada.
+
+     `propiedadPlantaEquipo` faltaba aquí igual que `eeffDatos`: el parser ya lee PP&E
+     desde 2026-08-10 (ppe: datos.propiedad_planta_equipo en aplicarEeffEnFila), pero
+     esta lista es anterior a ese cambio y nunca se amplió, así que el ajuste de PP&E
+     tampoco se sostenía al reutilizar cifras del catálogo. */
   const cifras = {
     ingresos: comparable.s,
     costos: comparable.c,
@@ -422,12 +437,24 @@ export function docEeff({ comparable, anio, usuario, previo = null, marcaDeTiemp
     cartera: comparable.ar,
     inventarios: comparable.inv,
     proveedores: comparable.ap,
+    propiedadPlantaEquipo: comparable.ppe,
   };
   Object.entries(cifras).forEach(([campo, valor]) => {
     const n = aNumero(valor);
     if (n !== null) doc[campo] = n;
     else if (previo && aNumero(previo[campo]) !== null) doc[campo] = previo[campo];
   });
+
+  /* La matriz completa que consume el ANEXO B (ingresos_operacionales, costo_ventas,
+     propiedad_planta_equipo, …): sin esto, «Buscar cifras ya cargadas» refrescaba
+     s/c/op/ar/inv/ap para el cálculo del rango pero dejaba el ANEXO B con el
+     eeffDatos que la fila ya tuviera —viejo o de otra empresa— sin ningún aviso,
+     porque el campo no queda vacío, solo desactualizado. */
+  if (comparable.eeffDatos && typeof comparable.eeffDatos === 'object') {
+    doc.eeffDatos = comparable.eeffDatos;
+  } else if (previo && previo.eeffDatos) {
+    doc.eeffDatos = previo.eeffDatos;
+  }
 
   const fuente = String(comparable.eeffArchivo || comparable.fuente || '').trim();
   if (fuente) doc.fuente = fuente.slice(0, 300);
@@ -492,6 +519,11 @@ export function aplicarEeffGuardadoEnFila(filas, indice, doc) {
     ar: cifra(doc.cartera, fila.ar),
     inv: cifra(doc.inventarios, fila.inv),
     ap: cifra(doc.proveedores, fila.ap),
+    ppe: cifra(doc.propiedadPlantaEquipo, fila.ppe),
+    /* Sin esto, el ANEXO B seguía leyendo el eeffDatos que la fila ya tuviera —viejo o
+       de otra empresa— porque esta función nunca lo tocaba: solo refrescaba los campos
+       cortos del cálculo del rango. */
+    eeffDatos: (doc.eeffDatos && typeof doc.eeffDatos === 'object') ? doc.eeffDatos : fila.eeffDatos,
     eeffHallazgos: Array.isArray(doc.hallazgos) ? doc.hallazgos : (fila.eeffHallazgos || []),
     eeffArchivo: doc.fuente || fila.eeffArchivo || '',
     eeffReutilizado: { anio: doc.anio, fuente: doc.fuente || '', nombre: doc.nombre || '' },

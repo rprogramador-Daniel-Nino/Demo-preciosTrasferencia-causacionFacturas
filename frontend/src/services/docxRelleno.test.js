@@ -11,7 +11,8 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA, insertarAnexoC,
+  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
+  localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -902,6 +903,167 @@ test('la Tabla 4 declara el código de operación y no lo inventa cuando no se p
   assert.ok(!sinCodigo.includes('>07<'), 'no debe inventar el código 07');
 });
 
+/* ══════════════════ prosa que describe una tabla ══════════════════ */
+
+/* La plantilla parte la frase en varios runs y deja cada cifra en el suyo, que es lo que
+   permite cambiarlas sin tocar el texto. Así viene el informe del cliente. */
+const parrafoConCifras = (cifras) => new Paragraph({
+  children: [
+    new TextRun({ text: 'Como se observa en el cuadro anterior, el rango Intercuartil obtenido por las compañías comparables se ubica entre el percentil 25 (' }),
+    new TextRun({ text: cifras[0] }),
+    new TextRun({ text: ') y (' }),
+    new TextRun({ text: cifras[1] }),
+    new TextRun({ text: ') percentil 75, la mediana con (' }),
+    new TextRun({ text: cifras[2] }),
+    new TextRun({ text: ').' }),
+  ],
+});
+
+const tablaRango = () => new Table({
+  rows: [
+    new TableRow({ children: ['RANGO', 'Percentil 25', 'Mediana', 'Percentil 75'].map(
+      (t) => new TableCell({ children: [new Paragraph(t)] })) }),
+    new TableRow({ children: ['5.58%', '1.78%', '2.34%', '8.80%'].map(
+      (t) => new TableCell({ children: [new Paragraph(t)] })) }),
+  ],
+});
+
+test('la descripción de una tabla se actualiza con las cifras del estudio', async () => {
+  /* La tabla se rehacía con el estudio y la frase de debajo se quedaba con las cifras del
+     informe del año anterior, contradiciéndola en el mismo documento. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 5. Rango Intercuartil'),
+    tablaRango(),
+    parrafoConCifras(['-3.001%', '6.418%', '-1.075%']),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+
+  const salida = actualizarProsaTrasTabla(xml, 'Rango Intercuartil', ['1,780%', '8,800%', '2,340%']);
+  const texto = textoPlanoOoxml(salida);
+
+  assert.ok(texto.includes('percentil 25 (1,780%)'), 'el P25 nuevo');
+  assert.ok(texto.includes('(8,800%) percentil 75'), 'el P75 nuevo');
+  assert.ok(texto.includes('la mediana con (2,340%)'), 'y la mediana');
+  ['-3.001', '6.418', '-1.075'].forEach((v) =>
+    assert.ok(!texto.includes(v), `la cifra vieja ${v} tiene que irse`));
+  /* Y la redacción intacta, que es la del cliente. */
+  assert.ok(texto.includes('Como se observa en el cuadro anterior, el rango Intercuartil obtenido'),
+    'no se toca una sola palabra');
+});
+
+test('la descripción actualizada llega al documento que se descarga', async () => {
+  /* El primer intento no servía de nada: el generador hacía `xml = actualizarProsa(xml…)`
+     sobre una variable local, pero devuelve el XML del sustituidor, así que el cambio se
+     descartaba en silencio. La prueba de la función pasaba y el informe salía igual. Esta
+     va por la ruta completa —`rellenarDocx`— para que eso no vuelva a colarse. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 18. Rango Intercuartil'),
+    tablaRango(),
+    parrafoConCifras(['-3.001%', '6.418%', '-1.075%']),
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO, pli: 'MO', cmode: 'all', useadj: false, prime: '7.37',
+      t_s: 1000, t_c: 600, t_op: 100,
+      comparables: [
+        { name: 'Uno', s: 1000, c: 600, op: 100 },
+        { name: 'Dos', s: 2000, c: 1600, op: 260 },
+        { name: 'Tres', s: 3000, c: 2400, op: 300 },
+        { name: 'Cuatro', s: 1500, c: 900, op: 200 },
+      ],
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+  ['-3.001', '6.418', '-1.075'].forEach((v) =>
+    assert.ok(!texto.includes(v), `la cifra ${v} de la plantilla tenía que irse del .docx`));
+  assert.ok(/percentil 25 \([\d.,]+ ?%\)/.test(texto), 'y quedar una cifra del estudio');
+});
+
+test('si la descripción no trae las cifras esperadas se deja como estaba', async () => {
+  /* Con más números de los previstos —o en otro orden— la sustitución pondría una cifra en
+     el sitio de otra, y publicar el P75 donde va la mediana es peor que no tocar nada. */
+  const avisos = [];
+  const buf = await plantilla([
+    new Paragraph('Tabla 5. Rango Intercuartil'),
+    tablaRango(),
+    parrafoConCifras(['1.11%', '2.22%', '3.33%']),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+
+  const salida = actualizarProsaTrasTabla(xml, 'Rango Intercuartil', ['9,990%', '8,880%'], avisos);
+  const texto = textoPlanoOoxml(salida);
+  assert.ok(texto.includes('1.11%') && texto.includes('3.33%'), 'la frase queda intacta');
+  assert.ok(!texto.includes('9,990'), 'y no se escribe nada');
+  assert.strictEqual(avisos.length, 1, 'pero se avisa');
+  assert.match(avisos[0], /no trae las 2 cifras que se esperaban/);
+});
+
+/* ══════════════════ ANEXO B — descripciones de comparables ══════════════════ */
+
+test('el ANEXO B se escribe en el cuerpo y no dentro del índice', async () => {
+  /* El título sale dos veces: en la tabla de contenidos y en el cuerpo. Tomando la
+     PRIMERA aparición, el inicio y el final de la sección caían los dos dentro del índice
+     —a unos cientos de caracteres uno del otro—, así que las descripciones y los estados
+     financieros se escribían ahí, se destruía la entrada del índice, y el ANEXO B de
+     verdad se quedaba con lo que trajera la plantilla: el del año anterior. */
+  const buf = await plantilla([
+    parrafo('ANEXO A. Estados financieros . 40'),
+    parrafo('ANEXO B. Descripciones de comparables . 45'),
+    parrafo('ANEXO C. Matriz de Rechazo . 88'),
+    parrafo('Cuerpo del informe que no se puede perder.'),
+    parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
+    parrafo('DESCRIPCION VIEJA DE LA PLANTILLA'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+    parrafo('MATRIZ VIEJA'),
+  ]);
+  const zip = new PizZip(buf);
+  insertarImagenesAnexoB(zip, {
+    comparables: [{ name: 'ACME COMPARABLE SA', eeffArchivo: 'acme.pdf', descActividad: 'Desarrolla videojuegos.' }],
+  });
+
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.ok(texto.includes('ACME COMPARABLE SA'), 'la comparable tiene que aparecer');
+  assert.ok(!texto.includes('DESCRIPCION VIEJA'), 'y la descripción de la plantilla irse');
+
+  /* El índice queda intacto: sus tres entradas siguen, y con ellas el cuerpo intermedio. */
+  assert.ok(texto.includes('ANEXO A. Estados financieros . 40'), 'la entrada del índice del A');
+  assert.ok(texto.includes('ANEXO C. Matriz de Rechazo . 88'), 'y la del C, que era la que se perdía');
+  assert.ok(texto.includes('Cuerpo del informe que no se puede perder'), 'y lo que va en medio');
+  /* Y el ANEXO C del cuerpo sigue en pie: es el corte de la sección, no parte de ella. */
+  assert.ok(texto.includes('MATRIZ VIEJA'), 'el anexo siguiente no se toca');
+  assert.ok(xml.includes('</w:body>'), 'el documento queda bien cerrado');
+});
+
+test('en el ANEXO B del .docx salen también las comparables sin estado financiero', async () => {
+  /* El filtro por `eeffArchivo` las dejaba fuera y en su lugar quedaba el bloque del
+     contribuyente ANTERIOR. Ahora entran todas: las que falten, con un [PENDIENTE] que se
+     ve, porque un hueco señalado se completa y unas cifras del año pasado se radican. */
+  const buf = await plantilla([
+    parrafo('ANEXO B. Descripciones de comparables . 45'),
+    parrafo('ANEXO C. Matriz de Rechazo . 88'),
+    parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
+    parrafo('BLOQUE VIEJO DEL INFORME ANTERIOR'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+  ]);
+  const zip = new PizZip(buf);
+  insertarImagenesAnexoB(zip, {
+    comparables: [
+      { name: 'CON EEFF SA', eeffArchivo: 'a.pdf', descActividad: 'Desarrolla juegos.' },
+      { name: 'SIN EEFF SA', descActividad: 'Publica juegos.' },
+    ],
+  });
+
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.ok(texto.includes('CON EEFF SA'), 'la que tiene documento');
+  assert.ok(texto.includes('SIN EEFF SA'), 'y la que no, que antes desaparecía');
+  assert.ok(texto.includes('[PENDIENTE]') && texto.includes('SIN EEFF SA'),
+    'con el hueco señalado y nombrando a cuál le falta');
+  assert.ok(!texto.includes('BLOQUE VIEJO'), 'y nada del informe anterior sobrevive');
+});
+
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */
 
 const ESTUDIO_ANEXO_C = {
@@ -985,4 +1147,120 @@ test('las letras del ANEXO C son las de la Tabla 16', async () => {
   assert.ok(texto.includes('RIGOR UNO' + letraDe('rigorFuncional')), 'diferencias funcionales');
   assert.ok(texto.includes('HOLD UNO' + letraDe('holding')), 'holding');
   assert.ok(texto.includes('OK UNO' + letraDe('aceptadas')), 'aceptadas');
+});
+
+const parrafoXml = (texto) => `<w:p><w:r><w:t>${texto}</w:t></w:r></w:p>`;
+
+test('localizarBloqueProsa delimita desde el encabezado de inicio hasta el de fin, sin incluirlo', () => {
+  const xml = [
+    parrafoXml('Preámbulo'),
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('CRECIMIENTO MUNDIAL'),
+    parrafoXml('La economía mundial transitó durante el bienio 2024-2025...'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Cierre'),
+  ].join('');
+
+  const bloque = localizarBloqueProsa(
+    xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']
+  );
+
+  assert.ok(bloque);
+  const dentro = xml.slice(bloque.inicio, bloque.fin);
+  assert.match(dentro, /A\. Análisis del Panorama/);
+  assert.match(dentro, /CRECIMIENTO MUNDIAL/);
+  assert.match(dentro, /bienio 2024-2025/);
+  assert.doesNotMatch(dentro, /Crecimiento del PIB Mundial \(2024-2026\)/);
+});
+
+test('localizarBloqueProsa devuelve null si no encuentra el encabezado de inicio', () => {
+  const xml = parrafoXml('Algo que no es el encabezado buscado');
+  assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
+});
+
+test('localizarBloqueProsa devuelve null si el encabezado de inicio existe pero ningún tituloFin aparece después', () => {
+  const xml = parrafoXml('A. Análisis del Panorama de la Economía Mundial') + parrafoXml('Cierre sin tabla');
+  assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
+});
+
+test('localizarBloqueProsa ignora la entrada de la Tabla de Contenido y encuentra el encabezado real del cuerpo', () => {
+  const entradaToc = '<w:p><w:pPr><w:pStyle w:val="TDC2"/></w:pPr><w:r><w:t>Análisis del Panorama de la Economía Mundial</w:t></w:r>'
+    + '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
+  const xml = [
+    entradaToc,
+    parrafoXml('B. Análisis del panorama de la economía colombiana'), // otra entrada del TOC, distinta
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'), // encabezado real del cuerpo
+    parrafoXml('La prosa real que hay que reemplazar.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+  ].join('');
+
+  const bloque = localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']);
+  assert.ok(bloque);
+  const dentro = xml.slice(bloque.inicio, bloque.fin);
+  assert.doesNotMatch(dentro, /economía colombiana/);
+  assert.match(dentro, /La prosa real que hay que reemplazar/);
+});
+
+test('parrafosOoxmlDesdeHtml convierte cada <p> en un párrafo y <strong> en negrita', () => {
+  const html = '<p>Primer párrafo con <strong>énfasis</strong> normal.</p><p>Segundo párrafo.</p>';
+  const xml = parrafosOoxmlDesdeHtml(html);
+
+  assert.equal((xml.match(/<w:p>/g) || []).length, 2);
+  assert.match(xml, /<w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">énfasis<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">Primer párrafo con <\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve"> normal\.<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">Segundo párrafo\.<\/w:t>/);
+});
+
+test('parrafosOoxmlDesdeHtml aplana enlaces a su texto visible, sin dejar el <a>', () => {
+  const html = '<p>Fuente: <a href="https://dane.gov.co">DANE</a>.</p>';
+  const xml = parrafosOoxmlDesdeHtml(html);
+  assert.match(xml, /<w:t xml:space="preserve">Fuente: DANE\.<\/w:t>/);
+  assert.doesNotMatch(xml, /<a /);
+});
+
+test('parrafosOoxmlDesdeHtml devuelve cadena vacía si el HTML no trae <p>', () => {
+  assert.equal(parrafosOoxmlDesdeHtml(''), '');
+  assert.equal(parrafosOoxmlDesdeHtml(null), '');
+});
+
+test('actualizarApartadosMacroOoxml reemplaza la prosa de mundial y colombia con la narrativa de Firestore', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto de END GAME sobre Colombia, 2024.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa real del mundo para este cliente.</p>',
+      colombia: '<p>Narrativa real de Colombia para este cliente.</p>',
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.match(salida, /Narrativa real del mundo para este cliente\./);
+  assert.match(salida, /Narrativa real de Colombia para este cliente\./);
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.equal(avisos.length, 0);
+});
+
+test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narrativa, y avisa', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, null, 2026, avisos);
+
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
+  assert.ok(avisos.length >= 1);
 });
