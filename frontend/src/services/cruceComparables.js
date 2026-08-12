@@ -11,6 +11,7 @@
    un rechazo en lugar de limitarse a negarlo. */
 
 import { nameKey } from './comparablesEngine.js';
+import { pctf } from '../utils/calculations.js';
 
 /* Umbral de solapamiento de palabras por debajo del cual no se acepta el cruce.
    0,5 es el valor del Bloque 18: con la mitad de las palabras significativas en
@@ -214,7 +215,10 @@ const NOMBRE_MODO = {
  *  Un rechazo sin motivo no se puede corregir. */
 export function motivoCruce(cruce, entrada, nombreArchivo) {
   const leido = String((entrada && entrada.nombre) || '').trim() || nombreArchivo || 'documento sin nombre';
-  const pct = Math.round((cruce.punt || 0) * 100);
+  /* `pctf` recibe la fracción y pone el signo, así que aquí desaparece el `* 100` y de los
+     literales de abajo desaparece el « %»: dejar cualquiera de los dos daba una cadena
+     creíble y falsa —«8.700,000 %» o «87,000 % %»—. */
+  const pct = pctf(cruce.punt || 0);
 
   if (cruce.modo === 'sin-comparables') {
     return 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a la ' +
@@ -232,15 +236,15 @@ export function motivoCruce(cruce, entrada, nombreArchivo) {
     const cerca = cruce.masCercana && cruce.masCercana.name;
     return cerca
       ? 'El documento es de «' + leido + '», que no está entre las comparables del estudio. ' +
-        'Lo más parecido era «' + cerca + '», con ' + pct + ' % de coincidencia — por debajo del ' +
-        Math.round(UMBRAL_TOKENS * 100) + ' % que se exige.'
+        'Lo más parecido era «' + cerca + '», con ' + pct + ' de coincidencia — por debajo del ' +
+        pctf(UMBRAL_TOKENS) + ' que se exige.'
       : 'El documento es de «' + leido + '» y no se parece a ninguna de las comparables del estudio.';
   }
 
   const base = 'Asignado a «' + cruce.comparable.name + '» porque ' + (NOMBRE_MODO[cruce.modo] || cruce.modo);
   return esCruceFirme(cruce)
     ? base + '.'
-    : base + ' (' + pct + ' %). Se leyó «' + leido + '»: confírmalo antes de radicar.';
+    : base + ' (' + pct + '). Se leyó «' + leido + '»: confírmalo antes de radicar.';
 }
 
 /** Motivo del rechazo cuando el documento se sube a una fila concreta y resulta
@@ -248,9 +252,9 @@ export function motivoCruce(cruce, entrada, nombreArchivo) {
 export function motivoRechazoEnFila(entrada, comparableDestino, nombreArchivo) {
   const leido = String((entrada && entrada.nombre) || '').trim() || nombreArchivo || 'documento sin nombre';
   const destino = (comparableDestino && comparableDestino.name) || 'la fila seleccionada';
-  const pct = Math.round(parecido(leido, destino) * 100);
+  const pct = pctf(parecido(leido, destino));
   return 'El documento es de «' + leido + '» y lo estás cargando en «' + destino + '» (' + pct +
-    ' % de coincidencia). No se aplicaron las cifras: si de verdad corresponde, corrige la razón ' +
+    ' de coincidencia). No se aplicaron las cifras: si de verdad corresponde, corrige la razón ' +
     'social de la comparable o usa la carga masiva, que reparte cada documento a su fila.';
 }
 

@@ -13,7 +13,7 @@
    queda vacía, queda con el dato del cliente anterior.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { fmt, num } from '../utils/calculations.js';
+import { fmt, num, pctf } from '../utils/calculations.js';
 
 const SIN_DATO = '—';
 
@@ -42,7 +42,9 @@ export function verticalSobreActivos(estudio) {
   return (valor) => {
     const n = num(valor);
     if (n === null || !total) return SIN_DATO;
-    return ((n / total) * 100).toFixed(2) + '%';
+    /* El formato lo pone `pctf`, no una copia local: cuando cada sitio se formateaba solo, el
+       mismo informe publicaba «4,985%» por una ruta y «4.98%» por la otra. */
+    return pctf(n / total);
   };
 }
 

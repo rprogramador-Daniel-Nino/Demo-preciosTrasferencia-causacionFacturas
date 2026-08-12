@@ -379,9 +379,9 @@ test('el A.V. del ANEXO A sale de la misma cuenta que la Tabla 10', async () => 
     conTabla('<w:p><w:t>Tabla 10. Activos a 31 de diciembre de 2025</w:t></w:p>'),
     ESTUDIO_EEFF,
   );
-  /* 12.417.756 sobre 2.179.479.687 es 0,57 %. */
-  assert.match(tabla10, /0\.57%/, 'la Tabla 10 calcula el vertical sobre el total de activos');
-  assert.match(anexo, /0\.57%/, 'y el anexo tiene que dar lo mismo');
+  /* 12.417.756 sobre 2.179.479.687 es 0,570 %. */
+  assert.match(tabla10, /0,570 %/, 'la Tabla 10 calcula el vertical sobre el total de activos');
+  assert.match(anexo, /0,570 %/, 'y el anexo tiene que dar lo mismo');
 });
 
 test('el ERI del ANEXO A declara el ajuste excluido', async () => {
@@ -585,7 +585,7 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
 
   assert.ok(xmlActualizado.includes('Tabla 10. Activos a 31 de diciembre de 2024'), 'No se reemplazó la Tabla 10');
   assert.ok(xmlActualizado.includes('5.000.000'), 'Falta el valor del efectivo formateado en la Tabla 10');
-  assert.ok(xmlActualizado.includes('5.00%'), 'Falta el análisis vertical de efectivo en la Tabla 10');
+  assert.ok(xmlActualizado.includes('5,000 %'), 'Falta el análisis vertical de efectivo en la Tabla 10');
 });
 
 

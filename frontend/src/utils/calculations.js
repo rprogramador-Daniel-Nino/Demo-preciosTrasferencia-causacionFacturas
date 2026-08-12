@@ -91,9 +91,20 @@ export function num(v) {
   return negativo ? -n : n;
 }
 
+/* Tres decimales y separador de es-CO. Es la convención del informe y la que `index.html` ya
+   aplicaba: antes de unificarlo, un mismo estudio publicaba «4,985%» por la ruta del monolito y
+   «4.98%» por la del gestor para la misma cifra.
+
+   Los tres decimales no son cosmética. Los márgenes de este dominio se mueven en centésimas de
+   punto, y con dos decimales «4,985 %» y «4,984 %» se imprimen iguales.
+
+   `toLocaleString` pone la coma sola; un `replace('.', ',')` a mano se rompe en cuanto el
+   número lleva separador de miles. La guarda de `isNaN` la tenía el monolito y aquí faltaba:
+   `pctf(NaN)` devolvía la cadena «NaN%», que se radicaba tal cual. */
 export function pctf(v) {
-  if (v === null || v === undefined) return '—';
-  return (v * 100).toFixed(2) + '%';
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v * 100).toLocaleString('es-CO',
+    { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' %';
 }
 
 export function fmt(v) {

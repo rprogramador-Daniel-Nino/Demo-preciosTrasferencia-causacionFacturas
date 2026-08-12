@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { montoOperacion, num, fmt } from './calculations.js';
+import { montoOperacion, num, fmt, pctf } from './calculations.js';
 
 /* ══════ montoOperacion ══════
    El monto de las operaciones con vinculados se guarda en más de un campo y cada
@@ -53,4 +53,36 @@ test('num distingue el cero de la ausencia', () => {
   assert.strictEqual(num(''), null);
   assert.strictEqual(num(null), null);
   assert.strictEqual(num(0), 0);
+});
+
+/* ══════ pctf ══════
+   Tres decimales y separador de es-CO. La convención no es nueva: `index.html` ya formateaba
+   con toLocaleString('es-CO') y tres decimales, mientras este `pctf` daba dos decimales con
+   punto. El mismo estudio publicaba «4,985%» por la ruta del monolito y «4.98%» por la del
+   gestor para la misma cifra. */
+
+test('pctf imprime tres decimales con coma y espacio antes del signo', () => {
+  assert.strictEqual(pctf(0.04985), '4,985 %');
+});
+
+test('pctf conserva los tres decimales cuando el valor no los necesita', () => {
+  // `minimumFractionDigits` es lo que lo garantiza; un toFixed mal puesto daría «5 %».
+  assert.strictEqual(pctf(0.05), '5,000 %');
+  assert.strictEqual(pctf(1), '100,000 %');
+});
+
+test('pctf distingue dos cifras que con dos decimales se imprimían iguales', () => {
+  // La razón de ser del cambio: los márgenes se mueven en centésimas de punto.
+  assert.notStrictEqual(pctf(0.04985), pctf(0.04984));
+});
+
+test('pctf devuelve el hueco visible sin dato, incluido NaN', () => {
+  // NaN es la guarda que el monolito ya tenía y a esta versión le faltaba: devolvía «NaN%».
+  assert.strictEqual(pctf(null), '—');
+  assert.strictEqual(pctf(undefined), '—');
+  assert.strictEqual(pctf(NaN), '—');
+});
+
+test('pctf formatea los negativos con su signo y los tres decimales', () => {
+  assert.strictEqual(pctf(-0.0432), '-4,320 %');
 });
