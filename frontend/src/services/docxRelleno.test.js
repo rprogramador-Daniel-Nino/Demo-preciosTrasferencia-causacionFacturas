@@ -1036,6 +1036,33 @@ test('el ANEXO B se escribe en el cuerpo y no dentro del índice', async () => {
   assert.ok(xml.includes('</w:body>'), 'el documento queda bien cerrado');
 });
 
+test('en el ANEXO B del .docx salen también las comparables sin estado financiero', async () => {
+  /* El filtro por `eeffArchivo` las dejaba fuera y en su lugar quedaba el bloque del
+     contribuyente ANTERIOR. Ahora entran todas: las que falten, con un [PENDIENTE] que se
+     ve, porque un hueco señalado se completa y unas cifras del año pasado se radican. */
+  const buf = await plantilla([
+    parrafo('ANEXO B. Descripciones de comparables . 45'),
+    parrafo('ANEXO C. Matriz de Rechazo . 88'),
+    parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
+    parrafo('BLOQUE VIEJO DEL INFORME ANTERIOR'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+  ]);
+  const zip = new PizZip(buf);
+  insertarImagenesAnexoB(zip, {
+    comparables: [
+      { name: 'CON EEFF SA', eeffArchivo: 'a.pdf', descActividad: 'Desarrolla juegos.' },
+      { name: 'SIN EEFF SA', descActividad: 'Publica juegos.' },
+    ],
+  });
+
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.ok(texto.includes('CON EEFF SA'), 'la que tiene documento');
+  assert.ok(texto.includes('SIN EEFF SA'), 'y la que no, que antes desaparecía');
+  assert.ok(texto.includes('[PENDIENTE]') && texto.includes('SIN EEFF SA'),
+    'con el hueco señalado y nombrando a cuál le falta');
+  assert.ok(!texto.includes('BLOQUE VIEJO'), 'y nada del informe anterior sobrevive');
+});
+
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */
 
 const ESTUDIO_ANEXO_C = {

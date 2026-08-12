@@ -1226,7 +1226,12 @@ export function insertarAnexoC(zip, estudio) {
  * @returns {{insertadas:number}}
  */
 export function insertarImagenesAnexoB(zip, estudio) {
-  const comparables = ((estudio && estudio.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
+  /* TODAS las comparables de la muestra, tengan o no estado financiero cargado. El filtro
+     por `eeffArchivo` dejaba fuera del anexo a las que faltaban, y el anexo se radicaba con
+     los bloques del contribuyente anterior en su lugar. Las que no traen documento salen con
+     su descripción y un párrafo que dice qué falta: un hueco señalado se completa, unas
+     cifras del año pasado se radican sin que nadie lo note. */
+  const comparables = ((estudio && estudio.comparables) || []).filter((c) => c && c.name);
   if (!comparables.length) return { insertadas: 0 };
 
   let xml = zip.file(RUTA_DOC).asText();
@@ -1301,7 +1306,12 @@ export function insertarImagenesAnexoB(zip, estudio) {
       });
     } else {
       // Párrafo de pendiente si no tiene imágenes
-      nuevoXmlB += `\n<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/><w:b/></w:rPr><w:t>Pendiente: vuelva a cargar el Estado Financiero de esta comparable en el Paso 4 del motor de comparables.</w:t></w:r></w:p>`;
+      /* En rojo y con el nombre: es un hueco que hay que ver antes de radicar, no una nota
+         al pie. Sustituye a lo que había antes en su lugar —el bloque de esta comparable en
+         el informe del contribuyente anterior—. */
+      nuevoXmlB += `\n<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/><w:b/></w:rPr>`
+        + `<w:t>${escaparXml('[PENDIENTE] Falta el estado financiero de ' + c.name
+          + '. Cárgalo en el paso 4 del motor de comparables y vuelve a generar el informe.')}</w:t></w:r></w:p>`;
     }
   });
 
