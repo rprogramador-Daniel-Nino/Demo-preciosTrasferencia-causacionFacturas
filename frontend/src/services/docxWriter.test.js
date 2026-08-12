@@ -659,3 +659,20 @@ test('el estilo por defecto fija el espacio entre párrafos en cero', async () =
   assert.match(estilos, /<w:spacing[^>]*w:lineRule="auto"/);
   assert.match(estilos, /<w:spacing[^>]*w:line="276"/);
 });
+
+test('el índice del .docx asocia hipervínculos internos (redirecciones) a los marcadores de las secciones', async () => {
+  const html =
+    '<h1>1. RESUMEN EJECUTIVO</h1>' +
+    '<p>1. RESUMEN EJECUTIVO ....................... 12</p>' +
+    '<h2>1.1 Antecedentes</h2>' +
+    '<p>1.1 Antecedentes ....................... 13</p>';
+  const { doc } = await abrir(html);
+
+  // Verificamos que se hayan creado los marcadores (BookmarkStart) en los encabezados
+  assert.match(doc, /<w:bookmarkStart[^>]*w:name="heading_ref_1"/, 'falta el marcador del h1');
+  assert.match(doc, /<w:bookmarkStart[^>]*w:name="heading_ref_2"/, 'falta el marcador del h2');
+
+  // Verificamos que se hayan creado los hipervínculos internos (hyperlink) en las entradas del índice
+  assert.match(doc, /<w:hyperlink[^>]*w:anchor="heading_ref_1"/, 'falta el hipervínculo del h1 en el índice');
+  assert.match(doc, /<w:hyperlink[^>]*w:anchor="heading_ref_2"/, 'falta el hipervínculo del h2 en el índice');
+});
