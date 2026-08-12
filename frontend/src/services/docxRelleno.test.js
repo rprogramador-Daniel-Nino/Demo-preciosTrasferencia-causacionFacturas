@@ -11,7 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB,
+  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -900,6 +900,73 @@ test('la Tabla 4 declara el código de operación y no lo inventa cuando no se p
   assert.ok(!sinCodigo.includes('Old Table 4'), 'la Tabla 4 tiene que haberse reemplazado');
   assert.ok(sinCodigo.includes('VENTA SERVICIOS'), 'la descripción es la del estudio');
   assert.ok(!sinCodigo.includes('>07<'), 'no debe inventar el código 07');
+});
+
+/* ══════════════════ prosa que describe una tabla ══════════════════ */
+
+/* La plantilla parte la frase en varios runs y deja cada cifra en el suyo, que es lo que
+   permite cambiarlas sin tocar el texto. Así viene el informe del cliente. */
+const parrafoConCifras = (cifras) => new Paragraph({
+  children: [
+    new TextRun({ text: 'Como se observa en el cuadro anterior, el rango Intercuartil obtenido por las compañías comparables se ubica entre el percentil 25 (' }),
+    new TextRun({ text: cifras[0] }),
+    new TextRun({ text: ') y (' }),
+    new TextRun({ text: cifras[1] }),
+    new TextRun({ text: ') percentil 75, la mediana con (' }),
+    new TextRun({ text: cifras[2] }),
+    new TextRun({ text: ').' }),
+  ],
+});
+
+const tablaRango = () => new Table({
+  rows: [
+    new TableRow({ children: ['RANGO', 'Percentil 25', 'Mediana', 'Percentil 75'].map(
+      (t) => new TableCell({ children: [new Paragraph(t)] })) }),
+    new TableRow({ children: ['5.58%', '1.78%', '2.34%', '8.80%'].map(
+      (t) => new TableCell({ children: [new Paragraph(t)] })) }),
+  ],
+});
+
+test('la descripción de una tabla se actualiza con las cifras del estudio', async () => {
+  /* La tabla se rehacía con el estudio y la frase de debajo se quedaba con las cifras del
+     informe del año anterior, contradiciéndola en el mismo documento. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 5. Rango Intercuartil'),
+    tablaRango(),
+    parrafoConCifras(['-3.001%', '6.418%', '-1.075%']),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+
+  const salida = actualizarProsaTrasTabla(xml, 'Rango Intercuartil', ['1,780%', '8,800%', '2,340%']);
+  const texto = textoPlanoOoxml(salida);
+
+  assert.ok(texto.includes('percentil 25 (1,780%)'), 'el P25 nuevo');
+  assert.ok(texto.includes('(8,800%) percentil 75'), 'el P75 nuevo');
+  assert.ok(texto.includes('la mediana con (2,340%)'), 'y la mediana');
+  ['-3.001', '6.418', '-1.075'].forEach((v) =>
+    assert.ok(!texto.includes(v), `la cifra vieja ${v} tiene que irse`));
+  /* Y la redacción intacta, que es la del cliente. */
+  assert.ok(texto.includes('Como se observa en el cuadro anterior, el rango Intercuartil obtenido'),
+    'no se toca una sola palabra');
+});
+
+test('si la descripción no trae las cifras esperadas se deja como estaba', async () => {
+  /* Con más números de los previstos —o en otro orden— la sustitución pondría una cifra en
+     el sitio de otra, y publicar el P75 donde va la mediana es peor que no tocar nada. */
+  const avisos = [];
+  const buf = await plantilla([
+    new Paragraph('Tabla 5. Rango Intercuartil'),
+    tablaRango(),
+    parrafoConCifras(['1.11%', '2.22%', '3.33%']),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+
+  const salida = actualizarProsaTrasTabla(xml, 'Rango Intercuartil', ['9,990%', '8,880%'], avisos);
+  const texto = textoPlanoOoxml(salida);
+  assert.ok(texto.includes('1.11%') && texto.includes('3.33%'), 'la frase queda intacta');
+  assert.ok(!texto.includes('9,990'), 'y no se escribe nada');
+  assert.strictEqual(avisos.length, 1, 'pero se avisa');
+  assert.match(avisos[0], /3 cifra\(s\) y se esperaban 2/);
 });
 
 /* ══════════════════ ANEXO B — descripciones de comparables ══════════════════ */
