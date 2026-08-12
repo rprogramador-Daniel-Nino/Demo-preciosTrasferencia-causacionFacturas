@@ -35,7 +35,24 @@ async function buscarCifras(geminiApiKey, anioActual) {
   }
   const texto = (candidato.content.parts || []).map((p) => p.text || '').join('');
   const groundingChunks = (candidato.groundingMetadata && candidato.groundingMetadata.groundingChunks) || [];
-  return parsearRespuestaBusqueda(texto, groundingChunks);
+  const series = parsearRespuestaBusqueda(texto, groundingChunks);
+
+  /* Qué trajo la corrida, para poder diagnosticarla desde los logs. Sin esto, las tres
+     formas de quedarse sin datos —el modelo no buscó, la respuesta se cortó y el JSON no
+     se pudo extraer, o vino con claves que no son series— acababan en el mismo mensaje
+     («ninguna serie confiable») y no había manera de saber cuál fue. La corrida es mensual:
+     esperar a la siguiente para adivinar sale caro. */
+  console.info('[analisisMercado] búsqueda: '
+    + `grounding=${groundingChunks.length} `
+    + `series=${Object.keys(series).length} `
+    + `finishReason=${candidato.finishReason || '(sin dato)'} `
+    + `largoRespuesta=${texto.length}`);
+  if (!groundingChunks.length || !Object.keys(series).length) {
+    console.warn('[analisisMercado] respuesta que no dio series utilizables (primeros 700): '
+      + texto.slice(0, 700));
+  }
+
+  return series;
 }
 
 /* Con respaldo en Gemini: esta función llama a Anthropic directamente y no pasa por
@@ -67,7 +84,17 @@ async function actualizarAnalisisMercado({ geminiApiKey, claudeApiKey, anioActua
     Object.entries(series).filter(([, s]) => s.confiable)
   );
   if (!Object.keys(seriesConfiables).length) {
-    throw new Error('Ninguna serie trajo un dato confiable esta corrida; se conserva la anterior.');
+    /* El motivo, en el propio error: «ninguna confiable» tiene dos causas muy distintas y
+       arreglarlas requiere cosas distintas. Si no se parseó ninguna serie, el problema está
+       en la respuesta (se cortó, o no venía el JSON). Si se parsearon pero ninguna es
+       confiable, el modelo contestó de memoria sin usar la búsqueda, y lo que hay que
+       cambiar es cómo se le pide. */
+    const cuantas = Object.keys(series).length;
+    throw new Error(cuantas
+      ? `Se parsearon ${cuantas} serie(s) pero ninguna vino de una búsqueda real: el modelo `
+        + 'respondió de memoria. Se conserva la corrida anterior.'
+      : 'No se pudo parsear ninguna serie de la respuesta de Gemini; ver el log de la '
+        + 'respuesta cruda. Se conserva la corrida anterior.');
   }
 
   const narrativa = await redactarNarrativa(claudeApiKey, geminiApiKey, seriesConfiables, anioActual);

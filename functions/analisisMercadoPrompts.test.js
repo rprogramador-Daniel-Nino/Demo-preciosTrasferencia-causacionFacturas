@@ -33,6 +33,28 @@ test('construirPromptBusqueda pide las 8 series y la ventana de 4 años', () => 
   ['2024', '2025', '2026', '2027'].forEach((a) => assert.ok(prompt.includes(a), 'falta el año ' + a));
 });
 
+test('el prompt manda buscar y NO exige que la respuesta sea solo el JSON', () => {
+  /* Esto es lo que tenía muerta la Sección III. Con «Responde ÚNICAMENTE con un objeto
+     JSON (sin texto adicional)», Gemini se salta la búsqueda y contesta de memoria:
+     devolvía las ocho series completas y bien formadas, pero con `groundingChunks` vacío,
+     y como la confiabilidad se mide justo por ahí, la corrida se descartaba entera. Un mes
+     por intento.
+
+     Medido en producción el 2026-08-12: con la exigencia de formato, grounding=0 y ninguna
+     serie guardada; pidiendo primero buscar y citar, grounding=32 y las ocho series con
+     fuente del DANE, el Banco de la República y el FMI.
+
+     `extraerJSON` escanea llaves balanceadas, así que el JSON se recupera igual venga con
+     prosa o con markdown alrededor: no hace falta prohibirle escribir. */
+  const prompt = construirPromptBusqueda(2026);
+  assert.ok(/Busca en la web/i.test(prompt), 'tiene que ordenar buscar');
+  assert.ok(/NO respondas con cifras que recuerdes/i.test(prompt), 'y prohibir contestar de memoria');
+  assert.ok(!/ÚNICAMENTE con un objeto JSON/i.test(prompt),
+    'no puede volver la exigencia de responder solo el JSON: apaga la búsqueda');
+  assert.ok(!/sin texto adicional/i.test(prompt),
+    'ni la de no añadir texto, por el mismo motivo');
+});
+
 /* La confianza depende de que la respuesta haya venido de una búsqueda real
    (grounding no vacío), no de que la fuenteUrl del JSON coincida con la URI de
    algún chunk: los groundingChunks de Gemini son URLs de redirección de Google

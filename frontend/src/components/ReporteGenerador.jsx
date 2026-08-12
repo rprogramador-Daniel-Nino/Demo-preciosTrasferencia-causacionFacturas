@@ -2,7 +2,7 @@ import React, {
   useState, useEffect, useMemo, useRef,
 } from 'react';
 import axios from 'axios';
-import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle } from 'lucide-react';
+import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle, RefreshCw } from 'lucide-react';
 import mammoth from 'mammoth';
 import { diagnosticarCobertura } from '../services/tablasInforme';
 import { normalizarActividad, claveActividad } from '../services/analisisMercado';
@@ -1036,6 +1036,55 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      obsoleto el resto de la sesión. Un `useRef` se lee y se escribe de inmediato, sin esperar a
      un repintado, así que cierra la ventana del todo y no sólo el caso normal. */
   const generandoDocxRef = useRef(false);
+  /* Actualización de lo que no vive en el estudio: ver `actualizarInformacion`. */
+  const [actualizando, setActualizando] = useState(false);
+  const actualizandoRef = useRef(false);
+
+  /* Rehace el informe con lo que hay AHORA, sin volver a montar la pantalla ni rehacer el
+     estudio.
+
+     Hacía falta porque parte de lo que alimenta el documento no vive en el estudio y solo se
+     leía una vez, al abrir esta pantalla: el análisis de mercado (las tablas de la Sección
+     III y la narrativa de III.A/III.B) y el del sector (III.C). Si el cron los refrescaba
+     —o alguien los generaba— después de que abrieras el gestor, el informe seguía saliendo
+     con el contenido de la plantilla y la única salida era recargar la página entera sin
+     saber que había que hacerlo.
+
+     Lo que este botón NO puede recuperar es el universo de Capital IQ, del que se deriva la
+     matriz del ANEXO C: eso lo restaura el paso 4 al montarse, descargando el cribado. Si
+     falta, el aviso de cobertura lo dice y manda ahí. */
+  const actualizarInformacion = async () => {
+    if (actualizandoRef.current) return;
+    actualizandoRef.current = true;
+    setActualizando(true);
+    try {
+      const macro = await leerAnalisisMercado();
+      setAnalisisMercado(macro);
+
+      /* El del sector se rehace solo si el estudio trae con qué buscarlo, y se lee con la
+         misma clave que la carga inicial —solo la actividad normalizada—. Si no hay una
+         corrida guardada se deja el que ya estuviera: este botón actualiza, no dispara
+         generaciones que cuestan una llamada de IA. */
+      const actividadTexto = ((study && (study.actividad_especifica || study.objeto)) || '').trim();
+      if (actividadTexto) {
+        const sector = await leerAnalisisSector(claveActividad(normalizarActividad(actividadTexto)));
+        if (sector) setAnalisisSector(sector);
+      }
+
+      /* Y la vista previa, que es donde se comprueba si el documento quedó completo: se
+         rehace con la plantilla marcada del estudio, igual que la descarga. */
+      if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
+        const marcado = await leerDocxMarcado(plantillaActiva.id);
+        if (marcado) await previsualizarDocx(marcado);
+      }
+    } catch (err) {
+      console.error('[generador] no se pudo actualizar la información', err);
+      setAvisoCobertura('No se pudo actualizar la información: ' + (err && err.message ? err.message : 'error desconocido'));
+    } finally {
+      actualizandoRef.current = false;
+      setActualizando(false);
+    }
+  };
 
   const descargarDocx = async () => {
     if (generandoDocxRef.current) return;
@@ -1344,6 +1393,18 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
               Volver a marcar
             </button>
           )}
+          {/* Rehace el informe con los datos actuales sin recargar la página ni rehacer el
+              estudio: relee el análisis de mercado y el del sector —que solo se cargaban al
+              abrir esta pantalla— y regenera la vista previa. */}
+          <button
+            onClick={actualizarInformacion}
+            disabled={actualizando || generandoDocx}
+            title="Vuelve a leer el análisis de mercado y del sector, y rehace la vista previa con los datos actuales del estudio"
+            className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={'w-3.5 h-3.5' + (actualizando ? ' animate-spin' : '')} />
+            {actualizando ? 'Actualizando…' : 'Actualizar información'}
+          </button>
           <button
             onClick={descargarDocx}
             disabled={generandoDocx}
