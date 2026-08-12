@@ -166,6 +166,12 @@ function filasResumen(grupos, universo) {
   return filas;
 }
 
+/* Las dos salen del módulo porque el ANEXO C de la ruta .docx las necesita para emitir
+   exactamente el mismo anexo (`docxRelleno.js`). Reescribirlas allá habría puesto a
+   competir dos definiciones del mismo conteo, que es como el informe acaba declarando en
+   Word un total distinto al del PDF. */
+export { filasResumen as filasResumenAnexoC, tituloDeGrupo as tituloDeGrupoAnexoC };
+
 /* El título de una tabla de listado, tal como lo escribe la plantilla: en mayúsculas. */
 function tituloDeGrupo(grupo) {
   /* La etiqueta del cuerpo del informe es una frase con su explicación —«Diferencias

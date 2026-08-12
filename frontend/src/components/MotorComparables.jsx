@@ -202,8 +202,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* La matriz del ANEXO C: qué compañía quedó en cada motivo, solo los nombres. El
          generador del informe no puede calcularla —necesita el universo enriquecido, y
          `universo` no viaja con el estudio—, así que se guarda ya agrupada. Va en
-         CAMPOS_SOLO_LOCALES: son miles de nombres y no caben en el documento de Firestore. */
-      matrizRechazo,
+         CAMPOS_SOLO_LOCALES: son miles de nombres y no caben en el documento de Firestore.
+
+         Solo se publica cuando hay algo que publicar. `updateStudy` fusiona con
+         `{...prev, ...campos}`, así que mandar `null` BORRABA la matriz guardada: al
+         reabrir un estudio, `universo` no está —no se persiste— y el cálculo de arriba
+         devuelve `null`, de modo que este efecto pisaba con nada la matriz que el estudio
+         traía de la corrida anterior. El ANEXO C del informe se quedaba entonces con la
+         tabla de la plantilla, sin que nada más lo delatara. */
+      ...(matrizRechazo ? { matrizRechazo } : {}),
       /* Conteos de la última selección: alimentan la tabla 14 del informe. */
       embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
