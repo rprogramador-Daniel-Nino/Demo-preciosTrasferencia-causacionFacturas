@@ -460,6 +460,32 @@ test('docEeff acota los hallazgos contables al tope de las reglas', () => {
   assert.strictEqual(doc.hallazgos.length, 50);
 });
 
+test('docEeff persiste eeffDatos, la matriz completa que consume el ANEXO B', () => {
+  const eeffDatos = { ingresos_operacionales: 28.81, costo_ventas: 0.15, unidad_origen: '' };
+  const doc = docEeff({
+    comparable: { name: 'QubicGames', nameKey: 'qubicgames', s: 1000, eeffDatos },
+    anio: 2024, usuario: USUARIO, marcaDeTiempo: AHORA,
+  });
+  assert.deepStrictEqual(doc.eeffDatos, eeffDatos);
+});
+
+test('docEeff conserva el eeffDatos previo si esta carga no trae uno nuevo', () => {
+  const previo = { creadoPor: 'uid-juan', creadoEn: 'F', eeffDatos: { ingresos_operacionales: 28.81 } };
+  const doc = docEeff({
+    comparable: { name: 'QubicGames', nameKey: 'qubicgames', s: 1000 },
+    anio: 2024, usuario: USUARIO, previo, marcaDeTiempo: AHORA,
+  });
+  assert.deepStrictEqual(doc.eeffDatos, { ingresos_operacionales: 28.81 });
+});
+
+test('docEeff persiste propiedadPlantaEquipo (ppe), igual que las demás cifras cortas', () => {
+  const doc = docEeff({
+    comparable: { name: 'Acme', nameKey: 'acme', s: 1000, ppe: 250 },
+    anio: 2024, usuario: USUARIO, marcaDeTiempo: AHORA,
+  });
+  assert.strictEqual(doc.propiedadPlantaEquipo, 250);
+});
+
 /* ══════ reutilización de estados financieros ══════ */
 
 /* La clave se calcula con la función real: `nameKey` quita los sufijos societarios y
@@ -519,6 +545,29 @@ test('aplicarEeffGuardadoEnFila conserva las cifras que el registro no trae', ()
   const filas = [{ name: 'Acme', nameKey: CLAVE_ACME, s: '', ar: 123 }];
   const nuevas = aplicarEeffGuardadoEnFila(filas, 0, EEFF_GUARDADO[CLAVE_ACME]);
   assert.strictEqual(nuevas[0].ar, 123, 'el registro no trae cartera y la de la fila se mantiene');
+});
+
+test('aplicarEeffGuardadoEnFila también refresca eeffDatos y ppe, no solo las cifras cortas', () => {
+  const eeffDatos = { ingresos_operacionales: 28.81, costo_ventas: 0.15 };
+  const guardado = { ...EEFF_GUARDADO[CLAVE_ACME], eeffDatos, propiedadPlantaEquipo: 250 };
+  const filas = [{
+    name: 'Acme Corp', nameKey: CLAVE_ACME, s: '', ppe: 999,
+    eeffDatos: { ingresos_operacionales: 999999999 },
+  }];
+  const nuevas = aplicarEeffGuardadoEnFila(filas, 0, guardado);
+  assert.deepStrictEqual(nuevas[0].eeffDatos, eeffDatos,
+    'el ANEXO B debe leer la matriz del registro reutilizado, no la vieja de la fila');
+  assert.strictEqual(nuevas[0].ppe, 250);
+});
+
+test('aplicarEeffGuardadoEnFila deja el eeffDatos y ppe de la fila si el registro reutilizado no los trae (documento guardado antes de este fix)', () => {
+  const filas = [{
+    name: 'Acme Corp', nameKey: CLAVE_ACME, s: '', ppe: 999,
+    eeffDatos: { ingresos_operacionales: 12345 },
+  }];
+  const nuevas = aplicarEeffGuardadoEnFila(filas, 0, EEFF_GUARDADO[CLAVE_ACME]);
+  assert.deepStrictEqual(nuevas[0].eeffDatos, { ingresos_operacionales: 12345 });
+  assert.strictEqual(nuevas[0].ppe, 999);
 });
 
 /* ══════ consulta del catálogo ══════ */

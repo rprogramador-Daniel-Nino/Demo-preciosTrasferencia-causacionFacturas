@@ -414,7 +414,12 @@ export function docEeff({ comparable, anio, usuario, previo = null, marcaDeTiemp
   };
 
   /* Nombres de campo del gestor -> nombres del documento. Solo se escribe lo que es
-     un número: un null explícito borraría una cifra ya guardada. */
+     un número: un null explícito borraría una cifra ya guardada.
+
+     `propiedadPlantaEquipo` faltaba aquí igual que `eeffDatos`: el parser ya lee PP&E
+     desde 2026-08-10 (ppe: datos.propiedad_planta_equipo en aplicarEeffEnFila), pero
+     esta lista es anterior a ese cambio y nunca se amplió, así que el ajuste de PP&E
+     tampoco se sostenía al reutilizar cifras del catálogo. */
   const cifras = {
     ingresos: comparable.s,
     costos: comparable.c,
@@ -422,12 +427,24 @@ export function docEeff({ comparable, anio, usuario, previo = null, marcaDeTiemp
     cartera: comparable.ar,
     inventarios: comparable.inv,
     proveedores: comparable.ap,
+    propiedadPlantaEquipo: comparable.ppe,
   };
   Object.entries(cifras).forEach(([campo, valor]) => {
     const n = aNumero(valor);
     if (n !== null) doc[campo] = n;
     else if (previo && aNumero(previo[campo]) !== null) doc[campo] = previo[campo];
   });
+
+  /* La matriz completa que consume el ANEXO B (ingresos_operacionales, costo_ventas,
+     propiedad_planta_equipo, …): sin esto, «Buscar cifras ya cargadas» refrescaba
+     s/c/op/ar/inv/ap para el cálculo del rango pero dejaba el ANEXO B con el
+     eeffDatos que la fila ya tuviera —viejo o de otra empresa— sin ningún aviso,
+     porque el campo no queda vacío, solo desactualizado. */
+  if (comparable.eeffDatos && typeof comparable.eeffDatos === 'object') {
+    doc.eeffDatos = comparable.eeffDatos;
+  } else if (previo && previo.eeffDatos) {
+    doc.eeffDatos = previo.eeffDatos;
+  }
 
   const fuente = String(comparable.eeffArchivo || comparable.fuente || '').trim();
   if (fuente) doc.fuente = fuente.slice(0, 300);
@@ -492,6 +509,11 @@ export function aplicarEeffGuardadoEnFila(filas, indice, doc) {
     ar: cifra(doc.cartera, fila.ar),
     inv: cifra(doc.inventarios, fila.inv),
     ap: cifra(doc.proveedores, fila.ap),
+    ppe: cifra(doc.propiedadPlantaEquipo, fila.ppe),
+    /* Sin esto, el ANEXO B seguía leyendo el eeffDatos que la fila ya tuviera —viejo o
+       de otra empresa— porque esta función nunca lo tocaba: solo refrescaba los campos
+       cortos del cálculo del rango. */
+    eeffDatos: (doc.eeffDatos && typeof doc.eeffDatos === 'object') ? doc.eeffDatos : fila.eeffDatos,
     eeffHallazgos: Array.isArray(doc.hallazgos) ? doc.hallazgos : (fila.eeffHallazgos || []),
     eeffArchivo: doc.fuente || fila.eeffArchivo || '',
     eeffReutilizado: { anio: doc.anio, fuente: doc.fuente || '', nombre: doc.nombre || '' },
