@@ -13,7 +13,7 @@ El código, los comentarios, la UI y los documentos de `docs/` están en españo
 ## Comandos
 
 ```bash
-npm run build          # sync-index.js (raíz→public) + build de frontend/ (Vite→public/gestor-reportes)
+npm run build          # build de frontend/ (Vite → public/gestor-reportes)
 npm start              # corre build (prestart) y levanta server.js en :3000
 npm run dev  --prefix frontend    # Vite dev server del gestor de reportes, proxy /api → :3000
 npm run lint --prefix frontend    # oxlint (única herramienta de lint del repo)
@@ -21,58 +21,18 @@ npm test               # corre la suite de pruebas unitarias sobre scripts/lib/,
 firebase deploy        # hosting + functions; el predeploy dispara `npm run build`
 ```
 
-**La aplicación tiene pruebas unitarias integradas.** `npm test` ejecuta los casos de prueba sobre `scripts/lib/`, los servicios puros en `frontend/src/services/` (por ejemplo, el motor de rango, cálculos, parser y vocabulario de plantillas), las utilidades en `frontend/src/utils/` y las funciones de Firebase en `functions/` (con un total de ~895 pruebas). Para un cambio en estos servicios, la suite debe quedar al 100 % en verde. Para cambios puramente visuales o sobre `index.html` de la raíz, la verificación sigue siendo manual en el navegador.
-
-## Regla crítica de edición
-
-`index.html` (raíz) es la **fuente**; `public/index.html` es un **artefacto generado**
-(`scripts/sync-index.js` copia raíz→public, nunca al revés). Editar `public/index.html`
-directamente produce drift y el cambio se pierde en el siguiente `npm run build`.
-`public/vendor/` (pdf.js, `pdf.min.js`, `pdf.worker.min.js`) **no** sigue esa regla: no hay
-`vendor/` en la raíz del repo, así que `scripts/sync-index.js` nunca copia nada ahí (el copiado
-`vendor/` → `public/vendor/` solo se dispara si existe una carpeta `vendor/` en la raíz).
-`public/vendor/` está commiteado directamente y se edita ahí mismo.
+**La aplicación tiene pruebas unitarias integradas.** `npm test` ejecuta los casos de prueba sobre `scripts/lib/`, los servicios puros en `frontend/src/services/` (por ejemplo, el motor de rango, cálculos, parser y vocabulario de plantillas), las utilidades en `frontend/src/utils/` y las funciones de Firebase en `functions/` (con un total de ~895 pruebas). Para un cambio en estos servicios, la suite debe quedar al 100 % en verde. Para cambios puramente visuales, la verificación sigue siendo manual en el navegador.
 
 ## Arquitectura
 
-### Dos aplicaciones conviviendo
-
-1. **Sistema PT (`index.html`)** — monolito de ~13 000 líneas: HTML + CSS + JavaScript
-   vanilla en un solo archivo. Sin framework, sin bundler, sin módulos. Se sirve en `/`.
-   **No recibe desarrollo nuevo** (decisión del usuario, 2026-07-31): solo correcciones
-   puntuales sobre lo que ya existe ahí, cuando el problema es inherente a ese archivo.
-   Cualquier feature o funcionalidad nueva va en `frontend/`, nunca aquí.
-2. **Gestor de Reportes (`frontend/`)** — app React 19 + Vite + Tailwind 4, servida bajo
-   `/gestor-reportes/` (`vite.config.js` fija `base` y `outDir: ../public/gestor-reportes`).
-   Reimplementación del mismo dominio (ver `frontend/src/services/`, que porta lógica de
-   `index.html`) y **destino de todo el desarrollo activo**: el trabajo del día a día ocurre
-   aquí, no en `index.html`.
-
-### Estructura interna de `index.html`
-
-Entender esto es indispensable antes de tocar el archivo:
-
-- **Script principal** (`<script>` ~1925–6114): estado global (`studies`, `active`, `MATRIX`,
-  `DESCS`, `MOTOR`), utilidades (`$`, `num`, `escH`, `calc`/`calcD`), persistencia
-  (`stSet`/`stGet`/`stDel`/`stList`), motor de comparables (`moRows`, `moScore`, `moCfg`),
-  exportaciones (Word, 1125, 120), ingesta documental y llamadas a IA.
-- **`window.ORQ_OCR`** (~6151–6312): OCR sobre PDFs. PDF con capa de texto → extracción
-  directa vía pdf.js (`public/vendor/pdfjs/`); PDF escaneado → rasteriza a canvas y usa
-  tesseract.js cargado perezosamente desde CDN.
-- **~20 bloques `PARCHE PT — Bloque N`** (~6316–13232): IIFEs que se cargan *después* del
-  script principal y **reasignan funciones globales** para corregir o extender el
-  comportamiento base sin tocar el código original. Es un patrón deliberado y reversible
-  (quitar el `<script>` revierte el parche), no deuda accidental.
-
-Consecuencias prácticas:
-
-- Una función puede estar **redefinida varias veces**. Antes de editar, `grep` de todas las
-  definiciones y determina **cuál es la última que gana en tiempo de ejecución** — editar la
-  primera suele no tener efecto.
-- Algunas funciones son **cadenas de decoradores** (`window.ptContextoCompleto` se envuelve
-  tres veces guardando la anterior en `_ctxPrev`). Ahí sí importan todas las capas.
-- Los **números de línea se mueven constantemente**. Localiza el texto exacto con Grep/Read
-  en el momento de editar; nunca confíes en una línea citada en un plan o spec.
+**Gestor de Reportes (`frontend/`)** — app React 19 + Vite + Tailwind 4. Hasta el
+2026-08-13 convivía con un monolito legado, **Sistema PT** (`index.html` en la raíz,
+~13 000 líneas de HTML/CSS/JS vanilla, servido en `/`); se eliminó por decisión del
+usuario y `frontend/` pasó a servirse también en la raíz del dominio (antes solo bajo
+`/gestor-reportes/`; `vite.config.js` sigue fijando `base` y `outDir: ../public/gestor-reportes`,
+y `firebase.json`/`server.js` reescriben `/` y cualquier ruta no reconocida hacia
+`/gestor-reportes/index.html`). `frontend/src/services/` porta la lógica que antes
+vivía en aquel archivo — es el único código vivo del dominio ahora.
 
 ### Backend: tres implementaciones del mismo proxy
 
@@ -112,22 +72,16 @@ lógica, cámbialo también.
 
 ### Persistencia
 
-Sin base de datos. Todo vive en el navegador.
-
-- `index.html`: abstracción `stSet/stGet/stDel/stList` con fallback en cascada
-  `window.storage` → `localStorage` → objeto en memoria. Claves `pt:study:<slug-entidad>:<año>`.
-  Una auto-limpieza cada 24 h conserva solo los `autoSaveConfig.keepOldStudies` estudios más
-  recientes (hoy 500; `nota para programador.md` y `parche_keepOldStudies.patch` documentan
-  el ajuste, ya aplicado).
-- `frontend/`: `localStorage` directo, con **otro esquema** — `pt:study:<id>` para el detalle
-  y `pt:study:index` para el índice. Los dos esquemas no son intercambiables.
+Sin base de datos por defecto: `localStorage` directo, con `pt:study:<id>` para el
+detalle de cada estudio y `pt:study:index` para el índice. También hay respaldo en
+Firestore por usuario (`usuarios/{uid}/estudios/{id}`, ver `firestoreRepo.js`).
 
 ### Respuestas de IA
 
-Los modelos devuelven JSON envuelto en prosa o markdown con frecuencia. `index.html` incluye
-`extraerJSONDeRespuestaIA(texto)`, que escanea llaves balanceadas respetando cadenas. Úsala
-en lugar de `JSON.parse(texto.replace(fences).trim())`, que falla en cuanto el modelo agrega
-una palabra después del JSON.
+Los modelos devuelven JSON envuelto en prosa o markdown con frecuencia. `comparablesEngine.js`
+incluye `extraerJSON(texto)`, que escanea llaves balanceadas respetando cadenas. Úsala en
+lugar de `JSON.parse(texto.replace(fences).trim())`, que falla en cuanto el modelo agrega una
+palabra después del JSON.
 
 ## Flujo de trabajo documentado
 
@@ -139,19 +93,23 @@ respeta su alcance.
 
 ## Trabajo en equipo
 
-Cada quien trabaja en su rama (`juandev` y las que definan los demás) sobre un `index.html`
-que todos editan. Correr:
+Cada quien trabaja en su rama (`juandev` y las que definan los demás) sobre el mismo
+repo. Correr:
 
 ```
 /revisar-ramas-equipo
 ```
 
-Trae `main` y las ramas remotas de los compañeros, reporta qué cambió cada una **mapeado al
-bloque concreto de `index.html` que toca** —no "conflicto en index.html", que en 13 000 líneas
-no informa nada— e integra en el orden que emite el escaneo: **`main` primero** y después los
-compañeros de menor a mayor solapamiento, abortando ante cualquier conflicto fuera de
-`public/index.html` y `public/gestor-reportes/` (los únicos artefactos que regenera
-`npm run build`; `public/vendor/` está commiteado directamente y no es generado).
+Trae `main` y las ramas remotas de los compañeros, reporta qué cambió cada una e integra
+en el orden que emite el escaneo: **`main` primero** y después los compañeros de menor a
+mayor solapamiento, abortando ante cualquier conflicto fuera de `public/gestor-reportes/`
+(el único artefacto que regenera `npm run build`).
+
+El mapeo por **bloque de `index.html`** que hacía `scripts/revisar-ramas.js` quedó sin
+efecto al retirar ese archivo (2026-08-13): el script sigue corriendo —degrada a no
+reportar bloques, no falla—, pero esa parte de su lógica (`etiquetasDeHunks`,
+`bloques_en_conflicto_potencial`) es código muerto hasta que alguien la retire o la
+adapte a `frontend/`.
 
 **Dos momentos, no uno:** al empezar un spec o feature, para no duplicar trabajo, y otra vez
 al cerrarlo antes del merge, para integrar limpio lo que los demás publicaron mientras duraba.
@@ -174,7 +132,13 @@ si se quiere el JSON crudo.
 ## Notas sueltas
 
 - `prueba.html`, `Sistema PT con OCR.html`, `mockup-comparables.html` y
-  `Cpanel/.../Sistema PT V3 5.html` son snapshots/experimentos, no fuentes vivas.
-- `build-wizard.ps1` genera un `index-wizard.html` a partir de `index.html`; no forma parte
-  de `npm run build` ni del deploy.
+  `Cpanel/.../Sistema PT V3 5.html` son snapshots/experimentos, no fuentes vivas — no
+  dependen del `index.html` de la raíz, que se eliminó (2026-08-13).
+- `build-wizard.ps1` generaba un `index-wizard.html` a partir del `index.html` de la
+  raíz; con ese archivo retirado, el script ya no tiene fuente y quedó roto. No formaba
+  parte de `npm run build` ni del deploy, así que no bloquea nada, pero hay que retirarlo
+  o adaptarlo si alguien lo vuelve a necesitar.
+- `Cpanel/public_html/` sirve el mismo dominio de forma legada, fuera de Firebase; ahí
+  puede seguir habiendo copias del `index.html` retirado (p. ej. `Cpanel/public_html/demo-precios-transferencia/index.html`)
+  que este cambio no tocó.
 - `brain_estudio_pasado.txt` (180 KB) es material de referencia de un estudio previo.

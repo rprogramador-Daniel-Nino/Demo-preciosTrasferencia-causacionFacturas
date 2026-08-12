@@ -1,4 +1,4 @@
-// server.js — Servidor local para "Sistema Precios de Transferencia"
+// server.js — Servidor local del Gestor de Reportes de Precios de Transferencia
 // Sirve el HTML y actúa como proxy seguro hacia la API de Anthropic.
 // La API key NUNCA se expone al navegador: vive solo en el servidor (.env).
 
@@ -65,16 +65,6 @@ app.use('/assets', assets);
 
 // Sirve el HTML y cualquier otro estático desde public/ (misma carpeta que despliega Firebase Hosting)
 app.use(express.static(path.join(__dirname, 'public'), SIN_CACHE));
-
-// Ruta explícita para el HTML antiguo
-app.get('/index', (req, res) => {
-  htmlSinCache(res);
-  res.sendFile(path.join(__dirname, 'public/index.html'));
-});
-app.get('/index.html', (req, res) => {
-  htmlSinCache(res);
-  res.sendFile(path.join(__dirname, 'public/index.html'));
-});
 
 // Ruta de la aplicación React (Gestor de Reportes)
 app.get('/gestor-reportes-inicio', (req, res) => {
@@ -344,9 +334,18 @@ app.get('/api/estado', (req, res) => {
   });
 });
 
+/* El Gestor de Reportes es ahora la única aplicación: cualquier ruta que no sea
+   un archivo concreto ni una de las de arriba sirve su HTML, igual que hace
+   /gestor-reportes* para las suyas. Mismo criterio del 404-antes-que-HTML: un
+   asset que falta no debe recibir este HTML con 200. */
+app.get('*', (req, res, next) => {
+  if (/\.[a-z0-9]+$/i.test(req.path)) return next();
+  htmlSinCache(res);
+  res.sendFile(path.join(__dirname, 'public/gestor-reportes/index.html'));
+});
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n✅ Sistema PT corriendo en:`);
+  console.log(`\n✅ Gestor de Reportes corriendo en:`);
   console.log(`   Local:     http://localhost:${PORT}`);
   console.log(`   En tu red: http://<TU-IP-LOCAL>:${PORT}  (usa ipconfig / ifconfig para verla)\n`);
 });
