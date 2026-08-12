@@ -12,6 +12,7 @@ import {
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
+  localizarBloqueProsa,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -1146,4 +1147,38 @@ test('las letras del ANEXO C son las de la Tabla 16', async () => {
   assert.ok(texto.includes('RIGOR UNO' + letraDe('rigorFuncional')), 'diferencias funcionales');
   assert.ok(texto.includes('HOLD UNO' + letraDe('holding')), 'holding');
   assert.ok(texto.includes('OK UNO' + letraDe('aceptadas')), 'aceptadas');
+});
+
+const parrafoXml = (texto) => `<w:p><w:r><w:t>${texto}</w:t></w:r></w:p>`;
+
+test('localizarBloqueProsa delimita desde el encabezado de inicio hasta el de fin, sin incluirlo', () => {
+  const xml = [
+    parrafoXml('Preámbulo'),
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('CRECIMIENTO MUNDIAL'),
+    parrafoXml('La economía mundial transitó durante el bienio 2024-2025...'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Cierre'),
+  ].join('');
+
+  const bloque = localizarBloqueProsa(
+    xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']
+  );
+
+  assert.ok(bloque);
+  const dentro = xml.slice(bloque.inicio, bloque.fin);
+  assert.match(dentro, /A\. Análisis del Panorama/);
+  assert.match(dentro, /CRECIMIENTO MUNDIAL/);
+  assert.match(dentro, /bienio 2024-2025/);
+  assert.doesNotMatch(dentro, /Crecimiento del PIB Mundial \(2024-2026\)/);
+});
+
+test('localizarBloqueProsa devuelve null si no encuentra el encabezado de inicio', () => {
+  const xml = parrafoXml('Algo que no es el encabezado buscado');
+  assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
+});
+
+test('localizarBloqueProsa devuelve null si el encabezado de inicio existe pero ningún tituloFin aparece después', () => {
+  const xml = parrafoXml('A. Análisis del Panorama de la Economía Mundial') + parrafoXml('Cierre sin tabla');
+  assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
 });

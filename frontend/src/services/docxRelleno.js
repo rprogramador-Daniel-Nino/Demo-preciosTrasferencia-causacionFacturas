@@ -378,6 +378,41 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
 }
 
+/**
+ * Delimita un bloque de párrafos entre un encabezado de inicio y el primero de una
+ * lista de encabezados de fin — pensado para reemplazar la PROSA de un apartado sin
+ * tocar las tablas que le siguen (esas ya las localiza `localizarBloqueTabla`).
+ *
+ * `inicio` cae en el propio párrafo de `tituloInicio` (se conserva su encabezado en el
+ * reemplazo) y `fin` justo antes del párrafo de fin encontrado, que queda intacto.
+ *
+ * @param {string} xml
+ * @param {string} tituloInicio
+ * @param {string[]} titulosFin
+ * @returns {{inicio:number, fin:number}|null}
+ */
+export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
+  const texto = String(xml || '');
+  const claveInicio = claveTitulo(tituloInicio);
+  const clavesFin = (titulosFin || []).map(claveTitulo).filter(Boolean);
+  if (!claveInicio || !clavesFin.length) return null;
+
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let p;
+  let inicio = null;
+  while ((p = rxParrafo.exec(texto)) !== null) {
+    const clave = claveTitulo(textoPlanoOoxml(p[0]));
+    if (inicio === null) {
+      if (clave.includes(claveInicio)) inicio = p.index;
+      continue;
+    }
+    if (clavesFin.some((c) => clave.includes(c))) {
+      return { inicio, fin: p.index };
+    }
+  }
+  return null;
+}
+
 /* Un `<w:t>` que es SOLO una cifra: «2.05%», «-3.001%», «1,780 %». Es lo que Word deja
    cuando la plantilla escribe un número entre paréntesis dentro de una frase, y es lo que
    permite cambiarlo sin tocar una letra del resto. */
