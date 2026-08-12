@@ -630,7 +630,16 @@ export function actualizarAnioEnParrafo(xml, ancla, anioGravable, avisos) {
   let salida = String(xml || '');
   const gravable = Number(anioGravable);
   const buscado = String(ancla || '').trim();
-  if (!buscado || !Number.isInteger(gravable) || gravable < 2000 || gravable > 2100) return salida;
+  /* Un año que no se puede leer NO se calla: retornar en silencio aquí dejaba el informe con
+     el año de la plantilla y el panel de avisos limpio, que es indistinguible de haberlo
+     actualizado. Fue exactamente lo que pasó la primera vez que se desplegó esto. */
+  if (!buscado || !Number.isInteger(gravable) || gravable < 2000 || gravable > 2100) {
+    if (Array.isArray(avisos)) {
+      avisos.push('no se pudo leer el año gravable del estudio ("' + String(anioGravable)
+        + '"), así que el año que menciona la conclusión se queda como lo trajo la plantilla');
+    }
+    return salida;
+  }
 
   let cambiados = 0;
   const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
@@ -906,7 +915,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   /* El año gravable en la conclusión del rango, localizada por su frase y no por su posición:
      en el informe del cliente ese párrafo está a un salto de página de la tabla. */
   doc.aplicar((x) => actualizarAnioEnParrafo(
-    x, 'De acuerdo a los resultados obtenidos', estudio.anio, avisos,
+    x, 'De acuerdo a los resultados obtenidos', year, avisos,
   ));
 
   /* 13. Margen Operacional Compañías Comparables.
