@@ -4,7 +4,8 @@ import {
   localizarTablaHtml, reescribirFilasHtml, envolturaDe, textoPlanoHtml,
   actualizarTablasMotorHtml, reescribirCeldaHtml, TABLA_MARGENES,
   actualizarTablasMacroHtml, reescribirRotuloHtml, TABLA_CRITERIOS,
-  actualizarApartadosMacroHtml,
+  actualizarApartadosMacroHtml, localizarHitosHtml, reemplazarHuecosHtml,
+  actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
@@ -519,9 +520,16 @@ test('actualizarApartadosMacroHtml reemplaza la prosa localizándola por encabez
     '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
     '<p>Texto de END GAME sobre el mundo, 2024.</p>',
     '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<h3>Tasas de Inflación Global (2024-2026)</h3>',
+    '<h3>Proyecciones de Crecimiento del PIB por Región/País (2026)</h3>',
     '<h2>B. Análisis del panorama de la economía colombiana</h2>',
     '<p>Texto de END GAME sobre Colombia, 2024.</p>',
     '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    '<h3>Inflación en Colombia (2024 vs. Meta 2025)</h3>',
+    '<h3>Tasa de Intervención del Banco de la República (Marzo 2023 - Diciembre 2024)</h3>',
+    '<h3>Tasa Representativa del Mercado (TRM) Promedio (2023-2024)</h3>',
+    '<h3>Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)</h3>',
+    '<h2>Análisis del Sector de la industria del software</h2>',
   ].join('');
 
   const datosMacro = {
@@ -538,6 +546,43 @@ test('actualizarApartadosMacroHtml reemplaza la prosa localizándola por encabez
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.match(salida, /Crecimiento del PIB Mundial/); // la tabla que sigue no se toca
   assert.equal(avisos.length, 0);
+});
+
+test('actualizarApartadosMacroHtml reemplaza también los huecos intermedios, y protege una tabla que caiga en uno', () => {
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Texto de END GAME sobre el mundo, 2024.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<table><tr><td>fila real de PIB Mundial</td></tr></table>',
+    '<h3>Tasas de Inflación Global (2024-2026)</h3>',
+    '<table><tr><td>fila real de Inflación Global</td></tr></table>',
+    '<h3>Proyecciones de Crecimiento del PIB por Región/País (2026)</h3>',
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+    '<p>Texto de END GAME sobre Colombia, 2024.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    '<h3>Inflación en Colombia (2024 vs. Meta 2025)</h3>',
+    '<h4>Política Monetaria</h4>',
+    '<p>La tasa de intervención descendió al 9,50 %, texto viejo de referencia bastante largo para superar el umbral.</p>',
+    '<h3>Tasa de Intervención del Banco de la República (Marzo 2023 - Diciembre 2024)</h3>',
+    '<h3>Tasa Representativa del Mercado (TRM) Promedio (2023-2024)</h3>',
+    '<h3>Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)</h3>',
+    '<h2>Análisis del Sector de la industria del software</h2>',
+  ].join('');
+
+  const datosMacro = {
+    narrativa: { mundial: '<p>Narrativa real del mundo.</p>', colombia: '<p>Narrativa real de Colombia.</p>' },
+  };
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+
+  assert.doesNotMatch(salida, /texto viejo de referencia/);
+  /* El subtítulo "Política Monetaria" cae DENTRO del hueco entre "Inflación en
+     Colombia" y "Intervención del Banco" y se reemplaza junto con la prosa que
+     describía — mismo criterio que la ruta .docx (ver docxRelleno.test.js): es la
+     forma robusta de que funcione igual sin importar cómo cada plantilla titule ese
+     hueco intermedio. Lo que sí no puede perderse son las tablas reales. */
+  assert.match(salida, /fila real de PIB Mundial/);
+  assert.match(salida, /fila real de Inflación Global/);
+  assert.match(salida, /Tasa de Intervención del Banco de la República/);
 });
 
 test('actualizarApartadosMacroHtml ignora una entrada de Tabla de Contenido con número de página', () => {
@@ -569,5 +614,86 @@ test('actualizarApartadosMacroHtml usa el marcador de pendiente si no hay narrat
 
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
+  assert.ok(avisos.length >= 1);
+});
+
+test('localizarHitosHtml no confunde un párrafo de prosa largo con el título real', () => {
+  const html = [
+    '<h3>PIB Mundial</h3>',
+    '<p>La inflación global ha venido descendiendo gradualmente desde su pico en 2022, en parte por la normalización de las cadenas de suministro y la reducción de precios internacionales.</p>',
+    '<h3>Inflación Global</h3>',
+  ].join('');
+  const hitos = localizarHitosHtml(html, ['PIB Mundial', 'Inflación Global']);
+  assert.ok(hitos[0]);
+  assert.ok(hitos[1]);
+  assert.equal(hitos[1].inicio, html.indexOf('<h3>Inflación Global'), 'encontró el encabezado real, no el párrafo de prosa que lo menciona de pasada');
+});
+
+test('reemplazarHuecosHtml protege una tabla que cae justo después de un hito', () => {
+  const html = '<h2>Encabezado A</h2><table><tr><td>dato real</td></tr></table><h2>Encabezado B</h2>';
+  const salida = reemplazarHuecosHtml(html, ['Encabezado A', 'Encabezado B'], [() => '<p>marcador</p>'], []);
+  assert.match(salida, /<table><tr><td>dato real/, 'la tabla entera sigue intacta, sin texto insertado dentro');
+});
+
+test('actualizarApartadoSectorialHtml reemplaza los cuatro bloques y deja intacta la tabla de datos clave', () => {
+  const html = [
+    '<h2>Análisis del Sector de la industria del software y de los videojuegos</h2>',
+    '<h3>Comportamiento del Sector de la Industria del Software y de los Videojuegos en 2024 y Comparación con 2023</h3>',
+    '<p>Texto viejo de comportamiento.</p>',
+    '<h3>Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)</h3>',
+    '<table><tr><td>fila vieja</td></tr></table>',
+    '<h3>Importaciones y exportaciones del sector de la industria del software y de los videojuegos</h3>',
+    '<p>Texto viejo de comercio.</p>',
+    '<h3>¿Qué se proyecta para el sector de la industria del software y de los videojuegos en 2025?</h3>',
+    '<p>Texto viejo de proyección.</p>',
+    '<h3>Conclusiones y Perspectivas</h3>',
+    '<p>Texto viejo de conclusiones.</p>',
+    '<h2>ANÁLISIS ECONÓMICO</h2>',
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2026: {
+        tituloSector: 'Software y Videojuegos',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real 2026.</p>',
+          comercioExterior: '<p>Comercio exterior real 2026.</p>',
+          proyeccion: '<p>Proyección real 2026.</p>',
+          conclusiones: '<p>Conclusiones reales 2026.</p>',
+        },
+        datosClaveTabla: [{ indicador: 'Empleo', valorAnterior: '250.000', valorActual: '260.000' }],
+      },
+    },
+  };
+
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2026 }, 2026, []);
+  assert.match(salida, /Comportamiento real 2026\./);
+  assert.match(salida, /Comercio exterior real 2026\./);
+  assert.match(salida, /Proyección real 2026\./);
+  assert.match(salida, /Conclusiones reales 2026\./);
+  assert.doesNotMatch(salida, /Texto viejo/);
+  assert.match(salida, /<table>/); // la tabla vieja de datos clave, sin tocar (otro mecanismo la regenera aparte)
+});
+
+test('actualizarApartadoSectorialHtml usa el marcador de pendiente si no hay corrida para ese año', () => {
+  const html = [
+    '<h2>Análisis del Sector de la industria del software y de los videojuegos</h2>',
+    '<h3>Comportamiento del Sector de la Industria del Software y de los Videojuegos en 2024 y Comparación con 2023</h3>',
+    '<p>Texto viejo de comportamiento.</p>',
+    '<h3>Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)</h3>',
+    '<table><tr><td>fila vieja</td></tr></table>',
+    '<h3>Importaciones y exportaciones del sector de la industria del software y de los videojuegos</h3>',
+    '<p>Texto viejo de comercio.</p>',
+    '<h3>¿Qué se proyecta para el sector de la industria del software y de los videojuegos en 2025?</h3>',
+    '<p>Texto viejo de proyección.</p>',
+    '<h3>Conclusiones y Perspectivas</h3>',
+    '<p>Texto viejo de conclusiones.</p>',
+    '<h2>ANÁLISIS ECONÓMICO</h2>',
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialHtml(html, null, { anio: 2026 }, 2026, avisos);
+  assert.doesNotMatch(salida, /Texto viejo/);
+  assert.match(salida, /\[Actualizar con el análisis del comportamiento del sector/);
   assert.ok(avisos.length >= 1);
 });
