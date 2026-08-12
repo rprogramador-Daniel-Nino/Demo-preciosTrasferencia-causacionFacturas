@@ -141,6 +141,44 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      recalcula corriendo el motor otra vez. */
   const [motorAuditoria, setMotorAuditoria] = useState(null); // { rechazadas, reserva } | null
 
+  /* Auditoría del motor: el motivo de rechazo y el perfil funcional de cada
+     candidata del universo.
+
+     Vive SOLO en memoria —no se persiste con el estudio, igual que el universo— así
+     que al reabrir un estudio guardado el universo se restauraba desde el archivo de
+     Capital IQ pero los motivos no, y la hoja de trazabilidad salía con las 2.986
+     compañías sin motivo y todos los contadores del embudo en cero: un documento que
+     parece declarar que no se descartó a ninguna.
+
+     `scoreCandidates` es determinista y tiene sus insumos persistidos —universo,
+     configuración, actividad, veredicto de la IA y estudio anterior—, así que se
+     recalcula cuando falta en lugar de emitir una hoja vacía. */
+  const auditoria = useMemo(() => {
+    if (motorAuditoria) return motorAuditoria;
+    if (!Array.isArray(universo) || universo.length === 0) return null;
+    const rehecha = scoreCandidates(
+      universo, engineConfig, actividad,
+      (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
+      { ventasParteExaminada: study.t_s, iaMatch },
+    );
+    return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
+
+  /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
+     —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
+     generador del informe no tiene con qué recalcularla: `universo` no viaja con el estudio.
+     Solo los nombres, que es lo que el anexo publica.
+
+     Va declarada ANTES del efecto que la persiste, y no junto al resto de los cálculos
+     del render: el arreglo de dependencias de ese efecto se evalúa durante el render, así
+     que con la declaración más abajo `matrizRechazo` se leía en su zona muerta y el
+     componente moría con «Cannot access before initialization», dejando la aplicación en
+     blanco. Lo mismo obliga a que `auditoria`, de la que depende, quede también aquí. */
+  const matrizRechazo = useMemo(() => {
+    if (!Array.isArray(universo) || !universo.length) return null;
+    return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
+  }, [universo, comparables, auditoria]);
+
   useEffect(() => {
     updateStudy({
       /* El aviso de «no extraído» no se guarda: el apartado sectorial del informe se
@@ -1082,38 +1120,6 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const stats = rango.stats;
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
-
-  /* Auditoría del motor: el motivo de rechazo y el perfil funcional de cada
-     candidata del universo.
-
-     Vive SOLO en memoria —no se persiste con el estudio, igual que el universo— así
-     que al reabrir un estudio guardado el universo se restauraba desde el archivo de
-     Capital IQ pero los motivos no, y la hoja de trazabilidad salía con las 2.986
-     compañías sin motivo y todos los contadores del embudo en cero: un documento que
-     parece declarar que no se descartó a ninguna.
-
-     `scoreCandidates` es determinista y tiene sus insumos persistidos —universo,
-     configuración, actividad, veredicto de la IA y estudio anterior—, así que se
-     recalcula cuando falta en lugar de emitir una hoja vacía. */
-  const auditoria = useMemo(() => {
-    if (motorAuditoria) return motorAuditoria;
-    if (!Array.isArray(universo) || universo.length === 0) return null;
-    const rehecha = scoreCandidates(
-      universo, engineConfig, actividad,
-      (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
-      { ventasParteExaminada: study.t_s, iaMatch },
-    );
-    return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
-  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
-
-  /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
-     —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
-     generador del informe no tiene con qué recalcularla: `universo` no viaja con el estudio.
-     Solo los nombres, que es lo que el anexo publica. */
-  const matrizRechazo = useMemo(() => {
-    if (!Array.isArray(universo) || !universo.length) return null;
-    return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
-  }, [universo, comparables, auditoria]);
 
   /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
      rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de
