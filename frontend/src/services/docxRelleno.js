@@ -600,65 +600,6 @@ export function actualizarProsaTrasTabla(xml, nombres, cifras, avisos) {
 }
 
 /**
- * Pone el año gravable en un párrafo identificado POR SU TEXTO.
- *
- * La conclusión del rango dice «…del margen operacional ajustado durante el 2024» con las
- * cifras del estudio actual al lado: el año venía de la plantilla.
- *
- * Se localiza por una frase del propio párrafo y no por su posición respecto a la tabla. El
- * primer intento fue por posición y hubo que revertirlo: en el informe del cliente ese
- * párrafo está en el carácter 501.297, a un salto de página y varios párrafos de la tabla del
- * rango, así que el recorrido no llegaba nunca. Y al ampliarlo, alcanzaba el párrafo de las
- * fuentes citadas y le cambiaba «(2023)» y «April 2022», que son fechas correctas.
- *
- * Por el texto no hay ambigüedad: se toca ese párrafo y ninguno más. Los años legítimos del
- * documento —los encabezados del ANEXO B, que son los estados financieros disponibles de las
- * comparables, del año anterior— quedan fuera por definición.
- *
- * El año va dentro de un `<w:t>` con más texto («… durante el 2024, demostrando …»), así que
- * se sustituye ahí mismo sin tocar los runs vecinos ni el formato.
- *
- * Si la frase no aparece —el cliente redactó de otro modo— se anota el aviso y no se cambia
- * nada: fallar por omisión, con el pendiente a la vista.
- *
- * @param {string} xml
- * @param {string} ancla  fragmento de texto que identifica al párrafo.
- * @param {number|string} anioGravable
- * @param {string[]} [avisos]
- */
-export function actualizarAnioEnParrafo(xml, ancla, anioGravable, avisos) {
-  let salida = String(xml || '');
-  const gravable = Number(anioGravable);
-  const buscado = String(ancla || '').trim();
-  if (!buscado || !Number.isInteger(gravable) || gravable < 2000 || gravable > 2100) return salida;
-
-  let cambiados = 0;
-  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
-  const partes = [];
-  let ultimo = 0;
-  for (let m = rxParrafo.exec(salida); m; m = rxParrafo.exec(salida)) {
-    if (!textoPlanoOoxml(m[0]).includes(buscado)) continue;
-    const nuevo = m[0].replace(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g, (todo, abre, contenido, cierra) => {
-      const hecho = contenido.replace(/\b20\d{2}\b/g, (anio) => (
-        Number(anio) === gravable ? anio : String(gravable)
-      ));
-      return hecho === contenido ? todo : abre + hecho + cierra;
-    });
-    if (nuevo === m[0]) continue;
-    partes.push(salida.slice(ultimo, m.index), nuevo);
-    ultimo = m.index + m[0].length;
-    cambiados += 1;
-  }
-  if (cambiados) salida = partes.join('') + salida.slice(ultimo);
-
-  if (!cambiados && Array.isArray(avisos)) {
-    avisos.push(`no se encontró un año que actualizar en el párrafo que empieza por «${buscado}»: `
-      + 'si el informe menciona ahí el año gravable, revísalo a mano antes de radicar');
-  }
-  return salida;
-}
-
-/**
  * Sustituidor de tablas sobre un `document.xml`.
  *
  * Encapsula el XML que va mutando y el registro de las tablas que la plantilla no
@@ -901,12 +842,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     x, 'Rango Intercuartil',
     [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
     avisos,
-  ));
-
-  /* El año gravable en la conclusión del rango, localizada por su frase y no por su posición:
-     en el informe del cliente ese párrafo está a un salto de página de la tabla. */
-  doc.aplicar((x) => actualizarAnioEnParrafo(
-    x, 'De acuerdo a los resultados obtenidos', estudio.anio, avisos,
   ));
 
   /* 13. Margen Operacional Compañías Comparables.

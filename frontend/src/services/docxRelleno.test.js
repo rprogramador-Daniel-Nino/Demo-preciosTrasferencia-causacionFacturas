@@ -11,7 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioEnParrafo,
+  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
@@ -1263,38 +1263,4 @@ test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narra
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
   assert.ok(avisos.length >= 1);
-});
-
-/* ══════════════════ año gravable en la conclusión del rango ══════════════════ */
-
-test('el año gravable se actualiza en el párrafo localizado por su texto', async () => {
-  /* Verificado contra el .docx del cliente: «ajustado durante el 2024» pasó a 2025 y el
-     documento entero bajó de 88 apariciones de «2024» a 87 — una sola sustitución. */
-  const buf = await plantilla([
-    parrafo('De acuerdo a los resultados obtenidos dentro del estudio, del margen operacional ajustado durante el 2024, la compañía cumplió.'),
-    /* Los años que NO son el gravable y son correctos: no se pueden tocar. */
-    parrafo('Fondo Monetario Internacional (2023). World Economic Outlook, April 2022.'),
-    parrafo('Los estados financieros de las comparables son del 2024.'),
-  ]);
-  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
-  const salida = actualizarAnioEnParrafo(xml, 'De acuerdo a los resultados obtenidos', 2025);
-  const texto = textoPlanoOoxml(salida);
-
-  assert.ok(texto.includes('ajustado durante el 2025'), 'el año del párrafo pasa al gravable');
-  assert.ok(texto.includes('April 2022') && texto.includes('(2023)'),
-    'las fechas de las fuentes citadas NO se tocan');
-  assert.ok(texto.includes('comparables son del 2024'),
-    'ni los años legítimos de otros párrafos: solo se toca el localizado');
-});
-
-test('si la frase no aparece se avisa y no se cambia nada', async () => {
-  /* El cliente puede redactar esa conclusión de otro modo. Falla por omisión, con el
-     pendiente a la vista, en vez de escribir un año en el sitio equivocado. */
-  const avisos = [];
-  const buf = await plantilla([parrafo('Otra redacción cualquiera del 2024.')]);
-  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
-  const salida = actualizarAnioEnParrafo(xml, 'De acuerdo a los resultados obtenidos', 2025, avisos);
-  assert.strictEqual(salida, xml, 'no se toca el documento');
-  assert.strictEqual(avisos.length, 1);
-  assert.match(avisos[0], /revísalo a mano/);
 });
