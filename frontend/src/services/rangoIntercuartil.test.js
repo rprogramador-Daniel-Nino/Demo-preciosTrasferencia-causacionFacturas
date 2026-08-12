@@ -93,15 +93,36 @@ const conAjuste = {
   ],
 };
 
-test('el ajuste solo corre con useadj y mueve el margen de cada comparable', () => {
+test('las dos cifras de cada comparable se publican aunque useadj esté apagado', () => {
+  /* La columna de la tabla se titula «AJUSTADO» y el motor calcula ese número siempre, así
+     que ahí va. Antes se copiaba el margen crudo cuando la casilla estaba apagada: el
+     informe publicaba dos columnas idénticas mientras el libro de soporte, en su columna
+     CxC+CxP+Inv, publicaba el ajuste de verdad. */
   const con = analizarRango(conAjuste);
   const sin = analizarRango({ ...conAjuste, useadj: false });
 
   con.filas.forEach((f, i) => {
     assert.notStrictEqual(f.ajustado, f.noAjustado, `${f.nombre}: el ajuste no movió nada`);
-    assert.strictEqual(f.noAjustado, sin.filas[i].ajustado,
-      `${f.nombre}: sin useadj el ajustado debe ser el margen crudo`);
+    assert.strictEqual(sin.filas[i].ajustado, f.ajustado,
+      `${f.nombre}: el ajustado no depende de la casilla`);
+    assert.strictEqual(sin.filas[i].noAjustado, f.noAjustado,
+      `${f.nombre}: ni el crudo`);
   });
+});
+
+test('useadj decide el rango que sostiene la conclusión, no lo que muestran las tablas', () => {
+  /* Lo que la casilla significa: si el ANÁLISIS ajusta por capital de trabajo. Eso cambia
+     contra qué rango se compara el indicador del contribuyente —y por tanto el CUMPLE—,
+     pero no puede cambiar el contenido de una columna que ya tiene su título. */
+  const con = analizarRango(conAjuste);
+  const sin = analizarRango({ ...conAjuste, useadj: false });
+
+  assert.deepStrictEqual(con.stats, con.statsAjustado, 'con la casilla, concluye con el ajustado');
+  assert.deepStrictEqual(sin.stats, sin.statsNoAjustado, 'sin ella, con el crudo');
+  /* Y las dos estadísticas de las tablas son las mismas en ambos casos. */
+  assert.deepStrictEqual(sin.statsAjustado, con.statsAjustado);
+  assert.deepStrictEqual(sin.statsNoAjustado, con.statsNoAjustado);
+  assert.notDeepStrictEqual(con.statsAjustado, con.statsNoAjustado, 'y son distintas entre sí');
 });
 
 test('con la tasa en cero el ajuste no mueve nada aunque useadj esté activo', () => {
