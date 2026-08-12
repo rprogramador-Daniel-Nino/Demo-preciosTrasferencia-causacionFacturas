@@ -93,6 +93,109 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
   return avisos;
 }
 
+/**
+ * Sustituye en el OOXML los datos del informe de referencia que sobrevivieron al marcado.
+ *
+ * `revisarSalidaRenderizada` ya los detecta y avisa, pero avisar deja el trabajo al ojo de
+ * quien radica: en un informe real sobreviven decenas de apariciones. Aquí se corrigen las
+ * que se pueden corregir sin riesgo, y se informa de las que no.
+ *
+ * DOS GUARDAS, y sin ellas esto destroza el documento:
+ *
+ *  1. Un valor que es parte de otro valor de la lista NO se toca. «END GAME» (el
+ *     contribuyente) está dentro de «END GAME INTERACTIVE» (la vinculada): sustituirlo
+ *     reescribiría también las menciones de la otra empresa. Es la misma cautela que ya
+ *     aplica el marcado cuando el texto «no identifica el dato por sí solo».
+ *
+ *  2. Cuando el valor viejo es el principio del nuevo —«END GAME INTERACTIVE» →
+ *     «END GAME INTERACTIVE INC»—, solo se sustituyen las apariciones que NO vengan ya
+ *     seguidas del resto. Sin esto, las que ya estaban correctas se convertirían en
+ *     «END GAME INTERACTIVE INC INC» a cada generación.
+ *
+ * Solo se toca texto contenido íntegro en un `<w:t>`: si Word partió el valor entre varios
+ * runs se deja como está y se cuenta en `omitidos`, antes que romper el marcado del párrafo.
+ *
+ * @returns {{xml:string, sustituidos:Array, omitidos:Array}}
+ */
+export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
+  let salida = String(xml || '');
+  const sustituidos = [];
+  const omitidos = [];
+  if (!salida || !Array.isArray(valores) || !valores.length) return { xml: salida, sustituidos, omitidos };
+
+  /* Pares realmente distintos: si el estudio no trae el campo, o trae el mismo valor, no hay
+     nada que corregir (mismo contribuyente al año siguiente, por ejemplo). */
+  const pares = [];
+  for (const { campo, valor } of valores) {
+    const viejo = String(valor || '');
+    if (!viejo.trim()) continue;
+    const nuevo = valorDeCampo(estudio, campo);
+    if (nuevo === null || nuevo === undefined) continue;
+    if (normalizar(nuevo) === normalizar(viejo)) continue;
+    pares.push({ campo, viejo, nuevo: String(nuevo) });
+  }
+
+  /* De más largo a más corto: el orden importa cuando uno contiene a otro. */
+  pares.sort((a, b) => b.viejo.length - a.viejo.length);
+
+  for (const par of pares) {
+    /* Guarda 1: ambiguo porque otro valor de la lista lo contiene. */
+    const contenedor = pares.find((o) => o !== par && o.viejo.includes(par.viejo));
+    if (contenedor) {
+      omitidos.push({
+        campo: par.campo, valor: par.viejo,
+        motivo: `«${par.viejo}» es parte de «${contenedor.viejo}», así que sustituirlo `
+          + 'reescribiría también las menciones de ese otro dato. Revísalo a mano.',
+      });
+      continue;
+    }
+
+    /* Guarda 2: el viejo es el principio del nuevo. Se exige que no siga el resto. */
+    const esPrefijo = par.nuevo.startsWith(par.viejo);
+    const resto = esPrefijo ? par.nuevo.slice(par.viejo.length) : '';
+
+    let cuenta = 0;
+    let partidos = 0;
+    salida = salida.replace(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g, (todo, abre, contenido, cierra) => {
+      if (!contenido.includes(par.viejo)) return todo;
+      let hecho = contenido;
+      if (esPrefijo && resto) {
+        /* Solo las que no traen ya el sufijo. */
+        const partes = hecho.split(par.viejo);
+        let rearmado = partes[0];
+        for (let i = 1; i < partes.length; i += 1) {
+          const yaCompleto = partes[i].startsWith(resto);
+          rearmado += (yaCompleto ? par.viejo : par.nuevo) + partes[i];
+          if (!yaCompleto) cuenta += 1;
+        }
+        hecho = rearmado;
+      } else {
+        const trozos = hecho.split(par.viejo);
+        cuenta += trozos.length - 1;
+        hecho = trozos.join(par.nuevo);
+      }
+      return hecho === contenido ? todo : abre + hecho + cierra;
+    });
+
+    /* Lo que queda al concatenar los tramos y no se pudo tocar es que estaba partido entre
+       varios de ellos. Se concatenan los `<w:t>` y no se usa `soloTexto`, que está hecho
+       para el HTML renderizado y no ve el OOXML. */
+    const plano = (salida.match(/<w:t[^>]*>[^<]*<\/w:t>/g) || [])
+      .map((t) => t.replace(/<[^>]+>/g, '')).join('');
+    if (plano.includes(par.viejo) && !(esPrefijo && resto)) {
+      partidos = 1;
+      omitidos.push({
+        campo: par.campo, valor: par.viejo,
+        motivo: `«${par.viejo}» sigue apareciendo con el texto repartido entre varios tramos `
+          + 'del párrafo, donde no se puede sustituir sin romper el formato. Revísalo a mano.',
+      });
+    }
+    if (cuenta) sustituidos.push({ campo: par.campo, valor: par.viejo, nuevo: par.nuevo, cuenta, partidos });
+  }
+
+  return { xml: salida, sustituidos, omitidos };
+}
+
 /* Extrae la base (dígitos sin guión) y el dígito de verificación de un NIT normalizado.
    Retorna { base: string de dígitos, dv: string de 1 dígito, dvConocido: boolean } */
 function extraerBaseYDV(nit) {

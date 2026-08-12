@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  revisarAntesDeGenerar, revisarSalidaRenderizada, valoresDeReferencia,
+  revisarAntesDeGenerar, revisarSalidaRenderizada, valoresDeReferencia, sustituirDatosDeReferencia,
 } from './plantillaGuardas.js';
 
 const base = { estudio: { nit: '800123456-7' }, nitDeReferencia: '800123456-7', vacios: [], tieneAnexo: true, recursosFaltantes: [] };
@@ -471,4 +471,75 @@ test('el aviso de plantilla vieja no necesita nada más para salir', () => {
   /* Y sin nada que avisar no inventa avisos. */
   assert.deepStrictEqual(revisarAntesDeGenerar({ faltaPorVersion: [] }), []);
   assert.deepStrictEqual(revisarAntesDeGenerar({}), []);
+});
+
+/* ══════════════════ sustitución de los datos del informe de referencia ══════════════════ */
+
+const wt = (t) => `<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;
+
+test('sustituye el dato del informe de referencia por el del estudio', () => {
+  /* Avisar no basta: en un informe real sobreviven decenas de apariciones y el trabajo
+     quedaba para el ojo de quien radica. */
+  const xml = wt('Estudio de ACME ANTERIOR SAS para el año.') + wt('Otra vez ACME ANTERIOR SAS aquí.');
+  const r = sustituirDatosDeReferencia(xml, {
+    estudio: { ent: 'NUEVA COMPAÑIA SAS' },
+    valores: [{ campo: 'ent', valor: 'ACME ANTERIOR SAS' }],
+  });
+  assert.ok(!r.xml.includes('ACME ANTERIOR'), 'el dato anterior no puede sobrevivir');
+  assert.strictEqual((r.xml.match(/NUEVA COMPAÑIA SAS/g) || []).length, 2, 'en las dos apariciones');
+  assert.strictEqual(r.sustituidos[0].cuenta, 2);
+});
+
+test('no toca un valor que es parte de otro valor de la lista', () => {
+  /* «END GAME» está dentro de «END GAME INTERACTIVE»: sustituirlo reescribiría también las
+     menciones de la vinculada, que es otra empresa. */
+  const xml = wt('END GAME INTERACTIVE es la vinculada de END GAME.');
+  const r = sustituirDatosDeReferencia(xml, {
+    estudio: { ent: 'CONTRIBUYENTE NUEVO SAS', vinc: 'OTRA VINCULADA INC' },
+    valores: [
+      { campo: 'ent', valor: 'END GAME' },
+      { campo: 'vinc', valor: 'END GAME INTERACTIVE' },
+    ],
+  });
+  assert.ok(r.xml.includes('END GAME.'), 'la mención corta se queda como estaba');
+  assert.ok(r.omitidos.some((o) => o.valor === 'END GAME'), 'y se informa de por qué');
+  assert.match(r.omitidos.find((o) => o.valor === 'END GAME').motivo, /es parte de/);
+  assert.ok(r.xml.includes('OTRA VINCULADA INC'), 'la que sí es inequívoca se corrige');
+});
+
+test('no duplica el sufijo cuando el valor viejo es el principio del nuevo', () => {
+  /* «END GAME INTERACTIVE» → «END GAME INTERACTIVE INC». Sin la guarda, las apariciones ya
+     correctas se volvían «END GAME INTERACTIVE INC INC» en cada generación. */
+  const xml = wt('Aquí END GAME INTERACTIVE INC ya está bien.') + wt('Y aquí END GAME INTERACTIVE falta.');
+  const r = sustituirDatosDeReferencia(xml, {
+    estudio: { vinc: 'END GAME INTERACTIVE INC' },
+    valores: [{ campo: 'vinc', valor: 'END GAME INTERACTIVE' }],
+  });
+  assert.ok(!r.xml.includes('INC INC'), 'nunca se duplica el sufijo');
+  assert.strictEqual((r.xml.match(/END GAME INTERACTIVE INC/g) || []).length, 2,
+    'las dos quedan completas');
+  assert.strictEqual(r.sustituidos[0].cuenta, 1, 'solo se tocó la que faltaba');
+});
+
+test('si el estudio trae el mismo dato no se toca nada', () => {
+  /* El mismo contribuyente el año siguiente: no hay fuga que corregir. */
+  const xml = wt('Estudio de ACME SAS.');
+  const r = sustituirDatosDeReferencia(xml, {
+    estudio: { ent: 'ACME SAS' },
+    valores: [{ campo: 'ent', valor: 'ACME SAS' }],
+  });
+  assert.strictEqual(r.xml, xml);
+  assert.strictEqual(r.sustituidos.length, 0);
+});
+
+test('un valor partido entre varios tramos del párrafo se deja y se informa', () => {
+  /* Word parte el texto por revisiones ortográficas. Sustituir a través de los runs
+     rompería el formato del párrafo. */
+  const xml = '<w:p><w:r><w:t>ACME ANT</w:t></w:r><w:r><w:t>ERIOR SAS cerró.</w:t></w:r></w:p>';
+  const r = sustituirDatosDeReferencia(xml, {
+    estudio: { ent: 'NUEVA SAS' },
+    valores: [{ campo: 'ent', valor: 'ACME ANTERIOR SAS' }],
+  });
+  assert.strictEqual(r.xml, xml, 'no se toca');
+  assert.ok(r.omitidos.some((o) => /repartido entre varios tramos/.test(o.motivo)));
 });

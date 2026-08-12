@@ -61,6 +61,11 @@ export const VOCABULARIO = [
   { campo: 'rango.mediana', etiqueta: 'Mediana', grupo: 'Rango' },
   { campo: 'rango.p75', etiqueta: 'Cuartil superior', grupo: 'Rango' },
   { campo: 'rango.cumple', etiqueta: 'Conclusión de cumplimiento', grupo: 'Rango' },
+  /* El indicador de la parte examinada. Faltaba, y el informe lo nombra en prosa —«la
+     empresa obtuvo una rentabilidad de (X)»— justo debajo de la tabla que lo publica: sin
+     campo no había dónde marcarlo, así que esa frase se radicaba con el porcentaje del
+     contribuyente anterior. */
+  { campo: 'rango.indicador', etiqueta: 'Indicador de la parte examinada', grupo: 'Rango' },
   { campo: 'uvt.valor', etiqueta: 'Valor de la UVT', grupo: 'Topes' },
   { campo: 'uvt.tope45k', etiqueta: 'Tope de 45.000 UVT', grupo: 'Topes' },
   { campo: 'uvt.tope10k', etiqueta: 'Tope de 10.000 UVT', grupo: 'Topes' },
@@ -133,10 +138,22 @@ export function valorDeCampo(estudio, campo, opciones = {}) {
   }
 
   if (campo.startsWith('rango.')) {
-    const { stats, cumple } = analizarRango(estudio);
+    const { stats, statsAjustado, tPLI, cumple } = analizarRango(estudio);
     if (!stats) return null;
     if (campo === 'rango.cumple') return cumple;
-    const v = { 'rango.p25': stats.p25, 'rango.mediana': stats.med, 'rango.p75': stats.p75 }[campo];
+    /* El indicador del contribuyente NO se ajusta: se compara contra sí mismo, así que su
+       ajuste es cero. Es la misma cifra que la tabla del rango publica en su primera
+       columna. */
+    if (campo === 'rango.indicador') {
+      return tPLI === null || tPLI === undefined ? null : pctf(tPLI);
+    }
+    /* `statsAjustado` y no `stats`: estos campos rellenan la frase que va DEBAJO de la tabla
+       del rango —«se ubica entre el percentil 25 (X) y (Y)…»— y la tabla publica el rango
+       ajustado. `stats` es el escenario que sostiene la conclusión, el que elige `useadj`,
+       así que con la casilla apagada la frase decía 3,315 % donde la tabla de encima decía
+       2,165 %: dos cifras distintas para lo mismo, en la misma página del documento. */
+    const base = statsAjustado || stats;
+    const v = { 'rango.p25': base.p25, 'rango.mediana': base.med, 'rango.p75': base.p75 }[campo];
     /* `pctf` y no `fmt`: los percentiles son fracciones. `fmt` es el formateador de pesos
        —redondea a entero— y convertía cada percentil en «0» dentro del informe. */
     return v === null || v === undefined ? null : pctf(v);
