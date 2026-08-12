@@ -11,7 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA, insertarAnexoC,
+  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -900,6 +900,43 @@ test('la Tabla 4 declara el código de operación y no lo inventa cuando no se p
   assert.ok(!sinCodigo.includes('Old Table 4'), 'la Tabla 4 tiene que haberse reemplazado');
   assert.ok(sinCodigo.includes('VENTA SERVICIOS'), 'la descripción es la del estudio');
   assert.ok(!sinCodigo.includes('>07<'), 'no debe inventar el código 07');
+});
+
+/* ══════════════════ ANEXO B — descripciones de comparables ══════════════════ */
+
+test('el ANEXO B se escribe en el cuerpo y no dentro del índice', async () => {
+  /* El título sale dos veces: en la tabla de contenidos y en el cuerpo. Tomando la
+     PRIMERA aparición, el inicio y el final de la sección caían los dos dentro del índice
+     —a unos cientos de caracteres uno del otro—, así que las descripciones y los estados
+     financieros se escribían ahí, se destruía la entrada del índice, y el ANEXO B de
+     verdad se quedaba con lo que trajera la plantilla: el del año anterior. */
+  const buf = await plantilla([
+    parrafo('ANEXO A. Estados financieros . 40'),
+    parrafo('ANEXO B. Descripciones de comparables . 45'),
+    parrafo('ANEXO C. Matriz de Rechazo . 88'),
+    parrafo('Cuerpo del informe que no se puede perder.'),
+    parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
+    parrafo('DESCRIPCION VIEJA DE LA PLANTILLA'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+    parrafo('MATRIZ VIEJA'),
+  ]);
+  const zip = new PizZip(buf);
+  insertarImagenesAnexoB(zip, {
+    comparables: [{ name: 'ACME COMPARABLE SA', eeffArchivo: 'acme.pdf', descActividad: 'Desarrolla videojuegos.' }],
+  });
+
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.ok(texto.includes('ACME COMPARABLE SA'), 'la comparable tiene que aparecer');
+  assert.ok(!texto.includes('DESCRIPCION VIEJA'), 'y la descripción de la plantilla irse');
+
+  /* El índice queda intacto: sus tres entradas siguen, y con ellas el cuerpo intermedio. */
+  assert.ok(texto.includes('ANEXO A. Estados financieros . 40'), 'la entrada del índice del A');
+  assert.ok(texto.includes('ANEXO C. Matriz de Rechazo . 88'), 'y la del C, que era la que se perdía');
+  assert.ok(texto.includes('Cuerpo del informe que no se puede perder'), 'y lo que va en medio');
+  /* Y el ANEXO C del cuerpo sigue en pie: es el corte de la sección, no parte de ella. */
+  assert.ok(texto.includes('MATRIZ VIEJA'), 'el anexo siguiente no se toca');
+  assert.ok(xml.includes('</w:body>'), 'el documento queda bien cerrado');
 });
 
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */

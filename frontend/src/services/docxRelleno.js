@@ -1126,18 +1126,24 @@ export function insertarImagenesAnexoB(zip, estudio) {
 
   let xml = zip.file(RUTA_DOC).asText();
 
-  // Encontrar sección ANEXO B y ANEXO C de forma insensible a mayúsculas
-  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
-  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
+  /* La sección del ANEXO B en el CUERPO, que es la ÚLTIMA aparición y no la primera: el
+     título sale también en la tabla de contenidos, al principio del documento. Con la
+     primera, `inicioB` y `finB` caían los dos dentro del índice —a 300 caracteres uno del
+     otro— y este relleno escribía las descripciones y los estados financieros ahí,
+     destruyendo la entrada del índice y dejando el ANEXO B de verdad con lo que trajera la
+     plantilla: el del año anterior. Se veía como si el anexo no se generara. */
+  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
+  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
 
-  const mB = rxB.exec(xml);
-  if (!mB) return { insertadas: 0 };
-  const inicioB = mB.index;
+  let inicioB = -1;
+  for (let m = rxB.exec(xml); m; m = rxB.exec(xml)) inicioB = m.index;
+  if (inicioB < 0) return { insertadas: 0 };
 
-  const mC = rxC.exec(xml);
+  /* Y el corte, en la primera mención del ANEXO C que venga DESPUÉS del cuerpo del B:
+     las del índice quedan detrás y tomarlas dejaría `finB` por delante de `inicioB`. */
   let finB = xml.length;
-  if (mC && mC.index > inicioB) {
-    finB = mC.index;
+  for (let m = rxC.exec(xml); m; m = rxC.exec(xml)) {
+    if (m.index > inicioB) { finB = m.index; break; }
   }
 
   let rels = zip.file(RUTA_RELS).asText();
