@@ -17,15 +17,11 @@ npm run build          # sync-index.js (raíz→public) + build de frontend/ (Vi
 npm start              # corre build (prestart) y levanta server.js en :3000
 npm run dev  --prefix frontend    # Vite dev server del gestor de reportes, proxy /api → :3000
 npm run lint --prefix frontend    # oxlint (única herramienta de lint del repo)
-npm test               # node --test sobre scripts/lib/ — cubre solo los helpers de scripts/
+npm test               # corre la suite de pruebas unitarias sobre scripts/lib/, frontend/src/services/, frontend/src/utils/ y functions/
 firebase deploy        # hosting + functions; el predeploy dispara `npm run build`
 ```
 
-**La aplicación no tiene tests.** `npm test` cubre únicamente los helpers de `scripts/lib/`;
-nada de `index.html` ni de `frontend/` está bajo test. Para un cambio en la aplicación la
-verificación es: (a) `grep` de que ningún símbolo eliminado siga referenciado, y (b) prueba
-manual en el navegador. No afirmes que algo "pasa los tests" apoyándote en `npm test` si
-tocaste la aplicación; describe qué verificaste y cómo.
+**La aplicación tiene pruebas unitarias integradas.** `npm test` ejecuta los casos de prueba sobre `scripts/lib/`, los servicios puros en `frontend/src/services/` (por ejemplo, el motor de rango, cálculos, parser y vocabulario de plantillas), las utilidades en `frontend/src/utils/` y las funciones de Firebase en `functions/` (con un total de ~895 pruebas). Para un cambio en estos servicios, la suite debe quedar al 100 % en verde. Para cambios puramente visuales o sobre `index.html` de la raíz, la verificación sigue siendo manual en el navegador.
 
 ## Regla crítica de edición
 
@@ -99,6 +95,20 @@ en la redacción pesada) para redacción y razonamiento; Gemini (`gemini-3-flash
 para lectura/OCR de documentos — es notablemente más barato en esa tarea. Los prompts de
 extracción de RUT y Cámara de Comercio están **duplicados literalmente** en `server.js`,
 `functions/index.js` y el PHP: al ajustar uno, ajusta los tres.
+
+**Fallback de Claude a Gemini.** Si Anthropic no puede atender —sin saldo (400/402 con
+`credit balance`), con el tope de gasto de la cuenta alcanzado (400 con `usage limits`, el
+que fija la propia organización en la consola), con el límite de peticiones alcanzado (429)
+o sobrecargado (529)—,
+`/api/claude` atiende con Gemini y **devuelve la respuesta con forma de Anthropic**
+(`content[].text`), porque así la leen los catorce llamadores. NO se cae en un 400 por
+petición mal formada ni en un 401 por key inválida: fallarían igual en Gemini y taparlo
+enmascara un defecto propio. Quién atendió se publica en la cabecera `X-Proveedor-IA` y en
+el campo `proveedor` de la respuesta. La lógica es pura y vive en
+`functions/fallbackGemini.js` (probada en `functions/fallbackGemini.test.js`); `server.js`
+la requiere desde ahí, así que esas dos no pueden divergir. El PHP
+(`Cpanel/public_html/api/fallback-gemini.php`) **sí** es un port a mano: al cambiar la
+lógica, cámbialo también.
 
 ### Persistencia
 

@@ -5,6 +5,10 @@
 
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
+import { actualizarTablasMotorHtml, actualizarTablasMacroHtml } from './tablasHtmlInforme.js';
+import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
+import { actualizarAnexoBHtml } from './anexoBHtml.js';
+import { actualizarAnexoCHtml } from './anexoCHtml.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -29,11 +33,43 @@ const resaltar = resaltarValor;
 
 const RX_MARCA = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
 
-export function renderizar(htmlMarcado, estudio, recursos = []) {
+/**
+ * @param {string} htmlMarcado
+ * @param {object} estudio
+ * @param {Array} [recursos]
+ * @param {{datosMacro?:object}} [opciones]  `datosMacro` alimenta las ocho tablas de
+ *        tendencias de la economía; sin él se usan las series de respaldo de
+ *        `analisisMercado.js`, igual que en la ruta .docx.
+ */
+export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
   const vacios = new Set();
   const recursosFaltantes = new Set();
 
-  let html = String(htmlMarcado || '').replace(RX_MARCA, (_, campo) => {
+  /* Las tablas se regeneran ANTES de sustituir las marcas, y no después, por dos razones.
+     Una: las marcas que la IA hubiera puesto dentro de la tabla vieja se van con ella, así
+     que no se cuentan como campos vacíos por un texto que ya no existe. Otra: el número de
+     filas depende del estudio, no de la plantilla, y sustituir marca por marca no puede
+     añadirlas ni quitarlas — es lo que dejaba la tabla de márgenes con las comparables del
+     informe del que salió la plantilla y unas pocas celdas del estudio nuevo. */
+  const avisosTablas = [];
+  let html = actualizarTablasMotorHtml(htmlMarcado, estudio, avisosTablas);
+  /* Las Tablas 1 y 2 —las de la operación con el vinculado— por el mismo motivo que las
+     del motor: sus celdas no corresponden a ningún campo del vocabulario, así que el
+     marcado no las alcanza y se radicaban con el concepto, el vinculado, el país y el
+     monto del cliente anterior. */
+  html = actualizarTablasOperacionesHtml(html, estudio, avisosTablas);
+  html = actualizarTablasMacroHtml(
+    html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
+  /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su
+     número depende de la muestra: hay que crear y retirar bloques enteros. */
+  html = actualizarAnexoBHtml(html, estudio, avisosTablas);
+  /* El ANEXO C, por lo mismo: una tabla por motivo que descartó a alguien, y su
+     tabla-resumen no tiene rótulo del que agarrarse —va pegada al encabezado del anexo—, así
+     que el localizador de tablas no la alcanzaba y se radicaba con los conteos del informe
+     del que salió la plantilla, contradiciendo a la Tabla 16 del cuerpo. */
+  html = actualizarAnexoCHtml(html, estudio, avisosTablas);
+
+  html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
     if (valor === null) {
       vacios.add(campo);
@@ -85,5 +121,11 @@ export function renderizar(htmlMarcado, estudio, recursos = []) {
     console.warn('[plantillaRenderer] Recursos faltantes: ' + [...recursosFaltantes].join(', '));
   }
 
-  return { html, vacios: [...vacios], recursosFaltantes: [...recursosFaltantes] };
+  return {
+    html, vacios: [...vacios], recursosFaltantes: [...recursosFaltantes],
+    /* Qué tabla del motor no se encontró en la plantilla. Se devuelve para que la UI lo
+       diga: una tabla que no se regenera se radica con los datos del informe del que
+       salió la plantilla, y ese fallo tiene que dejar de ser mudo también aquí. */
+    avisosTablas,
+  };
 }

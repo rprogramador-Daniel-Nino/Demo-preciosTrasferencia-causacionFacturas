@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 import axios from 'axios';
 import { num, pliOf } from '../utils/calculations.js';
 import {
-  esHolding, tieneSemanticaHolding, tieneSemanticaHoldingDesc, holdingSospecha, esControlada, participacionMaxima,
+  esHolding, tieneSemanticaHolding, holdingSospecha, esControlada, participacionMaxima,
 } from './filtrosComparablesPatch.js';
 import { perfilFuncionalBilingue, PERFILES_DETERMINADOS } from './perfilFuncionalPatch.js';
 
@@ -38,8 +38,10 @@ export function elegirHoja(nombresDeHoja) {
  * Extrae los criterios de búsqueda de la hoja "Screen Criteria" del export de
  * Capital IQ —aparte de "Screening" (las candidatas) y "Aggregates"—, para
  * poder reconstruir la Tabla 13 (Códigos SIC utilizados) del informe con la
- * corrida real de este año en vez de arrastrar la del informe anterior (ver
- * frontend/src/services/exactTemplateMapper.js:generarTablaCriteriosScreeningHtml).
+ * corrida real de este año en vez de arrastrar la del informe anterior. El
+ * generador de esa tabla murió con la sustitución por literales; lo que se
+ * parsea aquí queda en `study.criteriosScreening`, a la espera de que la ruta
+ * por campos con nombre lo publique (Fase 2, `plantillaVocabulario.js`).
  *
  * Cada fila de esa hoja es una sola celda de texto, con la forma
  * "N) Etiqueta: valor", "And) Etiqueta: valor" u "Or) Etiqueta: valor" — el
@@ -91,6 +93,20 @@ export function encontrarFilaEncabezados(filas) {
   return mejor;
 }
 
+/** ¿La candidata tiene la utilidad operacional en negativo?
+ *
+ * Se mira la cifra, no un `hasLoss` calculado antes: ese campo solo lo pone
+ * `importCapitalIQExcel`, así que una candidata que llegue por otra vía —cargada a
+ * mano, traída del estudio anterior o con la utilidad corregida después de
+ * importar— pasaba el filtro con la utilidad en rojo. Se acepta `op` y también
+ * `utilidadOperacional`, que es como la nombra el paquete de parches. */
+export function enPerdida(cand) {
+  if (!cand) return false;
+  if (cand.hasLoss === true) return true;
+  const op = num(cand.op != null ? cand.op : cand.utilidadOperacional);
+  return op !== null && op < 0;
+}
+
 /** Sinónimos por columna, en un solo sitio para poder informar qué se buscó. */
 export const COLUMNAS_IQ = {
   name: { etiqueta: 'Compañía', esencial: true, claves: ['company name', 'compañía', 'compania', 'empresa', 'razon social', 'razón social', 'nombre'] },
@@ -100,6 +116,15 @@ export const COLUMNAS_IQ = {
   ar: { etiqueta: 'Cuentas por cobrar', esencial: false, claves: ['accounts receivable', 'cuentas por cobrar', 'cxc'] },
   inv: { etiqueta: 'Inventarios', esencial: false, claves: ['total inventory', 'inventarios', 'inventario'] },
   ap: { etiqueta: 'Cuentas por pagar', esencial: false, claves: ['accounts payable', 'cuentas por pagar', 'cxp'] },
+  /* PP&E entra por la misma vía que las otras partidas de balance. Sin él, el ajuste
+     de propiedad, planta y equipo se calcula contra cero en todas las comparables y
+     los escenarios que lo incluyen quedan sin sentido. */
+  ppe: {
+    etiqueta: 'Propiedad, planta y equipo',
+    esencial: false,
+    claves: ['net property plant and equipment', 'property plant and equipment', 'net pp&e', 'pp&e', 'ppe',
+      'propiedad planta y equipo', 'propiedad, planta y equipo', 'propiedades planta y equipo'],
+  },
   sic: { etiqueta: 'SIC', esencial: false, claves: ['primary sic', 'sic', 'ciiu'] },
   id: { etiqueta: 'Identificador de la fuente', esencial: false, claves: ['excel company id', 'capital iq id', 'company id', 'iqid'] },
   desc: { etiqueta: 'Descripción del negocio', esencial: false, claves: ['business description', 'descripción', 'descripcion', 'actividad', 'profile'] },
@@ -203,8 +228,8 @@ export async function importCapitalIQExcel(file, onProgress) {
           throw err;
         }
         const sIdx = idx.s, cIdx = idx.c, opIdx = idx.op, arIdx = idx.ar, invIdx = idx.inv,
-          apIdx = idx.ap, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc, countryIdx = idx.country,
-          holderPctIdx = idx.holderPct, holdersIdx = idx.holders;
+          apIdx = idx.ap, ppeIdx = idx.ppe, sicIdx = idx.sic, idIdx = idx.id, descIdx = idx.desc,
+          countryIdx = idx.country, holderPctIdx = idx.holderPct, holdersIdx = idx.holders;
         const total = json.length - filaEncabezados - 1;
         avisar('Leyendo compañías…', 0, total);
         const rows = [];
@@ -233,6 +258,7 @@ export async function importCapitalIQExcel(file, onProgress) {
           const ar = arIdx >= 0 ? num(row[arIdx]) : null;
           const inv = invIdx >= 0 ? num(row[invIdx]) : null;
           const ap = apIdx >= 0 ? num(row[apIdx]) : null;
+          const ppe = ppeIdx >= 0 ? num(row[ppeIdx]) : null;
           const sic = sicIdx >= 0 ? String(row[sicIdx] || '').trim() : '';
           const idIQ = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
           const desc = descIdx >= 0 ? String(row[descIdx] || '').trim() : '';
@@ -269,6 +295,7 @@ export async function importCapitalIQExcel(file, onProgress) {
             ar,
             inv,
             ap,
+            ppe,
             sic,
             desc,
             holderPct,
@@ -450,7 +477,8 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     umbralControl = 50,
     saldoNegativo = 'excluir',
     geo = 'ninguna',
-    rigor = 'estandar',
+    /* `rigor` sigue llegando en la configuración y se conserva en el estudio, pero ya
+       no descarta a nadie: ver la nota del bloque «rigor funcional» más abajo. */
   } = config;
 
   const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
@@ -499,14 +527,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        momento y retirarla ahora rompería la continuidad de la serie. */
     if (control === 'excluir' && esControlada(cand, { umbral: umbralControl })) {
       rechazar('filtro', 'controlada',
-        `Vinculada: un accionista supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
+        `Vinculada: un accionista alcanza o supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
     } else if (holding === 'excluir' && tieneSemanticaHolding(cand) && !esContinuidad) {
       rechazar('filtro', 'holding', 'Sociedad holding o de grupo (en Razón Social).');
-    } else if (holding === 'excluir' && tieneSemanticaHoldingDesc(cand) && !esContinuidad) {
-      rechazar('filtro', 'holdingDescripcion', 'Mención de sociedad holding o grupo en la descripción del negocio.');
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
       rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
-    } else if (perdidaOp === 'excluir' && cand.hasLoss) {
+    } else if (perdidaOp === 'excluir' && enPerdida(cand)) {
       rechazar('filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN).');
     }
 
@@ -535,22 +561,17 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     const perfilOrigen = perfilIA ? 'ia' : 'heuristica';
     const fPerfil = perfil === 'SERVICIO' ? 1 : (perfil === 'MIXTO' ? 0.6 : 0.35);
 
-    /* ── rigor funcional ──
-       Antes `rigor` se guardaba en la configuración y se pintaba en el paso 2, pero
-       el motor no lo leía: elegir «Estricto» daba exactamente el mismo resultado que
-       «Amplio», porque el perfil solo pesaba en el puntaje. Ahora descarta.
+    /* ── rigor funcional: RETIRADO como filtro (decisión del usuario, 2026-08-10) ──
+       Descartaba por perfil —el rigor estricto admitía solo prestadores de servicios,
+       el estándar excluía al empresario pleno— y separaba así un puñado de compañías
+       del resto. Dejó de aportar cuando el informe pasó a reportar bajo un solo
+       concepto, «diferencias funcionales», todo lo que supera los filtros objetivos
+       y no integra la muestra: las que apartaba acababan en el mismo sitio que las
+       demás, y de paso el motor perdía candidatas que podían puntuar bien.
 
-       Dos exenciones, las mismas que rigen para el veredicto de la IA: INDEFINIDO no
-       descarta (no hay perfil que juzgar, y así llegan las candidatas de otras
-       fuentes o agregadas a mano), y una comparable de continuidad no se retira
-       porque su inclusión ya se sustentó en el estudio anterior. */
-    if (!descartada && !esContinuidad && PERFILES_DETERMINADOS.has(perfil)) {
-      if (rigor === 'estricto' && perfil !== 'SERVICIO') {
-        rechazar('rigor', 'rigorFuncional', `Diferencias funcionales (perfil ${perfil.toLowerCase()}): el rigor estricto admite solo prestadores de servicios (art. 260-4 E.T.).`);
-      } else if (rigor === 'estandar' && perfil === 'EMPRESARIO') {
-        rechazar('rigor', 'rigorFuncional', 'Diferencias funcionales (empresario pleno): propiedad intelectual y riesgo de mercado propios (art. 260-4 E.T.).');
-      }
-    }
+       El perfil sigue vivo y sigue pesando: alimenta `fPerfil` justo arriba, que
+       ordena el puntaje, y se publica en la columna «Perfil funcional» de la hoja de
+       trazabilidad. Lo que se retira es su capacidad de excluir por sí solo. */
 
     /* ── especialidad: coincidencia con la actividad del contribuyente ──
        Si la IA ya confirmó la coincidencia sobre la descripción real, se toma su
@@ -654,7 +675,6 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        decir cuántas por holding, cuántas por pérdidas y cuántas por actividad. */
     rechazadasPorMotivo: {
       holding: rechazadas.filter(c => c.motivoClave === 'holding').length,
-      holdingDescripcion: rechazadas.filter(c => c.motivoClave === 'holdingDescripcion').length,
       controlada: rechazadas.filter(c => c.motivoClave === 'controlada').length,
       saldoNegativo: rechazadas.filter(c => c.motivoClave === 'saldoNegativo').length,
       perdidaOperativa: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,
@@ -703,21 +723,57 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 export function enriquecerUniverso(universo, comparables = [], auditoria = null) {
   if (!Array.isArray(universo) || universo.length === 0) return [];
 
-  const clave = (c) => (c && (c.nameKey || nameKey(c.name))) || '';
-  const seleccionadas = new Set((comparables || []).map(clave).filter(Boolean));
+  /* El identificador de Capital IQ es único por compañía; `nameKey` NO lo es.
+     `nameKey` se diseñó para cruzar con el estudio del año anterior —donde el nombre
+     viene escrito de otra forma— y por eso quita paréntesis, sufijos societarios y
+     todo lo que no sea alfanumérico. La contrapartida es que colapsa compañías
+     distintas: «N-able, Inc. (NYSE:NABL)» y «Nable Inc. (KOSDAQ:A153460)» dan las dos
+     «NABLE», y cruzar la auditoría por ahí le pegaba a la primera el motivo de la
+     segunda —aparecía descartada por control con un 32,63 % de su mayor accionista,
+     contradiciendo a la propia columna «Controlada» de la hoja—.
+
+     Así que manda el identificador, y el nombre queda de respaldo solo cuando no hay
+     dos identificadores que se contradigan. */
+  const idDe = (c) => (c && c.id != null && String(c.id).trim()) || '';
+  const nkDe = (c) => (c && (c.nameKey || nameKey(c.name))) || '';
+
+  const indexar = (lista) => {
+    const porId = new Map(), porNombre = new Map();
+    lista.forEach((c) => {
+      const id = idDe(c);
+      if (id) porId.set(id, c);
+      const nk = nkDe(c);
+      if (nk && !porNombre.has(nk)) porNombre.set(nk, c);
+    });
+    return { porId, porNombre };
+  };
+
+  const buscar = (idx, cand) => {
+    const id = idDe(cand);
+    if (id && idx.porId.has(id)) return idx.porId.get(id);
+    const ev = idx.porNombre.get(nkDe(cand));
+    if (!ev) return null;
+    /* Las dos traen identificador y no es el mismo: son compañías distintas que
+       comparten clave de nombre, así que no se cruzan. */
+    if (id && idDe(ev) && idDe(ev) !== id) return null;
+    return ev;
+  };
+
+  const idxSeleccionadas = indexar(comparables || []);
 
   /* Un solo índice con todo lo que evaluó el motor: las rechazadas traen el motivo y
      las de reserva confirman el perfil de una válida que no entró al TOP-N. */
-  const evaluadas = new Map();
-  [...((auditoria && auditoria.rechazadas) || []), ...((auditoria && auditoria.reserva) || []), ...(comparables || [])]
-    .forEach(c => { const k = clave(c); if (k) evaluadas.set(k, c); });
+  const idxEvaluadas = indexar([
+    ...((auditoria && auditoria.rechazadas) || []),
+    ...((auditoria && auditoria.reserva) || []),
+    ...(comparables || []),
+  ]);
 
   return universo.map(cand => {
-    const k = clave(cand);
-    const ev = evaluadas.get(k);
+    const ev = buscar(idxEvaluadas, cand);
     return {
       ...cand,
-      seleccionada: seleccionadas.has(k),
+      seleccionada: Boolean(buscar(idxSeleccionadas, cand)),
       motivoClave: (ev && ev.motivoClave) || '',
       motivoRechazo: (ev && ev.motivoRechazo) || '',
       categoriaRechazo: (ev && ev.categoriaRechazo) || '',

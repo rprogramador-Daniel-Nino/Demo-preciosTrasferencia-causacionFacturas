@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { hojasMemoriaRangoOptimo } from './memoriaCalculoRangoOptimo.js';
+import { hojasMemoriaRangoOptimo, TERMINOS_HOLDING_HOJA } from './memoriaCalculoRangoOptimo.js';
 import { enriquecerUniverso } from './comparablesEngine.js';
+import { TERMINOS_HOLDING } from './filtrosComparablesPatch.js';
 
 /* La hoja «Selección comparables» y la «Matriz de rechazo» son el respaldo que se
    entrega ante la DIAN: si sus conteos no cuadran con el universo, el informe no se
@@ -66,14 +67,60 @@ test('el embudo cuenta los siete motivos sobre la columna que escribe el motor',
   });
 });
 
-test('las válidas se restan de las siete exclusiones, no de algunas', () => {
-  /* Si la resta omitiera un motivo, el embudo dejaría de cuadrar en cuanto la
-     curación por IA descartara a alguien. */
+test('las válidas se restan de TODAS las exclusiones, no de algunas', () => {
+  /* Si la resta omitiera una fila, el embudo dejaría de cuadrar en cuanto la
+     curación por IA descartara a alguien. Se comparan contra las filas «(−)» que
+     el propio embudo emite, y no contra un número fijo: son seis desde que los dos
+     motivos de perfil se presentan juntos, y un siete quemado aquí obligaría a
+     tocar el test cada vez que cambie la presentación. */
   const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const exclusiones = sel.celdas.filter((f) => f && f[0] && String(f[0].v || '').startsWith('(−)')).length;
   const f = fila(sel.celdas, '= Válidas');
   assert.ok(f, 'existe la fila de válidas');
   const restas = (f[1].f.match(/-/g) || []).length;
-  assert.strictEqual(restas, 7, `deben restarse los 7 motivos, se restan ${restas}`);
+  assert.strictEqual(restas, exclusiones, `hay ${exclusiones} exclusiones y se restan ${restas}`);
+});
+
+test('todos los motivos del motor quedan contados, aunque se presenten en menos filas', () => {
+  /* La presentación agrupa; la aritmética no puede perder ninguno. Un motivo que el
+     motor escriba y la hoja no cuente descuadra la suma de control: fue exactamente
+     lo que pasó con el descarte de holding por descripción. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  /* Fórmulas de las filas «(−)» del embudo, que son las que restan del universo. */
+  const formulas = sel.celdas
+    .filter((f) => f && f[0] && String(f[0].v || '').startsWith('(−)'))
+    .map((f) => f[1].f)
+    .join(' ');
+  ['controlada', 'holding', 'saldoNegativo', 'perdidaOperativa',
+    'sinDescripcion', 'actividadDistinta', 'rigorFuncional',
+  ].forEach((m) => assert.match(formulas, new RegExp(`COUNTIF\\(N\\d+:N\\d+,"${m}"\\)`), `falta contar ${m}`));
+});
+
+test('«Diferencias funcionales» recoge los motivos cualitativos y las que no entraron a la muestra', () => {
+  /* Todo lo que supera los cuatro filtros objetivos y no integra la muestra cuenta
+     como rechazado por comparabilidad funcional, lleve motivo escrito o no. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const f = fila(sel.celdas, '(−) Diferencias funcionales');
+  assert.ok(f, 'existe la fila unificada');
+  ['sinDescripcion', 'actividadDistinta', 'rigorFuncional'].forEach((m) =>
+    assert.match(f[1].f, new RegExp(`COUNTIF\\(N\\d+:N\\d+,"${m}"\\)`), `falta ${m}`));
+  /* El término que recoge a las que pasaron todo y no se seleccionaron. */
+  assert.match(f[1].f, /COUNTIFS\(N\d+:N\d+,"",Q\d+:Q\d+,"<>Sí"\)/);
+  assert.match(String(f[2].v), /No comparable con la parte examinada \(Art\. 260-4\)/);
+  /* Y dejan de tener fila propia. */
+  assert.ok(!fila(sel.celdas, '(−) Actividad distinta'));
+  assert.ok(!fila(sel.celdas, '(−) Sin descripción'));
+});
+
+test('válida es solo la que integra la muestra', () => {
+  /* El estado ya no depende de si hay motivo escrito: una compañía que superó todos
+     los criterios pero no entró al rango queda rechazada por diferencias
+     funcionales, que es como el informe la sustenta. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  assert.match(filaCand[15].f, /IF\(Q\d+="Sí","Válida","Rechazada"\)/);
+  assert.match(filaCand[17].f, /"Comparable de la muestra"/);
+  assert.match(filaCand[17].f, /"Diferencias funcionales"/);
 });
 
 test('la suma de control compara rechazadas + válidas contra el universo', () => {
@@ -126,8 +173,59 @@ test('el umbral de control viaja a las fórmulas y a los rótulos', () => {
     criterios: [], candidatas: universoDePrueba(), umbralControl: 30,
   });
   const texto = JSON.stringify(sel.celdas);
-  assert.ok(texto.includes('>30'), 'la fórmula de la columna Controlada usa el umbral dado');
+  /* Mayor o IGUAL: con el umbral justo también hay control. */
+  assert.ok(texto.includes('>=30'), 'la fórmula de la columna Controlada usa el umbral dado');
   assert.ok(texto.includes('30 %'), 'y el rótulo del embudo lo dice');
+});
+
+test('Controlada, Holding y Pérdida se marcan por separado, cada una con su fórmula', () => {
+  /* Una compañía puede ser las tres cosas a la vez. La precedencia solo decide qué
+     motivo queda escrito en la columna N; estas tres casillas son hechos
+     independientes y ninguna depende de las otras. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, {
+    criterios: [],
+    candidatas: [{ name: 'Mega Grupo Holding', holderPct: 80, op: -5, motivoClave: 'controlada' }],
+  });
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  assert.match(filaCand[10].f, /IF\(N\(I\d+\)>=50/, 'K Controlada, sobre el % del mayor accionista');
+  assert.match(filaCand[11].f, /SEARCH\("holding"/, 'L Holding, sobre la razón social');
+  assert.match(filaCand[11].f, /SEARCH\("grupo"/, 'y con todo el vocabulario, no solo un término');
+  assert.match(filaCand[12].f, /IF\(N\(G\d+\)<0/, 'M Pérdida, sobre la utilidad operacional');
+});
+
+test('el segundo cuadre compara las dos formas de contar la muestra', () => {
+  /* Las válidas del embudo salen de restar las exclusiones al universo; la muestra
+     sale de contar «¿Seleccionada?». Si difieren, alguna fila quedó seleccionada
+     llevando motivo de rechazo, o un motivo del motor dejó de contarse. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const filaExacta = (etq) => sel.celdas.find((f) => f && f[0] && f[0].v === etq);
+  const check = filaExacta('¿Coincide con las válidas del embudo?');
+  assert.ok(check, 'existe la fila de cuadre');
+  assert.match(check[1].f, /"NO ✗ \("&/, 'informa los dos números cuando no cuadra');
+});
+
+test('el vocabulario de holding de la hoja es el mismo que aplica el motor', () => {
+  /* La hoja traduce el criterio a fórmula de Excel, así que la lista está escrita
+     dos veces. Si divergen, el libro dice que una compañía es holding y el motor no
+     la descartó —o al revés—, que es la contradicción más difícil de sostener ante
+     la DIAN: la hoja se estaría desmintiendo a sí misma. */
+  assert.deepStrictEqual(
+    [...TERMINOS_HOLDING_HOJA].sort(),
+    [...TERMINOS_HOLDING].sort(),
+    'sincronizar TERMINOS_HOLDING_HOJA con TERMINOS_HOLDING de filtrosComparablesPatch.js'
+  );
+});
+
+test('la columna Holding solo mira el nombre, nunca el SIC ni la descripción', () => {
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, {
+    criterios: [],
+    candidatas: [{ name: 'Gamma Operating Corp', sic: '6719 Offices of Holding Companies', desc: 'Subsidiary of Global Holding Group' }],
+  });
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  /* La fórmula referencia B —la columna Compañía— y ninguna otra. */
+  const refs = filaCand[11].f.match(/,([A-R]\d+)\)/g) || [];
+  assert.ok(refs.length > 0, 'la fórmula debería referenciar alguna celda');
+  refs.forEach((ref) => assert.match(ref, /,B\d+\)/, `referencia inesperada: ${ref}`));
 });
 
 test('la matriz de rechazo cuadra contra el universo real, no contra un número fijo', () => {
@@ -165,7 +263,185 @@ test('el universo enriquecido por el motor alimenta el embudo de la hoja', () =>
 
   const filas = sel.celdas.slice(-2);
   assert.strictEqual(filas[0][13].v, 'holding', 'el motivo del motor llega a la columna N');
-  assert.strictEqual(filas[0][11].v, 'Sí', 'y la columna Holding queda marcada');
+  /* La columna Holding es una fórmula sobre el nombre —«Alpha Group» contiene
+     «group»—, no una marca volcada desde el motor: la hoja muestra el criterio. */
+  assert.match(filas[0][11].f, /SEARCH\("group"/, 'y la columna Holding aplica el criterio');
   assert.strictEqual(filas[1][13].v, '', 'la seleccionada no trae motivo');
   assert.strictEqual(filas[1][16].v, 'Sí', 'y sí queda marcada como seleccionada');
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Las hojas de cálculo: la tasa y las fórmulas de ajuste.
+
+   Nada de esto estaba cubierto, y es donde vivían los errores que llegaron al
+   consultor: una fórmula que Excel no podía leer y un ajuste que salía en cero.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Con 3 comparables el bloque de la hoja Datos ocupa las filas 15, 16 y 17: la
+   parte examinada va en A4:B11 y el encabezado de comparables en la 14. */
+const ESTUDIO3 = {
+  ...ESTUDIO,
+  prime: 7.37,
+  comparables: [
+    { name: 'A SA', s: 500, c: 300, op: 100, ar: 50, inv: 20, ap: 40, ppe: 100 },
+    { name: 'B SA', s: 800, c: 500, op: 150, ar: 90, inv: 10, ap: 60, ppe: 40 },
+    { name: 'C SA', s: 300, c: 100, op: 120, ar: 30, inv: 5, ap: 20, ppe: 10 },
+  ],
+};
+
+/** Todas las celdas del libro que llevan fórmula, con su hoja y su posición. */
+function formulas(hojas) {
+  const out = [];
+  hojas.forEach((h) => (h.celdas || []).forEach((fila, r) => (fila || []).forEach((c, col) => {
+    if (c && c.f) out.push({ hoja: h.nombre, fila: r + 1, col, f: String(c.f) });
+  })));
+  return out;
+}
+
+test('ninguna fórmula se emite con el «=» delante', () => {
+  /* SheetJS escribe el campo `f` tal cual dentro de <f>…</f>, y ahí la fórmula va
+     SIN el signo igual. Con él, Excel no puede parsear la expresión: abre el libro
+     en modo reparación y se lleva por delante la celda. Pasó exactamente eso con la
+     columna «Tasa», que es de donde las cinco hojas de método leen el Prime Rate:
+     el libro llegaba al consultor sin ningún ajuste aplicado. */
+  const conTodo = hojasMemoriaRangoOptimo(ESTUDIO3, seleccionDePrueba());
+  const malas = formulas(conTodo).filter((c) => c.f.startsWith('='));
+  assert.deepStrictEqual(malas, [], 'fórmulas con «=» inicial: ' + JSON.stringify(malas.slice(0, 3)));
+});
+
+test('la tasa se escribe una sola vez, en Datos!B11, y en porcentaje', () => {
+  const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  const b11 = datos.celdas[10][1];
+  assert.strictEqual(b11.v, 0.0737, 'prime llega en porcentaje y se divide entre 100 aquí');
+  assert.strictEqual(b11.z, '0.00%');
+  assert.strictEqual(datos.celdas[10][0].v, 'Tasa de interés de referencia (Prime Rate)');
+});
+
+test('las tres comparables toman la tasa de esa única celda, no una propia', () => {
+  /* La plantilla de Capital IQ traía la tasa del país de cada comparable escrita
+     como valor fijo: tres tasas distintas en la misma columna, y dos comparables
+     con 0 %, es decir, sin ajuste alguno. */
+  const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  /* Fila 15 y no 14: la fila «Ámbito de la muestra» se inserta después de la tasa y
+     antes de la sección de comparables, así que el bloque completo baja una fila. */
+  for (let i = 0; i < 3; i++) {
+    const tasa = datos.celdas[15 + i][8];
+    assert.strictEqual(tasa.f, '$B$11', `la comparable ${i + 1} debería referenciar la celda única`);
+    assert.strictEqual(tasa.v, undefined, 'y no traer un valor propio quemado');
+  }
+});
+
+test('la hoja Datos documenta de dónde sale la tasa y a quién se aplica', () => {
+  const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  /* Columna 11 y no 10: la columna «Ámbito» (J) se insertó en la tabla de comparables
+     y empujó una posición a la derecha este bloque de trazabilidad, que vivía en K–M
+     y ahora vive en L–N. */
+  const etiquetas = [2, 3, 4, 5, 6].map((r) => datos.celdas[r][11] && datos.celdas[r][11].v);
+  assert.ok(etiquetas[0].startsWith('PARÁMETRO'), 'el bloque arranca con su título');
+  assert.deepStrictEqual(etiquetas.slice(1), ['Tasa aplicada', 'Fuente', 'Aplicación', 'Convención']);
+  assert.match(datos.celdas[4][12].v, /RIFSPBLPNA/, 'la fuente cita la serie, no solo el número');
+  assert.strictEqual(datos.celdas[3][12].f, '$B$11', 'el bloque refleja la celda editable, no la duplica');
+});
+
+test('el texto de «Aplicación» cita la dirección completa de la tasa, no una a medias', () => {
+  /* Regresión: un literal de plantilla reciclaba `celdaTasa` ("B11", sin el primer
+     "$") dentro de un texto que ya traía un "$" antes de la interpolación. En JS eso
+     NO produce dos signos de dólar seguidos: el primero queda literal y el segundo es
+     el que abre `${...}`, así que salía «=$B11» en vez de «=$B$11». La fórmula real
+     (fila «Tasa aplicada») estaba bien; lo que mentía era el texto que la describe
+     para quien audita el libro. */
+  const datos = hojasMemoriaRangoOptimo(ESTUDIO3, null).find((h) => h.nombre === 'Datos');
+  const direccionTasa = `=${datos.celdas[3][12].f}`; // p.ej. '=$B$11', a partir de la fórmula real
+  const aplicacion = datos.celdas[5][12].v;
+  assert.ok(aplicacion.includes(direccionTasa),
+    `«Aplicación» debería citar la dirección completa ${direccionTasa}: ${aplicacion}`);
+});
+
+test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', () => {
+  /* Sin el factor de base, la columna Q salía dividida por el monto de las ventas y
+     los escenarios «+PP&E» y «PP&E» reproducían a los que no llevan PP&E. */
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
+  const mo = hojas.find((h) => h.nombre === 'MO');
+  assert.strictEqual(mo.celdas[2][16].f, '((H3/M3)-(Datos!$B$10/Datos!$B$4))*(M3*I3)');
+  const ncp = hojas.find((h) => h.nombre === 'NCP');
+  assert.strictEqual(ncp.celdas[2][16].f,
+    '((H3/((C3-G3)+D3))-(Datos!$B$10/(Datos!$B$5+Datos!$B$6)))*(M3*I3)',
+    'NCP toma el ratio sobre el denominador depurado pero escala con la base del método');
+});
+
+test('los sabores que no ajustan CxC no dividen sobre la venta ajustada', () => {
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
+  const mo = hojas.find((h) => h.nombre === 'MO');
+  // columnas S..Y = índices 18..24; U=20 (CxP), V=21 (Inv), Y=24 (PP&E)
+  assert.strictEqual(mo.celdas[2][20].f, '(J3+O3)/M3');
+  assert.strictEqual(mo.celdas[2][21].f, '(J3-P3)/M3');
+  assert.strictEqual(mo.celdas[2][24].f, '(J3-Q3)/M3');
+  // los que sí ajustan CxC siguen usando R, la venta ajustada
+  assert.strictEqual(mo.celdas[2][19].f, '(J3-N3)/R3', 'solo CxC');
+  assert.strictEqual(mo.celdas[2][22].f, '(J3-N3+O3-P3)/R3', 'el escenario que reporta el informe');
+
+  /* En NCP y Cost Plus la columna R es el denominador depurado (COGS−CxP), que no
+     tiene nada que ver con el ajuste de CxC: ahí se mantiene en los siete sabores. */
+  const ncp = hojas.find((h) => h.nombre === 'NCP');
+  assert.strictEqual(ncp.celdas[2][20].f, '(J3+O3)/R3');
+});
+
+test('el libro trae una hoja de diagnóstico con las comprobaciones sobre los datos', () => {
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
+  const dg = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  assert.ok(dg, 'debería existir la hoja de diagnóstico');
+  const texto = JSON.stringify(dg.celdas);
+  assert.match(texto, /SUMPRODUCT/, 'los conteos son fórmulas, no valores calculados en JS');
+  /* Fila 16 y no 15: la fila «Ámbito de la muestra» corre la sección de comparables
+     una posición hacia abajo en la hoja Datos. */
+  assert.match(texto, /Datos!\$C\$16:\$C\$18/, 'y apuntan al rango real de comparables');
+  /* Una fila por comparable en la sección de PP&E, referida a la hoja MO para no
+     reimplementar el ajuste una segunda vez. */
+  assert.match(texto, /MO!Q3/);
+  assert.match(texto, /MO!Q5/);
+});
+
+test('sin comparables no se arma la hoja de diagnóstico', () => {
+  const hojas = hojasMemoriaRangoOptimo({ ...ESTUDIO, comparables: [] }, null);
+  assert.ok(!hojas.some((h) => h.nombre === 'Diagnóstico de datos'));
+});
+
+test('el emisor descuenta el segmento excluido, no el llamador', () => {
+  /* MemoriaRangoModal.jsx:93 llama aquí directo. Si el descuento viviera en
+     motorExcelExport, el libro del modal saldría con las ventas sin descontar y el del
+     motor con ellas descontadas: dos libros distintos para el mismo estudio. */
+  const datos = hojasMemoriaRangoOptimo(
+    { ...ESTUDIO, t_s: 1000, seg_excluido: 120 }, null,
+  ).find((h) => h.nombre === 'Datos');
+  const ventas = datos.celdas.find((f) => f && f[0] && f[0].v === 'Ventas netas');
+  assert.strictEqual(ventas[1].v, 880);
+});
+
+test('las referencias del contribuyente apuntan al rubro, no a una fila fija', () => {
+  /* Esta prueba pasa antes y después del refactor: es la red que impide que ampliar
+     la hoja Datos deje las hojas de método apuntando al rubro equivocado, que es un
+     fallo que no revienta —da un número creíble y falso—. */
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const mo = hojas.find((h) => h.nombre === 'MO');
+
+  const filaDe = (etiqueta) => datos.celdas.findIndex(
+    (f) => f && f[0] && f[0].v === etiqueta) + 1;
+
+  /* Fila 3 de la hoja MO = primera comparable; índice 13 = columna N = Aj.CxC. */
+  const ajCxC = mo.celdas[2][13].f;
+  const ajInv = mo.celdas[2][15].f;
+  const ajPpe = mo.celdas[2][16].f;
+
+  assert.ok(ajCxC.includes(`Datos!$B$${filaDe('Cuentas por cobrar')}`),
+    `Aj.CxC apunta al rubro de CxC: ${ajCxC}`);
+  assert.ok(ajInv.includes(`Datos!$B$${filaDe('Inventarios')}`),
+    `Aj.Inv apunta al rubro de inventarios: ${ajInv}`);
+  assert.ok(ajPpe.includes(`Datos!$B$${filaDe('Propiedad, planta y equipo')}`),
+    `Aj.PP&E apunta al rubro de PP&E: ${ajPpe}`);
+
+  /* La columna Tasa de cada comparable apunta a la fila de la tasa. */
+  const filaTasa = filaDe('Tasa de interés de referencia (Prime Rate)');
+  const primeraComp = datos.celdas.findIndex((f) => f && f[0] && f[0].v === 'Buena SA');
+  assert.strictEqual(datos.celdas[primeraComp][8].f, `$B$${filaTasa}`);
 });

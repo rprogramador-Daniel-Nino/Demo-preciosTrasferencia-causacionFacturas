@@ -243,6 +243,20 @@ export default function IngestaCifras({ study, updateStudy }) {
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
               />
             </div>
+
+            {/* PP&E no tenía campo: solo entraba si el lector de documentos lo
+                encontraba, y sin él el ajuste de propiedad, planta y equipo se
+                calculaba contra cero sin que nada lo advirtiera. */}
+            <div className="flex flex-col">
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Propiedad, Planta y Equipo</label>
+              <input
+                type="number"
+                value={study.t_ppe || ''}
+                onChange={(e) => handleFieldChange('t_ppe', e.target.value)}
+                placeholder="COP PP&E"
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -265,7 +279,7 @@ export default function IngestaCifras({ study, updateStudy }) {
             >
               <option value="MO">Margen Operacional (MO = Utilidad Op / Ventas)</option>
               <option value="MB">Margen Bruto (MB = Utilidad Bruta / Ventas)</option>
-              <option value="Berry">Razón Berry (Ventas / Costos Totales)</option>
+              <option value="Berry">Índice de Berry (Utilidad Bruta / Gastos Operativos)</option>
             </select>
           </div>
 
@@ -284,15 +298,22 @@ export default function IngestaCifras({ study, updateStudy }) {
 
           {study.useadj && (
             <div className="flex flex-col pt-2">
-              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Tasa de Interés Anual (ej: Prime Rate %)</label>
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Tasa de Interés Anual (Prime Rate %)</label>
               <input
                 type="number"
                 step="0.01"
                 value={study.prime || ''}
                 onChange={(e) => handleFieldChange('prime', e.target.value)}
-                placeholder="Ej: 8.5"
+                placeholder="Ej: 7.37"
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100"
               />
+              {/* De dónde sale el valor precargado. Es una sola tasa para toda la muestra:
+                  el ajuste no usa la tasa del país de cada comparable. */}
+              <p className="text-[10px] text-zinc-500 mt-1.5 leading-snug">
+                Bank Prime Loan Rate (Reserva Federal, H.15 · serie FRED RIFSPBLPNA), promedio
+                anual de días hábiles: 2025 = 7,37 %; 2024 = 8,31 %. Se aplica la misma tasa a
+                todas las comparables — ajústala si el año gravable es otro.
+              </p>
             </div>
           )}
         </div>

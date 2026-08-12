@@ -30,11 +30,23 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { filasComparablesInforme, filasRazonesRechazo } from './exactTemplateMapper.js';
-import { pctf } from '../utils/calculations.js';
 import {
-  DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
-} from './analisisMercado.js';
+  filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
+  filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+} from './tablasOperaciones.js';
+/* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
+   este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
+import {
+  filasComposicionAccionaria, filasActivos, verticalSobreActivos,
+} from './tablasContribuyente.js';
+
+export { verticalSobreActivos };
+import {
+  filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
+  filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
+} from './tablasInforme.js';
+import { pctf, fmt, num } from '../utils/calculations.js';
+import { nameKey } from './comparablesEngine.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -53,7 +65,6 @@ const RUTA_DOC = 'word/document.xml';
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
 
-const AMBITO = { Int: 'INTERNACIONAL', Nac: 'NACIONAL' };
 
 /**
  * Los datos de las tablas que se repiten, con la forma que esperan los bucles.
@@ -85,7 +96,16 @@ export function coleccionesDelEstudio(estudio) {
     cantidad: String(f.cuantas),
   }));
 
-  return { comparables, razonesRechazo };
+  const accionistas = (study.accionistas || []).map((a, i) => ({
+    n: String(i + 1),
+    nombre: a.nombre || '',
+    pais: a.pais || '',
+    acciones: a.acciones ? fmt(num(a.acciones)) : '',
+    valorCapital: a.valor_capital ? fmt(num(a.valor_capital)) : '',
+    participacion: a.participacion_pct ? String(a.participacion_pct) : '',
+  }));
+
+  return { comparables, razonesRechazo, accionistas };
 }
 
 function escaparXml(s) {
@@ -140,164 +160,490 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
 }
 
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
-export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
-  let out = xml;
+export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
+  const doc = sustituidorDeTablas(xml, avisos);
 
-  const y1 = year - 1, y2 = year, y3 = year + 1;
-  const wrap = (v) => String(v == null ? '—' : v);
+  /* Qué tabla es cada una y con qué contenido lo describe `tablasMacroInforme`, que es de
+     donde las toma también la ruta de plantilla PDF. Antes la definición de las ocho vivía
+     aquí, y llevarlas a la otra ruta habría significado copiarlas con sus series y sus
+     fuentes: dos definiciones de la misma tabla que se separan en la primera corrección.
 
-  // 1. PIB Mundial
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?PIB Mundial(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
-        ['Año', 'Crecimiento Mundial (%)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
-          [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
+     Estas ocho no llevan «Tabla N.» en la plantilla, así que la numeración nunca fue su
+     problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el título
+     tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso pasan por
+     el mismo localizador, que compara sobre el texto ya reconstruido. */
+  tablasMacroInforme(datosMacro, year).forEach((t) => {
+    doc.reemplazar(t.nombre, () => generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente));
+  });
+
+  return doc.xml;
+}
+
+
+/** Reemplaza quirúrgicamente las catorce tablas operativas en el OOXML del documento de la Fase 3. */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Localización de tablas en la plantilla: por NOMBRE, no por número.
+
+   La plantilla numera sus tablas, pero esa numeración no es fiable: cambia de un
+   informe a otro según qué secciones lleve. Se ve en la propia plantilla —la de
+   transacciones intercompañía viene como «Tabla 3» o como «Tabla 12», y el rango
+   vertical como «Tabla 18» o como «Tabla 20»—, lo que obligaba a escribir dos
+   patrones para la misma tabla y a no encontrarla con cualquier tercera numeración.
+
+   Lo estable es el nombre. Este localizador:
+
+     · lee el TEXTO VISIBLE de cada párrafo concatenando sus `<w:t>`. Word parte una
+       frase en varios runs sin criterio —«Tabla 1» + «7. Muestra Com» + «pañías»— y
+       un regex contra el XML crudo no la encuentra aunque el texto esté completo. Es
+       el mismo motivo por el que este módulo usa docxtemplater para los marcadores;
+     · normaliza el título: minúsculas, sin tildes y con los espacios colapsados, de
+       modo que «Compañías», «COMPANIAS» y «compañias» cuenten igual;
+     · descarta el prefijo «Tabla N.» antes de comparar, así que el número deja de
+       decidir. Se puede pasar como PISTA para desambiguar dos tablas homónimas —el
+       rango intercuartil aparece dos veces, horizontal y vertical—, pero si no
+       coincide con ninguna, la búsqueda por nombre sigue valiendo;
+     · cierra la tabla contando `<w:tbl>` anidados, en vez de parar en el primer
+       `</w:tbl>`: Word permite tablas dentro de una celda y ahí el patrón anterior
+       cortaba el bloque por la mitad.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Texto visible de un fragmento de OOXML: solo el contenido de los `<w:t>`. */
+export function textoPlanoOoxml(fragmento) {
+  const trozos = String(fragmento || '').match(/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/g) || [];
+  return trozos
+    .map((t) => t.replace(/<[^>]*>/g, ''))
+    .join('')
+    /* Las entidades hay que deshacerlas para comparar contra texto legible; el
+       espacio duro es frecuente en los títulos que el cliente maquetó a mano. */
+    .replace(/&#160;|&nbsp;/gi, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/** Clave de comparación de un título: sin «Tabla N.», sin tildes y sin puntuación. */
+export function claveTitulo(texto) {
+  return String(texto || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    /* El número es obligatorio para descartar el prefijo. Sin él se le arrancaba la palabra
+       «Tabla» a la tabla que SE LLAMA «Tabla de rangos», y su clave quedaba en «de rangos»:
+       incomparable de forma exacta y dependiente de la coincidencia por inclusión. */
+    .replace(/^\s*tabla\s*n?[°º]?\s*\.?\s*\d+\s*[.:)\-–—]*\s*/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** Número que precede al título, si la plantilla lo trae. `null` si no hay. */
+export function numeroDeTabla(texto) {
+  const m = /^\s*tabla\s*n?[°º]?\s*\.?\s*(\d+)/i.exec(
+    String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  return m ? Number(m[1]) : null;
+}
+
+/** Fin del `<w:tbl>` que empieza en `desde`, contando anidamiento. -1 si no cierra. */
+function finDeTabla(xml, desde) {
+  const rx = /<w:tbl(?:\s[^>]*)?>|<\/w:tbl>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '</w:tbl>' ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/** Fin del `<w:tr>` que empieza en `desde`, contando anidamiento. -1 si no cierra. */
+function finDeFila(xml, desde) {
+  const rx = /<w:tr(?:\s[^>]*)?>|<\/w:tr>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '</w:tr>' ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/**
+ * Tablas cuyo título no las precede, sino que es su PRIMERA FILA.
+ *
+ * Así trae la plantilla de referencia la «Tabla 20. Tabla de rangos» del final del informe:
+ * el rótulo es una celda de la fila de arriba, no un párrafo aparte. Para el localizador
+ * clásico —«párrafo de título seguido de `<w:tbl>`»— esa tabla era inalcanzable, y se
+ * radicaba con los percentiles del informe anterior.
+ *
+ * Solo la primera fila cuenta. Si valiera cualquiera, una celda del cuerpo que mencione el
+ * nombre —la matriz de rechazo lo hace— secuestraría la sustitución de la tabla completa.
+ *
+ * El bloque devuelto abarca la tabla entera, rótulo incluido: lo que se emite en su lugar
+ * ya trae su propio párrafo de título.
+ *
+ * La coincidencia es EXACTA, no por inclusión como en el localizador por párrafo. Un rótulo
+ * es exactamente el nombre de la tabla; una celda cualquiera, no. La plantilla trae una
+ * tabla de definiciones cuya primera fila es «MO | Margen operacional de utilidad o
+ * rentabilidad operacional»: por inclusión se haría pasar por la tabla de márgenes de las
+ * comparables, y sustituirla borraría las definiciones del método.
+ */
+function candidatosPorFilaTitulo(texto, claves) {
+  const encontrados = [];
+  let cursor = 0;
+  for (;;) {
+    const inicio = texto.indexOf('<w:tbl', cursor);
+    if (inicio === -1) break;
+    const fin = finDeTabla(texto, inicio);
+    if (fin < 0) break;
+    /* Desde `fin` y no desde el interior: así las tablas anidadas no se analizan por
+       separado —su rótulo, si lo tienen, es de la celda que las contiene—. */
+    cursor = fin;
+
+    const iFila = texto.indexOf('<w:tr', inicio);
+    if (iFila === -1 || iFila > fin) continue;
+    const finFila = finDeFila(texto, iFila);
+    if (finFila < 0 || finFila > fin) continue;
+
+    const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+    const primeraFila = texto.slice(iFila, finFila);
+    let p;
+    while ((p = rxParrafo.exec(primeraFila)) !== null) {
+      const titulo = textoPlanoOoxml(p[0]);
+      const clave = claveTitulo(titulo);
+      if (!clave || !claves.some((c) => clave === c)) continue;
+      encontrados.push({ inicio, fin, titulo, numero: numeroDeTabla(titulo) });
+      break;
     }
   }
+  return encontrados;
+}
 
-  // 2. PIB Colombia
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?PIB en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
-        ['Año', 'Crecimiento del PIB (%)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
-          [String(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
+/**
+ * Bloque «párrafo del título + la tabla que le sigue» cuyo título coincide con
+ * alguno de los nombres dados.
+ *
+ * @param xml       el `document.xml` completo.
+ * @param nombres   nombre canónico de la tabla, o varios sinónimos.
+ * @param opciones  `numeros`: números con los que desambiguar dos tablas homónimas.
+ *                  `ocurrencia`: cuál tomar si quedan varias (0 = la primera).
+ * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
+ */
+export function localizarBloqueTabla(xml, nombres, opciones = {}) {
+  const texto = String(xml || '');
+  const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
+  if (!claves.length) return null;
+
+  const candidatos = [];
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let p;
+  while ((p = rxParrafo.exec(texto)) !== null) {
+    const titulo = textoPlanoOoxml(p[0]);
+    const clave = claveTitulo(titulo);
+    if (!clave || !claves.some((c) => clave.includes(c))) continue;
+
+    /* Entre el título y la tabla la plantilla suele dejar párrafos vacíos. Se saltan
+       los que no tienen texto; en cuanto aparece uno con contenido, el título ya no
+       era el de esta tabla y se descarta. */
+    let cursor = p.index + p[0].length;
+    for (;;) {
+      const resto = texto.slice(cursor);
+      const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
+      if (!hueco) break;
+      if (textoPlanoOoxml(hueco[0]).trim()) break;
+      cursor += hueco[0].length;
     }
+    const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(cursor));
+    if (!tras) continue;
+
+    const inicioTabla = cursor + tras[0].indexOf('<w:tbl');
+    const fin = finDeTabla(texto, inicioTabla);
+    if (fin < 0) continue;
+    candidatos.push({ inicio: p.index, fin, titulo, numero: numeroDeTabla(titulo) });
   }
 
-  // 3. Inflación Global
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Inflación Global(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
-        ['Año', 'Tasa de Inflación (%)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
-          [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
+  /* Las del rótulo embebido se añaden y todo se ordena por posición en el documento, que es
+     sobre lo que `ocurrencia` cuenta: «la primera» tiene que ser la primera que se lee. */
+  candidatos.push(...candidatosPorFilaTitulo(texto, claves));
+  candidatos.sort((a, b) => a.inicio - b.inicio);
 
-  // 4. PIB por Región
-  {
-    const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?por Región\/País(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const porRegion = porAnio[year];
-      const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
-      let filas = [];
-      if (!porRegion || !porRegion.length) {
-        const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
-        filas = regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]);
-      } else {
-        filas = porRegion.map(({ region, valor }) => [region, wrap(valor)]);
+  if (!candidatos.length) return null;
+
+  /* El número solo desempata. Si la plantilla renumeró y ninguno coincide, se sigue
+     con todos los que dio el nombre en vez de no encontrar nada. */
+  const numeros = Array.isArray(opciones.numeros) ? opciones.numeros : [];
+  const porNumero = numeros.length ? candidatos.filter((c) => numeros.includes(c.numero)) : [];
+  const finalistas = porNumero.length ? porNumero : candidatos;
+  const i = Number(opciones.ocurrencia) || 0;
+  return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+/**
+ * Sustituidor de tablas sobre un `document.xml`.
+ *
+ * Encapsula el XML que va mutando y el registro de las tablas que la plantilla no
+ * trae, para que los dos generadores —el de macroeconomía y el de operaciones—
+ * compartan el mecanismo en vez de llevar cada uno su copia.
+ *
+ * Anotar las ausentes es la mitad del valor: hasta ahora el fallo era mudo y la
+ * tabla se quedaba con los datos del informe anterior, que es la peor forma de
+ * fallar en un documento que se radica ante la DIAN.
+ *
+ * @param xmlInicial  el `document.xml` de partida.
+ * @param avisos      (opcional) arreglo donde se anotan los nombres no encontrados.
+ */
+function sustituidorDeTablas(xmlInicial, avisos) {
+  let out = String(xmlInicial || '');
+  return {
+    /** true si la tabla estaba y se sustituyó. */
+    reemplazar(nombres, generar, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) {
+        if (Array.isArray(avisos)) {
+          avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+        }
+        return false;
       }
-      const tabla = generarTablaOoxml(titulo, ['Región/País', 'Crecimiento Proyectado (%)'], filas, fuente);
-      out = out.replace(rx, () => tabla);
-    }
-  }
+      out = out.slice(0, bloque.inicio) + generar(bloque) + out.slice(bloque.fin);
+      return true;
+    },
+    get xml() { return out; },
+  };
+}
 
-  // 5. Inflación Colombia
+
+export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
+  if (!estudio) return xml;
+  const doc = sustituidorDeTablas(xml, avisos);
+  const reemplazar = (...args) => doc.reemplazar(...args);
+
+  /* Título de la tabla que se emite. Conserva el número que traía la plantilla en vez
+     de imponer el nuestro: si el cliente renumeró, escribir «Tabla 17» sobre lo que su
+     documento llama «Tabla 15» descuadra la referencia en el índice y en el texto. */
+  const tituloDe = (bloque, nombre) => (
+    bloque && bloque.numero != null ? `Tabla ${bloque.numero}. ${nombre}` : nombre
+  );
+  const year = Number(estudio.anio) || 2025;
+  const wrap = (v) => String(v == null || v === '' ? '—' : v);
+
+  /* Las filas del rango y su cálculo viven en `tablasInforme.js`, que es de donde las toma
+     también la ruta de plantilla PDF (`tablasHtmlInforme.js`). Antes se calculaban aquí, y
+     al añadir esa segunda ruta el cálculo habría quedado duplicado: dos sitios donde
+     computar los percentiles del mismo estudio es la forma de acabar publicando dos rangos
+     distintos, que es lo que ya pasó cuando había dos implementaciones del cuartil. */
+  const rango = filasRangoIntercuartil(estudio);
+  const tPLI = rango.tPLI;
+
+  /* La versión horizontal del rango (bloque 5) publica solo los percentiles ajustados. */
+  const ajustadoDe = (etiqueta) => {
+    const f = rango.filas.find((x) => x.etiqueta === etiqueta);
+    return f ? f.ajustado : null;
+  };
+  const p25Ajustado = ajustadoDe(ETIQUETAS_RANGO.p25);
+  const medAjustado = ajustadoDe(ETIQUETAS_RANGO.med);
+  const p75Ajustado = ajustadoDe(ETIQUETAS_RANGO.p75);
+
+  const pStr = (v) => (v === null || v === undefined ? '—' : pctf(v));
+
+  /* Las Tablas 1 y 2 dicen lo mismo aquí y en la ruta de plantilla PDF, así que sus filas
+     salen de `tablasOperaciones.js` y no se arman dos veces. Ahí vive también el motivo por
+     el que el código de operación puede ser «—»: el que había antes en este archivo lo
+     inventaba, devolvía '07' —el de END GAME 2024— para cualquier tipo sin paréntesis. */
+  /* `titulo` cuando lo trae y `nombre` si no: hay tablas cuyo rótulo es más largo que el
+     nombre con el que se localizan —«Método de Precios de Transferencia Aplicable» frente a
+     «Método de Precios de Transferencia»— o que llevan el año gravable dentro. */
+  const emitir = (b, t) => generarTablaOoxml(
+    tituloDe(b, t.titulo || t.nombre), t.encabezados, t.filas, t.fuente
+  );
+
+  // 1. Operaciones de Ingreso/Egreso
+  reemplazar(
+    ['Operaciones de Ingreso', 'Operaciones de Egreso'],
+    (b) => emitir(b, filasOperacionesDeIngreso(estudio)),
+    { numeros: [1] }
+  );
+
+  // 2. Operación analizar
+  reemplazar(
+    'Operación analizar',
+    (b) => emitir(b, filasOperacionAnalizar(estudio)),
+    { numeros: [2] }
+  );
+
+  /* 3. Transacciones Inter compañía. La plantilla la trae dos veces —una en la
+     descripción del vinculado y otra en el análisis— con la misma cabecera y números
+     que cambian según el informe (3 y 12 en la del cliente). Se sustituyen las dos
+     por ocurrencia, sin depender de esos números. */
   {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Inflación en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Inflación en Colombia (' + year + ' vs. Meta ' + y3 + ')',
-        ['Indicador', 'Valor (%)'],
-        [
-          ['Inflación ' + year, wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
-          ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
+    const t3 = filasTransaccionesIntercompania(estudio);
+    const tablaTx = (b) => generarTablaOoxml(
+      tituloDe(b, t3.nombre), t3.encabezados, t3.filas, escaparXml(t3.fuente)
+    );
+    /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
+       segunda, y el localizador trabaja sobre posiciones del XML. */
+    reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 1 });
+    reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 0 });
   }
 
-  // 6. Tasa de Intervención
+  // 4. Método de Precios de Transferencia Aplicable
+  reemplazar(
+    'Método de Precios de Transferencia',
+    (b) => emitir(b, filasMetodoAplicable(estudio)),
+    { numeros: [4] }
+  );
+
+  /* 5. Rango Intercuartil, versión horizontal. El nombre no la distingue de la
+     vertical del análisis —las dos se llaman igual—, así que la primera ocurrencia
+     es la horizontal, que va antes en el documento. */
+  reemplazar('Rango Intercuartil', (b) => {
+    const col1 = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+    return generarTablaOoxml(
+      tituloDe(b, 'Rango Intercuartil'),
+      [col1, 'Percentil 25', 'Mediana', 'Percentil 75'],
+      [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
+      'Información suministrada por la Administración de la Compañía.'
+    );
+  }, { numeros: [5], ocurrencia: 0 });
+
+  // 6. Composición accionaria
+  reemplazar(
+    'Composición accionaria',
+    (b) => emitir(b, filasComposicionAccionaria(estudio)),
+    { numeros: [6] }
+  );
+
+  // 7. Compañías vinculadas al cierre del año gravable
+  reemplazar(
+    'Compañías vinculadas',
+    (b) => emitir(b, filasCompaniasVinculadas(estudio)),
+    { numeros: [8] }
+  );
+
+  // 8. Criterios de vinculación económica
+  reemplazar(
+    'Criterios de vinculación',
+    (b) => emitir(b, filasCriteriosVinculacion(estudio)),
+    { numeros: [9] }
+  );
+
+  // 9. Tabla 10. Activos a 31 de diciembre del año gravable
+  reemplazar(
+    'Activos a 31 de diciembre',
+    (b) => emitir(b, filasActivos(estudio)),
+    { numeros: [10] }
+  );
+
+  // 10. Razones de rechazo
+  reemplazar('Razones de rechazo', (b) => {
+    const { filas: razonesFilas } = filasRazonesRechazo(estudio.embudoSeleccion);
+    const filas16 = (razonesFilas || []).map((f) => [
+      f.etiqueta,
+      f.letra,
+      String(f.cuantas)
+    ]);
+    const totalEvaluadas = estudio.embudoSeleccion ? String(estudio.embudoSeleccion.evaluadas) : '—';
+    filas16.push([
+      'TOTAL, UNIVERSO',
+      '',
+      totalEvaluadas
+    ]);
+    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
+    return generarTablaOoxml(
+      tituloDe(b, 'Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)'),
+      ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
+      filas16,
+      `Información Base Datos ${dbFuente}.`
+    );
+  }, { numeros: [16] });
+
+  // 11. Muestra Compañías comparables
+  reemplazar('Muestra Compañías comparables', (b) => {
+    const filas17 = filasMuestraComparables(estudio).map((f) => [
+      String(f.numero), f.nombre, f.ambito,
+    ]);
+    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
+    return generarTablaOoxml(
+      tituloDe(b, 'Muestra Compañías comparables'),
+      ['Número', 'Nombre de la Compañía', 'Ámbito'],
+      filas17,
+      `Información Base Datos ${dbFuente}`
+    );
+  }, { numeros: [17] });
+
+  /* 12. Rango intercuartil en vertical. La plantilla lo trae DOS VECES —la «Tabla 18. Rango
+     Intercuartil» de los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones,
+     esta última con el rótulo dentro de su primera fila— y las dos tienen que quedar con
+     los mismos percentiles. Antes se elegía una con un if/else y la otra se radicaba con
+     los datos del informe anterior.
+
+     Qué tablas existen se decide sobre el `xml` de ENTRADA, antes de que los bloques
+     anteriores hayan escrito nada: las tablas que este módulo emite llevan «RANGO
+     INTERCUARTIL» en su cabecera, así que preguntar después las haría pasar por tablas de
+     la plantilla y una sustitución acabaría pisando a la otra.
+
+     De atrás hacia adelante, como en Transacciones Inter compañía. */
   {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Intervención del Banco(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const filas = [y1, y2].map((y) => {
-        const obs = S[y];
-        return obs
-          ? [obs.etiqueta, wrap(obs.valor)]
-          : ['Diciembre ' + y, wrap(marcadorPendiente(y, 'la tasa de intervención del Banco de la República'))];
-      });
-      const tabla = generarTablaOoxml(
-        'Tasa de Intervención del Banco de la República (' + filas[0][0] + ' - ' + filas[1][0] + ')',
-        ['Fecha', 'Tasa de Intervención (%)'],
-        filas,
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
+    const filas18_20 = rango.filas.map((f) => [
+      wrap(f.etiqueta), pStr(f.noAjustado), pStr(f.ajustado),
+    ]);
+    const tablaRangos = (b) => generarTablaOoxml(
+      tituloDe(b, /tabla de rangos/i.test(b.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
+      ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
+      filas18_20
+    );
+    const OPC_TABLA_RANGOS = { numeros: [20] };
+    /* Sin «Tabla de rangos» en la plantilla, el vertical es el segundo «Rango
+       Intercuartil»: el primero ya lo consumió el bloque 5. */
+    const OPC_RANGO_VERTICAL = { numeros: [18], ocurrencia: 1 };
+    const traeTablaRangos = !!localizarBloqueTabla(xml, 'Tabla de rangos', OPC_TABLA_RANGOS);
+    const traeRangoVertical = !!localizarBloqueTabla(xml, 'Rango Intercuartil', OPC_RANGO_VERTICAL);
+
+    if (traeTablaRangos) reemplazar('Tabla de rangos', tablaRangos, OPC_TABLA_RANGOS);
+    if (traeRangoVertical) reemplazar('Rango Intercuartil', tablaRangos, OPC_RANGO_VERTICAL);
+    if (!traeTablaRangos && !traeRangoVertical && Array.isArray(avisos)) {
+      avisos.push('Tabla de rangos');
     }
   }
 
-  // 7. TRM Promedio
+  /* 13. Margen Operacional Compañías Comparables.
+
+     Se localiza por el nombre COMPLETO, no por «Margen Operacional» a secas. La clave corta
+     casa por inclusión con la prosa del propio informe: en la plantilla de End Game, el
+     párrafo «Para el análisis del método TU se consideró que el indicador financiero de
+     rentabilidad más apropiado es el Margen Operacional…» va seguido de la tabla de
+     definiciones del método, y está 79 000 caracteres ANTES del rótulo verdadero. Mientras la
+     plantilla numere la tabla como la 19 el desempate de `numeros` lo tapa; en cuanto un
+     cliente la renumera, `numeros` no filtra nada, gana el primer candidato por posición y el
+     generador sustituye la tabla de definiciones mientras la de márgenes se queda con las
+     cifras del informe anterior —el fallo que se reportó el 2026-08-11—.
+
+     El nombre de la tabla es lo único estable: el prefijo se renumera al reordenar el informe,
+     y hay plantillas que lo rotulan sin número. Por eso se busca solo por el nombre. */
   {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Tasa Representativa del Mercado(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
-        ['Año', 'TRM Promedio ($)'],
-        [
-          [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
-          [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
-        ],
-        fuente
+    const generarTabla19 = (b) => {
+      const compList = filasComparablesInforme(estudio);
+      const filas19 = (compList || []).map((f) => [
+        f.nombre,
+        pStr(f.noAjustado),
+        pStr(f.ajustado)
+      ]);
+      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      return generarTablaOoxml(
+        tituloDe(b, 'Margen Operacional Compañías Comparables'),
+        ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
+        filas19,
+        `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
       );
-      out = out.replace(rx, () => tabla);
-    }
+    };
+    /* Sin `numeros`: el prefijo «Tabla N.» cambia de una plantilla a otra —y hay plantillas que
+       rotulan la tabla sin número—, así que el número no es criterio de nada. El nombre
+       completo, en cambio, es único en el documento: se buscó sobre el word/document.xml de End
+       Game y de los trece párrafos que mencionan «margen operacional» solo uno tiene esa clave.
+
+       Tampoco se cae al nombre corto cuando no aparece. Con la clave corta el único candidato
+       que queda es la prosa, y sustituir ahí destruye la tabla de definiciones del método sin
+       tocar la de márgenes: dos tablas mal en vez de una. Si el rótulo no está, `reemplazar`
+       anota la tabla en los avisos y el panel lo dice antes de radicar, que es lo que este
+       mecanismo existe para hacer. */
+    reemplazar('Margen Operacional Compañías Comparables', generarTabla19);
   }
 
-  // 8. Tasa de Desempleo
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
-    const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?Desempleo en Colombia(?:(?!<\/w:p>)[\s\S])*?<\/w:p>\s*(?:<w:p(?:\s[^>]*)?\/>\s*)*<w:tbl>[\s\S]*?<\/w:tbl>/i;
-    if (rx.test(out)) {
-      const tabla = generarTablaOoxml(
-        'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + y3 + ')',
-        ['Indicador', 'Valor (%)'],
-        [
-          ['Desempleo ' + year, wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
-          ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
-        ],
-        fuente
-      );
-      out = out.replace(rx, () => tabla);
-    }
-  }
-
-  return out;
+  return doc.xml;
 }
 
 /**
@@ -317,19 +663,26 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year) {
  * @param {object} estudio
  * @param {{colecciones?:object, delimitadores?:{abrir:string,cerrar:string}}} [opciones]
  *        `colecciones` alimenta los bucles de tabla (`{#comparables}…{/comparables}`).
- * @returns {{zip:PizZip, camposVacios:string[]}} el zip listo para generar, y qué
- *          campos salieron sin dato, para poder avisarlo antes de radicar.
+ * @returns {{zip:PizZip, camposVacios:string[], avisosTablas:string[]}} el zip listo para
+ *          generar, qué campos salieron sin dato y qué tablas no se encontraron en la
+ *          plantilla, para poder avisar de ambas cosas antes de radicar.
  */
 export function renderizarDocx(binario, estudio, opciones = {}) {
-  const { datosMacro, colecciones = {}, delimitadores } = opciones;
+  const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
   const camposVacios = new Set();
 
   const zip = new PizZip(binario);
-  
+
+  /* Las tablas que la plantilla no trae se recogen aquí y se devuelven. Sin el arreglo, el
+     sustituidor calcula el aviso y nadie lo lee: la tabla se queda con los datos del cliente
+     anterior y el informe se radica así. */
+  const avisosTablas = [];
+
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
-  xml = actualizarTablasMacroOoxml(xml, datosMacro, year);
+  xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
+  xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   zip.file(RUTA_DOC, xml);
 
   const doc = new Docxtemplater(zip, {
@@ -342,7 +695,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
            fila de comparables es del comparable, no del estudio. */
         if (scope && Object.prototype.hasOwnProperty.call(scope, tag)) return scope[tag];
         if (Object.prototype.hasOwnProperty.call(colecciones, tag)) return colecciones[tag];
-        const v = valorDeCampo(estudio, tag);
+        const v = valorDeCampo(estudio, tag, { datosMacro, analisisSector });
         if (v === null || v === undefined || v === '') { camposVacios.add(tag); return null; }
         return v;
       },
@@ -351,7 +704,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   });
 
   doc.render(colecciones);
-  return { zip: doc.getZip(), camposVacios: [...camposVacios] };
+  return { zip: doc.getZip(), camposVacios: [...camposVacios], avisosTablas };
 }
 
 /** El mayor rId ya usado, para no repetir ninguno al añadir relaciones. */
@@ -392,6 +745,31 @@ function parrafoConImagen({ rId, id, nombre, cx, cy }) {
     + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>';
 }
 
+/**
+ * Mete una imagen en el paquete y devuelve el `rId` con el que referirla.
+ *
+ * Las tres cosas que hay que tocar para que Word la abra —el binario en `word/media/`, el
+ * content-type de su extensión y la relación en `document.xml.rels`— van juntas aquí porque
+ * olvidar una sola de ellas produce un .docx que Word declara corrupto, y ese es el fallo
+ * que el spec 2026-08-04-docx-real-ooxml-design.md documenta como el más fácil de repetir.
+ *
+ * @returns {{rels:string, ct:string, idRel:string}} los dos archivos ya actualizados.
+ */
+function registrarImagen({ zip, rels, ct, rId, nombre, base64, datos, ext }) {
+  zip.file(`word/media/${nombre}`, base64 || datos, base64 ? { base64: true } : {});
+
+  const ctNuevo = new RegExp(`Extension="${ext}"`).test(ct)
+    ? ct
+    : ct.replace('</Types>', `<Default Extension="${ext}" ContentType="image/${ext}"/></Types>`);
+
+  const idRel = `rId${rId}`;
+  const relsNuevo = rels.replace('</Relationships>',
+    `<Relationship Id="${idRel}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"`
+    + ` Target="media/${nombre}"/></Relationships>`);
+
+  return { rels: relsNuevo, ct: ctNuevo, idRel };
+}
+
 /** Separa una data URL en su tipo y sus bytes. */
 export function desdeDataUrl(dataUrl) {
   const m = /^data:image\/(png|jpe?g|gif);base64,(.+)$/i.exec(String(dataUrl || '').trim());
@@ -420,7 +798,8 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
 
   /* El párrafo que contiene el centinela, acotado por índice y no por una regex de
      párrafo: `<w:p>` puede venir sin atributos y las regex con lookahead fallan ahí.
-     Es el mismo enfoque que ya usa `reemplazarAnexoB` en exactTemplateMapper. */
+     Era el mismo enfoque de `reemplazarAnexoB`, que vivía en el mapper por literales y
+     se retiró con él; aquí se conserva porque el problema de las regex es el mismo. */
   const inicio = xml.lastIndexOf('<w:p', posicion);
   const cierre = xml.indexOf('</w:p>', posicion);
   if (inicio === -1 || cierre === -1) return { insertadas: 0 };
@@ -474,19 +853,306 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
  * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
  *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
- * @returns {{salida:*, camposVacios:string[], imagenesInsertadas:number}}
+ * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
+ */
+/* ─────────────────────────────────────────────────────────────────────────────
+   ANEXO A — Estados financieros del contribuyente, desde la ingesta.
+
+   POR QUÉ NO BASTABA `insertarImagenes`. Depende del centinela `@@ANEXO_EEFF@@`, y la
+   plantilla del cliente no lo trae: cero ocurrencias en el informe generado el
+   2026-08-10. Las páginas que el usuario ya había cargado en la ingesta nunca entraban
+   y el anexo se radicaba en blanco. El ANEXO B se ancla por su encabezado desde el
+   principio; el A no tenía equivalente, y esto lo es.
+
+   POR QUÉ TABLAS NATIVAS Y NO SOLO LAS PÁGINAS ESCANEADAS. Las cifras ya están
+   parseadas: `eeffParser.js` las escribe en el estudio y de ahí salen la Tabla 10, el
+   indicador de rentabilidad y el rango. Publicarlas como tabla —seleccionable, con el
+   formato del informe y con el mismo A.V. que el cuerpo— es lo que hace que el anexo
+   sea verificable contra el análisis en vez de una foto que nadie puede cotejar. Las
+   páginas del PDF van debajo, como soporte.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Nombre y valor de cada rubro del ESF que la ingesta sabe leer, en orden de balance. */
+const RUBROS_ESF = [
+  ['Efectivo y equivalentes de efectivo', 't_cash'],
+  ['Inversiones asociadas', 't_inv_assoc'],
+  ['Cuentas por cobrar comerciales y otras cuentas por cobrar', 't_ar'],
+  ['Inventarios', 't_inv'],
+  ['Activos por impuestos corrientes', 't_tax'],
+  ['Total, Activo corriente', 't_act_curr'],
+  ['Propiedades, planta y equipo', 't_ppe'],
+  ['Intangibles', 't_intang'],
+  ['Diferidos', 't_dif'],
+  ['Total, Activos no corrientes', 't_act_nocurr'],
+  ['Total, Activos', 't_act_tot'],
+];
+
+/** true si el estudio trae algo del estado financiero que se pueda publicar. */
+function traeCifrasEeff(estudio) {
+  const claves = [...RUBROS_ESF.map(([, c]) => c), 't_ap', 't_s', 't_c', 't_op'];
+  return claves.some((c) => num(estudio && estudio[c]) !== null);
+}
+
+/**
+ * Filas del Estado de Situación Financiera para el ANEXO A.
+ *
+ * El A.V. sale de `verticalSobreActivos`, la misma función que usa la Tabla 10. Las
+ * cuentas por pagar se publican porque la ingesta las lee y sostienen el ajuste de capital
+ * de trabajo, pero sin vertical: un pasivo sobre el total de activos no significa nada, y
+ * escribir ahí un porcentaje sería inventarlo.
+ */
+export function filasEsfAnexoA(estudio) {
+  const av = verticalSobreActivos(estudio);
+  const monto = (clave) => {
+    const n = num(estudio && estudio[clave]);
+    return n === null ? SIN_DATO : fmt(n);
+  };
+
+  const filas = RUBROS_ESF.map(([etiqueta, clave]) => [etiqueta, monto(clave), av(estudio[clave])]);
+  filas.push(['PASIVOS', '', '']);
+  filas.push(['Cuentas por pagar comerciales', monto('t_ap'), SIN_DATO]);
+  return filas;
+}
+
+/**
+ * Filas del Estado de Resultados Integral para el ANEXO A.
+ *
+ * La utilidad bruta y los gastos operativos se derivan y no se piden a la ingesta, con el
+ * mismo despeje que documenta `pliOf`: `opex = ventas − costo − utilidad operacional`. Así
+ * el anexo no puede contradecir al indicador de rentabilidad.
+ *
+ * Los costos y gastos excluidos se declaran como línea propia: son lo que sostiene el
+ * margen que el informe publica, y un estado de resultados que no los nombre no cuadra con
+ * el rango de unas páginas más adelante.
+ */
+export function filasEriAnexoA(estudio) {
+  const e = estudio || {};
+  const s = num(e.t_s), c = num(e.t_c), op = num(e.t_op), excluido = num(e.seg_excluido);
+  const val = (n) => (n === null ? SIN_DATO : fmt(n));
+  const bruta = s !== null && c !== null ? s - c : null;
+  const opex = bruta !== null && op !== null ? bruta - op : null;
+
+  const filas = [
+    ['Ingresos de actividades ordinarias', val(s)],
+    ['Costo de ventas', val(c)],
+    ['Utilidad bruta', val(bruta)],
+    ['Gastos operativos', val(opex)],
+    ['Utilidad operacional', val(op)],
+  ];
+  if (excluido !== null && excluido !== 0) {
+    filas.push(['Costos y gastos excluidos de la operación analizada', val(excluido)]);
+  }
+  return filas;
+}
+
+/** El párrafo del encabezado de un anexo, o null si el documento no lo trae. */
+function bloqueDeAnexo(xml, letra, letraSiguiente) {
+  const rx = (l) => new RegExp(
+    '<w:p(?:\\s[^>]*)?>(?:(?!</w:p>)[\\s\\S])*?ANEXO\\s+' + l + '(?:(?!</w:p>)[\\s\\S])*?</w:p>', 'i');
+  const inicio = rx(letra).exec(xml);
+  if (!inicio) return null;
+  const siguiente = letraSiguiente ? rx(letraSiguiente).exec(xml) : null;
+  const fin = siguiente && siguiente.index > inicio.index ? siguiente.index : xml.length;
+  return { inicio: inicio.index, fin };
+}
+
+/**
+ * Llena el ANEXO A con los estados financieros del contribuyente y sus páginas de soporte.
+ *
+ * @param {PizZip} zip
+ * @param {object} estudio
+ * @param {{imagenes?:Array<{dataUrl?:string, datos?:Uint8Array, ext?:string}>}} [opciones]
+ * @returns {{insertadas:number}} cuántas páginas de soporte entraron.
+ */
+export function insertarAnexoA(zip, estudio, opciones = {}) {
+  let xml = zip.file(RUTA_DOC).asText();
+  const bloque = bloqueDeAnexo(xml, 'A', 'B');
+  if (!bloque) return { insertadas: 0 };
+
+  const year = Number(estudio && estudio.anio) || 2025;
+  const entidad = (estudio && estudio.ent) || 'la Compañía';
+
+  let nuevo = '<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr><w:r><w:rPr><w:b/></w:rPr>'
+    + `<w:t>ANEXO A. Estados financieros ${escaparXml(entidad)}</w:t></w:r></w:p>`;
+
+  if (!traeCifrasEeff(estudio)) {
+    /* Mismo aviso que el ANEXO B usa para una comparable sin estado financiero: el hueco
+       tiene que verse. Lo que NO puede quedarse es el anexo del informe anterior. */
+    nuevo += '<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/>'
+      + '<w:b/></w:rPr><w:t>Pendiente: carga el PDF de estados financieros en el paso de '
+      + 'ingesta de cifras para que este anexo se llene.</w:t></w:r></w:p>';
+    xml = xml.slice(0, bloque.inicio) + nuevo + xml.slice(bloque.fin);
+    zip.file(RUTA_DOC, xml);
+    return { insertadas: 0 };
+  }
+
+  nuevo += generarTablaOoxml(
+    `Estado de Situación Financiera a 31 de diciembre de ${year}`,
+    ['Cifras expresadas en pesos colombianos', String(year), 'A.V. ' + year],
+    filasEsfAnexoA(estudio),
+    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
+  );
+  nuevo += generarTablaOoxml(
+    `Estado de Resultados Integral ${year}`,
+    ['Cifras expresadas en pesos colombianos', String(year)],
+    filasEriAnexoA(estudio),
+    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
+  );
+
+  let rels = zip.file(RUTA_RELS).asText();
+  let ct = zip.file(RUTA_CT).asText();
+  let rId = siguienteRId(rels);
+  let idDibujo = siguienteIdDibujo(xml);
+  let insertadas = 0;
+
+  (opciones.imagenes || []).filter(Boolean).forEach((img, i) => {
+    const desde = img.dataUrl ? desdeDataUrl(img.dataUrl) : null;
+    if (!desde && !img.datos) return;
+    const ext = (desde && desde.ext) || img.ext || 'png';
+    const nombre = `anexo_a_${i + 1}.${ext}`;
+
+    const reg = registrarImagen({
+      zip, rels, ct, rId: rId++, nombre, ext,
+      base64: desde ? desde.base64 : null, datos: img.datos,
+    });
+    rels = reg.rels;
+    ct = reg.ct;
+
+    const anchoCm = img.anchoCm || ANCHO_UTIL_CM;
+    const altoCm = img.altoCm || (anchoCm * 297) / 210;
+    nuevo += parrafoConImagen({
+      rId: reg.idRel, id: idDibujo++, nombre,
+      cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
+    });
+    insertadas++;
+  });
+
+  xml = asegurarNamespaceWp(xml.slice(0, bloque.inicio) + nuevo + xml.slice(bloque.fin));
+  zip.file(RUTA_DOC, xml);
+  zip.file(RUTA_RELS, rels);
+  zip.file(RUTA_CT, ct);
+  return { insertadas };
+}
+
+/**
+ * Inserta de manera dinámica el Anexo B en el OOXML de la plantilla .docx.
+ * Identifica la sección de Anexo B, genera la tabla de Nombre y Descripción de comparables
+ * utilizando la función nativa generarTablaOoxml, e inyecta las imágenes correspondientes
+ * del EEFF de cada comparable conservando el flujo OOXML estándar.
+ *
+ * @param {PizZip} zip
+ * @param {object} estudio
+ * @returns {{insertadas:number}}
+ */
+export function insertarImagenesAnexoB(zip, estudio) {
+  const comparables = ((estudio && estudio.comparables) || []).filter((c) => c && c.name && c.eeffArchivo);
+  if (!comparables.length) return { insertadas: 0 };
+
+  let xml = zip.file(RUTA_DOC).asText();
+
+  // Encontrar sección ANEXO B y ANEXO C de forma insensible a mayúsculas
+  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
+  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/i;
+
+  const mB = rxB.exec(xml);
+  if (!mB) return { insertadas: 0 };
+  const inicioB = mB.index;
+
+  const mC = rxC.exec(xml);
+  let finB = xml.length;
+  if (mC && mC.index > inicioB) {
+    finB = mC.index;
+  }
+
+  let rels = zip.file(RUTA_RELS).asText();
+  let ct = zip.file(RUTA_CT).asText();
+  let rId = siguienteRId(rels);
+  let idDibujo = siguienteIdDibujo(xml);
+
+  const imagenesPorComparable = (estudio && estudio.eeffImagenesComparables) || {};
+  let nuevoXmlB = `<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>ANEXO B. Descripciones de comparables y Estados Financieros</w:t></w:r></w:p>`;
+
+  let totalInsertadas = 0;
+
+  comparables.forEach((c) => {
+    const desc = c.descActividad || c.desc || 'Descripción de actividad no disponible.';
+    // Generar la tabla de nombre y descripción
+    const tablaXml = generarTablaOoxml(
+      'Descripción de la Compañía Comparable',
+      ['NOMBRE DE LA COMPAÑÍA COMPARABLE', 'DESCRIPCIÓN ACTIVIDAD'],
+      [[c.name, desc]]
+    );
+    nuevoXmlB += '\n' + tablaXml;
+
+    // Obtener imágenes de esta comparable
+    const key = nameKey(c.name);
+    const listaImg = (imagenesPorComparable[key] || []).filter(Boolean);
+
+    if (listaImg.length > 0) {
+      listaImg.forEach((imgUrl, idx) => {
+        const desde = desdeDataUrl(imgUrl);
+        if (!desde) return;
+        const ext = desde.ext || 'png';
+        const nombreImg = `anexo_b_${key}_${idx + 1}.${ext}`;
+
+        // Binario, content-type y relación van juntos: olvidar uno corrompe el .docx.
+        const reg = registrarImagen({
+          zip, rels, ct, rId: rId++, nombre: nombreImg, ext, base64: desde.base64,
+        });
+        rels = reg.rels;
+        ct = reg.ct;
+
+        // Generar párrafo de dibujo con proporción A4 estándar
+        const anchoCm = ANCHO_UTIL_CM;
+        const altoCm = (anchoCm * 297) / 210;
+        nuevoXmlB += '\n' + parrafoConImagen({
+          rId: reg.idRel, id: idDibujo++, nombre: nombreImg,
+          cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
+        });
+
+        totalInsertadas++;
+      });
+    } else {
+      // Párrafo de pendiente si no tiene imágenes
+      nuevoXmlB += `\n<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/><w:b/></w:rPr><w:t>Pendiente: vuelva a cargar el Estado Financiero de esta comparable en el Paso 4 del motor de comparables.</w:t></w:r></w:p>`;
+    }
+  });
+
+  xml = asegurarNamespaceWp(xml.slice(0, inicioB) + nuevoXmlB + xml.slice(finB));
+  zip.file(RUTA_DOC, xml);
+  zip.file(RUTA_RELS, rels);
+  zip.file(RUTA_CT, ct);
+
+  return { insertadas: totalInsertadas };
+}
+
+/**
+ * El camino completo: plantilla marcada + estudio → .docx listo para descargar.
+ *
+ * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
+ *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
+ *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
+ * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
  */
 export function rellenarDocx({
-  binario, estudio, datosMacro, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
+  binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
 }) {
-  const { zip, camposVacios } = renderizarDocx(binario, estudio, { datosMacro, colecciones, delimitadores });
+  const { zip, camposVacios, avisosTablas } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
   const { insertadas } = insertarImagenes(zip, imagenesAnexo);
+  /* El ANEXO A siempre se rearma —sus tablas salen de la ingesta—, pero las páginas del PDF
+     solo van aquí si el centinela no se las llevó ya: con las dos vías activas el anexo
+     saldría con el escaneo repetido. */
+  const { insertadas: insertadasA } = insertarAnexoA(zip, estudio, {
+    imagenes: insertadas > 0 ? [] : imagenesAnexo,
+  });
+  const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
   return {
     salida: zip.generate({
       type: tipoSalida,
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
     camposVacios,
-    imagenesInsertadas: insertadas,
+    avisosTablas,
+    imagenesInsertadas: insertadas + insertadasA + insertadasB,
   };
 }

@@ -97,6 +97,22 @@ export function contarApariciones(html, fragmento) {
   return n;
 }
 
+/* Etiquetas que NO interrumpen un bloque de texto. Word y el extractor de PDF parten una
+   misma frase en varios `<span>`/`<strong>` por cada cambio de formato, así que el texto
+   visible de un párrafo llega troceado y hay preguntas —«¿termina en el número de página?»—
+   que solo se pueden responder sobre el bloque entero. */
+const ETIQUETAS_INLINE = new Set([
+  'span', 'strong', 'b', 'em', 'i', 'u', 'a', 'sub', 'sup', 'br', 'small', 'font',
+]);
+
+/** Nombre de la etiqueta de un segmento de etiqueta, en minúsculas. '' si no se reconoce. */
+function nombreEtiqueta(etiqueta) {
+  const m = /^<\s*\/?\s*([a-z0-9]+)/i.exec(String(etiqueta || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
+const esInline = (etiqueta) => ETIQUETAS_INLINE.has(nombreEtiqueta(etiqueta));
+
 /* Índice del texto visible de un documento SIN MARCAR: una entrada por corrida
    con el desplazamiento del HTML donde empieza. Se calcula una vez por
    documento y se reutiliza para todos los fragmentos y todos los trozos: sin
@@ -105,8 +121,12 @@ export function contarApariciones(html, fragmento) {
 
    Exige HTML sin marcar porque `inicio + posición` solo equivale a un
    desplazamiento del HTML mientras no haya etiquetas insertadas dentro de la
-   corrida. `proponerMarcas` siempre trabaja sobre el documento crudo. */
-function indexarTexto(html) {
+   corrida. `proponerMarcas` siempre trabaja sobre el documento crudo.
+
+   `corta` decide qué etiqueta cierra la acumulación. Por omisión cualquiera, que es lo que
+   necesitan las apariciones: un fragmento no puede cruzar una frontera del HTML. Pasando
+   `(e) => !esInline(e)` se obtienen BLOQUES, donde el texto sí atraviesa los `<span>`. */
+function indexarTexto(html, corta = () => true) {
   const corridas = [];
   let actual = null;
   let offset = 0;
@@ -114,7 +134,7 @@ function indexarTexto(html) {
     if (s.tipo === 'texto') {
       if (!actual) actual = { texto: '', inicio: offset };
       actual.texto += s.valor;
-    } else if (actual) {
+    } else if (actual && corta(s.valor)) {
       corridas.push(actual);
       actual = null;
     }
@@ -147,6 +167,150 @@ function contextoDe(textos, c, pos, largo, radio) {
     antes: antes.slice(-radio).replace(/\s+/g, ' '),
     despues: despues.slice(0, radio).replace(/\s+/g, ' '),
   };
+}
+
+/* ── Zonas del documento ──
+
+   Un informe local no es texto uniforme: tiene tramos donde un dato del contribuyente
+   simplemente no puede aparecer. Marcar sin distinguirlos es lo que dejó, en el informe
+   del 2026-08-10, la ficha de COLOPL con las cifras de END GAME dentro del ANEXO B, y la
+   serie histórica del PIB mundial reescrita con el año gravable.
+
+   Las fronteras salen de los encabezados que el propio informe ya trae. No hace falta
+   configurarlas: son las mismas en todos los informes de esta firma.
+
+   LA TABLA DE CONTENIDO NO CUENTA. El índice repite todos los encabezados con el número
+   de página pegado al final («ANEXO B. Descripciones de comparables…55»). Si abriera zona,
+   el documento entero quedaría marcado como anexo desde la primera página y no se
+   sustituiría ni un dato. De ahí la condición de que un encabezado de zona no termine en
+   dígito: ninguno lo hace, y toda entrada del índice sí. */
+
+const RX_ANEXO = /^\s*anexo\s+([a-e])\b/i;
+/* «III. TENDENCIAS DE LA ECONOMÍA»: sus ocho tablas las regenera actualizarTablasMacroOoxml
+   y su prosa viene de los campos `ia.economia_*`. */
+const RX_MACRO = /^\s*(?:iii|3)\s*\.?\s*tendencias\b/i;
+/* Cualquier capítulo romano posterior devuelve al cuerpo. */
+const RX_CAPITULO = /^\s*(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\s*\.\s*\S/i;
+/* Una nota o referencia: número de llamada, espacio y el texto. Las listas numeradas del
+   cuerpo llevan punto («1. Equipos de Computación»), así que no se confunden. */
+const RX_CITA = /^\s*\d{1,3}\s+["'«¿A-ZÁÉÍÓÚÑ]/;
+/* Entrada del índice: el número de página queda pegado al final del título. */
+const RX_ENTRADA_INDICE = /\d\s*$/;
+
+/** Zonas en las que no se marca ningún campo del contribuyente. */
+export const ZONAS_PROHIBIDAS = new Set([
+  'macro', 'anexoA', 'anexoB', 'anexoC', 'anexoD', 'anexoE', 'cita',
+]);
+
+/* La zona que abre este párrafo, o null si no es un encabezado de zona. */
+function zonaQueAbre(texto) {
+  const t = String(texto || '').trim();
+  if (!t || RX_ENTRADA_INDICE.test(t)) return null;
+  const anexo = RX_ANEXO.exec(t);
+  if (anexo) return 'anexo' + anexo[1].toUpperCase();
+  if (RX_MACRO.test(t)) return 'macro';
+  /* Un capítulo posterior cierra la macro y devuelve al cuerpo. Los anexos no se cierran
+     así: el último llega hasta el final del documento. */
+  if (RX_CAPITULO.test(t)) return 'cuerpo';
+  return null;
+}
+
+/**
+ * Los tramos del documento con su zona, en orden y por desplazamiento del HTML.
+ *
+ * @param {string} html
+ * @returns {Array<{inicio:number, fin:number, zona:string}>}
+ */
+export function zonasDelDocumento(html) {
+  /* Por BLOQUES y no por corridas. El extractor de PDF emite la entrada del índice como
+     `<p><strong> ANEXO E. …Transferencia </strong><strong><span…>83</span></strong></p>`:
+     el número de página va en otro `<span>`, así que por corridas el título termina en
+     espacio, `RX_ENTRADA_INDICE` no lo reconocía como entrada del índice y la zona
+     `anexoE` se abría ahí. Como los anexos no se cierran, se arrastraba sobre todo el
+     RESUMEN EJECUTIVO —donde están las Tablas 1, 2 y 3— y ninguna de sus celdas se podía
+     marcar: el informe se radicaba con el concepto, el vinculado, el país y el monto del
+     año anterior. Con el texto del bloque completo la guarda ve el «83» y funciona como
+     se diseñó. */
+  const bloques = indexarTexto(String(html || ''), (etiqueta) => !esInline(etiqueta));
+  const tramos = [];
+  let zona = 'cuerpo';
+  for (let i = 0; i < bloques.length; i++) {
+    const b = bloques[i];
+    const abre = zonaQueAbre(b.texto);
+    if (abre) zona = abre;
+    /* La cita es de un solo párrafo: no arrastra a los siguientes. */
+    const suya = RX_CITA.test(b.texto) ? 'cita' : zona;
+    const fin = i + 1 < bloques.length ? bloques[i + 1].inicio : Infinity;
+    tramos.push({ inicio: b.inicio, fin, zona: suya });
+  }
+  return tramos;
+}
+
+/** La zona en la que cae un desplazamiento del HTML. */
+export function zonaEnOffset(zonas, offset) {
+  for (const t of zonas || []) {
+    if (offset >= t.inicio && offset < t.fin) return t.zona;
+  }
+  return 'cuerpo';
+}
+
+/* ── Guardas de extensión ──
+
+   Extender un acierto del modelo a todas las apariciones del mismo texto resuelve un
+   problema medido: la razón social sobrevivía 31 veces sin marcar. Pero extender a ciegas
+   convierte el acierto en corrupción, y así se radicó «CUMPLEn con el propósito
+   fundamental», con el fragmento «cumple» sustituido dentro de «cumplen». */
+
+const RX_ALFANUM = /[\p{L}\p{N}]/u;
+
+/** true si la aparición es la palabra completa y no un trozo de otra más larga. */
+export function esPalabraCompleta(texto, pos, largo) {
+  const antes = pos > 0 ? texto[pos - 1] : '';
+  const despues = texto[pos + largo] || '';
+  const bordeIzq = !RX_ALFANUM.test(String(texto[pos] || '')) || !RX_ALFANUM.test(antes);
+  const bordeDer = !RX_ALFANUM.test(String(texto[pos + largo - 1] || '')) || !RX_ALFANUM.test(despues);
+  return bordeIzq && bordeDer;
+}
+
+/**
+ * ¿Se puede extender este fragmento a las apariciones que el modelo no miró?
+ *
+ * El criterio es si el texto IDENTIFICA un dato por sí solo. Una razón social sí; una
+ * palabra común no.
+ */
+export function puedeExtenderse(fragmento) {
+  const t = String(fragmento || '').trim();
+  if (!t) return false;
+
+  /* Sin letras es una cifra. Extenderla es lo correcto para un monto o un NIT —el monto de
+     la operación se repite por todo el informe—, pero no para un número corto, que coincide
+     con cualquier cosa. Un año se admite aquí y lo filtra su propia guarda de contexto. */
+  if (!/\p{L}/u.test(t)) {
+    const digitos = t.replace(/\D/g, '');
+    return digitos.length >= 6 || esAnio(t);
+  }
+
+  /* Una sola palabra y toda en minúsculas es lenguaje, no un dato: «cumple», «ingreso»,
+     «otros». Una razón social viene con mayúsculas («ACME INC») o con varias palabras. */
+  if (!/\s/.test(t) && t === t.toLowerCase()) return false;
+
+  return true;
+}
+
+/** true si el fragmento es un año de cuatro cifras y nada más. */
+export function esAnio(fragmento) {
+  return /^\s*(?:19|20)\d{2}\s*$/.test(String(fragmento || ''));
+}
+
+/* Lo que tiene que haber justo antes de un año para que sea el año GRAVABLE y no otra
+   fecha. Sin esta guarda, «Último estado financiero entre junio de 2024 y mayo de 2025»
+   —la ventana de búsqueda de comparables— quedaba como «entre junio de 2025 y mayo de
+   2025», que no es ninguna ventana; y la bibliografía se fechaba mal. */
+const RX_CONTEXTO_ANIO = /(?:31\s+de\s+diciembre\s+de|a[nñ]o(?:\s+(?:gravable|fiscal))?|per[ií]odo\s+fiscal|periodo\s+fiscal|vigencia|ejercicio(?:\s+fiscal)?|gravable|fiscal)\s*$/i;
+
+/** ¿La frase anterior sostiene que este año es el año gravable? */
+export function contextoRespaldaAnio(antes) {
+  return RX_CONTEXTO_ANIO.test(String(antes || ''));
 }
 
 /* Motivos de descarte. Se exportan porque quien los muestra tiene que
@@ -329,12 +493,36 @@ export async function proponerMarcas(html, opciones = {}) {
      se memorizan porque el mismo texto —la razón social, el NIT— se propone en
      casi todos los trozos. */
   const corridas = indexarTexto(completo);
+  const zonas = zonasDelDocumento(completo);
+  let bloqueadasPorZona = 0;
+  let bloqueadasPorGuarda = 0;
   const cache = new Map();
   const apariciones = (fragmento) => {
     if (!cache.has(fragmento)) cache.set(fragmento, aparicionesEn(corridas, fragmento));
     return cache.get(fragmento);
   };
   const textos = corridas.map((c) => c.texto);
+
+  /* Las tres guardas que decide una aparición concreta, en un solo sitio para que valgan
+     igual para lo que propuso el modelo y para lo que completa la extensión: quien mira una
+     marca en pantalla no tiene por qué saber de cuál de los dos caminos vino.
+
+     Devuelve el motivo por el que se rechaza, o null si la aparición es válida. */
+  const motivoDeRechazo = (fragmento, donde) => {
+    if (!donde) return null; // no aparece: lo resuelve `aplicarMarcas` con su propio motivo
+    if (ZONAS_PROHIBIDAS.has(zonaEnOffset(zonas, donde.offset))) return 'zona';
+    if (!esPalabraCompleta(textos[donde.corrida], donde.pos, fragmento.length)) return 'guarda';
+    if (esAnio(fragmento)) {
+      const { antes } = contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60);
+      if (!contextoRespaldaAnio(antes)) return 'guarda';
+    }
+    return null;
+  };
+
+  const contar = (motivo) => {
+    if (motivo === 'zona') bloqueadasPorZona++;
+    else if (motivo === 'guarda') bloqueadasPorGuarda++;
+  };
 
   const trozos = trocear(completo, opciones.maxCaracteres);
 
@@ -361,6 +549,9 @@ export async function proponerMarcas(html, opciones = {}) {
      orden de las marcas no depende de cuál respondió primero: con las mismas
      respuestas sale el mismo documento. */
   const porTrozo = new Array(trozos.length);
+  /* Pares «fragmento → campo» que afirmó el modelo, con independencia de si la aparición
+     que señaló se pudo marcar. De aquí sale la extensión. */
+  const asociaciones = [];
   let siguiente = 0;
   let terminados = 0;
 
@@ -390,6 +581,19 @@ export async function proponerMarcas(html, opciones = {}) {
           const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
           const ocurrencia = previas(fragmento) + local;
           const donde = apariciones(fragmento)[ocurrencia - 1];
+          /* La asociación «este texto es este campo» se guarda SIEMPRE, incluso si esta
+             aparición concreta se rechaza. Lo que el modelo afirmó es de qué dato se trata;
+             el rechazo es sobre el sitio. Perder la asociación dejaría el documento sin
+             marcar ese dato en ninguna parte, que es peor que marcarlo donde no va. */
+          asociaciones.push({ fragmento, campo: m.campo });
+
+          if (motivoDeRechazo(fragmento, donde)) {
+            /* El modelo señaló un sitio donde ese dato no puede ir: dentro del ANEXO B, en
+               una serie histórica, en una cita, o partiendo una palabra por la mitad. La
+               extensión recorre después todas las apariciones y ahí se cuenta el bloqueo,
+               una sola vez por aparición. */
+            continue;
+          }
           delTrozo.push({
             fragmento,
             campo: m.campo,
@@ -443,7 +647,7 @@ export async function proponerMarcas(html, opciones = {}) {
      la revisión humana lo vea en vez de que el código elija a ciegas. */
   const campoPorFragmento = new Map();
   const ambiguos = new Set();
-  for (const m of marcas) {
+  for (const m of asociaciones) {
     const previo = campoPorFragmento.get(m.fragmento);
     if (previo === undefined) campoPorFragmento.set(m.fragmento, m.campo);
     else if (previo !== m.campo) ambiguos.add(m.fragmento);
@@ -456,9 +660,20 @@ export async function proponerMarcas(html, opciones = {}) {
       marcas.filter((m) => m.fragmento === fragmento).map((m) => m.ocurrencia)
     );
     const todas = apariciones(fragmento);
+    /* Un fragmento que no identifica un dato por sí solo no se extiende. Se cuentan las
+       apariciones que se dejan sin marcar: son las que habrían reescrito la prosa. */
+    if (!puedeExtenderse(fragmento)) {
+      bloqueadasPorGuarda += todas.filter((_, i) => !yaMarcadas.has(i + 1)).length;
+      continue;
+    }
     for (let i = 1; i <= todas.length; i++) {
       if (yaMarcadas.has(i)) continue;
       const donde = todas[i - 1];
+      const motivo = motivoDeRechazo(fragmento, donde);
+      if (motivo) {
+        contar(motivo);
+        continue;
+      }
       marcas.push({
         fragmento,
         campo,
@@ -478,6 +693,11 @@ export async function proponerMarcas(html, opciones = {}) {
     trozosFallidos,
     rechazadasPorVocabulario,
     extendidas,
+    /* Lo que las guardas dejaron fuera. Publicarlo es parte del diseño: un bloqueo
+       silencioso es tan opaco como la extensión ciega que vino a corregir, y estas cifras
+       son la señal de que una plantilla nueva necesita mirarse a mano. */
+    bloqueadasPorZona,
+    bloqueadasPorGuarda,
     fragmentosAmbiguos: [...ambiguos],
   };
 }

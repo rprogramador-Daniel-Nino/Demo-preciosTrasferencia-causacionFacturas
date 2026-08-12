@@ -1,0 +1,263 @@
+import { test } from 'node:test';
+import assert from 'node:assert';
+import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
+
+/* Forma REAL que `pdfReferenceExtractor` produce para estas dos tablas, tomada del HTML
+   extraído de `Archivos Prueba/estudio pasado.pdf`: el rótulo es un `<p><strong>` aparte,
+   la fila de encabezados usa `<th>`, y la fila de datos abre con `<th>` y sigue con `<td>`. */
+const TABLA_1 =
+  '<p><strong> Tabla 1. Operaciones de Ingreso</strong></p>' +
+  '<table>' +
+  '<tr><th><p></p><p><strong> Concepto de Operaciones a analizar</strong></p></th>' +
+  '<th><p><strong> Nombre vinculado</strong></p></th>' +
+  '<th><p><strong> País vinculado</strong></p></th>' +
+  '<th><p><strong> Monto de la Operación analizar</strong></p></th></tr>' +
+  '<tr><th><p> Otros servicios (07)</p></th><td><p> END GAME INTERACTIVE INC</p></td>' +
+  '<td><p> ESTADOS UNIDOS</p></td><td><p> 3.435.357.400</p></td></tr>' +
+  '</table>';
+
+const TABLA_2 =
+  '<p><strong> Tabla 2. Operación analizar</strong></p>' +
+  '<table>' +
+  '<tr><th><p><strong> No. Operaciones de análisis</strong></p></th>' +
+  '<th><p><strong> Descripción</strong></p></th></tr>' +
+  '<tr><th><p> Ingreso (07)</p></th><td><p> Otros servicios</p></td></tr>' +
+  '</table>';
+
+const INFORME = '<h1><strong> RESUMEN EJECUTIVO</strong></h1>' + TABLA_1 +
+  '<p> Las anteriores operaciones fueron realizadas con intercompañías.</p>' + TABLA_2;
+
+const ESTUDIO = {
+  vinc_tipo: 'VENTA SERVICIOS',
+  vinc: 'ACME INTERACTIVE LLC',
+  pais_vinc: 'MÉXICO',
+  monto_operacion: 3433542684,
+};
+
+const sinEtiquetas = (html) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+test('la Tabla 1 se llena con los datos del estudio y no con los de la plantilla', () => {
+  /* Este es el fallo que motivó el módulo: el informe se radicaba con el concepto, el
+     vinculado, el país y el monto de END GAME 2024. */
+  const texto = sinEtiquetas(actualizarTablasOperacionesHtml(INFORME, ESTUDIO));
+  assert.match(texto, /VENTA SERVICIOS/);
+  assert.match(texto, /ACME INTERACTIVE LLC/);
+  assert.match(texto, /MÉXICO/);
+  assert.match(texto, /3\.433\.542\.684/);
+  assert.ok(!texto.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
+  assert.ok(!texto.includes('3.435.357.400'), 'sobrevivió el monto anterior');
+});
+
+test('la Tabla 2 se llena con la operación del estudio', () => {
+  const texto = sinEtiquetas(actualizarTablasOperacionesHtml(INFORME, ESTUDIO));
+  assert.match(texto, /Ingreso \(—\)/, 'sin código resoluble el hueco tiene que verse');
+  assert.ok(!texto.includes('Ingreso (07)'), 'sobrevivió el código anterior');
+});
+
+test('se conserva la fila de encabezados que traía la plantilla', () => {
+  /* Es el formato del cliente. Regenerarla la despintaría. */
+  const salida = actualizarTablasOperacionesHtml(INFORME, ESTUDIO);
+  assert.match(salida, /<th><p><\/p><p><strong> Concepto de Operaciones a analizar<\/strong><\/p><\/th>/);
+  assert.match(salida, /<th><p><strong> Descripción<\/strong><\/p><\/th>/);
+});
+
+test('el rótulo de la tabla no se toca', () => {
+  const salida = actualizarTablasOperacionesHtml(INFORME, ESTUDIO);
+  assert.match(salida, /<p><strong> Tabla 1\. Operaciones de Ingreso<\/strong><\/p>/);
+  assert.match(salida, /<p><strong> Tabla 2\. Operación analizar<\/strong><\/p>/);
+});
+
+test('las filas emitidas llevan la forma td/th que docxWriter sabe convertir', () => {
+  /* `docxWriter.js` recoge los hijos `td`/`th` de cada `tr` y descarta lo demás, y cada
+     celda tiene que traer su `<p>`: un texto suelto en la celda no se emite. La etiqueta,
+     los atributos y la envoltura salen de la fila molde de la plantilla —lo hace
+     `reescribirFilasHtml`—, así que la primera celda sigue siendo `<th>` porque así la
+     trae el informe del cliente. */
+  const salida = actualizarTablasOperacionesHtml(INFORME, ESTUDIO);
+  assert.match(
+    salida,
+    /<tr><th><p>VENTA SERVICIOS<\/p><\/th><td><p>ACME INTERACTIVE LLC<\/p><\/td><td><p>MÉXICO<\/p><\/td><td><p>3\.433\.542\.684<\/p><\/td><\/tr>/
+  );
+});
+
+test('se conserva el énfasis con el que la plantilla escribe la celda', () => {
+  /* La razón de ser de esta ruta es conservar la presentación del informe del cliente. Si
+     su fila de datos va en negrita, la nueva también: el valor cambia, el formato no. */
+  const html =
+    '<p><strong> Tabla 2. Operación analizar</strong></p>' +
+    '<table><tr><th><p><strong> No. Operaciones de análisis</strong></p></th>' +
+    '<th><p><strong> Descripción</strong></p></th></tr>' +
+    '<tr><th><p><strong> Ingreso (07)</strong></p></th>' +
+    '<td><p><strong> Otros servicios</strong></p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO);
+  assert.match(
+    salida,
+    /<tr><th><p><strong>Ingreso \(—\)<\/strong><\/p><\/th><td><p><strong>VENTA SERVICIOS<\/strong><\/p><\/td><\/tr>/
+  );
+});
+
+test('el texto entre las dos tablas sobrevive intacto', () => {
+  const salida = actualizarTablasOperacionesHtml(INFORME, ESTUDIO);
+  assert.match(salida, /<p> Las anteriores operaciones fueron realizadas con intercompañías\.<\/p>/);
+});
+
+test('una plantilla sin estas tablas no se altera en absoluto', () => {
+  /* Sin el aviso la tabla se queda con los datos del informe de referencia y nadie se
+     entera: es el mismo contrato que `sustituidorDeTablas` de la ruta OOXML. La lista
+     completa de nombres la comprueba el test del final. */
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml('<p> Un informe sin esas tablas.</p>', ESTUDIO, avisos);
+  assert.ok(avisos.includes('Operaciones de Ingreso'), 'la Tabla 1 tiene que avisarse');
+  assert.strictEqual(salida, '<p> Un informe sin esas tablas.</p>', 'el documento no debe cambiar');
+});
+
+test('una plantilla de egreso se reconoce por el rótulo de su tabla', () => {
+  const html =
+    '<p><strong> Tabla 1. Operaciones de Egreso</strong></p>' +
+    '<table><tr><th><p><strong> Concepto</strong></p></th></tr>' +
+    '<tr><th><p> Otros servicios (36)</p></th></tr></table>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(html, { ...ESTUDIO, egreso: true }, avisos);
+  assert.ok(!avisos.includes('Operaciones de Ingreso'), 'la tabla de egreso sí estaba');
+  assert.match(sinEtiquetas(salida), /VENTA SERVICIOS/);
+});
+
+test('el número del rótulo desempata entre dos tablas homónimas', () => {
+  /* La plantilla nombra «Operaciones de Ingreso» también como encabezado de la sección y
+     en el índice. Solo la que lleva «Tabla 1.» y una tabla detrás es la que se sustituye. */
+  const html =
+    '<h3><strong> 1. Operaciones de Ingreso</strong></h3>' +
+    '<p><strong> Tabla 1. Operaciones de Ingreso</strong></p>' +
+    '<table><tr><th><p><strong> Concepto</strong></p></th></tr>' +
+    '<tr><th><p> Otros servicios (07)</p></th></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO);
+  assert.match(salida, /<h3><strong> 1\. Operaciones de Ingreso<\/strong><\/h3>/, 'el encabezado de sección no se toca');
+  assert.match(sinEtiquetas(salida), /VENTA SERVICIOS/);
+});
+
+test('un estudio sin datos deja huecos visibles y no los datos de la plantilla', () => {
+  const texto = sinEtiquetas(actualizarTablasOperacionesHtml(INFORME, {}));
+  assert.ok(!texto.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
+  assert.ok(!texto.includes('3.435.357.400'), 'sobrevivió el monto anterior');
+  assert.match(texto, /—/);
+});
+
+/* ── Las cuatro tablas restantes del vinculado y del contribuyente ── */
+
+const ESTUDIO_COMPLETO = {
+  ...ESTUDIO, anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc_id: '444444001',
+  accionistas: [{ nombre: 'ACME HOLDINGS LLC', pais: 'ESTADOS UNIDOS', acciones: 1000, valor_capital: 10000, participacion_pct: 100 }],
+  t_cash: 500, t_act_tot: 1000,
+};
+
+test('la ficha del vinculado se sustituye en TODAS sus ocurrencias', () => {
+  /* La plantilla la trae dos veces —rotulada «Tabla 3.» y «Tabla 12.»—, y las dos publican
+     la misma ficha. Sustituir solo la primera deja la segunda con el vinculado anterior. */
+  const ficha = (n) =>
+    '<p><strong> Tabla ' + n + '.Transacciones Inter compañía</strong></p>' +
+    '<table><tr><th><p><strong> Compañía vinculada</strong></p></th></tr>' +
+    '<tr><th><p><strong> Razón social</strong></p></th><td><p> END GAME INTERACTIVE INC</p></td></tr></table>';
+  const html = ficha(3) + '<p> Texto intermedio.</p>' + ficha(12);
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.ok(!salida.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
+  assert.strictEqual((salida.match(/Razón social/g) || []).length, 2, 'las dos fichas siguen ahí');
+  assert.strictEqual(
+    (salida.match(/ACME INTERACTIVE LLC/g) || []).length, 2,
+    'el vinculado del estudio tiene que quedar en las dos fichas'
+  );
+  assert.match(salida, /<p> Texto intermedio\.<\/p>/, 'el texto entre las dos sobrevive');
+});
+
+test('el rótulo con el año se reescribe con el año gravable del estudio', () => {
+  /* La plantilla rotula «Activos a 31 de diciembre de 2024». El año es un dato, no
+     redacción: dejarlo publica el encabezado del año anterior. El número de la plantilla
+     se conserva, porque renumerar descuadra su índice. */
+  const html =
+    '<p><strong> Tabla 10. Activos a 31 de diciembre de 2024</strong></p>' +
+    '<table><tr><th><p><strong> Cifras</strong></p></th><th><p><strong> 2024</strong></p></th>' +
+    '<th><p><strong> A.V. 2024</strong></p></th></tr>' +
+    '<tr><th><p> Efectivo y equivalentes de efectivo</p></th><td><p> 1</p></td><td><p> 1%</p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.match(salida, /Tabla 10\. Activos a 31 de diciembre de 2025/);
+  assert.ok(!salida.includes('de 2024'), 'sobrevivió el año de la plantilla');
+});
+
+test('el método aplicable se localiza por su nombre corto y se rotula con el largo', () => {
+  const html =
+    '<p><strong> Tabla 4.Método de Precios de Transferencia Aplicable</strong></p>' +
+    '<table><tr><th><p><strong> Código</strong></p></th><th><p><strong> Descripción</strong></p></th>' +
+    '<th><p><strong> Método</strong></p></th><th><p><strong> Indicador</strong></p></th></tr>' +
+    '<tr><th><p> 07</p></th><td><p> Otros servicios</p></td><td><p> TU</p></td><td><p> MO</p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.match(salida, /<td><p>VENTA SERVICIOS<\/p><\/td>/);
+  assert.ok(!salida.includes('<p> Otros servicios</p>'), 'sobrevivió la descripción anterior');
+});
+
+test('la composición accionaria y los criterios de vinculación también se regeneran', () => {
+  const html =
+    '<p><strong> Tabla 6. Composición accionaria</strong></p>' +
+    '<table><tr><th><p><strong> Accionista</strong></p></th><th><p><strong> País</strong></p></th>' +
+    '<th><p><strong> Acciones</strong></p></th><th><p><strong> Capital</strong></p></th>' +
+    '<th><p><strong> %</strong></p></th></tr>' +
+    '<tr><th><p> VIEJO ACCIONISTA</p></th><td><p> JAPÓN</p></td><td><p> 1</p></td><td><p> 1</p></td><td><p> 1%</p></td></tr></table>' +
+    '<p><strong> Tabla 9. Criterios de vinculación económica</strong></p>' +
+    '<table><tr><th><p><strong> Vinculada</strong></p></th><th><p><strong> País</strong></p></th>' +
+    '<th><p><strong> Criterio</strong></p></th><th><p><strong> Detalle</strong></p></th></tr>' +
+    '<tr><th><p> END GAME INTERACTIVE INC</p></th><td><p> ESTADOS UNIDOS</p></td><td><p> x</p></td><td><p> y</p></td></tr></table>';
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO);
+  assert.ok(!salida.includes('VIEJO ACCIONISTA'), 'sobrevivió el accionista de la plantilla');
+  assert.match(salida, /ACME HOLDINGS LLC/);
+  assert.match(salida, /Vinculación Directa/);
+});
+
+test('las tablas ausentes se nombran todas en los avisos', () => {
+  const avisos = [];
+  actualizarTablasOperacionesHtml('<p> Un informe pelado.</p>', ESTUDIO_COMPLETO, avisos);
+  assert.deepStrictEqual(avisos, [
+    'Operaciones de Ingreso', 'Operación analizar', 'Transacciones Inter compañía',
+    'Método de Precios de Transferencia', 'Composición accionaria',
+    'Compañías vinculadas', 'Criterios de vinculación', 'Activos a 31 de diciembre',
+  ]);
+});
+
+/* ── Tablas que ningún motor sabe regenerar ── */
+
+test('la tabla de competencia se avisa porque publica los competidores del cliente anterior', () => {
+  /* Ningún motor la regenera: el estudio no tiene dónde guardar los competidores. Lo que no
+     se puede arreglar hay que decirlo — hasta ahora fallaba en silencio, y los competidores
+     de END GAME viajaban al informe de cualquier otro cliente. */
+  const html =
+    '<p><strong> Tabla 7. Competencia nacional e internacional al 31 de diciembre de 2024</strong></p>' +
+    '<table><tr><th><p><strong> NACIONALES</strong></p></th><th><p><strong> INTERNACIONALES</strong></p></th></tr>' +
+    '<tr><th><p> Teravision</p></th><td><p> Supercell</p></td></tr></table>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO, avisos);
+  assert.strictEqual(salida, html, 'no se puede regenerar, así que no se toca');
+  assert.ok(
+    avisos.some((a) => a.includes('Competencia nacional e internacional')),
+    'tiene que nombrarse en los avisos'
+  );
+});
+
+test('no se avisa de la tabla de competencia si la plantilla no la trae', () => {
+  /* Un aviso falso acusa de incompleta a una plantilla que está bien, y así se enseña a la
+     gente a no leer el banner. */
+  const avisos = [];
+  actualizarTablasOperacionesHtml('<p> Sin esa tabla.</p>', ESTUDIO_COMPLETO, avisos);
+  assert.ok(
+    !avisos.some((a) => a.includes('Competencia')),
+    'no debe avisar de una tabla que la plantilla no tiene'
+  );
+});
+
+test('la tabla de fuentes de información no se avisa: no arrastra datos del cliente', () => {
+  /* Sus entradas son instituciones —FMI, Banco de la República, ANDI, DANE— idénticas en
+     todos los informes de la firma. Avisar de ella sería ruido. */
+  const html =
+    '<p><strong> Tabla 11. Fuentes de Información</strong></p>' +
+    '<table><tr><th><p><strong> Fondo Monetario Internacional</strong></p></th></tr>' +
+    '<tr><th><p> Banco de la República</p></th></tr></table>';
+  const avisos = [];
+  actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO, avisos);
+  assert.ok(!avisos.some((a) => a.includes('Fuentes de Información')), 'no debe avisarse');
+});

@@ -15,6 +15,7 @@ const {
   parsearRespuestaRedaccionSector,
   armarEntradaAnio,
 } = require('./analisisSectorPrompts');
+const { redactarConFallback } = require('./redaccionConFallback');
 
 if (!getApps().length) initializeApp();
 
@@ -87,26 +88,16 @@ async function buscarDatosSector(geminiApiKey, actividad, year) {
   return parsearRespuestaBusquedaSector(texto, webSearchQueries);
 }
 
-async function redactarSector(claudeApiKey, datosConfiables, actividad, year) {
-  const prompt = construirPromptRedaccionSector(datosConfiables, actividad, year);
-  const respuesta = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': claudeApiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+/* Con respaldo en Gemini, por lo mismo que en el análisis de mercado: esta función llama a
+   Anthropic directamente y no pasa por `/api/claude`, así que se quedaba sin el fallback del
+   proxy. Aquí duele más que en el cron mensual, porque esta corre por demanda: con el tope
+   de uso alcanzado, la primera actividad nueva del día se quedaba sin análisis de sector. */
+async function redactarSector(claudeApiKey, geminiApiKey, datosConfiables, actividad, year) {
+  const { texto } = await redactarConFallback({
+    prompt: construirPromptRedaccionSector(datosConfiables, actividad, year),
+    claudeApiKey, geminiApiKey,
+    modeloClaude: CLAUDE_MODEL, modeloGemini: GEMINI_MODEL,
   });
-  const data = await respuesta.json();
-  if (!respuesta.ok || !data.content || !data.content[0]) {
-    throw new Error('Claude no devolvió una respuesta usable: ' + JSON.stringify(data).slice(0, 500));
-  }
-  const texto = data.content.map((b) => b.text || '').join('');
   return parsearRespuestaRedaccionSector(texto);
 }
 
@@ -133,7 +124,7 @@ async function actualizarAnalisisSector({ geminiApiKey, claudeApiKey, actividad,
     throw new Error('Ningún dato del sector trajo confirmación de búsqueda esta corrida.');
   }
 
-  const narrativa = await redactarSector(claudeApiKey, datosConfiables, actividad, year);
+  const narrativa = await redactarSector(claudeApiKey, geminiApiKey, datosConfiables, actividad, year);
 
   const ahora = Timestamp.now();
   const entrada = armarEntradaAnio({ datosVerificados: datosConfiables, narrativa, ahora });

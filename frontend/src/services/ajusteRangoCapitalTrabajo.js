@@ -19,8 +19,23 @@
         Excel, comparable por comparable, para que el rango publicado sea el
         mismo que sustenta el estudio.
 
-   Validado contra los 16 comparables de END GAME 2025: los 7 sabores de OM,
-   los 7 de Berry y los de NCP coinciden con el Excel al quinto decimal.
+        Esas dos convenciones conviven dentro del mismo ajuste y no se han
+        homogeneizado: es una decisión heredada de la plantilla, no un descuido,
+        y por eso tiene que quedar descrita en el anexo metodológico del informe.
+
+   Se partió de una réplica exacta de END GAME 2025, y desde ahí se corrigieron
+   dos defectos que la plantilla arrastraba y que la auditoría celda por celda del
+   libro de Capital IQ dejó documentados:
+
+     · el ajuste de PP&E no escalaba por la base del método, así que salía
+       prácticamente cero y los escenarios con PP&E no se distinguían de los
+       demás;
+     · la venta ajustada se usaba como denominador en los siete sabores, también
+       en los que no restan el ajuste de cuentas por cobrar del numerador.
+
+   Por eso los sabores `aap`, `inv`, `ppe` y `aar_aap_inv_ppe` ya NO coinciden con
+   la hoja original: coinciden con ella corregida. Los demás sí siguen cuadrando
+   con END GAME al quinto decimal.
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { num } from '../utils/calculations.js';
@@ -37,6 +52,10 @@ export const TIPOS_AJUSTE = {
   aar_aap_inv_ppe: 'Ajuste 5 (CxC, CxP, Inventario y PP&E)',
   ppe: 'Ajuste 6 (Propiedad, Planta y Equipo)',
 };
+
+/* Sabores que restan el ajuste de cuentas por cobrar del numerador y, por tanto,
+   son los únicos que deben dividir sobre la venta ajustada. */
+const AJUSTAN_AR = new Set(['aar', 'aar_aap_inv', 'aar_aap_inv_ppe']);
 
 /* Métodos que admiten este ajuste. El Índice de Berry queda fuera por decisión
    heredada del sistema (rangoIntercuartil.js ya lo excluía), pero el Excel sí lo
@@ -93,7 +112,13 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
   const s = cifras(contribuyente);
   if (c.s === null || c.ebit === null || !s.s) return null;
 
-  const base = BASES[metodo] || 'ventas';
+  /* Métodos que este módulo no sabe construir (MCG, ROA y cualquier otro que se
+     agregue al sistema sin darle una base aquí). Antes caían al `|| 'ventas'` y
+     devolvían un margen operacional disfrazado del método pedido; devolver null
+     deja que el llamador use su propia ruta en vez de publicar un número ajeno. */
+  if (!BASES[metodo]) return null;
+
+  const base = BASES[metodo];
   const t = num(tasa) || 0;
   const desc = t / (1 + t); // factor de valor presente para CxC y CxP
 
@@ -135,7 +160,12 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
   const ajusteAR = ((c.ar / baseC) - (s.ar / baseS)) * (baseC * desc);
   const ajusteAP = ((c.ap / baseC) - (s.ap / baseS)) * (baseC * desc);
   const ajusteINV = ((c.inv / baseInvC) - (s.inv / baseS)) * (baseC * t);
-  const ajustePPE = ((c.ppe / (usaDepurado ? denomNCP : baseC)) - (s.ppe / baseS)) * t;
+  /* PP&E escala por la base igual que las otras tres partidas. La plantilla de
+     Capital IQ multiplicaba solo por la tasa: sin la base, el ajuste quedaba
+     dividido por el monto de las ventas (o del costo, según el método) y salía
+     prácticamente cero, por lo que los escenarios «+PP&E» y «PP&E» reproducían
+     casi exactamente a «CxC+CxP+Inv» y al margen sin ajustar. */
+  const ajustePPE = ((c.ppe / baseInvC) - (s.ppe / baseS)) * (baseC * t);
 
   /* Ventas ajustadas: el Excel descuenta el ajuste de CxC de las ventas y divide
      el margen sobre esa venta corregida (fila 83). Para bases distintas de ventas
@@ -181,20 +211,23 @@ export function indicadorAjustado(comp, contribuyente, metodo, ajuste, tasa) {
        MO/MB     → venta ajustada (descuenta el ajuste de CxC),
        Berry     → opex,
        NCP       → (COGS − CxP) + opex, el denominador depurado del Excel,
-       Cost Plus → (COGS − CxP), el COGS depurado del Excel (E133). */
+       Cost Plus → (COGS − CxP), el COGS depurado del Excel (E133).
+
+     La venta ajustada solo se usa en los sabores que sí restan el ajuste de CxC
+     del numerador. La plantilla la aplicaba a los siete por igual, de modo que
+     «solo CxP» y «solo inventario» descontaban del denominador un ajuste que
+     nunca habían aplicado arriba. No afectaba al escenario que se reporta
+     —CxC+CxP+Inv—, pero dejaba dos columnas incoherentes consigo mismas. */
   const denom = usaDepurado ? denomNCP
-    : base === 'ventas' ? baseAjustada
+    : base === 'ventas' ? (AJUSTAN_AR.has(ajuste) ? baseAjustada : baseC)
     : baseC;
   return denom ? numerador / denom : null;
 }
 
-/* Cuartil por interpolación lineal, equivalente a QUARTILE.INC de Excel.
-
-   IMPORTANTE: difiere a propósito de `quart` en calculations.js, que toma el
-   elemento en la posición truncada sin interpolar. El modelo Excel de rangos
-   usa QUARTILE.INC, y para que el rango ajustado que publica el sistema coincida
-   con el que el consultor validó en la hoja, este módulo interpola. La ruta sin
-   ajuste sigue usando `quart` heredado; sólo el rango ajustado usa este. */
+/* Cuartil por interpolación lineal, equivalente a QUARTILE.INC de Excel, y desde
+   agosto de 2026 el único del sistema: `quart` (posición truncada, sin interpolar)
+   convivía en calculations.js y sobre la misma serie daba otro rango. El modelo Excel
+   de rangos usa QUARTILE.INC, así que se conservó esta y se retiró aquella. */
 export function cuartilInterpolado(serieOrdenada, p) {
   const n = serieOrdenada.length;
   if (n === 0) return null;
@@ -206,12 +239,26 @@ export function cuartilInterpolado(serieOrdenada, p) {
   return serieOrdenada[lo];
 }
 
+/* Un comparable entra en la serie según el filtro de ámbito del estudio, el mismo
+   `cmode` que aplica el panel: 'intl' solo internacionales, 'nac' solo nacionales,
+   cualquier otro valor las toma todas. */
+const entraPorAmbito = (amb, modo) => (
+  modo === 'intl' ? amb === 'Int' : modo === 'nac' ? amb === 'Nac' : true
+);
+
 /* Rango ajustado completo para un método y un sabor de ajuste.
 
    Recibe el estudio tal como lo maneja el sistema (t_s, t_c, t_op, t_ar, t_inv,
-   t_ap para el contribuyente y `comparables` con s/c/op/ar/inv/ap y opcionalmente
-   `ppe` y `tasaEfectiva`). La tasa por comparable cae, en orden de preferencia, a
-   la del propio comparable, luego a la del estudio (prime), luego a 0.
+   t_ap, t_ppe para el contribuyente y `comparables` con s/c/op/ar/inv/ap/ppe).
+
+   IMPORTANTE: `op` y `t_op` son GASTOS operativos, no utilidad operacional. El
+   resto del sistema usa el convenio contrario (ver `pliOf` en utils/calculations.js),
+   así que hay que pasar las cifras por `normalizarEeff` antes de llamar aquí.
+
+   La tasa es una sola para todo el estudio —`prime`, en porcentaje—. Hasta agosto
+   de 2026 cada comparable podía traer la suya (`tasaEfectiva`), que era la tasa de
+   su país heredada de la plantilla de Capital IQ; se retiró porque la metodología
+   del informe usa una única tasa de referencia para toda la muestra.
 
    Devuelve { stats, filas, cumple, sujeto } con la misma forma que analizarRango
    para que las tablas del informe puedan consumir uno u otro sin ramificar. */
@@ -219,27 +266,46 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
   const study = estudio || {};
   const kind = metodo || study.pli || 'MO';
   const tipo = ajuste || 'ninguno';
+  const modo = study.cmode || 'all';
+
+  /* Ingreso de una operación no controlada (p. ej. un proyecto CoCrea) ajeno a la
+     vinculada: se descuenta de las ventas para que el margen no se calcule sobre
+     cifras mezcladas. Solo de las ventas: como aquí `t_op` son gastos y no utilidad,
+     restarlo también de `t_op` —como hace el panel, donde `op` sí es utilidad—
+     cambiaría la utilidad operacional dos veces. */
+  const segExcluido = num(study.seg_excluido) || 0;
+  const tS = num(study.t_s);
 
   const contribuyente = {
-    s: study.t_s, c: study.t_c, op: study.t_op,
+    s: tS !== null ? tS - segExcluido : null,
+    c: study.t_c, op: study.t_op,
     ar: study.t_ar, inv: study.t_inv, ap: study.t_ap, ppe: study.t_ppe,
   };
 
   const tasaEstudio = (num(study.prime) || 0) / 100;
 
   const filas = (study.comparables || []).map((comp) => {
-    const tasa = num(comp.tasaEfectiva) !== null ? num(comp.tasaEfectiva) : tasaEstudio;
-    const valor = indicadorAjustado(comp, contribuyente, kind, tipo, tasa);
+    const valor = indicadorAjustado(comp, contribuyente, kind, tipo, tasaEstudio);
+    /* El mismo indicador sin ninguna partida de capital de trabajo. Va en la fila
+       porque las tablas del informe publican las dos columnas —margen y margen
+       ajustado— y la diferencia entre ambas tiene que ser el ajuste que de verdad
+       se aplicó, no un tercer cálculo hecho aparte. */
+    const noAjustado = tipo === 'ninguno'
+      ? valor
+      : indicadorAjustado(comp, contribuyente, kind, 'ninguno', tasaEstudio);
+    const amb = comp && comp.amb === 'Nac' ? 'Nac' : 'Int';
     return {
       nombre: String((comp && comp.name) || '').trim(),
-      amb: comp && comp.amb === 'Nac' ? 'Nac' : 'Int',
+      amb,
       valor,
+      noAjustado,
+      incluida: entraPorAmbito(amb, modo) && valor !== null && Number.isFinite(valor),
     };
   });
 
   const serie = filas
+    .filter((f) => f.incluida)
     .map((f) => f.valor)
-    .filter((v) => v !== null && Number.isFinite(v))
     .sort((a, b) => a - b);
 
   let stats = null;

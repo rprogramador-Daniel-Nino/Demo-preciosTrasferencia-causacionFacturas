@@ -8,7 +8,14 @@ import PizZip from 'pizzip';
 import {
   renderizarDocx, insertarImagenes, rellenarDocx, desdeDataUrl,
   CENTINELA_ANEXO, SIN_DATO, EMU_POR_CM, actualizarTablasMacroOoxml,
+  actualizarTablasOperacionesOoxml,
+  coleccionesDelEstudio,
+  textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
+  insertarAnexoA,
 } from './docxRelleno.js';
+
+/** Donde vive el cuerpo del documento dentro del .docx. */
+const RUTA_DOC_TEST = 'word/document.xml';
 
 
 /* Un PNG de 1×1 válido, para no meter binarios en el repo. */
@@ -308,6 +315,120 @@ test('rellenarDocx entrega un .docx válido con datos, tabla e imágenes', async
   assert.ok(z.file('word/media/anexo_eeff_1.png'), 'y la imagen quedó dentro');
 });
 
+/* ══════════════════ ANEXO A: estados financieros del contribuyente ══════════════════ */
+
+/* Las cifras que la ingesta ya parsea, con los nombres que escribe `eeffParser.js`. */
+const ESTUDIO_EEFF = {
+  ent: 'ACME COLOMBIA S.A.S', anio: 2025,
+  t_cash: 12417756, t_inv_assoc: 1031832388, t_ar: 578289605, t_tax: 388909218,
+  t_act_curr: 2011448966, t_ppe: 114783610, t_intang: 4620815, t_dif: 48626297,
+  t_act_nocurr: 168030721, t_act_tot: 2179479687, t_ap: 27255376,
+  t_s: 5271105507, t_c: 2761202249, t_op: 262820000, seg_excluido: 983180000,
+};
+
+const conAnexoA = () => '<w:p><w:t>VIII. ANEXOS</w:t></w:p>'
+  + '<w:p><w:t>ANEXO A. Estados financieros END GAME INTERACTIVE COLOMBIA</w:t></w:p>'
+  + '<w:p><w:t>páginas del informe anterior</w:t></w:p>'
+  + '<w:p><w:t>ANEXO B. Descripciones de comparables y Estados Financieros</w:t></w:p>'
+  + '<w:p><w:t>fichas de comparables</w:t></w:p>';
+
+async function zipConAnexoA() {
+  const buf = await plantilla([parrafo('x')]);
+  const zip = new PizZip(buf);
+  zip.file(RUTA_DOC_TEST, zip.file(RUTA_DOC_TEST).asText()
+    .replace('</w:body>', conAnexoA() + '</w:body>'));
+  return zip;
+}
+
+test('el ANEXO A se ancla en su encabezado, sin depender del centinela', async () => {
+  /* La plantilla del cliente no trae @@ANEXO_EEFF@@ —verificado: cero ocurrencias en el
+     informe del 2026-08-10—, así que las páginas ingestadas nunca entraban y el anexo se
+     radicaba vacío. El ANEXO B ya se ancla por su encabezado; el A no tenía equivalente. */
+  const zip = await zipConAnexoA();
+  const { insertadas } = insertarAnexoA(zip, ESTUDIO_EEFF, {
+    imagenes: [{ dataUrl: PNG_DATA_URL }, { dataUrl: PNG_DATA_URL }],
+  });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.strictEqual(insertadas, 2, 'las páginas del PDF van como soporte');
+  assert.ok(!texto.includes('páginas del informe anterior'), 'lo viejo del anexo debe irse');
+  assert.match(texto, /ANEXO B\. Descripciones de comparables/, 'y el ANEXO B queda intacto');
+  assert.match(texto, /fichas de comparables/);
+  assert.ok(zip.file('word/media/anexo_a_1.png'), 'la primera página quedó en el paquete');
+});
+
+test('el ANEXO A trae el ESF y el ERI como tablas nativas, no como imagen', async () => {
+  const zip = await zipConAnexoA();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.match(texto, /Estado de Situación Financiera/);
+  assert.match(texto, /Estado de Resultados/);
+  assert.match(texto, /2\.179\.479\.687/, 'el total de activos, formateado en pesos');
+  assert.match(texto, /5\.271\.105\.507/, 'los ingresos del ERI');
+});
+
+test('el A.V. del ANEXO A sale de la misma cuenta que la Tabla 10', async () => {
+  /* Si cada uno calculara su porcentaje, el anexo y el cuerpo del informe publicarían
+     verticales distintos para el mismo estado financiero. */
+  const zip = await zipConAnexoA();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const anexo = textoDe(zip, RUTA_DOC_TEST);
+
+  const tabla10 = actualizarTablasOperacionesOoxml(
+    conTabla('<w:p><w:t>Tabla 10. Activos a 31 de diciembre de 2025</w:t></w:p>'),
+    ESTUDIO_EEFF,
+  );
+  /* 12.417.756 sobre 2.179.479.687 es 0,57 %. */
+  assert.match(tabla10, /0\.57%/, 'la Tabla 10 calcula el vertical sobre el total de activos');
+  assert.match(anexo, /0\.57%/, 'y el anexo tiene que dar lo mismo');
+});
+
+test('el ERI del ANEXO A declara el ajuste excluido', async () => {
+  /* Los $983.180.000 del proyecto CoCrea son lo que sostiene el margen que el informe
+     declara. Un estado de resultados que no los nombre no cuadra con el rango. */
+  const zip = await zipConAnexoA();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.match(texto, /983\.180\.000/);
+});
+
+test('sin cifras parseadas el ANEXO A avisa en vez de salir vacío', async () => {
+  const zip = await zipConAnexoA();
+  const { insertadas } = insertarAnexoA(zip, { ent: 'ACME', anio: 2025 }, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.strictEqual(insertadas, 0);
+  assert.match(texto, /Pendiente/, 'el hueco tiene que verse');
+  assert.ok(!texto.includes('páginas del informe anterior'),
+    'y no conservar el anexo del informe anterior');
+});
+
+test('una plantilla sin ANEXO A no se toca', async () => {
+  const buf = await plantilla([parrafo('Informe sin anexos')]);
+  const zip = new PizZip(buf);
+  const antes = zip.file(RUTA_DOC_TEST).asText();
+  const { insertadas } = insertarAnexoA(zip, ESTUDIO_EEFF, { imagenes: [{ dataUrl: PNG_DATA_URL }] });
+  assert.strictEqual(insertadas, 0);
+  assert.strictEqual(zip.file(RUTA_DOC_TEST).asText(), antes, 'el documento debe quedar igual');
+});
+
+test('rellenarDocx llena el ANEXO A con lo que trae el estudio', async () => {
+  /* La cadena completa: sin centinela en la plantilla, el anexo se llena igual. */
+  const buf = await plantilla([parrafo('Informe de {ent}')]);
+  const zip = new PizZip(buf);
+  zip.file(RUTA_DOC_TEST, zip.file(RUTA_DOC_TEST).asText()
+    .replace('</w:body>', conAnexoA() + '</w:body>'));
+
+  const { salida } = rellenarDocx({
+    binario: zip.generate({ type: 'nodebuffer' }),
+    estudio: ESTUDIO_EEFF,
+    imagenesAnexo: [{ dataUrl: PNG_DATA_URL }],
+    tipoSalida: 'nodebuffer',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+  assert.match(texto, /Estado de Situación Financiera/);
+  assert.ok(!texto.includes('páginas del informe anterior'));
+});
+
 test('el .docx resultante conserva las partes obligatorias del paquete', async () => {
   const buf = await plantilla([parrafo('{ent}')]);
   const { salida } = rellenarDocx({ binario: buf, estudio: ESTUDIO, tipoSalida: 'nodebuffer' });
@@ -367,4 +488,415 @@ test('actualización de tablas macroeconómicas en el OOXML de docxRelleno', asy
   assert.ok(xmlActualizado.includes('2024'), 'Falta el año 2024 en la tabla de PIB mundial');
   assert.ok(xmlActualizado.includes('3.3'), 'Falta el valor 3.3 en la tabla de PIB mundial');
   assert.ok(xmlActualizado.includes('2.8'), 'Falta el valor 2.8 en la tabla de PIB mundial');
+});
+
+test('coleccionesDelEstudio arma las comparables, razones de rechazo y los accionistas correctamente', () => {
+  const estudioConAccionistas = {
+    embudoSeleccion: {
+      evaluadas: 10,
+      seleccionadas: 2,
+      porMotivo: { holding: 8 }
+    },
+    comparables: [
+      { name: 'Comp A', amb: 'Int', s: 1000, c: 800, op: 100 },
+      { name: 'Comp B', amb: 'Nac', s: 2000, c: 1500, op: 200 }
+    ],
+    accionistas: [
+      { nombre: 'Accionista A', pais: 'USA', acciones: 150000, valor_capital: 150000000, participacion_pct: 75 },
+      { nombre: 'Accionista B', pais: 'COLOMBIA', acciones: 50000, valor_capital: 50000000, participacion_pct: 25 }
+    ]
+  };
+
+  const colecciones = coleccionesDelEstudio(estudioConAccionistas);
+  assert.ok(Array.isArray(colecciones.comparables), 'Debe tener la colección comparables');
+  assert.ok(Array.isArray(colecciones.razonesRechazo), 'Debe tener la colección razonesRechazo');
+  assert.ok(Array.isArray(colecciones.accionistas), 'Debe tener la colección accionistas de la Fase 2');
+
+  assert.strictEqual(colecciones.accionistas.length, 2);
+  assert.strictEqual(colecciones.accionistas[0].nombre, 'Accionista A');
+  assert.strictEqual(colecciones.accionistas[0].acciones, '150.000');
+  assert.strictEqual(colecciones.accionistas[0].participacion, '75');
+});
+
+test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', () => {
+  const estudio = {
+    ent: 'END GAME COLOMBIA S.A.S',
+    nit: '901.337.576-6',
+    anio: '2024',
+    vinc: 'END GAME INTERACTIVE INC',
+    vinc_id: '604477955',
+    pais_vinc: 'ESTADOS UNIDOS',
+    vinc_tipo: 'Otros servicios (07)',
+    monto_operacion: 3435357400,
+    pli: 'MO',
+    metodo: 'TU',
+    egreso: false,
+    t_s: 100000000,
+    t_c: 60000000,
+    t_op: 10000000,
+    t_act_tot: 100000000,
+    t_cash: 5000000,
+    accionistas: [
+      { nombre: 'Accionista Principal', pais: 'ESTADOS UNIDOS', acciones: 200000, valor_capital: 200000000, participacion_pct: 100 }
+    ],
+    embudoSeleccion: {
+      evaluadas: 442,
+      seleccionadas: 2,
+      porMotivo: {
+        rigorFuncional: 327,
+        holding: 36,
+        sinDescripcion: 66
+      }
+    },
+    comparables: [
+      { name: 'AKATSUKI INC.', amb: 'Int', s: 1000, c: 600, op: 100 },
+      { name: 'COLOPL, INC.', amb: 'Int', s: 1000, c: 700, op: 200 }
+    ]
+  };
+
+  const xmlOriginal = `
+    <w:p><w:t>Tabla 1. Operaciones de Ingreso</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 1</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 2. Operación analizar</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 2</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 3</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 6</w:t></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:t>Tabla 10. Activos a 31 de diciembre</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>Old Table 10</w:t></w:p></w:tc></w:tr></w:tbl>
+  `;
+
+  const xmlActualizado = actualizarTablasOperacionesOoxml(xmlOriginal, estudio);
+
+  assert.ok(xmlActualizado.includes('Tabla 1. Operaciones de Ingreso'), 'No se reemplazó la Tabla 1');
+  assert.ok(xmlActualizado.includes('Otros servicios (07)'), 'Falta el concepto en la Tabla 1');
+  assert.ok(xmlActualizado.includes('3.435.357.400'), 'Falta el monto formateado en la Tabla 1');
+
+  assert.ok(xmlActualizado.includes('Tabla 2. Operación analizar'), 'No se reemplazó la Tabla 2');
+  assert.ok(xmlActualizado.includes('Ingreso (07)'), 'Falta el tipo de operación en la Tabla 2');
+  assert.ok(xmlActualizado.includes('Otros servicios'), 'Falta la descripción en la Tabla 2');
+
+  /* «Tabla 3. Transacciones», con espacio tras el punto: el título de todas las tablas
+     lo compone ahora un solo helper a partir del número que traía la plantilla, así que
+     dejan de convivir dos formatos. */
+  assert.ok(xmlActualizado.includes('Tabla 3. Transacciones Inter compañía'), 'No se reemplazó la Tabla 3');
+  assert.ok(xmlActualizado.includes('604477955'), 'Falta la identificación fiscal en la Tabla 3');
+
+  assert.ok(xmlActualizado.includes('Tabla 6. Composición accionaria'), 'No se reemplazó la Tabla 6');
+  assert.ok(xmlActualizado.includes('Accionista Principal'), 'Falta el nombre de accionista en la Tabla 6');
+  assert.ok(xmlActualizado.includes('200.000'), 'Falta el número de acciones formateado en la Tabla 6');
+
+  assert.ok(xmlActualizado.includes('Tabla 10. Activos a 31 de diciembre de 2024'), 'No se reemplazó la Tabla 10');
+  assert.ok(xmlActualizado.includes('5.000.000'), 'Falta el valor del efectivo formateado en la Tabla 10');
+  assert.ok(xmlActualizado.includes('5.00%'), 'Falta el análisis vertical de efectivo en la Tabla 10');
+});
+
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Localización de tablas por nombre.
+
+   La numeración de la plantilla no es fiable —cambia de un informe a otro— y el
+   texto de un título viene partido en varios runs. Estos tests fijan las dos cosas
+   que hacen que la tabla se encuentre igual.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+const conTabla = (parrafoXml) =>
+  `${parrafoXml}<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>`;
+
+test('textoPlanoOoxml une los runs en que Word parte una frase', () => {
+  /* Word corta por rsid, por el corrector o por un cambio de formato; el título
+     completo no aparece contiguo en el XML aunque se lea entero en pantalla. */
+  const xml = '<w:p><w:r><w:t>Tabla 1</w:t></w:r><w:r><w:t>7. Muestra Com</w:t></w:r>'
+    + '<w:r><w:t xml:space="preserve">pañías comparables</w:t></w:r></w:p>';
+  assert.strictEqual(textoPlanoOoxml(xml), 'Tabla 17. Muestra Compañías comparables');
+});
+
+test('textoPlanoOoxml deshace las entidades y el espacio duro', () => {
+  const xml = '<w:p><w:t>Ingresos&#160;y&amp;gastos</w:t></w:p>';
+  assert.strictEqual(textoPlanoOoxml(xml), 'Ingresos y&gastos');
+});
+
+test('claveTitulo ignora el número, las tildes y las mayúsculas', () => {
+  const esperada = 'muestra companias comparables';
+  ['Tabla 17. Muestra Compañías comparables',
+    'TABLA 3. MUESTRA COMPAÑIAS COMPARABLES',
+    'Tabla N° 21 – Muestra compañías comparables',
+    'Muestra Compañías Comparables',
+  ].forEach((t) => assert.strictEqual(claveTitulo(t), esperada, t));
+});
+
+test('claveTitulo solo descarta el prefijo cuando trae número', () => {
+  /* «Tabla de rangos» es el NOMBRE de una tabla del informe, no un prefijo numerado.
+     Quitarle la palabra «Tabla» dejaba la clave en «de rangos», que no es comparable con
+     nada de forma exacta y solo funcionaba por inclusión. */
+  assert.strictEqual(claveTitulo('Tabla de rangos'), 'tabla de rangos');
+  assert.strictEqual(claveTitulo('Tabla 20. Tabla de rangos'), 'tabla de rangos');
+});
+
+test('numeroDeTabla lee el número cuando está y devuelve null cuando no', () => {
+  assert.strictEqual(numeroDeTabla('Tabla 17. Muestra'), 17);
+  assert.strictEqual(numeroDeTabla('Tabla N° 4 – Método'), 4);
+  assert.strictEqual(numeroDeTabla('Muestra Compañías comparables'), null);
+});
+
+test('la tabla se encuentra aunque la plantilla la renumere', () => {
+  /* El mismo nombre con tres numeraciones distintas: es el caso que rompía el
+     patrón anterior, que exigía «Tabla 17» literal. */
+  ['Tabla 17.', 'Tabla 21.', 'Tabla 9.', ''].forEach((prefijo) => {
+    const xml = conTabla(`<w:p><w:t>${prefijo} Muestra Compañías comparables</w:t></w:p>`);
+    const b = localizarBloqueTabla(xml, 'Muestra Compañías comparables', { numeros: [17] });
+    assert.ok(b, `no la encontró con «${prefijo || 'sin número'}»`);
+    assert.strictEqual(b.inicio, 0);
+    assert.ok(xml.slice(b.fin) === '', 'el bloque debe llegar hasta el cierre de la tabla');
+  });
+});
+
+test('la tabla se encuentra aunque el título venga partido en runs', () => {
+  const xml = conTabla('<w:p><w:r><w:t>Tabla 1</w:t></w:r><w:r><w:t>0. Activos a 31 de dic</w:t></w:r>'
+    + '<w:r><w:t>iembre</w:t></w:r></w:p>');
+  const b = localizarBloqueTabla(xml, 'Activos a 31 de diciembre');
+  assert.ok(b, 'el título partido debe localizarse igual');
+  assert.strictEqual(b.numero, 10, 'y conserva el número que traía la plantilla');
+});
+
+test('el número desempata dos tablas con el mismo nombre', () => {
+  const xml = conTabla('<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>')
+    + conTabla('<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>');
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { numeros: [18] }).numero, 18);
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { numeros: [5] }).numero, 5);
+  /* Y si la plantilla renumeró, el nombre sigue mandando en vez de no encontrar nada. */
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { numeros: [99] }).numero, 5);
+  assert.strictEqual(localizarBloqueTabla(xml, 'Rango Intercuartil', { ocurrencia: 1 }).numero, 18);
+});
+
+test('el bloque cierra en la tabla que corresponde, no en una anidada', () => {
+  /* Word admite tablas dentro de una celda. Parar en el primer </w:tbl> partía el
+     bloque por la mitad y dejaba medio esqueleto suelto en el documento. */
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:t>interna</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '</w:tc></w:tr></w:tbl><w:p><w:t>siguiente</w:t></w:p>';
+  const b = localizarBloqueTabla(xml, 'Composición accionaria');
+  assert.ok(b);
+  assert.ok(xml.slice(b.inicio, b.fin).endsWith('</w:tbl></w:tc></w:tr></w:tbl>'),
+    'debe abarcar la tabla externa completa');
+  assert.ok(xml.slice(b.fin).startsWith('<w:p>'), 'y no llevarse el párrafo siguiente');
+});
+
+test('la tabla se encuentra cuando su título es la primera fila, y no un párrafo aparte', () => {
+  /* Es como la plantilla de End Game trae la «Tabla 20. Tabla de rangos» del final: el
+     título no precede a la tabla, vive dentro de su primera fila. Con el localizador que
+     exigía «párrafo de título + <w:tbl>» esa tabla era inalcanzable y se radicaba con los
+     percentiles del informe anterior. Verificado contra su word/document.xml. */
+  const xml = '<w:p><w:t>texto previo</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>Percentil 25</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:p><w:t>siguiente</w:t></w:p>';
+  const b = localizarBloqueTabla(xml, 'Tabla de rangos');
+  assert.ok(b, 'debe encontrarla con el título embebido en la primera fila');
+  assert.strictEqual(b.numero, 20, 'y conservar el número que traía la plantilla');
+  assert.ok(xml.slice(b.inicio).startsWith('<w:tbl>'), 'el bloque empieza en la tabla');
+  assert.ok(xml.slice(b.fin).startsWith('<w:p><w:t>siguiente'),
+    'y termina al cerrar la tabla, sin llevarse lo que sigue');
+});
+
+test('el rótulo embebido exige el nombre exacto y no una celda que lo contenga', () => {
+  /* La plantilla trae una tabla de definiciones cuya primera fila es «MO | Margen
+     operacional de utilidad o rentabilidad operacional». Si al rótulo embebido le bastara
+     con contener el nombre, esa tabla se haría pasar por la «Tabla 19. Margen Operacional
+     Compañías Comparables» y la sustitución borraría las definiciones del método. */
+  const xml = '<w:tbl><w:tr><w:tc><w:p><w:t>MO</w:t></w:p></w:tc>'
+    + '<w:tc><w:p><w:t>Margen operacional de utilidad o rentabilidad operacional</w:t></w:p>'
+    + '</w:tc></w:tr></w:tbl>';
+  assert.strictEqual(localizarBloqueTabla(xml, 'Margen Operacional'), null);
+});
+
+/* Prosa real de la plantilla de End Game: el párrafo va seguido de la tabla de definiciones
+   del método TU, 79 000 caracteres antes del rótulo verdadero de la tabla de márgenes. */
+const PROSA_METODO = '<w:p><w:t>Para el análisis del método TU se consideró que el indicador '
+  + 'financiero de rentabilidad más apropiado es el Margen Operacional (MO).</w:t></w:p>';
+
+test('la tabla de márgenes se localiza por su nombre, sea cual sea el prefijo del rótulo', () => {
+  /* El nombre de la tabla es lo único estable: el prefijo se renumera al reordenar el informe y
+     hay plantillas que lo rotulan sin número. La clave corta «Margen Operacional», en cambio,
+     casa por inclusión con la prosa del método —que también va seguida de una tabla— y esa
+     prosa está antes en el documento, así que gana por posición en cuanto el número no
+     desempata. Verificado contra el word/document.xml de End Game. */
+  const completo = 'Margen Operacional Compañías Comparables';
+  const conRotulo = (rotulo) => conTabla(PROSA_METODO)
+    + `<w:p><w:t>${rotulo}</w:t></w:p>`
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  for (const rotulo of [
+    'Tabla 19. Margen Operacional Compañías Comparables',
+    'Tabla 21. Margen Operacional Compañías Comparables',
+    'Margen Operacional Compañías Comparables',
+    'TABLA N° 7: MARGEN OPERACIONAL COMPAÑÍAS COMPARABLES',
+  ]) {
+    const xml = conRotulo(rotulo);
+    const b = localizarBloqueTabla(xml, completo);
+    assert.ok(b, `debe encontrarla con el rótulo «${rotulo}»`);
+    assert.strictEqual(xml.slice(b.inicio, b.fin).includes('márgenes viejos'), true,
+      `el bloque de «${rotulo}» debe abarcar la tabla de márgenes y no otra`);
+    /* Y el nombre corto se lleva la prosa en su lugar, que es el fallo que esto cierra. */
+    assert.ok(localizarBloqueTabla(xml, 'Margen Operacional', { numeros: [19] })
+      .titulo.startsWith('Para el análisis') || /Tabla 19\./.test(rotulo),
+      `con «${rotulo}» el nombre corto se queda con la prosa`);
+  }
+});
+
+test('un título dentro de una fila que no es la primera no se toma por título de la tabla', () => {
+  /* Si valiera cualquier fila, una celda que mencione el nombre —el cuerpo de la matriz de
+     rechazo lo hace— secuestraría la sustitución de la tabla entera. */
+  const xml = '<w:tbl><w:tr><w:tc><w:p><w:t>cabecera</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>Tabla de rangos</w:t></w:p></w:tc></w:tr></w:tbl>';
+  assert.strictEqual(localizarBloqueTabla(xml, 'Tabla de rangos'), null);
+});
+
+test('un título sin tabla detrás no se toma por tabla', () => {
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p><w:p><w:t>texto suelto</w:t></w:p>';
+  assert.strictEqual(localizarBloqueTabla(xml, 'Composición accionaria'), null);
+});
+
+test('los párrafos vacíos entre el título y la tabla no rompen la búsqueda', () => {
+  const xml = '<w:p><w:t>Tabla 9. Criterios de vinculación</w:t></w:p><w:p/><w:p><w:t></w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  assert.ok(localizarBloqueTabla(xml, 'Criterios de vinculación'));
+});
+
+test('las tablas que la plantilla no trae se reportan en vez de fallar en silencio', () => {
+  /* Sin este aviso, una tabla que no se encuentra deja en el informe los datos del
+     cliente anterior y nadie se entera hasta que el documento ya está radicado. */
+  const avisos = [];
+  actualizarTablasOperacionesOoxml(
+    conTabla('<w:p><w:t>Tabla 2. Operación analizar</w:t></w:p>'),
+    { anio: 2025, ent: 'ACME', vinc_tipo: 'Otros servicios (07)' },
+    avisos,
+  );
+  assert.ok(avisos.length > 0, 'debería avisar de las que faltan');
+  assert.ok(!avisos.includes('Operación analizar'), 'y no de la que sí estaba');
+  assert.ok(avisos.includes('Muestra Compañías comparables'));
+});
+
+test('renderizarDocx publica qué tablas no trae la plantilla', async () => {
+  /* `sustituidorDeTablas` sabe anotar las que faltan, pero `renderizarDocx` llamaba a los
+     dos actualizadores sin pasarles el arreglo: el aviso se calculaba y se tiraba. Una tabla
+     no sustituida se radica con los datos del cliente anterior, que es justo el fallo que
+     ese mecanismo existe para evitar. */
+  const binario = await plantilla([parrafo('Informe de {ent}')]);
+  const { avisosTablas } = renderizarDocx(binario, ESTUDIO);
+  assert.ok(Array.isArray(avisosTablas), 'debe devolver la lista de tablas no encontradas');
+  assert.ok(avisosTablas.includes('Muestra Compañías comparables'),
+    'una plantilla sin tablas debe reportarlas todas');
+  assert.ok(avisosTablas.includes('PIB Mundial'), 'también las de macroeconomía');
+});
+
+test('rellenarDocx propaga los avisos de tablas hasta quien genera el informe', async () => {
+  const binario = await plantilla([parrafo('Informe de {ent}')]);
+  const { avisosTablas } = rellenarDocx({ binario, estudio: ESTUDIO, tipoSalida: 'nodebuffer' });
+  assert.ok(avisosTablas && avisosTablas.length > 0, 'el aviso tiene que llegar a la UI');
+});
+
+test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
+  /* La plantilla trae el rango vertical dos veces: la «Tabla 18. Rango Intercuartil» de
+     los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones, esta última con
+     el rótulo dentro de su primera fila. El código elegía una de las dos con un if/else,
+     así que la otra se radicaba con los percentiles del informe anterior. */
+  const xml = '<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>horizontal vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vertical vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>conclusiones vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' });
+  assert.ok(!salida.includes('vertical vieja'), 'la Tabla 18 debe actualizarse');
+  assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
+  assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
+    'deben quedar las dos tablas verticales regeneradas');
+});
+
+test('la tabla de márgenes se actualiza con cualquier prefijo, sin tocar las definiciones', () => {
+  /* El caso que se reportó el 2026-08-11: la tabla del informe salía con los márgenes del
+     cliente anterior. Con la clave corta, la prosa del método ganaba por posición y se llevaba
+     la sustitución, dejando además destruida la tabla de definiciones: dos tablas mal. */
+  for (const rotulo of [
+    'Tabla 21. Margen Operacional Compañías Comparables',
+    'Margen Operacional Compañías Comparables',
+  ]) {
+    const xml = conTabla(PROSA_METODO)
+      + `<w:p><w:t>${rotulo}</w:t></w:p>`
+      + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+    const avisos = [];
+    const salida = actualizarTablasOperacionesOoxml(xml, {
+      anio: 2025, ent: 'ACME', pli: 'MO',
+      comparables: [{ name: 'Alfa SA', s: 1000, c: 700, op: 200 }],
+    }, avisos);
+
+    assert.ok(!salida.includes('márgenes viejos'), `con «${rotulo}» debe actualizarse`);
+    assert.ok(salida.includes('vieja'), 'y la tabla de definiciones del método quedar intacta');
+    assert.match(salida, /MO NO AJUSTADO/, 'la tabla regenerada es la de márgenes');
+    assert.ok(salida.includes('Alfa SA'), 'con los comparables del estudio');
+    assert.ok(!avisos.includes('Margen Operacional Compañías Comparables'),
+      'no debe reportarse como ausente una tabla que sí estaba');
+  }
+});
+
+test('sin el rótulo de la tabla de márgenes se avisa, en vez de sustituir la prosa del método', () => {
+  /* Antes el nombre corto encontraba la prosa y sustituía ahí: se perdían las definiciones del
+     método y los márgenes seguían siendo los del informe anterior, en silencio. Avisar deja el
+     documento intacto y el panel lo dice antes de radicar. */
+  const xml = conTabla(PROSA_METODO);
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+
+  assert.ok(salida.includes('vieja'), 'la tabla que sigue a la prosa no se toca');
+  assert.ok(!/MO NO AJUSTADO/.test(salida), 'y no se emite la tabla de márgenes donde no va');
+  assert.ok(avisos.includes('Margen Operacional Compañías Comparables'),
+    'la ausencia tiene que llegar al aviso');
+});
+
+test('una tabla macro se encuentra con el título partido en runs', () => {
+  /* Estas ocho no llevan número, así que la numeración nunca fue su problema; lo que
+     sí las alcanzaba es que el título tuviera que estar contiguo en el XML. */
+  const xml = '<w:p><w:r><w:t>Crecimiento del PIB Mun</w:t></w:r><w:r><w:t>dial</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025);
+  assert.ok(!salida.includes('vieja'), 'la tabla partida en runs debe sustituirse igual');
+  assert.match(salida, /Crecimiento Mundial/);
+});
+
+test('una tabla macro se encuentra sin tildes y en mayúsculas', () => {
+  const xml = '<w:p><w:t>TASAS DE INFLACION GLOBAL</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025);
+  assert.ok(!salida.includes('vieja'));
+});
+
+test('las tablas macro ausentes también se reportan', () => {
+  const avisos = [];
+  actualizarTablasMacroOoxml(
+    '<w:p><w:t>Crecimiento del PIB Mundial</w:t></w:p><w:tbl><w:tr><w:tc><w:p><w:t>v</w:t></w:p></w:tc></w:tr></w:tbl>',
+    null, 2025, avisos,
+  );
+  assert.strictEqual(avisos.length, 7, 'siete de las ocho no están en esta plantilla');
+  assert.ok(!avisos.includes('PIB Mundial'));
+  assert.ok(avisos.includes('Desempleo en Colombia'));
+});
+
+test('la Tabla 4 declara el código de operación y no lo inventa cuando no se puede resolver', async () => {
+  /* La Tabla 4 («Método de Precios de Transferencia Aplicable») publica el código de
+     operación en su propia columna. Compartía el helper que devolvía '07' fijo, así que un
+     tipo en texto libre —«VENTA SERVICIOS», lo que trae el Excel de 2025— salía declarado
+     ante la DIAN como el 07 de END GAME 2024. */
+  const xml = '<w:p><w:t>Tabla 4. Método de Precios de Transferencia Aplicable</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old Table 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const conCodigo = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, vinc_tipo: 'Otros servicios (07)', metodo: 'TU', pli: 'MO',
+  });
+  assert.ok(conCodigo.includes('07'), 'el código escrito en el tipo tiene que publicarse');
+  assert.ok(conCodigo.includes('Otros servicios'), 'y la descripción sin el código');
+
+  const sinCodigo = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, vinc_tipo: 'VENTA SERVICIOS', metodo: 'TU', pli: 'MO',
+  });
+  assert.ok(!sinCodigo.includes('Old Table 4'), 'la Tabla 4 tiene que haberse reemplazado');
+  assert.ok(sinCodigo.includes('VENTA SERVICIOS'), 'la descripción es la del estudio');
+  assert.ok(!sinCodigo.includes('>07<'), 'no debe inventar el código 07');
 });

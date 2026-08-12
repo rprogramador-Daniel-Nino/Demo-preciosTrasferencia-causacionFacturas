@@ -17,6 +17,11 @@ Devuelve ÚNICAMENTE un JSON estricto sin marcas markdown con esta estructura:
 {
   "actividad_especifica": "Descripción detallada y completa de la actividad económica real, funciones (compras, logística, ventas, marketing), activos empleados y riesgos asumidos, así como la caracterización de los productos o servicios transaccionados de la compañía examinada.",
   "anio_gravable": 2024,
+  "vinculado": {
+    "razon_social": "Razón social del vinculado económico del exterior con el que se hizo la operación analizada; cadena vacía si no aparece",
+    "identificacion": "Número de identificación fiscal (Tax ID) de ese vinculado, tal como aparece en el informe, sin puntos ni guiones decorativos; cadena vacía si no aparece",
+    "pais": "País de domicilio del vinculado; cadena vacía si no aparece"
+  },
   "comparables": [
     {
       "name": "Nombre de la empresa comparable, tal como aparece en el informe",
@@ -27,6 +32,11 @@ Devuelve ÚNICAMENTE un JSON estricto sin marcas markdown con esta estructura:
     }
   ]
 }
+
+El bloque "vinculado" importa tanto como las comparables: sirve para detectar que la
+identificación fiscal de la contraparte cambió respecto al año anterior sin explicación, que es
+un hallazgo típico de auditoría. Si el informe trae varias contrapartes, devuelve la de la
+operación que el informe analiza. Si no encuentras el dato, deja cadena vacía; no lo deduzcas.
 
 Reglas para los campos de las comparables:
 - "name" es obligatorio. Si no puedes leer la razón social, omite esa comparable entera.
@@ -95,6 +105,7 @@ export async function parsePriorStudyFile(file) {
       return {
         actividad_especifica: parsed.actividad_especifica || '',
         anio_gravable: parsed.anio_gravable || null,
+        vinculado: parsed.vinculado || null,
         comparables: parsed.comparables || [],
         filename: file.name
       };
@@ -132,6 +143,7 @@ export async function parsePriorStudyFile(file) {
           resolve({
             actividad_especifica: parsed.actividad_especifica || '',
             anio_gravable: parsed.anio_gravable || null,
+            vinculado: parsed.vinculado || null,
             comparables: parsed.comparables || [],
             filename: file.name
           });

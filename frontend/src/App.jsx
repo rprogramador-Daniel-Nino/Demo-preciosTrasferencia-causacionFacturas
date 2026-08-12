@@ -240,7 +240,7 @@ export default function App() {
       const crudo = localStorage.getItem(claveIaMatch(id));
       const iaMatch = crudo ? JSON.parse(crudo) : null;
       /* Y las páginas del ANEXO A desde IndexedDB: sin esto el informe saldría sin los
-         estados financieros adjuntos, que es lo que consume exactTemplateMapper. */
+         estados financieros adjuntos, que es lo que inserta docxRelleno.js. */
       let eeffImages = [];
       try {
         eeffImages = await leerAnexoEeff(id);
@@ -355,7 +355,12 @@ export default function App() {
     ent: '', nit: '', anio: 2025,
     ciiu: '', objeto: '', representante: '', vinc: '', pais_vinc: '', vinc_id: '',
     vinc_tipo: '', t_s: '', t_c: '', t_op: '', t_ar: '', t_inv: '', t_ap: '',
-    pli: 'MO', useadj: false, prime: '', comparables: [], cmode: 'all',
+    /* `prime` arranca en 7,37: el promedio anual 2025 de la Bank Prime Loan Rate
+       (Reserva Federal, H.15 · serie FRED RIFSPBLPNA). Es editable como cualquier otro
+       campo, y hay que cambiarlo si el año gravable no es 2025. Antes arrancaba vacío,
+       y un estudio con el ajuste activado y la tasa sin diligenciar producía un ajuste
+       idénticamente cero sin avisar de nada. */
+    pli: 'MO', useadj: false, prime: '7.37', comparables: [], cmode: 'all',
   });
 
   const crearEstudio = async (datos) => {

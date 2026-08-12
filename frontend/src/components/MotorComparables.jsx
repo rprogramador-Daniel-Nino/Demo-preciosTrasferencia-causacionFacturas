@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
 } from 'lucide-react';
-import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
+import { num, pliOf, ratios, pctf, adjustInfo } from '../utils/calculations';
+import { analizarRango } from '../services/rangoIntercuartil';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso } from '../services/comparablesEngine';
 import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
+import {
+  separarPorSuficiencia, partidasFaltantes, motivoSinInformacionFinanciera, retirarFilas,
+} from '../services/eeffSuficiencia';
+import { matrizDeRechazo } from '../services/anexoCHtml';
 import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
@@ -82,8 +87,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      intercuartil y al informe. Un hueco se ve; una muestra plausible y ajena, no. */
   const [comparables, setComparables] = useState(study.comparables || []);
   /* Imágenes del EEFF de cada comparable para el ANEXO B, por nameKey — ver
-     plantillaStore.js (guardarAnexoBImagenes) y exactTemplateMapper.js
-     (generarBloqueComparableAnexoB). No es parte de `comparables`: pesa demasiado para
+     plantillaStore.js (guardarAnexoBImagenes) y docxRelleno.js
+     (insertarImagenesAnexoB). No es parte de `comparables`: pesa demasiado para
      ir dentro de cada fila del estudio (ver CAMPOS_SOLO_LOCALES). */
   const [eeffImagenesComparables, setEeffImagenesComparables] = useState(study.eeffImagenesComparables || {});
 
@@ -156,6 +161,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       comparables,
       cmode,
       criteriosScreening,
+      /* La matriz del ANEXO C: qué compañía quedó en cada motivo, solo los nombres. El
+         generador del informe no puede calcularla —necesita el universo enriquecido, y
+         `universo` no viaja con el estudio—, así que se guarda ya agrupada. Va en
+         CAMPOS_SOLO_LOCALES: son miles de nombres y no caben en el documento de Firestore. */
+      matrizRechazo,
       /* Conteos de la última selección: alimentan la tabla 14 del informe. */
       embudoSeleccion: selectionFunnel,
       /* el veredicto de la curación es la constancia de por qué se aceptó o rechazó
@@ -166,7 +176,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       iaMatch,
       eeffImagenesComparables,
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables, matrizRechazo]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -184,6 +194,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           fuente: result.filename,
           actividad: result.actividad_especifica,
           anio: result.anio_gravable || null,
+          /* La identificación del vinculado del informe anterior es lo que permite
+             detectar que el Tax ID de la contraparte cambió de un año a otro sin
+             explicación. Sin guardarla aquí, ese cotejo no se puede hacer. */
+          vinculado: result.vinculado || null,
           comparables: result.comparables || []
         };
         setEstudioAnteriorInfo(info);
@@ -618,6 +632,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       ar: datos.cuentas_por_cobrar || copia[indice].ar,
       inv: datos.inventarios || copia[indice].inv,
       ap: datos.cuentas_por_pagar || copia[indice].ap,
+      /* El parser ya leía PP&E —está en el esquema de los dos prompts, el individual
+         y el de lote—, pero no se volcaba en la fila, así que llegaba en cero al
+         ajuste y al Excel de soporte por más que el documento lo trajera. */
+      ppe: datos.propiedad_planta_equipo || copia[indice].ppe,
       eeffDatos: datos,
       eeffVerificado: verificacion.esValido,
       eeffHallazgos: verificacion.hallazgos,
@@ -628,6 +646,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       eeffPorConfirmar: cruce ? !esCruceFirme(cruce) : false,
     };
     return copia;
+  };
+
+  /* El embudo tiene que seguir cuadrando: la tabla de razones de rechazo del informe
+     comprueba que rechazos + aceptadas dé el universo evaluado. Bajar `seleccionadas`
+     sin anotar las retiradas en ningún sitio haría fallar esa comprobación, así que
+     van a `sinEeff`, que `filasRazonesRechazo` suma a las diferencias funcionales
+     —el mismo destino que la reserva, y por la misma razón—.
+
+     Si no hay embudo (estudio con comparables cargadas a mano, sin correr el motor del
+     paso 3) no hay nada que ajustar. */
+  const anotarRetiradasEnEmbudo = (cuantas) => {
+    if (!cuantas) return;
+    setSelectionFunnel((prev) => (prev ? {
+      ...prev,
+      seleccionadas: Math.max(0, (Number(prev.seleccionadas) || 0) - cuantas),
+      sinEeff: (Number(prev.sinEeff) || 0) + cuantas,
+    } : prev));
   };
 
   /* Guarda las páginas rasterizadas de esta comparable para el ANEXO B. Se combina con
@@ -782,6 +817,27 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         return;
       }
 
+      /* Mismo criterio que en la carga en lote, y por la misma razón: un documento sin
+         cifras con las que calcular el margen no sostiene a la comparable, y aplicarlo
+         dejaría en la fila las de Capital IQ como si este documento las respaldara. */
+      const faltantes = partidasFaltantes(result.data);
+      if (faltantes.length) {
+        const nombre = (destino && destino.name) || (result.data && result.data.nombre);
+        const { filas: filasFinales } = retirarFilas(comparables, new Set([compIndex]));
+        setComparables(filasFinales);
+        anotarRetiradasEnEmbudo(1);
+        setResultadoCarga({
+          aplicadas: [],
+          rechazadas: [],
+          retiradas: [{
+            archivo: file.name,
+            comparable: nombre || 'la comparable',
+            motivo: motivoSinInformacionFinanciera(nombre, faltantes, file.name),
+          }],
+        });
+        return;
+      }
+
       const cruceEfectivo = traeNombre
         ? cruce
         : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
@@ -882,17 +938,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setCargaEeff({ etapa: 'Cruzando ' + entradas.length + ' empresa(s) con las comparables…', hechas: lista.length, total: lista.length });
       const { aplicadas, rechazadas } = repartir(entradas, comparables);
 
+      /* Las que cruzaron pero cuyo documento no trae con qué calcular el margen salen de
+         la muestra en vez de aplicarse. Volcarlas dejaría en la fila las cifras que ya
+         traía de Capital IQ como si este documento las respaldara, y la comparable
+         seguiría en el rango sin soporte. */
+      const { conCifras, sinCifras } = separarPorSuficiencia(aplicadas);
+
       /* Se acumulan todas las filas antes de un único setComparables: un set por
          empresa se sobrescribiría entre iteraciones y solo entraría la última. */
       let filas = comparables;
-      aplicadas.forEach((a) => {
+      conCifras.forEach((a) => {
         filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
       });
 
       /* Imágenes por empresa, recortadas del PDF de lote al que pertenecen. Se hace
          después de aplicar las cifras: la clave (nameKey) sale del nombre ya asentado
          en la fila, que puede diferir en mayúsculas/acentos del que trajo el documento. */
-      aplicadas.forEach((a) => {
+      conCifras.forEach((a) => {
         const clave = nameKey(filas[a.indice].name || '');
         const imagenesArchivo = a._imagenesDelArchivo || [];
         if (!imagenesArchivo.length) {
@@ -906,14 +968,37 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         }
       });
 
-      if (aplicadas.length) {
-        setComparables(filas);
-        await publicarEeff(filas, aplicadas.map(a => a.indice));
-        redactarDescripcionesDeFilas(filas, aplicadas.map((a) => a.indice)).catch((err) =>
+      /* El retiro va después de aplicar y de recortar las imágenes, que trabajan sobre
+         los índices originales, y antes de publicar y de pedir las descripciones, que
+         reciben ya los nuevos. */
+      const retiradas = sinCifras.map((a) => ({
+        archivo: a.archivo,
+        comparable: (filas[a.indice] && filas[a.indice].name)
+          || (a.datos && a.datos.nombre) || 'la comparable',
+        motivo: motivoSinInformacionFinanciera(
+          (filas[a.indice] && filas[a.indice].name) || (a.datos && a.datos.nombre),
+          a.faltantes, a.archivo,
+        ),
+      }));
+      const aRetirar = new Set(sinCifras.map((a) => a.indice));
+      const { filas: filasFinales, nuevoIndice } = retirarFilas(filas, aRetirar);
+      const indicesAplicados = conCifras
+        .map((a) => (nuevoIndice ? nuevoIndice.get(a.indice) : a.indice))
+        .filter((i) => i != null);
+
+      if (conCifras.length || aRetirar.size) setComparables(filasFinales);
+      anotarRetiradasEnEmbudo(aRetirar.size);
+      if (indicesAplicados.length) {
+        await publicarEeff(filasFinales, indicesAplicados);
+        redactarDescripcionesDeFilas(filasFinales, indicesAplicados).catch((err) =>
           console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
         );
       }
-      setResultadoCarga({ aplicadas, rechazadas: [...rechazadas, ...fallosLectura] });
+      setResultadoCarga({
+        aplicadas: conCifras,
+        rechazadas: [...rechazadas, ...fallosLectura],
+        retiradas,
+      });
     } finally {
       setUploadingEEFF(false);
       setCargaEeff(null);
@@ -928,7 +1013,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   const addComparable = () => {
     setComparables([...comparables, {
-      name: '', amb: 'Int', s: '', c: '', op: '', ar: '', inv: '', ap: '', sic: '', id: Date.now().toString()
+      name: '', amb: 'Int', s: '', c: '', op: '', ar: '', inv: '', ap: '', ppe: '', sic: '', id: Date.now().toString()
     }]);
   };
 
@@ -953,40 +1038,39 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     op: tOpNum !== null ? tOpNum - segExcluido : null,
     ar: num(study.t_ar),
     inv: num(study.t_inv),
-    ap: num(study.t_ap)
+    ap: num(study.t_ap),
+    /* PP&E faltaba aquí, y este `T` es el que viaja al Excel de soporte: el libro
+       salía con la propiedad, planta y equipo de la parte examinada en cero aunque
+       el estudio la tuviera cargada. */
+    ppe: num(study.t_ppe),
   };
 
   const tPLI = pliOf(T, kind);
   const tR = ratios(T);
 
-  const calculatedRows = comparables.map(c => {
-    const rawVal = {
-      s: num(c.s),
-      c: num(c.c),
-      op: num(c.op),
-      ar: num(c.ar),
-      inv: num(c.inv),
-      ap: num(c.ap)
-    };
+  /* El rango lo calcula `analizarRango`, el mismo servicio que alimenta el informe
+     Word y el Excel de soporte. Esta pantalla repetía aquí la fórmula del ajuste, de
+     modo que el tablero, el documento y el libro podían publicar tres rangos
+     distintos sobre las mismas comparables. `comparables` y `cmode` van del estado
+     local y no de `study` porque el efecto que los sincroniza corre después. */
+  const rango = analizarRango({ ...study, comparables, cmode });
 
-    let pliVal = pliOf(rawVal, kind);
-    let adj = 0;
-    const cR = ratios(rawVal);
-
-    if (useAdj && kind !== 'Berry' && tR && cR && tR.apC !== null && cR.apC !== null) {
-      adj = interestRate * ((tR.arS - cR.arS) + (tR.invS - cR.invS) - (tR.apC - cR.apC));
-    }
-
-    const adjustedPli = pliVal === null ? null : pliVal + adj;
-    const isIncluded = cmode === 'all' ? true : (cmode === 'intl' ? c.amb === 'Int' : c.amb === 'Nac');
-
+  const calculatedRows = comparables.map((c, idx) => {
+    const fila = rango.filas[idx] || {};
+    const pliVal = fila.noAjustado ?? null;
+    const adjustedPli = fila.ajustado ?? null;
     return {
       ...c,
       pli: pliVal,
-      adj,
-      ratiosComp: cR,
+      /* El ajuste es la diferencia entre las dos columnas, no un tercer cálculo:
+         así lo que se muestra cuadra siempre con lo que se sumó de verdad. */
+      adj: pliVal === null || adjustedPli === null ? 0 : adjustedPli - pliVal,
+      ratiosComp: ratios({
+        s: num(c.s), c: num(c.c), op: num(c.op),
+        ar: num(c.ar), inv: num(c.inv), ap: num(c.ap),
+      }),
       adjustedPli,
-      isIncluded
+      isIncluded: cmode === 'all' ? true : (cmode === 'intl' ? c.amb === 'Int' : c.amb === 'Nac'),
     };
   });
 
@@ -995,13 +1079,41 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     .map(r => r.adjustedPli)
     .sort((a, b) => a - b);
 
-  const stats = activeSeries.length ? {
-    p25: quart(activeSeries, .25),
-    med: quart(activeSeries, .5),
-    p75: quart(activeSeries, .75)
-  } : null;
+  const stats = rango.stats;
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
+
+  /* Auditoría del motor: el motivo de rechazo y el perfil funcional de cada
+     candidata del universo.
+
+     Vive SOLO en memoria —no se persiste con el estudio, igual que el universo— así
+     que al reabrir un estudio guardado el universo se restauraba desde el archivo de
+     Capital IQ pero los motivos no, y la hoja de trazabilidad salía con las 2.986
+     compañías sin motivo y todos los contadores del embudo en cero: un documento que
+     parece declarar que no se descartó a ninguna.
+
+     `scoreCandidates` es determinista y tiene sus insumos persistidos —universo,
+     configuración, actividad, veredicto de la IA y estudio anterior—, así que se
+     recalcula cuando falta en lugar de emitir una hoja vacía. */
+  const auditoria = useMemo(() => {
+    if (motorAuditoria) return motorAuditoria;
+    if (!Array.isArray(universo) || universo.length === 0) return null;
+    const rehecha = scoreCandidates(
+      universo, engineConfig, actividad,
+      (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
+      { ventasParteExaminada: study.t_s, iaMatch },
+    );
+    return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
+
+  /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
+     —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
+     generador del informe no tiene con qué recalcularla: `universo` no viaja con el estudio.
+     Solo los nombres, que es lo que el anexo publica. */
+  const matrizRechazo = useMemo(() => {
+    if (!Array.isArray(universo) || !universo.length) return null;
+    return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
+  }, [universo, comparables, auditoria]);
 
   /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
      rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de
@@ -1013,18 +1125,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     }
 
     /* El universo es el import crudo: el motivo de rechazo y el perfil funcional los
-       aporta la auditoría de la última corrida del motor (ver `enriquecerUniverso`). */
+       aporta la auditoría del motor (ver `enriquecerUniverso`). */
     const candidatasUniverso = Array.isArray(universo) && universo.length > 0
-      ? enriquecerUniverso(universo, calculatedRows || comparables, motorAuditoria)
+      ? enriquecerUniverso(universo, calculatedRows || comparables, auditoria)
       : null;
 
     const datos = {
-      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate },
+      /* `prime` va en porcentaje, tal como lo escribe el usuario: es lo que espera el
+         generador del libro. `interestRate` es el mismo número ya dividido entre 100,
+         que usa el cálculo de esta pantalla; se conserva porque otros consumidores del
+         payload lo leen, pero el Excel no debe tomarlo de ahí. */
+      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate, prime: study.prime },
       examinada: { T, tPLI, tR },
       rango: { stats, activeCount: activeSeries.length, adjustment },
       filtros: { engineConfig, selectionFunnel },
       comparables: calculatedRows,
-      auditoria: motorAuditoria,
+      auditoria,
       /* Sin `universo` (candidatasUniverso null: estudio con comparables cargadas a mano,
          sin importar el Excel de Capital IQ) se omite `seleccion` para que
          construirLibroSoporte caiga en su propio fallback (comparables + rechazadas +
@@ -1770,7 +1886,38 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 </div>
               ))}
 
-              {!resultadoCarga.aplicadas.length && !resultadoCarga.rechazadas.length && (
+              {/* Comparables retiradas de la muestra porque su EEFF no traía cifras. Es un
+                  estado distinto de «rechazado»: ahí no se aplicó un documento, aquí se
+                  quitó una comparable del estudio, y eso cambia el tamaño de la muestra.
+                  Este aviso vive solo en pantalla: no se escribe en el Excel de soporte
+                  —donde la compañía aparece contada entre las diferencias funcionales— ni
+                  en el informe. */}
+              {(resultadoCarga.retiradas || []).length > 0 && (
+                <div className="rounded-lg px-4 py-3 text-xs border bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900 text-orange-800 dark:text-orange-300">
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <div className="font-semibold">
+                        {resultadoCarga.retiradas.length === 1
+                          ? '1 comparable salió de la muestra por falta de información financiera'
+                          : `${resultadoCarga.retiradas.length} comparables salieron de la muestra por falta de información financiera`}
+                        {selectionFunnel ? ` · la muestra queda en ${selectionFunnel.seleccionadas}` : ''}
+                      </div>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {resultadoCarga.retiradas.map((r, i) => (
+                          <li key={'ret' + i}>
+                            <span className="font-semibold">{r.comparable}</span>
+                            <span className="block leading-relaxed">{r.motivo}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!resultadoCarga.aplicadas.length && !resultadoCarga.rechazadas.length
+                && !(resultadoCarga.retiradas || []).length && (
                 <div className="text-xs text-zinc-500">No se encontró ningún estado financiero en los documentos.</div>
               )}
             </div>
@@ -1914,7 +2061,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
              última corrida del motor, con el motivo de rechazo de cada candidata, y
              es lo que permite que el embudo del Excel refleje lo que el motor
              decidió en vez de contar cero en todos los motivos. */
-          estudio={{ ...study, comparables, cmode, universo, criteriosScreening, motorConfig: engineConfig, auditoria: motorAuditoria }}
+          estudio={{ ...study, comparables, cmode, universo, criteriosScreening, motorConfig: engineConfig, auditoria }}
           alCerrar={() => setMemoriaAbierta(false)}
         />
       )}
@@ -1956,6 +2103,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">CxC</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">Inv.</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">CxP</th>
+                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">PP&amp;E</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[12%]">PLI Ajustado</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[8%]">Acciones</th>
               </tr>
@@ -2047,6 +2195,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                       value={row.ap}
                       placeholder="0"
                       onChange={(e) => handleRowChange(idx, 'ap', e.target.value)}
+                      className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                    />
+                  </td>
+                  <td className="py-2 px-3 text-right">
+                    <input
+                      type="number"
+                      value={row.ppe ?? ''}
+                      placeholder="0"
+                      onChange={(e) => handleRowChange(idx, 'ppe', e.target.value)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>

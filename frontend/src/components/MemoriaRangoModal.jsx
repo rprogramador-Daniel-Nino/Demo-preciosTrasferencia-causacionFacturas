@@ -7,70 +7,7 @@ import {
 } from '../services/memoriaCalculoRango.js';
 import { hojasMemoriaRangoOptimo } from '../services/memoriaCalculoRangoOptimo.js';
 import { enriquecerUniverso } from '../services/comparablesEngine.js';
-import { normalizarEeff } from '../services/eeffParserNormalizador.js';
-
-/**
- * Prepara una copia aislada del estudio para la memoria de cálculo óptima
- * sin tocar ni alterar el objeto 'estudio' original usado por el resto del sistema
- * (previniendo inversiones de signo o cambios de convención en op / EBIT).
- */
-function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
-  if (!estudioOriginal) return {};
-
-  // 1. Clonar profundamente para no mutar las referencias originales
-  const copia = JSON.parse(JSON.stringify(estudioOriginal));
-
-  // 2. Normalizar el contribuyente para la convención del parche (op = gastos operacionales)
-  const cftNormalizadas = normalizarEeff({
-    ingresos_operacionales: copia.t_s,
-    costo_ventas: copia.t_c,
-    utilidad_operacional: copia.t_op, // en el sistema original t_op era utilidad/EBIT
-    gastos_operacionales: copia.t_gastos || copia.t_opex,
-    cuentas_por_cobrar: copia.t_ar,
-    inventarios: copia.t_inv,
-    cuentas_por_pagar: copia.t_ap,
-    propiedad_planta_equipo: copia.t_ppe,
-  });
-
-  if (cftNormalizadas.op !== null && cftNormalizadas.op !== undefined) {
-    copia.t_op = cftNormalizadas.op;
-  } else if (copia.t_s != null && copia.t_c != null && copia.t_op != null) {
-    copia.t_op = Number(copia.t_s) - Number(copia.t_c) - Number(copia.t_op);
-  }
-
-  if (cftNormalizadas.ppe != null) {
-    copia.t_ppe = cftNormalizadas.ppe;
-  }
-
-  // 3. Normalizar comparables si existen
-  if (Array.isArray(copia.comparables)) {
-    copia.comparables = copia.comparables.map((comp) => {
-      const compNorm = normalizarEeff({
-        ingresos_operacionales: comp.s,
-        costo_ventas: comp.c,
-        utilidad_operacional: comp.op, // en sistema original comp.op era EBIT
-        gastos_operacionales: comp.gastos || comp.opex,
-        cuentas_por_cobrar: comp.ar,
-        inventarios: comp.inv,
-        cuentas_por_pagar: comp.ap,
-        propiedad_planta_equipo: comp.ppe || comp.propiedad_planta_equipo,
-      });
-
-      let opex = compNorm.op;
-      if ((opex === null || opex === undefined) && comp.s != null && comp.c != null && comp.op != null) {
-        opex = Number(comp.s) - Number(comp.c) - Number(comp.op);
-      }
-
-      return {
-        ...comp,
-        op: opex !== null && opex !== undefined ? opex : comp.op, // gastos operativos para el parche
-        ppe: compNorm.ppe !== null && compNorm.ppe !== undefined ? compNorm.ppe : comp.ppe,
-      };
-    });
-  }
-
-  return copia;
-}
+import { obtenerEstudioNormalizadoParaParche } from '../services/estudioNormalizado.js';
 
 /* Cómo se llegó al rango intercuartil que muestra la tarjeta del panel: la fórmula del
    indicador, el margen de cada comparable, el ajuste de capital de trabajo y la posición

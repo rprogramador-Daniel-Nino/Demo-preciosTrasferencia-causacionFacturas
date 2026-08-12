@@ -576,6 +576,50 @@ test('las columnas esenciales son las que hacen falta para el rango', () => {
   ['ar', 'inv', 'ap'].forEach(k => assert.strictEqual(COLUMNAS_IQ[k].esencial, false, k + ' no debe ser esencial'));
 });
 
+test('importCapitalIQExcel lee la columna de propiedad, planta y equipo', async () => {
+  /* PP&E no estaba en COLUMNAS_IQ, así que aunque el export de Capital IQ la trajera
+     se descartaba en silencio y el ajuste de PP&E se calculaba contra cero en toda la
+     muestra. Se prueban dos encabezados: el de Capital IQ y uno en español. */
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue [FY 2025]', 'Operating Income [FY 2025]',
+      'Net Property Plant And Equipment [FY 2025]'],
+    ['ACME Services PLC', 1000, 100, 250.5],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+  await conFileReader(buf, async () => {
+    const { rows, meta } = await importCapitalIQExcel({ name: 'ppe.xlsx', size: buf.length });
+    assert.strictEqual(rows[0].ppe, 250.5);
+    assert.ok(meta.reconocidas.some((r) => r.clave === 'ppe'), 'la reporta como columna reconocida');
+  });
+
+  const wbEs = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbEs, XLSX.utils.aoa_to_sheet([
+    ['Compañía', 'Ventas', 'Utilidad operacional', 'Propiedad, planta y equipo'],
+    ['Beta S.A.', 500, 40, 77],
+  ]), 'Screening');
+  const bufEs = XLSX.write(wbEs, { bookType: 'xlsx', type: 'buffer' });
+  await conFileReader(bufEs, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'ppe-es.xlsx', size: bufEs.length });
+    assert.strictEqual(rows[0].ppe, 77);
+  });
+});
+
+test('sin columna de PP&E la comparable la deja en null, no en cero', async () => {
+  /* Cero significaría «la empresa no tiene activo fijo» y el ajuste lo tomaría como
+     dato bueno; null dice que no se sabe. */
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Company Name', 'Total Revenue [FY 2025]', 'Operating Income [FY 2025]'],
+    ['ACME Services PLC', 1000, 100],
+  ]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+  await conFileReader(buf, async () => {
+    const { rows } = await importCapitalIQExcel({ name: 'sin-ppe.xlsx', size: buf.length });
+    assert.strictEqual(rows[0].ppe, null);
+  });
+});
+
 test('importCapitalIQExcel explica el fallo en vez de devolver un array vacío', async () => {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['algo', 'otra cosa'], [1, 2]]), 'Hoja1');
@@ -633,8 +677,8 @@ test('importCapitalIQExcel lee un export con el título arriba, como el real', a
 });
 
 /* ══════ Criterios de búsqueda (hoja "Screen Criteria") ══════
-   Alimentan la Tabla 13 del informe — ver
-   frontend/src/services/exactTemplateMapper.js:generarTablaCriteriosScreeningHtml. */
+   Alimentan la Tabla 13 del informe: quedan en `study.criteriosScreening` a la
+   espera de que la ruta por campos con nombre los publique. */
 
 test('parsearCriteriosScreening lee la hoja real, con el conector de cada línea', () => {
   const wb = XLSX.utils.book_new();
@@ -842,37 +886,36 @@ test('prefiltrar respeta los filtros puestos en «incluir»', () => {
   assert.strictEqual(prefiltrar(candidatas, {}).validas.length, 0, 'excluir es el criterio por defecto');
 });
 
-test('el rigor estricto deja solo prestadores de servicios', () => {
+test('el perfil funcional ya no descarta por sí solo, con ningún nivel de rigor', () => {
+  /* El filtro de rigor se retiró (decisión del usuario, 2026-08-10): el informe pasó
+     a reportar bajo un solo concepto —diferencias funcionales— todo lo que supera los
+     filtros objetivos y no integra la muestra, así que apartar antes a unas cuantas
+     por su perfil no aportaba nada y le quitaba candidatas al puntaje. */
   const candidatas = [
     { id: 'S', name: 'Servicio SA', desc: 'software development services', s: 100, op: 10 },
     { id: 'M', name: 'Mixta SA', desc: 'software development services and publishes its own games', s: 100, op: 10 },
     { id: 'E', name: 'Empresario SA', desc: 'publishes its own titles and monetizes them', s: 100, op: 10 },
   ];
-  const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estricto' }, '', [], {});
-  assert.deepStrictEqual(r.seleccionadas.map(c => c.id), ['S']);
-  assert.strictEqual(r.rechazadasPorCategoria.rigor, 2, 'mixto y empresario se caen por rigor');
-  assert.match(r.rechazadas.find(c => c.id === 'M').motivoRechazo, /rigor estricto/);
+  ['estricto', 'estandar', 'amplio'].forEach((rigor) => {
+    const r = scoreCandidates(candidatas, { nTarget: 10, rigor }, '', [], {});
+    assert.deepStrictEqual(r.seleccionadas.map(c => c.id).sort(), ['E', 'M', 'S'], `con rigor ${rigor}`);
+    assert.strictEqual(r.rechazadasPorCategoria.rigor, 0, `con rigor ${rigor}`);
+  });
 });
 
-test('el rigor estándar admite servicios y mixtos, y descarta al empresario pleno', () => {
+test('el perfil se sigue calculando y publicando, aunque no descarte', () => {
+  /* Ordena el puntaje y va a la columna «Perfil funcional» de la hoja: lo que se
+     retiró es su capacidad de excluir, no el dato. */
   const candidatas = [
     { id: 'S', name: 'Servicio SA', desc: 'software development services', s: 100, op: 10 },
-    { id: 'M', name: 'Mixta SA', desc: 'software development services and publishes its own games', s: 100, op: 10 },
     { id: 'E', name: 'Empresario SA', desc: 'publishes its own titles and monetizes them', s: 100, op: 10 },
   ];
   const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estandar' }, '', [], {});
-  assert.deepStrictEqual(r.seleccionadas.map(c => c.id).sort(), ['M', 'S']);
-  assert.strictEqual(r.rechazadasPorCategoria.rigor, 1);
-  assert.match(r.rechazadas[0].motivoRechazo, /260-4/, 'el motivo cita la norma que sustenta el descarte');
-});
-
-test('el rigor amplio no descarta a nadie por su perfil', () => {
-  const candidatas = [
-    { id: 'E', name: 'Empresario SA', desc: 'publishes its own titles and monetizes them', s: 100, op: 10 },
-  ];
-  const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'amplio' }, '', [], {});
-  assert.strictEqual(r.seleccionadas.length, 1);
-  assert.strictEqual(r.rechazadasPorCategoria.rigor, 0);
+  const perfiles = Object.fromEntries(r.seleccionadas.map(c => [c.id, c.perfilFuncional]));
+  assert.strictEqual(perfiles.S, 'SERVICIO');
+  assert.strictEqual(perfiles.E, 'EMPRESARIO');
+  /* Y el de servicios puntúa por encima del empresario pleno. */
+  assert.strictEqual(r.seleccionadas[0].id, 'S', 'el perfil sigue pesando en el orden');
 });
 
 test('el perfil INDEFINIDO nunca se descarta por rigor', () => {
@@ -964,13 +1007,15 @@ test('el desglose por motivo cuenta cada criterio por separado', () => {
 
   assert.deepStrictEqual(r.rechazadasPorMotivo, {
     holding: 2,
-    holdingDescripcion: 0,
     controlada: 0,
     saldoNegativo: 1,
     perdidaOperativa: 1,
     sinDescripcion: 1,
     actividadDistinta: 1,
-    rigorFuncional: 1,
+    /* El filtro de rigor se retiró: el perfil ya no descarta por sí solo, así que
+       este contador se queda en cero. La clave se conserva porque la tabla de
+       razones de rechazo del informe y los estudios ya guardados la esperan. */
+    rigorFuncional: 0,
   });
 });
 
@@ -990,16 +1035,60 @@ test('el desglose por motivo suma lo mismo que las categorías', () => {
   assert.strictEqual(porMotivo, r.rechazadas.length);
 });
 
-test('desglosa holding por Razón Social (holding) y holding por Descripción (holdingDescripcion)', () => {
+test('el holding se decide SOLO por la razón social, no por la descripción ni por el SIC', () => {
+  /* La descripción menciona al grupo del que la empresa forma parte, que no es lo
+     mismo que ser ella la sociedad de cartera. Descartarla por eso retiraba
+     comparables operativas perfectamente válidas. */
   const candidatas = [
     { id: '1', name: 'Alpha Holdings Inc', desc: 'software development services', s: 100, op: 10 },
     { id: '2', name: 'Beta Services LLC', desc: 'Subsidiary of Global Holding Group', s: 100, op: 10 },
+    { id: '3', name: 'Gamma Operating Corp', sic: '6719 Offices of Holding Companies', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5, holding: 'excluir' }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'solo Alpha Holdings, por su razón social');
+  assert.ok(!('holdingDescripcion' in r.rechazadasPorMotivo), 'el motivo por descripción ya no existe');
+  const rechazadas = r.rechazadas.map((c) => c.name);
+  assert.ok(!rechazadas.includes('Beta Services LLC'), 'la mención en la descripción no descarta');
+  assert.ok(!rechazadas.includes('Gamma Operating Corp'), 'el SIC 67xx no descarta');
+});
+
+test('el término de holding se busca contenido en el nombre y sin distinguir mayúsculas', () => {
+  const candidatas = [
+    { id: '1', name: 'GRUPOSURA', desc: 'software development services', s: 100, op: 10 },
+    { id: '2', name: 'techgroupcorp', desc: 'software development services', s: 100, op: 10 },
     { id: '3', name: 'Gamma Operating Corp', desc: 'software development services', s: 100, op: 10 },
   ];
   const r = scoreCandidates(candidatas, { nTarget: 5, holding: 'excluir' }, '', []);
-  assert.strictEqual(r.rechazadasPorMotivo.holding, 1, 'Alpha Holdings descarta por Razón Social');
-  assert.strictEqual(r.rechazadasPorMotivo.holdingDescripcion, 1, 'Beta Services descarta por mención en Descripción');
-  assert.strictEqual(r.rechazadasPorMotivo.holding + r.rechazadasPorMotivo.holdingDescripcion, 2, 'La suma total de holdings da 2');
+  assert.strictEqual(r.rechazadasPorMotivo.holding, 2);
+});
+
+test('la utilidad en negativo marca pérdida aunque la candidata no traiga hasLoss', () => {
+  /* `hasLoss` solo lo pone la importación de Capital IQ; una candidata cargada a
+     mano o corregida después llegaba sin él y pasaba el filtro con la utilidad en
+     rojo. */
+  const candidatas = [
+    { id: '1', name: 'Roja SA', desc: 'software development services', s: 100, op: -20 },
+    { id: '2', name: 'Verde SA', desc: 'software development services', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 5, perdidaOp: 'excluir' }, '', []);
+  assert.strictEqual(r.rechazadasPorMotivo.perdidaOperativa, 1);
+  assert.strictEqual(r.rechazadas[0].name, 'Roja SA');
+});
+
+test('la precedencia es controlada > holding > pérdida', () => {
+  /* Una compañía puede cumplir los tres a la vez; el motivo que se escribe es el
+     primero de la lista, y las tres casillas de la hoja se marcan por separado. */
+  const lasTres = { id: '1', name: 'Mega Grupo Holding', holderPct: 80, op: -5, s: 100, desc: 'software development services' };
+  const r = scoreCandidates([lasTres], { nTarget: 5 }, '', []);
+  assert.strictEqual(r.rechazadas[0].motivoClave, 'controlada');
+
+  const holdingYPerdida = { ...lasTres, holderPct: 10 };
+  const r2 = scoreCandidates([holdingYPerdida], { nTarget: 5 }, '', []);
+  assert.strictEqual(r2.rechazadas[0].motivoClave, 'holding');
+
+  const soloPerdida = { ...lasTres, holderPct: 10, name: 'Operativa SA' };
+  const r3 = scoreCandidates([soloPerdida], { nTarget: 5 }, '', []);
+  assert.strictEqual(r3.rechazadas[0].motivoClave, 'perdidaOperativa');
 });
 
 test('las categorías de rechazo cubren cada descarte una sola vez', () => {
@@ -1016,7 +1105,7 @@ test('las categorías de rechazo cubren cada descarte una sola vez', () => {
   const veredicto = { porId: { R: { coincide: false, motivo: 'otra actividad' }, OK: { coincide: true }, E: { coincide: true } } };
   const r = scoreCandidates(candidatas, { nTarget: 10, rigor: 'estandar' }, 'desarrollo de software', [], { iaMatch: veredicto });
   const cat = r.rechazadasPorCategoria;
-  assert.deepStrictEqual(cat, { filtro: 1, ia: 1, rigor: 1 });
+  assert.deepStrictEqual(cat, { filtro: 1, ia: 1, rigor: 0 });
   assert.strictEqual(cat.filtro + cat.ia + cat.rigor + r.totalValidas, r.evaluadas,
     'nada se cuenta dos veces ni se pierde');
 });
@@ -1232,4 +1321,41 @@ test('la importación marca la sospecha de holding por la razón social', async 
     assert.strictEqual(rows[0].sospechaHolding, 'revisar');
     assert.strictEqual(rows[1].sospechaHolding, 'no');
   });
+});
+
+test('el motivo de rechazo no se contagia entre compañías con el mismo nameKey', () => {
+  /* Caso real del universo del cliente: «N-able, Inc. (NYSE:NABL)» y «Nable Inc.
+     (KOSDAQ:A153460)» dan las dos la clave «NABLE», porque `nameKey` quita
+     paréntesis y sufijos societarios para poder cruzar con el estudio anterior. La
+     segunda sí está controlada (66,35 %); la primera no (32,63 %), y aparecía
+     descartada por control heredando el motivo de su homónima. */
+  const universo = [
+    { id: 'IQ_NABL', name: 'N-able, Inc. (NYSE:NABL)', holderPct: 32.63 },
+    { id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)', holderPct: 66.35 },
+  ];
+  const auditoria = {
+    rechazadas: [{ id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)', motivoClave: 'controlada', categoriaRechazo: 'filtro' }],
+  };
+  const [nable, otra] = enriquecerUniverso(universo, [], auditoria);
+  assert.strictEqual(otra.motivoClave, 'controlada', 'la que sí está controlada conserva su motivo');
+  assert.strictEqual(nable.motivoClave, '', 'y no se le pega a la que comparte nombre');
+});
+
+test('sin identificador el cruce por nombre sigue funcionando', () => {
+  /* Las candidatas cargadas a mano o traídas de otras fuentes no traen id; para
+     ellas el nombre es lo único que hay. */
+  const universo = [{ name: 'Alpha Group' }];
+  const auditoria = { rechazadas: [{ name: 'Alpha Group', motivoClave: 'holding', categoriaRechazo: 'filtro' }] };
+  assert.strictEqual(enriquecerUniverso(universo, [], auditoria)[0].motivoClave, 'holding');
+});
+
+test('la selección tampoco se contagia entre homónimas', () => {
+  const universo = [
+    { id: 'IQ_NABL', name: 'N-able, Inc. (NYSE:NABL)' },
+    { id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)' },
+  ];
+  const seleccionadas = [{ id: 'IQ_A153460', name: 'Nable Inc. (KOSDAQ:A153460)' }];
+  const [nable, otra] = enriquecerUniverso(universo, seleccionadas, null);
+  assert.strictEqual(otra.seleccionada, true);
+  assert.strictEqual(nable.seleccionada, false, 'la homónima no queda marcada como comparable del estudio');
 });

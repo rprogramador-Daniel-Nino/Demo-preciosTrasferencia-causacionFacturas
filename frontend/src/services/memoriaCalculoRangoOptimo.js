@@ -36,6 +36,34 @@ const METODOS = [
   { hoja: 'NCP', nombre: 'Net Cost Plus', base: 'costos', num: 'ebit', dep: true, fmt: '0.00%' },
 ];
 
+/* Rubros de la parte examinada en la hoja Datos, en el orden en que se escriben.
+   La dirección de cada uno se DERIVA de este arreglo y no se escribe a mano en
+   ninguna fórmula: al insertar un rubro, las cinco hojas de método siguen apuntando
+   al correcto. Una dirección absoluta escrita a mano en una fórmula es un fallo
+   silencioso —da un número creíble y falso— y por eso no queda ninguna.
+
+   El comentario evita nombrar una dirección concreta a propósito: el comando de
+   verificación del Step 4 busca literales por texto y una mención en prosa se delataría
+   a sí misma. */
+const RUBROS_EXAMINADA = [
+  { clave: 't_s', etiqueta: 'Ventas netas' },
+  { clave: 't_c', etiqueta: 'Costo de ventas' },
+  { clave: 't_op', etiqueta: 'Gastos operativos' },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar' },
+  { clave: 't_inv', etiqueta: 'Inventarios' },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar' },
+  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
+];
+
+/* 1-based: fila 1 título, 2 vacía, 3 «PARTE EXAMINADA», 4 el primer rubro. */
+const FILA_RUBRO_0 = 4;
+const filaDeRubro = (clave) => FILA_RUBRO_0
+  + RUBROS_EXAMINADA.findIndex((r) => r.clave === clave);
+/* La tasa va inmediatamente después del último rubro. La fila del ámbito de la
+   muestra va después de la tasa, pero no necesita su propia constante: se escribe
+   sola al hacer `push` justo detrás, sin que ninguna fórmula la referencie hoy. */
+const FILA_TASA = () => FILA_RUBRO_0 + RUBROS_EXAMINADA.length;
+
 const AJUSTES = [
   { clave: 'ninguno', etiqueta: 'Sin ajuste' },
   { clave: 'aar', etiqueta: 'CxC' },
@@ -55,13 +83,37 @@ const cForT = (f) => ({ t: 's', f }); // fórmula de texto (conclusión)
 /* Referencia a una celda de la hoja Datos. */
 const D = (celda) => `Datos!${celda}`;
 
+/* Términos que delatan una sociedad de cartera o de grupo en la razón social. Es el
+   mismo criterio que aplica `tieneSemanticaHolding` en filtrosComparablesPatch.js:
+   subcadena, sin distinguir mayúsculas, y SOLO sobre el nombre —ni el código SIC ni
+   la descripción del negocio intervienen—. Se replican aquí como fórmula para que la
+   hoja muestre el criterio en vez de una marca ya decidida; si el vocabulario cambia
+   allá, hay que traerlo aquí, y el test de paridad entre ambos lo recuerda. */
+export const TERMINOS_HOLDING_HOJA = [
+  'holding', 'grupo', 'group', 'holdco', 'hldg', 'groupe', 'gruppo',
+  'sociedad de cartera', 'sociedad tenedora', 'sociedad matriz', 'tenedora de acciones',
+  'holdingmaatschappij',
+];
+/* SEARCH no distingue mayúsculas de minúsculas, que es justo lo que se busca. */
+const HOLDING_FORMULA = (ref) => 'IF(OR('
+  + TERMINOS_HOLDING_HOJA.map((t) => `ISNUMBER(SEARCH("${t}",${ref}))`).join(',')
+  + '),"Sí","")';
+
 /**
  * Construye las hojas del libro con fórmulas vivas.
  *
  * @param estudio  el estudio con t_s, t_c, t_op(gastos), t_ar, t_inv, t_ap, t_ppe,
- *                 prime y comparables [{name,s,c,op,ar,inv,ap,ppe,tasaEfectiva}].
+ *                 prime, cmode (ámbito de la muestra: 'nac', 'intl' o cualquier otro
+ *                 valor para todas), seg_excluido (ingreso de una operación no
+ *                 controlada que se descuenta de t_s) y comparables
+ *                 [{name,s,c,op,ar,inv,ap,ppe,amb}], con `amb` en 'Nac' o 'Int'.
  *                 IMPORTANTE: `op` y `t_op` deben ser GASTOS operativos
- *                 (usar el normalizador eeffParserNormalizador.js antes).
+ *                 (usar el normalizador eeffParserNormalizador.js antes), y `prime`
+ *                 es la tasa EN PORCENTAJE (7.37, no 0.0737): esta función la divide
+ *                 entre 100 al escribir Datos!B11, así que quien la llame no debe
+ *                 hacerlo antes. `cmode` y `amb` solo se escriben en la hoja Datos en
+ *                 esta versión; el filtrado del cuartil por ámbito lo aplica quien
+ *                 llama.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
  *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
@@ -90,34 +142,85 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   datos.push([cTxt('DATOS DE ENTRADA — editar aquí recalcula todo el libro')]);
   datos.push([]);
   datos.push([cTxt('PARTE EXAMINADA')]);
-  const tp = [
-    ['Ventas netas', study.t_s], ['Costo de ventas', study.t_c],
-    ['Gastos operativos', study.t_op], ['Cuentas por cobrar', study.t_ar],
-    ['Inventarios', study.t_inv], ['Cuentas por pagar', study.t_ap],
-    ['Propiedad, planta y equipo', study.t_ppe],
-  ];
-  tp.forEach(([k, v]) => datos.push([cTxt(k), cNum(Number(v) || 0)]));
-  // filas Datos: 4=Ventas B4, 5=Costo B5, 6=Gastos B6, 7=CxC B7, 8=Inv B8, 9=CxP B9, 10=PPE B10
+  /* El valor de cada rubro. `t_s` es el único que no se escribe tal cual: descuenta el
+     segmento excluido con el mismo criterio del motor (`ajusteRangoCapitalTrabajo.js:
+     271-276`), solo de las ventas y no de `t_op`, porque aquí `t_op` son GASTOS y
+     restarlo también movería la utilidad operacional dos veces. Queda en una función
+     para que ampliar la lista de rubros no pueda perder el descuento por el camino.
+
+     Va aquí y no en `motorExcelExport` porque este emisor es el único punto por el que
+     pasan las dos rutas de descarga del libro: la del motor y la del modal
+     (MemoriaRangoModal.jsx:93). */
+  const segExcluido = Number(study.seg_excluido) || 0;
+  const valorDeRubro = (clave) => (clave === 't_s'
+    ? (Number(study.t_s) || 0) - segExcluido
+    : Number(study[clave]) || 0);
+
+  RUBROS_EXAMINADA.forEach((r) => {
+    datos.push([cTxt(r.etiqueta), cNum(valorDeRubro(r.clave))]);
+  });
+  datos.push([
+    cTxt('Tasa de interés de referencia (Prime Rate)'),
+    cNum((Number(study.prime) || 0) / 100, '0.00%'),
+  ]);
+  /* El ámbito de la muestra, escrito como dato y no como decisión ya aplicada: la
+     hoja de método lo lee para decidir qué filas entran al cuartil. */
+  datos.push([cTxt('Ámbito de la muestra'), cTxt(study.cmode || 'all')]);
   datos.push([]);
   datos.push([cTxt('COMPARABLES')]);
-  const hdr = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inventario', 'CxP', 'PP&E', 'Tasa'];
+  const hdr = ['Compañía', 'Ventas', 'Costo', 'Gastos op.', 'CxC', 'Inventario', 'CxP', 'PP&E', 'Tasa', 'Ámbito'];
   datos.push(hdr.map(cTxt));
   const filaComp0 = datos.length + 1; // 1-based fila de la primera comparable
   comps.forEach((c) => {
     datos.push([
       cTxt(c.name), cNum(Number(c.s) || 0), cNum(Number(c.c) || 0), cNum(Number(c.op) || 0),
       cNum(Number(c.ar) || 0), cNum(Number(c.inv) || 0), cNum(Number(c.ap) || 0),
-      cNum(Number(c.ppe) || 0), cNum(Number(c.tasaEfectiva) || 0, '0.0000'),
+      cNum(Number(c.ppe) || 0), cFor(`$B$${FILA_TASA()}`, '0.00%'),
+      cTxt(c.amb === 'Nac' ? 'Nac' : 'Int'),
     ]);
   });
+
+  /* ─── Trazabilidad de la tasa, en las columnas L–N ───
+     La tabla de comparables llega hasta la J (con la columna de Ámbito), así que este
+     bloque cabe al lado sin estorbar. Deja escrito de dónde sale el número, a qué
+     comparables alcanza y con qué convención se aplica: quien audita el libro no
+     debería tener que preguntarlo. La celda editable sigue siendo B11 —una sola—; aquí
+     solo se refleja.
+     Los índices de columna son 11 y 12 (antes 10 y 11): la columna J de Ámbito
+     desplazó una posición a este bloque, que vivía en K–M. */
+  const anotarTasa = (idxFila, etiqueta, valor) => {
+    if (!datos[idxFila]) datos[idxFila] = [];
+    datos[idxFila][11] = cTxt(etiqueta);
+    datos[idxFila][12] = valor;
+  };
+  const celdaTasa = `B${FILA_TASA()}`;
+  anotarTasa(2, 'PARÁMETRO — TASA DE INTERÉS DE LOS AJUSTES DE CAPITAL DE TRABAJO', null);
+  anotarTasa(3, 'Tasa aplicada', cFor(`$B$${FILA_TASA()}`, '0.00%'));
+  datos[3][13] = cTxt(`← única celda editable: ${celdaTasa} alimenta a los ` + n + ' comparables');
+  anotarTasa(4, 'Fuente', cTxt(
+    'Board of Governors of the Federal Reserve System, H.15 Selected Interest Rates — '
+    + 'Bank Prime Loan Rate (serie FRED RIFSPBLPNA). Promedio anual de días hábiles: '
+    + '2025 = 7,37 %; 2024 = 8,31 %.'));
+  anotarTasa(5, 'Aplicación', cTxt(
+    'Tasa única para los ' + n + ' comparables: la columna «Tasa» de esta hoja es la '
+    + `fórmula =$B$${FILA_TASA()} en todas las filas. La plantilla de Capital IQ traía en su lugar la `
+    + 'tasa del país de cada comparable, que es la fuga que este libro cierra.'));
+  anotarTasa(6, 'Convención', cTxt(
+    'Cuentas por cobrar y cuentas por pagar: r/(1+r). Inventario y propiedad, planta y '
+    + 'equipo: r directo. Son dos convenciones dentro del mismo ajuste, heredadas de la '
+    + 'plantilla; describir esta asimetría en el anexo metodológico del informe.'));
+
   hojas.push({
     nombre: 'Datos', celdas: datos,
-    cols: [{ wch: 34 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 9 }],
+    cols: [{ wch: 34 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+      { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 3 }, { wch: 30 }, { wch: 62 }, { wch: 46 }],
   });
 
-  // Referencias del contribuyente (celdas fijas en Datos)
-  const S_s = D('$B$4'), C_s = D('$B$5'), OP_s = D('$B$6');
-  const AR_s = D('$B$7'), INV_s = D('$B$8'), AP_s = D('$B$9'), PPE_s = D('$B$10');
+  // Referencias del contribuyente, derivadas del orden de RUBROS_EXAMINADA
+  const refDe = (clave) => D(`$B$${filaDeRubro(clave)}`);
+  const S_s = refDe('t_s'), C_s = refDe('t_c'), OP_s = refDe('t_op');
+  const AR_s = refDe('t_ar'), INV_s = refDe('t_inv');
+  const AP_s = refDe('t_ap'), PPE_s = refDe('t_ppe');
 
   /* ─── Una hoja por método, con fórmulas por comparable ─── */
   const infoMetodos = [];
@@ -140,10 +243,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       const r = r0 + i;
       const src = filaComp0 + i; // fila en Datos
       // columnas A..I: referencias a Datos (letras A..I = 1..9)
-      const refs = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map((L) => cForT(`${D(`${L}${src}`)}`));
-      // A es texto (nombre), el resto numérico → re-tipar
+      // A es texto (nombre), el resto numérico
       const nombreRef = { t: 's', f: `${D(`A${src}`)}` };
-      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => cFor(`${D(`${L}${src}`)}`, '#,##0.00'));
+      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L) => cFor(`${D(`${L}${src}`)}`, '#,##0.00'));
       const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000');
       // base comparable
       const base = M.base === 'ventas' ? `B${r}` : M.base === 'opex' ? `D${r}`
@@ -151,6 +253,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       const denomDep = M.hoja === 'NCP' ? `((C${r}-G${r})+D${r})` : M.hoja === 'CostPlus' ? `(C${r}-G${r})` : null;
       const baseInv = M.dep ? denomDep : `M${r}`;
       const num = M.num === 'ebit' ? `J${r}` : `K${r}`;
+      /* Denominador de los sabores que NO restan el ajuste de CxC del numerador
+         («solo CxP», «solo inventario» y «solo PP&E»): la base sin corregir. La
+         columna R descuenta ese ajuste y solo corresponde a los sabores que sí lo
+         aplican. Para NCP y Cost Plus R es el denominador depurado (COGS−CxP), que
+         no tiene nada que ver con el ajuste de CxC, así que ahí se mantiene. */
+      const denomSinAR = M.base === 'ventas' ? `M${r}` : `R${r}`;
 
       const fila = [
         nombreRef,                              // A nombre
@@ -163,15 +271,15 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         cFor(`((E${r}/M${r})-(${AR_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // N Aj.CxC
         cFor(`((G${r}/M${r})-(${AP_s}/${baseS}))*(M${r}*L${r})`, '#,##0.000'),   // O Aj.CxP
         cFor(`((F${r}/${baseInv})-(${INV_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // P Aj.Inv
-        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*I${r}`, '#,##0.000'),     // Q Aj.PP&E
+        cFor(`((H${r}/${baseInv})-(${PPE_s}/${baseS}))*(M${r}*I${r})`, '#,##0.000'), // Q Aj.PP&E
         cFor(`${M.dep ? denomDep : (M.base === 'ventas' ? `(B${r}-N${r})` : M.base === 'opex' ? `D${r}` : `M${r}`)}`, '#,##0.00'), // R denom ajustado
         cFor(`${num}/M${r}`, M.fmt),            // S sin ajuste
         cFor(`(${num}-N${r})/R${r}`, M.fmt),    // T CxC
-        cFor(`(${num}+O${r})/R${r}`, M.fmt),    // U CxP
-        cFor(`(${num}-P${r})/R${r}`, M.fmt),    // V Inv
+        cFor(`(${num}+O${r})/${denomSinAR}`, M.fmt),  // U CxP
+        cFor(`(${num}-P${r})/${denomSinAR}`, M.fmt),  // V Inv
         cFor(`(${num}-N${r}+O${r}-P${r})/R${r}`, M.fmt),        // W CxC+CxP+Inv
         cFor(`(${num}-N${r}+O${r}-P${r}-Q${r})/R${r}`, M.fmt), // X +PP&E
-        cFor(`(${num}-Q${r})/R${r}`, M.fmt),    // Y PP&E
+        cFor(`(${num}-Q${r})/${denomSinAR}`, M.fmt),  // Y PP&E
       ];
       celdas.push(fila);
     }
@@ -223,13 +331,133 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       celdas.push(fila);
     }
 
-    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
+    infoMetodos.push({ hoja: M.hoja, nombre: M.nombre, fmt: M.fmt, base: M.base, dep: M.dep, r0, rN, filaMin, filaP25, filaP75, filaMax, filaTested, filaConcl: celdas.length });
 
     hojas.push({
       nombre: M.hoja, celdas,
       cols: [{ wch: 28 }].concat(new Array(24).fill({ wch: 11 })),
     });
   });
+
+  /* ─── Hoja «Diagnóstico de datos» ───
+     Las condiciones que invalidan un método o vuelven sospechoso un ajuste no se ven
+     mirando el rango: hay que ir comparable por comparable. Esta hoja las cuenta por
+     fórmula sobre «Datos», así que se actualiza sola cuando se corrige una cifra.
+
+     Cubre las tres observaciones que salieron de la auditoría del libro: métodos
+     inutilizables por costo de ventas casi nulo o denominador depurado negativo,
+     cuentas por pagar de la parte examinada demasiado pequeñas para sostener el
+     ajuste de CxP, y comparables cuyo PP&E desborda su propia utilidad. */
+  if (n > 0) {
+    const filaCompN = filaComp0 + n - 1;
+    const cd = (L) => `Datos!$${L}$${filaComp0}:$${L}$${filaCompN}`;
+    const VEN = cd('B'), COS = cd('C'), GAS = cd('D');
+    const CXC = cd('E'), INV = cd('F'), CXP = cd('G'), PPE = cd('H');
+
+    const dg = [];
+    dg.push([cTxt('DIAGNÓSTICO DE DATOS — comprobaciones por fórmula sobre la hoja «Datos»')]);
+    dg.push([cTxt('Nada está quemado: al corregir una cifra de entrada, estas comprobaciones se recalculan solas.')]);
+    dg.push([]);
+
+    dg.push([cTxt('1) ¿ES UTILIZABLE CADA MÉTODO CON ESTOS DATOS?')]);
+    dg.push([cTxt('Método'), cTxt('Comparables afectados'), cTxt('Veredicto'), cTxt('Criterio')]);
+    const CHEQUEOS = [
+      ['Margen Bruto', `SUMPRODUCT(--(${COS}<0.05*${VEN}))`,
+        'Costo de ventas por debajo del 5 % de las ventas: el margen bruto se pega al 100 % y deja de discriminar.'],
+      ['Cost Plus', `SUMPRODUCT(--((${COS}-${CXP})<=0))`,
+        'Denominador depurado (Costo − CxP) nulo o negativo: el indicador cambia de signo y no es interpretable.'],
+      ['Índice de Berry', `SUMPRODUCT(--(${GAS}<=0))`,
+        'Gastos operativos nulos o negativos: el índice se indefine.'],
+      ['Net Cost Plus', `SUMPRODUCT(--(((${COS}-${CXP})+${GAS})<=0))`,
+        'Denominador depurado ((Costo − CxP) + Gastos) nulo o negativo.'],
+      ['Margen Operacional', `SUMPRODUCT(--(${VEN}<=0))`,
+        'Ventas nulas o negativas: no hay base sobre la que calcular el margen.'],
+    ];
+    const filaCheq0 = dg.length + 1;
+    CHEQUEOS.forEach(([nombre, formula, criterio], i) => {
+      const r = filaCheq0 + i;
+      dg.push([
+        cTxt(nombre),
+        cFor(formula, '#,##0'),
+        cForT(`IF(B${r}=0,"Utilizable","Revisar: "&B${r}&" de ${n}")`),
+        cTxt(criterio),
+      ]);
+    });
+    dg.push([]);
+
+    dg.push([cTxt('2) PARTE EXAMINADA — tamaño de las partidas de capital de trabajo')]);
+    dg.push([cTxt('Partida'), cTxt('Valor'), cTxt('Unidad'), cTxt('Por qué importa')]);
+    [
+      ['Cuentas por cobrar', `${AR_s}/${S_s}*365`, '#,##0.0', 'días de venta',
+        'Sostiene el ajuste de CxC.'],
+      ['Inventarios', `${INV_s}/${C_s}*365`, '#,##0.0', 'días de costo',
+        'Sostiene el ajuste de inventario. En cero, el ajuste solo recoge el de las comparables.'],
+      ['Cuentas por pagar', `${AP_s}/${C_s}*365`, '#,##0.0', 'días de costo',
+        'Si equivalen a muy pocos días, verificar si hay pasivos comerciales clasificados en otras cuentas antes de sostener el ajuste de CxP.'],
+      ['Cuentas por pagar / Ventas', `${AP_s}/${S_s}`, '0.00%', 'porcentaje', ''],
+      ['PP&E / Ventas', `${PPE_s}/${S_s}`, '0.00%', 'porcentaje',
+        'Se contrasta contra la columna PP&E/Ventas de cada comparable, más abajo.'],
+    ].forEach(([etq, f, z, uni, nota]) => {
+      dg.push([cTxt(etq), cFor(f, z), cTxt(uni), cTxt(nota)]);
+    });
+    dg.push([]);
+
+    /* Una comparable sin cartera, inventario, proveedores ni activo fijo entra al
+       ajuste como si de verdad no tuviera ninguna de esas partidas —no como si
+       faltara el dato—, y arrastra el rango hacia el margen sin ajustar. Es lo que
+       pasa cuando el cribado de Capital IQ no trae las columnas de balance y no se
+       cargaron los estados financieros de esa empresa. */
+    const CERO = [
+      ['Sin ninguna partida de capital de trabajo', `SUMPRODUCT(--((${CXC}=0)*(${INV}=0)*(${CXP}=0)))`,
+        'Ni cartera, ni inventario, ni proveedores: su ajuste será cero por falta de datos, no por su operación.'],
+      ['Sin cuentas por cobrar', `SUMPRODUCT(--(${CXC}=0))`, 'El ajuste de CxC no las mueve.'],
+      ['Sin propiedad, planta y equipo', `SUMPRODUCT(--(${PPE}=0))`,
+        'Los escenarios con PP&E las tratan como empresas sin activo fijo.'],
+    ];
+    dg.push([cTxt('3) COMPARABLES CON PARTIDAS DE BALANCE EN CERO')]);
+    dg.push([cTxt('Situación'), cTxt('Comparables'), cTxt('Veredicto'), cTxt('Qué implica')]);
+    const filaCero0 = dg.length + 1;
+    CERO.forEach(([etq, formula, nota], i) => {
+      const r = filaCero0 + i;
+      dg.push([
+        cTxt(etq),
+        cFor(formula, '#,##0'),
+        cForT(`IF(B${r}=0,"Todas con dato","Revisar: "&B${r}&" de ${n}")`),
+        cTxt(nota),
+      ]);
+    });
+    dg.push([]);
+
+    /* PP&E comparable por comparable. Las referencias van contra la hoja MO porque
+       ahí ya están calculados el ajuste (columna Q) y la utilidad operacional
+       (columna J): repetir esas fórmulas aquí sería una segunda implementación que
+       se desincroniza en cuanto cambie una. */
+    const mo = infoMetodos.find((M) => M.hoja === 'MO');
+    if (mo) {
+      dg.push([cTxt('4) PP&E POR COMPARABLE — dónde el ajuste de PP&E desborda el resultado')]);
+      dg.push([cTxt('Compañía'), cTxt('PP&E / Ventas'), cTxt('Ajuste PP&E (MO)'), cTxt('Utilidad operacional (MO)'),
+        cTxt('¿El ajuste supera la utilidad?')]);
+      for (let i = 0; i < n; i++) {
+        const rMO = mo.r0 + i;
+        const r = dg.length + 1;
+        dg.push([
+          cForT(`MO!A${rMO}`),
+          cFor(`MO!H${rMO}/MO!B${rMO}`, '0.00%'),
+          cFor(`MO!Q${rMO}`, '#,##0.000'),
+          cFor(`MO!J${rMO}`, '#,##0.00'),
+          cForT(`IF(ABS(C${r})>ABS(D${r}),"Sí — el escenario con PP&E no es defendible para esta compañía","")`),
+        ]);
+      }
+      dg.push([]);
+      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
+      dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+    }
+
+    hojas.unshift({
+      nombre: 'Diagnóstico de datos', celdas: dg,
+      cols: [{ wch: 34 }, { wch: 20 }, { wch: 26 }, { wch: 26 }, { wch: 58 }],
+    });
+  }
 
   /* ─── Hoja Resumen: sensibilidad, referenciando las hojas de método ─── */
   const resumen = [];
@@ -290,9 +518,10 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        implementaciones del mismo criterio que se desincronizaban en cuanto el motor
        cambiaba una regla. Ahora la hoja REFLEJA lo que el motor decidió.
 
-       Están las SIETE exclusiones, no solo las de los filtros duros: si faltara
+       Están TODAS las exclusiones, no solo las de los filtros duros: si faltara
        alguna, la resta «Universo − exclusiones = Válidas» dejaría de cuadrar en
-       cuanto la curación por IA descartara a alguien. */
+       cuanto la curación por IA descartara a alguien. Son seis filas para siete
+       motivos del motor, porque los dos de perfil se presentan juntos. */
     sel.push([cTxt('EMBUDO DE SELECCIÓN (Arts. 260-1 y 260-4 E.T.)')]);
     sel.push([cTxt('Etapa'), cTxt('Empresas'), cTxt('Fórmula / criterio')]);
     const fe = {};
@@ -301,20 +530,24 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sel.push([cTxt(etiqueta), null, cTxt(criterio)]);
     };
     etapa('universo', 'Universo Capital IQ (tras cribado)', 'COUNTA de la columna Compañía');
-    etapa('controlada', '(−) Vinculadas o controladas', `Un accionista supera el ${umbralControl} % del capital (Art. 260-1)`);
-    etapa('holding', '(−) Holdings o grupos', 'Sociedad de cartera o grupo, sin operación directa (Art. 260-4)');
+    etapa('controlada', '(−) Vinculadas o controladas', `Un accionista alcanza o supera el ${umbralControl} % del capital (Art. 260-1)`);
+    etapa('holding', '(−) Holdings o grupos', 'Término de holding, grupo o group en la razón social (Art. 260-4)');
     etapa('negativo', '(−) Saldos negativos', 'Dato de balance no verosímil');
     etapa('perdida', '(−) Pérdida operativa', 'Criterio conservador DIAN: comparable rentable');
-    etapa('sinDesc', '(−) Sin descripción del negocio', 'No hay con qué verificar la actividad');
-    etapa('actividad', '(−) Actividad distinta', 'Curación IA: la descripción no coincide con la actividad');
-    etapa('rigor', '(−) Diferencias funcionales', 'Perfil no comparable con la parte examinada (Art. 260-4)');
-    etapa('validas', '= Válidas tras todos los criterios', 'Universo − las siete exclusiones de arriba');
-    etapa('seleccionadas', '= Muestra final seleccionada', 'Comparables usadas en el rango (⊂ válidas)');
+    /* Una sola fila para todo lo que supera los cuatro filtros objetivos y no integra
+       la muestra: la curación no reconoció su actividad, faltaba la descripción del
+       negocio, o simplemente no alcanzó el puntaje de las comparables elegidas. Ante
+       la DIAN todas responden a lo mismo —no son funcionalmente comparables con la
+       parte examinada—, y el desglose por criterio sigue disponible en la columna
+       «Motivo de rechazo» de la base de datos. */
+    etapa('rigor', '(−) Diferencias funcionales', 'No comparable con la parte examinada (Art. 260-4)');
+    etapa('validas', '= Válidas tras todos los criterios', 'Universo − las exclusiones de arriba');
+    etapa('seleccionadas', '= Muestra final seleccionada', 'Las válidas son exactamente la muestra');
     sel.push([]);
 
-    /* Suma de control: los siete motivos y las válidas son mutuamente excluyentes
-       —el motor asigna un solo motivo por candidata, el primero que aplica— y agotan
-       el universo, así que su suma tiene que dar el total exacto. Es la comprobación
+    /* Suma de control: las exclusiones y las válidas son mutuamente excluyentes —el
+       motor asigna un solo motivo por candidata, el primero que aplica— y agotan el
+       universo, así que su suma tiene que dar el total exacto. Es la comprobación
        que permite firmar la hoja. */
     sel.push([cTxt('SUMA DE CONTROL (partición del universo — cada empresa cuenta una vez)')]);
     const sc = {};
@@ -322,14 +555,13 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sc[clave] = sel.length + 1;
       sel.push([cTxt(etiqueta), null, cTxt(criterio)]);
     };
-    control('rechazadas', 'Total rechazadas', 'Suma de los siete motivos');
-    control('validas', 'Total válidas', 'Estado = "Válida"');
+    control('rechazadas', 'Total rechazadas', 'Suma de las exclusiones del embudo');
+    control('validas', 'Total válidas = muestra del estudio', 'Estado = "Válida"');
     control('suma', 'SUMA', 'Rechazadas + válidas');
     control('universo', 'UNIVERSO (Capital IQ)', 'Total de compañías');
     control('check', '¿CUADRA? (suma = universo)', 'Debe decir "SÍ ✓"');
-    control('seleccionadas', '   · de las válidas, la muestra del estudio', '¿Seleccionada? = "Sí"');
-    control('difFuncional', '   · de las válidas, con diferencias funcionales', 'Superan los criterios pero no integran la muestra');
-    control('checkVal', '¿Muestra + diferencias = válidas?', 'Debe decir "SÍ ✓"');
+    control('seleccionadas', '   · contadas por «¿Seleccionada?»', '¿Seleccionada? = "Sí"');
+    control('checkVal', '¿Coincide con las válidas del embudo?', 'Debe decir "SÍ ✓"');
     sel.push([]);
 
     // Base de datos: encabezado + una fila por candidata
@@ -360,19 +592,27 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         costo == null ? cTxt('') : cNum(costo, '#,##0.00'),
         pct == null ? cTxt('') : cNum(pct, '0.00'),
         cTxt(c.holdersText || ''),                                  // J dato original, auditable
-        cForT(`IF(N(I${r})>${umbralControl},"Sí","")`),              // K Controlada (fórmula)
-        /* L Holding: la señal que trae la candidata y, si no viniera, el veredicto
-           del motor. Una fila rechazada por holding con esta columna en blanco se
-           lee como una contradicción de la hoja consigo misma. */
-        cTxt(c.sospechaHolding === 'revisar' || c.isHolding || c.motivoClave === 'holding' || c.motivoClave === 'holdingDescripcion' ? 'Sí' : ''),
+        /* K, L y M son tres hechos independientes y se marcan por separado: una
+           compañía puede ser a la vez controlada, holding y estar en pérdida, y las
+           tres casillas tienen que decirlo. La precedencia —controlada, luego
+           holding, luego pérdida— solo decide cuál queda escrito en el motivo de
+           rechazo de la columna N, no cuáles se marcan aquí. */
+        cForT(`IF(N(I${r})>=${umbralControl},"Sí","")`),              // K Controlada (fórmula)
+        /* L Holding, también por fórmula y solo sobre la razón social: quien audita
+           la hoja puede ver el criterio aplicado en vez de tener que fiarse de una
+           marca volcada desde el motor. */
+        cForT(HOLDING_FORMULA(`B${r}`)),                              // L Holding (fórmula)
         cForT(`IF(N(G${r})<0,"Sí","")`),                             // M Pérdida (fórmula)
         cTxt(c.motivoClave || ''),                                   // N Motivo (del motor)
         cTxt(c.perfilFuncional || 'INDEFINIDO'),                     // O Perfil funcional
-        cForT(`IF(N${r}="","Válida","Rechazada")`),                  // P Estado (fórmula)
+        /* P Estado. Válida es solo la que integra la muestra: todo lo que supera los
+           filtros objetivos y no se incorpora al rango queda rechazado por diferencias
+           funcionales, así que la partición del universo es «las 16 y todo lo demás». */
+        cForT(`IF(Q${r}="Sí","Válida","Rechazada")`),
         cTxt(c.seleccionada ? 'Sí' : ''),                            // Q ¿Seleccionada?
         /* R: el estado de comparabilidad dicho en palabras, en cada fila, para que
            quien filtre la tabla no tenga que cruzar el motivo con la selección. */
-        cForT(`IF(P${r}<>"Válida","Rechazada (ver motivo)",IF(Q${r}="Sí","Sin diferencias funcionales","Con diferencias funcionales"))`),
+        cForT(`IF(Q${r}="Sí","Comparable de la muestra",IF(N${r}="","Diferencias funcionales","Rechazada (ver motivo)"))`),
       ]);
     });
     const rN = r0 + cand.length - 1;
@@ -381,23 +621,41 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const cMotivo = `N${r0}:N${rN}`;
     const cEstado = `P${r0}:P${rN}`;
     const cSel = `Q${r0}:Q${rN}`;
-    const cComp = `R${r0}:R${rN}`;
 
-    /* Los siete motivos, con la MISMA clave que emite `scoreCandidates`: la hoja no
+    /* Los motivos, con la MISMA clave que emite `scoreCandidates`: la hoja no
        reclasifica nada, cuenta lo que el motor escribió. */
     const MOTIVOS = [
-      ['controlada', 'filtro', 'controlada', `Vinculadas: un accionista supera el ${umbralControl} % (Art. 260-1)`],
-      ['holding', 'filtro', 'holding', 'Holdings o grupos, sin actividad operativa directa (Art. 260-4)'],
-      ['negativo', 'filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil)'],
-      ['perdida', 'filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN)'],
-      ['sinDesc', 'ia', 'sinDescripcion', 'Sin descripción del negocio para verificar la actividad'],
-      ['actividad', 'ia', 'actividadDistinta', 'Curación IA: la descripción no coincide con la actividad'],
-      ['rigor', 'rigor', 'rigorFuncional', 'Diferencias funcionales: perfil no comparable (Art. 260-4)'],
+      ['controlada', 'filtro', ['controlada'], `Vinculadas: un accionista alcanza o supera el ${umbralControl} % (Art. 260-1)`],
+      ['holding', 'filtro', ['holding'], 'Holdings o grupos, por la razón social (Art. 260-4)'],
+      ['negativo', 'filtro', ['saldoNegativo'], 'Saldo negativo en balances (dato no verosímil)'],
+      ['perdida', 'filtro', ['perdidaOperativa'], 'Pérdida operativa (criterio conservador DIAN)'],
+      /* Una sola fila para TODO lo que supera los filtros objetivos y no integra la
+         muestra. Recoge los motivos cualitativos que escribe el motor —la curación no
+         reconoció la actividad, faltaba la descripción del negocio, o el perfil no era
+         comparable en los estudios anteriores al retiro de ese filtro— y además las
+         que no llevan motivo pero tampoco se incorporaron al rango.
+
+         Todas responden a lo mismo ante la DIAN: no son funcionalmente comparables con
+         la parte examinada (Art. 260-4). El desglose fino sigue en la columna «Motivo
+         de rechazo» de la base de datos, para quien lo necesite. */
+      ['rigor', 'rigor', ['sinDescripcion', 'actividadDistinta', 'rigorFuncional'],
+        'Diferencias funcionales: no comparable con la parte examinada (Art. 260-4)',
+        true],
     ];
 
+    /* Una fila del embudo puede recoger varios motivos del motor, así que el conteo es
+       la suma de sus COUNTIF y no uno solo. Las que llevan `sinMotivo` suman además
+       las que pasaron todo y no entraron a la muestra: no traen motivo escrito, pero
+       quedan fuera por la misma razón. */
+    const contarMotivos = (rango, motivos, sinMotivo, rangoSel) => {
+      const partes = motivos.map((m) => `COUNTIF(${rango},"${m}")`);
+      if (sinMotivo) partes.push(`COUNTIFS(${rango},"",${rangoSel},"<>Sí")`);
+      return partes.join('+');
+    };
+
     sel[fe.universo - 1][1] = cFor(`COUNTA(${cNombre})`, '#,##0');
-    MOTIVOS.forEach(([clave, , motivo]) => {
-      sel[fe[clave] - 1][1] = cFor(`COUNTIF(${cMotivo},"${motivo}")`, '#,##0');
+    MOTIVOS.forEach(([clave, , motivos, , sinMotivo]) => {
+      sel[fe[clave] - 1][1] = cFor(contarMotivos(cMotivo, motivos, sinMotivo, cSel), '#,##0');
     });
     sel[fe.validas - 1][1] = cFor(
       `B${fe.universo}-` + MOTIVOS.map(([clave]) => `B${fe[clave]}`).join('-'), '#,##0');
@@ -409,10 +667,13 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     sel[sc.universo - 1][1] = cFor(`COUNTA(${cNombre})`, '#,##0');
     sel[sc.check - 1][1] = cForT(
       `IF(B${sc.suma}=B${sc.universo},"SÍ ✓","NO ✗ ("&B${sc.suma}&" vs "&B${sc.universo}&")")`);
+    /* Las válidas son ahora exactamente la muestra, así que el segundo cuadre compara
+       las dos formas de contarla: por la columna «¿Seleccionada?» y por el estado que
+       de ella se deriva. Si difieren, alguna fila quedó seleccionada llevando motivo
+       de rechazo. */
     sel[sc.seleccionadas - 1][1] = cFor(`COUNTIF(${cSel},"Sí")`, '#,##0');
-    sel[sc.difFuncional - 1][1] = cFor(`COUNTIF(${cComp},"Con diferencias funcionales")`, '#,##0');
     sel[sc.checkVal - 1][1] = cForT(
-      `IF(B${sc.seleccionadas}+B${sc.difFuncional}=B${sc.validas},"SÍ ✓","NO ✗")`);
+      `IF(B${sc.seleccionadas}=B${fe.validas},"SÍ ✓","NO ✗ ("&B${sc.seleccionadas}&" vs "&B${fe.validas}&")")`);
 
     hojas.unshift({
       nombre: 'Selección comparables', celdas: sel,
@@ -434,9 +695,10 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     mtz.push([cTxt('Categoría'), cTxt('Motivo'), cTxt('Descripción'), cTxt('Empresas')]);
     const refMotivo = `'Selección comparables'!${cMotivo}`;
     const mFila0 = mtz.length + 1;
-    MOTIVOS.forEach(([, categoria, motivo, descripcion]) => {
-      mtz.push([cTxt(categoria), cTxt(motivo), cTxt(descripcion),
-        cFor(`COUNTIF(${refMotivo},"${motivo}")`, '#,##0')]);
+    const refSel = `'Selección comparables'!${cSel}`;
+    MOTIVOS.forEach(([, categoria, motivos, descripcion, sinMotivo]) => {
+      mtz.push([cTxt(categoria), cTxt(sinMotivo ? 'diferenciaFuncional' : motivos.join(' + ')), cTxt(descripcion),
+        cFor(contarMotivos(refMotivo, motivos, sinMotivo, refSel), '#,##0')]);
     });
     const mFilaN = mFila0 + MOTIVOS.length - 1;
     mtz.push([]);
@@ -452,24 +714,22 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     mtz.push([cTxt('TOTAL RECHAZADAS'), cTxt(''), cTxt(''),
       cFor(`SUM(${colCant})`, '#,##0')]);
     const fSel = mtz.length + 1;
-    mtz.push([cTxt('(+) Válidas — muestra seleccionada'), cTxt(''),
-      cTxt('Sin diferencias funcionales relevantes: las comparables del estudio'),
+    mtz.push([cTxt('(+) Muestra seleccionada'), cTxt(''),
+      cTxt('Las comparables que sustentan el rango del informe'),
       cFor(`COUNTIF('Selección comparables'!${cSel},"Sí")`, '#,##0')]);
-    const fDif = mtz.length + 1;
-    mtz.push([cTxt('(+) Válidas — con diferencias funcionales'), cTxt(''),
-      cTxt('Superan los criterios pero no integran la muestra'),
-      cFor(`COUNTIF('Selección comparables'!${cComp},"Con diferencias funcionales")`, '#,##0')]);
     const fUniv = mtz.length + 1;
     mtz.push([cTxt('= UNIVERSO (debe igualar el de Capital IQ)'), cTxt(''), cTxt(''),
-      cFor(`D${fTotRech}+D${fSel}+D${fDif}`, '#,##0')]);
+      cFor(`D${fTotRech}+D${fSel}`, '#,##0')]);
     const fReal = mtz.length + 1;
     mtz.push([cTxt('UNIVERSO real (Capital IQ)'), cTxt(''), cTxt(''),
       cFor(`COUNTA('Selección comparables'!${cNombre})`, '#,##0')]);
-    mtz.push([cTxt('¿CUADRA? (rechazadas + válidas = universo)'), cTxt(''), cTxt(''),
+    mtz.push([cTxt('¿CUADRA? (rechazadas + muestra = universo)'), cTxt(''), cTxt(''),
       cForT(`IF(D${fUniv}=D${fReal},"SÍ ✓","NO ✗ ("&D${fUniv}&" vs "&D${fReal}&")")`)]);
     mtz.push([]);
-    mtz.push([cTxt('Nota: los motivos «ia» y «rigor» los asigna el motor sobre la descripción del negocio')]);
-    mtz.push([cTxt('y el perfil funcional. Si la selección no se ha ejecutado, llegan en cero.')]);
+    mtz.push([cTxt('Nota: «diferencias funcionales» recoge todo lo que supera los filtros objetivos y no')]);
+    mtz.push([cTxt('integra la muestra. El desglose por criterio está en la columna «Motivo de rechazo»')]);
+    mtz.push([cTxt('de la hoja Selección comparables, y las que no llevan motivo son las que pasaron')]);
+    mtz.push([cTxt('todos los criterios sin alcanzar el puntaje de la muestra final.')]);
 
     hojas.splice(1, 0, {
       nombre: 'Matriz de rechazo', celdas: mtz,

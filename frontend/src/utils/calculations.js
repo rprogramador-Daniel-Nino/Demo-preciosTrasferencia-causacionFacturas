@@ -3,7 +3,7 @@
 export const PLIN = {
   'MO': 'Margen Operacional (MO)',
   'MB': 'Margen Bruto (MB)',
-  'Berry': 'Razón Berry'
+  'Berry': 'Índice de Berry'
 };
 
 export const UVT_VALUES = {
@@ -155,13 +155,22 @@ export function pliOf(o, kind) {
   if (!s || s === 0) return null;
   if (kind === 'MO') return num(o.op) / s;
   if (kind === 'MB') return (s - num(o.c)) / s;
+  /* Berry = utilidad bruta ÷ gastos operativos, la definición del Anexo del Cap. III
+     de las Guías OCDE y la que replica el modelo Excel validado por el consultor.
+
+     Hasta agosto de 2026 aquí se calculaba «ventas ÷ costos totales», que no es el
+     mismo indicador que emite `ajusteRangoCapitalTrabajo.js`. Convivían las dos y el
+     informe y su Excel de soporte publicaban cifras distintas para el mismo estudio.
+
+     `op` llega como UTILIDAD operacional (convenio del sistema), así que los gastos
+     operativos se despejan: opex = ventas − costo − utilidad operacional. */
   if (kind === 'Berry') {
     const c = num(o.c);
     const op = num(o.op);
-    const costOfSales = c !== null ? c : 0;
-    const opExpenses = (num(o.s) - costOfSales - (op !== null ? op : 0));
-    const denom = costOfSales + opExpenses;
-    return denom !== 0 ? num(o.s) / denom : null;
+    if (c === null || op === null) return null;
+    const utilidadBruta = s - c;
+    const opex = s - c - op;
+    return opex !== 0 ? utilidadBruta / opex : null;
   }
   return null;
 }
@@ -180,10 +189,11 @@ export function ratios(o) {
   return null;
 }
 
-export function quart(s, p) {
-  if (!s || !s.length) return 0;
-  return s[Math.floor(p * (s.length - 1))];
-}
+/* Aquí vivía `quart`: cuartil por posición truncada de la serie ordenada, sin
+   interpolar. Era el segundo algoritmo de cuartil del sistema frente a
+   `cuartilInterpolado` (QUARTILE.INC) de `services/ajusteRangoCapitalTrabajo.js`, y
+   sobre la misma serie los dos publicaban números distintos. Se retiró al quedarse sin
+   llamadores para que no haya dos definiciones del rango intercuartil. */
 
 export function adjustInfo(T, tPLI, st, base, unitMult, egresoValue = null) {
   if (!st || tPLI === null) return null;

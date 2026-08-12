@@ -2,6 +2,7 @@
 // api/claude.php — Proxy PHP hacia la API de Anthropic con control de consumo de Tokens (cPanel)
 header('Content-Type: application/json');
 require_once __DIR__ . '/logger.php';
+require_once __DIR__ . '/fallback-gemini.php';
 
 // Permitir solicitudes solo mediante POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -54,8 +55,25 @@ if (curl_errno($ch)) {
 
 curl_close($ch);
 
-// 5. Registrar el consumo de tokens si la respuesta fue exitosa
-$resData = json_decode($response, true);
+// 5. Si Claude no pudo atender —sin saldo, con el límite alcanzado o sobrecargado—, la
+//    petición la atiende Gemini y la respuesta sale con forma de Anthropic, para que ningún
+//    llamador note el cambio. El límite diario del punto 2 NO llega aquí: es control de
+//    costo propio y sale antes, sin gastar en el otro proveedor.
+$resData = json_decode($response, true) ?: [];
+if (debeCaerAGemini($httpCode, $resData)) {
+    $conGemini = atenderConGemini(json_decode($inputData, true) ?: [], $config, $httpCode);
+    if ($conGemini !== null) {
+        header(CABECERA_PROVEEDOR . ': ' . PROVEEDOR_GEMINI);
+        http_response_code(200);
+        echo json_encode($conGemini);
+        exit;
+    }
+    // Gemini tampoco pudo: sigue el curso normal y se devuelve el error de Anthropic, que
+    // es el que explica por qué se llegó hasta aquí.
+}
+header(CABECERA_PROVEEDOR . ': anthropic');
+
+// 6. Registrar el consumo de tokens si la respuesta fue exitosa
 if ($httpCode >= 200 && $httpCode < 300 && isset($resData['usage'])) {
     $inTokens = $resData['usage']['input_tokens'] ?? 0;
     $outTokens = $resData['usage']['output_tokens'] ?? 0;
@@ -63,6 +81,6 @@ if ($httpCode >= 200 && $httpCode < 300 && isset($resData['usage'])) {
     logClaudeUsage('Precios de Transferencia', $inTokens, $outTokens, $model);
 }
 
-// 6. Devolver la respuesta de Anthropic al cliente
+// 7. Devolver la respuesta de Anthropic al cliente
 http_response_code($httpCode > 0 ? $httpCode : 200);
 echo $response;
