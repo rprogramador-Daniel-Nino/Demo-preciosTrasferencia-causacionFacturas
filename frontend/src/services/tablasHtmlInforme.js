@@ -38,6 +38,7 @@ import {
   filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme,
 } from './tablasInforme.js';
 import { claveTitulo, numeroDeTabla } from './docxRelleno.js';
+import { pctf } from '../utils/calculations.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
 export function textoPlanoHtml(fragmento) {
@@ -512,10 +513,10 @@ export function actualizarTablasMacroHtml(html, datosMacro, year, avisos) {
   return salida;
 }
 
-/* Mismo formato que la ruta .docx: dos decimales y el signo de porcentaje. Un hueco
-   visible —y no un cero— cuando la comparable no tiene margen calculable. */
+/* Mismo formato que la ruta .docx, y por el mismo formateador: `pctf`. Un hueco visible —y no
+   un cero— cuando la comparable no tiene margen calculable. */
 function pct(v) {
   return (v === null || v === undefined || !Number.isFinite(Number(v)))
     ? '—'
-    : (Number(v) * 100).toFixed(2) + '%';
+    : pctf(Number(v));
 }

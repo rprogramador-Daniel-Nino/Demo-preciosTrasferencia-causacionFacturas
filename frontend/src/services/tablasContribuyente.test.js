@@ -3,16 +3,20 @@ import assert from 'node:assert';
 import {
   verticalSobreActivos, filasComposicionAccionaria, filasActivos,
 } from './tablasContribuyente.js';
+import { pctf } from '../utils/calculations.js';
 
 /* ── verticalSobreActivos ── */
 
 test('el análisis vertical es el rubro sobre el total de activos', () => {
   const av = verticalSobreActivos({ t_act_tot: 2000 });
-  assert.strictEqual(av(500), '25.00%');
+  /* Se coteja contra `pctf` y no contra una cadena a mano: así el A.V. y el resto del informe
+     no pueden volver a divergir, que es lo que pasaba cuando cada sitio se formateaba solo. */
+  assert.strictEqual(av(500), pctf(0.25));
+  assert.strictEqual(av(500), '25,000 %');
 });
 
 test('sin total de activos el vertical queda en hueco y no en cero', () => {
-  /* Un «0.00%» afirma que el rubro no pesa nada; el hueco dice que no se pudo calcular. */
+  /* Un «0,000 %» afirma que el rubro no pesa nada; el hueco dice que no se pudo calcular. */
   assert.strictEqual(verticalSobreActivos({})(500), '—');
   assert.strictEqual(verticalSobreActivos({ t_act_tot: 0 })(500), '—');
 });
@@ -74,8 +78,8 @@ test('los activos llevan el año gravable en el título y en las columnas', () =
 test('los activos publican los diez rubros con su análisis vertical', () => {
   const t = filasActivos(EEFF);
   assert.strictEqual(t.filas.length, 10);
-  assert.deepStrictEqual(t.filas[0], ['Efectivo y equivalentes de efectivo', '12.417.756', '0.57%']);
-  assert.deepStrictEqual(t.filas[9], ['Total, Activos', '2.179.479.687', '100.00%']);
+  assert.deepStrictEqual(t.filas[0], ['Efectivo y equivalentes de efectivo', '12.417.756', '0,570 %']);
+  assert.deepStrictEqual(t.filas[9], ['Total, Activos', '2.179.479.687', '100,000 %']);
 });
 
 test('un rubro sin dato sale como hueco en el valor y en el vertical', () => {
@@ -88,5 +92,5 @@ test('un rubro en cero sale como hueco y no como «0»', () => {
      nadie cargó se leen igual de mal si se publica «0». */
   const t = filasActivos({ ...EEFF, t_intang: 0 });
   const intangibles = t.filas.find((f) => f[0] === 'Intangibles');
-  assert.deepStrictEqual(intangibles, ['Intangibles', '—', '0.00%']);
+  assert.deepStrictEqual(intangibles, ['Intangibles', '—', '0,000 %']);
 });

@@ -206,7 +206,7 @@ test('actualizarTablasMotorHtml pone las comparables del estudio en la tabla', (
     assert.ok(salida.includes(n), `debe aparecer ${n}`));
   assert.ok(!salida.includes('AKATSUKI'), 'y no las del informe anterior');
   assert.ok(!salida.includes('16.557%'), 'ni sus márgenes');
-  assert.match(salida, /18\.00%/, 'el margen se calcula con el motor del estudio');
+  assert.match(salida, /18,000 %/, 'el margen se calcula con el motor del estudio');
   assert.ok(!avisos.includes(TABLA_MARGENES), 'esa tabla estaba: no hay que avisar de ella');
   assert.ok(salida.includes('<p>siguiente'), 'el resto del documento queda intacto');
 });

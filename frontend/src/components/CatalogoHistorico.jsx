@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Search, RefreshCw, Library, ChevronDown, ChevronRight } from 'lucide-react';
 import { listarComparablesHistoricas } from '../services/firestoreRepo';
 import { filtrarCatalogo, aniosDelCatalogo } from '../services/firestoreModelo';
+import { pctf } from '../utils/calculations';
 
 /* Catálogo de comparables extraídas de la documentación comprobatoria de años
    anteriores. Lo alimenta el paso de fuente histórica del motor; esta vista es para
@@ -41,9 +42,10 @@ export default function CatalogoHistorico({ usuario }) {
     if (valor === null || valor === undefined) return '—';
     const n = Number(valor);
     if (!Number.isFinite(n)) return '—';
-    return Math.abs(n) <= 1
-      ? (n * 100).toFixed(2).replace('.', ',') + ' %'
-      : n.toFixed(2).replace('.', ',') + ' %';
+    /* Las dos ramas reciben unidades distintas y `pctf` siempre multiplica por 100, así que la
+       segunda tiene que dividir antes: 0,1803 y 18,03 son el mismo margen expresado de dos
+       formas, y las dos deben salir «18,030 %». */
+    return Math.abs(n) <= 1 ? pctf(n) : pctf(n / 100);
   };
 
   return (
