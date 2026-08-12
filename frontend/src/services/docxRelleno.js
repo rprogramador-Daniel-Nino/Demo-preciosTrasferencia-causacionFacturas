@@ -600,83 +600,6 @@ export function actualizarProsaTrasTabla(xml, nombres, cifras, avisos) {
 }
 
 /**
- * Pone el año gravable del estudio en la prosa que comenta una tabla.
- *
- * El informe cierra el análisis del rango con «…del margen operacional ajustado durante el
- * 2024», y ese año venía de la plantilla: se radicaba el año del informe anterior junto a
- * cifras del actual. No se puede arreglar con un reemplazo global de «2024» porque en el
- * mismo documento hay años legítimos que NO son el gravable —los encabezados del ANEXO B son
- * los estados financieros disponibles de las comparables, del año anterior, y las citas de
- * fuentes llevan su propia fecha—. Por eso `anio` está fuera de los campos que se vigilan en
- * la salida y por eso el marcado con IA lo evita.
- *
- * El alcance es lo que hace esto seguro: solo los párrafos que siguen a la tabla indicada, y
- * se corta en cuanto aparece otra tabla. Nunca entra en celdas.
- *
- * Si el cliente coloca esa frase en otro sitio del informe, el año se queda sin actualizar y
- * se anota el aviso. Falla por omisión, que es el lado correcto: escribir un año equivocado
- * en un documento fiscal es peor que dejar el viejo a la vista.
- *
- * @param {string} xml
- * @param {string|string[]} nombres  tabla de referencia.
- * @param {number|string} anioGravable
- * @param {string[]} [avisos]
- */
-export function actualizarAnioEnProsa(xml, nombres, anioGravable, avisos) {
-  let salida = String(xml || '');
-  const gravable = Number(anioGravable);
-  if (!Number.isInteger(gravable) || gravable < 2000 || gravable > 2100) return salida;
-
-  const RX_ANIO = /\b20\d{2}\b/g;
-  let cambiados = 0;
-
-  for (let ocurrencia = 0; ocurrencia < 6; ocurrencia += 1) {
-    const bloque = localizarBloqueTabla(salida, nombres, { ocurrencia });
-    if (!bloque) break;
-    if (ocurrencia > 0) {
-      const previo = localizarBloqueTabla(salida, nombres, { ocurrencia: ocurrencia - 1 });
-      if (previo && previo.inicio === bloque.inicio) break;
-    }
-
-    const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
-    rxParrafo.lastIndex = bloque.fin;
-    /* Hasta dónde se ha leído: si entre el último párrafo y este hay una tabla, la prosa de
-       ESTA tabla se acabó y lo que viene después es de otra sección. Sin este corte el
-       recorrido llegaba al párrafo de las fuentes citadas —«(2023)… April 2022»— y le
-       cambiaba las fechas, que son correctas y no son el año gravable. */
-    let cursor = bloque.fin;
-    for (let m = rxParrafo.exec(salida), n = 0; m && n < 4; m = rxParrafo.exec(salida), n += 1) {
-      if (salida.slice(cursor, m.index).includes('<w:tbl')) break;
-      cursor = m.index + m[0].length;
-
-      const texto = textoPlanoOoxml(m[0]);
-      if (!texto.trim() || !RX_ANIO.test(texto)) { RX_ANIO.lastIndex = 0; continue; }
-      RX_ANIO.lastIndex = 0;
-
-      const nuevo = m[0].replace(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g, (todo, abre, contenido, cierra) => {
-        const hecho = contenido.replace(/\b20\d{2}\b/g, (anio) => (
-          Number(anio) === gravable ? anio : String(gravable)
-        ));
-        return hecho === contenido ? todo : abre + hecho + cierra;
-      });
-      if (nuevo !== m[0]) {
-        salida = salida.slice(0, m.index) + nuevo + salida.slice(m.index + m[0].length);
-        cambiados += 1;
-        /* Los offsets se movieron: se vuelve a empezar desde esta tabla. */
-        rxParrafo.lastIndex = m.index + nuevo.length;
-        cursor = m.index + nuevo.length;
-      }
-    }
-  }
-
-  if (!cambiados && Array.isArray(avisos)) {
-    avisos.push(`no se encontró el año gravable en la prosa que sigue a «${Array.isArray(nombres) ? nombres[0] : nombres}»: `
-      + 'si esa frase menciona un año, revísalo a mano antes de radicar');
-  }
-  return salida;
-}
-
-/**
  * Sustituidor de tablas sobre un `document.xml`.
  *
  * Encapsula el XML que va mutando y el registro de las tablas que la plantilla no
@@ -920,11 +843,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
     avisos,
   ));
-
-  /* Y el año gravable en esa misma prosa: la conclusión del rango decía «durante el 2024»
-     con las cifras del estudio actual al lado. Solo en los párrafos de esta tabla, para no
-     tocar los años legítimos del ANEXO B ni las fechas de las fuentes citadas. */
-  doc.aplicar((x) => actualizarAnioEnProsa(x, 'Rango Intercuartil', estudio.anio, avisos));
 
   /* 13. Margen Operacional Compañías Comparables.
 
