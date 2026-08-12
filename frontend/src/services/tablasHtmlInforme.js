@@ -206,6 +206,12 @@ export function escaparTextoHtml(texto) {
  *
  * Los de énfasis (`<strong>`, `<span style>`) están porque otras plantillas ponen la
  * razón social en negrita o la fuente al pie en cuerpo 9 dentro de la propia tabla.
+ *
+ * El `<span data-campo>` es la excepción: se DESENVUELVE pero no se reproduce. No es
+ * presentación, es una marca del vocabulario, y `plantillaRenderer` rellena toda marca que
+ * encuentre. Reproducir la del molde —la primera fila de datos de la plantilla— le ponía a
+ * las diez filas de la Tabla 10 la marca del efectivo, así que el informe publicaba el
+ * efectivo repetido en los diez rubros del activo, con el vertical correcto al lado.
  */
 export function envolturaDe(contenido) {
   const texto = String(contenido || '');
@@ -216,7 +222,9 @@ export function envolturaDe(contenido) {
     if (!m) break;
     const cierre = new RegExp('</' + m[1] + '\\s*>\\s*$', 'i');
     if (!cierre.test(resto)) break;
-    abre.push('<' + m[1] + (m[2] || '') + '>');
+    const atributos = m[2] || '';
+    const esMarca = m[1].toLowerCase() === 'span' && /\sdata-campo\s*=/i.test(atributos);
+    if (!esMarca) abre.push('<' + m[1] + atributos + '>');
     resto = resto.slice(m[0].length).replace(cierre, '');
   }
   return {
