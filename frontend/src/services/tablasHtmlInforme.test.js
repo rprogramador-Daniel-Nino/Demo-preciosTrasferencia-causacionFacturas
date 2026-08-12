@@ -4,6 +4,7 @@ import {
   localizarTablaHtml, reescribirFilasHtml, envolturaDe, textoPlanoHtml,
   actualizarTablasMotorHtml, reescribirCeldaHtml, TABLA_MARGENES,
   actualizarTablasMacroHtml, reescribirRotuloHtml, TABLA_CRITERIOS,
+  actualizarApartadosMacroHtml,
 } from './tablasHtmlInforme.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
@@ -511,4 +512,62 @@ test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () =>
   const salida = actualizarTablasMotorHtml(html, {}, avisos);
   assert.strictEqual(salida, html, 'la tabla no debe alterarse');
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('actualizarApartadosMacroHtml reemplaza la prosa localizándola por encabezado', () => {
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Texto de END GAME sobre el mundo, 2024.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+    '<p>Texto de END GAME sobre Colombia, 2024.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa real del mundo.</p>',
+      colombia: '<p>Narrativa real de Colombia.</p>',
+    },
+  };
+  const avisos = [];
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, avisos);
+
+  assert.match(salida, /Narrativa real del mundo\./);
+  assert.match(salida, /Narrativa real de Colombia\./);
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.match(salida, /Crecimiento del PIB Mundial/); // la tabla que sigue no se toca
+  assert.equal(avisos.length, 0);
+});
+
+test('actualizarApartadosMacroHtml ignora una entrada de Tabla de Contenido con número de página', () => {
+  const html = [
+    '<p>A. Análisis del Panorama de la Economía Mundial ... 13</p>', // entrada de TOC
+    '<p>B. Análisis del panorama de la economía colombiana ... 20</p>', // otra entrada de TOC
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>', // encabezado real
+    '<p>Texto de END GAME sobre el mundo, 2024.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Narrativa real del mundo.</p>' } };
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.match(salida, /Narrativa real del mundo\./);
+  assert.match(salida, /economía colombiana \.\.\. 20/, 'la entrada de TOC de colombia no se toca');
+});
+
+test('actualizarApartadosMacroHtml usa el marcador de pendiente si no hay narrativa, y avisa', () => {
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Texto de END GAME sobre el mundo, 2024.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroHtml(html, null, 2026, avisos);
+
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
+  assert.ok(avisos.length >= 1);
 });

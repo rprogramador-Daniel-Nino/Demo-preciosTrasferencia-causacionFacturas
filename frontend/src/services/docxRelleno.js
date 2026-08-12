@@ -164,6 +164,58 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
   return xml;
 }
 
+/** Mismo texto y misma referencia normativa que `marcadorPendiente` de
+ *  `analisisMercado.js` — no se importa de ahí para no acoplar la ruta .docx a la
+ *  ruta HTML por un solo texto; si cambia la redacción legal, cambia en los dos sitios
+ *  a propósito. */
+function marcadorApartadoPendiente(tema, year) {
+  return '[Actualizar con el análisis del panorama de la economía ' + tema + ' del año gravable ' +
+    year + ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
+}
+
+/**
+ * Reemplaza la PROSA (no las tablas) de III.A y III.B, localizándola por su encabezado,
+ * para que deje de depender de que el marcado con IA la haya marcado como
+ * `ia.economia_mundial`/`ia.economia_colombia` (`plantillaVocabulario.js`).
+ *
+ * Las tablas de cada apartado quedan intactas aquí — las sigue actualizando
+ * `actualizarTablasMacroOoxml` después, por su propio encabezado.
+ *
+ * @param {string} xml
+ * @param {object|null} datosMacro  el documento `analisisMercado/actual` de Firestore.
+ * @param {number} year
+ * @param {string[]} [avisos]  nombres de apartado que no se pudieron localizar o que
+ *        quedaron con el marcador de pendiente por falta de narrativa.
+ * @returns {string}
+ */
+export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
+  const doc = sustituidorDeTablas(xml, null);
+  const apartados = [
+    { inicio: 'Análisis del Panorama de la Economía Mundial', fin: ['PIB Mundial'], tema: 'mundial', clave: 'mundial' },
+    { inicio: 'Análisis del panorama de la economía colombiana', fin: ['PIB en Colombia'], tema: 'colombiana', clave: 'colombia' },
+  ];
+
+  apartados.forEach((a) => {
+    const narrativaHtml = datosMacro && datosMacro.narrativa && datosMacro.narrativa[a.clave];
+    doc.aplicar((actual) => {
+      const bloque = localizarBloqueProsa(actual, a.inicio, a.fin);
+      if (!bloque) {
+        if (Array.isArray(avisos)) avisos.push('prosa de ' + a.inicio);
+        return actual;
+      }
+      const tituloParrafo = actual.slice(bloque.inicio, actual.indexOf('</w:p>', bloque.inicio) + '</w:p>'.length);
+      const cuerpo = narrativaHtml
+        ? parrafosOoxmlDesdeHtml(narrativaHtml)
+        : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(a.tema, year))}</w:t></w:r></w:p>`;
+      if (!narrativaHtml && Array.isArray(avisos)) avisos.push('narrativa de ' + a.inicio);
+      return actual.slice(0, bloque.inicio) + tituloParrafo + cuerpo + actual.slice(bloque.fin);
+    });
+  });
+
+  return doc.xml;
+}
+
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
 export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
   const doc = sustituidorDeTablas(xml, avisos);
@@ -376,6 +428,88 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   const finalistas = porNumero.length ? porNumero : candidatos;
   const i = Number(opciones.ocurrencia) || 0;
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+/**
+ * Delimita un bloque de párrafos entre un encabezado de inicio y el primero de una
+ * lista de encabezados de fin — pensado para reemplazar la PROSA de un apartado sin
+ * tocar las tablas que le siguen (esas ya las localiza `localizarBloqueTabla`).
+ *
+ * `inicio` cae en el propio párrafo de `tituloInicio` (se conserva su encabezado en el
+ * reemplazo) y `fin` justo antes del párrafo de fin encontrado, que queda intacto.
+ *
+ * @param {string} xml
+ * @param {string} tituloInicio
+ * @param {string[]} titulosFin
+ * @returns {{inicio:number, fin:number}|null}
+ */
+export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
+  const texto = String(xml || '');
+  const claveInicio = claveTitulo(tituloInicio);
+  const clavesFin = (titulosFin || []).map(claveTitulo).filter(Boolean);
+  if (!claveInicio || !clavesFin.length) return null;
+
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let p;
+  let inicio = null;
+  while ((p = rxParrafo.exec(texto)) !== null) {
+    /* La Tabla de Contenido repite el mismo texto de cada encabezado en un párrafo con
+       un campo PAGEREF, antes de que aparezca el encabezado real del cuerpo. Sin este
+       filtro, `inicio` caía en la entrada del TOC —que nunca lleva la prosa del
+       apartado— y todo lo que hay entre el TOC y la primera tabla (el índice entero)
+       se tomaba como si fuera la prosa a reemplazar. */
+    if (p[0].includes('PAGEREF')) continue;
+    const clave = claveTitulo(textoPlanoOoxml(p[0]));
+    if (inicio === null) {
+      if (clave.includes(claveInicio)) inicio = p.index;
+      continue;
+    }
+    if (clavesFin.some((c) => clave.includes(c))) {
+      return { inicio, fin: p.index };
+    }
+  }
+  return null;
+}
+
+/** Texto de un fragmento de HTML de narrativa (sin sus etiquetas), con las entidades
+ *  básicas deshechas — misma lista que `escaparXml` invierte, porque este texto vuelve
+ *  a pasar por `escaparXml` al escribirse en el run. */
+function textoPlanoDeNarrativa(fragmento) {
+  return String(fragmento || '')
+    .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/**
+ * La narrativa de III.A/III.B que redacta Claude (HTML simple: `<p>`, `<strong>`, `<a>`)
+ * convertida a párrafos OOXML, para insertarla en el `.docx` sin depender del marcado.
+ *
+ * Solo entiende `<strong>` (negrita) y `<a>` (se aplana a su texto): es lo único que el
+ * prompt de redacción produce (`functions/analisisMercadoPrompts.js`, "Cada apartado en
+ * HTML, como una serie de párrafos <p>...</p>, sin encabezados ni tablas").
+ *
+ * @param {string} html
+ * @returns {string} OOXML, una cadena vacía si `html` no trae ningún `<p>`.
+ */
+export function parrafosOoxmlDesdeHtml(html) {
+  const bloques = String(html || '').match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) || [];
+  return bloques.map((bloque) => {
+    const interior = bloque.replace(/^<p\b[^>]*>/i, '').replace(/<\/p>\s*$/i, '');
+    const runs = [];
+    const rx = /<strong>([\s\S]*?)<\/strong>|([^<]+(?:<a\b[^>]*>[\s\S]*?<\/a>[^<]*)*)/gi;
+    let m;
+    while ((m = rx.exec(interior)) !== null) {
+      if (m[1] !== undefined) {
+        const texto = textoPlanoDeNarrativa(m[1]);
+        if (texto) runs.push(`<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r>`);
+      } else if (m[2] !== undefined) {
+        const texto = textoPlanoDeNarrativa(m[2]);
+        if (texto) runs.push(`<w:r><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r>`);
+      }
+    }
+    return `<w:p>${runs.join('')}</w:p>`;
+  }).join('');
 }
 
 /* Un `<w:t>` que es SOLO una cifra: «2.05%», «-3.001%», «1,780 %». Es lo que Word deja
@@ -791,6 +925,7 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
+  xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   zip.file(RUTA_DOC, xml);

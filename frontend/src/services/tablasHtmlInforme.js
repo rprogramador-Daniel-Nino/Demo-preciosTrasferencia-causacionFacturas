@@ -532,6 +532,84 @@ export function actualizarTablasMacroHtml(html, datosMacro, year, avisos) {
   return salida;
 }
 
+/** Igual que `localizarBloqueProsa` de `docxRelleno.js`, pero sobre el HTML de la ruta
+ *  de plantilla PDF: delimita desde el bloque cuyo texto coincide con `tituloInicio`
+ *  hasta el bloque cuyo texto coincide con alguno de `titulosFin` (sin incluirlo).
+ *
+ *  El extractor mapea la Tabla de Contenido a los mismos bloques `<p>` que el cuerpo
+ *  (comentario de `RX_BLOQUE` arriba: "el extractor mapea P, TOCI y Note a `<p>`"), así
+ *  que un bloque de TOC con el mismo texto del encabezado es indistinguible por
+ *  etiqueta — se descarta por forma: una entrada de TOC termina en el número de página,
+ *  con o sin puntos de relleno («... 13», «13»), la prosa real no. */
+function pareceEntradaDeToc(textoPlano) {
+  return /(?:\.{2,}\s*)?\d{1,4}\s*$/.test(textoPlano.trim());
+}
+
+function localizarBloqueProsaHtml(html, tituloInicio, titulosFin) {
+  const claveInicio = claveTitulo(tituloInicio);
+  const clavesFin = (titulosFin || []).map(claveTitulo).filter(Boolean);
+  if (!claveInicio || !clavesFin.length) return null;
+
+  RX_BLOQUE.lastIndex = 0;
+  let m;
+  let inicio = null;
+  let finEncabezado = null;
+  while ((m = RX_BLOQUE.exec(html)) !== null) {
+    const plano = textoPlanoHtml(m[2]);
+    if (pareceEntradaDeToc(plano)) continue;
+    const clave = claveTitulo(plano);
+    if (inicio === null) {
+      if (clave.includes(claveInicio)) {
+        inicio = m.index;
+        finEncabezado = m.index + m[0].length;
+      }
+      continue;
+    }
+    if (clavesFin.some((c) => clave.includes(c))) return { inicio, finEncabezado, fin: m.index };
+  }
+  return null;
+}
+
+function marcadorApartadoPendienteHtml(tema, year) {
+  return '<p>[Actualizar con el análisis del panorama de la economía ' + tema + ' del año gravable ' +
+    year + ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]</p>';
+}
+
+/**
+ * Reemplaza la PROSA de III.A y III.B en la ruta HTML/PDF, localizándola por su
+ * encabezado — equivalente de `actualizarApartadosMacroOoxml` (`docxRelleno.js`) para
+ * esta ruta. No hace falta un conversor: la narrativa de Firestore ya llega en HTML.
+ *
+ * @param {string} html
+ * @param {object|null} datosMacro
+ * @param {number} year
+ * @param {string[]} [avisos]
+ * @returns {string}
+ */
+export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
+  let out = String(html || '');
+  const apartados = [
+    { inicio: 'Análisis del Panorama de la Economía Mundial', fin: ['PIB Mundial'], tema: 'mundial', clave: 'mundial' },
+    { inicio: 'Análisis del panorama de la economía colombiana', fin: ['PIB en Colombia'], tema: 'colombiana', clave: 'colombia' },
+  ];
+
+  apartados.forEach((a) => {
+    const bloque = localizarBloqueProsaHtml(out, a.inicio, a.fin);
+    if (!bloque) {
+      if (Array.isArray(avisos)) avisos.push('prosa de ' + a.inicio);
+      return;
+    }
+    const narrativaHtml = datosMacro && datosMacro.narrativa && datosMacro.narrativa[a.clave];
+    const encabezado = out.slice(bloque.inicio, bloque.finEncabezado);
+    const cuerpo = narrativaHtml || marcadorApartadoPendienteHtml(a.tema, year);
+    if (!narrativaHtml && Array.isArray(avisos)) avisos.push('narrativa de ' + a.inicio);
+    out = out.slice(0, bloque.inicio) + encabezado + cuerpo + out.slice(bloque.fin);
+  });
+
+  return out;
+}
+
 /* Mismo formato que la ruta .docx, y por el mismo formateador: `pctf`. Un hueco visible —y no
    un cero— cuando la comparable no tiene margen calculable. */
 function pct(v) {

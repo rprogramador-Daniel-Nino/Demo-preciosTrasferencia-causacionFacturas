@@ -5,7 +5,9 @@
 
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
-import { actualizarTablasMotorHtml, actualizarTablasMacroHtml } from './tablasHtmlInforme.js';
+import {
+  actualizarTablasMotorHtml, actualizarTablasMacroHtml, actualizarApartadosMacroHtml,
+} from './tablasHtmlInforme.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 import { actualizarAnexoCHtml } from './anexoCHtml.js';
@@ -58,6 +60,8 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      marcado no las alcanza y se radicaban con el concepto, el vinculado, el país y el
      monto del cliente anterior. */
   html = actualizarTablasOperacionesHtml(html, estudio, avisosTablas);
+  html = actualizarApartadosMacroHtml(
+    html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
   html = actualizarTablasMacroHtml(
     html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
   /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su

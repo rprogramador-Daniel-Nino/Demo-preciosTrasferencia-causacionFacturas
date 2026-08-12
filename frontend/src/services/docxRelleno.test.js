@@ -12,6 +12,7 @@ import {
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
+  localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -1146,4 +1147,120 @@ test('las letras del ANEXO C son las de la Tabla 16', async () => {
   assert.ok(texto.includes('RIGOR UNO' + letraDe('rigorFuncional')), 'diferencias funcionales');
   assert.ok(texto.includes('HOLD UNO' + letraDe('holding')), 'holding');
   assert.ok(texto.includes('OK UNO' + letraDe('aceptadas')), 'aceptadas');
+});
+
+const parrafoXml = (texto) => `<w:p><w:r><w:t>${texto}</w:t></w:r></w:p>`;
+
+test('localizarBloqueProsa delimita desde el encabezado de inicio hasta el de fin, sin incluirlo', () => {
+  const xml = [
+    parrafoXml('Preámbulo'),
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('CRECIMIENTO MUNDIAL'),
+    parrafoXml('La economía mundial transitó durante el bienio 2024-2025...'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Cierre'),
+  ].join('');
+
+  const bloque = localizarBloqueProsa(
+    xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']
+  );
+
+  assert.ok(bloque);
+  const dentro = xml.slice(bloque.inicio, bloque.fin);
+  assert.match(dentro, /A\. Análisis del Panorama/);
+  assert.match(dentro, /CRECIMIENTO MUNDIAL/);
+  assert.match(dentro, /bienio 2024-2025/);
+  assert.doesNotMatch(dentro, /Crecimiento del PIB Mundial \(2024-2026\)/);
+});
+
+test('localizarBloqueProsa devuelve null si no encuentra el encabezado de inicio', () => {
+  const xml = parrafoXml('Algo que no es el encabezado buscado');
+  assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
+});
+
+test('localizarBloqueProsa devuelve null si el encabezado de inicio existe pero ningún tituloFin aparece después', () => {
+  const xml = parrafoXml('A. Análisis del Panorama de la Economía Mundial') + parrafoXml('Cierre sin tabla');
+  assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
+});
+
+test('localizarBloqueProsa ignora la entrada de la Tabla de Contenido y encuentra el encabezado real del cuerpo', () => {
+  const entradaToc = '<w:p><w:pPr><w:pStyle w:val="TDC2"/></w:pPr><w:r><w:t>Análisis del Panorama de la Economía Mundial</w:t></w:r>'
+    + '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
+  const xml = [
+    entradaToc,
+    parrafoXml('B. Análisis del panorama de la economía colombiana'), // otra entrada del TOC, distinta
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'), // encabezado real del cuerpo
+    parrafoXml('La prosa real que hay que reemplazar.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+  ].join('');
+
+  const bloque = localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']);
+  assert.ok(bloque);
+  const dentro = xml.slice(bloque.inicio, bloque.fin);
+  assert.doesNotMatch(dentro, /economía colombiana/);
+  assert.match(dentro, /La prosa real que hay que reemplazar/);
+});
+
+test('parrafosOoxmlDesdeHtml convierte cada <p> en un párrafo y <strong> en negrita', () => {
+  const html = '<p>Primer párrafo con <strong>énfasis</strong> normal.</p><p>Segundo párrafo.</p>';
+  const xml = parrafosOoxmlDesdeHtml(html);
+
+  assert.equal((xml.match(/<w:p>/g) || []).length, 2);
+  assert.match(xml, /<w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">énfasis<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">Primer párrafo con <\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve"> normal\.<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">Segundo párrafo\.<\/w:t>/);
+});
+
+test('parrafosOoxmlDesdeHtml aplana enlaces a su texto visible, sin dejar el <a>', () => {
+  const html = '<p>Fuente: <a href="https://dane.gov.co">DANE</a>.</p>';
+  const xml = parrafosOoxmlDesdeHtml(html);
+  assert.match(xml, /<w:t xml:space="preserve">Fuente: DANE\.<\/w:t>/);
+  assert.doesNotMatch(xml, /<a /);
+});
+
+test('parrafosOoxmlDesdeHtml devuelve cadena vacía si el HTML no trae <p>', () => {
+  assert.equal(parrafosOoxmlDesdeHtml(''), '');
+  assert.equal(parrafosOoxmlDesdeHtml(null), '');
+});
+
+test('actualizarApartadosMacroOoxml reemplaza la prosa de mundial y colombia con la narrativa de Firestore', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto de END GAME sobre Colombia, 2024.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa real del mundo para este cliente.</p>',
+      colombia: '<p>Narrativa real de Colombia para este cliente.</p>',
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.match(salida, /Narrativa real del mundo para este cliente\./);
+  assert.match(salida, /Narrativa real de Colombia para este cliente\./);
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.equal(avisos.length, 0);
+});
+
+test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narrativa, y avisa', () => {
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto de END GAME sobre el mundo, 2024.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, null, 2026, avisos);
+
+  assert.doesNotMatch(salida, /Texto de END GAME/);
+  assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
+  assert.ok(avisos.length >= 1);
 });
