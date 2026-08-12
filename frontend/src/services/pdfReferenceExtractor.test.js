@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
+  normalizarCaracteresMatematicos,
 } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
@@ -394,4 +395,17 @@ test('el encabezado sabe de qué lado va y desde qué página', async () => {
   /* Medido: la primera con logo es la 5. Una medición por geometría exacta decía 6
      porque la de la página 5 está unos puntos desplazada respecto a las siguientes. */
   assert.strictEqual(desde, 5);
+});
+
+test('normalizarCaracteresMatematicos traduce simbolos matematicos de LaTeX/Unicode a ASCII legible', () => {
+  // Mayúsculas cursivas matemáticas (𝐴𝑅)
+  assert.strictEqual(normalizarCaracteresMatematicos('𝐴𝑅 Adjustment'), 'AR Adjustment');
+  
+  // Ecuación corrupta real de la plantilla
+  const ecuacionCorrupta = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴'; // Contiene caracteres cursivos y negritas mezclados
+  assert.strictEqual(normalizarCaracteresMatematicos(ecuacionCorrupta).replace(/\s+/g, ' '), 'AAAAAATTTT AA');
+
+  // Letras matemáticas combinadas: negritas, cursivas, sans-serif, monospace
+  const combinadas = '𝐉𝑲𝖫𝗤𝚡'; // J negrita, K cursiva, L sans-serif, Q sans-serif negrita, x monospace
+  assert.strictEqual(normalizarCaracteresMatematicos(combinadas), 'JKLQx');
 });
