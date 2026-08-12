@@ -13,6 +13,7 @@ import {
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
+  localizarHitos, reemplazarPorHitos,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 
@@ -1263,4 +1264,66 @@ test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narra
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.match(salida, /\[Actualizar con el análisis del panorama de la economía mundial/);
   assert.ok(avisos.length >= 1);
+});
+
+test('localizarHitos encuentra los encabezados en orden y da el fin de cada uno', () => {
+  const xml = [
+    parrafoXml('Uno'),
+    parrafoXml('Dos'),
+    parrafoXml('Tres'),
+  ].join('');
+  const hitos = localizarHitos(xml, ['Uno', 'Tres']);
+  assert.equal(hitos.length, 2);
+  assert.ok(hitos[0]);
+  assert.ok(hitos[1]);
+  assert.ok(hitos[0].inicio < hitos[0].finPropio);
+  assert.ok(hitos[0].finPropio <= hitos[1].inicio);
+});
+
+test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanzar', () => {
+  const xml = parrafoXml('Uno') + parrafoXml('Tres');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres']);
+  assert.ok(hitos[0]);
+  assert.equal(hitos[1], null);
+});
+
+test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {
+  const entradaToc = '<w:p><w:r><w:t>Uno</w:t></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
+  const xml = entradaToc + parrafoXml('Uno') + parrafoXml('Dos');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos']);
+  assert.ok(hitos[0].inicio > entradaToc.length - 1);
+});
+
+test('reemplazarPorHitos reemplaza el hueco cuando la función de contenido devuelve texto', () => {
+  const xml = [
+    parrafoXml('Encabezado A'),
+    parrafoXml('Prosa vieja que debe irse.'),
+    parrafoXml('Encabezado B'),
+  ].join('');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => parrafoXml('Prosa nueva.')], []);
+  assert.match(doc.xml, /Prosa nueva\./);
+  assert.doesNotMatch(doc.xml, /Prosa vieja/);
+  assert.match(doc.xml, /Encabezado A/);
+  assert.match(doc.xml, /Encabezado B/);
+});
+
+test('reemplazarPorHitos no toca el hueco cuando la función de contenido devuelve null', () => {
+  const xml = [
+    parrafoXml('Encabezado A'),
+    parrafoXml('Tabla que no hay que tocar.'),
+    parrafoXml('Encabezado B'),
+  ].join('');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => null], []);
+  assert.match(doc.xml, /Tabla que no hay que tocar\./);
+});
+
+test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () => {
+  const xml = parrafoXml('Encabezado A');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => 'nunca se usa'], avisos, 'III.A');
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0], /III\.A/);
 });

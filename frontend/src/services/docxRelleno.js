@@ -471,6 +471,84 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
   return null;
 }
 
+/**
+ * Los `titulos`, en el orden en que deben aparecer en el documento, con dónde empieza
+ * y dónde termina el párrafo de cada uno. Sirve para delimitar TODOS los huecos entre
+ * un encabezado y el siguiente en un solo recorrido — `localizarBloqueProsa` resuelve
+ * un único hueco; esta es su generalización a una cadena de encabezados.
+ *
+ * Se exige que aparezcan en ESE orden: en cuanto se encuentra el título `i`, la
+ * búsqueda del título `i+1` empieza después de él, nunca antes ni desde el principio
+ * del documento — así una tabla que se llame igual que un encabezado posterior no se
+ * confunde con él.
+ *
+ * @param {string} xml
+ * @param {string[]} titulos
+ * @returns {Array<{inicio:number, finPropio:number}|null>}
+ */
+export function localizarHitos(xml, titulos) {
+  const texto = String(xml || '');
+  const claves = (titulos || []).map(claveTitulo);
+  const resultado = new Array(claves.length).fill(null);
+  if (!claves.length) return resultado;
+
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  let objetivo = 0;
+  let m;
+  while (objetivo < claves.length && (m = rxParrafo.exec(texto)) !== null) {
+    if (m[0].includes('PAGEREF')) continue;
+    const clave = claveTitulo(textoPlanoOoxml(m[0]));
+    if (clave.includes(claves[objetivo])) {
+      resultado[objetivo] = { inicio: m.index, finPropio: m.index + m[0].length };
+      objetivo += 1;
+    }
+  }
+  return resultado;
+}
+
+/**
+ * Reemplaza, uno por uno, los huecos entre una lista ordenada de encabezados. Cada
+ * hueco es el texto entre el final del párrafo de un hito y el inicio del párrafo del
+ * siguiente — el propio encabezado nunca se toca.
+ *
+ * @param {{aplicar:(f:(s:string)=>string)=>void}} doc  un `sustituidorDeTablas`.
+ * @param {string[]} titulos
+ * @param {Array<(textoHueco:string)=>(string|null)>} contenidos  longitud
+ *        `titulos.length - 1`; recibe el texto plano ya existente en ese hueco (para
+ *        decidir si hace falta tocarlo) y devuelve el OOXML nuevo, o `null` para
+ *        dejarlo como está.
+ * @param {string[]} [avisos]
+ * @param {string} [nombreParaAvisos]
+ */
+export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaAvisos) {
+  doc.aplicar((actual) => {
+    const hitos = localizarHitos(actual, titulos);
+    console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
+      + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+    let salida = actual;
+    for (let i = contenidos.length - 1; i >= 0; i -= 1) {
+      const hitoActual = hitos[i];
+      const hitoSiguiente = hitos[i + 1];
+      if (!hitoActual || !hitoSiguiente) {
+        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
+        console.warn('[docxRelleno] ' + aviso);
+        if (Array.isArray(avisos)) avisos.push(aviso);
+        continue;
+      }
+      const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+      const nuevo = contenidos[i](textoHueco);
+      if (nuevo === null) {
+        console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": sin tocar');
+        continue;
+      }
+      console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
+        + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+      salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
+    }
+    return salida;
+  });
+}
+
 /** Texto de un fragmento de HTML de narrativa (sin sus etiquetas), con las entidades
  *  básicas deshechas — misma lista que `escaparXml` invierte, porque este texto vuelve
  *  a pasar por `escaparXml` al escribirse en el run. */
