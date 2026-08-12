@@ -74,14 +74,14 @@ export function analizarRango(estudio) {
   };
   const tPLI = pliOf(T, kind);
 
-  const { filas, stats, statsNoAjustado } = porMetodologiaOCDE(study, kind);
+  const { filas, stats, statsNoAjustado, statsAjustado } = porMetodologiaOCDE(study, kind);
 
   const adj = stats && tPLI !== null ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
   /* 'CUMPLE' cuando no hay ajuste es comportamiento heredado, no un descuido.
      Ver la nota de la Task 0 del plan antes de cambiarlo. */
   const cumple = adj ? (adj.within ? 'CUMPLE' : 'NO CUMPLE') : 'CUMPLE';
 
-  return { stats, statsNoAjustado, adj, cumple, filas };
+  return { stats, statsNoAjustado, statsAjustado, adj, cumple, filas };
 }
 
 /* Ruta unificada: el mismo motor que emite las fórmulas del Excel de soporte.
@@ -89,28 +89,41 @@ export function analizarRango(estudio) {
    ignoraba —el filtro de ámbito (`cmode`) y el descuento del segmento excluido—,
    de modo que el rango del documento pasa a ser el que se ve en el tablero. */
 function porMetodologiaOCDE(study, kind) {
-  const ajuste = study.useadj ? SABOR_INFORME : 'ninguno';
   const preparado = {
     ...study,
     t_op: aConvenioOCDE({ s: study.t_s, c: study.t_c, op: study.t_op }).op,
     comparables: (study.comparables || []).map(aConvenioOCDE),
   };
-  const r = analizarRangoAjustado(preparado, kind, ajuste);
 
-  /* La estadística del escenario SIN ajuste, que es la columna «NO AJUSTADO» de las
-     tablas del informe y la columna S del libro de soporte. Se pide al motor en vez
-     de recalcularla: `docxRelleno.js` la ordenaba y la cuartilaba por su cuenta, sin
-     el filtro de ámbito, de modo que las dos columnas de una misma tabla salían sobre
-     universos distintos. Cuando el escenario reportado ya es «ninguno» no hace falta
-     una segunda pasada. */
-  const statsNoAjustado = ajuste === 'ninguno'
-    ? r.stats
-    : analizarRangoAjustado(preparado, kind, 'ninguno').stats;
+  /* Los DOS escenarios se calculan siempre, sin mirar `useadj`. Las tablas del informe
+     tienen una columna que se titula «AJUSTADO» y otra «NO AJUSTADO», y cada una debe
+     llevar lo que su encabezado promete.
+
+     Antes solo se corría el escenario que `useadj` seleccionaba y el otro se copiaba: con
+     la casilla apagada, la columna «RANGE MO AJUSTADO» publicaba el rango sin ajustar
+     —0,54 % donde el ajuste da 0,21 %—, repitiendo la columna de al lado. El número
+     ajustado ya estaba calculado y el libro de soporte lo publicaba en su columna
+     CxC+CxP+Inv; el informe simplemente no lo llevaba a la tabla.
+
+     Se le piden al motor y no se recalculan aquí: `docxRelleno.js` los ordenaba y
+     cuartilaba por su cuenta, sin el filtro de ámbito (`cmode`), de modo que las dos
+     columnas de una misma tabla salían sobre universos distintos. */
+  const conAjuste = analizarRangoAjustado(preparado, kind, SABOR_INFORME);
+  const sinAjuste = analizarRangoAjustado(preparado, kind, 'ninguno');
+
+  /* `useadj` sigue decidiendo UNA cosa: cuál de los dos rangos sostiene la conclusión de
+     cumplimiento. Eso es metodología del estudio —si el análisis ajusta o no por capital
+     de trabajo— y no le corresponde a una tabla. Lo que la casilla ya no decide es si el
+     documento muestra un número que tiene calculado. */
+  const reportado = study.useadj ? conAjuste : sinAjuste;
 
   return {
-    stats: r.stats,
-    statsNoAjustado,
-    filas: r.filas.map((f) => ({
+    stats: reportado.stats,
+    statsNoAjustado: sinAjuste.stats,
+    statsAjustado: conAjuste.stats,
+    /* Las filas salen de la pasada CON ajuste porque trae las dos cifras de cada
+       comparable: `noAjustado` es su margen tal cual y `valor` el ajustado. */
+    filas: conAjuste.filas.map((f) => ({
       nombre: f.nombre,
       amb: f.amb,
       noAjustado: f.noAjustado,

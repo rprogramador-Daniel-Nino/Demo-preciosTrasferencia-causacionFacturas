@@ -204,7 +204,11 @@ export function filasMuestraComparables(study) {
 export function filasRangoIntercuartil(study) {
   const estudio = study || {};
   const r = analizarRango(estudio);
-  const stats = r.stats || {};
+  /* `statsAjustado` y NO `stats`: el segundo es el escenario que sostiene la conclusión
+     —el que elige `useadj`—, mientras esta columna se titula «AJUSTADO» y tiene que
+     llevar el rango ajustado por capital de trabajo, que el motor calcula siempre. Con
+     `stats` aquí, un estudio con la casilla apagada repetía la columna de al lado. */
+  const stats = r.statsAjustado || {};
   /* La estadística del escenario SIN ajuste se le pide al motor (`statsNoAjustado`) en vez
      de ordenar la serie aquí. Ordenarla a mano fue el defecto que Juan corrigió el
      2026-08-11 en `rangoIntercuartil.js`: ese cálculo propio no aplicaba el filtro de
