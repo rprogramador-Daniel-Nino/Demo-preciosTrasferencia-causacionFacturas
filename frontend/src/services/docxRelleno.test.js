@@ -1183,6 +1183,24 @@ test('localizarBloqueProsa devuelve null si el encabezado de inicio existe pero 
   assert.equal(localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']), null);
 });
 
+test('localizarBloqueProsa ignora la entrada de la Tabla de Contenido y encuentra el encabezado real del cuerpo', () => {
+  const entradaToc = '<w:p><w:pPr><w:pStyle w:val="TDC2"/></w:pPr><w:r><w:t>Análisis del Panorama de la Economía Mundial</w:t></w:r>'
+    + '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
+  const xml = [
+    entradaToc,
+    parrafoXml('B. Análisis del panorama de la economía colombiana'), // otra entrada del TOC, distinta
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'), // encabezado real del cuerpo
+    parrafoXml('La prosa real que hay que reemplazar.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+  ].join('');
+
+  const bloque = localizarBloqueProsa(xml, 'Análisis del Panorama de la Economía Mundial', ['PIB Mundial']);
+  assert.ok(bloque);
+  const dentro = xml.slice(bloque.inicio, bloque.fin);
+  assert.doesNotMatch(dentro, /economía colombiana/);
+  assert.match(dentro, /La prosa real que hay que reemplazar/);
+});
+
 test('parrafosOoxmlDesdeHtml convierte cada <p> en un párrafo y <strong> en negrita', () => {
   const html = '<p>Primer párrafo con <strong>énfasis</strong> normal.</p><p>Segundo párrafo.</p>';
   const xml = parrafosOoxmlDesdeHtml(html);

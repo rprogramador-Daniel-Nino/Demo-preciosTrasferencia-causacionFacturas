@@ -453,6 +453,12 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
   let p;
   let inicio = null;
   while ((p = rxParrafo.exec(texto)) !== null) {
+    /* La Tabla de Contenido repite el mismo texto de cada encabezado en un párrafo con
+       un campo PAGEREF, antes de que aparezca el encabezado real del cuerpo. Sin este
+       filtro, `inicio` caía en la entrada del TOC —que nunca lleva la prosa del
+       apartado— y todo lo que hay entre el TOC y la primera tabla (el índice entero)
+       se tomaba como si fuera la prosa a reemplazar. */
+    if (p[0].includes('PAGEREF')) continue;
     const clave = claveTitulo(textoPlanoOoxml(p[0]));
     if (inicio === null) {
       if (clave.includes(claveInicio)) inicio = p.index;
