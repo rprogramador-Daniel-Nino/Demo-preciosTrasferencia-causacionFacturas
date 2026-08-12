@@ -2015,10 +2015,7 @@
     /* rapidez: los inputs usan calcD (debounce 220 ms); el motor y las exportaciones llaman calc() directo */
     let _calcT = null; function calcD() { clearTimeout(_calcT); _calcT = setTimeout(() => { try { calc(); } catch (e) { console.error(e); } }, 220); }
     const fmt = (n, d = 0) => n === null || isNaN(n) ? '—' : n.toLocaleString('es-CO', { minimumFractionDigits: d, maximumFractionDigits: d });
-    /* Espacio antes del signo, que es la norma tipográfica en español y lo que ahora emite
-       también `pctf` del gestor: los dos formateadores tienen que dar la misma cadena, porque
-       el mismo estudio se puede publicar por cualquiera de las dos rutas. */
-    const pctf = n => n === null || isNaN(n) ? '—' : (n * 100).toLocaleString('es-CO', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' %';
+    const pctf = n => n === null || isNaN(n) ? '—' : (n * 100).toLocaleString('es-CO', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + '%';
     const PLIN = { MO: 'Margen Operacional (MO)', MB: 'Margen Bruto (MB)', Berry: 'Razón Berry' };
 
     /* ================= MEMORIA HISTÓRICA (persistente) ================= */
@@ -3605,13 +3602,12 @@ ${textoTotal}`;
       }
       const calculado = ai.within ? 0 : ai.capped;
       const dif = calculado - conocido;
-      /* Fracción, no porcentaje: `pctf` multiplica por 100 él mismo y pone el signo. */
-      const pct = conocido !== 0 ? Math.abs(dif / conocido) : null;
-      if (Math.abs(dif) < 1000000 || (pct !== null && pct < 0.01)) {
-        el.innerHTML = '<div class="alert-green" style="margin-top:8px"><b>✓ Verificación cruzada:</b> el ajuste calculado (COP ' + fmt(calculado) + ') COINCIDE con el conocido (COP ' + fmt(conocido) + '). Diferencia: COP ' + fmt(dif) + (pct !== null ? ' (' + pctf(pct) + ')' : '') + '.</div>';
+      const pct = conocido !== 0 ? Math.abs(dif / conocido * 100) : null;
+      if (Math.abs(dif) < 1000000 || (pct !== null && pct < 1)) {
+        el.innerHTML = '<div class="alert-green" style="margin-top:8px"><b>✓ Verificación cruzada:</b> el ajuste calculado (COP ' + fmt(calculado) + ') COINCIDE con el conocido (COP ' + fmt(conocido) + '). Diferencia: COP ' + fmt(dif) + (pct !== null ? ' (' + pct.toFixed(2) + '%)' : '') + '.</div>';
       }
       else {
-        el.innerHTML = '<div class="alert-amber" style="margin-top:8px"><b>⚠ Verificación cruzada — DISCREPANCIA:</b> calculado COP ' + fmt(calculado) + ' vs conocido COP ' + fmt(conocido) + ' → diferencia COP ' + fmt(dif) + (pct !== null ? ' (' + pctf(pct) + ')' : '') + '. Revise: comparables usados, PLI, año de cifras, unidad de los EEFF y tope del egreso.</div>';
+        el.innerHTML = '<div class="alert-amber" style="margin-top:8px"><b>⚠ Verificación cruzada — DISCREPANCIA:</b> calculado COP ' + fmt(calculado) + ' vs conocido COP ' + fmt(conocido) + ' → diferencia COP ' + fmt(dif) + (pct !== null ? ' (' + pct.toFixed(1) + '%)' : '') + '. Revise: comparables usados, PLI, año de cifras, unidad de los EEFF y tope del egreso.</div>';
       }
     }
 
@@ -3707,10 +3703,7 @@ ${textoTotal}`;
       if (o.holding && cfg.holding === 'excluir') return { out: 'Sociedad de inversión/holding sin actividad operativa propia: excluida (funciones, activos y riesgos no comparables, Art. 260-4 E.T.)' };
       var socioMax = maxParticipacion(o.holders);
       var topeIndep = (window.PT_CRITERIOS && PT_CRITERIOS.independenciaTope) || 50;
-      /* `socioMax` y `topeIndep` vienen YA en porcentaje (50, no 0,5), así que se dividen antes
-         de pasarlos a `pctf`, que multiplica. Es una cita del Art. 260-1 y el número tiene que
-         salir con el mismo formato que el resto del informe. */
-      if (socioMax !== null && socioMax > topeIndep) return { out: 'No independiente: un solo accionista concentra el ' + pctf(socioMax / 100) + ' de la propiedad, superior al ' + pctf(topeIndep / 100) + ' admitido; existe vinculación por control (Art. 260-1 E.T.).' };
+      if (socioMax !== null && socioMax > topeIndep) return { out: 'No independiente: un solo accionista concentra el ' + socioMax.toFixed(2) + ' % de la propiedad, superior al ' + topeIndep + ' % admitido; existe vinculación por control (Art. 260-1 E.T.).' };
       if (o.saldoNeg && o.saldoNeg.length && cfg.saldoneg === 'excluir') return { out: 'Saldo negativo en ' + o.saldoNeg.map(k => ({ ar: 'Cuentas por cobrar', inv: 'Inventario', ap: 'Cuentas por pagar' }[k])).join('/') + ': dato no verosímil, se excluye de la muestra' };
       if (cfg.act === 'estricto' && o.perfil !== 'SERVICIO' && !o.continuidadTabla) return { out: 'Perfil ' + o.perfil + ': excluido en modo estricto (Art. 260-4 — solo prestadores de servicios)' };
       if (cfg.act === 'estandar' && o.perfil === 'INDEFINIDO' && !o.continuidadTabla) return { out: 'Perfil funcional indefinido: excluido en modo estándar; disponible en modo amplio con revisión manual' };
@@ -8763,7 +8756,7 @@ se guía la descarga manual
           'Las Directrices de la OCDE no imponen excluirlas de forma automática: una pérdida puede reflejar el ciclo normal del negocio. Sí exigen analizar si obedece a circunstancias extraordinarias ajenas al giro ordinario.',
           '<i>Conservar dejando constancia</i> las mantiene y anota la exigencia de verificar el origen de la pérdida. <i>Excluir</i> las saca del conjunto. <i>Admitir sin observación</i> no deja rastro y no es recomendable.',
           elPerdida
-            ? '<b>' + escH(elPerdida.name) + '</b> presenta un margen operacional de ' + pctf(elPerdida.op / elPerdida.s) + '. Conservarla arrastra el cuartil inferior hacia abajo y ensancha el rango; excluirla lo estrecha. La decisión debe tomarse y quedar motivada, no dejarse al azar.'
+            ? '<b>' + escH(elPerdida.name) + '</b> presenta un margen operacional de ' + ((elPerdida.op / elPerdida.s) * 100).toFixed(2) + ' %. Conservarla arrastra el cuartil inferior hacia abajo y ensancha el rango; excluirla lo estrecha. La decisión debe tomarse y quedar motivada, no dejarse al azar.'
             : 'Una comparable con margen de −30 % arrastra el primer cuartil hacia abajo. Conservarla amplía el rango; excluirla lo estrecha. En ambos casos la decisión queda escrita en el informe.');
 
         h += bloque('4 · Independencia',
@@ -8771,7 +8764,7 @@ se guía la descarga manual
           'El Art. 260-1 del Estatuto Tributario define la vinculación económica. Una compañía controlada no sirve como comparable: sus precios pueden no responder a condiciones de mercado.',
           'El <i>tope</i> fija el porcentaje a partir del cual se considera control —50 % es lo usual—. Para las compañías cuya composición accionaria la fuente no reporta, puede <i>admitirlas con constancia</i> o <i>excluirlas</i>.',
           elControl
-            ? '<b>' + escH(elControl.name) + '</b> tiene un accionista con el ' + pctf(maxParticipacion(elControl.holders) / 100) + ' de la propiedad. Supera el tope del ' + pctf(K.independenciaTope / 100) + ' y se rechaza por no ser independiente, con cita expresa del Art. 260-1.'
+            ? '<b>' + escH(elControl.name) + '</b> tiene un accionista con el ' + maxParticipacion(elControl.holders).toFixed(2) + ' % de la propiedad. Supera el tope del ' + K.independenciaTope + ' % y se rechaza por no ser independiente, con cita expresa del Art. 260-1.'
             : 'Una compañía en la que un solo accionista concentra el 51 % se rechaza por vinculación por control, con cita del Art. 260-1.');
 
         h += bloque('5 · Ejercicios analizados',
@@ -8793,7 +8786,7 @@ se guía la descarga manual
         h += '<table style="width:100%;font-size:11px;border-collapse:collapse">' +
           '<thead><tr style="background:#EBF5FB"><th style="text-align:left;padding:5px;border:1px solid #D5DBDB">Paso</th><th style="text-align:left;padding:5px;border:1px solid #D5DBDB">Qué se verifica</th><th style="text-align:left;padding:5px;border:1px solid #D5DBDB">Resultado en el ejemplo</th></tr></thead><tbody>' +
           [['1. Análisis funcional', '¿Su actividad principal coincide con la de la parte examinada?', ej ? (MOTOR.motivo[nameKey(ej.name)] ? escH(MOTOR.motivo[nameKey(ej.name)].slice(0, 90)) : ((act && act.resumen) ? escH(act.resumen) : 'Ver motivo individual en el Anexo D')) : ((act && act.resumen) ? escH(act.resumen) : 'Actividad específica no determinada')],
-          ['2. Independencia', '¿Algún accionista supera el ' + pctf(K.independenciaTope / 100) + '?', (function () { var s = ej ? maxParticipacion(ej.holders) : null; return s !== null && s !== undefined ? pctf(s / 100) + ' → ' + (s > K.independenciaTope ? 'RECHAZADA' : 'pasa') : 'sin dato reportado'; })()],
+          ['2. Independencia', '¿Algún accionista supera el ' + K.independenciaTope + ' %?', (function () { var s = ej ? maxParticipacion(ej.holders) : null; return s !== null && s !== undefined ? s.toFixed(2) + ' % → ' + (s > K.independenciaTope ? 'RECHAZADA' : 'pasa') : 'sin dato reportado'; })()],
           ['3. Operación vigente', '¿Estuvo en operación durante el período?', 'Sí'],
           ['4. Información financiera', '¿Tiene ingresos y utilidad operacional del período?', ej && ej.s !== null ? 'Sí' : 'No'],
           ['5. Mercado geográfico', '¿Opera en el ámbito exigido?', ej ? escH(ej.pais || 'no reportado') + ' → ' + (K.geografia === 'global' ? 'se acepta y se documenta' : 'se evalúa contra el criterio') : '—'],
@@ -9087,8 +9080,8 @@ se guía la descarga manual
             if (vinc > 0) {
               var razon = vinc / ing;
               if (razon > 1.02) H.push({ id: 'cruce_ops', estado: 'error', sev: 'error', msg: 'El ingreso con el vinculado registrado en la plantilla de operaciones (' + fmt(vinc) + ') supera los ingresos operacionales de los estados financieros (' + fmt(ing) + '). Verifique que ambas fuentes correspondan al mismo año gravable.' });
-              else if (razon > 1) H.push({ id: 'cruce_ops', estado: 'aviso', sev: 'aviso', msg: 'El ingreso con el vinculado (' + fmt(vinc) + ') equivale al ' + pctf(razon) + ' de los ingresos operacionales: excede levemente el total. Suele indicar que la plantilla de operaciones y los estados financieros son de períodos distintos.' });
-              else H.push({ id: 'cruce_ops', estado: 'ok', msg: 'El ingreso con el vinculado (' + fmt(vinc) + ') es consistente con los ingresos operacionales: representa el ' + pctf(razon) + ' de los ingresos.' });
+              else if (razon > 1) H.push({ id: 'cruce_ops', estado: 'aviso', sev: 'aviso', msg: 'El ingreso con el vinculado (' + fmt(vinc) + ') equivale al ' + (razon * 100).toFixed(1) + ' % de los ingresos operacionales: excede levemente el total. Suele indicar que la plantilla de operaciones y los estados financieros son de períodos distintos.' });
+              else H.push({ id: 'cruce_ops', estado: 'ok', msg: 'El ingreso con el vinculado (' + fmt(vinc) + ') es consistente con los ingresos operacionales: representa el ' + (razon * 100).toFixed(1) + ' % de los ingresos.' });
             }
           }
         } catch (e) { }
@@ -9098,8 +9091,8 @@ se guía la descarga manual
           var pa = j.periodo_anterior || {};
           if (pa.ingresos_operacionales && ing) {
             var varr = (ing - pa.ingresos_operacionales) / pa.ingresos_operacionales;
-            if (Math.abs(varr) > 2) H.push({ id: 'variacion', estado: 'aviso', sev: 'aviso', msg: 'Los ingresos varían un ' + pctf(varr) + ' frente al período anterior; confirme que ambas columnas correspondan al mismo concepto.' });
-            else H.push({ id: 'variacion', estado: 'ok', msg: 'Variación de ingresos frente al período anterior: ' + pctf(varr) + '.' });
+            if (Math.abs(varr) > 2) H.push({ id: 'variacion', estado: 'aviso', sev: 'aviso', msg: 'Los ingresos varían un ' + (varr * 100).toFixed(0) + ' % frente al período anterior; confirme que ambas columnas correspondan al mismo concepto.' });
+            else H.push({ id: 'variacion', estado: 'ok', msg: 'Variación de ingresos frente al período anterior: ' + (varr * 100).toFixed(1) + ' %.' });
           }
         } catch (e) { }
 
@@ -9897,7 +9890,7 @@ se guía la descarga manual
         var eeff = ['t_s', 't_c', 't_op', 't_ar', 't_inv', 't_ap', 'patrimonio', 'ingbrutos']
           .map(function (id) { return id + '=' + (g(id) || '—'); }).join(' · ');
         P.push('ESTADOS FINANCIEROS DE LA PARTE EXAMINADA\n· ' + eeff +
-          (window.LAST && window.LAST.tPLI !== null && window.LAST.tPLI !== undefined ? '\n· Indicador aplicado: ' + g('pli') + ' = ' + pctf(window.LAST.tPLI) : ''));
+          (window.LAST && window.LAST.tPLI !== null && window.LAST.tPLI !== undefined ? '\n· Indicador aplicado: ' + g('pli') + ' = ' + (window.LAST.tPLI * 100).toFixed(3) + ' %' : ''));
 
         /* operaciones */
         try {
@@ -9927,8 +9920,8 @@ se guía la descarga manual
               seleccionadas.map(function (o) { return o.name + ' [' + (o.id || 's/id') + ']'; }).join(' · ') +
               '\n· Del estudio anterior: ' + nPrevias + ' · nuevas: ' + (seleccionadas.length - nPrevias));
           }
-          if (window.LAST && LAST.st) P.push('RANGO\n· P25 ' + pctf(LAST.st.p25) + ' · mediana ' +
-            pctf(LAST.st.med) + ' · P75 ' + pctf(LAST.st.p75));
+          if (window.LAST && LAST.st) P.push('RANGO\n· P25 ' + (LAST.st.p25 * 100).toFixed(3) + ' % · mediana ' +
+            (LAST.st.med * 100).toFixed(3) + ' % · P75 ' + (LAST.st.p75 * 100).toFixed(3) + ' %');
         } catch (e) { }
 
         /* criterios adoptados */
@@ -11823,7 +11816,7 @@ se guía la descarga manual
             '<table class="rep"><thead><tr><th>Vinculado</th><th>Tipo</th><th>Monto</th><th>% del tope</th></tr></thead><tbody>' +
             D.informativas.map(function (r) {
               return '<tr><td>' + escH(r.vinculado) + '</td><td>' + escH(r.tipo || r.seccion || '—') + '</td><td class="n">' + C(r.monto) + '</td>' +
-                '<td class="n">' + pctf(r.monto / r.topeCOP) + '</td></tr>';
+                '<td class="n">' + ((r.monto / r.topeCOP) * 100).toFixed(1) + ' %</td></tr>';
             }).join('') + '</tbody></table>';
         }
 
@@ -12165,7 +12158,7 @@ se guía la descarga manual
           '<table class="rep"><thead><tr><th>Dato</th><th>Período anterior</th><th>Año en curso</th><th>Variación</th><th>Prevalece</th></tr></thead><tbody>' +
           L.map(function (c) {
             return '<tr><td>' + escH(c.campo) + '</td><td>' + escH(c.valorPrevio.slice(0, 90)) + '</td><td>' + escH(c.valorNuevo.slice(0, 90)) + '</td>' +
-              '<td>' + (c.variacion === null || c.variacion === undefined ? '—' : pctf(c.variacion / 100)) + '</td>' +
+              '<td>' + (c.variacion === null || c.variacion === undefined ? '—' : c.variacion.toFixed(1) + ' %') + '</td>' +
               '<td>' + escH(ETIQUETA[c.prevalece] || c.prevalece) + '</td></tr>';
           }).join('') + '</tbody></table>';
       };
