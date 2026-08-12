@@ -950,6 +950,36 @@ test('la descripción de una tabla se actualiza con las cifras del estudio', asy
     'no se toca una sola palabra');
 });
 
+test('la descripción actualizada llega al documento que se descarga', async () => {
+  /* El primer intento no servía de nada: el generador hacía `xml = actualizarProsa(xml…)`
+     sobre una variable local, pero devuelve el XML del sustituidor, así que el cambio se
+     descartaba en silencio. La prueba de la función pasaba y el informe salía igual. Esta
+     va por la ruta completa —`rellenarDocx`— para que eso no vuelva a colarse. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 18. Rango Intercuartil'),
+    tablaRango(),
+    parrafoConCifras(['-3.001%', '6.418%', '-1.075%']),
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO, pli: 'MO', cmode: 'all', useadj: false, prime: '7.37',
+      t_s: 1000, t_c: 600, t_op: 100,
+      comparables: [
+        { name: 'Uno', s: 1000, c: 600, op: 100 },
+        { name: 'Dos', s: 2000, c: 1600, op: 260 },
+        { name: 'Tres', s: 3000, c: 2400, op: 300 },
+        { name: 'Cuatro', s: 1500, c: 900, op: 200 },
+      ],
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+  ['-3.001', '6.418', '-1.075'].forEach((v) =>
+    assert.ok(!texto.includes(v), `la cifra ${v} de la plantilla tenía que irse del .docx`));
+  assert.ok(/percentil 25 \([\d.,]+ ?%\)/.test(texto), 'y quedar una cifra del estudio');
+});
+
 test('si la descripción no trae las cifras esperadas se deja como estaba', async () => {
   /* Con más números de los previstos —o en otro orden— la sustitución pondría una cifra en
      el sitio de otra, y publicar el P75 donde va la mediana es peor que no tocar nada. */
@@ -966,7 +996,7 @@ test('si la descripción no trae las cifras esperadas se deja como estaba', asyn
   assert.ok(texto.includes('1.11%') && texto.includes('3.33%'), 'la frase queda intacta');
   assert.ok(!texto.includes('9,990'), 'y no se escribe nada');
   assert.strictEqual(avisos.length, 1, 'pero se avisa');
-  assert.match(avisos[0], /3 cifra\(s\) y se esperaban 2/);
+  assert.match(avisos[0], /no trae las 2 cifras que se esperaban/);
 });
 
 /* ══════════════════ ANEXO B — descripciones de comparables ══════════════════ */

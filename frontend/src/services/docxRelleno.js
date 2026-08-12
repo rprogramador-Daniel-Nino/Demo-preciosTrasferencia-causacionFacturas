@@ -423,24 +423,28 @@ export function actualizarProsaTrasTabla(xml, nombres, cifras, avisos) {
       if (previo && previo.inicio === bloque.inicio) break;
     }
 
-    /* El primer párrafo CON TEXTO después de la tabla es su descripción. Los vacíos que la
-       plantilla deja en medio se saltan. */
+    /* Entre la tabla y su descripción hay más párrafos: la línea de la fuente que emite
+       `generarTablaOoxml` («Información suministrada por…»), y los vacíos de la plantilla.
+       Quedarse con el primero que tenga texto tomaba la fuente por descripción, no
+       encontraba las cifras y se iba sin tocar nada ni avisar. Así que se examinan unos
+       cuantos y se elige el primero que traiga EXACTAMENTE las cifras que se esperan. */
     const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
     rxParrafo.lastIndex = bloque.fin;
     let parrafo = null;
-    for (let m = rxParrafo.exec(salida); m; m = rxParrafo.exec(salida)) {
-      if (!textoPlanoOoxml(m[0]).trim()) continue;
-      parrafo = m;
-      break;
+    let conCifra = [];
+    let vistosConCifras = 0;
+    for (let m = rxParrafo.exec(salida), n = 0; m && n < 6; m = rxParrafo.exec(salida), n += 1) {
+      const trozos = [...m[0].matchAll(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g)];
+      const cifras = trozos.filter((t) => RX_SOLO_CIFRA.test(t[2]));
+      if (cifras.length) vistosConCifras += 1;
+      if (cifras.length === esperadas.length) { parrafo = m; conCifra = cifras; break; }
+      /* Una tabla nueva antes de encontrarla: la descripción de ESTA no está. */
+      if (/<w:tbl[ >]/.test(salida.slice(rxParrafo.lastIndex, rxParrafo.lastIndex + 40))) break;
     }
-    if (!parrafo) continue;
-
-    const trozos = [...parrafo[0].matchAll(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g)];
-    const conCifra = trozos.filter((t) => RX_SOLO_CIFRA.test(t[2]));
-    if (conCifra.length !== esperadas.length) {
-      if (Array.isArray(avisos) && conCifra.length) {
-        avisos.push(`la descripción de «${bloque.titulo || nombres}» trae ${conCifra.length} `
-          + `cifra(s) y se esperaban ${esperadas.length}, así que se dejó como estaba`);
+    if (!parrafo) {
+      if (Array.isArray(avisos) && vistosConCifras) {
+        avisos.push(`la descripción de «${bloque.titulo || nombres}» no trae las `
+          + `${esperadas.length} cifras que se esperaban, así que se dejó como estaba`);
       }
       continue;
     }
@@ -489,6 +493,13 @@ function sustituidorDeTablas(xmlInicial, avisos) {
       }
       out = out.slice(0, bloque.inicio) + generar(bloque) + out.slice(bloque.fin);
       return true;
+    },
+    /* Para lo que no es sustituir una tabla entera —la prosa que la describe, por ejemplo—.
+       Existe porque `out` es privado y solo había getter: un `xml = transformar(xml)` en el
+       generador modificaba una variable local que nadie volvía a leer, ya que al final se
+       devuelve `doc.xml`. El cambio se descartaba en silencio, sin fallar ni avisar. */
+    aplicar(transformar) {
+      out = transformar(out);
     },
     get xml() { return out; },
   };
@@ -693,11 +704,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      frase se quedaba con las cifras del informe anterior, contradiciéndola en el mismo
      documento. El orden —P25, P75, mediana— es el de la redacción de la plantilla, no el
      de la tabla, que lista la mediana en medio. */
-  xml = actualizarProsaTrasTabla(
-    xml, 'Rango Intercuartil',
+  doc.aplicar((x) => actualizarProsaTrasTabla(
+    x, 'Rango Intercuartil',
     [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
     avisos,
-  );
+  ));
 
   /* 13. Margen Operacional Compañías Comparables.
 
