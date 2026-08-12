@@ -69,26 +69,28 @@ test('idEeff identifica una empresa por año gravable', () => {
 /* ══════ separación nube / navegador ══════ */
 
 test('separarEstudio deja fuera de la nube los campos pesados', () => {
-  /* Los tres son grandes y no se comparten: el universo son miles de filas con
-     descripción de negocio, el veredicto un dictamen por candidata, y eeffImages las
-     páginas del PDF de estados financieros en base64 —3,4 MB en un caso real, más del
-     triple del techo de 1 MiB por documento. */
+  /* Todos son grandes y no se comparten: el universo son miles de filas con descripción de
+     negocio, el veredicto un dictamen por candidata, eeffImages las páginas del PDF de
+     estados financieros en base64 —3,4 MB en un caso real, más del triple del techo de 1 MiB
+     por documento— y `matrizRechazo` un nombre por cada compañía evaluada, medido en 93 KB
+     con un cribado de 2.986 candidatas. */
   const study = {
     ent: 'Acme', comparables: [],
     universo: [{ id: 1 }, { id: 2 }],
     iaMatch: { porId: { A: {} } },
     eeffImages: ['data:image/png;base64,AAAA'],
     eeffImagenesComparables: { ACME_COMP: ['data:image/png;base64,BBBB'] },
+    matrizRechazo: { porMotivo: { holding: ['UNO SA'] }, universo: 1 },
   };
   const { nube, local } = separarEstudio(study);
   assert.deepStrictEqual(Object.keys(nube).sort(), ['comparables', 'ent']);
   assert.deepStrictEqual(
     Object.keys(local).sort(),
-    ['eeffImagenesComparables', 'eeffImages', 'iaMatch', 'universo'],
+    ['eeffImagenesComparables', 'eeffImages', 'iaMatch', 'matrizRechazo', 'universo'],
   );
   assert.deepStrictEqual(
     CAMPOS_SOLO_LOCALES,
-    ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO],
+    ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', 'matrizRechazo', SELLO_ESTUDIO],
   );
 });
 

@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   filasRazonesRechazo, filasComparablesInforme, diagnosticarCobertura,
+  filasRangoIntercuartil, filasCriteriosScreening,
 } from './tablasInforme.js';
+import { analizarRango } from './rangoIntercuartil.js';
 
 /* Estudio de un cliente que NO es End Game. */
 const otroCliente = {
@@ -63,6 +65,75 @@ test('la fila de diferencias funcionales aparece aunque solo la sostenga la rese
   assert.ok(rigor, 'la fila tiene que aparecer');
   assert.strictEqual(rigor.cuantas, 12);
   assert.ok(cuadra, '12 + 8 = 20');
+});
+
+test('las retiradas por no traer EEFF se cuentan en las diferencias funcionales', () => {
+  /* Al cargar los estados financieros, una comparable cuyo documento no trae cifras sale
+     de la muestra: el componente baja `seleccionadas` y anota `sinEeff`. Si esta fila no
+     las recogiera, la suma dejaría de dar el universo y el generador avisaría de un
+     descuadre inexistente. */
+  const conRetiradas = { ...embudoReal, seleccionadas: 6, sinEeff: 2 };
+  const { filas, cuadra } = filasRazonesRechazo(conRetiradas);
+  assert.ok(!filas.some(f => f.clave === 'sinEeff'), 'no puede tener fila propia en el informe');
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.cuantas, 19, '5 por rigor + 12 de reserva + 2 sin EEFF');
+  assert.ok(cuadra, 'la suma sigue dando el universo evaluado');
+});
+
+test('la fila de diferencias funcionales aparece aunque solo la sostengan las retiradas', () => {
+  const soloSinEeff = { evaluadas: 10, seleccionadas: 9, reserva: 0, sinEeff: 1, porMotivo: {} };
+  const { filas, cuadra } = filasRazonesRechazo(soloSinEeff);
+  const rigor = filas.find(f => f.clave === 'rigorFuncional');
+  assert.ok(rigor, 'la fila tiene que aparecer');
+  assert.strictEqual(rigor.cuantas, 1);
+  assert.ok(cuadra, '1 + 9 = 10');
+});
+
+test('un embudo sin `sinEeff` sigue cuadrando igual', () => {
+  /* Los estudios guardados antes de este cambio no traen la clave. */
+  const { cuadra } = filasRazonesRechazo(embudoReal);
+  assert.ok(cuadra);
+});
+
+test('las filas del rango respetan el filtro de ámbito en las DOS columnas', () => {
+  /* `rangoIntercuartil.test.js` ya comprueba que el motor publica `statsNoAjustado` con el
+     ámbito aplicado. Esta prueba cierra el tramo siguiente: que las filas del informe lo
+     consuman en vez de reordenar la serie por su cuenta.
+
+     Hace falta porque el defecto ya viajó una vez. El cálculo a mano vivía en
+     `docxRelleno.js`, se corrigió en el motor, y al extraer estas filas a este módulo el
+     cálculo antiguo vino con ellas: al integrar las dos ramas la corrección se quedaba sin
+     consumidor y git no marcaba nada, porque cada cambio estaba en un archivo distinto. */
+  const estudio = {
+    pli: 'MO', useadj: true, cmode: 'nac', prime: 7.37, ent: 'ACME',
+    t_s: 1000, t_c: 600, t_op: 200, t_ar: 100, t_inv: 50, t_ap: 80, t_ppe: 300,
+    comparables: [
+      { name: 'Nacional A', amb: 'Nac', s: 500, c: 300, op: 120, ar: 50, inv: 20, ap: 40, ppe: 100 },
+      { name: 'Nacional B', amb: 'Nac', s: 800, c: 500, op: 180, ar: 70, inv: 30, ap: 50, ppe: 120 },
+      { name: 'Nacional C', amb: 'Nac', s: 600, c: 350, op: 150, ar: 60, inv: 25, ap: 45, ppe: 110 },
+      /* Margen deliberadamente extremo: si entra, mueve el mínimo y el máximo. */
+      { name: 'Internacional X', amb: 'Int', s: 900, c: 100, op: 100, ar: 10, inv: 5, ap: 5, ppe: 10 },
+    ],
+  };
+
+  const { filas } = filasRangoIntercuartil(estudio);
+  const de = (etiqueta) => filas.find((f) => f.etiqueta === etiqueta);
+  const extremos = [de('Mínimo'), de('Máximo')];
+
+  /* El margen de la internacional excluida, que es el que no debe asomar. */
+  const rEsperado = analizarRango(estudio);
+  extremos.forEach((f) => {
+    assert.strictEqual(f.noAjustado, rEsperado.statsNoAjustado[f.etiqueta === 'Mínimo' ? 'min' : 'max'],
+      `el ${f.etiqueta.toLowerCase()} no ajustado sale del motor, no de un cálculo propio`);
+  });
+
+  ['Percentil 25', 'Mediana', 'Percentil 75'].forEach((etiqueta) => {
+    const clave = etiqueta === 'Mediana' ? 'med' : (etiqueta === 'Percentil 25' ? 'p25' : 'p75');
+    assert.strictEqual(de(etiqueta).noAjustado, rEsperado.statsNoAjustado[clave],
+      `${etiqueta} no ajustado sale del motor`);
+    assert.strictEqual(de(etiqueta).ajustado, rEsperado.stats[clave],
+      `${etiqueta} ajustado sale del motor`);
+  });
 });
 
 test('filasRazonesRechazo cuadra la suma con el universo evaluado', () => {
@@ -209,4 +280,50 @@ test('el apartado sectorial se reconoce aunque el título venga partido en varia
      buscar la cadena en el HTML crudo no la encontraría. */
   const partido = '<strong>Análisis</strong> <em>del</em> <strong>Sector</strong> económico';
   assert.strictEqual(diagnosticarCobertura(partido, otroCliente).sectorialCubierto, true);
+});
+
+/* ══════════════ Criterios de búsqueda (Tablas 13 a 15) ══════════════ */
+
+test('los criterios de búsqueda alternan cada criterio con su conector', () => {
+  /* La plantilla arma esa tabla así: una fila de dos celdas por criterio (etiqueta y
+     valor) y entre ellas una fila de una sola celda con el conector. El primer criterio
+     no lleva conector delante. */
+  const filas = filasCriteriosScreening({
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Código SIC primario', valor: 'Entre 7371 y 7375' },
+      { conector: 'Y', etiqueta: 'Nivel de propiedad', valor: 'Menos del 50%' },
+      { conector: 'O', etiqueta: 'Palabra clave', valor: 'Contiene juegos' },
+    ],
+  });
+  assert.deepStrictEqual(filas, [
+    ['Código SIC primario', 'Entre 7371 y 7375'],
+    ['Y'],
+    ['Nivel de propiedad', 'Menos del 50%'],
+    ['O'],
+    ['Palabra clave', 'Contiene juegos'],
+  ]);
+});
+
+test('un solo criterio no emite ninguna fila de conector', () => {
+  assert.deepStrictEqual(
+    filasCriteriosScreening({ criteriosScreening: [{ conector: null, etiqueta: 'SIC', valor: '7371' }] }),
+    [['SIC', '7371']]
+  );
+});
+
+test('sin criterios ingeridos no se emite ninguna fila', () => {
+  /* La tabla conserva entonces lo que traía la plantilla y el motor lo avisa. Blanquearla
+     sería peor: quien revisa no sabría que el cribado de este año no dejó criterios. */
+  assert.deepStrictEqual(filasCriteriosScreening({}), []);
+  assert.deepStrictEqual(filasCriteriosScreening({ criteriosScreening: [] }), []);
+});
+
+test('el conector se emite como Y cuando el criterio no lo trae', () => {
+  const filas = filasCriteriosScreening({
+    criteriosScreening: [
+      { conector: null, etiqueta: 'A', valor: '1' },
+      { etiqueta: 'B', valor: '2' },
+    ],
+  });
+  assert.deepStrictEqual(filas, [['A', '1'], ['Y'], ['B', '2']]);
 });

@@ -1,167 +1,141 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    tablasOperacionesHtml.js — las Tablas 1 y 2 en la ruta de plantilla PDF.
 
-   La ruta OOXML rellena el .docx del cliente y regenera veinte tablas
-   (`docxRelleno.js`). La ruta de plantilla PDF no regeneraba ninguna: convierte el
-   informe del año anterior a HTML y solo sustituye lo que quedó envuelto en un
-   `<span data-campo>` por el marcado. Las celdas de estas dos tablas no llevan marca
-   —«Ingreso (07)» y «Otros servicios» no corresponden a ningún campo del
-   vocabulario— así que el informe se radicaba con el concepto, el vinculado, el país
-   y el monto del cliente anterior.
+   POR QUÉ EXISTE. En esta ruta el informe del año anterior se convierte a HTML y solo
+   se sustituye lo que el marcado envolvió en un `<span data-campo>`. Las celdas de
+   estas dos tablas no llevan marca: «Ingreso (07)» y «Otros servicios» no
+   corresponden a ningún campo del vocabulario. Así que el informe se radicaba con el
+   concepto, el vinculado, el país y el monto del cliente anterior.
 
-   POR QUÉ DETERMINISTA Y NO POR MARCADO. Marcar tablas con un modelo es frágil, y
-   aquí además «Otros servicios» es subcadena de «Otros servicios (07)»: la primera se
-   marcaría dentro de la segunda y la segunda quedaría descartada por solape, así que
-   el resultado dependería del orden en que el modelo las propusiera. Es el mismo
-   razonamiento por el que existe `actualizarTablasOperacionesOoxml`.
+   POR QUÉ NO POR MARCADO. «Otros servicios» es subcadena de «Otros servicios (07)»:
+   la primera se marcaría dentro de la segunda y la segunda quedaría descartada por
+   solape, así que el resultado dependería del orden en que el modelo las propusiera.
 
-   SE CONSERVA LA FILA DE ENCABEZADOS. Es el formato del cliente —sus negritas, su
-   sombreado, sus anchos—; solo se reescriben las filas de datos. Y el rótulo tampoco
-   se toca, así que la numeración del cliente sobrevive intacta aunque haya renumerado.
+   LAS PRIMITIVAS SON DE `tablasHtmlInforme.js`. Localizar la tabla por su rótulo y
+   reescribir sus filas conservando el markup del cliente ya estaba resuelto ahí para
+   las tablas del motor y las de macroeconomía. Este módulo solo aporta QUÉ tablas y
+   con qué filas; el cómo es compartido. Llevar aquí una segunda copia del localizador
+   —que es como nació este módulo— dejaba dos definiciones de «qué es el rótulo de una
+   tabla» divergiendo en el mismo documento.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { claveTitulo, numeroDeTabla } from './docxRelleno.js';
-import { resaltarValor } from './estiloDocumento.js';
-import { filasOperacionesDeIngreso, filasOperacionAnalizar } from './tablasOperaciones.js';
+import {
+  localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml,
+} from './tablasHtmlInforme.js';
+import {
+  filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
+  filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+} from './tablasOperaciones.js';
+import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 
-/** Texto visible de un fragmento de HTML, con las entidades deshechas para poder comparar. */
-function textoPlanoHtml(fragmento) {
-  return String(fragmento || '')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&#160;|&nbsp;/gi, ' ')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-}
-
-/* El valor va escapado: sale del OCR de un RUT o de un Excel del cliente y puede traer
-   `&` o `<`. Sin escapar, un `&` rompería el HTML del informe. */
-function escaparHtml(texto) {
-  return String(texto == null ? '' : texto)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+/* La tabla de operaciones se llama de ingreso o de egreso según el sentido de la operación
+   del contribuyente, y la plantilla trae el rótulo que le corresponde: se buscan los dos. */
+export const TABLA_OPERACIONES = ['Operaciones de Ingreso', 'Operaciones de Egreso'];
 
 /**
- * Fin de la etiqueta contenedora que empieza en `desde`, contando anidamiento.
+ * Las tablas que este motor regenera, con lo que cada una necesita de la plantilla.
  *
- * Las tablas y las filas se anidan —la plantilla mete tablas dentro de celdas—, así que
- * un `indexOf('</table>')` cerraría en la interior y partiría el documento.
+ * `todas`: la ficha del vinculado viene DOS veces en la plantilla —rotulada «Tabla 3.» y
+ * «Tabla 12.», una en la descripción del vinculado y otra en el análisis— y las dos
+ * publican lo mismo. Sustituir solo la primera deja la segunda con el vinculado anterior.
  *
- * @returns {{inicioCierre:number, fin:number}|null}
+ * `rotulo`: solo cuando el título lleva un dato. El de los activos y el de las compañías
+ * vinculadas llevan el año gravable, y la plantilla trae el del informe anterior: sin
+ * reescribirlo, el informe de 2025 rotula «al 31 de diciembre de 2024». En las demás el
+ * título no contiene datos y no se toca, que es el criterio de las tablas del motor.
  */
-function finDeElemento(html, desde, etiqueta) {
-  const rx = new RegExp('<' + etiqueta + '(?:\\s[^>]*)?>|</' + etiqueta + '\\s*>', 'gi');
-  rx.lastIndex = desde;
-  let nivel = 0;
-  let m;
-  while ((m = rx.exec(html)) !== null) {
-    nivel += m[0].startsWith('</') ? -1 : 1;
-    if (nivel === 0) return { inicioCierre: m.index, fin: m.index + m[0].length };
+const OBJETIVOS = [
+  { nombres: TABLA_OPERACIONES, filas: filasOperacionesDeIngreso },
+  { nombres: 'Operación analizar', filas: filasOperacionAnalizar },
+  { nombres: 'Transacciones Inter compañía', filas: filasTransaccionesIntercompania, todas: true },
+  { nombres: 'Método de Precios de Transferencia', filas: filasMetodoAplicable },
+  { nombres: 'Composición accionaria', filas: filasComposicionAccionaria },
+  { nombres: 'Compañías vinculadas', filas: filasCompaniasVinculadas, rotulo: true },
+  { nombres: 'Criterios de vinculación', filas: filasCriteriosVinculacion },
+  { nombres: 'Activos a 31 de diciembre', filas: filasActivos, rotulo: true },
+];
+
+/* Tablas que publican datos DEL CLIENTE y que ningún motor sabe regenerar, porque el
+   estudio no tiene dónde guardar su contenido. No se tocan —no hay con qué— pero se nombran
+   en los avisos: la Tabla 7 lista los competidores del contribuyente, y hasta ahora fallaba
+   en silencio, así que los competidores de END GAME viajaban al informe de cualquier cliente.
+
+   La «Tabla 11. Fuentes de Información» NO está aquí a propósito. Sus entradas son
+   instituciones —FMI, Banco de la República, ANDI, DANE, Datos Abiertos— idénticas en todos
+   los informes de la firma, así que no arrastra ningún dato ajeno. Avisar de ella sería un
+   falso «no cubierto», que es como se enseña a la gente a no leer el banner.
+
+   Cada entrada trae su propia explicación porque el banner mezcla estos avisos con nombres
+   de tabla no encontrada y no puede suponer de qué tipo es cada uno. */
+const SIN_MOTOR = [
+  {
+    nombres: 'Competencia nacional e internacional',
+    aviso: 'Competencia nacional e internacional (el estudio no guarda los competidores, '
+      + 'así que hoy trae los del informe de referencia: complétala a mano)',
+  },
+];
+
+/* Sustituye una ocurrencia: primero las filas y DESPUÉS el rótulo. El orden importa —el
+   rótulo está antes en el documento, así que reescribirlo primero movería los offsets del
+   bloque que ya se localizó—; es el mismo orden que sigue `actualizarTablasMacroHtml`. */
+function sustituir(html, bloque, tabla, conRotulo) {
+  let out = html.slice(0, bloque.inicio)
+    + reescribirFilasHtml(html.slice(bloque.inicio, bloque.fin), tabla.filas)
+    + html.slice(bloque.fin);
+
+  if (conRotulo && bloque.rotulo) {
+    const nuevo = reescribirRotuloHtml(bloque.rotulo.xml, tabla.titulo || tabla.nombre);
+    out = out.slice(0, bloque.rotulo.inicio) + nuevo + out.slice(bloque.rotulo.fin);
   }
-  return null;
-}
-
-/* Bloques que pueden llevar el rótulo de una tabla. El extractor de PDF lo emite como
-   `<p><strong> Tabla 1. …</strong></p>`; un cliente puede haberlo puesto como encabezado. */
-const RX_BLOQUE = /<(p|h[1-6])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi;
-
-/* Entre el rótulo y la tabla la plantilla deja párrafos vacíos. Se saltan; en cuanto
-   aparece uno con texto, ese rótulo no era el de esta tabla. */
-const RX_HUECO = /^\s*(?:<p(?:\s[^>]*)?\/>|<p(?:\s[^>]*)?>(?:(?!<\/p\s*>)[\s\S])*?<\/p\s*>)/i;
-
-/**
- * La tabla cuyo rótulo coincide con alguno de los nombres dados.
- *
- * @param html      el informe completo.
- * @param nombres   nombre canónico de la tabla, o varios sinónimos.
- * @param numeros   números con los que desambiguar rótulos homónimos.
- * @returns {{inicioTabla:number, inicioCierre:number, fin:number, numero:number|null}|null}
- */
-export function localizarTablaHtml(html, nombres, numeros = []) {
-  const texto = String(html || '');
-  const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
-  if (!claves.length) return null;
-
-  const candidatos = [];
-  RX_BLOQUE.lastIndex = 0;
-  let b;
-  while ((b = RX_BLOQUE.exec(texto)) !== null) {
-    const titulo = textoPlanoHtml(b[2]);
-    const clave = claveTitulo(titulo);
-    if (!clave || !claves.some((c) => clave.includes(c))) continue;
-
-    let cursor = b.index + b[0].length;
-    for (;;) {
-      const hueco = RX_HUECO.exec(texto.slice(cursor));
-      if (!hueco || textoPlanoHtml(hueco[0]).trim()) break;
-      cursor += hueco[0].length;
-    }
-    const tras = /^\s*<table(?:\s[^>]*)?>/i.exec(texto.slice(cursor));
-    if (!tras) continue;
-
-    const inicioTabla = cursor + tras[0].search(/<table/i);
-    const cierre = finDeElemento(texto, inicioTabla, 'table');
-    if (!cierre) continue;
-    candidatos.push({ inicioTabla, ...cierre, numero: numeroDeTabla(titulo) });
-  }
-
-  if (!candidatos.length) return null;
-
-  /* El número solo desempata. Si el cliente renumeró y ninguno coincide, se sigue con lo
-     que dio el nombre en vez de no encontrar nada: misma regla que la ruta OOXML. */
-  const porNumero = numeros.length ? candidatos.filter((c) => numeros.includes(c.numero)) : [];
-  return (porNumero.length ? porNumero : candidatos)[0];
-}
-
-/** Una fila de datos. La primera celda va en `<th>` porque así la trae la plantilla. */
-function filaHtml(celdas) {
-  return '<tr>' + celdas.map((c, i) => {
-    const et = i === 0 ? 'th' : 'td';
-    return '<' + et + '><p>' + resaltarValor(escaparHtml(c)) + '</p></' + et + '>';
-  }).join('') + '</tr>';
-}
-
-/** Sustituye las filas de datos de `tabla` por las de `filas`, conservando la de encabezados. */
-function reescribirFilas(html, tabla, filas) {
-  /* La primera fila es la de encabezados y se conserva. Si la tabla no trae ninguna, las
-     filas nuevas entran justo antes del cierre. */
-  const iFila = html.indexOf('<tr', tabla.inicioTabla);
-  let desde = tabla.inicioCierre;
-  if (iFila !== -1 && iFila < tabla.inicioCierre) {
-    const cierreFila = finDeElemento(html, iFila, 'tr');
-    if (cierreFila && cierreFila.fin <= tabla.inicioCierre) desde = cierreFila.fin;
-  }
-  return html.slice(0, desde) + filas.map(filaHtml).join('') + html.slice(tabla.inicioCierre);
+  return out;
 }
 
 /**
- * Reescribe las Tablas 1 y 2 del informe en HTML con los datos del estudio.
+ * Reescribe con los datos del estudio las tablas del informe que el marcado no alcanza.
  *
- * @param {string} html     el informe renderizado.
+ * @param {string} html     la plantilla marcada.
  * @param {object} estudio
  * @param {string[]} [avisos] arreglo donde se anotan las tablas que la plantilla no trae.
- *        Sin el aviso, una tabla ausente se queda con las cifras del informe de referencia
- *        y nadie se entera: mismo contrato que `sustituidorDeTablas` de la ruta OOXML.
- * @returns {string} el informe con las dos tablas actualizadas.
+ *        Sin el aviso, una tabla ausente conserva las cifras del informe de referencia y
+ *        nadie se entera. Es el mismo arreglo que llenan los otros dos motores de tablas,
+ *        así que el banner de `ReporteGenerador` las reporta todas por un solo canal.
+ * @returns {string} el informe con las tablas actualizadas.
  */
 export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
   let out = String(html || '');
   if (!estudio) return out;
 
-  const objetivos = [
-    { nombres: ['Operaciones de Ingreso', 'Operaciones de Egreso'], numeros: [1],
-      tabla: filasOperacionesDeIngreso(estudio) },
-    { nombres: 'Operación analizar', numeros: [2], tabla: filasOperacionAnalizar(estudio) },
-  ];
+  for (const objetivo of OBJETIVOS) {
+    const tabla = objetivo.filas(estudio);
 
-  for (const { nombres, numeros, tabla } of objetivos) {
-    const donde = localizarTablaHtml(out, nombres, numeros);
-    if (!donde) {
+    if (objetivo.todas) {
+      /* De atrás hacia adelante: sustituir una desplaza los offsets de las que van después.
+         Es la misma razón por la que la ruta OOXML recorre sus dos ocurrencias al revés. */
+      const bloques = localizarTablasHtml(out, objetivo.nombres);
+      if (!bloques.length) {
+        if (Array.isArray(avisos)) avisos.push(tabla.nombre);
+        continue;
+      }
+      for (const bloque of [...bloques].reverse()) {
+        out = sustituir(out, bloque, tabla, objetivo.rotulo);
+      }
+      continue;
+    }
+
+    const bloque = localizarTablaHtml(out, objetivo.nombres);
+    if (!bloque) {
       if (Array.isArray(avisos)) avisos.push(tabla.nombre);
       continue;
     }
-    out = reescribirFilas(out, donde, tabla.filas);
+    out = sustituir(out, bloque, tabla, objetivo.rotulo);
+  }
+
+  /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un
+     aviso por una tabla que no existe acusa de incompleta a una plantilla que está bien. */
+  if (Array.isArray(avisos)) {
+    for (const { nombres, aviso } of SIN_MOTOR) {
+      if (localizarTablaHtml(out, nombres)) avisos.push(aviso);
+    }
   }
 
   return out;

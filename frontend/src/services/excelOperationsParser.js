@@ -1,6 +1,23 @@
 import XLSX from 'xlsx-js-style';
 import { PAIS_DIAN } from '../utils/calculations.js';
 
+/* El concepto que el informe declara es «nombre (código)» —«Otros servicios (07)»—. El
+   nombre viene de la columna «Tipo de operación», que admite texto libre, y el código de la
+   columna «Cod», que es OPCIONAL. Cuando el código está, se pega al nombre para que el
+   estudio lo guarde en un solo campo y `conceptoDeOperacion` lo lea del paréntesis.
+
+   Cuando no está, el tipo se devuelve tal cual y el código queda sin resolver. Antes se
+   rellenaba con «Otros servicios (07)» —el concepto de END GAME 2024— y ese código viajaba
+   al informe de cualquier contribuyente que dejara la columna en blanco, que es lo normal
+   en este formato. */
+const tipoConCodigo = (tipo, cod) => {
+  const t = String(tipo || '').trim();
+  const c = String(cod || '').replace(/\D/g, '');
+  if (!t || !c) return t;
+  if (/\(\d+\)\s*$/.test(t)) return t; // el nombre ya traía su código escrito
+  return t + ' (' + c.padStart(2, '0') + ')';
+};
+
 /**
  * Módulo de lectura e ingesta del Excel de Operaciones con Vinculados
  * (Basado en la lógica del método pt36AnalizarOperaciones de index.html)
@@ -152,7 +169,7 @@ export async function parseExcelOperations(file) {
             vinculado: nom,
             nit,
             pais,
-            tipo: currentTipo || 'Otros servicios (07)',
+            tipo: tipoConCodigo(currentTipo, cod),
             monto,
             cod
           });
@@ -180,12 +197,14 @@ export async function parseExcelOperations(file) {
     // Mapeo por tipo de operación
     const tipoMap = {};
     rowsParsed.forEach(r => {
-      const k = r.tipo || 'Otros servicios (07)';
-      tipoMap[k] = (tipoMap[k] || 0) + r.monto;
+      /* Las filas sin tipo no aportan concepto. Agruparlas bajo un nombre inventado hacía
+         que ese nombre ganara por monto y se declarara como el concepto del estudio. */
+      if (!r.tipo) return;
+      tipoMap[r.tipo] = (tipoMap[r.tipo] || 0) + r.monto;
     });
 
     // Determinar el tipo de operación dominante por monto
-    let mainTipo = 'Otros servicios (07)';
+    let mainTipo = null;
     let maxMontoTipo = 0;
     Object.keys(tipoMap).forEach(k => {
       if (tipoMap[k] > maxMontoTipo) {
@@ -234,7 +253,7 @@ export async function parseExcelOperations(file) {
       vinc: mainVinculado || null,
       vinc_id: mainVinculadoId || null,
       pais_vinc: paisNombre || null,
-      vinc_tipo: mainTipo || 'Otros servicios (07)',
+      vinc_tipo: mainTipo || null,
       monto: totalMonto || null,
       monto_operacion: totalMonto || null,
       t_s: totalMonto || null,

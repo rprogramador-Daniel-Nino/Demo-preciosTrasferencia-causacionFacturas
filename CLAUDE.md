@@ -97,7 +97,9 @@ extracción de RUT y Cámara de Comercio están **duplicados literalmente** en `
 `functions/index.js` y el PHP: al ajustar uno, ajusta los tres.
 
 **Fallback de Claude a Gemini.** Si Anthropic no puede atender —sin saldo (400/402 con
-`credit balance`), con el límite de peticiones alcanzado (429) o sobrecargado (529)—,
+`credit balance`), con el tope de gasto de la cuenta alcanzado (400 con `usage limits`, el
+que fija la propia organización en la consola), con el límite de peticiones alcanzado (429)
+o sobrecargado (529)—,
 `/api/claude` atiende con Gemini y **devuelve la respuesta con forma de Anthropic**
 (`content[].text`), porque así la leen los catorce llamadores. NO se cae en un 400 por
 petición mal formada ni en un 401 por key inválida: fallarían igual en Gemini y taparlo

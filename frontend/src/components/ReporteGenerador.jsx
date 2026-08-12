@@ -285,7 +285,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
 
      `huecos` es cuántos huecos de anexo dejó el extractor en esta plantilla. */
   const renderizarYAvisar = (htmlMarcado, recursos, huecos = 0) => {
-    const r = renderizar(htmlMarcado, study, recursos);
+    /* `analisisMercado` alimenta las ocho tablas de tendencias de la economía. La ruta
+       .docx ya lo recibía (`construirDocxDelEstudio`); esta se quedaba sin él y esas tablas
+       salían con las series del informe del que se tomó la plantilla. */
+    const r = renderizar(htmlMarcado, study, recursos, { datosMacro: analisisMercado });
     /* Los valores que traía el informe de referencia salen del propio HTML
        marcado: el marcado envuelve el texto original sin alterarlo, así que el
        contenido de una marca `data-campo="nit"` es literalmente el NIT del
@@ -299,7 +302,23 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
        literales, así que quien trabajaba con plantilla marcada —la ruta buena— no
        se enteraba de que le faltaban las series macro o el análisis del sector. */
     revisarCobertura(r.html);
-    setAvisos(revisarAntesDeGenerar({
+    /* Las tablas del motor que la plantilla no trae. Mismo aviso que en la ruta .docx:
+       una tabla que no se regenera se queda con los datos del informe del que salió la
+       plantilla, y sin decirlo el fallo llega hasta la radicación. */
+    const avisosDeTablas = (r.avisosTablas || []).length
+      ? [{
+        nivel: 'aviso',
+        origen: 'tablas',
+        /* La lista mezcla nombres de tabla y avisos que ya traen su propia explicación —el
+           del ANEXO B nombra las comparables a las que falta el estado financiero—, así que
+           el encabezado no puede dar por hecho que todo sea «una tabla no encontrada». */
+        texto: 'Esto no se actualizó con los datos del estudio: ' + r.avisosTablas.join(' · ') +
+          '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
+          'revísalo antes de radicar; si alguna tabla está rotulada de otro modo, dilo para ' +
+          'añadir ese nombre.',
+      }]
+      : [];
+    setAvisos(avisosDeTablas.concat(revisarAntesDeGenerar({
       estudio: study,
       /* Sin NIT de referencia la guarda no opina, que es lo correcto: no hay
          con qué comparar. */
@@ -325,7 +344,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          del informe, por ejemplo— y sin este aviso no hay forma de saberlo ni de
          saber que la solución es volver a subir el PDF. */
       faltaPorVersion: loQueFaltaPorVersion(versionDe(htmlMarcado)),
-    }));
+    })));
   };
 
   /* Restauración al abrir el estudio: sin esto la plantilla y sus imágenes se

@@ -97,7 +97,11 @@ export function anioValido(valor) {
  */
 export const SELLO_ESTUDIO = '_estudioId';
 
-export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', SELLO_ESTUDIO];
+/* `matrizRechazo` se suma a los solo-locales por el mismo motivo que `universo`: es un
+   nombre por cada compañía evaluada —miles en un cribado normal— y aunque pesa mucho menos
+   que el universo entero (no lleva descripciones de negocio), sigue siendo demasiado para el
+   documento de Firestore. Se recalcula solo al abrir el paso 3 con el cribado cargado. */
+export const CAMPOS_SOLO_LOCALES = ['universo', 'iaMatch', 'eeffImages', 'eeffImagenesComparables', 'matrizRechazo', SELLO_ESTUDIO];
 
 /** Máximo que admite un documento de Firestore. */
 export const TOPE_DOCUMENTO = 1048576;

@@ -30,14 +30,23 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { filasComparablesInforme, filasRazonesRechazo } from './tablasInforme.js';
-import { pctf, fmt, num, pliOf } from '../utils/calculations.js';
-import { nameKey } from './comparablesEngine.js';
-import { analizarRango } from './rangoIntercuartil.js';
-import { filasOperacionesDeIngreso, filasOperacionAnalizar } from './tablasOperaciones.js';
 import {
-  DATOS_MACRO, FUENTES_MACRO, resolverSerie, valorODisponible, marcadorPendiente
-} from './analisisMercado.js';
+  filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
+  filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+} from './tablasOperaciones.js';
+/* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
+   este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
+import {
+  filasComposicionAccionaria, filasActivos, verticalSobreActivos,
+} from './tablasContribuyente.js';
+
+export { verticalSobreActivos };
+import {
+  filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
+  filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
+} from './tablasInforme.js';
+import { pctf, fmt, num } from '../utils/calculations.js';
+import { nameKey } from './comparablesEngine.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -56,7 +65,6 @@ const RUTA_DOC = 'word/document.xml';
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
 
-const AMBITO = { Int: 'INTERNACIONAL', Nac: 'NACIONAL' };
 
 /**
  * Los datos de las tablas que se repiten, con la forma que esperan los bucles.
@@ -154,141 +162,23 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
 export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
   const doc = sustituidorDeTablas(xml, avisos);
-  const reemplazar = (...args) => doc.reemplazar(...args);
 
-  const y1 = year - 1, y2 = year, y3 = year + 1;
-  const wrap = (v) => String(v == null ? '—' : v);
+  /* Qué tabla es cada una y con qué contenido lo describe `tablasMacroInforme`, que es de
+     donde las toma también la ruta de plantilla PDF. Antes la definición de las ocho vivía
+     aquí, y llevarlas a la otra ruta habría significado copiarlas con sus series y sus
+     fuentes: dos definiciones de la misma tabla que se separan en la primera corrección.
 
-  /* Estas ocho no llevan «Tabla N.» en la plantilla, así que la numeración nunca fue
-     su problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el
-     título tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso
-     pasan por el mismo localizador, que compara sobre el texto ya reconstruido. */
-
-  // 1. PIB Mundial
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
-    reemplazar('PIB Mundial', () => generarTablaOoxml(
-      'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
-      ['Año', 'Crecimiento Mundial (%)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
-        [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 2. PIB Colombia
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_colombia');
-    reemplazar('PIB en Colombia', () => generarTablaOoxml(
-      'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
-      ['Año', 'Crecimiento del PIB (%)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
-        [String(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 3. Inflación Global
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_global');
-    reemplazar('Inflación Global', () => generarTablaOoxml(
-      'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
-      ['Año', 'Tasa de Inflación (%)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
-        [String(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 4. PIB por Región
-  {
-    const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
-    reemplazar('por Región/País', () => {
-      const porRegion = porAnio[year];
-      const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
-      let filas = [];
-      if (!porRegion || !porRegion.length) {
-        const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
-        filas = regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]);
-      } else {
-        filas = porRegion.map(({ region, valor }) => [region, wrap(valor)]);
-      }
-      return generarTablaOoxml(titulo, ['Región/País', 'Crecimiento Proyectado (%)'], filas, fuente);
-    });
-  }
-
-  // 5. Inflación Colombia
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'inflacion_colombia');
-    reemplazar('Inflación en Colombia', () => generarTablaOoxml(
-      'Inflación en Colombia (' + year + ' vs. Meta ' + y3 + ')',
-      ['Indicador', 'Valor (%)'],
-      [
-        ['Inflación ' + year, wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
-        ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
-      ],
-      fuente
-    ));
-  }
-
-  // 6. Tasa de Intervención
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'tasa_intervencion');
-    reemplazar('Intervención del Banco', () => {
-      const filas = [y1, y2].map((y) => {
-        const obs = S[y];
-        return obs
-          ? [obs.etiqueta, wrap(obs.valor)]
-          : ['Diciembre ' + y, wrap(marcadorPendiente(y, 'la tasa de intervención del Banco de la República'))];
-      });
-      return generarTablaOoxml(
-        'Tasa de Intervención del Banco de la República (' + filas[0][0] + ' - ' + filas[1][0] + ')',
-        ['Fecha', 'Tasa de Intervención (%)'],
-        filas,
-        fuente
-      );
-    });
-  }
-
-  // 7. TRM Promedio
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'trm_promedio');
-    reemplazar('Tasa Representativa del Mercado', () => generarTablaOoxml(
-      'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
-      ['Año', 'TRM Promedio ($)'],
-      [
-        [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
-      ],
-      fuente
-    ));
-  }
-
-  // 8. Tasa de Desempleo
-  {
-    const { valores: S, fuente } = resolverSerie(datosMacro, 'desempleo_colombia');
-    reemplazar('Desempleo en Colombia', () => generarTablaOoxml(
-      'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + y3 + ')',
-      ['Indicador', 'Valor (%)'],
-      [
-        ['Desempleo ' + year, wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
-        ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
-      ],
-      fuente
-    ));
-  }
+     Estas ocho no llevan «Tabla N.» en la plantilla, así que la numeración nunca fue su
+     problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el título
+     tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso pasan por
+     el mismo localizador, que compara sobre el texto ya reconstruido. */
+  tablasMacroInforme(datosMacro, year).forEach((t) => {
+    doc.reemplazar(t.nombre, () => generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente));
+  });
 
   return doc.xml;
 }
+
 
 /** Reemplaza quirúrgicamente las catorce tablas operativas en el OOXML del documento de la Fase 3. */
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -516,24 +406,6 @@ function sustituidorDeTablas(xmlInicial, avisos) {
   };
 }
 
-/**
- * El análisis vertical de un rubro sobre el total de activos del estudio.
- *
- * Una sola definición para la Tabla 10 del cuerpo y para el ESF del ANEXO A: si cada una
- * llevara su cuenta, el informe publicaría dos verticales distintos para el mismo estado
- * financiero, y el que revisa no tendría forma de saber cuál vale.
- *
- * @param {object} estudio
- * @returns {(valor:*) => string} el porcentaje formateado, o «—» sin total de activos.
- */
-export function verticalSobreActivos(estudio) {
-  const total = num(estudio && estudio.t_act_tot);
-  return (valor) => {
-    const n = num(valor);
-    if (n === null || !total) return '—';
-    return ((n / total) * 100).toFixed(2) + '%';
-  };
-}
 
 export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
@@ -549,35 +421,22 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   const year = Number(estudio.anio) || 2025;
   const wrap = (v) => String(v == null || v === '' ? '—' : v);
 
-  const rResult = analizarRango(estudio);
-  const stats = rResult.stats || {};
+  /* Las filas del rango y su cálculo viven en `tablasInforme.js`, que es de donde las toma
+     también la ruta de plantilla PDF (`tablasHtmlInforme.js`). Antes se calculaban aquí, y
+     al añadir esa segunda ruta el cálculo habría quedado duplicado: dos sitios donde
+     computar los percentiles del mismo estudio es la forma de acabar publicando dos rangos
+     distintos, que es lo que ya pasó cuando había dos implementaciones del cuartil. */
+  const rango = filasRangoIntercuartil(estudio);
+  const tPLI = rango.tPLI;
 
-  // Calcular tPLI (indicador del contribuyente unificado)
-  const seg = num(estudio.seg_excluido) || 0;
-  const tS = num(estudio.t_s), tOp = num(estudio.t_op);
-  const T = {
-    s: tS !== null ? tS - seg : null,
-    c: num(estudio.t_c),
-    op: tOp !== null ? tOp - seg : null,
-    ar: num(estudio.t_ar), inv: num(estudio.t_inv), ap: num(estudio.t_ap),
+  /* La versión horizontal del rango (bloque 5) publica solo los percentiles ajustados. */
+  const ajustadoDe = (etiqueta) => {
+    const f = rango.filas.find((x) => x.etiqueta === etiqueta);
+    return f ? f.ajustado : null;
   };
-  const tPLI = pliOf(T, estudio.pli || 'MO');
-
-  /* Estadística de las dos columnas, del mismo sitio. Aquí vivía una serie ordenada a
-     mano con `cuartilInterpolado`: era el tercer cálculo del cuartil del sistema y el
-     único que no aplicaba el filtro de ámbito. */
-  const sinAj = rResult.statsNoAjustado || {};
-  const minNoAjustado = sinAj.min !== undefined ? sinAj.min : null;
-  const maxNoAjustado = sinAj.max !== undefined ? sinAj.max : null;
-  const p25NoAjustado = sinAj.p25 !== undefined ? sinAj.p25 : null;
-  const medNoAjustado = sinAj.med !== undefined ? sinAj.med : null;
-  const p75NoAjustado = sinAj.p75 !== undefined ? sinAj.p75 : null;
-
-  const minAjustado = stats.min !== undefined ? stats.min : null;
-  const maxAjustado = stats.max !== undefined ? stats.max : null;
-  const p25Ajustado = stats.p25 !== undefined ? stats.p25 : null;
-  const medAjustado = stats.med !== undefined ? stats.med : null;
-  const p75Ajustado = stats.p75 !== undefined ? stats.p75 : null;
+  const p25Ajustado = ajustadoDe(ETIQUETAS_RANGO.p25);
+  const medAjustado = ajustadoDe(ETIQUETAS_RANGO.med);
+  const p75Ajustado = ajustadoDe(ETIQUETAS_RANGO.p75);
 
   const pStr = (v) => (v === null || v === undefined ? '—' : pctf(v));
 
@@ -585,7 +444,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      salen de `tablasOperaciones.js` y no se arman dos veces. Ahí vive también el motivo por
      el que el código de operación puede ser «—»: el que había antes en este archivo lo
      inventaba, devolvía '07' —el de END GAME 2024— para cualquier tipo sin paréntesis. */
-  const emitir = (b, t) => generarTablaOoxml(tituloDe(b, t.nombre), t.encabezados, t.filas, t.fuente);
+  /* `titulo` cuando lo trae y `nombre` si no: hay tablas cuyo rótulo es más largo que el
+     nombre con el que se localizan —«Método de Precios de Transferencia Aplicable» frente a
+     «Método de Precios de Transferencia»— o que llevan el año gravable dentro. */
+  const emitir = (b, t) => generarTablaOoxml(
+    tituloDe(b, t.titulo || t.nombre), t.encabezados, t.filas, t.fuente
+  );
 
   // 1. Operaciones de Ingreso/Egreso
   reemplazar(
@@ -606,18 +470,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      que cambian según el informe (3 y 12 en la del cliente). Se sustituyen las dos
      por ocurrencia, sin depender de esos números. */
   {
-    const filas3 = [
-      ['Razón social', wrap(estudio.vinc)],
-      ['Identificación fiscal', wrap(estudio.vinc_id)],
-      ['País - Residencia fiscal', wrap(estudio.pais_vinc)],
-      ['Tipo de vinculación', wrap(estudio.tipo_vinculacion || 'Art 260-1 E-T Inciso 1')],
-      [`Tipo de operaciones (${estudio.egreso ? 'Egreso' : 'Ingreso'})`, wrap(estudio.vinc_tipo)],
-      ['Monto en pesos', estudio.monto_operacion ? fmt(num(estudio.monto_operacion)) : '—']
-    ];
+    const t3 = filasTransaccionesIntercompania(estudio);
     const tablaTx = (b) => generarTablaOoxml(
-      tituloDe(b, 'Transacciones Inter compañía'),
-      ['Compañía vinculada', ''], filas3,
-      `Información de ${escaparXml(estudio.ent || 'la Compañía')}.`
+      tituloDe(b, t3.nombre), t3.encabezados, t3.filas, escaparXml(t3.fuente)
     );
     /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
        segunda, y el localizador trabaja sobre posiciones del XML. */
@@ -626,15 +481,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   }
 
   // 4. Método de Precios de Transferencia Aplicable
-  reemplazar('Método de Precios de Transferencia', (b) => {
-    const { desc, cod } = extraerCodigoYDesc(estudio.vinc_tipo);
-    return generarTablaOoxml(
-      tituloDe(b, 'Método de Precios de Transferencia Aplicable'),
-      ['Código de Operación', 'Descripción de la operación', 'Método seleccionado', 'Indicador de Rentabilidad'],
-      [[cod, desc, estudio.metodo || 'TU', estudio.pli || 'MO']],
-      'Información suministrada por la Administración de la Compañía.'
-    );
-  }, { numeros: [4] });
+  reemplazar(
+    'Método de Precios de Transferencia',
+    (b) => emitir(b, filasMetodoAplicable(estudio)),
+    { numeros: [4] }
+  );
 
   /* 5. Rango Intercuartil, versión horizontal. El nombre no la distingue de la
      vertical del análisis —las dos se llaman igual—, así que la primera ocurrencia
@@ -650,71 +501,32 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   }, { numeros: [5], ocurrencia: 0 });
 
   // 6. Composición accionaria
-  reemplazar('Composición accionaria', (b) => {
-    const filas = (estudio.accionistas || []).map((a) => [
-      wrap(a.nombre),
-      wrap(a.pais),
-      a.acciones ? fmt(num(a.acciones)) : '—',
-      a.valor_capital ? fmt(num(a.valor_capital)) : '—',
-      a.participacion_pct ? String(a.participacion_pct) + '%' : '—'
-    ]);
-    const totalAcciones = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.acciones) || 0), 0);
-    const totalCapital = (estudio.accionistas || []).reduce((acc, a) => acc + (num(a.valor_capital) || 0), 0);
-    filas.push([
-      'Total',
-      '',
-      totalAcciones ? fmt(totalAcciones) : '—',
-      totalCapital ? fmt(totalCapital) : '—',
-      '100%'
-    ]);
-    return generarTablaOoxml(
-      tituloDe(b, 'Composición accionaria'),
-      ['Accionista', 'País', 'N° Acciones', 'Valor Capital', '% Participación'],
-      filas,
-      'Información suministrada por la administración de la Compañía.'
-    );
-  }, { numeros: [6] });
+  reemplazar(
+    'Composición accionaria',
+    (b) => emitir(b, filasComposicionAccionaria(estudio)),
+    { numeros: [6] }
+  );
 
   // 7. Compañías vinculadas al cierre del año gravable
-  reemplazar('Compañías vinculadas', (b) => generarTablaOoxml(
-    tituloDe(b, `Compañías vinculadas al 31 de diciembre de ${year}`),
-    ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
-    [[wrap(estudio.vinc), wrap(estudio.vinc_id), wrap(estudio.pais_vinc)]],
-    'Información suministrada por la Administración de la Compañía.'
-  ), { numeros: [8] });
+  reemplazar(
+    'Compañías vinculadas',
+    (b) => emitir(b, filasCompaniasVinculadas(estudio)),
+    { numeros: [8] }
+  );
 
   // 8. Criterios de vinculación económica
-  reemplazar('Criterios de vinculación', (b) => generarTablaOoxml(
-    tituloDe(b, 'Criterios de vinculación económica'),
-    ['Nombre Vinculada', 'País', 'Criterio de vinculación', 'Detalle del Criterio de Vinculación'],
-    [[wrap(estudio.vinc), wrap(estudio.pais_vinc), 'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa']],
-    'Información suministrada por la Administración de la Compañía.'
-  ), { numeros: [9] });
+  reemplazar(
+    'Criterios de vinculación',
+    (b) => emitir(b, filasCriteriosVinculacion(estudio)),
+    { numeros: [9] }
+  );
 
-  // 9. Tabla 10. Activos a 31 de diciembre de ${year}
-  reemplazar('Activos a 31 de diciembre', (b) => {
-    {
-      const av = verticalSobreActivos(estudio);
-      const filas10 = [
-        ['Efectivo y equivalentes de efectivo', wrap(estudio.t_cash ? fmt(num(estudio.t_cash)) : null), av(estudio.t_cash)],
-        ['Inversiones asociadas', wrap(estudio.t_inv_assoc ? fmt(num(estudio.t_inv_assoc)) : null), av(estudio.t_inv_assoc)],
-        ['Cuentas por cobrar comerciales y otras cuentas por cobrar', wrap(estudio.t_ar ? fmt(num(estudio.t_ar)) : null), av(estudio.t_ar)],
-        ['Activos por impuestos corrientes', wrap(estudio.t_tax ? fmt(num(estudio.t_tax)) : null), av(estudio.t_tax)],
-        ['Total, Activo corriente', wrap(estudio.t_act_curr ? fmt(num(estudio.t_act_curr)) : null), av(estudio.t_act_curr)],
-        ['Propiedades, planta y equipo', wrap(estudio.t_ppe ? fmt(num(estudio.t_ppe)) : null), av(estudio.t_ppe)],
-        ['Intangibles', wrap(estudio.t_intang ? fmt(num(estudio.t_intang)) : null), av(estudio.t_intang)],
-        ['Diferidos', wrap(estudio.t_dif ? fmt(num(estudio.t_dif)) : null), av(estudio.t_dif)],
-        ['Total, Activos no corrientes', wrap(estudio.t_act_nocurr ? fmt(num(estudio.t_act_nocurr)) : null), av(estudio.t_act_nocurr)],
-        ['Total, Activos', wrap(estudio.t_act_tot ? fmt(num(estudio.t_act_tot)) : null), av(estudio.t_act_tot)],
-      ];
-      return generarTablaOoxml(
-        tituloDe(b, `Activos a 31 de diciembre de ${year}`),
-        ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-        filas10,
-        `Estados financieros de la Compañía a 31 de diciembre de ${year}.`
-      );
-    }
-  }, { numeros: [10] });
+  // 9. Tabla 10. Activos a 31 de diciembre del año gravable
+  reemplazar(
+    'Activos a 31 de diciembre',
+    (b) => emitir(b, filasActivos(estudio)),
+    { numeros: [10] }
+  );
 
   // 10. Razones de rechazo
   reemplazar('Razones de rechazo', (b) => {
@@ -741,11 +553,8 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
   // 11. Muestra Compañías comparables
   reemplazar('Muestra Compañías comparables', (b) => {
-    const compList = filasComparablesInforme(estudio);
-    const filas17 = (compList || []).map((f, idx) => [
-      String(idx + 1),
-      f.nombre,
-      AMBITO[f.amb] || ''
+    const filas17 = filasMuestraComparables(estudio).map((f) => [
+      String(f.numero), f.nombre, f.ambito,
     ]);
     const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
     return generarTablaOoxml(
@@ -769,14 +578,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
 
      De atrás hacia adelante, como en Transacciones Inter compañía. */
   {
-    const filas18_20 = [
-      ['Mínimo', pStr(minNoAjustado), pStr(minAjustado)],
-      ['Percentil 25', pStr(p25NoAjustado), pStr(p25Ajustado)],
-      ['Mediana', pStr(medNoAjustado), pStr(medAjustado)],
-      ['Percentil 75', pStr(p75NoAjustado), pStr(p75Ajustado)],
-      ['Máximo', pStr(maxNoAjustado), pStr(maxAjustado)],
-      [wrap(estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE'), pStr(tPLI), pStr(tPLI)]
-    ];
+    const filas18_20 = rango.filas.map((f) => [
+      wrap(f.etiqueta), pStr(f.noAjustado), pStr(f.ajustado),
+    ]);
     const tablaRangos = (b) => generarTablaOoxml(
       tituloDe(b, /tabla de rangos/i.test(b.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
       ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
@@ -796,22 +600,48 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     }
   }
 
-  // 13. Margen Operacional Compañías Comparables
-  reemplazar('Margen Operacional', (b) => {
-    const compList = filasComparablesInforme(estudio);
-    const filas19 = (compList || []).map((f) => [
-      f.nombre,
-      pStr(f.noAjustado),
-      pStr(f.ajustado)
-    ]);
-    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
-    return generarTablaOoxml(
-      tituloDe(b, 'Margen Operacional Compañías Comparables'),
-      ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
-      filas19,
-      `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
-    );
-  }, { numeros: [19] });
+  /* 13. Margen Operacional Compañías Comparables.
+
+     Se localiza por el nombre COMPLETO, no por «Margen Operacional» a secas. La clave corta
+     casa por inclusión con la prosa del propio informe: en la plantilla de End Game, el
+     párrafo «Para el análisis del método TU se consideró que el indicador financiero de
+     rentabilidad más apropiado es el Margen Operacional…» va seguido de la tabla de
+     definiciones del método, y está 79 000 caracteres ANTES del rótulo verdadero. Mientras la
+     plantilla numere la tabla como la 19 el desempate de `numeros` lo tapa; en cuanto un
+     cliente la renumera, `numeros` no filtra nada, gana el primer candidato por posición y el
+     generador sustituye la tabla de definiciones mientras la de márgenes se queda con las
+     cifras del informe anterior —el fallo que se reportó el 2026-08-11—.
+
+     El nombre de la tabla es lo único estable: el prefijo se renumera al reordenar el informe,
+     y hay plantillas que lo rotulan sin número. Por eso se busca solo por el nombre. */
+  {
+    const generarTabla19 = (b) => {
+      const compList = filasComparablesInforme(estudio);
+      const filas19 = (compList || []).map((f) => [
+        f.nombre,
+        pStr(f.noAjustado),
+        pStr(f.ajustado)
+      ]);
+      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      return generarTablaOoxml(
+        tituloDe(b, 'Margen Operacional Compañías Comparables'),
+        ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
+        filas19,
+        `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
+      );
+    };
+    /* Sin `numeros`: el prefijo «Tabla N.» cambia de una plantilla a otra —y hay plantillas que
+       rotulan la tabla sin número—, así que el número no es criterio de nada. El nombre
+       completo, en cambio, es único en el documento: se buscó sobre el word/document.xml de End
+       Game y de los trece párrafos que mencionan «margen operacional» solo uno tiene esa clave.
+
+       Tampoco se cae al nombre corto cuando no aparece. Con la clave corta el único candidato
+       que queda es la prosa, y sustituir ahí destruye la tabla de definiciones del método sin
+       tocar la de márgenes: dos tablas mal en vez de una. Si el rótulo no está, `reemplazar`
+       anota la tabla en los avisos y el panel lo dice antes de radicar, que es lo que este
+       mecanismo existe para hacer. */
+    reemplazar('Margen Operacional Compañías Comparables', generarTabla19);
+  }
 
   return doc.xml;
 }

@@ -1,7 +1,8 @@
-# Tablas 1 y 2 de operaciones en la ruta HTML
+# Tablas del informe en la ruta de plantilla PDF
 
 **Fecha:** 2026-08-11
-**Estado:** aprobado, en implementación
+**Estado:** cerrado — paridad de las dos rutas en las 22 tablas (1078 pruebas en verde, sin
+errores de lint, build limpio)
 
 ## Problema
 
@@ -150,6 +151,17 @@ que ya existe lo recoge sin añadir ningún campo nuevo al estudio. Sin `Cod` y 
 coincidencia en el catálogo, `vinc_tipo` queda como el texto crudo del Excel y la Tabla 2
 sale `Ingreso (—)` con aviso.
 
+### 5 bis. La Tabla 4 compartía el defecto (hallado al implementar)
+
+`extraerCodigoYDesc` no lo usaban solo las Tablas 1 y 2: la Tabla 4 («Método de Precios de
+Transferencia Aplicable», `docxRelleno.js`) publica el código de operación en su propia
+columna «Código de Operación» y salía con el mismo `07` inventado. Pasa a resolverlo con
+`conceptoDeOperacion`, y sin código publica «—».
+
+Lo delató `npm run lint`, no las pruebas: al borrar el helper quedó una referencia viva que
+ninguna prueba cubría, así que esa ruta habría lanzado `ReferenceError` en tiempo de
+ejecución. Se le añadió prueba.
+
 ### 6. Manejo de ausencias
 
 - Tabla que no aparece en la plantilla → aviso, y la tabla conserva lo que traía (el banner
@@ -167,6 +179,54 @@ sale `Ingreso (—)` con aviso.
   aviso, y forma `td`/`th` que `docxWriter` sabe leer.
 - `excelOperationsParser.test.js`: sin `(07)` fingido; `Cod` diligenciada compone el código.
 - `npm test` al 100 %.
+
+## Cómo quedó tras integrar con `origin/antoniodev`
+
+`pablo-barreto` construyó en paralelo el mismo mecanismo: `tablasHtmlInforme.js`, con la
+misma arquitectura y los mismos nombres (`textoPlanoHtml`, `localizarTablaHtml`,
+`reescribirFilasHtml`), para la tabla de márgenes, las cuatro del motor y las ocho de
+macroeconomía. Lo detectó `/revisar-ramas-equipo` al cerrar, no al empezar: cuando se corrió
+al arrancar, esos commits todavía no estaban publicados.
+
+Se resolvió plegando estas dos tablas a **su** motor, no dejando los dos conviviendo:
+
+- `tablasOperacionesHtml.js` pierde su localizador —duplicaba el suyo— y usa
+  `localizarTablaHtml` y `reescribirFilasHtml`. Con eso gana lo que su versión hace mejor:
+  copia etiqueta, atributos y envoltura de énfasis de la fila molde de la plantilla, así que
+  conserva el formato del cliente en vez de imponer un `<th><p><span class="pt-valor">`. Y
+  localiza por nombre y no por número del rótulo (criterio del usuario, 2026-08-11).
+- Las dos tablas se registran dentro de `renderizar()` en `plantillaRenderer.js`, junto a los
+  otros dos motores y compartiendo su arreglo `avisosTablas`. El enganche en
+  `ReporteGenerador.jsx` que describe el punto 4 sobra: su banner ya reporta por un solo canal
+  las tablas que la plantilla no trae.
+- `docxRelleno.js` toma su versión del rango, que unifica el cálculo en `tablasInforme.js`.
+
+El resto se conserva entero porque no se solapa: la corrección de zona —que su trabajo
+también necesitaba, porque el RESUMEN EJECUTIVO estaba bloqueado para ellos igual—,
+`tablasOperaciones.js` y `tiposOperacionDian.js`.
+
+## Cierre: paridad de las dos rutas
+
+Tras integrar, quedaban seis tablas que la ruta OOXML regeneraba y la de plantilla PDF no,
+así que se radicaban con los datos del informe del que salió la plantilla: **3** (ficha del
+vinculado), **4** (método aplicable), **6** (composición accionaria), **8** (compañías
+vinculadas), **9** (criterios de vinculación) y **10** (activos). Se cerraron con el mismo
+patrón: extraer las filas a un módulo compartido —`tablasOperaciones.js` las cuatro del
+vinculado, nuevo `tablasContribuyente.js` la accionaria y los activos— y registrarlas en el
+motor HTML.
+
+La plantilla real obligó a resolver dos cosas que no se ven en el código de la ruta OOXML:
+
+- **La ficha del vinculado viene dos veces**, rotulada «Tabla 3.» y «Tabla 12.», y las dos
+  publican lo mismo. Se sustituyen todas las ocurrencias, de atrás hacia adelante porque
+  cada una desplaza los offsets de las siguientes.
+- **Las Tablas 8 y 10 llevan el año gravable en el rótulo** y la plantilla dice 2024. Sin
+  reescribirlo, el informe de 2025 rotula «Activos a 31 de diciembre de 2024». Se reescribe
+  con `reescribirRotuloHtml`, que conserva el número de la plantilla para no descuadrar su
+  índice. En las demás el título no contiene datos y no se toca.
+
+Auditado contra el código: las dos rutas regeneran las mismas **22 tablas**, ninguna
+pendiente.
 
 ## Fuera de alcance
 
