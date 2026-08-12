@@ -133,10 +133,16 @@ export function valorDeCampo(estudio, campo, opciones = {}) {
   }
 
   if (campo.startsWith('rango.')) {
-    const { stats, cumple } = analizarRango(estudio);
+    const { stats, statsAjustado, cumple } = analizarRango(estudio);
     if (!stats) return null;
     if (campo === 'rango.cumple') return cumple;
-    const v = { 'rango.p25': stats.p25, 'rango.mediana': stats.med, 'rango.p75': stats.p75 }[campo];
+    /* `statsAjustado` y no `stats`: estos campos rellenan la frase que va DEBAJO de la tabla
+       del rango —«se ubica entre el percentil 25 (X) y (Y)…»— y la tabla publica el rango
+       ajustado. `stats` es el escenario que sostiene la conclusión, el que elige `useadj`,
+       así que con la casilla apagada la frase decía 3,315 % donde la tabla de encima decía
+       2,165 %: dos cifras distintas para lo mismo, en la misma página del documento. */
+    const base = statsAjustado || stats;
+    const v = { 'rango.p25': base.p25, 'rango.mediana': base.med, 'rango.p75': base.p75 }[campo];
     /* `pctf` y no `fmt`: los percentiles son fracciones. `fmt` es el formateador de pesos
        —redondea a entero— y convertía cada percentil en «0» dentro del informe. */
     return v === null || v === undefined ? null : pctf(v);
