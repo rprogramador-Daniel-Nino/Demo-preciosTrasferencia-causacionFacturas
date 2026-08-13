@@ -499,6 +499,34 @@ test('cifraODisponible estima y muestra el método y los datos cuando nadie lo p
   assert.doesNotMatch(texto, /Completar/);
 });
 
+test('la tabla de regiones estima cada región cuando falta el corte del año', () => {
+  /* Antes ponía un marcador por región. Era la última casilla numérica de la Sección III
+     que seguía saliendo por completar. */
+  const datosMacro = { series: { crecimiento_por_region: { valores: {
+    2023: [{ region: 'Mundial', valor: '3.0' }, { region: 'Colombia (OCDE)', valor: '1.0' }],
+    2024: [{ region: 'Mundial', valor: '2.9' }, { region: 'Colombia (OCDE)', valor: '1.5' }],
+    2025: [{ region: 'Mundial', valor: '2.8' }, { region: 'Colombia (OCDE)', valor: '2.0' }],
+  }, fuente: 'FMI' } } };
+
+  const salida = generarTablaCrecimientoPorRegion(datosMacro, 2026, (v) => String(v));
+  assert.doesNotMatch(salida, /Completar/);
+  assert.match(salida, /Mundial/);
+  assert.match(salida, /Colombia \(OCDE\)/);
+  assert.match(salida, /estimación propia/i);
+  /* Cada región se ajusta con SU propia serie, no con la de otra: Mundial baja 0,1 por año
+     (2.7) y Colombia sube 0,5 (2.5). */
+  assert.match(salida, /2\.7/);
+  assert.match(salida, /2\.5/);
+});
+
+test('la tabla de regiones conserva el marcador si no hay años suficientes que ajustar', () => {
+  const datosMacro = { series: { crecimiento_por_region: { valores: {
+    2025: [{ region: 'Mundial', valor: '2.8' }],
+  }, fuente: 'FMI' } } };
+  const salida = generarTablaCrecimientoPorRegion(datosMacro, 2026, (v) => String(v));
+  assert.match(salida, /Completar/);
+});
+
 test('cifraODisponible cae al marcador si no hay con qué estimar', () => {
   /* Sin serie suficiente no se inventa nada: ahí el hueco sigue siendo la única salida
      honesta, y lo dice el marcador de siempre. */

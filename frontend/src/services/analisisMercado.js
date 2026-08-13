@@ -408,16 +408,47 @@ export function generarTablaInflacionGlobal(datosMacro, year, wrap) {
   );
 }
 
+/* `crecimiento_por_region` no es una serie temporal sino un corte de regiones por año, así
+   que para estimar hay que darle la vuelta: sacar la lista de regiones vistas en cualquier
+   año, y de cada una su serie año→valor. */
+
+const REGIONES_POR_DEFECTO = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
+
+function regionesDeLaSerie(porAnio) {
+  const vistas = [];
+  Object.keys(porAnio || {}).sort().forEach((anio) => {
+    (porAnio[anio] || []).forEach((r) => {
+      if (r && r.region && !vistas.includes(r.region)) vistas.push(r.region);
+    });
+  });
+  return vistas.length ? vistas : REGIONES_POR_DEFECTO;
+}
+
+function serieDeRegion(porAnio, region) {
+  const serie = {};
+  Object.keys(porAnio || {}).forEach((anio) => {
+    const fila = (porAnio[anio] || []).find((r) => r && r.region === region);
+    if (fila && fila.valor !== undefined && fila.valor !== null && fila.valor !== '') {
+      serie[anio] = fila.valor;
+    }
+  });
+  return serie;
+}
+
 export function generarTablaCrecimientoPorRegion(datosMacro, year, wrap) {
   const { valores: porAnio, fuente } = resolverSerie(datosMacro, 'crecimiento_por_region');
   const porRegion = porAnio[year];
   const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
   if (!porRegion || !porRegion.length) {
-    /* Sin corte del año no se reutiliza el de otro: se listan las regiones con el
-       marcador, que es lo que hay que completar. */
-    const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
+    /* Sin corte del año NO se reutiliza el de otro —eso publicaría la proyección de un año
+       ajeno como si fuera la de este—, pero tampoco se deja la tabla por completar: cada
+       región se estima con SU propia serie a lo largo de los años que sí hay, por el mismo
+       método y con la misma evidencia que `cifraODisponible`. Solo las regiones sin tres
+       cortes conservan el marcador. */
+    const regiones = regionesDeLaSerie(porAnio);
     return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
-      regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]),
+      regiones.map((r) => [r, wrap(cifraODisponible(serieDeRegion(porAnio, r), year,
+        'la proyección de crecimiento de ' + r))]),
       fuente);
   }
   return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
