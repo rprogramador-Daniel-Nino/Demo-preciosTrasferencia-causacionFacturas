@@ -879,7 +879,7 @@ export function normalizarCaracteresMatematicos(str, tipo) {
   const normalized = res.replace(/\s+/g, ' ').trim();
 
   // Detecta el cuerpo principal de la fórmula (Fila 2 de la fracción)
-  if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA') && normalized.includes('RR (1 + RR)')) {
+  if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAAA') || normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA')) {
     if (tipo === 'AP') {
       return 'AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))';
     } else {
