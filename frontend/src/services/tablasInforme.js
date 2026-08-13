@@ -112,6 +112,22 @@ export function filasRazonesRechazo(embudo) {
      universo evaluado y el generador avisaría de un descuadre que no existe. */
   const sinEeff = Number(e.sinEeff) || 0;
 
+  /* Las que el analista retiró a mano de la muestra en el paso 4, con la papelera. Van al mismo
+     sitio que la reserva y las que se quedaron sin estado financiero, y por la misma razón:
+     superaron los filtros objetivos y no integran la muestra, así que el motivo que se sostiene
+     ante quien revise el informe es no ser funcionalmente comparable con la parte examinada.
+
+     Sin esto la tabla mentía y nadie se enteraba. El borrado manual solo quitaba la fila de la
+     pantalla: el embudo seguía declarando las aceptadas de antes, así que el informe decía «13
+     compañías comparables aceptadas» mientras la tabla de márgenes listaba 12 y el rango se
+     calculaba sobre 12. Y la comprobación de cuadre seguía dando `true` —los conteos del embudo
+     no habían cambiado y seguían sumando el universo—, de modo que el descuadre llegaba hasta la
+     radicación sin un solo aviso.
+
+     Es una LISTA de nombres y no un contador para que el conteo no pueda desincronizarse: retirar
+     dos veces la misma no la cuenta dos veces, y volver a añadirla la saca de aquí. */
+  const retiradasMano = Array.isArray(e.retiradasManual) ? e.retiradasManual.length : 0;
+
   const filas = [];
   RAZONES_RECHAZO.forEach(([clave, etiqueta]) => {
     /* Sin fila propia: su conteo se suma al de «Diferencias funcionales», más abajo. */
@@ -125,7 +141,7 @@ export function filasRazonesRechazo(embudo) {
        misma puerta y por el mismo motivo. */
     const cuantas = (Number(porMotivo[clave]) || 0)
       + (esRigor
-        ? reserva + sinEeff
+        ? reserva + sinEeff + retiradasMano
           + FUNDIDOS_EN_RIGOR.reduce((acc, k) => acc + (Number(porMotivo[k]) || 0), 0)
         : 0);
     if (cuantas > 0) filas.push({ clave, etiqueta: esRigor ? ETIQUETA_RIGOR : etiqueta, cuantas });
