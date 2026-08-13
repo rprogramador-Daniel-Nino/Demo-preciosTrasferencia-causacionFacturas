@@ -110,23 +110,39 @@ function construirPromptRedaccion(series, anioActual) {
     'Eres economista y redactas la Sección III ("TENDENCIAS DE LA ECONOMÍA") de un informe local de ' +
     'precios de transferencia para Colombia, año gravable ' + anioActual + '. Tienes ÚNICAMENTE estos ' +
     'datos ya verificados, con su fuente:\n\n' + resumen + '\n\n' +
-    'Redacta dos apartados extensos (mínimo 3 párrafos cada uno, tono técnico-formal, en español) y ' +
-    'declara las fuentes que usaste:\n' +
-    '1. "mundial": Análisis del Panorama de la Economía Mundial — crecimiento del PIB mundial, ' +
-    'inflación global y su tendencia, riesgos y factores relevantes del período.\n' +
-    '2. "colombia": Análisis del panorama de la economía colombiana — PIB, inflación, tasa de ' +
-    'intervención del Banco de la República, TRM, desempleo, y su efecto sobre empresas que operan en ' +
-    'el país.\n' +
-    '3. "fuentesCitadas": la lista de las fuentes que efectivamente usaste para redactar, tomadas de ' +
-    'los datos de arriba, cada una con su título y su URL.\n\n' +
+    'Redacta lo siguiente, en español, tono técnico-formal. Los apartados 1 y 2 son extensos (mínimo ' +
+    '3 párrafos); los apartados 3 a 9 son un solo párrafo corto y específico cada uno — no repitas en ' +
+    'ellos lo que ya dijiste en 1 o 2, cada uno cubre SOLO su propio tema:\n' +
+    '1. "mundial": Análisis del Panorama de la Economía Mundial — crecimiento del PIB mundial y su ' +
+    'tendencia general (sin entrar en inflación ni proyecciones por región, eso va en 3 y 4).\n' +
+    '2. "colombia": Análisis del panorama de la economía colombiana — PIB de Colombia y su efecto ' +
+    'general sobre empresas que operan en el país (sin entrar en inflación, política monetaria, TRM, ' +
+    'desempleo ni conclusiones, eso va en 5 a 9).\n' +
+    '3. "inflacionMundial": un párrafo sobre la inflación global y su tendencia.\n' +
+    '4. "proyeccionMundial": un párrafo sobre las proyecciones de crecimiento del PIB por región/país.\n' +
+    '5. "inflacionColombia": un párrafo sobre la inflación de Colombia (IPC/DANE).\n' +
+    '6. "politicaMonetaria": un párrafo sobre la tasa de intervención del Banco de la República y su ' +
+    'evolución reciente.\n' +
+    '7. "tasaCambio": un párrafo sobre la TRM promedio y su evolución.\n' +
+    '8. "mercadoLaboral": un párrafo sobre la tasa de desempleo de Colombia.\n' +
+    '9. "conclusiones": un párrafo que cierre el panorama económico de III.A/III.B, sintetizando el ' +
+    'efecto conjunto de estas variables sobre empresas que operan en Colombia — no repitas cifras, ' +
+    'esto es síntesis, no una fuente nueva.\n' +
+    '10. "fuentesCitadas": la lista de las fuentes que efectivamente usaste para redactar cualquiera de ' +
+    'los apartados de arriba, cada una con su título y su URL.\n\n' +
     'Reglas estrictas:\n' +
     '- NO menciones ninguna cifra que no esté en los datos de arriba. Si te falta un dato para algo que ' +
     'quieras afirmar, no lo afirmes.\n' +
-    '- Cada apartado en HTML, como una serie de párrafos <p>...</p>, sin encabezados ni tablas.\n' +
+    '- Si no tienes datos verificados para alguno de los apartados 3 a 8, omite esa clave del JSON por ' +
+    'completo — no inventes el párrafo ni lo dejes vacío.\n' +
+    '- Cada apartado en HTML, como uno o más párrafos <p>...</p>, sin encabezados ni tablas.\n' +
     '- En "fuentesCitadas" no inventes ninguna fuente ni ninguna URL: usa únicamente las que aparecen ' +
     'en los datos de arriba. Si una serie no trae URL, omítela de la lista.\n' +
     '- Responde ÚNICAMENTE con un objeto JSON (sin marcas markdown) con esta forma exacta:\n' +
     '{ "mundial": "<p>...</p><p>...</p>", "colombia": "<p>...</p><p>...</p>", ' +
+    '"inflacionMundial": "<p>...</p>", "proyeccionMundial": "<p>...</p>", ' +
+    '"inflacionColombia": "<p>...</p>", "politicaMonetaria": "<p>...</p>", ' +
+    '"tasaCambio": "<p>...</p>", "mercadoLaboral": "<p>...</p>", "conclusiones": "<p>...</p>", ' +
     '"fuentesCitadas": [{"titulo":"...","url":"..."}] }'
   );
 }
@@ -144,6 +160,14 @@ function construirPromptRedaccion(series, anioActual) {
    qué falta. */
 const MIN_LARGO_APARTADO = 20;
 
+/** Campos de tema que son "mejor si están, no bloqueantes" — a diferencia de
+ *  "mundial"/"colombia", que siguen siendo obligatorios. Cada uno alimenta un hueco
+ *  intermedio específico de III.A/III.B en docxRelleno.js/tablasHtmlInforme.js. */
+const CAMPOS_TEMA_OPCIONALES = [
+  'inflacionMundial', 'proyeccionMundial', 'inflacionColombia', 'politicaMonetaria',
+  'tasaCambio', 'mercadoLaboral', 'conclusiones',
+];
+
 function parsearRespuestaRedaccion(texto) {
   const bruto = extraerJSON(texto);
   if (typeof bruto.mundial !== 'string' || typeof bruto.colombia !== 'string') {
@@ -157,7 +181,14 @@ function parsearRespuestaRedaccion(texto) {
         (f) => f && typeof f.titulo === 'string' && typeof f.url === 'string' && f.titulo && f.url
       ).map((f) => ({ titulo: f.titulo, url: f.url }))
     : [];
-  return { mundial: bruto.mundial, colombia: bruto.colombia, fuentesCitadas };
+
+  const resultado = { mundial: bruto.mundial, colombia: bruto.colombia, fuentesCitadas };
+  CAMPOS_TEMA_OPCIONALES.forEach((campo) => {
+    if (typeof bruto[campo] === 'string' && bruto[campo].trim().length >= MIN_LARGO_APARTADO) {
+      resultado[campo] = bruto[campo];
+    }
+  });
+  return resultado;
 }
 
 /** Documento final para `analisisMercado/actual`. No escribe nada por sí mismo —
@@ -175,18 +206,19 @@ function armarDocumentoFirestore({ series, narrativa, ahora }) {
     seriesConFecha[clave] = { ...series[clave], fechaConsulta: ahora };
   });
 
+  const narrativaDoc = {
+    mundial: narrativa.mundial,
+    colombia: narrativa.colombia,
+    fuentesCitadas: narrativa.fuentesCitadas || [],
+  };
+  CAMPOS_TEMA_OPCIONALES.forEach((campo) => {
+    if (typeof narrativa[campo] === 'string') narrativaDoc[campo] = narrativa[campo];
+  });
+
   return {
     actualizadoEn: ahora,
     series: seriesConFecha,
-    narrativa: {
-      mundial: narrativa.mundial,
-      colombia: narrativa.colombia,
-      /* Lista de respaldo que el informe muestra al cierre de III.B. Se guarda
-         siempre, aunque venga vacía: Firestore no tiene esquema y un campo
-         ausente obliga a cada lector a distinguir «sin fuentes» de «versión
-         vieja del documento». */
-      fuentesCitadas: narrativa.fuentesCitadas || [],
-    },
+    narrativa: narrativaDoc,
   };
 }
 
@@ -198,4 +230,5 @@ module.exports = {
   construirPromptRedaccion,
   parsearRespuestaRedaccion,
   armarDocumentoFirestore,
+  CAMPOS_TEMA_OPCIONALES,
 };

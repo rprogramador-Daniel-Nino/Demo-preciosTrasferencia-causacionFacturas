@@ -251,3 +251,46 @@ test('el ejemplo de crecimiento_por_region del prompt es admisible en Firestore'
   );
   assert.ok(!prompt.includes('[["Mundial"'), 'el prompt sigue mostrando arreglos anidados');
 });
+
+const TEMA_OK = '<p>La inflación mundial se moderó al 4,1 % en el período, según el FMI.</p>';
+
+test('construirPromptRedaccion pide los 7 apartados por tema, no solo mundial/colombia', () => {
+  const prompt = construirPromptRedaccion({}, 2026);
+  ['inflacionMundial', 'proyeccionMundial', 'inflacionColombia', 'politicaMonetaria',
+    'tasaCambio', 'mercadoLaboral', 'conclusiones'].forEach((campo) => {
+    assert.ok(prompt.includes(campo), 'el prompt no pide el campo ' + campo);
+  });
+});
+
+test('parsearRespuestaRedaccion incluye un tema cuando Claude lo trae con contenido suficiente', () => {
+  const texto = JSON.stringify({
+    mundial: MUNDIAL_OK, colombia: COLOMBIA_OK, inflacionMundial: TEMA_OK,
+  });
+  const r = parsearRespuestaRedaccion(texto);
+  assert.strictEqual(r.inflacionMundial, TEMA_OK);
+});
+
+test('parsearRespuestaRedaccion omite un tema ausente sin lanzar ni afectar mundial/colombia', () => {
+  const texto = JSON.stringify({ mundial: MUNDIAL_OK, colombia: COLOMBIA_OK });
+  const r = parsearRespuestaRedaccion(texto);
+  assert.strictEqual(r.mundial, MUNDIAL_OK);
+  assert.strictEqual('inflacionMundial' in r, false);
+});
+
+test('parsearRespuestaRedaccion omite un tema demasiado corto para ser un párrafo real', () => {
+  const texto = JSON.stringify({
+    mundial: MUNDIAL_OK, colombia: COLOMBIA_OK, politicaMonetaria: '<p>Sí.</p>',
+  });
+  const r = parsearRespuestaRedaccion(texto);
+  assert.strictEqual('politicaMonetaria' in r, false);
+});
+
+test('armarDocumentoFirestore guarda solo los temas que sí vinieron, sin claves undefined', () => {
+  const doc = armarDocumentoFirestore({
+    series: { pib_mundial: { valores: { 2026: '3' }, fuente: 'FMI', fuenteUrl: 'https://fmi.org', confiable: true } },
+    narrativa: { mundial: MUNDIAL_OK, colombia: COLOMBIA_OK, fuentesCitadas: [], tasaCambio: TEMA_OK },
+    ahora: new Date('2026-08-13T00:00:00Z'),
+  });
+  assert.strictEqual(doc.narrativa.tasaCambio, TEMA_OK);
+  assert.strictEqual('inflacionMundial' in doc.narrativa, false);
+});

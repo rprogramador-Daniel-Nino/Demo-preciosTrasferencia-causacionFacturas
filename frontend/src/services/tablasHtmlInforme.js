@@ -552,6 +552,24 @@ function marcadorApartadoPendienteHtml(tema, year) {
     '1.2.2.2.1.5 del Decreto 1625 de 2016.]</p>';
 }
 
+/** Línea "FUENTE: <fuente>, <url>" para un párrafo de narrativa con tema propio —
+ *  equivalente HTML de `parrafoFuenteOoxml` (docxRelleno.js); misma convención. Vacío
+ *  si no hay URL: no se cita una fuente que no vino de una búsqueda real. */
+function parrafoFuenteHtml(fuente, fuenteUrl) {
+  if (!fuenteUrl) return '';
+  const texto = 'FUENTE: ' + (fuente ? fuente + ', ' : '') + fuenteUrl;
+  return '<p><strong>' + escaparHtml(texto) + '</strong></p>';
+}
+
+/** Marcador para un hueco intermedio de III.A/III.B con tema propio (inflación
+ *  mundial, política monetaria, TRM, etc.) sin narrativa lista para ESE tema —
+ *  equivalente HTML de `marcadorTemaMacroPendiente` (docxRelleno.js). */
+function marcadorTemaMacroPendienteHtml(tema, year) {
+  return '[Actualizar con datos verificados sobre ' + tema + ' para el año gravable ' + year +
+    ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
+}
+
 /**
  * Reemplaza la PROSA de III.A y III.B en la ruta HTML/PDF, localizándola por su
  * encabezado — equivalente de `actualizarApartadosMacroOoxml` (`docxRelleno.js`) para
@@ -657,18 +675,37 @@ function contenidoHuecoIntermedioHtml(textoHueco) {
 export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
   const tituloColombia = 'Análisis del panorama de la economía colombiana';
-  const narrativaMundial = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
-  const narrativaColombia = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
+  const narrativa = (datosMacro && datosMacro.narrativa) || {};
+  const series = (datosMacro && datosMacro.series) || {};
   console.log('[tablasHtmlInforme] actualizarApartadosMacroHtml: año ' + year
-    + ', narrativa mundial: ' + (narrativaMundial ? 'sí' : 'no (marcador)')
-    + ', narrativa colombia: ' + (narrativaColombia ? 'sí' : 'no (marcador)'));
+    + ', narrativa mundial: ' + (narrativa.mundial ? 'sí' : 'no (marcador)')
+    + ', narrativa colombia: ' + (narrativa.colombia ? 'sí' : 'no (marcador)'));
 
   const primerHueco = (narrativaHtml, tema) => () => (narrativaHtml || marcadorApartadoPendienteHtml(tema, year));
+
+  /** Hueco intermedio con tema propio: párrafo + FUENTE si hay narrativa para ese
+   *  tema; marcador específico (no el genérico) si no, y solo si había prosa
+   *  sustancial que retirar — el umbral SOLO gatea la rama sin narrativa: cuando sí
+   *  hay narrativa lista se inserta siempre, sin importar cuánto medía el hueco
+   *  viejo (mismo criterio asimétrico que `temaHueco` en docxRelleno.js). */
+  const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
+    if (narrativaHtml) {
+      const serie = serieClave ? series[serieClave] : null;
+      const fuente = serie ? parrafoFuenteHtml(serie.fuente, serie.fuenteUrl) : '';
+      return narrativaHtml + fuente;
+    }
+    if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
+    return '<p>' + escaparHtml(marcadorTemaMacroPendienteHtml(tema, year)) + '</p>';
+  };
 
   let salida = reemplazarHuecosHtml(
     html,
     [tituloMundial, 'PIB Mundial', 'Inflación Global', 'por Región/País', tituloColombia],
-    [primerHueco(narrativaMundial, 'mundial'), contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml],
+    [
+      primerHueco(narrativa.mundial, 'mundial'),
+      temaHueco(narrativa.inflacionMundial, 'la inflación mundial', 'inflacion_global'),
+      temaHueco(narrativa.proyeccionMundial, 'la proyección de crecimiento mundial', 'crecimiento_por_region'),
+    ],
     avisos, tituloMundial
   );
   salida = reemplazarHuecosHtml(
@@ -678,23 +715,26 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
       'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
     ],
     [
-      primerHueco(narrativaColombia, 'colombiana'),
-      contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml,
-      contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml,
+      primerHueco(narrativa.colombia, 'colombiana'),
+      temaHueco(narrativa.inflacionColombia, 'la inflación en Colombia', 'inflacion_colombia'),
+      temaHueco(narrativa.politicaMonetaria, 'la política monetaria', 'tasa_intervencion'),
+      temaHueco(narrativa.tasaCambio, 'la tasa de cambio (TRM)', 'trm_promedio'),
+      temaHueco(narrativa.mercadoLaboral, 'el mercado laboral en Colombia', 'desempleo_colombia'),
+      temaHueco(narrativa.conclusiones, 'las conclusiones del panorama económico', null),
     ],
     avisos, tituloColombia
   );
 
-  if (!narrativaMundial && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloMundial);
-  if (!narrativaColombia && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloColombia);
+  if (!narrativa.mundial && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloMundial);
+  if (!narrativa.colombia && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloColombia);
 
   return salida;
 }
 
-/** Ruta HTML/PDF de `actualizarApartadoSectorialOoxml` (`docxRelleno.js`): mismos
- *  cuatro bloques de prosa de III.C localizados por encabezado, más la tabla "Datos
- *  Clave del Sector" que regenera `actualizarTablasMotorHtml`/el mecanismo de tabla
- *  existente — aquí solo se deja intacto ese hueco (`() => null`). */
+/** Ruta HTML/PDF de `actualizarApartadoSectorialOoxml` (`docxRelleno.js`): el hueco de
+ *  entrada más los cuatro bloques de prosa de III.C localizados por encabezado, más la
+ *  tabla "Datos Clave del Sector" que regenera `actualizarTablasMotorHtml`/el mecanismo
+ *  de tabla existente — aquí solo se deja intacto ese hueco (`() => null`). */
 export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, year, avisos) {
   const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
   console.log('[tablasHtmlInforme] actualizarApartadoSectorialHtml: año ' + year
@@ -705,6 +745,20 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     '1.2.2.2.1.5 del Decreto 1625 de 2016.]</p>';
   const bloque = (narrativaHtml, tema) => () => (narrativaHtml || marcador(tema));
 
+  /** Igual que `bloque`, pero cuando NO hay narrativa lista, el marcador de pendiente
+   *  solo se fabrica si el hueco traía prosa sustancial que retirar — el hueco de
+   *  entrada de III.C (antes de "Comportamiento del Sector") puede venir vacío en
+   *  plantillas cuyo encabezado de sección no trae párrafo introductorio propio, y sin
+   *  este resguardo se le fabricaría un marcador donde hoy no hay nada. El umbral NO
+   *  aplica cuando SÍ hay narrativa: insertar contenido real y verificado no es
+   *  "fabricar", así que se inserta siempre que esté disponible, sin importar cuánto
+   *  medía el hueco viejo (mismo criterio asimétrico que `temaHueco`, y que
+   *  `bloqueConUmbral` en docxRelleno.js). */
+  const bloqueConUmbral = (narrativaHtml, tema) => (textoHueco) => {
+    if (!narrativaHtml && textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
+    return bloque(narrativaHtml, tema)();
+  };
+
   const salida = reemplazarHuecosHtml(
     html,
     [
@@ -713,7 +767,7 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
       'ANÁLISIS ECONÓMICO',
     ],
     [
-      contenidoHuecoIntermedioHtml,
+      bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
       bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
       () => null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
