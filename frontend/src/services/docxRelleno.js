@@ -361,13 +361,16 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
       : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaSectorPendiente(tema, year))}</w:t></w:r></w:p>`
   );
 
-  /** Igual que `bloque`, pero solo actúa si el hueco traía prosa sustancial que
-   *  retirar — el hueco de entrada de III.C (antes de "Comportamiento del Sector")
-   *  puede venir vacío en plantillas cuyo encabezado de sección no trae párrafo
-   *  introductorio propio, y sin este resguardo se le fabricaría un marcador donde
-   *  hoy no hay nada. */
+  /** Igual que `bloque`, pero cuando NO hay narrativa lista, el marcador de pendiente
+   *  solo se fabrica si el hueco traía prosa sustancial que retirar — el hueco de
+   *  entrada de III.C (antes de "Comportamiento del Sector") puede venir vacío en
+   *  plantillas cuyo encabezado de sección no trae párrafo introductorio propio, y sin
+   *  este resguardo se le fabricaría un marcador donde hoy no hay nada. El umbral NO
+   *  aplica cuando SÍ hay narrativa: insertar contenido real y verificado no es
+   *  "fabricar", así que se inserta siempre que esté disponible, sin importar cuánto
+   *  medía el hueco viejo (mismo criterio asimétrico que `temaHueco`). */
   const bloqueConUmbral = (narrativaHtml, tema) => (textoHueco) => {
-    if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
+    if (!narrativaHtml && textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
     return bloque(narrativaHtml, tema)();
   };
 

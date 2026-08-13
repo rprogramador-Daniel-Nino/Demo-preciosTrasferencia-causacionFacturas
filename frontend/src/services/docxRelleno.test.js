@@ -1585,6 +1585,30 @@ test('actualizarApartadoSectorialOoxml no fabrica un marcador si el hueco de ent
   assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
 });
 
+test('actualizarApartadoSectorialOoxml inserta la introduccion aunque el hueco de entrada ya estuviera vacío', () => {
+  /* Caso que el brief marca como el más común: la plantilla no trae párrafo
+     introductorio propio ("Análisis del Sector" va seguido directo de "Comportamiento
+     del Sector"), pero SÍ hay narrativa real y verificada lista para ese hueco. No
+     fabricar un marcador ahí (umbral, cubierto por la prueba anterior) no debe
+     confundirse con no insertar contenido real cuando lo hay — el umbral solo gatea el
+     marcador de pendiente, nunca la narrativa disponible. */
+  const xml = [
+    parrafoXml('Análisis del Sector de la industria del software y de los videojuegos'),
+    parrafoXml('Comportamiento del Sector'),
+    parrafoXml('Texto real de comportamiento.'),
+    parrafoXml('Datos Clave del Sector'),
+  ].join('');
+
+  const analisisSector = { porAnio: { '2025': { narrativa: {
+    introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
+    comportamiento: '<p>Texto real de comportamiento.</p>',
+  } } } };
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /mostró dinamismo en 2025/);
+  assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
+});
+
 test('el año de la conclusión del rango pasa a ser el gravable, y solo ese', async () => {
   /* Medido antes contra el .docx del cliente: «ajustado durante el 2024» pasó a 2025 y las
      apariciones de «2024» en el documento entero bajaron de 88 a 87 — una sola sustitución.
