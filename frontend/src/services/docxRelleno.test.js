@@ -11,7 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
-  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla,
+  insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioConclusionRango,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
 } from './docxRelleno.js';
@@ -1484,4 +1484,36 @@ test('actualizarApartadoSectorialOoxml usa el marcador de pendiente si no hay co
   assert.doesNotMatch(salida, /Texto viejo/);
   assert.match(salida, /\[Actualizar con el análisis del comportamiento del sector/);
   assert.ok(avisos.length >= 1);
+});
+
+test('el año de la conclusión del rango pasa a ser el gravable, y solo ese', async () => {
+  /* Medido antes contra el .docx del cliente: «ajustado durante el 2024» pasó a 2025 y las
+     apariciones de «2024» en el documento entero bajaron de 88 a 87 — una sola sustitución.
+     Los otros años son correctos y no se pueden tocar: los encabezados del ANEXO B son los
+     estados financieros disponibles de las comparables, del año anterior. */
+  const buf = await plantilla([
+    parrafo('), del margen operacional ajustado durante el 2024, demostrando un comportamiento.'),
+    parrafo('Los estados financieros de las comparables son del 2024.'),
+    parrafo('Fondo Monetario Internacional (2023). World Economic Outlook, April 2022.'),
+  ]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+  const texto = textoPlanoOoxml(actualizarAnioConclusionRango(xml, 2025, []));
+
+  assert.ok(texto.includes('ajustado durante el 2025'), 'el año de la conclusión');
+  assert.ok(texto.includes('comparables son del 2024'), 'el del ANEXO B NO se toca');
+  assert.ok(texto.includes('(2023)') && texto.includes('April 2022'), 'ni las fuentes citadas');
+});
+
+test('sin la frase de la conclusión se avisa; con un año ilegible también', async () => {
+  const sinFrase = [];
+  const buf = await plantilla([parrafo('Otra redacción del 2024 cualquiera.')]);
+  const xml = new PizZip(buf).file(RUTA_DOC_TEST).asText();
+  assert.strictEqual(actualizarAnioConclusionRango(xml, 2025, sinFrase), xml);
+  assert.match(sinFrase[0], /revísalo a mano/);
+
+  /* Y nunca en silencio: un año que no se puede leer dejaba el informe con el de la
+     plantilla y el panel de avisos limpio, indistinguible de haberlo actualizado. */
+  const sinAnio = [];
+  actualizarAnioConclusionRango(xml, undefined, sinAnio);
+  assert.match(sinAnio[0], /no se pudo leer el año gravable/);
 });

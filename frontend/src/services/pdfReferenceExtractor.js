@@ -33,8 +33,9 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      5 — cada página del original envuelta, para que el salto caiga donde debe
      6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo
      7 — cada imagen con el tamaño que le da el PDF, y el encabezado en su lado
-     8 — la orientación de cada página, para la sección apaisada */
-export const VERSION_EXTRACTOR = 8;
+     8 — la orientación de cada página, para la sección apaisada
+     9 — las citas legales apartadas como notas al pie, con su llamada marcada */
+export const VERSION_EXTRACTOR = 9;
 
 /* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
    del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
@@ -49,10 +50,22 @@ const MAPA_ETIQUETAS = {
      la otra. Es lo que hacía que el índice se viera desordenado.
      `TOC` no se mapea: envolverlo añadiría un bloque sin efecto visible. */
   TOCI: 'p',
-  /* Las notas también son bloque. Si no, la nota al pie se fundía con el párrafo
-     que la precede y parecía parte del texto. */
-  Note: 'p',
+  /* `Note` no se mapea: no es un párrafo del cuerpo sino una nota al pie, y `aHTML` la
+     aparta antes de llegar aquí. Ponerla en el flujo —lo que se hacía— la dejaba en medio
+     de la página, empujando el resto del texto hacia abajo, mientras el informe la lleva
+     al pie de la hoja. */
 };
+
+/* La llamada de una nota al pie: en el árbol del PDF es un `Link` cuyo texto es sólo el
+   número. Los otros `Link` del informe son direcciones web —hay varias dentro de las notas
+   de la sección III— y no se tocan. */
+const RX_SOLO_NUMERO = /^\d{1,3}$/;
+
+/* El número con el que la nota empieza su propio texto. Word pone el suyo al emitirla como
+   nota al pie de verdad, así que este se quita del cuerpo o saldría duplicado ("1 1 En
+   virtud de…"). Se salta las etiquetas de apertura para llegar al primer texto visible: el
+   número viene envuelto en el `span` que declara su cuerpo de 5 puntos. */
+const RX_NUMERO_INICIAL = /^((?:<[^>]*>|\s)*)(\d{1,3})/;
 
 const escapar = (s) =>
   String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -125,8 +138,15 @@ export async function extraerReferencia(datos) {
     contarEstilos(porId, censoEstilos);
     /* Los items marcadores no traen `str`; sin el `|| ''` se colarían literales
        "undefined" en el texto de las páginas sin etiquetar. */
+    let ultimoTipoAjustePlano = 'AR';
     const textoPlano = texto.items
-      .map((i) => (i.hasEOL ? ' ' : '') + (i.str || ''))
+      .map((i) => {
+        if (!i.str) return i.hasEOL ? ' ' : '';
+        const upper = i.str.toUpperCase();
+        if (upper.includes('COBRAR')) ultimoTipoAjustePlano = 'AR';
+        if (upper.includes('PAGAR')) ultimoTipoAjustePlano = 'AP';
+        return (i.hasEOL ? ' ' : '') + normalizarCaracteresMatematicos(i.str, ultimoTipoAjustePlano);
+      })
       .join('')
       .trim();
 
@@ -187,7 +207,12 @@ export async function extraerReferencia(datos) {
   const bloques = leidas.map(({ pagina: n, arbol, porId, textoPlano, orientacion }) => {
     if (arbol) {
       const figuras = [];
-      const htmlStruct = aHTML(arbol, porId, figuras, n, base);
+      /* Las notas de la página van al final de su bloque, detrás de todo el texto. Es donde
+         el informe las lleva, y donde la vista previa las muestra sin más CSS que el que
+         las pinta pequeñas. El .docx no depende de esta posición —las saca del cuerpo y las
+         emite como notas al pie de Word—, pero la ruta HTML sí. */
+      const notas = [];
+      const htmlStruct = aHTML(arbol, porId, figuras, n, base, notas) + notas.join('');
       figurasPorPagina.set(n, figuras);
 
       /* Respaldo por página: si el árbol no rindió texto (documento etiquetado
@@ -453,6 +478,10 @@ export function loQueFaltaPorVersion(version) {
                'tabla, y el documento se infla a cientos de hojas; además el anexo ' +
                'llega con una sola página de las quince');
   }
+  if (version < 9) {
+    falta.push('las citas legales no van apartadas, así que el .docx tiene que ' +
+               'reconocerlas por su forma en vez de por lo que el PDF declara');
+  }
   return falta;
 }
 
@@ -593,6 +622,7 @@ function textoPorId(items, estilos = new Map()) {
      nombre del cliente anterior. Los cortes sin `hasEOL` se unen sin nada:
      ahí el renglón sólo se partió por un cambio de fuente. */
   let saltoPendiente = false;
+  let ultimoTipoAjuste = 'AR';
   for (const item of items) {
     if (item.type === 'beginMarkedContent' || item.type === 'beginMarkedContentProps') {
       pilaMarcas.push(item.id || null);
@@ -603,6 +633,11 @@ function textoPorId(items, estilos = new Map()) {
       continue;
     }
     if (item.str) {
+      const upper = item.str.toUpperCase();
+      if (upper.includes('COBRAR')) ultimoTipoAjuste = 'AR';
+      if (upper.includes('PAGAR')) ultimoTipoAjuste = 'AP';
+
+      const strLimpia = normalizarCaracteresMatematicos(item.str, ultimoTipoAjuste);
       const id = pilaMarcas[pilaMarcas.length - 1];
       if (id) {
         const runs = porId.get(id) || [];
@@ -628,9 +663,9 @@ function textoPorId(items, estilos = new Map()) {
         /* Runs contiguos con el mismo estilo se funden: el PDF corta el texto en
            cada cambio de fuente y sin fundir saldría un `<strong>` por sílaba. */
         if (ultimo && mismoEstilo(ultimo, estilo)) {
-          ultimo.texto += separador + item.str;
+          ultimo.texto += separador + strLimpia;
         } else {
-          runs.push({ ...estilo, texto: separador + item.str });
+          runs.push({ ...estilo, texto: separador + strLimpia });
         }
       }
       saltoPendiente = false;
@@ -682,8 +717,13 @@ const textoDeRuns = (runs) => (runs || []).map((r) => r.texto).join('');
    `figuras` recoge, en orden de documento, el bbox de cada nodo `Figure`, y en su
    lugar queda un marcador. Así la imagen acaba donde el informe la puso —entre
    los párrafos que la rodean— y no amontonada al final de la página, que es lo
-   que hacía que el Word generado no se pareciera al PDF de origen. */
-function aHTML(nodo, porId, figuras, pagina, base) {
+   que hacía que el Word generado no se pareciera al PDF de origen.
+
+   `notas` recoge las notas al pie, que salen del flujo por el motivo contrario: el árbol
+   del PDF las ancla justo detrás del párrafo que las cita —medido: las 42 del informe—, y
+   emitirlas ahí las ponía en mitad de la página. Quien llama las vuelca al final de la
+   página; el .docx las convierte además en notas al pie de Word. */
+function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
   if (!nodo) return '';
   if (nodo.type === 'content') return runsAHTML(porId.get(nodo.id), base);
 
@@ -691,6 +731,36 @@ function aHTML(nodo, porId, figuras, pagina, base) {
     const indice = figuras.length;
     figuras.push({ bbox: nodo.bbox || null, alt: nodo.alt || '' });
     return '<!--FIG:' + pagina + ':' + indice + '-->';
+  }
+
+  /* La nota al pie. Su número sale de su propio texto y no de un contador, para que
+     coincida con el de la llamada: el informe las numera de corrido, 1 a 42, y es ese
+     número el que empareja las dos mitades. Si una nota no lo trajera, se cae al orden de
+     aparición dentro de la página, que es lo único que se sabe sin él. */
+  if (nodo.role === 'Note') {
+    const dentro = (nodo.children || [])
+      .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+      .join('');
+    const m = RX_NUMERO_INICIAL.exec(dentro);
+    const numero = m ? m[2] : String(notas.length + 1);
+    /* Sólo el número: el resto del contenido se conserva tal cual, etiquetas incluidas. */
+    const cuerpo = m ? dentro.replace(RX_NUMERO_INICIAL, '$1') : dentro;
+    notas.push('<div data-nota-pie="' + numero + '">' + cuerpo + '</div>');
+    return '';
+  }
+
+  /* La llamada, marcada para que el .docx la sustituya por la referencia de Word y la
+     vista previa la pinte como superíndice. Hasta ahora llegaba como un dígito a cuerpo
+     de 8 puntos a media altura de línea, indistinguible de un número cualquiera. */
+  if (nodo.role === 'Link') {
+    const dentro = (nodo.children || [])
+      .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+      .join('');
+    const texto = dentro.replace(/<[^>]*>/g, '').trim();
+    if (RX_SOLO_NUMERO.test(texto)) {
+      return '<sup data-ref-nota="' + texto + '">' + texto + '</sup>';
+    }
+    return dentro;
   }
 
   /* Una fila sólo puede contener celdas. El PDF de referencia cuelga además un `P`
@@ -706,7 +776,7 @@ function aHTML(nodo, porId, figuras, pagina, base) {
   if (nodo.role === 'TR') {
     const celdas = [];
     for (const h of nodo.children || []) {
-      const html = aHTML(h, porId, figuras, pagina, base);
+      const html = aHTML(h, porId, figuras, pagina, base, notas);
       if (h.role === 'TD' || h.role === 'TH') {
         celdas.push(html);
         continue;
@@ -720,7 +790,7 @@ function aHTML(nodo, porId, figuras, pagina, base) {
   }
 
   const hijos = (nodo.children || [])
-    .map((h) => aHTML(h, porId, figuras, pagina, base))
+    .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
     .join('');
   const etiqueta = MAPA_ETIQUETAS[nodo.role];
   return etiqueta ? '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>' : hijos;
@@ -747,4 +817,86 @@ function emparejar(figuras, dibujosDePagina, tolerancia = 2) {
     }
     return null;
   });
+}
+
+/**
+ * Traduce un caracter alfanumérico matemático especializado (cursiva, negrita, monospace)
+ * de vuelta a su letra estándar equivalente (A-Z, a-z).
+ */
+function demath(char) {
+  const code = char.codePointAt(0);
+  if (!code) return char;
+
+  // Mayúsculas Negrita Matemática (U+1D400 - U+1D419) -> A-Z (65 - 90)
+  if (code >= 0x1D400 && code <= 0x1D419) return String.fromCharCode(65 + (code - 0x1D400));
+  // Minúsculas Negrita Matemática (U+1D41A - U+1D433) -> a-z (97 - 122)
+  if (code >= 0x1D41A && code <= 0x1D433) return String.fromCharCode(97 + (code - 0x1D41A));
+
+  // Mayúsculas Cursiva Matemática (U+1D434 - U+1D44D) -> A-Z (65 - 90)
+  if (code >= 0x1D434 && code <= 0x1D44D) return String.fromCharCode(65 + (code - 0x1D434));
+  // Minúsculas Cursiva Matemática (U+1D44E - U+1D467) -> a-z (97 - 122)
+  if (code >= 0x1D44E && code <= 0x1D467) return String.fromCharCode(97 + (code - 0x1D44E));
+
+  // Mayúsculas Negrita Cursiva (U+1D468 - U+1D481) -> A-Z (65 - 90)
+  if (code >= 0x1D468 && code <= 0x1D481) return String.fromCharCode(65 + (code - 0x1D468));
+  // Minúsculas Negrita Cursiva (U+1D482 - U+1D49B) -> a-z (97 - 122)
+  if (code >= 0x1D482 && code <= 0x1D49B) return String.fromCharCode(97 + (code - 0x1D482));
+
+  // Mayúsculas Caligráficas (Script) (U+1D49C - U+1D4B5) -> A-Z (65 - 90)
+  if (code >= 0x1D49C && code <= 0x1D4B5) return String.fromCharCode(65 + (code - 0x1D49C));
+  // Minúsculas Caligráficas (Script) (U+1D4B6 - U+1D4CF) -> a-z (97 - 122)
+  if (code >= 0x1D4B6 && code <= 0x1D4CF) return String.fromCharCode(97 + (code - 0x1D4B6));
+
+  // Mayúsculas Sans-serif Regular (U+1D5A0 - U+1D5B9) -> A-Z (65 - 90)
+  if (code >= 0x1D5A0 && code <= 0x1D5B9) return String.fromCharCode(65 + (code - 0x1D5A0));
+  // Minúsculas Sans-serif Regular (U+1D5BA - U+1D5D3) -> a-z (97 - 122)
+  if (code >= 0x1D5BA && code <= 0x1D5D3) return String.fromCharCode(97 + (code - 0x1D5BA));
+
+  // Mayúsculas Sans-serif (U+1D5D4 - U+1D5ED) -> A-Z (65 - 90)
+  if (code >= 0x1D5D4 && code <= 0x1D5ED) return String.fromCharCode(65 + (code - 0x1D5D4));
+  // Minúsculas Sans-serif (U+1D5EE - U+1D607) -> a-z (97 - 122)
+  if (code >= 0x1D5EE && code <= 0x1D607) return String.fromCharCode(97 + (code - 0x1D5EE));
+
+  // Mayúsculas Monoespacio (U+1D670 - U+1D689) -> A-Z (65 - 90)
+  if (code >= 0x1D670 && code <= 0x1D689) return String.fromCharCode(65 + (code - 0x1D670));
+  // Minúsculas Monoespacio (U+1D68A - U+1D6A3) -> a-z (97 - 122)
+  if (code >= 0x1D68A && code <= 0x1D6A3) return String.fromCharCode(97 + (code - 0x1D68A));
+
+  return char;
+}
+
+/**
+ * Normaliza una cadena de texto, traduciendo cualquier caracter matemático corrupto
+ * (procedente de fórmulas de LaTeX o editores de ecuaciones) a su letra ASCII equivalente legible.
+ * 
+ * Si se detecta un bloque correspondiente a las ecuaciones de ajuste de Cuentas por Cobrar
+ * o Cuentas por Pagar (que se extraen como tres líneas separadas debido a las fracciones),
+ * reconstruye automáticamente la fórmula limpia en la línea principal y vacía las otras dos.
+ */
+export function normalizarCaracteresMatematicos(str, tipo) {
+  if (typeof str !== 'string') return str;
+  let res = [...str].map(demath).join('');
+  const normalized = res.replace(/\s+/g, ' ').trim();
+
+  // Detecta el cuerpo principal de la fórmula (Fila 2 de la fracción)
+  if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA') && normalized.includes('RR (1 + RR)')) {
+    if (tipo === 'AP') {
+      return 'AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))';
+    } else {
+      return 'AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))';
+    }
+  }
+
+  // Detecta la línea del numerador de la fracción (Fila 1 de la fracción) para vaciarla
+  if (normalized === 'AAAAAATTTT AA' || normalized === 'AAAAAATTTT R') {
+    return '';
+  }
+
+  // Detecta la línea del denominador de la fracción (Fila 3 de la fracción) para vaciarla
+  if ((normalized.includes('TATTTTTT') || normalized.includes('TTAATTTTTT') || normalized.includes('TTTTTT')) && 
+      (normalized.includes('(1 + AA)') || normalized.includes('(1+AA)') || normalized.includes('(1 + R)') || normalized.includes('(1+R)'))) {
+    return '';
+  }
+
+  return res;
 }

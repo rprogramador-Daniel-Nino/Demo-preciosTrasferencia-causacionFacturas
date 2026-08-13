@@ -849,6 +849,47 @@ export function actualizarProsaTrasTabla(xml, nombres, cifras, avisos) {
   return salida;
 }
 
+/* El año que la conclusión del rango menciona junto a las cifras del estudio: «…del margen
+   operacional ajustado durante el 2024». Venía de la plantilla, así que el informe se
+   radicaba con el año del contribuyente anterior al lado de cifras del actual.
+
+   Se ancla en las palabras que rodean al año y NO en la posición respecto a la tabla: ese
+   párrafo está a un salto de página de ella —carácter 501.297 en el informe del cliente— y la
+   frase viaja completa dentro de un mismo `<w:t>`, así que cambiar el año ahí no toca los
+   runs vecinos ni el formato.
+
+   Solo ese año. Los demás del documento se quedan como están: los encabezados del ANEXO B
+   son los estados financieros disponibles de las comparables, del año anterior, y las
+   fuentes citadas llevan su propia fecha. */
+const RX_ANIO_CONCLUSION = /(ajustado\s+durante\s+el\s+)(20\d{2})/g;
+
+export function actualizarAnioConclusionRango(xml, anioGravable, avisos) {
+  const gravable = Number(anioGravable);
+  if (!Number.isInteger(gravable) || gravable < 2000 || gravable > 2100) {
+    if (Array.isArray(avisos)) {
+      avisos.push('no se pudo leer el año gravable ("' + String(anioGravable) + '"), así que el '
+        + 'año de la conclusión del rango se queda como lo trajo la plantilla');
+    }
+    return String(xml || '');
+  }
+
+  let cambiados = 0;
+  const salida = String(xml || '').replace(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g, (todo, abre, contenido, cierra) => {
+    const hecho = contenido.replace(RX_ANIO_CONCLUSION, (coincidencia, antes, anio) => {
+      if (Number(anio) === gravable) return coincidencia;
+      cambiados += 1;
+      return antes + gravable;
+    });
+    return hecho === contenido ? todo : abre + hecho + cierra;
+  });
+
+  if (!cambiados && Array.isArray(avisos)) {
+    avisos.push('no se encontró el año en la conclusión del rango («…ajustado durante el AÑO»): '
+      + 'si tu plantilla lo redacta de otro modo, revísalo a mano antes de radicar');
+  }
+  return salida;
+}
+
 /**
  * Sustituidor de tablas sobre un `document.xml`.
  *
@@ -1093,6 +1134,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
     avisos,
   ));
+
+  /* Y el año que esa misma conclusión menciona. */
+  doc.aplicar((x) => actualizarAnioConclusionRango(x, year, avisos));
 
   /* 13. Margen Operacional Compañías Comparables.
 

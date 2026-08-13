@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
+  normalizarCaracteresMatematicos,
 } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
@@ -394,4 +395,113 @@ test('el encabezado sabe de qué lado va y desde qué página', async () => {
   /* Medido: la primera con logo es la 5. Una medición por geometría exacta decía 6
      porque la de la página 5 está unos puntos desplazada respecto a las siguientes. */
   assert.strictEqual(desde, 5);
+});
+
+test('las citas legales se apartan como notas al pie, con su llamada marcada', async () => {
+  const r = await extraer();
+  /* El árbol del PDF ancla cada `Note` justo detrás del párrafo que la cita, así que
+     emitirla ahí la dejaba en mitad de la página y empujaba el resto del texto hacia abajo:
+     el diseño de la página siguiente dejaba de parecerse al original. Medido sobre el PDF
+     real: 42 notas numeradas de corrido, 1 a 42. */
+  const numeros = [...r.html.matchAll(/data-nota-pie="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.strictEqual(numeros.length, 42, 'no se apartaron las 42 citas del informe');
+  assert.deepStrictEqual(
+    numeros, Array.from({ length: 42 }, (_, i) => i + 1),
+    'los números de las notas no son los del informe, de corrido y en orden'
+  );
+
+  /* Cada nota tiene su llamada, y con el mismo número: es lo que las empareja al exportar. */
+  const refs = [...r.html.matchAll(/data-ref-nota="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepStrictEqual([...new Set(refs)].sort((a, b) => a - b), numeros,
+    'hay notas sin llamada o llamadas sin nota');
+});
+
+test('la nota va al final de su página y no en medio del texto', async () => {
+  const r = await extraer();
+  const pagina = /<div class="pagina" data-pagina="6"[\s\S]*?(?=<div class="pagina" data-pagina="7")/
+    .exec(r.html);
+  assert.ok(pagina, 'no se encontró la página del RESUMEN EJECUTIVO');
+
+  /* Las dos notas de esta página van juntas al final, detrás de todo el texto. */
+  const iNota = pagina[0].indexOf('data-nota-pie="1"');
+  const iUltimoParrafo = pagina[0].lastIndexOf('<p>');
+  assert.ok(iNota > 0, 'la página del RESUMEN EJECUTIVO no lleva su nota apartada');
+  assert.ok(iNota > pagina[0].indexOf('empresa especializada'),
+    'la nota sigue delante del cuerpo del texto');
+  assert.ok(iNota < iUltimoParrafo, 'la nota no está en el bloque final de la página');
+
+  /* Y el párrafo que la cita empalma con el siguiente del cuerpo, sin la cita en medio: es
+     justo lo que se había perdido. */
+  const texto = pagina[0].replace(/<div data-nota-pie[\s\S]*$/, '').replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ');
+  assert.ok(/artículo 260-2 del E\.T\.\s+END GAME INTERACTIVE COLOMBIA SAS es una empresa/
+    .test(texto), 'la cita sigue partiendo el cuerpo del RESUMEN EJECUTIVO: ' + texto.slice(0, 400));
+});
+
+test('el cuerpo de la nota no repite el número que Word le pone', async () => {
+  const r = await extraer();
+  /* El texto de la nota empieza por su número en el PDF. Word numera sus notas al pie por su
+     cuenta, así que dejarlo daría «1 1 En virtud de…». */
+  const m = /<div data-nota-pie="1">([\s\S]*?)<\/div>/.exec(r.html);
+  assert.ok(m, 'no se apartó la primera nota');
+  const texto = m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  assert.ok(texto.startsWith('En virtud de lo expresado en'),
+    'el cuerpo de la nota no empieza donde debe: ' + texto.slice(0, 60));
+
+  /* Y el contenido no se pierde por el camino: la primera nota del informe son dos párrafos,
+     el que cita el artículo y el que lo transcribe. */
+  assert.ok(texto.includes('Art. 260-2 – Estatuto Tributario'), 'falta el artículo citado');
+  assert.ok(texto.includes('Los contribuyentes del impuesto sobre la renta'),
+    'falta la transcripción del artículo, que va en el segundo párrafo de la nota');
+});
+
+test('una dirección web dentro de una nota no se confunde con una llamada', async () => {
+  const r = await extraer();
+  /* Las notas de la sección III llevan la fuente y su URL, y en el árbol del PDF la URL es un
+     `Link` igual que la llamada. Sólo el que es un número puro se marca como llamada. */
+  assert.ok(!/data-ref-nota="[^"]*[^\d"]/.test(r.html),
+    'se marcó como llamada algo que no es un número');
+  const soloTexto = r.html.replace(/<[^>]*>/g, ' ');
+  assert.ok(soloTexto.includes('https://www.dane.gov.co'),
+    'se perdió una dirección web de las notas de la sección III');
+});
+
+test('normalizarCaracteresMatematicos traduce simbolos matematicos de LaTeX/Unicode a ASCII legible', () => {
+  // Mayúsculas cursivas matemáticas (𝐴𝑅)
+  assert.strictEqual(normalizarCaracteresMatematicos('𝐴𝑅 Adjustment'), 'AR Adjustment');
+
+  /* Caracteres cursivos y negritas mezclados, que es como llegan las ecuaciones del informe.
+     La cadena de este caso NO puede ser «AAAAAATTTT AA»: ésa es el numerador suelto de la
+     fracción del ajuste, y desde que la función reconstruye esas fórmulas se vacía a propósito
+     —lo comprueba el test siguiente—. */
+  assert.strictEqual(
+    normalizarCaracteresMatematicos('𝐴𝐴𝑇𝑇 𝐴𝐴').replace(/\s+/g, ' '), 'AATT AA');
+
+  // Letras matemáticas combinadas: negritas, cursivas, sans-serif, monospace
+  const combinadas = '𝐉𝑲𝖫𝗤𝚡'; // J negrita, K cursiva, L sans-serif, Q sans-serif negrita, x monospace
+  assert.strictEqual(normalizarCaracteresMatematicos(combinadas), 'JKLQx');
+});
+
+test('la fórmula del ajuste se reconstruye en una línea y las otras dos se vacían', () => {
+  /* Las ecuaciones de ajuste de cuentas por cobrar y por pagar llevan una fracción, y el PDF las
+     entrega en tres renglones: numerador, cuerpo y denominador. Sueltos y con los caracteres
+     matemáticos corruptos no dicen nada, así que el cuerpo se reconstruye entero y los otros dos
+     se vacían. El `tipo` es el que decide si el ajuste es de cobrar (AR) o de pagar (AP).
+
+     Este test acompaña a esa reconstrucción, que llegó sin cobertura propia: sin él, el único
+     test que tocaba la función afirmaba lo contrario —que el numerador se conserva— y quedaba en
+     rojo sin decir por qué. */
+  const numerador = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴';
+  assert.strictEqual(normalizarCaracteresMatematicos(numerador), '',
+    'el numerador suelto de la fracción debería vaciarse');
+
+  /* El cuerpo, con el tipo de ajuste que corresponda. */
+  const cuerpo = 'AAAA AAAAAAAAAAAAAAAAAAA RR (1 + RR)';
+  assert.match(normalizarCaracteresMatematicos(cuerpo, 'AR'), /^AR Adjustment = /);
+  assert.match(normalizarCaracteresMatematicos(cuerpo, 'AP'), /^AP Adjustment = /);
+  /* Sin tipo se cae a cuentas por cobrar, que es la primera de las dos en el informe. */
+  assert.match(normalizarCaracteresMatematicos(cuerpo), /^AR Adjustment = /);
+
+  /* Y lo que no es una de esas tres líneas pasa igual que siempre. */
+  assert.strictEqual(normalizarCaracteresMatematicos('Total activos'), 'Total activos');
 });

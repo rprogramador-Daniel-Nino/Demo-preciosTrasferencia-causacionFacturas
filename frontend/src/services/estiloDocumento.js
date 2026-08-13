@@ -88,6 +88,21 @@ export const REGLAS_DOCUMENTO = [
      figura de la página 11 medía 29,9 cm contra 21,6 de papel y el desborde se repartía
      en páginas nuevas. `height:auto` va con ella para no deformar lo que se recorta. */
   ['img', 'max-width:100%;height:auto'],
+  /* La llamada de una nota al pie. El lector la aparta en un `sup`; sin esta regla el navegador
+     la sube pero el .doc la dejaría a media altura de línea, que es como se veía antes de que
+     existiera el `sup`: un dígito pequeño indistinguible de un número cualquiera.
+     En el .docx no hace falta —ahí es una referencia de Word y la coloca Word—. */
+  ['sup', 'vertical-align:super;font-size:0.7em;line-height:0'],
+  /* Las citas al pie de cada página, que el lector vuelca al final de su hoja. La línea de
+     arriba imita la separadora que Word dibuja sobre sus notas al pie; va sólo sobre la primera
+     nota de la página, y la regla siguiente es la que se la quita a las demás. Es una imitación
+     y no un calco —la de Word ocupa un tercio del ancho—, y no se acota con `width` porque eso
+     estrecharía también el texto de esa nota. El documento que se radica lleva la línea de
+     verdad: en el .docx éstas son notas al pie reales y las dibuja Word. */
+  ['div[data-nota-pie]',
+    'font-size:8pt;text-align:justify;margin:0;padding:4px 0 0;' +
+    'border-top:1px solid #0E1726;margin-top:12px'],
+  ['div[data-nota-pie]+div[data-nota-pie]', 'border-top:none;margin-top:0;padding-top:0'],
 ];
 
 /* Las mismas reglas, opcionalmente acotadas a un contenedor. La previsualización las
