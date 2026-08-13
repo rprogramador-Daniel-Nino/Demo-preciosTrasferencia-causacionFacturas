@@ -17,7 +17,7 @@
 
 import { analizarRango } from './rangoIntercuartil.js';
 import {
-  DATOS_MACRO, resolverSerie, valorODisponible, marcadorPendiente,
+  DATOS_MACRO, resolverSerie, cifraODisponible, marcadorPendiente,
 } from './analisisMercado.js';
 import { num, pliOf } from '../utils/calculations.js';
 
@@ -299,9 +299,9 @@ export function tablasMacroInforme(datosMacro, year) {
     return {
       titulo, fuente, cabeceras: ['Año', cabecera],
       filas: [
-        [String(y1), wrap(valorODisponible(S, y1, concepto))],
-        [String(y2), wrap(valorODisponible(S, y2, concepto))],
-        [String(y3) + etiquetaProyeccion, wrap(valorODisponible(S, y3, 'la proyección de ' + concepto))],
+        [String(y1), wrap(cifraODisponible(S, y1, concepto))],
+        [String(y2), wrap(cifraODisponible(S, y2, concepto))],
+        [String(y3) + etiquetaProyeccion, wrap(cifraODisponible(S, y3, 'la proyección de ' + concepto))],
       ],
     };
   };
@@ -351,7 +351,7 @@ export function tablasMacroInforme(datosMacro, year) {
       titulo: 'Inflación en Colombia (' + y + ' vs. Meta ' + y3 + ')',
       cabeceras: ['Indicador', 'Valor (%)'],
       filas: [
-        ['Inflación ' + y, wrap(valorODisponible(S, y, 'la inflación de Colombia'))],
+        ['Inflación ' + y, wrap(cifraODisponible(S, y, 'la inflación de Colombia'))],
         ['Meta Inflación ' + y3, wrap(DATOS_MACRO.meta_inflacion_banrep)],
       ],
       fuente,
@@ -385,8 +385,8 @@ export function tablasMacroInforme(datosMacro, year) {
       titulo: 'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
       cabeceras: ['Año', 'TRM Promedio ($)'],
       filas: [
-        [String(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
-        [String(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
+        [String(y1), wrap(cifraODisponible(S, y1, 'la TRM promedio'))],
+        [String(y2), wrap(cifraODisponible(S, y2, 'la TRM promedio'))],
       ],
       fuente,
     });
@@ -399,8 +399,8 @@ export function tablasMacroInforme(datosMacro, year) {
       titulo: 'Tasa de Desempleo en Colombia (' + y + ' vs. Proyección ' + y3 + ')',
       cabeceras: ['Indicador', 'Valor (%)'],
       filas: [
-        ['Desempleo ' + y, wrap(valorODisponible(S, y, 'la tasa de desempleo'))],
-        ['Desempleo Proyectado ' + y3, wrap(valorODisponible(S, y3, 'la proyección de desempleo'))],
+        ['Desempleo ' + y, wrap(cifraODisponible(S, y, 'la tasa de desempleo'))],
+        ['Desempleo Proyectado ' + y3, wrap(cifraODisponible(S, y3, 'la proyección de desempleo'))],
       ],
       fuente,
     });

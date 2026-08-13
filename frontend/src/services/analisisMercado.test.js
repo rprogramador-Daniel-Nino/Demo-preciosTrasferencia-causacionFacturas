@@ -5,6 +5,8 @@ import {
   FUENTES_MACRO,
   generarApartadoSectorial,
   valorODisponible,
+  proyectarPorTendencia,
+  cifraODisponible,
   corridaSectorIncompleta,
   fuenteDatosClaveSector,
   generarApartadoMundial,
@@ -64,11 +66,28 @@ test('la tabla de tasa de intervención conserva la etiqueta original de cada ob
   );
 });
 
-test('un año sin datos deja un marcador que exige la fuente, no un guion mudo', () => {
+test('un año sin datos se estima sobre la serie, con su método a la vista y sin guion mudo', () => {
+  /* Antes esta prueba EXIGÍA el marcador «[Completar...]». El criterio cambió el
+     2026-08-13 por decisión del usuario: la Sección III no puede radicarse con casillas
+     por completar, porque eso no es una salvaguarda sino trabajo que queda para quien
+     firma. Con serie suficiente se calcula y se declara cómo; el marcador queda solo para
+     cuando no hay ni con qué calcular (ver la prueba siguiente). */
   const salida = generarTablaTRM(null, 2031, (v) => String(v));
-  assert.ok(salida.includes('[Completar con la TRM promedio de 2031'), 'no se marcó el dato ausente');
+  assert.ok(!salida.includes('[Completar con la TRM promedio de 2031'), 'dejó la casilla por completar');
+  assert.ok(/estimación propia/i.test(salida), 'no se declaró que la cifra es una estimación');
+  assert.ok(/R²/.test(salida), 'no se publicó la calidad del ajuste');
+  assert.ok(/no es una cifra publicada/i.test(salida), 'no se advierte que no es un dato publicado');
+  assert.ok(!salida.includes('>—<'), 'quedó un guion mudo');
+});
+
+test('el marcador sobrevive solo donde no hay serie con la que estimar', () => {
+  /* Dos observaciones no bastan (MIN_OBSERVACIONES_TENDENCIA): ahí sí, hueco declarado
+     antes que una cifra sin respaldo ni ajuste que enseñar. */
+  const salida = generarTablaTRM(
+    { series: { trm_promedio: { valores: { 2030: '4000', 2031: '4100' } } } },
+    2033, (v) => String(v));
+  assert.ok(salida.includes('[Completar con la TRM promedio de 2033'), 'no se marcó el dato ausente');
   assert.ok(salida.includes('Decreto 1625 de 2016'), 'el marcador no invoca la obligación de citar la fuente');
-  assert.ok(!salida.includes('>—<'), 'quedó un guion mudo en lugar del marcador');
 });
 
 test('el desempleo del año siguiente sale como proyección y no repite el del año en curso', () => {
@@ -77,9 +96,12 @@ test('el desempleo del año siguiente sale como proyección y no repite el del a
   assert.ok(salida.includes('9.0'), 'falta la proyección de 2025');
 });
 
-test('un año sin datos deja el marcador aunque se le pase datosMacro vacío', () => {
+test('con datosMacro vacío se cae al respaldo local y se estima sobre él, no al hueco', () => {
+  /* `series: {}` hace que `resolverSerie` caiga a DATOS_MACRO, que sí trae TRM: hay con
+     qué estimar, así que la casilla no puede salir por completar. */
   const salida = generarTablaTRM({ series: {} }, 2031, (v) => String(v));
-  assert.ok(salida.includes('[Completar con la TRM promedio de 2031'), 'no se marcó el dato ausente');
+  assert.ok(!salida.includes('[Completar con la TRM promedio de 2031'), 'dejó la casilla por completar');
+  assert.ok(/estimación propia/i.test(salida));
 });
 
 test('con datosMacro de Firestore, la tabla usa esas cifras y esa fuente, no el respaldo local', () => {
@@ -415,6 +437,73 @@ test('valorODisponible con valor propio pero sin URL publica al menos el nombre 
     { 2026: { valor: '8.5', fuente: 'Fedesarrollo' } }, 2026, 'la proyección de desempleo');
   assert.match(texto, /^8\.5/);
   assert.match(texto, /Fedesarrollo/);
+});
+
+test('proyectarPorTendencia ajusta una recta por mínimos cuadrados sobre los años observados', () => {
+  /* Serie perfectamente lineal: −0,5 por año. La proyección de 2026 tiene que ser 8.0 y el
+     ajuste, perfecto. */
+  const r = proyectarPorTendencia({ 2022: '10.0', 2023: '9.5', 2024: '9.0', 2025: '8.5' }, 2026);
+  assert.strictEqual(r.valor, '8.0');
+  assert.strictEqual(r.r2, 1);
+  assert.deepStrictEqual(r.puntos, [[2022, 10], [2023, 9.5], [2024, 9], [2025, 8.5]]);
+  assert.strictEqual(r.pendiente, -0.5);
+});
+
+test('proyectarPorTendencia conserva los decimales de la serie observada', () => {
+  /* La TRM se publica con dos decimales; devolver «4052.8600000001» delataría el cálculo. */
+  const r = proyectarPorTendencia({ 2023: '4325.10', 2024: '4062.59', 2025: '4052.86' }, 2026);
+  assert.match(r.valor, /^\d+\.\d{2}$/);
+});
+
+test('proyectarPorTendencia se niega con menos de tres observaciones', () => {
+  /* Con dos puntos la «tendencia» es la recta que los une: no hay ajuste que evaluar ni
+     evidencia que enseñar, solo una extrapolación disfrazada. */
+  assert.strictEqual(proyectarPorTendencia({ 2024: '10.2', 2025: '8.9' }, 2026), null);
+  assert.strictEqual(proyectarPorTendencia({}, 2026), null);
+});
+
+test('proyectarPorTendencia ignora los años posteriores al que se proyecta y los no numéricos', () => {
+  const r = proyectarPorTendencia(
+    { 2022: '10.0', 2023: '9.5', 2024: '9.0', 2025: '8.5', 2027: '99', 2021: 'N.D.' }, 2026);
+  assert.deepStrictEqual(r.puntos.map((p) => p[0]), [2022, 2023, 2024, 2025]);
+});
+
+test('cifraODisponible prefiere el pronóstico publicado sobre la estimación propia', () => {
+  const serie = {
+    2023: '10.0', 2024: '9.5', 2025: '8.9',
+    2026: { valor: '8.5', fuente: 'FMI, WEO', fuenteUrl: 'https://www.imf.org/weo' },
+  };
+  const texto = cifraODisponible(serie, 2026, 'la proyección de desempleo');
+  assert.match(texto, /^8\.5/);
+  assert.match(texto, /https:\/\/www\.imf\.org\/weo/);
+  assert.doesNotMatch(texto, /estimación propia/i);
+});
+
+test('cifraODisponible estima y muestra el método y los datos cuando nadie lo publicó', () => {
+  /* Lo que pidió el usuario: en vez del hueco, la cifra calculada, cómo se calculó y sobre
+     qué datos, para poder rehacer la cuenta. */
+  const texto = cifraODisponible(
+    { 2022: '10.0', 2023: '9.5', 2024: '9.0', 2025: '8.5' }, 2026, 'la proyección de desempleo');
+
+  assert.match(texto, /^8\.0/);
+  assert.match(texto, /estimación propia/i);
+  assert.match(texto, /tendencia lineal|mínimos cuadrados/i);
+  /* La evidencia: los años y valores sobre los que se ajustó. */
+  assert.match(texto, /2022/);
+  assert.match(texto, /2025/);
+  assert.match(texto, /10|8\.5/);
+  /* La calidad del ajuste, para que se pueda desconfiar de ella con criterio. */
+  assert.match(texto, /R²/);
+  /* Y el aviso de que NO es una cifra publicada. */
+  assert.match(texto, /no es una cifra publicada/i);
+  assert.doesNotMatch(texto, /Completar/);
+});
+
+test('cifraODisponible cae al marcador si no hay con qué estimar', () => {
+  /* Sin serie suficiente no se inventa nada: ahí el hueco sigue siendo la única salida
+     honesta, y lo dice el marcador de siempre. */
+  const texto = cifraODisponible({ 2025: '8.9' }, 2026, 'la proyección de desempleo');
+  assert.match(texto, /Completar con la proyección de desempleo de 2026/);
 });
 
 test('valorODisponible sigue marcando pendiente si el objeto no trae cifra', () => {
