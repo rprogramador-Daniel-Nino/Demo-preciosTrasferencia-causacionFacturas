@@ -31,6 +31,18 @@ const soloTexto = (html) => String(html || '').replace(/<[^>]*>/g, ' ');
 
 const normalizar = (v) => String(v == null ? '' : v).replace(/[\s.]/g, '').toUpperCase();
 
+const escaparRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/* Un tramo de texto sustituible, por ruta. En el OOXML de Word es el contenido de un `<w:t>`; en
+   el HTML renderizado, lo que hay entre el cierre de una etiqueta y la apertura de la siguiente.
+   Los tres grupos son: lo que abre, el texto, lo que cierra.
+
+   Delimitarlo así es lo que mantiene la sustitución fuera de los atributos, y eso no es un
+   detalle: los `data:image/png;base64,…` de las imágenes son megabytes de texto donde cualquier
+   cosa aparece por casualidad. */
+export const TRAMO_OOXML = /(<w:t[^>]*>)([^<]*)(<\/w:t>)/g;
+export const TRAMO_HTML = /(>)([^<]*)(<)/g;
+
 /* Extrae de la plantilla marcada los valores que traía el informe de
    referencia. El marcado envuelve el texto original sin alterarlo, así que el
    contenido de una marca `data-campo="nit"` es literalmente el NIT del cliente
@@ -66,7 +78,43 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
   const texto = soloTexto(htmlRenderizado);
   if (!texto.trim()) return avisos;
 
-  for (const { campo, valor } of valores || []) {
+  /* Los tramos que ocupan los valores NUEVOS, que es lo que ya está bien. Sin esto el aviso
+     cuenta como fuga las apariciones del valor viejo que viven DENTRO del nuevo, y eso lo
+     dispara cualquier razón social que sea una ampliación de la anterior: con «END GAME
+     INTERACTIVE» → «END GAME INTERACTIVE INC» y «END GAME» → «END GAME INTERACTIVE COLOMBIA
+     SOCIEDAD POR ACCIONES SIMPLIFICADA», un documento SIN una sola fuga real avisaba de 73
+     apariciones de cada uno. Un aviso que grita cuando todo está bien enseña a ignorar el
+     banner, que es justo lo que este banner no puede permitirse.
+
+     Se juntan los nuevos de TODOS los campos y no solo el del que se revisa: «END GAME», que
+     es el valor viejo de `ent`, también vive dentro de «END GAME INTERACTIVE INC», que es el
+     nuevo de `vinc`. */
+  const cubiertos = [];
+  for (const { campo } of valores || []) {
+    const nuevo = valorDeCampo(estudio, campo);
+    if (nuevo === null || nuevo === undefined || !String(nuevo).trim()) continue;
+    const aguja = String(nuevo);
+    let desde = 0;
+    for (;;) {
+      const pos = texto.indexOf(aguja, desde);
+      if (pos === -1) break;
+      cubiertos.push([pos, pos + aguja.length]);
+      desde = pos + aguja.length;
+    }
+  }
+  const estaCubierta = (inicio, fin) =>
+    cubiertos.some(([a, b]) => inicio >= a && fin <= b);
+
+  /* De más largo a más corto, y cada fuga encontrada tapa su propio tramo. Así una sola
+     aparición se atribuye al valor MÁS ESPECÍFICO que la explica y no se cuenta tres veces:
+     «END GAME INTERACTIVE COLOMBIA SAS» contiene «END GAME INTERACTIVE» y «END GAME», así que
+     una única fuga de la razón social vieja producía tres avisos que parecían tres problemas
+     distintos. */
+  const aRevisar = (valores || [])
+    .slice()
+    .sort((a, b) => String(b.valor || '').length - String(a.valor || '').length);
+
+  for (const { campo, valor } of aRevisar) {
     const nuevo = valorDeCampo(estudio, campo);
     if (nuevo === null || normalizar(nuevo) === normalizar(valor)) continue;
 
@@ -75,7 +123,12 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
     for (;;) {
       const pos = texto.indexOf(valor, desde);
       if (pos === -1) break;
-      cuenta++;
+      /* Dentro de un valor nuevo no es una fuga: es la sustitución que sí funcionó. Dentro de
+         una fuga más específica ya reportada, tampoco: es la misma. */
+      if (!estaCubierta(pos, pos + valor.length)) {
+        cuenta++;
+        cubiertos.push([pos, pos + valor.length]);
+      }
       desde = pos + valor.length;
     }
     if (!cuenta) continue;
@@ -112,16 +165,38 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
  *     seguidas del resto. Sin esto, las que ya estaban correctas se convertirían en
  *     «END GAME INTERACTIVE INC INC» a cada generación.
  *
- * Solo se toca texto contenido íntegro en un `<w:t>`: si Word partió el valor entre varios
- * runs se deja como está y se cuenta en `omitidos`, antes que romper el marcado del párrafo.
+ * Solo se toca texto contenido íntegro en un tramo: si Word partió el valor entre varios runs se
+ * deja como está y se cuenta en `omitidos`, antes que romper el marcado del párrafo.
  *
+ * LO YA SUSTITUIDO SE PROTEGE. Cada sustitución se escribe primero como un token y los tokens se
+ * resuelven al final. Sin eso, un par posterior reescribe lo que otro acaba de poner: al cambiar
+ * «END GAME INTERACTIVE COLOMBIA SAS» por «END GAME INTERACTIVE COLOMBIA SOCIEDAD POR ACCIONES
+ * SIMPLIFICADA», el resultado contiene «END GAME INTERACTIVE», que es el valor viejo de la
+ * vinculada, y el par de esa vinculada lo convertía en «END GAME INTERACTIVE INC COLOMBIA
+ * SOCIEDAD POR ACCIONES SIMPLIFICADA». También se protege lo que la guarda 2 decide CONSERVAR,
+ * por el mismo motivo.
+ *
+ * @param {string} texto  el OOXML de `word/document.xml`, o el HTML ya renderizado.
+ * @param {{estudio:object, valores:Array, rxTramo?:RegExp}} opciones  `rxTramo` delimita un tramo
+ *        de texto sustituible; por defecto el `<w:t>` de Word. Para HTML se pasa `TRAMO_HTML`.
  * @returns {{xml:string, sustituidos:Array, omitidos:Array}}
  */
-export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
+export function sustituirDatosDeReferencia(xml, { estudio, valores, rxTramo } = {}) {
   let salida = String(xml || '');
   const sustituidos = [];
   const omitidos = [];
+  const tramo = rxTramo || TRAMO_OOXML;
   if (!salida || !Array.isArray(valores) || !valores.length) return { xml: salida, sustituidos, omitidos };
+
+  /* Marcador para lo ya resuelto. Se comprueba que no exista en el documento antes de usarlo:
+     si existiera, resolverlo al final corrompería texto del informe. */
+  let marca = '@@PT-REF@@';
+  while (salida.includes(marca)) marca += '@';
+  const puestos = [];
+  const tokenizar = (valorFinal) => {
+    puestos.push(valorFinal);
+    return marca + (puestos.length - 1) + marca;
+  };
 
   /* Pares realmente distintos: si el estudio no trae el campo, o trae el mismo valor, no hay
      nada que corregir (mismo contribuyente al año siguiente, por ejemplo). */
@@ -156,31 +231,34 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
 
     let cuenta = 0;
     let partidos = 0;
-    salida = salida.replace(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g, (todo, abre, contenido, cierra) => {
+    tramo.lastIndex = 0;
+    salida = salida.replace(tramo, (todo, abre, contenido, cierra) => {
       if (!contenido.includes(par.viejo)) return todo;
       let hecho = contenido;
       if (esPrefijo && resto) {
-        /* Solo las que no traen ya el sufijo. */
+        /* Solo las que no traen ya el sufijo. Las que ya lo traen se tokenizan igual: si se
+           dejaran en claro, un par más corto contenido en ellas las reescribiría. */
         const partes = hecho.split(par.viejo);
         let rearmado = partes[0];
         for (let i = 1; i < partes.length; i += 1) {
           const yaCompleto = partes[i].startsWith(resto);
-          rearmado += (yaCompleto ? par.viejo : par.nuevo) + partes[i];
+          rearmado += tokenizar(yaCompleto ? par.viejo : par.nuevo) + partes[i];
           if (!yaCompleto) cuenta += 1;
         }
         hecho = rearmado;
       } else {
         const trozos = hecho.split(par.viejo);
         cuenta += trozos.length - 1;
-        hecho = trozos.join(par.nuevo);
+        hecho = trozos.join(tokenizar(par.nuevo));
       }
       return hecho === contenido ? todo : abre + hecho + cierra;
     });
 
     /* Lo que queda al concatenar los tramos y no se pudo tocar es que estaba partido entre
-       varios de ellos. Se concatenan los `<w:t>` y no se usa `soloTexto`, que está hecho
-       para el HTML renderizado y no ve el OOXML. */
-    const plano = (salida.match(/<w:t[^>]*>[^<]*<\/w:t>/g) || [])
+       varios de ellos. Se concatenan los tramos y no se usa `soloTexto`, que está hecho para el
+       HTML renderizado y no ve el OOXML. */
+    tramo.lastIndex = 0;
+    const plano = (salida.match(tramo) || [])
       .map((t) => t.replace(/<[^>]+>/g, '')).join('');
     if (plano.includes(par.viejo) && !(esPrefijo && resto)) {
       partidos = 1;
@@ -191,6 +269,15 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
       });
     }
     if (cuenta) sustituidos.push({ campo: par.campo, valor: par.viejo, nuevo: par.nuevo, cuenta, partidos });
+  }
+
+  /* Los tokens vuelven a ser texto. Ya no queda ningún par por aplicar, así que nada puede
+     reescribirlos. */
+  if (puestos.length) {
+    salida = salida.replace(
+      new RegExp(escaparRegex(marca) + '(\\d+)' + escaparRegex(marca), 'g'),
+      (todo, i) => (puestos[Number(i)] !== undefined ? puestos[Number(i)] : todo)
+    );
   }
 
   return { xml: salida, sustituidos, omitidos };
