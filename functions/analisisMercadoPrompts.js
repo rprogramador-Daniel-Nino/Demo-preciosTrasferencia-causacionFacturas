@@ -82,9 +82,21 @@ function construirPromptBusqueda(anioActual) {
     'El año ' + anioProyeccion + ' es de PROYECCIÓN y lo quiero para TODAS las series. Ojo: ' +
     'algunas de las fuentes de arriba solo publican el dato ya ocurrido, no un pronóstico, ' +
     'así que para ese año hay que buscar en quien sí proyecta:\n\n' + proyecciones + '\n\n' +
+    'Si la primera institución que consultes no lo publica, NO te rindas ni dejes el año ' +
+    'vacío: sigue buscando en las demás de esa lista y, si ninguna lo trae, en cualquier otro ' +
+    'pronóstico publicado y atribuible (banco central, banca de inversión, gremio, centro de ' +
+    'investigación económica). Un año sin cifra obliga a completarlo a mano después, así que ' +
+    'agota la búsqueda antes de omitirlo.\n\n' +
+    'Cuando la cifra de un año venga de una fuente DISTINTA de la principal de esa serie ' +
+    '—que es lo normal en el año de proyección—, no la des como un número suelto: devuélvela ' +
+    'con SU propia fuente y SU propia URL, así:\n' +
+    '  "desempleo_colombia": { "valores": { "' + (anioProyeccion - 1) + '": "8.9", "' + anioProyeccion +
+    '": { "valor": "8.5", "fuente": "FMI, WEO Octubre ' + anioProyeccion + '", "fuenteUrl": "https://..." } }, ' +
+    '"fuente": "DANE, GEIH", "fuenteUrl": "https://..." }\n' +
+    'Ese enlace se publica en la propia celda del informe, para que quien lo lea pueda ' +
+    'verificar el pronóstico sin salir del documento. Sin él la cifra no sirve.\n\n' +
     'Esa proyección también tiene que salir de una página que hayas consultado: no la ' +
-    'estimes tú ni la extrapoles de los años anteriores. Si de verdad no encuentras un ' +
-    'pronóstico publicado, omite ese año.\n\n' +
+    'estimes tú ni la extrapoles de los años anteriores.\n\n' +
     'Cuando termines de buscar, incluye en tu respuesta un objeto JSON con esta forma (puede ' +
     'ir acompañado del texto y las citas que necesites; lo que importa es que el JSON esté ' +
     'completo y bien formado):\n' +

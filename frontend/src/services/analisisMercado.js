@@ -145,10 +145,37 @@ export function marcadorPendiente(anio, concepto) {
   );
 }
 
-/** Valor de una serie para un año, o el marcador si no está. */
+/** La fuente de un valor suelto, entre paréntesis y con la URL a la vista. Texto plano y no
+ *  un `<a>`: la misma celda se emite en HTML, en OOXML y en la ruta de PDF, y una URL
+ *  escrita se puede copiar y verificar en las tres. */
+function fuenteDelValor(v) {
+  const partes = [String(v.fuente || '').trim(), String(v.fuenteUrl || '').trim()].filter(Boolean);
+  return partes.length ? ' (' + partes.join(' — ') + ')' : '';
+}
+
+/**
+ * Valor de una serie para un año, o el marcador si no está.
+ *
+ * Un año puede venir como cifra suelta o como `{ valor, fuente, fuenteUrl }`. La segunda
+ * forma es la del año de PROYECCIÓN: quien publica el dato realizado no suele publicar el
+ * pronóstico —el desempleo lo publica el DANE, pero quien lo proyecta es el FMI—, así que
+ * esa cifra no la respalda la fuente del pie de la tabla y su enlace tiene que ir en la
+ * propia celda, donde se pueda verificar sin salir del documento.
+ *
+ * Los arreglos (`crecimiento_por_region`, que guarda una lista de regiones por año) se
+ * devuelven tal cual: no son un valor con fuente propia y su tabla los recorre ella misma.
+ */
 export function valorODisponible(serie, anio, concepto) {
   const v = serie && serie[anio];
-  return (v === undefined || v === null || v === '') ? marcadorPendiente(anio, concepto) : v;
+  if (v === undefined || v === null || v === '') return marcadorPendiente(anio, concepto);
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'object') {
+    const cifra = String(v.valor === undefined || v.valor === null ? '' : v.valor).trim();
+    /* Un objeto sin cifra es una respuesta a medias: se marca pendiente en vez de publicar
+       «[object Object]» o una fuente sin dato al que respaldar. */
+    return cifra ? cifra + fuenteDelValor(v) : marcadorPendiente(anio, concepto);
+  }
+  return v;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────

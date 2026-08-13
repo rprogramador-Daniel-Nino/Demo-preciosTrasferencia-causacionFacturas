@@ -4,6 +4,7 @@ import {
   DATOS_MACRO,
   FUENTES_MACRO,
   generarApartadoSectorial,
+  valorODisponible,
   corridaSectorIncompleta,
   fuenteDatosClaveSector,
   generarApartadoMundial,
@@ -388,6 +389,48 @@ test('generarApartadoSectorial arma los 6 títulos en orden con la narrativa gua
   });
   assert.ok(salida.includes('250.000') && salida.includes('260.000'), 'faltan los valores de la tabla de datos clave');
   assert.ok(salida.includes('href="https://dane.gov.co"'), 'falta el enlace de la fuente citada');
+});
+
+test('valorODisponible publica el enlace en la celda cuando el valor trae fuente propia', () => {
+  /* La proyección del año siguiente sale de otra institución que la serie histórica —el
+     desempleo lo publica el DANE, pero quien lo proyecta es el FMI—, así que su fuente NO
+     es la del pie de la tabla. Va en la propia celda, con la URL a la vista, para que se
+     pueda verificar sin salir del documento. */
+  const serie = {
+    2025: '8.9',
+    2026: { valor: '8.5', fuente: 'FMI, WEO Octubre 2026', fuenteUrl: 'https://www.imf.org/weo' },
+  };
+
+  assert.strictEqual(valorODisponible(serie, 2025, 'la tasa de desempleo'), '8.9');
+
+  const proyectado = valorODisponible(serie, 2026, 'la proyección de desempleo');
+  assert.match(proyectado, /^8\.5/);
+  assert.match(proyectado, /FMI, WEO Octubre 2026/);
+  assert.match(proyectado, /https:\/\/www\.imf\.org\/weo/);
+  assert.doesNotMatch(proyectado, /Completar/);
+});
+
+test('valorODisponible con valor propio pero sin URL publica al menos el nombre de la fuente', () => {
+  const texto = valorODisponible(
+    { 2026: { valor: '8.5', fuente: 'Fedesarrollo' } }, 2026, 'la proyección de desempleo');
+  assert.match(texto, /^8\.5/);
+  assert.match(texto, /Fedesarrollo/);
+});
+
+test('valorODisponible sigue marcando pendiente si el objeto no trae cifra', () => {
+  /* Un objeto sin `valor` es una respuesta a medias del modelo: no se publica como si
+     fuera un dato, y NUNCA se cae en "[object Object]". */
+  const texto = valorODisponible(
+    { 2026: { fuente: 'FMI', fuenteUrl: 'https://x' } }, 2026, 'la proyección de desempleo');
+  assert.match(texto, /Completar con la proyección de desempleo de 2026/);
+  assert.doesNotMatch(texto, /object Object/);
+});
+
+test('valorODisponible no altera las series cuyo valor es una lista', () => {
+  /* `crecimiento_por_region` guarda un arreglo de regiones por año; tratarlo como el
+     objeto {valor,fuente} lo convertiría en un marcador de pendiente. */
+  const regiones = [{ region: 'Mundial', valor: '3.0' }];
+  assert.strictEqual(valorODisponible({ 2026: regiones }, 2026, 'x'), regiones);
 });
 
 test('corridaSectorIncompleta señala la corrida vieja sin párrafo de entrada', () => {

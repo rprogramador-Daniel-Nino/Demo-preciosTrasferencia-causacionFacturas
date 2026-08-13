@@ -58,6 +58,40 @@ test('construirPromptBusqueda nombra dónde buscar la PROYECCIÓN de las series 
   assert.ok(claves.includes('trm_promedio'), 'trm_promedio sin fuente de proyección');
 });
 
+test('el prompt manda insistir en otra fuente y devolver el enlace pegado a ese valor', () => {
+  /* Dejar «[Completar…]» en el informe no es una salida aceptable: es trabajo que queda
+     para quien lo radica. Si el publicador habitual no proyecta, hay que buscar en quien
+     sí, y el valor tiene que traer SU propia fuente y URL —no la del pie de la tabla, que
+     respalda otra cosa— para poder verificarlo. */
+  const prompt = construirPromptBusqueda(2026);
+
+  assert.ok(/no te rindas|sigue buscando|insiste/i.test(prompt),
+    'el prompt no manda insistir en otra fuente');
+  /* La forma por valor, con su fuente y su URL. */
+  assert.ok(/"valor"\s*:/.test(prompt), 'el prompt no muestra la forma { valor, fuente, fuenteUrl }');
+  assert.ok(/fuenteUrl/.test(prompt));
+  assert.ok(/distinta|distinto|otra fuente/i.test(prompt),
+    'no se explica cuándo usar la forma con fuente propia');
+});
+
+test('parsearRespuestaBusqueda conserva la fuente propia de un valor de proyección', () => {
+  const texto = JSON.stringify({
+    desempleo_colombia: {
+      valores: {
+        2025: '8.9',
+        2026: { valor: '8.5', fuente: 'FMI, WEO', fuenteUrl: 'https://www.imf.org/weo' },
+      },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.deepStrictEqual(series.desempleo_colombia.valores[2026], {
+    valor: '8.5', fuente: 'FMI, WEO', fuenteUrl: 'https://www.imf.org/weo',
+  });
+  assert.strictEqual(series.desempleo_colombia.valores[2025], '8.9');
+});
+
 test('la regla de no inventar sobrevive a la instrucción de proyección', () => {
   /* Pedirle una proyección no puede convertirse en permiso para estimarla él mismo: la
      cifra sigue teniendo que salir de una página consultada. */
