@@ -138,8 +138,15 @@ export async function extraerReferencia(datos) {
     contarEstilos(porId, censoEstilos);
     /* Los items marcadores no traen `str`; sin el `|| ''` se colarían literales
        "undefined" en el texto de las páginas sin etiquetar. */
+    let ultimoTipoAjustePlano = 'AR';
     const textoPlano = texto.items
-      .map((i) => (i.hasEOL ? ' ' : '') + normalizarCaracteresMatematicos(i.str || ''))
+      .map((i) => {
+        if (!i.str) return i.hasEOL ? ' ' : '';
+        const upper = i.str.toUpperCase();
+        if (upper.includes('COBRAR')) ultimoTipoAjustePlano = 'AR';
+        if (upper.includes('PAGAR')) ultimoTipoAjustePlano = 'AP';
+        return (i.hasEOL ? ' ' : '') + normalizarCaracteresMatematicos(i.str, ultimoTipoAjustePlano);
+      })
       .join('')
       .trim();
 
@@ -615,6 +622,7 @@ function textoPorId(items, estilos = new Map()) {
      nombre del cliente anterior. Los cortes sin `hasEOL` se unen sin nada:
      ahí el renglón sólo se partió por un cambio de fuente. */
   let saltoPendiente = false;
+  let ultimoTipoAjuste = 'AR';
   for (const item of items) {
     if (item.type === 'beginMarkedContent' || item.type === 'beginMarkedContentProps') {
       pilaMarcas.push(item.id || null);
@@ -625,7 +633,11 @@ function textoPorId(items, estilos = new Map()) {
       continue;
     }
     if (item.str) {
-      const strLimpia = normalizarCaracteresMatematicos(item.str);
+      const upper = item.str.toUpperCase();
+      if (upper.includes('COBRAR')) ultimoTipoAjuste = 'AR';
+      if (upper.includes('PAGAR')) ultimoTipoAjuste = 'AP';
+
+      const strLimpia = normalizarCaracteresMatematicos(item.str, ultimoTipoAjuste);
       const id = pilaMarcas[pilaMarcas.length - 1];
       if (id) {
         const runs = porId.get(id) || [];
@@ -856,8 +868,35 @@ function demath(char) {
 /**
  * Normaliza una cadena de texto, traduciendo cualquier caracter matemático corrupto
  * (procedente de fórmulas de LaTeX o editores de ecuaciones) a su letra ASCII equivalente legible.
+ * 
+ * Si se detecta un bloque correspondiente a las ecuaciones de ajuste de Cuentas por Cobrar
+ * o Cuentas por Pagar (que se extraen como tres líneas separadas debido a las fracciones),
+ * reconstruye automáticamente la fórmula limpia en la línea principal y vacía las otras dos.
  */
-export function normalizarCaracteresMatematicos(str) {
+export function normalizarCaracteresMatematicos(str, tipo) {
   if (typeof str !== 'string') return str;
-  return [...str].map(demath).join('');
+  let res = [...str].map(demath).join('');
+  const normalized = res.replace(/\s+/g, ' ').trim();
+
+  // Detecta el cuerpo principal de la fórmula (Fila 2 de la fracción)
+  if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA') && normalized.includes('RR (1 + RR)')) {
+    if (tipo === 'AP') {
+      return 'AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))';
+    } else {
+      return 'AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))';
+    }
+  }
+
+  // Detecta la línea del numerador de la fracción (Fila 1 de la fracción) para vaciarla
+  if (normalized === 'AAAAAATTTT AA' || normalized === 'AAAAAATTTT R') {
+    return '';
+  }
+
+  // Detecta la línea del denominador de la fracción (Fila 3 de la fracción) para vaciarla
+  if ((normalized.includes('TATTTTTT') || normalized.includes('TTAATTTTTT') || normalized.includes('TTTTTT')) && 
+      (normalized.includes('(1 + AA)') || normalized.includes('(1+AA)') || normalized.includes('(1 + R)') || normalized.includes('(1+R)'))) {
+    return '';
+  }
+
+  return res;
 }
