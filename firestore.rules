@@ -236,6 +236,15 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
+    // `guardarNarrativaMacroEstudio` (firestoreRepo.js) escribe el documento completo
+    // con `setDoc` sin merge, siempre estos dos campos y ningún otro.
+    function narrativaMacroValida(d) {
+      return soloEstosCampos(['seriesActualizadoEnMs', 'narrativa'])
+        && tieneTodos(['seriesActualizadoEnMs', 'narrativa'])
+        && d.seriesActualizadoEnMs is number
+        && d.narrativa is map;
+    }
+
     // =============================================================
     // Espacio privado de cada consultor
     // =============================================================
@@ -326,6 +335,21 @@ service cloud.firestore {
     match /analisisSector/{clave} {
       allow read: if esMiembro();
       allow write: if false;
+    }
+
+    // =============================================================
+    // narrativaMacroPorEstudio — caché por estudio de la redacción en vivo de la
+    // narrativa macro (III.A/III.B), disparada desde el navegador cuando
+    // `analisisMercado/actual` no trae todavía la narrativa para ese estudio.
+    // A diferencia de analisisMercado/analisisSector (que solo escribe una Cloud
+    // Function), esta SÍ la escribe el cliente directamente — el contenido es
+    // prosa económica pública, no dato sensible de ningún cliente, mismo criterio
+    // de confianza que ya rige la lectura de los dos anteriores.
+    // =============================================================
+
+    match /narrativaMacroPorEstudio/{estudioId} {
+      allow read: if esMiembro();
+      allow write: if esMiembro() && narrativaMacroValida(request.resource.data);
     }
 
     /* ── «Compartidos conmigo» ──

@@ -408,19 +408,85 @@ export function tituloSectorial(study, analisisSector, year) {
     : 'Análisis del Sector económico de la Compañía';
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   La tabla «Datos Clave del Sector» de III.C, en un solo sitio.
+
+   La consumen las TRES rutas del informe: esta (que arma el apartado entero cuando la
+   plantilla no lo trae), `actualizarApartadoSectorialOoxml` en `docxRelleno.js` y
+   `actualizarApartadoSectorialHtml` en `tablasHtmlInforme.js`. Las dos últimas la
+   regeneran sobre la tabla de la plantilla, y hasta el 2026-08-13 solo la .docx lo
+   hacía: la ruta HTML dejaba intacta la tabla del informe de referencia, así que el
+   documento se radicaba con las cifras del contribuyente anterior —«250.000 empleos
+   (+13,69% vs 2022)»— bajo un encabezado que decía «2023 | 2024» mientras Firestore
+   tenía las cinco filas verificadas del año en curso.
+
+   Devuelven texto EN CRUDO, sin escapar: cada ruta escapa con lo suyo (`escaparHtml`
+   aquí y en la de HTML, `escaparXml` en la de OOXML) y hacerlo aquí lo escaparía dos
+   veces en unas y con las entidades equivocadas en otras.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Las filas de la tabla, en el orden de columnas que fija `cabecerasDatosClaveSector`.
+ *  Un `valorAnterior` ausente sale como hueco visible y NUNCA como el valor de al lado:
+ *  el año anterior sin dato es un dato en sí en un informe que se radica. */
+export function filasDatosClaveSector(datosClaveTabla) {
+  return (datosClaveTabla || []).map((f) => [
+    String(f.indicador || ''),
+    f.valorAnterior ? String(f.valorAnterior) : '—',
+    String(f.valorActual || ''),
+  ]);
+}
+
+/** Los años van en el encabezado, no en las filas: son el eje de comparación. */
+export function cabecerasDatosClaveSector(year) {
+  return ['Indicador Clave', String(year - 1), String(year)];
+}
+
+/** El rótulo lleva la industria redactada por Claude y los dos años comparados. Es la
+ *  parte que la plantilla del informe anterior trae con SUS años («…(2023 vs. 2024)»). */
+export function tituloDatosClaveSector(tituloSector, year) {
+  return 'Datos Clave del Sector de la Industria ' + (tituloSector || '') +
+    ' en Colombia (' + (year - 1) + ' vs. ' + year + ')';
+}
+
+/**
+ * La línea «FUENTE:» de esa tabla, a partir de las fuentes que Gemini verificó para sus
+ * filas, con el mismo formato que `resolverSerie` da a las series macro.
+ *
+ * Hace falta porque regenerar solo las filas deja debajo las notas al pie del informe de
+ * referencia —medido sobre la plantilla de END GAME: «Canal Trece (2024)», «Forbes (2024)»,
+ * «DANE, PIB Trimestral 2023-2024»—, y unas cifras de 2025 citando fuentes de 2024 es una
+ * atribución falsa, no un descuido de formato. La fecha de consulta sale de
+ * `actualizadoEn`, que es cuando la corrida buscó de verdad; si no está, no se fabrica,
+ * igual que hace `resolverSerie` con el respaldo local.
+ *
+ * @returns {string} vacío si la corrida no dejó ninguna fuente, para que el llamador
+ *          sepa que no hay nada real que poner y no escriba una línea hueca.
+ */
+export function fuenteDatosClaveSector(entrada) {
+  const vistas = new Set();
+  const partes = [];
+  for (const f of (entrada && entrada.datosClaveTabla) || []) {
+    const nombre = String((f && f.fuente) || '').trim();
+    if (!nombre || vistas.has(nombre)) continue;
+    vistas.add(nombre);
+    partes.push(f.fuenteUrl ? nombre + ' (' + f.fuenteUrl + ')' : nombre);
+  }
+  if (!partes.length) return '';
+  const fecha = formatearFechaConsulta(entrada && entrada.actualizadoEn);
+  return partes.join('; ') + (fecha ? ', consultado el ' + fecha : '');
+}
+
 export function generarApartadoSectorial(study, year, wrap, analisisSector) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
   const entrada = entradaSector(analisisSector, year);
 
   if (entrada) {
     const nombreSector = escaparHtml(entrada.tituloSector);
-    const filas = (entrada.datosClaveTabla || []).map((f) => [
-      escaparHtml(f.indicador), f.valorAnterior ? escaparHtml(f.valorAnterior) : '—', escaparHtml(f.valorActual),
-    ]);
+    const filas = filasDatosClaveSector(entrada.datosClaveTabla).map((f) => f.map(escaparHtml));
     const tabla = filas.length
       ? tablaHTML(
-          'Datos Clave del Sector de la Industria ' + entrada.tituloSector + ' en Colombia (' + (year - 1) + ' vs. ' + year + ')',
-          ['Indicador Clave', String(year - 1), String(year)],
+          tituloDatosClaveSector(entrada.tituloSector, year),
+          cabecerasDatosClaveSector(year),
           filas
         )
       : '';

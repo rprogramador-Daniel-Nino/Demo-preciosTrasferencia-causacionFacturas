@@ -44,7 +44,10 @@ import { pctf } from '../utils/calculations.js';
    de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
    misma fecha de consulta. Sin riesgo de import circular: `analisisMercado.js` no
    importa de este módulo ni de `docxRelleno.js`. */
-import { resolverSerie } from './analisisMercado.js';
+import {
+  resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
+  fuenteDatosClaveSector,
+} from './analisisMercado.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
 export function textoPlanoHtml(fragmento) {
@@ -744,10 +747,76 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
   return salida;
 }
 
+/**
+ * Regenera la tabla «Datos Clave del Sector» sobre la de la plantilla.
+ *
+ * Mismo trabajo que hace la ruta .docx dentro de `actualizarApartadoSectorialOoxml`, pero
+ * conservando el markup del cliente en vez de emitir una tabla nueva — la razón de ser de
+ * esta ruta, igual que en `actualizarTablasMacroHtml`, del que copia el orden: primero la
+ * tabla, después el rótulo, porque el rótulo está ANTES en el documento y reescribirlo
+ * primero movería los offsets del bloque recién localizado.
+ *
+ * Se tocan también las celdas de años del encabezado: la plantilla las trae con los del
+ * informe de referencia («2023 | 2024»), y publicar las cifras del año en curso bajo esos
+ * dos títulos de columna es peor que no tocarlas.
+ */
+function regenerarTablaDatosClave(html, entrada, year, avisos) {
+  const anotar = (motivo) => {
+    console.warn('[tablasHtmlInforme] tabla "Datos Clave del Sector": ' + motivo);
+    if (Array.isArray(avisos)) avisos.push('tabla de Datos Clave del Sector (' + motivo + ')');
+  };
+
+  const filas = filasDatosClaveSector(entrada && entrada.datosClaveTabla);
+  if (!filas.length) {
+    /* Sin datos verificados NO se fabrica una tabla: se deja la de la plantilla y se
+       avisa, que es lo mismo que decide la ruta .docx. Inventar filas aquí es justo lo
+       que el filtro de grounding de `analisisSectorPrompts.js` existe para impedir. */
+    anotar('la corrida de este año no trajo datos verificados, se deja como está');
+    return html;
+  }
+
+  const bloque = localizarTablaHtml(html, 'Datos Clave del Sector');
+  if (!bloque) {
+    anotar('no se encontró en la plantilla');
+    return html;
+  }
+
+  const original = html.slice(bloque.inicio, bloque.fin);
+  let tabla = reescribirFilasHtml(original, filas);
+  if (tabla === original) {
+    /* `reescribirFilasHtml` necesita al menos una fila de datos que clonar como molde.
+       Sin ella devuelve la tabla intacta, y callarlo dejaría las cifras del informe de
+       referencia en el documento sin que nada lo delate. */
+    anotar('no tiene una fila de datos que sirva de molde, sus cifras son las de la plantilla');
+    return html;
+  }
+
+  /* Solo si el encabezado tiene la forma que esta tabla supone (indicador + dos años).
+     Con otra forma, reescribir por posición pondría un año donde va otra cosa. */
+  const cabeceras = cabecerasDatosClaveSector(year);
+  const filasTabla = filasDe(tabla);
+  if (filasTabla.length && celdasDe(filasTabla[0].xml).length === cabeceras.length) {
+    for (let i = cabeceras.length - 1; i >= 1; i -= 1) {
+      tabla = reescribirCeldaHtml(tabla, 0, i, cabeceras[i]);
+    }
+  }
+
+  let salida = html.slice(0, bloque.inicio) + tabla + html.slice(bloque.fin);
+  if (bloque.rotulo) {
+    const nuevo = reescribirRotuloHtml(
+      bloque.rotulo.xml, tituloDatosClaveSector(entrada.tituloSector, year));
+    salida = salida.slice(0, bloque.rotulo.inicio) + nuevo + salida.slice(bloque.rotulo.fin);
+  }
+  console.log('[tablasHtmlInforme] tabla "Datos Clave del Sector": regenerada con '
+    + filas.length + ' fila(s)');
+  return salida;
+}
+
 /** Ruta HTML/PDF de `actualizarApartadoSectorialOoxml` (`docxRelleno.js`): el hueco de
  *  entrada más los cuatro bloques de prosa de III.C localizados por encabezado, más la
- *  tabla "Datos Clave del Sector" que regenera `actualizarTablasMotorHtml`/el mecanismo
- *  de tabla existente — aquí solo se deja intacto ese hueco (`() => null`). */
+ *  tabla "Datos Clave del Sector", que se regenera después de los huecos (su propio hueco
+ *  queda en `() => null` para no tocar lo que haya entre la tabla y el encabezado
+ *  siguiente). */
 export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, year, avisos) {
   const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
   console.log('[tablasHtmlInforme] actualizarApartadoSectorialHtml: año ' + year
@@ -782,7 +851,14 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     [
       bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
       bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
-      () => null,
+      /* El hueco que va entre la tabla de datos clave y el encabezado siguiente: en la
+         plantilla lo ocupan las notas al pie de ESA tabla, que son las fuentes de las
+         cifras del informe de referencia. Se sustituyen por las de la corrida de este año
+         —`regenerarTablaDatosClave` reescribe las filas justo después— y solo si la
+         corrida dejó alguna: sin fuente real se deja la nota como estaba, porque borrarla
+         dejaría la tabla sin la fuente que exige el numeral 4 del artículo 1.2.2.2.1.5 del
+         Decreto 1625 de 2016. */
+      () => parrafoFuenteHtml(fuenteDatosClaveSector(entrada)) || null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
       bloque(entrada && entrada.narrativa.proyeccion, 'proyección del sector'),
       bloque(entrada && entrada.narrativa.conclusiones, 'conclusiones del sector'),
@@ -792,7 +868,7 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
 
   if (!entrada && Array.isArray(avisos)) avisos.push('narrativa del Análisis del Sector');
 
-  return salida;
+  return regenerarTablaDatosClave(salida, entrada, year, avisos);
 }
 
 /* Mismo formato que la ruta .docx, y por el mismo formateador: `pctf`. Un hueco visible —y no
