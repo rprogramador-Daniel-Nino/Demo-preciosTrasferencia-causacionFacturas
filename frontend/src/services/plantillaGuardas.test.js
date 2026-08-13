@@ -643,6 +643,74 @@ test('no se toca nada dentro de un atributo, ni de un data URL', () => {
   assert.ok(r.xml.includes('<p>Estudio de NUEVA SAS.</p>'), 'no sustituyó donde debía');
 });
 
+/* ══════ el mismo nombre escrito con otra puntuación ══════ */
+
+test('encuentra la razón social vieja aunque la puntuación no coincida', () => {
+  /* Medido sobre el informe de referencia: la razón social del contribuyente anterior aparece 27
+     veces como «COLOMBIA SAS» y otras 17 como «COLOMBIA S.A.S». El marcado captura una sola de
+     las dos formas, así que buscar el valor literal dejaba las otras sin corregir y se radicaban
+     con el dato del contribuyente anterior. */
+  const html = '<p>De ACME ANTERIOR SAS y de ACME ANTERIOR S.A.S. y de Acme Anterior S A S.</p>';
+  const r = sustituirDatosDeReferencia(html, {
+    estudio: { ent: 'NUEVA COMPAÑIA SAS' },
+    valores: [{ campo: 'ent', valor: 'ACME ANTERIOR SAS' }],
+    rxTramo: TRAMO_HTML,
+  });
+  assert.strictEqual(r.sustituidos[0].cuenta, 3, 'no encontró las tres formas: ' + r.xml);
+  assert.ok(!/ACME ANTERIOR/i.test(r.xml), 'sobrevive alguna forma del dato anterior: ' + r.xml);
+});
+
+test('la puntuación que se ESCRIBE es la del estudio, no la normalizada', () => {
+  /* Se ignora la puntuación para ENCONTRAR, nunca para sustituir: lo que entra al documento es
+     el valor del estudio tal cual, con sus puntos. */
+  const html = '<p>Estudio de ACME ANTERIOR SAS.</p>';
+  const r = sustituirDatosDeReferencia(html, {
+    estudio: { ent: 'NUEVA COMPAÑIA S.A.S.' },
+    valores: [{ campo: 'ent', valor: 'ACME ANTERIOR SAS' }],
+    rxTramo: TRAMO_HTML,
+  });
+  assert.ok(r.xml.includes('NUEVA COMPAÑIA S.A.S.'),
+    'se perdió la puntuación del valor del estudio: ' + r.xml);
+});
+
+test('un valor corto se sigue buscando literal, sin tolerancia', () => {
+  /* «END GAME» son siete caracteres sin espacios y no llega al mínimo de la búsqueda tolerante.
+     Sin el respaldo literal, las apariciones del nombre corto dejarían de detectarse. */
+  const html = '<p>permite a END GAME crecer.</p>';
+  const avisos = revisarSalidaRenderizada({
+    estudio: ESTUDIO_AMPLIADO, htmlRenderizado: html, valores: VALORES_AMPLIADO,
+  });
+  assert.strictEqual(avisos.length, 1, 'dejó de ver el nombre corto');
+  assert.strictEqual(avisos[0].cuenta, 1);
+});
+
+test('si el contribuyente conserva su razón social y solo cambia la puntuación, no se destroza nada', () => {
+  /* El caso más común: el mismo cliente al año siguiente. Ese par no tiene nada que corregir, así
+     que se descarta — y por eso la guarda de ambigüedad tiene que mirar TODOS los valores de
+     referencia y no sólo los que quedaron por corregir. Mirando sólo los pendientes, «END GAME
+     INTERACTIVE» se quedaba sin contenedor y se sustituía dentro de las menciones del
+     contribuyente, dejándolas en «END GAME INTERACTIVE INC COLOMBIA S.A.S». Medido: 45
+     apariciones destrozadas en el informe real. */
+  const html = '<p>END GAME INTERACTIVE COLOMBIA S.A.S. presta servicios a su vinculada.</p>';
+  const r = sustituirDatosDeReferencia(html, {
+    estudio: {
+      ent: 'END GAME INTERACTIVE COLOMBIA S.A.S.',
+      vinc: 'END GAME INTERACTIVE INC',
+    },
+    valores: [
+      { campo: 'ent', valor: 'END GAME INTERACTIVE COLOMBIA SAS' },
+      { campo: 'vinc', valor: 'END GAME INTERACTIVE' },
+    ],
+    rxTramo: TRAMO_HTML,
+  });
+  assert.ok(!r.xml.includes('INC COLOMBIA'),
+    'se metió el sufijo de la vinculada dentro del nombre del contribuyente: ' + r.xml);
+  assert.ok(r.xml.includes('END GAME INTERACTIVE COLOMBIA S.A.S. presta'),
+    'se alteró el nombre del contribuyente, que estaba bien: ' + r.xml);
+  assert.ok(r.omitidos.some((o) => /es parte de/.test(o.motivo)),
+    'no explicó por qué no tocó la vinculada');
+});
+
 test('aplicarla dos veces no cambia el resultado', () => {
   /* La vista previa se re-renderiza a cada cambio del estudio. */
   const html = '<p>Estudio de END GAME INTERACTIVE COLOMBIA SAS con END GAME INTERACTIVE INC.</p>';

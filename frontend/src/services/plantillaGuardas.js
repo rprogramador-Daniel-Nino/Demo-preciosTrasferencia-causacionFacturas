@@ -43,6 +43,88 @@ const escaparRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const TRAMO_OOXML = /(<w:t[^>]*>)([^<]*)(<\/w:t>)/g;
 export const TRAMO_HTML = /(>)([^<]*)(<)/g;
 
+/* ── El mismo nombre escrito de otra forma ──────────────────────────────────────────────────
+   La razón social del contribuyente anterior no aparece de una sola manera en el informe:
+   medido sobre el informe de referencia, «END GAME INTERACTIVE COLOMBIA SAS» sale 27 veces y
+   «END GAME INTERACTIVE COLOMBIA S.A.S» —la misma, con los puntos de la forma jurídica— otras
+   17. El marcado captura una de las dos, así que buscar el valor literal dejaba las otras 17
+   sin detectar ni corregir, y se radicaban con el dato del contribuyente anterior.
+
+   Se comparan ignorando puntos y espacios, que es la misma regla que ya usa `normalizar` para
+   decidir si un valor cambió. Se hace con un índice y no con una expresión regular flexible
+   —«S[.\s]*A[.\s]*S»— por dos razones: el índice es exacto y recorre el texto una sola vez,
+   mientras que un patrón con treinta cuantificadores codiciosos sobre las 300 000 letras del
+   informe invita al backtracking. */
+
+/* El texto sin puntos ni espacios y en mayúsculas, con la posición original de cada carácter
+   que sobrevive. Es lo que permite encontrar una coincidencia sobre el texto normalizado y
+   devolver el tramo exacto del original al que corresponde. */
+function indexarSinPuntuacion(texto) {
+  const s = String(texto == null ? '' : texto);
+  let plano = '';
+  const posiciones = [];
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === '.' || /\s/.test(c)) continue;
+    plano += c.toUpperCase();
+    posiciones.push(i);
+  }
+  return { plano, posiciones };
+}
+
+/* Los tramos `[inicio, fin)` de `texto` donde aparece `valor`, tolerando que la puntuación, los
+   espacios y las mayúsculas no coincidan. Vacío si `valor` no tiene sustancia.
+
+   El mínimo de ocho caracteres no es un número al azar: sin él, un valor corto como «SAS»
+   casaría dentro de cualquier palabra que lleve esas letras seguidas. Los campos testigo son
+   razones sociales, NIT y direcciones —largos por naturaleza—, así que el mínimo no excluye
+   ninguno de los que importan. */
+export function aparicionesTolerantes(texto, valor) {
+  const aguja = indexarSinPuntuacion(valor).plano;
+  if (aguja.length < 8) return [];
+  const { plano, posiciones } = indexarSinPuntuacion(texto);
+  const rangos = [];
+  let desde = 0;
+  for (;;) {
+    const k = plano.indexOf(aguja, desde);
+    if (k === -1) break;
+    rangos.push([posiciones[k], posiciones[k + aguja.length - 1] + 1]);
+    desde = k + aguja.length;
+  }
+  return rangos;
+}
+
+/* Los tramos donde aparece `valor`: tolerando puntuación si el valor da para ello, y literales
+   si es corto. El respaldo literal no es un detalle: «END GAME» son siete caracteres sin
+   espacios y se queda por debajo del mínimo, así que sin él las apariciones del nombre corto
+   dejarían de detectarse, que es justo lo contrario de lo que se busca. */
+export function aparicionesDe(texto, valor) {
+  const flexibles = aparicionesTolerantes(texto, valor);
+  if (flexibles.length) return flexibles;
+  if (indexarSinPuntuacion(valor).plano.length >= 8) return [];
+
+  const s = String(texto == null ? '' : texto);
+  const aguja = String(valor == null ? '' : valor);
+  if (!aguja) return [];
+  const rangos = [];
+  let desde = 0;
+  for (;;) {
+    const pos = s.indexOf(aguja, desde);
+    if (pos === -1) break;
+    rangos.push([pos, pos + aguja.length]);
+    desde = pos + aguja.length;
+  }
+  return rangos;
+}
+
+/* ¿Contiene `contenedor` a `parte`, ignorando puntuación? Para las guardas, que comparan valores
+   entre sí y no contra el documento. */
+const contieneTolerante = (contenedor, parte) => {
+  const a = indexarSinPuntuacion(contenedor).plano;
+  const b = indexarSinPuntuacion(parte).plano;
+  return !!b && a.includes(b);
+};
+
 /* Extrae de la plantilla marcada los valores que traía el informe de
    referencia. El marcado envuelve el texto original sin alterarlo, así que el
    contenido de una marca `data-campo="nit"` es literalmente el NIT del cliente
@@ -93,14 +175,7 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
   for (const { campo } of valores || []) {
     const nuevo = valorDeCampo(estudio, campo);
     if (nuevo === null || nuevo === undefined || !String(nuevo).trim()) continue;
-    const aguja = String(nuevo);
-    let desde = 0;
-    for (;;) {
-      const pos = texto.indexOf(aguja, desde);
-      if (pos === -1) break;
-      cubiertos.push([pos, pos + aguja.length]);
-      desde = pos + aguja.length;
-    }
+    cubiertos.push(...aparicionesDe(texto, String(nuevo)));
   }
   const estaCubierta = (inicio, fin) =>
     cubiertos.some(([a, b]) => inicio >= a && fin <= b);
@@ -119,17 +194,12 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
     if (nuevo === null || normalizar(nuevo) === normalizar(valor)) continue;
 
     let cuenta = 0;
-    let desde = 0;
-    for (;;) {
-      const pos = texto.indexOf(valor, desde);
-      if (pos === -1) break;
+    for (const [ini, fin] of aparicionesDe(texto, valor)) {
       /* Dentro de un valor nuevo no es una fuga: es la sustitución que sí funcionó. Dentro de
          una fuga más específica ya reportada, tampoco: es la misma. */
-      if (!estaCubierta(pos, pos + valor.length)) {
-        cuenta++;
-        cubiertos.push([pos, pos + valor.length]);
-      }
-      desde = pos + valor.length;
+      if (estaCubierta(ini, fin)) continue;
+      cuenta++;
+      cubiertos.push([ini, fin]);
     }
     if (!cuenta) continue;
 
@@ -213,13 +283,28 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores, rxTramo } = 
   /* De más largo a más corto: el orden importa cuando uno contiene a otro. */
   pares.sort((a, b) => b.viejo.length - a.viejo.length);
 
+  /* Para la guarda 1 se miran TODOS los valores de referencia, no sólo los que quedaron por
+     corregir. Un valor sigue siendo ambiguo aunque el que lo contiene ya esté bien en el
+     documento, y mirar sólo los pares pendientes abría un agujero grave: si el contribuyente
+     conserva su razón social y sólo cambia su puntuación —«COLOMBIA SAS» a «COLOMBIA S.A.S.»,
+     el caso más común, el mismo cliente al año siguiente—, ese par se descarta por no tener
+     nada que corregir, la guarda se quedaba sin contenedor y «END GAME INTERACTIVE» se
+     sustituía dentro de las 45 menciones del contribuyente, dejándolas en «END GAME
+     INTERACTIVE INC COLOMBIA S.A.S». Medido sobre el informe real. */
+  const todosLosViejos = (valores || [])
+    .map((v) => String(v.valor || ''))
+    .filter((v) => v.trim());
+
   for (const par of pares) {
-    /* Guarda 1: ambiguo porque otro valor de la lista lo contiene. */
-    const contenedor = pares.find((o) => o !== par && o.viejo.includes(par.viejo));
+    /* Guarda 1: ambiguo porque otro valor de referencia lo contiene. Tolerante a la puntuación,
+       o «END GAME INTERACTIVE» pasaría por inequívoco frente a «END GAME INTERACTIVE COLOMBIA
+       S.A.S» sólo porque el otro valor está escrito sin puntos. */
+    const contenedor = todosLosViejos.find((otro) =>
+      !contieneTolerante(par.viejo, otro) && contieneTolerante(otro, par.viejo));
     if (contenedor) {
       omitidos.push({
         campo: par.campo, valor: par.viejo,
-        motivo: `«${par.viejo}» es parte de «${contenedor.viejo}», así que sustituirlo `
+        motivo: `«${par.viejo}» es parte de «${contenedor}», así que sustituirlo `
           + 'reescribiría también las menciones de ese otro dato. Revísalo a mano.',
       });
       continue;
@@ -233,23 +318,34 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores, rxTramo } = 
     let partidos = 0;
     tramo.lastIndex = 0;
     salida = salida.replace(tramo, (todo, abre, contenido, cierra) => {
-      if (!contenido.includes(par.viejo)) return todo;
+      /* Tolerante a la puntuación: la razón social vieja aparece en el informe como «COLOMBIA
+         SAS» y también como «COLOMBIA S.A.S», y el marcado sólo captura una de las dos. Lo que
+         se ESCRIBE es el valor del estudio tal cual, con su puntuación: aquí se ignora para
+         encontrar, nunca para sustituir. */
+      const donde = aparicionesDe(contenido, par.viejo);
+      if (!donde.length) return todo;
       let hecho = contenido;
-      if (esPrefijo && resto) {
-        /* Solo las que no traen ya el sufijo. Las que ya lo traen se tokenizan igual: si se
-           dejaran en claro, un par más corto contenido en ellas las reescribiría. */
-        const partes = hecho.split(par.viejo);
-        let rearmado = partes[0];
-        for (let i = 1; i < partes.length; i += 1) {
-          const yaCompleto = partes[i].startsWith(resto);
-          rearmado += tokenizar(yaCompleto ? par.viejo : par.nuevo) + partes[i];
-          if (!yaCompleto) cuenta += 1;
+      /* De atrás hacia adelante: cada sustitución mueve los índices de lo que va después. */
+      for (let i = donde.length - 1; i >= 0; i -= 1) {
+        const [ini, fin] = donde[i];
+        let reemplazo;
+        if (esPrefijo && resto) {
+          /* Sólo las que no traen ya el sufijo. Las que ya lo traen se tokenizan igual: si se
+             dejaran en claro, un par más corto contenido en ellas las reescribiría. */
+          const sigue = hecho.slice(fin);
+          const yaCompleto = indexarSinPuntuacion(sigue).plano
+            .startsWith(indexarSinPuntuacion(resto).plano);
+          if (yaCompleto) {
+            reemplazo = tokenizar(hecho.slice(ini, fin));
+          } else {
+            reemplazo = tokenizar(par.nuevo);
+            cuenta += 1;
+          }
+        } else {
+          reemplazo = tokenizar(par.nuevo);
+          cuenta += 1;
         }
-        hecho = rearmado;
-      } else {
-        const trozos = hecho.split(par.viejo);
-        cuenta += trozos.length - 1;
-        hecho = trozos.join(tokenizar(par.nuevo));
+        hecho = hecho.slice(0, ini) + reemplazo + hecho.slice(fin);
       }
       return hecho === contenido ? todo : abre + hecho + cierra;
     });
@@ -260,7 +356,7 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores, rxTramo } = 
     tramo.lastIndex = 0;
     const plano = (salida.match(tramo) || [])
       .map((t) => t.replace(/<[^>]+>/g, '')).join('');
-    if (plano.includes(par.viejo) && !(esPrefijo && resto)) {
+    if (aparicionesDe(plano, par.viejo).length && !(esPrefijo && resto)) {
       partidos = 1;
       omitidos.push({
         campo: par.campo, valor: par.viejo,
