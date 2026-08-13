@@ -7,6 +7,7 @@ import {
   actualizarApartadosMacroHtml, localizarHitosHtml, reemplazarHuecosHtml,
   actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
+import { resolverSerie } from './analisisMercado.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
    con la razón social en negrita y la fuente al pie dentro de la propia tabla.
@@ -696,4 +697,187 @@ test('actualizarApartadoSectorialHtml usa el marcador de pendiente si no hay cor
   assert.doesNotMatch(salida, /Texto viejo/);
   assert.match(salida, /\[Actualizar con el análisis del comportamiento del sector/);
   assert.ok(avisos.length >= 1);
+});
+
+test('actualizarApartadosMacroHtml reemplaza el hueco de política monetaria con su propio párrafo y fuente', () => {
+  const html = [
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+    '<p>Texto real de Colombia.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    /* Nota: evitar la frase literal "inflación en Colombia" en esta prosa — coincide
+       con la clave normalizada del título "Inflación en Colombia" y
+       `localizarHitosHtml` (por diseño, ver su comentario) toma por hito cualquier
+       párrafo corto que la incluya, aunque sea prosa y no el encabezado real. */
+    '<p>Texto de END GAME sobre la inflación colombiana, 2024, con contenido suficientemente largo.</p>',
+    '<h3>Inflación en Colombia (2025 vs. Meta 2026)</h3>',
+    '<p>Texto de END GAME sobre política monetaria, 2024, con contenido suficientemente largo.</p>',
+    '<h3>Tasa de Intervención del Banco de la República</h3>',
+    '<p>Texto de END GAME sobre TRM, 2024, con contenido suficientemente largo para el umbral.</p>',
+    '<h3>Tasa Representativa del Mercado (TRM) Promedio</h3>',
+    '<p>Texto de END GAME sobre desempleo, 2024, con contenido suficientemente largo para el umbral.</p>',
+    '<h3>Tasa de Desempleo en Colombia</h3>',
+    '<p>Texto de END GAME sobre conclusiones, 2024, con contenido suficientemente largo.</p>',
+    '<h2>Análisis del Sector</h2>',
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>',
+      politicaMonetaria: '<p>La tasa de intervención cerró en 12,00 % en julio de 2026.</p>',
+    },
+    series: {
+      tasa_intervencion: {
+        valores: { 2026: { etiqueta: 'Agosto 2026', valor: '12.00' } },
+        fuente: 'Banco de la República',
+        fuenteUrl: 'https://banrep.gov.co/tasa',
+        fechaConsulta: new Date('2026-08-04'),
+      },
+    },
+  };
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+
+  assert.match(salida, /tasa de intervención cerró en 12,00/);
+  /* Mismo formato que imprime la tabla de esta serie justo debajo (`resolverSerie` en
+     `analisisMercado.js`): URL entre paréntesis y fecha de consulta, no el formato
+     "FUENTE: <fuente>, <url>" (sin fecha) que este módulo fabricaba antes por su cuenta. */
+  assert.match(salida, /FUENTE: Banco de la República \(https:\/\/banrep\.gov\.co\/tasa\), consultado el/);
+  assert.doesNotMatch(salida, /Texto de END GAME sobre política monetaria/);
+  /* El encabezado "Inflación en Colombia" (el hito ANTERIOR a este hueco) no debe
+     desaparecer: si `localizarHitosHtml` lo confunde con la prosa que lo precede, el
+     título real se pierde dentro de un hueco que no le corresponde. */
+  assert.match(salida, /Inflación en Colombia \(2025 vs\. Meta 2026\)/);
+});
+
+test('actualizarApartadosMacroHtml: cada tema cita la fuente/fecha de SU propia serie, no la de otra', () => {
+  const PARES_TEMA_SERIE = [
+    { tema: 'inflacionMundial', serieClave: 'inflacion_global' },
+    { tema: 'proyeccionMundial', serieClave: 'crecimiento_por_region' },
+    { tema: 'inflacionColombia', serieClave: 'inflacion_colombia' },
+    { tema: 'politicaMonetaria', serieClave: 'tasa_intervencion' },
+    { tema: 'tasaCambio', serieClave: 'trm_promedio' },
+    { tema: 'mercadoLaboral', serieClave: 'desempleo_colombia' },
+  ];
+
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Narrativa mundial.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<h3>INFLACIÓN MUNDIAL</h3>',
+    '<h3>Tasas de Inflación Global (2024-2026)</h3>',
+    '<h3>Proyecciones de Crecimiento del PIB por Región/País (2026)</h3>',
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+    '<p>Narrativa colombia.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    '<h3>Inflación en Colombia (2025 vs. Meta 2026)</h3>',
+    '<h3>Tasa de Intervención del Banco de la República</h3>',
+    '<h3>Tasa Representativa del Mercado (TRM) Promedio</h3>',
+    '<h3>Tasa de Desempleo en Colombia</h3>',
+    '<h2>Análisis del Sector</h2>',
+  ].join('');
+
+  PARES_TEMA_SERIE.forEach(({ tema, serieClave }) => {
+    const datosMacro = {
+      narrativa: {
+        mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>',
+        [tema]: '<p>Narrativa distintiva de ' + tema + '.</p>',
+      },
+      series: {
+        [serieClave]: {
+          valores: { 2026: '1' },
+          fuente: 'Fuente distintiva de ' + serieClave,
+          fuenteUrl: 'https://ejemplo.test/' + serieClave,
+          fechaConsulta: new Date('2026-08-04'),
+        },
+      },
+    };
+    const { fuente: fuenteEsperada } = resolverSerie(datosMacro, serieClave);
+    const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+
+    assert.ok(
+      salida.includes('Narrativa distintiva de ' + tema + '.'),
+      tema + ': no se insertó su propia narrativa'
+    );
+    assert.ok(
+      salida.includes('FUENTE: ' + fuenteEsperada),
+      tema + ': no citó la fuente/fecha de su propia serie (' + serieClave + ')'
+    );
+  });
+});
+
+test('actualizarApartadosMacroHtml deja el marcador especifico de tema (no el generico) cuando falta narrativa', () => {
+  const html = [
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+    '<p>Texto real de Colombia.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    '<p>Texto de END GAME sobre la inflación colombiana, 2024, con contenido suficientemente largo.</p>',
+    '<h3>Inflación en Colombia (2025 vs. Meta 2026)</h3>',
+    '<h2>Análisis del Sector</h2>',
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>' } };
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+
+  assert.match(salida, /Actualizar con datos verificados sobre la inflación en Colombia/);
+  assert.doesNotMatch(salida, /este párrafo del informe de referencia se retiró/i);
+});
+
+test('actualizarApartadoSectorialHtml reemplaza el hueco de entrada con la introduccion, sin fuente', () => {
+  const html = [
+    '<h2>Análisis del Sector de la industria del software y los videojuegos</h2>',
+    '<p>Texto de END GAME de introducción al sector, con contenido suficientemente largo para no ser un hueco vacío.</p>',
+    '<h3>Comportamiento del Sector</h3>',
+    '<p>Texto real de comportamiento.</p>',
+    '<h3>Datos Clave del Sector</h3>',
+  ].join('');
+
+  const analisisSector = {
+    porAnio: { 2025: { narrativa: {
+      introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
+      comportamiento: '<p>Texto real de comportamiento.</p>',
+    } } },
+  };
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /mostró dinamismo en 2025/);
+  assert.doesNotMatch(salida, /Texto de END GAME de introducción/);
+});
+
+test('actualizarApartadoSectorialHtml no fabrica un marcador si el hueco de entrada ya estaba vacío', () => {
+  const html = [
+    '<h2>Análisis del Sector de la industria del software y de los videojuegos</h2>',
+    '<h3>Comportamiento del Sector</h3>',
+    '<p>Texto real de comportamiento.</p>',
+    '<h3>Datos Clave del Sector</h3>',
+  ].join('');
+
+  const analisisSector = { porAnio: { 2025: { narrativa: {
+    comportamiento: '<p>Texto real de comportamiento.</p>',
+  } } } };
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
+});
+
+test('actualizarApartadoSectorialHtml inserta la introduccion aunque el hueco de entrada ya estuviera vacío', () => {
+  /* Regresión: el umbral solo gatea el marcador de pendiente, nunca la narrativa
+     disponible. La plantilla no trae párrafo introductorio propio ("Análisis del
+     Sector" va seguido directo de "Comportamiento del Sector"), pero SÍ hay narrativa
+     real y verificada lista para ese hueco — debe insertarse igual, sin que el hueco
+     corto la descarte (mismo caso que el reviewer confirmó como defecto real en la
+     ruta .docx, corregido en docxRelleno.js). */
+  const html = [
+    '<h2>Análisis del Sector de la industria del software y de los videojuegos</h2>',
+    '<h3>Comportamiento del Sector</h3>',
+    '<p>Texto real de comportamiento.</p>',
+    '<h3>Datos Clave del Sector</h3>',
+  ].join('');
+
+  const analisisSector = { porAnio: { 2025: { narrativa: {
+    introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
+    comportamiento: '<p>Texto real de comportamiento.</p>',
+  } } } };
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /mostró dinamismo en 2025/);
+  assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
 });

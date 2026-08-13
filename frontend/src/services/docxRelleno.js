@@ -56,6 +56,13 @@ import { nameKey } from './comparablesEngine.js';
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
 
+/* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
+   `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
+   de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
+   misma fecha de consulta. Sin riesgo de import circular: `analisisMercado.js` no
+   importa de este módulo ni de `tablasHtmlInforme.js`. */
+import { resolverSerie } from './analisisMercado.js';
+
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
 
@@ -177,6 +184,32 @@ function marcadorApartadoPendiente(tema, year) {
     '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
 }
 
+/** Línea "FUENTE: <fuente>" para un párrafo de narrativa con tema propio, a partir del
+ *  texto YA formateado por `resolverSerie` (analisisMercado.js) — mismo texto,
+ *  paréntesis alrededor de la URL y fecha de consulta incluidos, que la tabla de esa
+ *  misma serie imprime justo debajo (`tablasMacroInforme` en `tablasInforme.js`, que
+ *  también llama a `resolverSerie`). Antes este módulo reformateaba `fuente`/`fuenteUrl`
+ *  por su cuenta ("FUENTE: <fuente>, <url>", sin fecha) y el resultado no coincidía con
+ *  el pie de la tabla ni citaba la fecha que exige el numeral 4 del artículo
+ *  1.2.2.2.1.5 del Decreto 1625 de 2016; ahora reutiliza la misma resolución.
+ *  Vacío si `fuenteTexto` viene vacío (`conclusiones`, que es síntesis y no cita una
+ *  serie nueva, no llama a esta función con nada que mostrar). */
+function parrafoFuenteOoxml(fuenteTexto) {
+  if (!fuenteTexto) return '';
+  const texto = 'FUENTE: ' + fuenteTexto;
+  return `<w:p><w:pPr><w:pStyle w:val="Normal"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:b/></w:rPr><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r></w:p>`;
+}
+
+/** Marcador para un hueco intermedio de III.A/III.B con tema propio (inflación
+ *  mundial, política monetaria, TRM, etc.) sin narrativa lista para ESE tema —
+ *  distinto de `marcadorApartadoPendiente`, que es solo para los dos apartados
+ *  líderes ("mundial"/"colombiana") y usa otra redacción legal ya fijada. */
+function marcadorTemaMacroPendiente(tema, year) {
+  return '[Actualizar con datos verificados sobre ' + tema + ' para el año gravable ' + year +
+    ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
+}
+
 /**
  * Reemplaza la PROSA (no las tablas) de III.A y III.B, localizándola por su encabezado,
  * para que deje de depender de que el marcado con IA la haya marcado como
@@ -224,11 +257,10 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
 
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
   const tituloColombia = 'Análisis del panorama de la economía colombiana';
-  const narrativaMundial = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
-  const narrativaColombia = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
+  const narrativa = (datosMacro && datosMacro.narrativa) || {};
   console.log('[docxRelleno] actualizarApartadosMacroOoxml: año ' + year
-    + ', narrativa mundial: ' + (narrativaMundial ? 'sí' : 'no (marcador)')
-    + ', narrativa colombia: ' + (narrativaColombia ? 'sí' : 'no (marcador)'));
+    + ', narrativa mundial: ' + (narrativa.mundial ? 'sí' : 'no (marcador)')
+    + ', narrativa colombia: ' + (narrativa.colombia ? 'sí' : 'no (marcador)'));
 
   const primerHueco = (narrativaHtml, tema) => () => (
     narrativaHtml
@@ -236,13 +268,34 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
       : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(tema, year))}</w:t></w:r></w:p>`
   );
 
+  /** Hueco intermedio con tema propio: párrafo + FUENTE si hay narrativa para ese
+   *  tema; marcador específico (no el genérico) si no, y solo si había prosa
+   *  sustancial que retirar — mismo umbral que ya aplicaba `contenidoHuecoIntermedio`
+   *  a esta misma posición, para no fabricar un marcador donde el hueco ya venía
+   *  vacío (p. ej. "INFLACIÓN MUNDIAL" como subtítulo corto sin desarrollo debajo).
+   *  `serieClave` es la clave en `datosMacro.series` que resuelve la fuente/fecha del
+   *  párrafo vía `resolverSerie` — `null` para "conclusiones", que sintetiza y no cita
+   *  una serie nueva. Si `datosMacro.series[serieClave]` no trae `valores` (o falta del
+   *  todo), `resolverSerie` cae al respaldo local (`DATOS_MACRO`/`FUENTES_MACRO`) igual
+   *  que hace la tabla de esa misma serie: preferible citar una fuente conocida y
+   *  estática a no citar ninguna, y mantiene párrafo y tabla en el mismo formato en
+   *  cualquier escenario. */
+  const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
+    if (narrativaHtml) {
+      const fuenteTexto = serieClave ? resolverSerie(datosMacro, serieClave).fuente : '';
+      return parrafosOoxmlDesdeHtml(narrativaHtml) + parrafoFuenteOoxml(fuenteTexto);
+    }
+    if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
+    return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
+  };
+
   reemplazarPorHitos(
     doc,
     [tituloMundial, 'PIB Mundial', 'Inflación Global', 'por Región/País', tituloColombia],
     [
-      primerHueco(narrativaMundial, 'mundial'),
-      contenidoHuecoIntermedio,
-      contenidoHuecoIntermedio,
+      primerHueco(narrativa.mundial, 'mundial'),
+      temaHueco(narrativa.inflacionMundial, 'la inflación mundial', 'inflacion_global'),
+      temaHueco(narrativa.proyeccionMundial, 'la proyección de crecimiento mundial', 'crecimiento_por_region'),
     ],
     avisos,
     tituloMundial
@@ -255,19 +308,19 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
       'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
     ],
     [
-      primerHueco(narrativaColombia, 'colombiana'),
-      contenidoHuecoIntermedio,
-      contenidoHuecoIntermedio,
-      contenidoHuecoIntermedio,
-      contenidoHuecoIntermedio,
-      contenidoHuecoIntermedio,
+      primerHueco(narrativa.colombia, 'colombiana'),
+      temaHueco(narrativa.inflacionColombia, 'la inflación en Colombia', 'inflacion_colombia'),
+      temaHueco(narrativa.politicaMonetaria, 'la política monetaria', 'tasa_intervencion'),
+      temaHueco(narrativa.tasaCambio, 'la tasa de cambio (TRM)', 'trm_promedio'),
+      temaHueco(narrativa.mercadoLaboral, 'el mercado laboral en Colombia', 'desempleo_colombia'),
+      temaHueco(narrativa.conclusiones, 'las conclusiones del panorama económico', null),
     ],
     avisos,
     tituloColombia
   );
 
-  if (!narrativaMundial && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloMundial);
-  if (!narrativaColombia && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloColombia);
+  if (!narrativa.mundial && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloMundial);
+  if (!narrativa.colombia && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloColombia);
 
   return doc.xml;
 }
@@ -325,11 +378,24 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
       : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaSectorPendiente(tema, year))}</w:t></w:r></w:p>`
   );
 
+  /** Igual que `bloque`, pero cuando NO hay narrativa lista, el marcador de pendiente
+   *  solo se fabrica si el hueco traía prosa sustancial que retirar — el hueco de
+   *  entrada de III.C (antes de "Comportamiento del Sector") puede venir vacío en
+   *  plantillas cuyo encabezado de sección no trae párrafo introductorio propio, y sin
+   *  este resguardo se le fabricaría un marcador donde hoy no hay nada. El umbral NO
+   *  aplica cuando SÍ hay narrativa: insertar contenido real y verificado no es
+   *  "fabricar", así que se inserta siempre que esté disponible, sin importar cuánto
+   *  medía el hueco viejo (mismo criterio asimétrico que `temaHueco`). */
+  const bloqueConUmbral = (narrativaHtml, tema) => (textoHueco) => {
+    if (!narrativaHtml && textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
+    return bloque(narrativaHtml, tema)();
+  };
+
   reemplazarPorHitos(
     doc,
     titulos,
     [
-      contenidoHuecoIntermedio,
+      bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
       bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
       () => null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),

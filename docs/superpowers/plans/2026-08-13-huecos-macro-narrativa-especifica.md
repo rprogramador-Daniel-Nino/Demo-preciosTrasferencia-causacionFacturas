@@ -506,6 +506,29 @@ Si `parrafoXml` no existe ya como helper en el archivo de pruebas, revisar cómo
 `xml` de las pruebas existentes de `actualizarApartadosMacroOoxml` (buscar `parrafoXml(` en el
 archivo) y reusar exactamente esa función — no crear una nueva.
 
+**Además, actualizar una prueba existente que este cambio vuelve obsoleta.** La prueba
+`'actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas'`
+(`docxRelleno.test.js:1348-1399`) cuenta que el marcador GENÉRICO "Este párrafo del informe de
+referencia se retiró" aparece exactamente 4 veces (Política Monetaria, Tasa de Cambio, Mercado
+Laboral, CONCLUSIONES) cuando `datosMacro.narrativa` solo trae `mundial`/`colombia`. Con este
+cambio esos 4 huecos ahora caen en `marcadorTemaMacroPendiente` (texto distinto), así que esa
+aserción debe cambiar. Reemplazar las líneas 1397-1398 de esa prueba:
+
+```javascript
+  const marcador = 'Este párrafo del informe de referencia se retiró';
+  assert.equal((salida.match(new RegExp(marcador, 'g')) || []).length, 4, 'los cuatro huecos con prosa real quedan marcados');
+```
+
+por:
+
+```javascript
+  assert.doesNotMatch(salida, /Este párrafo del informe de referencia se retiró/);
+  ['la política monetaria', 'la tasa de cambio \\(TRM\\)', 'el mercado laboral en Colombia',
+    'las conclusiones del panorama económico'].forEach((tema) => {
+    assert.match(salida, new RegExp('Actualizar con datos verificados sobre ' + tema));
+  });
+```
+
 - [ ] **Step 2: Correr las pruebas y verificar que fallan**
 
 Run: `npm test --prefix frontend -- docxRelleno`
@@ -612,17 +635,36 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
 }
 ```
 
-- [ ] **Step 5: Conectar el hueco de entrada de III.C a `introduccion`**
+- [ ] **Step 5: Conectar el hueco de entrada de III.C a `introduccion`, respetando el umbral**
 
-En `actualizarApartadoSectorialOoxml` (`frontend/src/services/docxRelleno.js:303-356`), dentro del
-arreglo de `contenidos` que se pasa a `reemplazarPorHitos` (línea ~328), cambiar la primera entrada:
+**No usar `bloque()` a secas para este hueco.** `bloque()` reemplaza incondicionalmente, sin mirar
+si había prosa real que retirar — correcto para los otros 4 bloques de esta función, porque ahí
+el hito siguiente siempre distingue contenido real. Pero este hueco (entre "Análisis del Sector" y
+"Comportamiento del Sector") puede venir VACÍO en una plantilla cuyo encabezado de sección no trae
+párrafo introductorio propio — igual que ya distingue `contenidoHuecoIntermedio` con
+`UMBRAL_HUECO_CON_PROSA` (línea ~206). Sin ese resguardo, una plantilla sin prosa ahí terminaría
+con un marcador fabricado donde hoy no hay nada — y rompe
+`docxRelleno.test.js:1420`/`1465` (fixtures con ese hueco vacío).
+
+En `actualizarApartadoSectorialOoxml` (`frontend/src/services/docxRelleno.js:303-356`), agregar,
+junto a la definición de `bloque` (línea ~319):
+
+```javascript
+  const bloqueConUmbral = (narrativaHtml, tema) => (textoHueco) => {
+    if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
+    return bloque(narrativaHtml, tema)();
+  };
+```
+
+Y dentro del arreglo de `contenidos` que se pasa a `reemplazarPorHitos` (línea ~328), cambiar la
+primera entrada:
 
 ```javascript
   reemplazarPorHitos(
     doc,
     titulos,
     [
-      bloque(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
+      bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
       bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
       () => null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
@@ -634,9 +676,29 @@ arreglo de `contenidos` que se pasa a `reemplazarPorHitos` (línea ~328), cambia
   );
 ```
 
-(La única línea que cambia es la primera: de `contenidoHuecoIntermedio` a
-`bloque(entrada && entrada.narrativa.introduccion, 'contexto introductorio')` — `bloque` ya existe
-en esa misma función, dos líneas arriba.)
+(La única línea que cambia dentro del arreglo es la primera: de `contenidoHuecoIntermedio` a
+`bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio')`.)
+
+Agregar un cuarto caso a las pruebas del Step 1 de esta tarea, confirmando que el umbral se
+respeta:
+
+```javascript
+test('actualizarApartadoSectorialOoxml no fabrica un marcador si el hueco de entrada ya estaba vacío', () => {
+  const xml = [
+    parrafoXml('Análisis del Sector de la industria del software y de los videojuegos'),
+    parrafoXml('Comportamiento del Sector'),
+    parrafoXml('Texto real de comportamiento.'),
+    parrafoXml('Datos Clave del Sector'),
+  ].join('');
+
+  const analisisSector = { porAnio: { '2025': { narrativa: {
+    comportamiento: '<p>Texto real de comportamiento.</p>',
+  } } } };
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
+});
+```
 
 - [ ] **Step 6: Correr las pruebas y verificar que pasan**
 
@@ -829,12 +891,30 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
 }
 ```
 
-- [ ] **Step 5: Conectar el hueco de entrada de III.C a `introduccion`**
+- [ ] **Step 5: Conectar el hueco de entrada de III.C a `introduccion`, respetando el umbral**
 
-En `actualizarApartadoSectorialHtml` (`frontend/src/services/tablasHtmlInforme.js:698-729`),
-cambiar la primera entrada del arreglo de contenidos (línea ~716) de
-`contenidoHuecoIntermedioHtml` a `bloque(entrada && entrada.narrativa.introduccion, 'contexto
-introductorio')` — mismo cambio que Task 3 Step 5, `bloque` ya existe en esta función.
+Mismo motivo y mismo cambio que Task 3 Step 5: `bloque()` a secas no respeta
+`UMBRAL_HUECO_CON_PROSA_HTML`, y este hueco puede venir vacío en la plantilla — rompería
+`tablasHtmlInforme.test.js:638`/`678`. En `actualizarApartadoSectorialHtml`
+(`frontend/src/services/tablasHtmlInforme.js:698-729`), junto a la definición de `bloque`
+(línea ~706), agregar:
+
+```javascript
+  const bloqueConUmbral = (narrativaHtml, tema) => (textoHueco) => {
+    if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
+    return bloque(narrativaHtml, tema)();
+  };
+```
+
+Y cambiar la primera entrada del arreglo de contenidos (línea ~716) de
+`contenidoHuecoIntermedioHtml` a `bloqueConUmbral(entrada && entrada.narrativa.introduccion,
+'contexto introductorio')`.
+
+Agregar el mismo cuarto caso de prueba del Step 1 de esta tarea (versión HTML): un fixture donde
+"Análisis del Sector..." va seguido inmediatamente de "Comportamiento del Sector" sin párrafo
+intermedio, y `entrada.narrativa` no trae `introduccion` — confirmar con
+`assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/)` que no
+aparece un marcador fabricado.
 
 - [ ] **Step 6: Correr las pruebas y verificar que pasan**
 
