@@ -673,7 +673,145 @@ test('actualizarApartadoSectorialHtml reemplaza los cuatro bloques y deja intact
   assert.match(salida, /Proyección real 2026\./);
   assert.match(salida, /Conclusiones reales 2026\./);
   assert.doesNotMatch(salida, /Texto viejo/);
-  assert.match(salida, /<table>/); // la tabla vieja de datos clave, sin tocar (otro mecanismo la regenera aparte)
+  assert.match(salida, /<table>/); // la tabla sigue ahí: es de una sola fila, no hay molde que clonar
+});
+
+/* Tabla de datos clave como la trae la plantilla de END GAME: encabezado con los DOS años
+   del informe anterior y filas de datos de aquel contribuyente. */
+const TABLA_DATOS_CLAVE = '<table>'
+  + '<tr><th>Indicador Clave</th><th>2023</th><th>2024</th></tr>'
+  + '<tr><td>Empleo Sector Software y TI</td><td>250.000 empleos (+13,69% vs 2022)</td><td>Crecimiento sostenido</td></tr>'
+  + '<tr><td>Exportaciones Software y TI</td><td>US$883 millones (+77% vs 2022)</td><td>Crecimiento de servicios +15,4%</td></tr>'
+  + '</table>';
+
+const htmlSectorial = (tabla) => [
+  '<h2>Análisis del Sector de la industria del software y de los videojuegos</h2>',
+  '<h3>Comportamiento del Sector de la Industria del Software y de los Videojuegos en 2024 y Comparación con 2023</h3>',
+  '<p>Texto viejo de comportamiento.</p>',
+  '<h3>Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)</h3>',
+  tabla,
+  '<h3>Importaciones y exportaciones del sector de la industria del software y de los videojuegos</h3>',
+  '<p>Texto viejo de comercio.</p>',
+  '<h3>¿Qué se proyecta para el sector de la industria del software y de los videojuegos en 2025?</h3>',
+  '<p>Texto viejo de proyección.</p>',
+  '<h3>Conclusiones y Perspectivas</h3>',
+  '<p>Texto viejo de conclusiones.</p>',
+  '<h2>ANÁLISIS ECONÓMICO</h2>',
+].join('');
+
+const sectorConTabla = {
+  porAnio: {
+    2025: {
+      tituloSector: 'de los videojuegos y servicios digitales creativos',
+      narrativa: {
+        comportamiento: '<p>Comportamiento real 2025.</p>',
+        comercioExterior: '<p>Comercio exterior real 2025.</p>',
+        proyeccion: '<p>Proyección real 2025.</p>',
+        conclusiones: '<p>Conclusiones reales 2025.</p>',
+      },
+      datosClaveTabla: [
+        { indicador: 'Tamaño del mercado (Millones USD)', valorAnterior: '802,0', valorActual: '802,3' },
+        { indicador: 'Estudios de desarrollo activos', valorAnterior: '80', valorActual: '100' },
+        { indicador: 'Talento humano capacitado', valorAnterior: '', valorActual: '262.000' },
+      ],
+    },
+  },
+};
+
+test('actualizarApartadoSectorialHtml regenera las filas de la tabla de datos clave', () => {
+  const salida = actualizarApartadoSectorialHtml(
+    htmlSectorial(TABLA_DATOS_CLAVE), sectorConTabla, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /Tamaño del mercado \(Millones USD\)/);
+  assert.match(salida, /Estudios de desarrollo activos/);
+  /* Las cifras del contribuyente anterior no pueden sobrevivir: es el fallo que esta
+     regeneración existe para evitar. */
+  assert.doesNotMatch(salida, /250\.000 empleos/);
+  assert.doesNotMatch(salida, /US\$883 millones/);
+  /* `valorAnterior` vacío se publica como hueco visible, nunca como el valor de al lado. */
+  assert.match(salida, /<td>—<\/td>/);
+});
+
+test('actualizarApartadoSectorialHtml pone el año del estudio en el encabezado y el rótulo de la tabla', () => {
+  const salida = actualizarApartadoSectorialHtml(
+    htmlSectorial(TABLA_DATOS_CLAVE), sectorConTabla, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /<th>2024<\/th><th>2025<\/th>/);
+  assert.match(
+    salida,
+    /Datos Clave del Sector de la Industria de los videojuegos y servicios digitales creativos en Colombia \(2024 vs\. 2025\)/
+  );
+  assert.doesNotMatch(salida, /\(2023 vs\. 2024\)/);
+});
+
+test('actualizarApartadoSectorialHtml retira las notas al pie de la tabla vieja y cita las nuevas fuentes', () => {
+  /* Como en la plantilla de END GAME: tras la tabla vienen las notas al pie de SUS cifras,
+     antes del encabezado siguiente. Dejarlas ahí atribuye a Canal Trece 2024 unas cifras
+     de 2025. */
+  const html = htmlSectorial(TABLA_DATOS_CLAVE).replace(
+    '<h3>Importaciones y exportaciones',
+    '<p>Canal Trece. (2024, agosto 29). Día del Gamer: Colombia. https://canaltrece.com.co/x</p>'
+    + '<p>DANE. (s.f.). PIB Trimestral 2023-2024.</p>'
+    + '<h3>Importaciones y exportaciones'
+  );
+  const conFuentes = {
+    porAnio: {
+      2025: {
+        ...sectorConTabla.porAnio[2025],
+        actualizadoEn: new Date('2026-08-13T15:42:46Z'),
+        datosClaveTabla: [
+          { indicador: 'Tamaño del mercado', valorAnterior: '802,0', valorActual: '802,3',
+            fuente: 'Informes de Expertos', fuenteUrl: 'https://informesdeexpertos.com/x' },
+          { indicador: 'Estudios activos', valorAnterior: '80', valorActual: '100',
+            fuente: 'ProColombia', fuenteUrl: 'https://procolombia.co/y' },
+          /* Fuente repetida: se cita una sola vez. */
+          { indicador: 'Usuarios', valorAnterior: '10,0', valorActual: '10,0', fuente: 'ProColombia' },
+        ],
+      },
+    },
+  };
+
+  const salida = actualizarApartadoSectorialHtml(html, conFuentes, { anio: 2025 }, 2025, []);
+  assert.doesNotMatch(salida, /Canal Trece/);
+  assert.doesNotMatch(salida, /PIB Trimestral 2023-2024/);
+  assert.match(salida, /FUENTE:/);
+  assert.match(salida, /Informes de Expertos \(https:\/\/informesdeexpertos\.com\/x\)/);
+  assert.match(salida, /consultado el/);
+  assert.strictEqual((salida.match(/ProColombia/g) || []).length, 1);
+});
+
+test('actualizarApartadoSectorialHtml no borra ese hueco si la corrida no dejó fuentes', () => {
+  /* Sin fuentes verificadas no hay con qué sustituir la nota al pie, y borrarla sin poner
+     nada deja la tabla sin la fuente que exige el numeral 4 del artículo 1.2.2.2.1.5. */
+  const html = htmlSectorial(TABLA_DATOS_CLAVE).replace(
+    '<h3>Importaciones y exportaciones',
+    '<p>Canal Trece. (2024, agosto 29).</p><h3>Importaciones y exportaciones'
+  );
+  const salida = actualizarApartadoSectorialHtml(html, sectorConTabla, { anio: 2025 }, 2025, []);
+  assert.match(salida, /Canal Trece/);
+});
+
+test('actualizarApartadoSectorialHtml avisa si la tabla de datos clave no se pudo regenerar', () => {
+  /* Un solo `<tr>`: no hay fila de datos que sirva de molde, así que las filas no se
+     pueden reescribir y la tabla se quedaría con lo que trajera la plantilla. Eso tiene
+     que llegar al panel antes de radicar, no pasar en silencio. */
+  const avisos = [];
+  actualizarApartadoSectorialHtml(
+    htmlSectorial('<table><tr><th>Indicador Clave</th><th>2023</th><th>2024</th></tr></table>'),
+    sectorConTabla, { anio: 2025 }, 2025, avisos);
+  assert.ok(avisos.some((a) => /Datos Clave del Sector/.test(a)), 'avisos: ' + JSON.stringify(avisos));
+});
+
+test('actualizarApartadoSectorialHtml avisa si la corrida del año no trae datos clave', () => {
+  const avisos = [];
+  const sinTabla = {
+    porAnio: { 2025: { ...sectorConTabla.porAnio[2025], datosClaveTabla: [] } },
+  };
+  const salida = actualizarApartadoSectorialHtml(
+    htmlSectorial(TABLA_DATOS_CLAVE), sinTabla, { anio: 2025 }, 2025, avisos);
+  assert.ok(avisos.some((a) => /Datos Clave del Sector/.test(a)), 'avisos: ' + JSON.stringify(avisos));
+  /* Sin datos verificados no se fabrica una tabla: se deja la de la plantilla y se avisa. */
+  assert.match(salida, /250\.000 empleos/);
 });
 
 test('actualizarApartadoSectorialHtml usa el marcador de pendiente si no hay corrida para ese año', () => {
