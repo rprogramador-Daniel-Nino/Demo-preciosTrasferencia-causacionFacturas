@@ -791,6 +791,40 @@ test('actualizarApartadoSectorialHtml no borra ese hueco si la corrida no dejó 
   assert.match(salida, /Canal Trece/);
 });
 
+test('actualizarApartadoSectorialHtml escribe los encabezados de III.C con la industria y los años del estudio', () => {
+  const salida = actualizarApartadoSectorialHtml(
+    htmlSectorial(TABLA_DATOS_CLAVE), sectorConTabla, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /Análisis del Sector de la industria de los videojuegos y servicios digitales creativos/);
+  assert.match(
+    salida,
+    /Comportamiento del Sector de la Industria de los videojuegos y servicios digitales creativos en 2025 y Comparación con 2024/
+  );
+  assert.match(salida, /Importaciones y exportaciones del sector de la industria de los videojuegos y servicios digitales creativos/);
+  /* La proyección es del año SIGUIENTE al gravable. */
+  assert.match(salida, /¿Qué se proyecta para el sector de la industria de los videojuegos y servicios digitales creativos en 2026\?/);
+
+  assert.doesNotMatch(salida, /en 2024 y Comparación con 2023/);
+  assert.doesNotMatch(salida, /para el sector de la industria del software y de los videojuegos en 2025/);
+  /* "Conclusiones y Perspectivas" no lleva industria ni años: se deja como estaba. */
+  assert.match(salida, /Conclusiones y Perspectivas/);
+});
+
+test('actualizarApartadoSectorialHtml conserva la numeración del apartado del cliente', () => {
+  const html = htmlSectorial(TABLA_DATOS_CLAVE)
+    .replace('<h2>Análisis del Sector', '<h2>C. Análisis del Sector');
+  const salida = actualizarApartadoSectorialHtml(html, sectorConTabla, { anio: 2025 }, 2025, []);
+  assert.match(salida, /<h2>C\. Análisis del Sector de la industria de los videojuegos/);
+});
+
+test('actualizarApartadoSectorialHtml no toca los encabezados si no hay corrida del año', () => {
+  const salida = actualizarApartadoSectorialHtml(
+    htmlSectorial(TABLA_DATOS_CLAVE), null, { anio: 2025 }, 2025, []);
+  /* Sin corrida no hay industria que escribir: inventar un encabezado sería peor que
+     dejar el de la plantilla, que al menos el marcador de pendiente delata. */
+  assert.match(salida, /en 2024 y Comparación con 2023/);
+});
+
 test('actualizarApartadoSectorialHtml avisa si la tabla de datos clave no se pudo regenerar', () => {
   /* Un solo `<tr>`: no hay fila de datos que sirva de molde, así que las filas no se
      pueden reescribir y la tabla se quedaría con lo que trajera la plantilla. Eso tiene

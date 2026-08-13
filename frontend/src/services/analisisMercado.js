@@ -145,10 +145,160 @@ export function marcadorPendiente(anio, concepto) {
   );
 }
 
-/** Valor de una serie para un año, o el marcador si no está. */
+/** La fuente de un valor suelto, entre paréntesis y con la URL a la vista. Texto plano y no
+ *  un `<a>`: la misma celda se emite en HTML, en OOXML y en la ruta de PDF, y una URL
+ *  escrita se puede copiar y verificar en las tres. */
+function fuenteDelValor(v) {
+  const partes = [String(v.fuente || '').trim(), String(v.fuenteUrl || '').trim()].filter(Boolean);
+  return partes.length ? ' (' + partes.join(' — ') + ')' : '';
+}
+
+/**
+ * Valor de una serie para un año, o el marcador si no está.
+ *
+ * Un año puede venir como cifra suelta o como `{ valor, fuente, fuenteUrl }`. La segunda
+ * forma es la del año de PROYECCIÓN: quien publica el dato realizado no suele publicar el
+ * pronóstico —el desempleo lo publica el DANE, pero quien lo proyecta es el FMI—, así que
+ * esa cifra no la respalda la fuente del pie de la tabla y su enlace tiene que ir en la
+ * propia celda, donde se pueda verificar sin salir del documento.
+ *
+ * Los arreglos (`crecimiento_por_region`, que guarda una lista de regiones por año) se
+ * devuelven tal cual: no son un valor con fuente propia y su tabla los recorre ella misma.
+ */
 export function valorODisponible(serie, anio, concepto) {
   const v = serie && serie[anio];
-  return (v === undefined || v === null || v === '') ? marcadorPendiente(anio, concepto) : v;
+  if (v === undefined || v === null || v === '') return marcadorPendiente(anio, concepto);
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'object') {
+    const cifra = String(v.valor === undefined || v.valor === null ? '' : v.valor).trim();
+    /* Un objeto sin cifra es una respuesta a medias: se marca pendiente en vez de publicar
+       «[object Object]» o una fuente sin dato al que respaldar. */
+    return cifra ? cifra + fuenteDelValor(v) : marcadorPendiente(anio, concepto);
+  }
+  return v;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   2b. PROYECCIÓN PROPIA, CUANDO NADIE LA PUBLICÓ
+
+   Para el año siguiente al gravable el informe necesita un pronóstico, y no siempre
+   existe uno publicado: el DANE publica el desempleo ocurrido, no el esperado, y a veces
+   ni el FMI ni Fedesarrollo lo traen para Colombia. Hasta ahora esa casilla salía con
+   «[Completar...]», es decir, con trabajo pendiente para quien radica el informe.
+
+   La alternativa NO es que la IA se invente una cifra. Es calcularla aquí: una regresión
+   lineal por mínimos cuadrados sobre los años ya observados de la propia serie —los
+   mismos que el informe publica dos filas más arriba, con su fuente al pie—, y publicar
+   junto al resultado el método, los puntos sobre los que se ajustó y el R² del ajuste.
+   Determinista, reproducible y auditable: quien lo lea puede rehacer la cuenta.
+
+   Va rotulada como estimación propia y con el aviso de que no es una cifra publicada.
+   Esa distinción es el punto: una estimación propia declarada es defendible ante la DIAN;
+   una estimación propia disfrazada de dato del FMI, no.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Cuántas observaciones exige la regresión. Con dos puntos la «tendencia» es la recta que
+ *  los une: no hay ajuste que medir ni evidencia que enseñar, solo una extrapolación
+ *  disfrazada de método. */
+const MIN_OBSERVACIONES_TENDENCIA = 3;
+
+/** Cuántos decimales usa la serie observada, para no delatar el cálculo con un
+ *  «4052.8600000001» donde la fuente publica dos. */
+function decimalesDe(valores) {
+  return valores.reduce((max, v) => {
+    const punto = String(v).indexOf('.');
+    return Math.max(max, punto < 0 ? 0 : String(v).length - punto - 1);
+  }, 0);
+}
+
+/**
+ * Recta de mínimos cuadrados sobre los años observados de una serie, evaluada en `anio`.
+ *
+ * Solo se usan los años ANTERIORES al que se proyecta y cuyo valor sea una cifra: un año
+ * posterior ya conocido no es historia sobre la que extrapolar, y un «N.D.» no es un dato.
+ *
+ * @returns {{valor:string, pendiente:number, r2:number, puntos:Array<[number,number]>}|null}
+ *          `null` si no hay observaciones suficientes o si todos los años son el mismo.
+ */
+export function proyectarPorTendencia(serie, anio, opciones = {}) {
+  const objetivo = Number(anio);
+  /* Por defecto solo se mira hacia atrás (extrapolación, que es el caso del año que se
+     proyecta). Con `soloAnteriores: false` entran también los años posteriores, y entonces
+     un hueco intermedio se INTERPOLA entre los datos que lo rodean — un ajuste mucho más
+     firme que extrapolar, porque el valor queda acotado por observaciones reales a los dos
+     lados. */
+  const soloAnteriores = opciones.soloAnteriores !== false;
+  const puntos = Object.keys(serie || {})
+    .map((k) => [Number(k), Number(serie[k])])
+    .filter(([a, v]) => Number.isFinite(a) && Number.isFinite(v)
+      && (soloAnteriores ? a < objetivo : a !== objetivo))
+    .sort((p, q) => p[0] - q[0]);
+  if (puntos.length < MIN_OBSERVACIONES_TENDENCIA) return null;
+
+  const n = puntos.length;
+  const mediaX = puntos.reduce((s, p) => s + p[0], 0) / n;
+  const mediaY = puntos.reduce((s, p) => s + p[1], 0) / n;
+  const sxx = puntos.reduce((s, p) => s + (p[0] - mediaX) ** 2, 0);
+  /* Todos los años iguales: la recta sería vertical y no hay nada que proyectar. No puede
+     pasar con años distintos, pero un `serie` con claves repetidas tras Number() sí. */
+  if (sxx === 0) return null;
+  const sxy = puntos.reduce((s, p) => s + (p[0] - mediaX) * (p[1] - mediaY), 0);
+  const pendiente = sxy / sxx;
+  const intercepto = mediaY - pendiente * mediaX;
+
+  /* R² = 1 − SSres/SStot. Con SStot 0 (serie plana) el ajuste es exacto por definición. */
+  const ssTot = puntos.reduce((s, p) => s + (p[1] - mediaY) ** 2, 0);
+  const ssRes = puntos.reduce((s, p) => s + (p[1] - (intercepto + pendiente * p[0])) ** 2, 0);
+  const r2 = ssTot === 0 ? 1 : 1 - ssRes / ssTot;
+
+  const decimales = decimalesDe(puntos.map((p) => serie[p[0]]));
+  return {
+    valor: (intercepto + pendiente * objetivo).toFixed(decimales),
+    pendiente: Number(pendiente.toFixed(6)),
+    r2: Number(r2.toFixed(4)),
+    puntos,
+    /* Fuera del rango observado es extrapolación; dentro, interpolación. Se dice cuál,
+       porque no merecen la misma confianza. */
+    extrapolacion: objetivo > puntos[puntos.length - 1][0] || objetivo < puntos[0][0],
+  };
+}
+
+/** Cómo se llegó a la cifra y sobre qué datos, para poder rehacer la cuenta. */
+function evidenciaDeTendencia(t) {
+  const serie = t.puntos.map(([a, v]) => a + ': ' + v).join('; ');
+  const sentido = t.pendiente === 0 ? 'sin variación' :
+    (t.pendiente > 0 ? '+' : '') + t.pendiente.toFixed(2) + ' por año';
+  return ' (estimación propia por ' + (t.extrapolacion ? 'extrapolación' : 'interpolación') +
+    ' de tendencia lineal —mínimos cuadrados— sobre ' +
+    t.puntos[0][0] + '-' + t.puntos[t.puntos.length - 1][0] + ' [' + serie + '], ' +
+    sentido + ', R²=' + t.r2.toFixed(2) + '. No es una cifra publicada: verifíquela antes ' +
+    'de radicar)';
+}
+
+/**
+ * La cifra de un año de la Sección III, por orden de preferencia:
+ *
+ *   1. el valor publicado que trajo la corrida, con su fuente y su enlace si trae los suyos;
+ *   2. si falta, una estimación propia calculada sobre los demás años de la serie, con su
+ *      método, los datos que la sustentan y el R² del ajuste a la vista;
+ *   3. y solo si no hay ni tres observaciones con las que estimar, el marcador de pendiente.
+ *
+ * El paso 2 existe porque la Sección III no puede radicarse con casillas «[Completar...]»:
+ * eso no es una salvaguarda, es trabajo que queda para quien firma el informe. Una
+ * estimación propia DECLARADA como tal, con su método y sus datos, es defendible; lo que no
+ * lo es —y esta función tampoco hace— es pasarla por una cifra publicada.
+ *
+ * Un hueco intermedio se interpola entre los años que lo rodean; el año que se proyecta se
+ * extrapola. `evidenciaDeTendencia` dice cuál de las dos fue.
+ */
+export function cifraODisponible(serie, anio, concepto) {
+  const v = serie && serie[anio];
+  if (!(v === undefined || v === null || v === '')) return valorODisponible(serie, anio, concepto);
+
+  const tendencia = proyectarPorTendencia(serie, anio, { soloAnteriores: false });
+  return tendencia
+    ? tendencia.valor + evidenciaDeTendencia(tendencia)
+    : marcadorPendiente(anio, concepto);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -220,9 +370,9 @@ export function generarTablaPibMundial(datosMacro, year, wrap) {
     'Crecimiento del PIB Mundial (' + y1 + '-' + y3 + ')',
     ['Año', 'Crecimiento Mundial (%)'],
     [
-      [wrap(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB mundial'))],
-      [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB mundial'))],
-      [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
+      [wrap(y1), wrap(cifraODisponible(S, y1, 'el crecimiento del PIB mundial'))],
+      [wrap(y2), wrap(cifraODisponible(S, y2, 'el crecimiento del PIB mundial'))],
+      [wrap(y3) + ' (Proyección)', wrap(cifraODisponible(S, y3, 'la proyección de crecimiento del PIB mundial'))],
     ],
     fuente
   );
@@ -235,9 +385,9 @@ export function generarTablaPibColombia(datosMacro, year, wrap) {
     'Crecimiento del PIB en Colombia (' + y1 + '-' + y3 + ')',
     ['Año', 'Crecimiento del PIB (%)'],
     [
-      [wrap(y1), wrap(valorODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
-      [wrap(y2), wrap(valorODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
-      [wrap(y3) + ' (Proyección OCDE)', wrap(valorODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
+      [wrap(y1), wrap(cifraODisponible(S, y1, 'el crecimiento del PIB de Colombia'))],
+      [wrap(y2), wrap(cifraODisponible(S, y2, 'el crecimiento del PIB de Colombia'))],
+      [wrap(y3) + ' (Proyección OCDE)', wrap(cifraODisponible(S, y3, 'la proyección de crecimiento del PIB de Colombia'))],
     ],
     fuente
   );
@@ -250,12 +400,39 @@ export function generarTablaInflacionGlobal(datosMacro, year, wrap) {
     'Tasas de Inflación Global (' + y1 + '-' + y3 + ')',
     ['Año', 'Tasa de Inflación (%)'],
     [
-      [wrap(y1), wrap(valorODisponible(S, y1, 'la inflación global'))],
-      [wrap(y2), wrap(valorODisponible(S, y2, 'la inflación global'))],
-      [wrap(y3) + ' (Proyección)', wrap(valorODisponible(S, y3, 'la proyección de inflación global'))],
+      [wrap(y1), wrap(cifraODisponible(S, y1, 'la inflación global'))],
+      [wrap(y2), wrap(cifraODisponible(S, y2, 'la inflación global'))],
+      [wrap(y3) + ' (Proyección)', wrap(cifraODisponible(S, y3, 'la proyección de inflación global'))],
     ],
     fuente
   );
+}
+
+/* `crecimiento_por_region` no es una serie temporal sino un corte de regiones por año, así
+   que para estimar hay que darle la vuelta: sacar la lista de regiones vistas en cualquier
+   año, y de cada una su serie año→valor. */
+
+const REGIONES_POR_DEFECTO = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
+
+function regionesDeLaSerie(porAnio) {
+  const vistas = [];
+  Object.keys(porAnio || {}).sort().forEach((anio) => {
+    (porAnio[anio] || []).forEach((r) => {
+      if (r && r.region && !vistas.includes(r.region)) vistas.push(r.region);
+    });
+  });
+  return vistas.length ? vistas : REGIONES_POR_DEFECTO;
+}
+
+function serieDeRegion(porAnio, region) {
+  const serie = {};
+  Object.keys(porAnio || {}).forEach((anio) => {
+    const fila = (porAnio[anio] || []).find((r) => r && r.region === region);
+    if (fila && fila.valor !== undefined && fila.valor !== null && fila.valor !== '') {
+      serie[anio] = fila.valor;
+    }
+  });
+  return serie;
 }
 
 export function generarTablaCrecimientoPorRegion(datosMacro, year, wrap) {
@@ -263,11 +440,15 @@ export function generarTablaCrecimientoPorRegion(datosMacro, year, wrap) {
   const porRegion = porAnio[year];
   const titulo = 'Proyecciones de Crecimiento del PIB por Región/País (' + year + ')';
   if (!porRegion || !porRegion.length) {
-    /* Sin corte del año no se reutiliza el de otro: se listan las regiones con el
-       marcador, que es lo que hay que completar. */
-    const regiones = ['Mundial', 'Estados Unidos', 'China', 'América Latina', 'Colombia (OCDE)'];
+    /* Sin corte del año NO se reutiliza el de otro —eso publicaría la proyección de un año
+       ajeno como si fuera la de este—, pero tampoco se deja la tabla por completar: cada
+       región se estima con SU propia serie a lo largo de los años que sí hay, por el mismo
+       método y con la misma evidencia que `cifraODisponible`. Solo las regiones sin tres
+       cortes conservan el marcador. */
+    const regiones = regionesDeLaSerie(porAnio);
     return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
-      regiones.map((r) => [r, wrap(marcadorPendiente(year, 'la proyección de crecimiento de ' + r))]),
+      regiones.map((r) => [r, wrap(cifraODisponible(serieDeRegion(porAnio, r), year,
+        'la proyección de crecimiento de ' + r))]),
       fuente);
   }
   return tablaHTML(titulo, ['Región/País', 'Crecimiento Proyectado (%)'],
@@ -281,7 +462,7 @@ export function generarTablaInflacionColombia(datosMacro, year, wrap) {
     'Inflación en Colombia (' + year + ' vs. Meta ' + (year + 1) + ')',
     ['Indicador', 'Valor (%)'],
     [
-      ['Inflación ' + wrap(year), wrap(valorODisponible(S, year, 'la inflación de Colombia'))],
+      ['Inflación ' + wrap(year), wrap(cifraODisponible(S, year, 'la inflación de Colombia'))],
       ['Meta Inflación ' + wrap(year + 1), wrap(DATOS_MACRO.meta_inflacion_banrep)],
     ],
     fuente
@@ -315,8 +496,8 @@ export function generarTablaTRM(datosMacro, year, wrap) {
     'Tasa Representativa del Mercado (TRM) Promedio (' + y1 + '-' + y2 + ')',
     ['Año', 'TRM Promedio ($)'],
     [
-      [wrap(y1), wrap(valorODisponible(S, y1, 'la TRM promedio'))],
-      [wrap(y2), wrap(valorODisponible(S, y2, 'la TRM promedio'))],
+      [wrap(y1), wrap(cifraODisponible(S, y1, 'la TRM promedio'))],
+      [wrap(y2), wrap(cifraODisponible(S, y2, 'la TRM promedio'))],
     ],
     fuente
   );
@@ -328,8 +509,8 @@ export function generarTablaDesempleo(datosMacro, year, wrap) {
     'Tasa de Desempleo en Colombia (' + year + ' vs. Proyección ' + (year + 1) + ')',
     ['Indicador', 'Valor (%)'],
     [
-      ['Desempleo ' + wrap(year), wrap(valorODisponible(S, year, 'la tasa de desempleo'))],
-      ['Desempleo Proyectado ' + wrap(year + 1), wrap(valorODisponible(S, year + 1, 'la proyección de desempleo'))],
+      ['Desempleo ' + wrap(year), wrap(cifraODisponible(S, year, 'la tasa de desempleo'))],
+      ['Desempleo Proyectado ' + wrap(year + 1), wrap(cifraODisponible(S, year + 1, 'la proyección de desempleo'))],
     ],
     fuente
   );
@@ -400,7 +581,7 @@ function entradaSector(analisisSector, year) {
 export function tituloSectorial(study, analisisSector, year) {
   const entrada = entradaSector(analisisSector, year);
   if (entrada && entrada.tituloSector) {
-    return 'Análisis del Sector de la industria ' + escaparHtml(entrada.tituloSector);
+    return escaparHtml(titulosSectorial(entrada.tituloSector, year).apartado);
   }
   const ciiu = escaparHtml((study && study.ciiu) || '').trim();
   return ciiu
@@ -476,12 +657,59 @@ export function fuenteDatosClaveSector(entrada) {
   return partes.join('; ') + (fecha ? ', consultado el ' + fecha : '');
 }
 
+/**
+ * Los encabezados de III.C con la industria y los años de ESTE estudio.
+ *
+ * Los usan las tres rutas: `generarApartadoSectorial` los emite al armar el apartado desde
+ * cero, y las dos que parchean una plantilla (`actualizarApartadoSectorialOoxml` y
+ * `actualizarApartadoSectorialHtml`) los escriben encima de los del informe de referencia.
+ * Hasta el 2026-08-13 esas dos no los tocaban —reemplazaban solo el hueco ENTRE
+ * encabezados— y el informe se radicaba con «…en 2024 y Comparación con 2023» y «(2023 vs.
+ * 2024)» sobre prosa y cifras de 2025, que es lo que hacía parecer que III.C no se había
+ * actualizado.
+ *
+ * `proyeccion` va con `year + 1` a propósito: ese apartado es la expectativa del año
+ * siguiente, no del gravable.
+ *
+ * Devuelve texto EN CRUDO, como el resto de los ayudantes de III.C: cada ruta escapa con lo
+ * suyo.
+ */
+export function titulosSectorial(tituloSector, year) {
+  const s = tituloSector || '';
+  return {
+    apartado: 'Análisis del Sector de la industria ' + s,
+    comportamiento: 'Comportamiento del Sector de la Industria ' + s
+      + ' en ' + year + ' y Comparación con ' + (year - 1),
+    datosClave: tituloDatosClaveSector(s, year),
+    comercioExterior: 'Importaciones y exportaciones del sector de la industria ' + s,
+    proyeccion: '¿Qué se proyecta para el sector de la industria ' + s + ' en ' + (year + 1) + '?',
+    /* Sin industria ni años: nada que actualizar, y reescribirlo solo arriesga perder el
+       formato del encabezado de la plantilla. */
+    conclusiones: 'Conclusiones y Perspectivas',
+  };
+}
+
+/**
+ * ¿A la corrida guardada le falta algo que el informe de hoy sí coloca?
+ *
+ * `narrativa.introduccion` se añadió el 2026-08-13 y las corridas anteriores no la traen.
+ * Como la clave de caché es solo actividad+año (`claveActividad`), esas entradas se
+ * reutilizan tal cual: el hueco de entrada de III.C se radica con el marcador de pendiente
+ * para siempre y nada explica por qué. Lo consume `ReporteGenerador` para ofrecer regenerar
+ * a mano — no se regenera sola, porque cuesta una cadena de llamadas a Gemini y Claude.
+ *
+ * @param {object|null} entrada  una entrada de `porAnio`, no el documento completo.
+ */
+export function corridaSectorIncompleta(entrada) {
+  if (!entrada) return false;
+  return !(entrada.narrativa && entrada.narrativa.introduccion);
+}
+
 export function generarApartadoSectorial(study, year, wrap, analisisSector) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
   const entrada = entradaSector(analisisSector, year);
 
   if (entrada) {
-    const nombreSector = escaparHtml(entrada.tituloSector);
     const filas = filasDatosClaveSector(entrada.datosClaveTabla).map((f) => f.map(escaparHtml));
     const tabla = filas.length
       ? tablaHTML(
@@ -497,16 +725,18 @@ export function generarApartadoSectorial(study, year, wrap, analisisSector) {
         '\n</p>\n'
       : '';
 
+    const titulos = titulosSectorial(entrada.tituloSector, year);
+    const encabezado = (texto) => '<p>\n<strong>' + escaparHtml(texto) + '</strong>\n</p>\n';
+
     return (
-      '<p>\n<strong>Comportamiento del Sector de la Industria ' + nombreSector + ' en ' + year +
-      ' y Comparación con ' + (year - 1) + '</strong>\n</p>\n' +
+      encabezado(titulos.comportamiento) +
       entrada.narrativa.comportamiento +
       tabla +
-      '<p>\n<strong>Importaciones y exportaciones del sector de la industria ' + nombreSector + '</strong>\n</p>\n' +
+      encabezado(titulos.comercioExterior) +
       entrada.narrativa.comercioExterior +
-      '<p>\n<strong>¿Qué se proyecta para el sector de la industria ' + nombreSector + ' en ' + (year + 1) + '?</strong>\n</p>\n' +
+      encabezado(titulos.proyeccion) +
       entrada.narrativa.proyeccion +
-      '<p>\n<strong>Conclusiones y Perspectivas</strong>\n</p>\n' +
+      encabezado(titulos.conclusiones) +
       entrada.narrativa.conclusiones +
       listaFuentes
     );

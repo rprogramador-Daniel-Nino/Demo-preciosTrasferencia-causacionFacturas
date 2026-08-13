@@ -5,7 +5,9 @@ import axios from 'axios';
 import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle, RefreshCw } from 'lucide-react';
 import mammoth from 'mammoth';
 import { diagnosticarCobertura } from '../services/tablasInforme';
-import { normalizarActividad, claveActividad } from '../services/analisisMercado';
+import {
+  normalizarActividad, claveActividad, corridaSectorIncompleta,
+} from '../services/analisisMercado';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
 } from '../services/pdfReferenceExtractor';
@@ -41,6 +43,23 @@ import {
   subirPlantillaDelEstudio, descargarPlantillaDelEstudio, restaurarPlantillaEnLocal,
 } from '../services/plantillaNube.js';
 import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage.js';
+
+/* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector: ese path pasa
+   por el rewrite de Firebase Hosting, que corta cualquier petición a los 60 s sin importar
+   el timeoutSeconds de la función (ver el comentario junto a GEMINI_CORTE_MS en
+   functions/index.js). La cadena Gemini→Gemini→Claude de este endpoint puede tardar más que
+   eso —el navegador recibía un 502 opaco del borde aunque la función siguiera viva dentro de
+   su propio límite de 180 s—. La función ya tiene cors:true. */
+const URL_ANALISIS_SECTOR =
+  'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector';
+
+/* El endpoint SIEMPRE rehace la corrida y la sobrescribe con `merge`: la decisión de
+   reutilizar lo guardado es de aquí, no de la función. Por eso sirve igual para la
+   generación bajo demanda y para regenerar a mano una corrida vieja. */
+async function pedirAnalisisSector(actividad, year) {
+  const resp = await axios.post(URL_ANALISIS_SECTOR, { actividad, year });
+  return { porAnio: { [String(year)]: resp.data.entrada } };
+}
 
 export default function ReporteGenerador({ study, estudioId, usuario }) {
   const [htmlContent, setHtmlContent] = useState('');
@@ -181,18 +200,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
         if (!yaTieneEsteAnio) {
           if (vivo) setSectorEnCurso(true);
           try {
-            /* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector:
-               ese path pasa por el rewrite de Firebase Hosting, que corta cualquier
-               petición a los 60 s sin importar el timeoutSeconds de la función (ver el
-               comentario junto a GEMINI_CORTE_MS en functions/index.js). La cadena
-               Gemini→Gemini→Claude de este endpoint puede tardar más que eso —el
-               navegador recibía un 502 opaco del borde aunque la función siguiera viva
-               dentro de su propio límite de 180 s. La función ya tiene cors:true. */
-            const resp = await axios.post(
-              'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector',
-              { actividad: actividadTexto, year }
-            );
-            doc = { porAnio: { [String(year)]: resp.data.entrada } };
+            doc = await pedirAnalisisSector(actividadTexto, year);
           } finally {
             if (vivo) setSectorEnCurso(false);
           }
@@ -1437,8 +1445,30 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      (`veredictoRadicacion`, que solo lista problemas) porque generar toma 60-100+ s
      y el usuario necesita saber que ya terminó sin tener que abrir el Word. */
   const anioEstudio = Number(study && study.anio) || null;
-  const sectorListo = !sectorEnCurso && !motivoFalloSector && anioEstudio
-    && !!(analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(anioEstudio)]);
+  const entradaSectorDelAnio = anioEstudio
+    && analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(anioEstudio)];
+  const sectorListo = !sectorEnCurso && !motivoFalloSector && !!entradaSectorDelAnio;
+  const sectorIncompleto = sectorListo && corridaSectorIncompleta(entradaSectorDelAnio);
+
+  /* Rehacer la corrida de esta actividad+año aunque ya haya una guardada. El endpoint
+     siempre regenera; lo que impedía recuperar una corrida vieja era que aquí solo se
+     pedía cuando no existía ninguna. Va a mano y no automático porque cuesta una cadena
+     de llamadas a Gemini y Claude. */
+  const regenerarSector = async () => {
+    const actividadTexto = ((study && (study.actividad_especifica || study.objeto)) || '').trim();
+    if (!actividadTexto || !anioEstudio) return;
+    setMotivoFalloSector(null);
+    setSectorEnCurso(true);
+    try {
+      setAnalisisSector(await pedirAnalisisSector(actividadTexto, anioEstudio));
+    } catch (err) {
+      console.error('No se pudo regenerar el análisis de sector:', err);
+      setAnalisisSector(null);
+      setMotivoFalloSector(err?.response?.data?.error || err?.message || 'error desconocido');
+    } finally {
+      setSectorEnCurso(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -1581,9 +1611,29 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           Generando el análisis del sector (III.C) para esta actividad y año — puede tardar uno o dos minutos.
         </div>
       )}
-      {sectorListo && (
+      {sectorListo && !sectorIncompleto && (
         <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300 rounded-xl px-5 py-3 text-xs leading-relaxed">
           ✓ Análisis del sector (III.C) generado para esta actividad y año {anioEstudio}.
+        </div>
+      )}
+      {/* La corrida existe pero es de una versión anterior del generador. Se dice cuál es
+          la consecuencia concreta en el documento —el hueco de entrada de III.C sale con el
+          marcador de pendiente— en vez de un «está desactualizada» que no orienta. */}
+      {sectorIncompleto && (
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+          <span>
+            El análisis del sector (III.C) de esta actividad y año {anioEstudio} viene de una
+            corrida anterior que no redactó el párrafo de entrada, así que ese hueco sale con
+            el marcador de pendiente. Regenéralo para que lo traiga.
+          </span>
+          <button
+            type="button"
+            onClick={regenerarSector}
+            className="shrink-0 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/40 font-medium"
+            title="Rehace la corrida del sector para esta actividad y año, aunque ya haya una guardada (tarda uno o dos minutos)"
+          >
+            Regenerar III.C
+          </button>
         </div>
       )}
 

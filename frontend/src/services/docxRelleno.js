@@ -63,7 +63,7 @@ import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
    importa de este módulo ni de `tablasHtmlInforme.js`. */
 import {
   resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
-  fuenteDatosClaveSector,
+  fuenteDatosClaveSector, titulosSectorial,
 } from './analisisMercado.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
@@ -328,6 +328,76 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
   return doc.xml;
 }
 
+/* La numeración con la que el informe del cliente rotula sus apartados: «C. », «1.4 »,
+   «III. ». Es SUYA —su índice y sus referencias en el texto dependen de ella, igual que el
+   «Tabla N.» que conserva `reescribirRotuloHtml`—, así que al reescribir el texto de un
+   encabezado se vuelve a poner delante en vez de imponer una propia. */
+const RX_PREFIJO_ENCABEZADO = /^\s*(?:[A-Z]|[IVXLC]{1,5}|\d+(?:\.\d+)*)[.)]?\s+/;
+
+/** El prefijo de numeración de un encabezado, o cadena vacía si no lo lleva. */
+export function prefijoDeEncabezado(texto) {
+  const m = RX_PREFIJO_ENCABEZADO.exec(String(texto || ''));
+  if (!m) return '';
+  /* Sin separador (punto o paréntesis) solo cuenta como numeración si es un número o un
+     romano: «Conclusiones y Perspectivas» empieza por una palabra y su primera letra no
+     es un rótulo. */
+  if (!/[.)]/.test(m[0]) && !/^\s*(?:[IVXLC]{1,5}|\d)/.test(m[0])) return '';
+  return m[0];
+}
+
+/**
+ * Reescribe el texto de un párrafo de OOXML conservando su formato.
+ *
+ * Word parte una frase en varios `<w:r><w:t>` por rsid o por el corrector —el encabezado
+ * «Datos Clave del Sector…» de la plantilla de END GAME viene en dos—, así que el texto
+ * nuevo entra completo en el PRIMER `<w:t>` y los demás se vacían. Vaciarlos y no
+ * eliminarlos deja el párrafo válido y conserva las propiedades de cada run.
+ *
+ * @returns {string} el párrafo con el texto nuevo, o el original si no tenía ningún `<w:t>`.
+ */
+export function reescribirTextoParrafoOoxml(parrafoXml, textoNuevo) {
+  const xml = String(parrafoXml || '');
+  if (!/<w:t(?:\s[^>]*)?>/.test(xml)) return xml;
+  let primero = true;
+  return xml.replace(/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/g, () => {
+    if (!primero) return '<w:t xml:space="preserve"></w:t>';
+    primero = false;
+    return '<w:t xml:space="preserve">' + escaparXml(textoNuevo) + '</w:t>';
+  });
+}
+
+/**
+ * Escribe los encabezados de III.C con la industria y los años del estudio.
+ *
+ * Los `hitos` vienen de `localizarHitos`, que ya los localizó en orden y saltándose las
+ * entradas de la tabla de contenido. Se recorre de atrás hacia adelante porque cada
+ * reescritura mueve los índices de lo que va después.
+ *
+ * @param {string} xml
+ * @param {Array<{inicio:number, finPropio:number}|null>} hitos
+ * @param {Array<string|null>} titulos  uno por hito; `null` deja ese encabezado como está.
+ */
+function reescribirEncabezadosOoxml(xml, hitos, titulos) {
+  let salida = String(xml || '');
+  for (let i = titulos.length - 1; i >= 0; i -= 1) {
+    const hito = hitos[i];
+    if (!hito || !titulos[i]) continue;
+    /* `finPropio` se extiende PASADA la tabla que sigue al encabezado (ver
+       `localizarHitos`), así que no sirve para delimitar el párrafo: se toma el primer
+       `</w:p>` desde su inicio, que es el cierre del propio encabezado. */
+    const cierre = salida.indexOf('</w:p>', hito.inicio);
+    if (cierre < 0) continue;
+    const fin = cierre + '</w:p>'.length;
+    const parrafo = salida.slice(hito.inicio, fin);
+    const nuevo = reescribirTextoParrafoOoxml(
+      parrafo, prefijoDeEncabezado(textoPlanoOoxml(parrafo)) + titulos[i]);
+    if (nuevo === parrafo) continue;
+    console.log('[docxRelleno] encabezado de III.C reescrito: ' + JSON.stringify(titulos[i]));
+    salida = salida.slice(0, hito.inicio) + nuevo + salida.slice(fin);
+  }
+  return salida;
+}
+
 /** Mismo texto que `marcadorApartadoPendiente`, pero para un tema puntual de III.C
  *  en vez de todo el apartado de III.A/III.B. */
 function marcadorTemaSectorPendiente(tema, year) {
@@ -403,6 +473,21 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     avisos,
     'Análisis del Sector'
   );
+
+  /* Los encabezados, después de la prosa: `reemplazarPorHitos` no los toca por diseño (solo
+     el hueco entre uno y el siguiente), así que se quedaban con la industria y los años del
+     informe de referencia. Se localizan de nuevo sobre el XML ya modificado.
+     "Datos Clave del Sector" NO va aquí —su rótulo lo reescribe `generarTablaOoxml` al
+     regenerar la tabla entera, más abajo— y "Conclusiones y Perspectivas" tampoco, porque no
+     lleva ni industria ni años. */
+  if (entrada) {
+    const t = titulosSectorial(entrada.tituloSector, year);
+    doc.aplicar((actual) => reescribirEncabezadosOoxml(
+      actual,
+      localizarHitos(actual, titulos),
+      [t.apartado, t.comportamiento, null, t.comercioExterior, t.proyeccion, null, null]
+    ));
+  }
 
   if (entrada && entrada.datosClaveTabla && entrada.datosClaveTabla.length) {
     const encontrada = doc.reemplazar('Datos Clave del Sector', () => generarTablaOoxml(
