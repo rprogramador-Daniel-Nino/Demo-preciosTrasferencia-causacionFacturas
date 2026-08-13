@@ -208,20 +208,23 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'Comportamiento del sector:\n' + resumir(datos.datosComportamiento) + '\n\n' +
     'Comercio exterior:\n' + resumir(datos.datosComercioExterior) + '\n\n' +
     'Proyección para ' + (year + 1) + ':\n' + resumir(datos.datosProyeccion) + '\n\n' +
-    'Redacta cuatro apartados en español, tono técnico-formal, denso en cifras concretas y ' +
+    'Redacta cinco apartados en español, tono técnico-formal, denso en cifras concretas y ' +
     'comparaciones año a año (2-3 párrafos sustanciales cada uno cuando el material lo permita, nunca ' +
     'una lista de frases sueltas), más un título corto para los encabezados de esta sección:\n' +
     '1. "tituloSector": el fragmento que completa la frase "Análisis del Sector de la industria ___", ' +
     'con la preposición correcta en español y en 2 a 6 palabras (ej. "del software y los videojuegos", ' +
     '"de la construcción", "de los alimentos procesados") — a partir de la actividad de arriba, no la ' +
     'copies completa, resúmela.\n' +
-    '2. "comportamiento": comportamiento del sector en ' + year + ' y comparación con ' + y1 + ', citando ' +
+    '2. "introduccion": 1-2 frases de contexto general que sitúen el sector antes de entrar en el ' +
+    'detalle de comportamiento, comercio exterior y proyección — puede ser cualitativo, sin cifra ' +
+    'nueva si los datos de arriba no traen una que sirva para esto.\n' +
+    '3. "comportamiento": comportamiento del sector en ' + year + ' y comparación con ' + y1 + ', citando ' +
     'las cifras concretas de empleo, tamaño de mercado, PIB/valor agregado y su variación % que traigan ' +
     'los datos de arriba — no los resumas en una frase, desarróllalos.\n' +
-    '3. "comercioExterior": importaciones y exportaciones del sector, con montos y variación % año a año.\n' +
-    '4. "proyeccion": qué se proyecta para el sector en ' + (year + 1) + ', con la cifra o el porcentaje ' +
+    '4. "comercioExterior": importaciones y exportaciones del sector, con montos y variación % año a año.\n' +
+    '5. "proyeccion": qué se proyecta para el sector en ' + (year + 1) + ', con la cifra o el porcentaje ' +
     'proyectado si los datos lo traen.\n' +
-    '5. "conclusiones": conclusiones y perspectivas del sector — no una repetición de lo ya dicho, sino ' +
+    '6. "conclusiones": conclusiones y perspectivas del sector — no una repetición de lo ya dicho, sino ' +
     'qué implica para evaluar la comparabilidad de la parte examinada (riesgos, oportunidades, retos del ' +
     'sector que el analista deba tener presentes).\n\n' +
     'Reglas estrictas:\n' +
@@ -229,10 +232,10 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'apartado, redáctalo en términos cualitativos sin inventar números.\n' +
     '- Prefiere siempre la cifra concreta y su fuente sobre la afirmación vaga ("creció de forma ' +
     'importante" sin el dato detrás no sirve; "generó 250.000 empleos, un incremento del 13,7%" sí).\n' +
-    '- Cada apartado (excepto tituloSector) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
+    '- Cada apartado (excepto tituloSector e introduccion) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
     'tablas (la tabla de datos clave se arma aparte, no la repitas).\n' +
     '- Responde ÚNICAMENTE con un objeto JSON (sin marcas markdown) con esta forma exacta:\n' +
-    '{ "tituloSector": "...", "comportamiento": "<p>...</p>", "comercioExterior": "<p>...</p>", ' +
+    '{ "tituloSector": "...", "introduccion": "<p>...</p>", "comportamiento": "<p>...</p>", "comercioExterior": "<p>...</p>", ' +
     '"proyeccion": "<p>...</p>", "conclusiones": "<p>...</p>", "fuentesCitadas": [{"titulo":"...","url":"..."}] }'
   );
 }
@@ -252,7 +255,7 @@ function parsearRespuestaRedaccionSector(texto) {
   const fuentesCitadas = (Array.isArray(bruto.fuentesCitadas) ? bruto.fuentesCitadas : [])
     .filter((f) => f && typeof f.titulo === 'string' && f.titulo.trim() && typeof f.url === 'string' && f.url.trim());
 
-  return {
+  const resultado = {
     tituloSector: bruto.tituloSector.trim(),
     comportamiento: bruto.comportamiento,
     comercioExterior: bruto.comercioExterior,
@@ -260,6 +263,11 @@ function parsearRespuestaRedaccionSector(texto) {
     conclusiones: bruto.conclusiones,
     fuentesCitadas,
   };
+  if (typeof bruto.introduccion === 'string'
+    && bruto.introduccion.replace(/<[^>]*>/g, '').trim().length >= MIN_LARGO_APARTADO) {
+    resultado.introduccion = bruto.introduccion;
+  }
+  return resultado;
 }
 
 /** Entrada de `porAnio` para un año dado. No escribe nada por sí misma — eso
@@ -269,17 +277,20 @@ function armarEntradaAnio({ datosVerificados, narrativa, ahora }) {
   if (!narrativa) {
     throw new Error('Falta la narrativa redactada: no se arma la entrada del año.');
   }
+  const narrativaEntrada = {
+    comportamiento: narrativa.comportamiento,
+    comercioExterior: narrativa.comercioExterior,
+    proyeccion: narrativa.proyeccion,
+    conclusiones: narrativa.conclusiones,
+    fuentesCitadas: narrativa.fuentesCitadas,
+  };
+  if (typeof narrativa.introduccion === 'string') narrativaEntrada.introduccion = narrativa.introduccion;
+
   return {
     actualizadoEn: ahora,
     tituloSector: narrativa.tituloSector,
     datosClaveTabla: datosVerificados.datosClaveTabla,
-    narrativa: {
-      comportamiento: narrativa.comportamiento,
-      comercioExterior: narrativa.comercioExterior,
-      proyeccion: narrativa.proyeccion,
-      conclusiones: narrativa.conclusiones,
-      fuentesCitadas: narrativa.fuentesCitadas,
-    },
+    narrativa: narrativaEntrada,
   };
 }
 

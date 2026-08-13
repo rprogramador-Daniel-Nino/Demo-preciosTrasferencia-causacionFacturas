@@ -201,6 +201,38 @@ test('parsearRespuestaRedaccionSector conserva fuentesCitadas bien formadas y de
   assert.strictEqual(r.fuentesCitadas[0].titulo, 'DANE');
 });
 
+test('construirPromptRedaccionSector pide el apartado "introduccion"', () => {
+  const prompt = construirPromptRedaccionSector({
+    datosClaveTabla: [], datosComportamiento: [], datosComercioExterior: [], datosProyeccion: [],
+  }, 'desarrollo de videojuegos', 2025);
+  assert.ok(prompt.includes('introduccion'), 'el prompt no pide "introduccion"');
+});
+
+test('parsearRespuestaRedaccionSector incluye "introduccion" cuando viene con contenido', () => {
+  const texto = JSON.stringify({
+    tituloSector: 'de los videojuegos',
+    introduccion: '<p>El sector de videojuegos en Colombia mostró dinamismo en 2025.</p>',
+    comportamiento: '<p>Creció un 11 % frente a 2024, según 6Wresearch.</p>',
+    comercioExterior: '<p>Las exportaciones subieron 419 % en 2024, según ProColombia.</p>',
+    proyeccion: '<p>Se proyecta un CAGR del 11 % para 2026.</p>',
+    conclusiones: '<p>El segmento móvil concentra el mayor dinamismo del sector.</p>',
+  });
+  const r = parsearRespuestaRedaccionSector(texto);
+  assert.ok(r.introduccion.includes('dinamismo'));
+});
+
+test('parsearRespuestaRedaccionSector no exige "introduccion" para aceptar la redacción', () => {
+  const texto = JSON.stringify({
+    tituloSector: 'de los videojuegos',
+    comportamiento: '<p>Creció un 11 % frente a 2024, según 6Wresearch.</p>',
+    comercioExterior: '<p>Las exportaciones subieron 419 % en 2024, según ProColombia.</p>',
+    proyeccion: '<p>Se proyecta un CAGR del 11 % para 2026.</p>',
+    conclusiones: '<p>El segmento móvil concentra el mayor dinamismo del sector.</p>',
+  });
+  const r = parsearRespuestaRedaccionSector(texto);
+  assert.strictEqual('introduccion' in r, false);
+});
+
 test('armarEntradaAnio exige narrativa y arma la forma final, con el tituloSector que redactó Claude', () => {
   const ahora = new Date('2026-08-04T00:00:00Z');
   assert.throws(() => armarEntradaAnio({ datosVerificados: { datosClaveTabla: [] }, narrativa: null, ahora }), /narrativa/);
