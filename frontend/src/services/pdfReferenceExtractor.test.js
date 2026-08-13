@@ -469,12 +469,39 @@ test('una dirección web dentro de una nota no se confunde con una llamada', asy
 test('normalizarCaracteresMatematicos traduce simbolos matematicos de LaTeX/Unicode a ASCII legible', () => {
   // Mayúsculas cursivas matemáticas (𝐴𝑅)
   assert.strictEqual(normalizarCaracteresMatematicos('𝐴𝑅 Adjustment'), 'AR Adjustment');
-  
-  // Ecuación corrupta real de la plantilla
-  const ecuacionCorrupta = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴'; // Contiene caracteres cursivos y negritas mezclados
-  assert.strictEqual(normalizarCaracteresMatematicos(ecuacionCorrupta).replace(/\s+/g, ' '), 'AAAAAATTTT AA');
+
+  /* Caracteres cursivos y negritas mezclados, que es como llegan las ecuaciones del informe.
+     La cadena de este caso NO puede ser «AAAAAATTTT AA»: ésa es el numerador suelto de la
+     fracción del ajuste, y desde que la función reconstruye esas fórmulas se vacía a propósito
+     —lo comprueba el test siguiente—. */
+  assert.strictEqual(
+    normalizarCaracteresMatematicos('𝐴𝐴𝑇𝑇 𝐴𝐴').replace(/\s+/g, ' '), 'AATT AA');
 
   // Letras matemáticas combinadas: negritas, cursivas, sans-serif, monospace
   const combinadas = '𝐉𝑲𝖫𝗤𝚡'; // J negrita, K cursiva, L sans-serif, Q sans-serif negrita, x monospace
   assert.strictEqual(normalizarCaracteresMatematicos(combinadas), 'JKLQx');
+});
+
+test('la fórmula del ajuste se reconstruye en una línea y las otras dos se vacían', () => {
+  /* Las ecuaciones de ajuste de cuentas por cobrar y por pagar llevan una fracción, y el PDF las
+     entrega en tres renglones: numerador, cuerpo y denominador. Sueltos y con los caracteres
+     matemáticos corruptos no dicen nada, así que el cuerpo se reconstruye entero y los otros dos
+     se vacían. El `tipo` es el que decide si el ajuste es de cobrar (AR) o de pagar (AP).
+
+     Este test acompaña a esa reconstrucción, que llegó sin cobertura propia: sin él, el único
+     test que tocaba la función afirmaba lo contrario —que el numerador se conserva— y quedaba en
+     rojo sin decir por qué. */
+  const numerador = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴';
+  assert.strictEqual(normalizarCaracteresMatematicos(numerador), '',
+    'el numerador suelto de la fracción debería vaciarse');
+
+  /* El cuerpo, con el tipo de ajuste que corresponda. */
+  const cuerpo = 'AAAA AAAAAAAAAAAAAAAAAAA RR (1 + RR)';
+  assert.match(normalizarCaracteresMatematicos(cuerpo, 'AR'), /^AR Adjustment = /);
+  assert.match(normalizarCaracteresMatematicos(cuerpo, 'AP'), /^AP Adjustment = /);
+  /* Sin tipo se cae a cuentas por cobrar, que es la primera de las dos en el informe. */
+  assert.match(normalizarCaracteresMatematicos(cuerpo), /^AR Adjustment = /);
+
+  /* Y lo que no es una de esas tres líneas pasa igual que siempre. */
+  assert.strictEqual(normalizarCaracteresMatematicos('Total activos'), 'Total activos');
 });
