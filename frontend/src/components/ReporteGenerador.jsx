@@ -16,6 +16,9 @@ import {
   guardarDocx, leerDocx, guardarDocxMarcado, leerDocxMarcado, borrarDocxMarcado,
 } from '../services/plantillaStore';
 import { leerAnalisisMercado, leerAnalisisSector } from '../services/firestoreRepo';
+import {
+  necesitaRedaccion, redactarNarrativaMacroEnVivo, guardarNarrativaMacroCache, leerNarrativaMacroCache,
+} from '../services/analisisMercadoRedaccion';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
 import {
   proponerMarcas, aplicarMarcas,
@@ -49,6 +52,10 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      responde — los generadores de analisisMercado.js caen al respaldo local
      embebido en el código cuando reciben null. */
   const [analisisMercado, setAnalisisMercado] = useState(null);
+  /* true mientras la redacción en vivo de la narrativa macro está en curso — mismo
+     propósito que sectorEnCurso más abajo, pero mucho más corta (un solo round-trip
+     a Claude/Gemini, sin búsqueda: segundos, no minutos). */
+  const [redactandoMacro, setRedactandoMacro] = useState(false);
   /* Análisis de sector (III.C) para la actividad de este estudio. A diferencia
      de analisisMercado (un solo documento global), este es por actividad+año
      — ver el efecto más abajo, que lo lee o lo genera bajo demanda. null
@@ -96,13 +103,43 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
 
+  /* Dispara la redacción en vivo si hace falta, o aplica el caché de localStorage si ya
+     existe uno vigente — mismo criterio en la carga inicial y en "Actualizar información".
+     `datos` es lo que acaba de devolver leerAnalisisMercado() (puede ser null). */
+  function aplicarNarrativaMacro(datos) {
+    if (!datos) return;
+    if (necesitaRedaccion(estudioId, datos)) {
+      setRedactandoMacro(true);
+      redactarNarrativaMacroEnVivo(datos.series || {}, Number(study && study.anio) || 2025)
+        .then((narrativaEnVivo) => {
+          if (!narrativaEnVivo) return; // se queda con el marcador especifico, no bloquea nada
+          const seriesActualizadoEnMs = datos.actualizadoEn && datos.actualizadoEn.toMillis
+            ? datos.actualizadoEn.toMillis() : Date.now();
+          guardarNarrativaMacroCache(estudioId, seriesActualizadoEnMs, narrativaEnVivo);
+          setAnalisisMercado((actual) => ({
+            ...actual,
+            narrativa: { ...(actual && actual.narrativa), ...narrativaEnVivo },
+          }));
+        })
+        .finally(() => setRedactandoMacro(false));
+    } else {
+      const cache = leerNarrativaMacroCache(estudioId);
+      if (cache) {
+        setAnalisisMercado((actual) => ({
+          ...actual,
+          narrativa: { ...(actual && actual.narrativa), ...cache.narrativa },
+        }));
+      }
+    }
+  }
+
   /* Documento global (no depende de estudioId): una lectura por sesión basta,
      el cron que lo refresca corre una vez al mes. Si falla, se deja null: los
      generadores de la Sección III ya saben caer al respaldo local. */
   useEffect(() => {
     let vivo = true;
     leerAnalisisMercado()
-      .then((datos) => { if (vivo) setAnalisisMercado(datos); })
+      .then((datos) => { if (vivo) { setAnalisisMercado(datos); aplicarNarrativaMacro(datos); } })
       .catch((err) => {
         console.error('No se pudo leer el análisis de mercado de Firestore:', err);
         if (vivo) setAnalisisMercado(null);
@@ -1086,6 +1123,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     try {
       const macro = await leerAnalisisMercado();
       setAnalisisMercado(macro);
+      aplicarNarrativaMacro(macro);
 
       /* El del sector se rehace solo si el estudio trae con qué buscarlo, y se lee con la
          misma clave que la carga inicial —solo la actividad normalizada—. Si no hay una
@@ -1468,6 +1506,12 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       {/* Estado del análisis de sector (III.C): en curso o ya listo para esta
           actividad+año. Aparte del semáforo de abajo porque ese banner solo lista
           problemas — esto es información de estado, no una advertencia. */}
+      {redactandoMacro && (
+        <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          Redactando el panorama económico (III.A/III.B) para este estudio — puede tardar unos segundos.
+        </div>
+      )}
       {sectorEnCurso && (
         <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
