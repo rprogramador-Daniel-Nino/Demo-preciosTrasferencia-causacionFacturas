@@ -1136,10 +1136,28 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       }
 
       /* Y la vista previa, que es donde se comprueba si el documento quedó completo: se
-         rehace con la plantilla marcada del estudio, igual que la descarga. */
+         rehace con la plantilla marcada del estudio, igual que la descarga.
+
+         LAS DOS RUTAS, y esto es lo que faltaba. La rama de .docx estaba desde el principio;
+         la de plantilla PDF no, así que con un PDF este botón leía los análisis y se iba sin
+         volver a renderizar. Que pareciera funcionar era casualidad: `leerAnalisisMercado`
+         devuelve un objeto nuevo, `setAnalisisMercado` cambiaba la referencia y el efecto de
+         más arriba —que sí renderiza— se disparaba de rebote. Pero cuando el estudio todavía
+         no tiene análisis macro generado esa función devuelve `null`, y asignar `null` sobre
+         `null` no cambia ninguna referencia: el botón no hacía nada en absoluto.
+
+         Ese rebote era además el ÚNICO camino por el que la vista previa recogía cambios en
+         los datos del estudio —comparables, cifras, año—, porque el efecto que renderiza no
+         los lista en sus dependencias. De ahí que la tabla del rango y la frase que la
+         comenta salieran coherentes entre sí y desactualizadas las dos: mismo render viejo. */
       if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
         const marcado = await leerDocxMarcado(plantillaActiva.id);
         if (marcado) await previsualizarDocx(marcado);
+      } else if (plantillaActiva && plantillaActiva.marcada) {
+        const marcado = await leerMarcado(plantillaActiva.id);
+        if (marcado) {
+          renderizarYAvisar(marcado, recursosCargados, plantillaActiva.huecos || 0);
+        }
       }
     } catch (err) {
       console.error('[generador] no se pudo actualizar la información', err);
