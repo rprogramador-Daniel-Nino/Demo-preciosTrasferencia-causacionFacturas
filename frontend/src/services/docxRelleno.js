@@ -60,7 +60,10 @@ import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
    de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
    misma fecha de consulta. Sin riesgo de import circular: `analisisMercado.js` no
    importa de este módulo ni de `tablasHtmlInforme.js`. */
-import { resolverSerie } from './analisisMercado.js';
+import {
+  resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
+  fuenteDatosClaveSector,
+} from './analisisMercado.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -332,15 +335,6 @@ function marcadorTemaSectorPendiente(tema, year) {
     '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
 }
 
-/** Fila de la tabla "Datos Clave del Sector", en la forma que espera `generarTablaOoxml`. */
-function filasDatosClaveSector(datosClaveTabla) {
-  return (datosClaveTabla || []).map((f) => [
-    String(f.indicador || ''),
-    f.valorAnterior ? String(f.valorAnterior) : '—',
-    String(f.valorActual || ''),
-  ]);
-}
-
 /**
  * Reemplaza los cuatro bloques de prosa de III.C (Comportamiento, Importaciones y
  * exportaciones, Proyección, Conclusiones y Perspectivas) y la tabla "Datos Clave del
@@ -396,7 +390,11 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     [
       bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
       bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
-      () => null,
+      /* Las notas al pie de la tabla de datos clave, que en la plantilla citan las fuentes
+         de las cifras del informe de referencia. Se cambian por las de esta corrida, y solo
+         si hay alguna — mismo criterio y mismo texto que la ruta HTML
+         (`actualizarApartadoSectorialHtml` en `tablasHtmlInforme.js`). */
+      () => parrafoFuenteOoxml(fuenteDatosClaveSector(entrada)) || null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
       bloque(entrada && entrada.narrativa.proyeccion, 'proyección del sector'),
       bloque(entrada && entrada.narrativa.conclusiones, 'conclusiones del sector'),
@@ -407,9 +405,8 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
 
   if (entrada && entrada.datosClaveTabla && entrada.datosClaveTabla.length) {
     const encontrada = doc.reemplazar('Datos Clave del Sector', () => generarTablaOoxml(
-      'Datos Clave del Sector de la Industria ' + (entrada.tituloSector || '') + ' en Colombia (' +
-        (year - 1) + ' vs. ' + year + ')',
-      ['Indicador Clave', String(year - 1), String(year)],
+      tituloDatosClaveSector(entrada.tituloSector, year),
+      cabecerasDatosClaveSector(year),
       filasDatosClaveSector(entrada.datosClaveTabla),
       null
     ));
