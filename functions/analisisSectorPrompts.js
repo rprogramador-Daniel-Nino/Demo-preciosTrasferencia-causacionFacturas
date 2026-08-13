@@ -215,9 +215,18 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'con la preposición correcta en español y en 2 a 6 palabras (ej. "del software y los videojuegos", ' +
     '"de la construcción", "de los alimentos procesados") — a partir de la actividad de arriba, no la ' +
     'copies completa, resúmela.\n' +
-    '2. "introduccion": 1-2 frases de contexto general que sitúen el sector antes de entrar en el ' +
-    'detalle de comportamiento, comercio exterior y proyección — puede ser cualitativo, sin cifra ' +
-    'nueva si los datos de arriba no traen una que sirva para esto.\n' +
+    /* Antes pedía «1-2 frases» y salían unos 470 caracteres. Es el párrafo que abre III.C
+       —lo primero que se lee del apartado— y tiene que sostenerse solo, así que se pide con
+       el mismo cuerpo que los demás. Lo que sí se conserva es que pueda ser cualitativo: los
+       datos verificados alimentan los apartados de detalle, y exigirle cifras propias a la
+       entrada la empujaría a repetirlas o a inventarlas. */
+    '2. "introduccion": 2 a 3 párrafos que sitúen el sector antes de entrar en el detalle — qué ' +
+    'actividad abarca, cómo se inserta en la economía colombiana, qué lo caracteriza ' +
+    'estructuralmente (cadena de valor, tipo de demanda, grado de formalización, dependencia ' +
+    'tecnológica o exportadora) y por qué importa para evaluar a una empresa que opera en él. ' +
+    'Puede ser cualitativo, sin cifra nueva, si los datos de arriba no traen una que sirva aquí. ' +
+    'No adelantes el contenido de los apartados 3, 4 y 5: la entrada da el marco, no el detalle ' +
+    'de comportamiento, comercio exterior ni proyección.\n' +
     '3. "comportamiento": comportamiento del sector en ' + year + ' y comparación con ' + y1 + ', citando ' +
     'las cifras concretas de empleo, tamaño de mercado, PIB/valor agregado y su variación % que traigan ' +
     'los datos de arriba — no los resumas en una frase, desarróllalos.\n' +
@@ -232,7 +241,7 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'apartado, redáctalo en términos cualitativos sin inventar números.\n' +
     '- Prefiere siempre la cifra concreta y su fuente sobre la afirmación vaga ("creció de forma ' +
     'importante" sin el dato detrás no sirve; "generó 250.000 empleos, un incremento del 13,7%" sí).\n' +
-    '- Cada apartado (excepto tituloSector e introduccion) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
+    '- Cada apartado (excepto tituloSector) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
     'tablas (la tabla de datos clave se arma aparte, no la repitas).\n' +
     '- Responde ÚNICAMENTE con un objeto JSON (sin marcas markdown) con esta forma exacta:\n' +
     '{ "tituloSector": "...", "introduccion": "<p>...</p>", "comportamiento": "<p>...</p>", "comercioExterior": "<p>...</p>", ' +
