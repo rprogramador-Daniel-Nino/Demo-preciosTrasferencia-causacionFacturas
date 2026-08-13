@@ -22,7 +22,10 @@ import {
   MOTIVO_NO_APARECE, MOTIVO_SOLAPE, MOTIVO_SIN_APARICION_LIBRE,
 } from '../services/plantillaMarcador.js';
 import { renderizar } from '../services/plantillaRenderer.js';
-import { revisarAntesDeGenerar, valoresDeReferencia, revisarSalidaRenderizada } from '../services/plantillaGuardas.js';
+import {
+  revisarAntesDeGenerar, valoresDeReferencia, revisarSalidaRenderizada,
+  sustituirDatosDeReferencia, TRAMO_HTML,
+} from '../services/plantillaGuardas.js';
 import { evaluarRadicacion } from '../services/semaforoRadicacion.js';
 import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
@@ -313,12 +316,23 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
        comprueba de verdad el objetivo de todo este trabajo. */
     const valores = valoresDeReferencia(htmlMarcado);
     const nitRef = valores.find((v) => v.campo === 'nit');
-    setHtmlContent(r.html);
-    /* La cobertura se mide sobre el render, no sobre la plantilla en crudo: es el
-       documento que se va a radicar. Antes solo se calculaba en la ruta por
-       literales, así que quien trabajaba con plantilla marcada —la ruta buena— no
-       se enteraba de que le faltaban las series macro o el análisis del sector. */
-    revisarCobertura(r.html, { valores, avisosTablas: r.avisosTablas, camposVacios: r.vacios });
+
+    /* Y se CORRIGEN las que se pueden corregir sin riesgo, no solo se avisan. Detectarlas
+       dejaba el trabajo al ojo de quien radica sobre un documento de 112 páginas.
+       `sustituirDatosDeReferencia` existía desde el 2026-08-12 con sus pruebas, pero no
+       estaba conectada a ninguna ruta: era el ajuste que faltaba. Lo que no puede corregir
+       —un valor ambiguo porque otro lo contiene, o partido entre dos tramos— lo devuelve en
+       `omitidos`, y de eso sí se avisa. */
+    const correccion = sustituirDatosDeReferencia(r.html, {
+      estudio: study, valores, rxTramo: TRAMO_HTML,
+    });
+    const htmlFinal = correccion.xml;
+
+    setHtmlContent(htmlFinal);
+    /* La cobertura se mide sobre el render CORREGIDO, no sobre la plantilla en crudo ni
+       sobre el render sin corregir: es el documento que se va a radicar, y contar como
+       fuga algo que se acaba de arreglar es lo que enseña a ignorar el banner. */
+    revisarCobertura(htmlFinal, { valores, avisosTablas: r.avisosTablas, camposVacios: r.vacios });
     /* Las tablas del motor que la plantilla no trae. Mismo aviso que en la ruta .docx:
        una tabla que no se regenera se queda con los datos del informe del que salió la
        plantilla, y sin decirlo el fallo llega hasta la radicación. */
@@ -335,7 +349,31 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           'añadir ese nombre.',
       }]
       : [];
-    setAvisos(avisosDeTablas.concat(revisarAntesDeGenerar({
+
+    /* Qué se corrigió y qué no. Lo corregido se dice porque cambia el documento sin que nadie
+       lo haya pedido explícitamente, y quien radica tiene derecho a saberlo; lo omitido,
+       porque sigue siendo un dato del contribuyente anterior que hay que mirar a mano. */
+    const avisosDeFugas = [];
+    if (correccion.sustituidos.length) {
+      avisosDeFugas.push({
+        nivel: 'info',
+        origen: 'fugas',
+        texto: 'Se reemplazaron datos del informe de referencia que el marcado no alcanzó: ' +
+          correccion.sustituidos
+            .map((s) => '«' + s.valor + '» → «' + s.nuevo + '» (' + s.cuenta + ')')
+            .join(' · ') + '.',
+      });
+    }
+    if (correccion.omitidos.length) {
+      avisosDeFugas.push({
+        nivel: 'aviso',
+        origen: 'fugas',
+        texto: 'Esto no se pudo reemplazar solo: ' +
+          correccion.omitidos.map((o) => o.motivo).join(' · '),
+      });
+    }
+
+    setAvisos(avisosDeTablas.concat(avisosDeFugas).concat(revisarAntesDeGenerar({
       estudio: study,
       /* Sin NIT de referencia la guarda no opina, que es lo correcto: no hay
          con qué comparar. */

@@ -31,6 +31,100 @@ const soloTexto = (html) => String(html || '').replace(/<[^>]*>/g, ' ');
 
 const normalizar = (v) => String(v == null ? '' : v).replace(/[\s.]/g, '').toUpperCase();
 
+const escaparRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/* Un tramo de texto sustituible, por ruta. En el OOXML de Word es el contenido de un `<w:t>`; en
+   el HTML renderizado, lo que hay entre el cierre de una etiqueta y la apertura de la siguiente.
+   Los tres grupos son: lo que abre, el texto, lo que cierra.
+
+   Delimitarlo así es lo que mantiene la sustitución fuera de los atributos, y eso no es un
+   detalle: los `data:image/png;base64,…` de las imágenes son megabytes de texto donde cualquier
+   cosa aparece por casualidad. */
+export const TRAMO_OOXML = /(<w:t[^>]*>)([^<]*)(<\/w:t>)/g;
+export const TRAMO_HTML = /(>)([^<]*)(<)/g;
+
+/* ── El mismo nombre escrito de otra forma ──────────────────────────────────────────────────
+   La razón social del contribuyente anterior no aparece de una sola manera en el informe:
+   medido sobre el informe de referencia, «END GAME INTERACTIVE COLOMBIA SAS» sale 27 veces y
+   «END GAME INTERACTIVE COLOMBIA S.A.S» —la misma, con los puntos de la forma jurídica— otras
+   17. El marcado captura una de las dos, así que buscar el valor literal dejaba las otras 17
+   sin detectar ni corregir, y se radicaban con el dato del contribuyente anterior.
+
+   Se comparan ignorando puntos y espacios, que es la misma regla que ya usa `normalizar` para
+   decidir si un valor cambió. Se hace con un índice y no con una expresión regular flexible
+   —«S[.\s]*A[.\s]*S»— por dos razones: el índice es exacto y recorre el texto una sola vez,
+   mientras que un patrón con treinta cuantificadores codiciosos sobre las 300 000 letras del
+   informe invita al backtracking. */
+
+/* El texto sin puntos ni espacios y en mayúsculas, con la posición original de cada carácter
+   que sobrevive. Es lo que permite encontrar una coincidencia sobre el texto normalizado y
+   devolver el tramo exacto del original al que corresponde. */
+function indexarSinPuntuacion(texto) {
+  const s = String(texto == null ? '' : texto);
+  let plano = '';
+  const posiciones = [];
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === '.' || /\s/.test(c)) continue;
+    plano += c.toUpperCase();
+    posiciones.push(i);
+  }
+  return { plano, posiciones };
+}
+
+/* Los tramos `[inicio, fin)` de `texto` donde aparece `valor`, tolerando que la puntuación, los
+   espacios y las mayúsculas no coincidan. Vacío si `valor` no tiene sustancia.
+
+   El mínimo de ocho caracteres no es un número al azar: sin él, un valor corto como «SAS»
+   casaría dentro de cualquier palabra que lleve esas letras seguidas. Los campos testigo son
+   razones sociales, NIT y direcciones —largos por naturaleza—, así que el mínimo no excluye
+   ninguno de los que importan. */
+export function aparicionesTolerantes(texto, valor) {
+  const aguja = indexarSinPuntuacion(valor).plano;
+  if (aguja.length < 8) return [];
+  const { plano, posiciones } = indexarSinPuntuacion(texto);
+  const rangos = [];
+  let desde = 0;
+  for (;;) {
+    const k = plano.indexOf(aguja, desde);
+    if (k === -1) break;
+    rangos.push([posiciones[k], posiciones[k + aguja.length - 1] + 1]);
+    desde = k + aguja.length;
+  }
+  return rangos;
+}
+
+/* Los tramos donde aparece `valor`: tolerando puntuación si el valor da para ello, y literales
+   si es corto. El respaldo literal no es un detalle: «END GAME» son siete caracteres sin
+   espacios y se queda por debajo del mínimo, así que sin él las apariciones del nombre corto
+   dejarían de detectarse, que es justo lo contrario de lo que se busca. */
+export function aparicionesDe(texto, valor) {
+  const flexibles = aparicionesTolerantes(texto, valor);
+  if (flexibles.length) return flexibles;
+  if (indexarSinPuntuacion(valor).plano.length >= 8) return [];
+
+  const s = String(texto == null ? '' : texto);
+  const aguja = String(valor == null ? '' : valor);
+  if (!aguja) return [];
+  const rangos = [];
+  let desde = 0;
+  for (;;) {
+    const pos = s.indexOf(aguja, desde);
+    if (pos === -1) break;
+    rangos.push([pos, pos + aguja.length]);
+    desde = pos + aguja.length;
+  }
+  return rangos;
+}
+
+/* ¿Contiene `contenedor` a `parte`, ignorando puntuación? Para las guardas, que comparan valores
+   entre sí y no contra el documento. */
+const contieneTolerante = (contenedor, parte) => {
+  const a = indexarSinPuntuacion(contenedor).plano;
+  const b = indexarSinPuntuacion(parte).plano;
+  return !!b && a.includes(b);
+};
+
 /* Extrae de la plantilla marcada los valores que traía el informe de
    referencia. El marcado envuelve el texto original sin alterarlo, así que el
    contenido de una marca `data-campo="nit"` es literalmente el NIT del cliente
@@ -66,17 +160,46 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
   const texto = soloTexto(htmlRenderizado);
   if (!texto.trim()) return avisos;
 
-  for (const { campo, valor } of valores || []) {
+  /* Los tramos que ocupan los valores NUEVOS, que es lo que ya está bien. Sin esto el aviso
+     cuenta como fuga las apariciones del valor viejo que viven DENTRO del nuevo, y eso lo
+     dispara cualquier razón social que sea una ampliación de la anterior: con «END GAME
+     INTERACTIVE» → «END GAME INTERACTIVE INC» y «END GAME» → «END GAME INTERACTIVE COLOMBIA
+     SOCIEDAD POR ACCIONES SIMPLIFICADA», un documento SIN una sola fuga real avisaba de 73
+     apariciones de cada uno. Un aviso que grita cuando todo está bien enseña a ignorar el
+     banner, que es justo lo que este banner no puede permitirse.
+
+     Se juntan los nuevos de TODOS los campos y no solo el del que se revisa: «END GAME», que
+     es el valor viejo de `ent`, también vive dentro de «END GAME INTERACTIVE INC», que es el
+     nuevo de `vinc`. */
+  const cubiertos = [];
+  for (const { campo } of valores || []) {
+    const nuevo = valorDeCampo(estudio, campo);
+    if (nuevo === null || nuevo === undefined || !String(nuevo).trim()) continue;
+    cubiertos.push(...aparicionesDe(texto, String(nuevo)));
+  }
+  const estaCubierta = (inicio, fin) =>
+    cubiertos.some(([a, b]) => inicio >= a && fin <= b);
+
+  /* De más largo a más corto, y cada fuga encontrada tapa su propio tramo. Así una sola
+     aparición se atribuye al valor MÁS ESPECÍFICO que la explica y no se cuenta tres veces:
+     «END GAME INTERACTIVE COLOMBIA SAS» contiene «END GAME INTERACTIVE» y «END GAME», así que
+     una única fuga de la razón social vieja producía tres avisos que parecían tres problemas
+     distintos. */
+  const aRevisar = (valores || [])
+    .slice()
+    .sort((a, b) => String(b.valor || '').length - String(a.valor || '').length);
+
+  for (const { campo, valor } of aRevisar) {
     const nuevo = valorDeCampo(estudio, campo);
     if (nuevo === null || normalizar(nuevo) === normalizar(valor)) continue;
 
     let cuenta = 0;
-    let desde = 0;
-    for (;;) {
-      const pos = texto.indexOf(valor, desde);
-      if (pos === -1) break;
+    for (const [ini, fin] of aparicionesDe(texto, valor)) {
+      /* Dentro de un valor nuevo no es una fuga: es la sustitución que sí funcionó. Dentro de
+         una fuga más específica ya reportada, tampoco: es la misma. */
+      if (estaCubierta(ini, fin)) continue;
       cuenta++;
-      desde = pos + valor.length;
+      cubiertos.push([ini, fin]);
     }
     if (!cuenta) continue;
 
@@ -112,16 +235,38 @@ export function revisarSalidaRenderizada({ estudio, htmlRenderizado, valores } =
  *     seguidas del resto. Sin esto, las que ya estaban correctas se convertirían en
  *     «END GAME INTERACTIVE INC INC» a cada generación.
  *
- * Solo se toca texto contenido íntegro en un `<w:t>`: si Word partió el valor entre varios
- * runs se deja como está y se cuenta en `omitidos`, antes que romper el marcado del párrafo.
+ * Solo se toca texto contenido íntegro en un tramo: si Word partió el valor entre varios runs se
+ * deja como está y se cuenta en `omitidos`, antes que romper el marcado del párrafo.
  *
+ * LO YA SUSTITUIDO SE PROTEGE. Cada sustitución se escribe primero como un token y los tokens se
+ * resuelven al final. Sin eso, un par posterior reescribe lo que otro acaba de poner: al cambiar
+ * «END GAME INTERACTIVE COLOMBIA SAS» por «END GAME INTERACTIVE COLOMBIA SOCIEDAD POR ACCIONES
+ * SIMPLIFICADA», el resultado contiene «END GAME INTERACTIVE», que es el valor viejo de la
+ * vinculada, y el par de esa vinculada lo convertía en «END GAME INTERACTIVE INC COLOMBIA
+ * SOCIEDAD POR ACCIONES SIMPLIFICADA». También se protege lo que la guarda 2 decide CONSERVAR,
+ * por el mismo motivo.
+ *
+ * @param {string} texto  el OOXML de `word/document.xml`, o el HTML ya renderizado.
+ * @param {{estudio:object, valores:Array, rxTramo?:RegExp}} opciones  `rxTramo` delimita un tramo
+ *        de texto sustituible; por defecto el `<w:t>` de Word. Para HTML se pasa `TRAMO_HTML`.
  * @returns {{xml:string, sustituidos:Array, omitidos:Array}}
  */
-export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
+export function sustituirDatosDeReferencia(xml, { estudio, valores, rxTramo } = {}) {
   let salida = String(xml || '');
   const sustituidos = [];
   const omitidos = [];
+  const tramo = rxTramo || TRAMO_OOXML;
   if (!salida || !Array.isArray(valores) || !valores.length) return { xml: salida, sustituidos, omitidos };
+
+  /* Marcador para lo ya resuelto. Se comprueba que no exista en el documento antes de usarlo:
+     si existiera, resolverlo al final corrompería texto del informe. */
+  let marca = '@@PT-REF@@';
+  while (salida.includes(marca)) marca += '@';
+  const puestos = [];
+  const tokenizar = (valorFinal) => {
+    puestos.push(valorFinal);
+    return marca + (puestos.length - 1) + marca;
+  };
 
   /* Pares realmente distintos: si el estudio no trae el campo, o trae el mismo valor, no hay
      nada que corregir (mismo contribuyente al año siguiente, por ejemplo). */
@@ -138,13 +283,28 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
   /* De más largo a más corto: el orden importa cuando uno contiene a otro. */
   pares.sort((a, b) => b.viejo.length - a.viejo.length);
 
+  /* Para la guarda 1 se miran TODOS los valores de referencia, no sólo los que quedaron por
+     corregir. Un valor sigue siendo ambiguo aunque el que lo contiene ya esté bien en el
+     documento, y mirar sólo los pares pendientes abría un agujero grave: si el contribuyente
+     conserva su razón social y sólo cambia su puntuación —«COLOMBIA SAS» a «COLOMBIA S.A.S.»,
+     el caso más común, el mismo cliente al año siguiente—, ese par se descarta por no tener
+     nada que corregir, la guarda se quedaba sin contenedor y «END GAME INTERACTIVE» se
+     sustituía dentro de las 45 menciones del contribuyente, dejándolas en «END GAME
+     INTERACTIVE INC COLOMBIA S.A.S». Medido sobre el informe real. */
+  const todosLosViejos = (valores || [])
+    .map((v) => String(v.valor || ''))
+    .filter((v) => v.trim());
+
   for (const par of pares) {
-    /* Guarda 1: ambiguo porque otro valor de la lista lo contiene. */
-    const contenedor = pares.find((o) => o !== par && o.viejo.includes(par.viejo));
+    /* Guarda 1: ambiguo porque otro valor de referencia lo contiene. Tolerante a la puntuación,
+       o «END GAME INTERACTIVE» pasaría por inequívoco frente a «END GAME INTERACTIVE COLOMBIA
+       S.A.S» sólo porque el otro valor está escrito sin puntos. */
+    const contenedor = todosLosViejos.find((otro) =>
+      !contieneTolerante(par.viejo, otro) && contieneTolerante(otro, par.viejo));
     if (contenedor) {
       omitidos.push({
         campo: par.campo, valor: par.viejo,
-        motivo: `«${par.viejo}» es parte de «${contenedor.viejo}», así que sustituirlo `
+        motivo: `«${par.viejo}» es parte de «${contenedor}», así que sustituirlo `
           + 'reescribiría también las menciones de ese otro dato. Revísalo a mano.',
       });
       continue;
@@ -156,33 +316,47 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
 
     let cuenta = 0;
     let partidos = 0;
-    salida = salida.replace(/(<w:t[^>]*>)([^<]*)(<\/w:t>)/g, (todo, abre, contenido, cierra) => {
-      if (!contenido.includes(par.viejo)) return todo;
+    tramo.lastIndex = 0;
+    salida = salida.replace(tramo, (todo, abre, contenido, cierra) => {
+      /* Tolerante a la puntuación: la razón social vieja aparece en el informe como «COLOMBIA
+         SAS» y también como «COLOMBIA S.A.S», y el marcado sólo captura una de las dos. Lo que
+         se ESCRIBE es el valor del estudio tal cual, con su puntuación: aquí se ignora para
+         encontrar, nunca para sustituir. */
+      const donde = aparicionesDe(contenido, par.viejo);
+      if (!donde.length) return todo;
       let hecho = contenido;
-      if (esPrefijo && resto) {
-        /* Solo las que no traen ya el sufijo. */
-        const partes = hecho.split(par.viejo);
-        let rearmado = partes[0];
-        for (let i = 1; i < partes.length; i += 1) {
-          const yaCompleto = partes[i].startsWith(resto);
-          rearmado += (yaCompleto ? par.viejo : par.nuevo) + partes[i];
-          if (!yaCompleto) cuenta += 1;
+      /* De atrás hacia adelante: cada sustitución mueve los índices de lo que va después. */
+      for (let i = donde.length - 1; i >= 0; i -= 1) {
+        const [ini, fin] = donde[i];
+        let reemplazo;
+        if (esPrefijo && resto) {
+          /* Sólo las que no traen ya el sufijo. Las que ya lo traen se tokenizan igual: si se
+             dejaran en claro, un par más corto contenido en ellas las reescribiría. */
+          const sigue = hecho.slice(fin);
+          const yaCompleto = indexarSinPuntuacion(sigue).plano
+            .startsWith(indexarSinPuntuacion(resto).plano);
+          if (yaCompleto) {
+            reemplazo = tokenizar(hecho.slice(ini, fin));
+          } else {
+            reemplazo = tokenizar(par.nuevo);
+            cuenta += 1;
+          }
+        } else {
+          reemplazo = tokenizar(par.nuevo);
+          cuenta += 1;
         }
-        hecho = rearmado;
-      } else {
-        const trozos = hecho.split(par.viejo);
-        cuenta += trozos.length - 1;
-        hecho = trozos.join(par.nuevo);
+        hecho = hecho.slice(0, ini) + reemplazo + hecho.slice(fin);
       }
       return hecho === contenido ? todo : abre + hecho + cierra;
     });
 
     /* Lo que queda al concatenar los tramos y no se pudo tocar es que estaba partido entre
-       varios de ellos. Se concatenan los `<w:t>` y no se usa `soloTexto`, que está hecho
-       para el HTML renderizado y no ve el OOXML. */
-    const plano = (salida.match(/<w:t[^>]*>[^<]*<\/w:t>/g) || [])
+       varios de ellos. Se concatenan los tramos y no se usa `soloTexto`, que está hecho para el
+       HTML renderizado y no ve el OOXML. */
+    tramo.lastIndex = 0;
+    const plano = (salida.match(tramo) || [])
       .map((t) => t.replace(/<[^>]+>/g, '')).join('');
-    if (plano.includes(par.viejo) && !(esPrefijo && resto)) {
+    if (aparicionesDe(plano, par.viejo).length && !(esPrefijo && resto)) {
       partidos = 1;
       omitidos.push({
         campo: par.campo, valor: par.viejo,
@@ -191,6 +365,15 @@ export function sustituirDatosDeReferencia(xml, { estudio, valores } = {}) {
       });
     }
     if (cuenta) sustituidos.push({ campo: par.campo, valor: par.viejo, nuevo: par.nuevo, cuenta, partidos });
+  }
+
+  /* Los tokens vuelven a ser texto. Ya no queda ningún par por aplicar, así que nada puede
+     reescribirlos. */
+  if (puestos.length) {
+    salida = salida.replace(
+      new RegExp(escaparRegex(marca) + '(\\d+)' + escaparRegex(marca), 'g'),
+      (todo, i) => (puestos[Number(i)] !== undefined ? puestos[Number(i)] : todo)
+    );
   }
 
   return { xml: salida, sustituidos, omitidos };
