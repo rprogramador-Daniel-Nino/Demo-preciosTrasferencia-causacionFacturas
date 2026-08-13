@@ -7,13 +7,14 @@
 
    Las medidas y el estilo NO se deciden aquí. Salen de `estiloDocumento.js`, que es la misma
    fuente que pinta la vista previa. Es lo que da la paridad que se pidió. */
-
 import {
   Document, Packer, Paragraph, TextRun, Header, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
-  Bookmark, InternalHyperlink, FootnoteReferenceRun,
+  Bookmark, InternalHyperlink,
+  Math as DocxMath, MathFraction, MathSubScript, MathRoundBrackets, MathRun,
+  FootnoteReferenceRun,
 } from 'docx';
 import {
   HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
@@ -324,6 +325,90 @@ const CAJA_TEXTO = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
 
 const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
 
+/* ── Fórmulas Matemáticas Nativas de Word ──────────────────────────────────────────────────
+   Cuando se exporta el reporte a Word, las ecuaciones de ajuste de LaTeX no deben salir como
+   texto plano lineal (tipo "AR Adjustment = (((ANC_TP / TNS_TP)..."). En su lugar, usamos el
+   motor matemático nativo de Microsoft Word (OMML) para que las renderice perfectamente como
+   ecuaciones reales con fracciones, paréntesis y subíndices, idéntico al PDF original. */
+const sub = (base, subText) => new MathSubScript({
+  children: [new MathRun(base)],
+  subScript: [new MathRun(subText)],
+});
+
+const formulaAR = () => new Paragraph({
+  children: [
+    new DocxMath({
+      children: [
+        new MathRun('AR Adjustment = '),
+        new MathRoundBrackets({
+          children: [
+            new MathRoundBrackets({
+              children: [
+                new MathFraction({
+                  numerator: [sub('ANC', 'TP')],
+                  denominator: [sub('TNS', 'TP')],
+                }),
+                new MathRun(' * '),
+                sub('TNS', 'comp'),
+              ],
+            }),
+            new MathRun(' - '),
+            sub('ANC', 'comp'),
+          ],
+        }),
+        new MathRun(' * '),
+        new MathRoundBrackets({
+          children: [
+            new MathFraction({
+              numerator: [new MathRun('R')],
+              denominator: [new MathRun('1 + R')],
+            }),
+          ],
+        }),
+      ],
+    }),
+  ],
+  spacing: { before: 120, after: 120 },
+  alignment: AlignmentType.CENTER,
+});
+
+const formulaAP = () => new Paragraph({
+  children: [
+    new DocxMath({
+      children: [
+        new MathRun('AP Adjustment = '),
+        new MathRoundBrackets({
+          children: [
+            new MathRoundBrackets({
+              children: [
+                new MathFraction({
+                  numerator: [sub('ANP', 'TP')],
+                  denominator: [sub('TNS', 'TP')],
+                }),
+                new MathRun(' * '),
+                sub('TNS', 'comp'),
+              ],
+            }),
+            new MathRun(' - '),
+            sub('ANP', 'comp'),
+          ],
+        }),
+        new MathRun(' * '),
+        new MathRoundBrackets({
+          children: [
+            new MathFraction({
+              numerator: [new MathRun('R')],
+              denominator: [new MathRun('1 + R')],
+            }),
+          ],
+        }),
+      ],
+    }),
+  ],
+  spacing: { before: 120, after: 120 },
+  alignment: AlignmentType.CENTER,
+});
+
 /* Agrupa las cinco funciones de traducción (`runsDe`, `parrafoDe`, `bloquesDe`, `tablaDe`,
    `runDeImagen`) y sus auxiliares detrás de un cierre sobre `porId`, el catálogo de recursos
    de la tarea 7 (y, en la 10, un contador del anexo). La alternativa —hilar el catálogo como
@@ -476,6 +561,15 @@ function traductor({
     if (!nivel) {
       const m = RX_ENTRADA_INDICE.exec(textoDe(nodo));
       if (m && m[1].trim()) return parrafoDeIndice(m[1].trim(), m[2]);
+
+      // Si es una de las fórmulas de ajuste normalizadas de LaTeX, usamos el motor matemático de Word
+      const texto = textoDe(nodo).trim();
+      if (texto.includes('AR Adjustment = (((ANC_TP / TNS_TP)')) {
+        return formulaAR();
+      }
+      if (texto.includes('AP Adjustment = (((ANP_TP / TNS_TP)')) {
+        return formulaAP();
+      }
     }
 
     // Si es una cabecera/sección, la envolvemos en un Bookmark con su ID correspondiente
