@@ -108,7 +108,13 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      `datos` es lo que acaba de devolver leerAnalisisMercado() (puede ser null). */
   async function aplicarNarrativaMacro(datos) {
     if (!datos) return;
-    const cache = await leerNarrativaMacroEstudio(estudioId);
+    let cache;
+    try {
+      cache = await leerNarrativaMacroEstudio(estudioId);
+    } catch (err) {
+      console.error('No se pudo leer el caché de narrativa macro de Firestore:', err);
+      return;
+    }
     if (necesitaRedaccion(datos, cache)) {
       setRedactandoMacro(true);
       redactarNarrativaMacroEnVivo(datos.series || {}, Number(study && study.anio) || 2025)
