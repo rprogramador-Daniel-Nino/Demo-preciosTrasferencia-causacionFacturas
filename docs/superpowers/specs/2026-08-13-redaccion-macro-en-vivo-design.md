@@ -1,5 +1,13 @@
 # Redacción de la Narrativa Macro en Vivo — Design
 
+**Corrección post-implementación (mismo día):** el plan derivado de este spec inicialmente cacheaba
+el resultado en `localStorage` (ver la nota de "Refinamiento sobre el spec" en el plan). El usuario
+lo rechazó explícitamente ("no me gusta esta filosofia de cachear, que sea desde la base de
+datos") tras ver el código — se reemplazó por una colección nueva de Firestore,
+`narrativaMacroPorEstudio/{estudioId}`, con su propia regla de seguridad. El resto de este
+documento describe el diseño ORIGINAL (con la idea de `localStorage` todavía en la sección de
+arquitectura) — para el mecanismo de caché real, ver el plan y `firestore.rules`, no esta sección.
+
 ## Contexto
 
 El feature de hoy (`docs/superpowers/specs/2026-08-13-huecos-macro-narrativa-especifica-design.md`)
