@@ -236,6 +236,15 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
+    // `guardarNarrativaMacroEstudio` (firestoreRepo.js) escribe el documento completo
+    // con `setDoc` sin merge, siempre estos dos campos y ningún otro.
+    function narrativaMacroValida(d) {
+      return soloEstosCampos(['seriesActualizadoEnMs', 'narrativa'])
+        && tieneTodos(['seriesActualizadoEnMs', 'narrativa'])
+        && d.seriesActualizadoEnMs is number
+        && d.narrativa is map;
+    }
+
     // =============================================================
     // Espacio privado de cada consultor
     // =============================================================
@@ -340,7 +349,7 @@ service cloud.firestore {
 
     match /narrativaMacroPorEstudio/{estudioId} {
       allow read: if esMiembro();
-      allow write: if esMiembro();
+      allow write: if esMiembro() && narrativaMacroValida(request.resource.data);
     }
 
     /* ── «Compartidos conmigo» ──

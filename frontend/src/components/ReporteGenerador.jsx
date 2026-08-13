@@ -128,6 +128,9 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
             narrativa: { ...(actual && actual.narrativa), ...narrativaEnVivo },
           }));
         })
+        .catch((err) => {
+          console.error('No se pudo guardar el caché de narrativa macro de Firestore:', err);
+        })
         .finally(() => setRedactandoMacro(false));
     } else if (cache) {
       setAnalisisMercado((actual) => ({
