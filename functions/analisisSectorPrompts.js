@@ -208,9 +208,15 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'Comportamiento del sector:\n' + resumir(datos.datosComportamiento) + '\n\n' +
     'Comercio exterior:\n' + resumir(datos.datosComercioExterior) + '\n\n' +
     'Proyección para ' + (year + 1) + ':\n' + resumir(datos.datosProyeccion) + '\n\n' +
+    /* Cada apartado lleva su mínimo de palabras por escrito. Sin él salían 70 palabras la
+       introducción, 120 la proyección y 250 las conclusiones (medido sobre tres corridas el
+       2026-08-13): «2-3 párrafos sustanciales» era demasiado interpretable. Los mínimos van
+       en el enunciado de cada apartado y no solo aquí arriba, porque el modelo atiende la
+       instrucción que tiene más cerca del punto donde redacta. */
     'Redacta cinco apartados en español, tono técnico-formal, denso en cifras concretas y ' +
-    'comparaciones año a año (2-3 párrafos sustanciales cada uno cuando el material lo permita, nunca ' +
-    'una lista de frases sueltas), más un título corto para los encabezados de esta sección:\n' +
+    'comparaciones año a año, nunca una lista de frases sueltas, más un título corto para los ' +
+    'encabezados de esta sección. Cada apartado lleva una extensión MÍNIMA que tienes que ' +
+    'cumplir; es un piso, no un objetivo:\n' +
     '1. "tituloSector": el fragmento que completa la frase "Análisis del Sector de la industria ___", ' +
     'con la preposición correcta en español y en 2 a 6 palabras (ej. "del software y los videojuegos", ' +
     '"de la construcción", "de los alimentos procesados") — a partir de la actividad de arriba, no la ' +
@@ -220,25 +226,42 @@ function construirPromptRedaccionSector(datos, actividad, year) {
        el mismo cuerpo que los demás. Lo que sí se conserva es que pueda ser cualitativo: los
        datos verificados alimentan los apartados de detalle, y exigirle cifras propias a la
        entrada la empujaría a repetirlas o a inventarlas. */
-    '2. "introduccion": 2 a 3 párrafos que sitúen el sector antes de entrar en el detalle — qué ' +
-    'actividad abarca, cómo se inserta en la economía colombiana, qué lo caracteriza ' +
+    '2. "introduccion" (MÍNIMO 200 palabras, 2 a 3 párrafos): sitúa el sector antes de entrar en el ' +
+    'detalle — qué actividad abarca, cómo se inserta en la economía colombiana, qué lo caracteriza ' +
     'estructuralmente (cadena de valor, tipo de demanda, grado de formalización, dependencia ' +
     'tecnológica o exportadora) y por qué importa para evaluar a una empresa que opera en él. ' +
     'Puede ser cualitativo, sin cifra nueva, si los datos de arriba no traen una que sirva aquí. ' +
     'No adelantes el contenido de los apartados 3, 4 y 5: la entrada da el marco, no el detalle ' +
     'de comportamiento, comercio exterior ni proyección.\n' +
-    '3. "comportamiento": comportamiento del sector en ' + year + ' y comparación con ' + y1 + ', citando ' +
-    'las cifras concretas de empleo, tamaño de mercado, PIB/valor agregado y su variación % que traigan ' +
-    'los datos de arriba — no los resumas en una frase, desarróllalos.\n' +
-    '4. "comercioExterior": importaciones y exportaciones del sector, con montos y variación % año a año.\n' +
-    '5. "proyeccion": qué se proyecta para el sector en ' + (year + 1) + ', con la cifra o el porcentaje ' +
-    'proyectado si los datos lo traen.\n' +
-    '6. "conclusiones": conclusiones y perspectivas del sector — no una repetición de lo ya dicho, sino ' +
-    'qué implica para evaluar la comparabilidad de la parte examinada (riesgos, oportunidades, retos del ' +
-    'sector que el analista deba tener presentes).\n\n' +
+    '3. "comportamiento" (MÍNIMO 450 palabras, 3 a 4 párrafos): comportamiento del sector en ' + year +
+    ' y comparación con ' + y1 + ', citando las cifras concretas de empleo, tamaño de mercado, ' +
+    'PIB/valor agregado y su variación % que traigan los datos de arriba. Dedica un párrafo a cada ' +
+    'bloque de indicadores en vez de amontonarlos, y de cada cifra explica QUÉ la produce y QUÉ ' +
+    'implica para quien opera en el sector, no solo cuánto varió.\n' +
+    '4. "comercioExterior" (MÍNIMO 350 palabras, 2 a 3 párrafos): importaciones y exportaciones del ' +
+    'sector, con montos y variación % año a año. Desarrolla también el saldo comercial que resulta, ' +
+    'de qué depende (insumos importados, tipo de cambio, demanda externa) y qué exposición supone ' +
+    'para una empresa del sector.\n' +
+    '5. "proyeccion" (MÍNIMO 350 palabras, 2 a 3 párrafos): qué se proyecta para el sector en ' +
+    (year + 1) + ', con la cifra o el porcentaje proyectado si los datos lo traen. Desarrolla los ' +
+    'supuestos en que se apoya esa proyección, qué la sostendría y qué la pondría en riesgo, y en ' +
+    'qué plazo se esperaría el efecto.\n' +
+    '6. "conclusiones" (MÍNIMO 450 palabras, 3 a 4 párrafos): conclusiones y perspectivas — no una ' +
+    'repetición de lo ya dicho, sino qué implica todo lo anterior para evaluar la comparabilidad de ' +
+    'la parte examinada. Trata por separado los riesgos del sector, las oportunidades, y las ' +
+    'cautelas que el analista debe tener presentes al comparar márgenes contra compañías de este ' +
+    'sector (por ejemplo asimetrías de tamaño, de mercado geográfico, de estructura de costos o de ' +
+    'propiedad de los intangibles).\n\n' +
     'Reglas estrictas:\n' +
     '- NO menciones ninguna cifra que no esté en los datos de arriba. Si no tienes datos para un ' +
     'apartado, redáctalo en términos cualitativos sin inventar números.\n' +
+    /* Sin esto, pedir longitud se paga en relleno: la misma cifra repetida en tres párrafos y
+       frases de adorno. La extensión tiene que salir del análisis, que es lo único que puede
+       crecer sin datos nuevos. */
+    '- La extensión sale de DESARROLLAR, no de rellenar: explica el mecanismo detrás de cada cifra, ' +
+    'por qué se comporta así y qué implica para la parte examinada. No repitas la misma cifra en ' +
+    'varios párrafos, no anuncies lo que vas a decir, y no cierres con fórmulas vacías del tipo ' +
+    '"en conclusión, el sector presenta retos y oportunidades".\n' +
     '- Prefiere siempre la cifra concreta y su fuente sobre la afirmación vaga ("creció de forma ' +
     'importante" sin el dato detrás no sirve; "generó 250.000 empleos, un incremento del 13,7%" sí).\n' +
     '- Cada apartado (excepto tituloSector) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
