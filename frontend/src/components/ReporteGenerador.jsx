@@ -53,6 +53,11 @@ import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage
 const URL_ANALISIS_SECTOR =
   'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector';
 
+/* Actividad+año cuya corrida ya se intentó rehacer en esta página. Vive fuera del
+   componente a propósito: sobrevive a que el estudio se cierre y se vuelva a abrir, que es
+   cuando el efecto se volvería a disparar y pediría otra corrida por lo mismo. */
+const SECTOR_REGENERADO = new Set();
+
 /* El endpoint SIEMPRE rehace la corrida y la sobrescribe con `merge`: la decisión de
    reutilizar lo guardado es de aquí, no de la función. Por eso sirve igual para la
    generación bajo demanda y para regenerar a mano una corrida vieja. */
@@ -197,10 +202,31 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       try {
         let doc = await leerAnalisisSector(clave);
         const yaTieneEsteAnio = doc && doc.porAnio && doc.porAnio[String(year)];
-        if (!yaTieneEsteAnio) {
+        /* Una corrida anterior al 2026-08-13 no trae `narrativa.introduccion`, y como la
+           clave de caché es solo actividad+año se reutilizaría tal cual: el hueco de entrada
+           de III.C saldría con el marcador de pendiente para siempre. Se rehace sola, porque
+           dejar una casilla por completar en la Sección III no es una opción.
+
+           `SECTOR_REGENERADO` acota el gasto: como mucho un intento por actividad+año en toda
+           la vida de la página. Si la corrida nueva vuelve a salir sin introducción —el campo
+           es opcional en el parseo a propósito, para no perder el resto de la redacción por
+           él— no se reintenta en bucle; queda el botón «Regenerar III.C» para insistir a
+           mano. */
+        const incompleta = yaTieneEsteAnio && corridaSectorIncompleta(yaTieneEsteAnio);
+        const claveIntento = clave + ':' + year;
+        const rehacer = incompleta && !SECTOR_REGENERADO.has(claveIntento);
+        if (rehacer) SECTOR_REGENERADO.add(claveIntento);
+
+        if (!yaTieneEsteAnio || rehacer) {
           if (vivo) setSectorEnCurso(true);
           try {
             doc = await pedirAnalisisSector(actividadTexto, year);
+          } catch (err) {
+            /* Si la que falla es la REGENERACIÓN, se conserva la corrida vieja: incompleta
+               es mejor que ninguna —trae comportamiento, comercio exterior, proyección y
+               conclusiones— y el marcador del hueco de entrada ya avisa de lo que falta. */
+            if (!yaTieneEsteAnio) throw err;
+            console.error('No se pudo rehacer la corrida del sector; se conserva la anterior:', err);
           } finally {
             if (vivo) setSectorEnCurso(false);
           }
