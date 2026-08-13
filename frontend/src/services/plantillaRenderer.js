@@ -9,6 +9,7 @@ import {
   actualizarTablasMotorHtml, actualizarTablasMacroHtml, actualizarApartadosMacroHtml,
   actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
+import { actualizarProsaRango } from './prosaRangoInforme.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 import { actualizarAnexoCHtml } from './anexoCHtml.js';
@@ -76,6 +77,12 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      que el localizador de tablas no la alcanzaba y se radicaba con los conteos del informe
      del que salió la plantilla, contradiciendo a la Tabla 16 del cuerpo. */
   html = actualizarAnexoCHtml(html, estudio, avisosTablas);
+  /* La frase que comenta el rango intercuartil, por el mismo motivo que las tablas: sus cifras
+     y su año no son campos que el marcado pueda alcanzar —el modelo no los reconoce, y aunque
+     los marcara, una marca no sabe qué cuartil introduce cada paréntesis—, así que la frase se
+     radicaba con las cifras del informe de referencia mientras la tabla de arriba ya traía las
+     del estudio. La misma función atiende la ruta .docx, cambiando cómo se delimita el párrafo. */
+  html = actualizarProsaRango(html, estudio, avisosTablas);
 
   html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
