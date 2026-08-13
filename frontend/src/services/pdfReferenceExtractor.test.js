@@ -470,38 +470,44 @@ test('normalizarCaracteresMatematicos traduce simbolos matematicos de LaTeX/Unic
   // Mayúsculas cursivas matemáticas (𝐴𝑅)
   assert.strictEqual(normalizarCaracteresMatematicos('𝐴𝑅 Adjustment'), 'AR Adjustment');
 
-  /* Caracteres cursivos y negritas mezclados, que es como llegan las ecuaciones del informe.
-     La cadena de este caso NO puede ser «AAAAAATTTT AA»: ésa es el numerador suelto de la
-     fracción del ajuste, y desde que la función reconstruye esas fórmulas se vacía a propósito
-     —lo comprueba el test siguiente—. */
+  /* Ecuación corrupta real de la plantilla: caracteres cursivos y negritas mezclados. Esta
+     función solo TRADUCE caracteres; quien reconoce y rearma las fórmulas es el
+     post-procesamiento de `textoPorId`, que trabaja sobre los runs de un nodo y no sobre una
+     cadena suelta —una fórmula abarca varios items del PDF, así que desde una sola cadena no se
+     puede reconocer—. El test siguiente cubre esa parte contra el PDF real. */
+  const ecuacionCorrupta = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴';
   assert.strictEqual(
-    normalizarCaracteresMatematicos('𝐴𝐴𝑇𝑇 𝐴𝐴').replace(/\s+/g, ' '), 'AATT AA');
+    normalizarCaracteresMatematicos(ecuacionCorrupta).replace(/\s+/g, ' '), 'AAAAAATTTT AA');
 
   // Letras matemáticas combinadas: negritas, cursivas, sans-serif, monospace
   const combinadas = '𝐉𝑲𝖫𝗤𝚡'; // J negrita, K cursiva, L sans-serif, Q sans-serif negrita, x monospace
   assert.strictEqual(normalizarCaracteresMatematicos(combinadas), 'JKLQx');
 });
 
-test('la fórmula del ajuste se reconstruye en una línea y las otras dos se vacían', () => {
-  /* Las ecuaciones de ajuste de cuentas por cobrar y por pagar llevan una fracción, y el PDF las
-     entrega en tres renglones: numerador, cuerpo y denominador. Sueltos y con los caracteres
-     matemáticos corruptos no dicen nada, así que el cuerpo se reconstruye entero y los otros dos
-     se vacían. El `tipo` es el que decide si el ajuste es de cobrar (AR) o de pagar (AP).
+test('las fórmulas de ajuste llegan legibles al informe, no como letras corruptas', async () => {
+  /* El PDF entrega cada ecuación de ajuste repartida en tres renglones —numerador, cuerpo y
+     denominador de la fracción— y con los caracteres del editor de ecuaciones corruptos: lo que
+     llega es «AAAA AAAAAAAAAAAAAAAAAAA RR (1 + RR)». Sueltos no dicen nada, así que el cuerpo se
+     rearma entero y los otros dos renglones se descartan.
 
-     Este test acompaña a esa reconstrucción, que llegó sin cobertura propia: sin él, el único
-     test que tocaba la función afirmaba lo contrario —que el numerador se conserva— y quedaba en
-     rojo sin decir por qué. */
-  const numerador = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴';
-  assert.strictEqual(normalizarCaracteresMatematicos(numerador), '',
-    'el numerador suelto de la fracción debería vaciarse');
+     Se comprueba contra el PDF real y no con una cadena inventada, que es lo que este arreglo
+     necesitaba: la reconstrucción vivió primero dentro de `normalizarCaracteresMatematicos`, que
+     recibe una cadena a la vez y por eso no podía ver una fórmula repartida en varios items. Un
+     test sobre esa función pasaba mientras el informe seguía saliendo con las letras corruptas. */
+  const r = await extraer();
+  const texto = r.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
 
-  /* El cuerpo, con el tipo de ajuste que corresponda. */
-  const cuerpo = 'AAAA AAAAAAAAAAAAAAAAAAA RR (1 + RR)';
-  assert.match(normalizarCaracteresMatematicos(cuerpo, 'AR'), /^AR Adjustment = /);
-  assert.match(normalizarCaracteresMatematicos(cuerpo, 'AP'), /^AP Adjustment = /);
-  /* Sin tipo se cae a cuentas por cobrar, que es la primera de las dos en el informe. */
-  assert.match(normalizarCaracteresMatematicos(cuerpo), /^AR Adjustment = /);
+  assert.ok(texto.includes('AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))'),
+    'la fórmula del ajuste de cuentas por COBRAR no llegó rearmada');
+  assert.ok(texto.includes('AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))'),
+    'la fórmula del ajuste de cuentas por PAGAR no llegó rearmada');
 
-  /* Y lo que no es una de esas tres líneas pasa igual que siempre. */
-  assert.strictEqual(normalizarCaracteresMatematicos('Total activos'), 'Total activos');
+  /* Cada una bajo su rótulo: es lo que decide si el ajuste es de cobrar o de pagar. */
+  const iCobrar = texto.indexOf('FORMULA AJUSTE CUENTAS POR COBRAR');
+  const iAr = texto.indexOf('AR Adjustment = ');
+  assert.ok(iCobrar >= 0 && iAr > iCobrar, 'la fórmula de cobrar no sigue a su rótulo');
+
+  /* Y no quedan renglones de letras corruptas dando vueltas. */
+  assert.ok(!/AAAAAATTTT/.test(texto), 'sobrevive el numerador suelto de la fracción');
+  assert.ok(!/AAAA AAAAAAAAAAAAAAAAAAA/.test(texto), 'sobrevive el cuerpo sin rearmar');
 });
