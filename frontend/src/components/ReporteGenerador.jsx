@@ -301,10 +301,11 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
 
      `huecos` es cuántos huecos de anexo dejó el extractor en esta plantilla. */
   const renderizarYAvisar = (htmlMarcado, recursos, huecos = 0) => {
-    /* `analisisMercado` alimenta las ocho tablas de tendencias de la economía. La ruta
-       .docx ya lo recibía (`construirDocxDelEstudio`); esta se quedaba sin él y esas tablas
-       salían con las series del informe del que se tomó la plantilla. */
-    const r = renderizar(htmlMarcado, study, recursos, { datosMacro: analisisMercado });
+    /* `analisisMercado` alimenta las ocho tablas y la prosa de tendencias de la economía
+       (III.A/III.B). La ruta .docx ya los recibía (`construirDocxDelEstudio`); esta se
+       quedaba sin ellos y esas tablas salían con las series del informe del que se tomó
+       la plantilla. `analisisSector` hace lo mismo para III.C. */
+    const r = renderizar(htmlMarcado, study, recursos, { datosMacro: analisisMercado, analisisSector });
     /* Los valores que traía el informe de referencia salen del propio HTML
        marcado: el marcado envuelve el texto original sin alterarlo, así que el
        contenido de una marca `data-campo="nit"` es literalmente el NIT del

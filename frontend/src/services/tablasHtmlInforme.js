@@ -532,42 +532,18 @@ export function actualizarTablasMacroHtml(html, datosMacro, year, avisos) {
   return salida;
 }
 
-/** Igual que `localizarBloqueProsa` de `docxRelleno.js`, pero sobre el HTML de la ruta
- *  de plantilla PDF: delimita desde el bloque cuyo texto coincide con `tituloInicio`
- *  hasta el bloque cuyo texto coincide con alguno de `titulosFin` (sin incluirlo).
+/** Una entrada de la Tabla de Contenido termina en puntos de relleno y el número de
+ *  página («... 13»). El extractor mapea la TOC a los mismos bloques `<p>` que el
+ *  cuerpo (comentario de `RX_BLOQUE` arriba: "el extractor mapea P, TOCI y Note a
+ *  `<p>`"), así que una entrada de TOC con el mismo texto del encabezado es
+ *  indistinguible por etiqueta — se descarta por forma.
  *
- *  El extractor mapea la Tabla de Contenido a los mismos bloques `<p>` que el cuerpo
- *  (comentario de `RX_BLOQUE` arriba: "el extractor mapea P, TOCI y Note a `<p>`"), así
- *  que un bloque de TOC con el mismo texto del encabezado es indistinguible por
- *  etiqueta — se descarta por forma: una entrada de TOC termina en el número de página,
- *  con o sin puntos de relleno («... 13», «13»), la prosa real no. */
+ *  Exige el punteado: un número final SIN puntos de relleno no basta, porque muchos
+ *  encabezados legítimos de esta sección terminan en un año («...en 2024 y
+ *  Comparación con 2023», «Datos Clave... (2023 vs. 2024)») y un `\d{1,4}$` sin más
+ *  los tomaría por entradas de TOC, descartándolos de la búsqueda del hito real. */
 function pareceEntradaDeToc(textoPlano) {
-  return /(?:\.{2,}\s*)?\d{1,4}\s*$/.test(textoPlano.trim());
-}
-
-function localizarBloqueProsaHtml(html, tituloInicio, titulosFin) {
-  const claveInicio = claveTitulo(tituloInicio);
-  const clavesFin = (titulosFin || []).map(claveTitulo).filter(Boolean);
-  if (!claveInicio || !clavesFin.length) return null;
-
-  RX_BLOQUE.lastIndex = 0;
-  let m;
-  let inicio = null;
-  let finEncabezado = null;
-  while ((m = RX_BLOQUE.exec(html)) !== null) {
-    const plano = textoPlanoHtml(m[2]);
-    if (pareceEntradaDeToc(plano)) continue;
-    const clave = claveTitulo(plano);
-    if (inicio === null) {
-      if (clave.includes(claveInicio)) {
-        inicio = m.index;
-        finEncabezado = m.index + m[0].length;
-      }
-      continue;
-    }
-    if (clavesFin.some((c) => clave.includes(c))) return { inicio, finEncabezado, fin: m.index };
-  }
-  return null;
+  return /\.{2,}\s*\d{1,4}\s*$/.test(textoPlano.trim());
 }
 
 function marcadorApartadoPendienteHtml(tema, year) {
@@ -587,27 +563,169 @@ function marcadorApartadoPendienteHtml(tema, year) {
  * @param {string[]} [avisos]
  * @returns {string}
  */
-export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
-  let out = String(html || '');
-  const apartados = [
-    { inicio: 'Análisis del Panorama de la Economía Mundial', fin: ['PIB Mundial'], tema: 'mundial', clave: 'mundial' },
-    { inicio: 'Análisis del panorama de la economía colombiana', fin: ['PIB en Colombia'], tema: 'colombiana', clave: 'colombia' },
-  ];
+/** Si justo después de `cursor` viene una `<table>` —saltando espacios—, el índice
+ *  donde termina; si no, -1. Análogo a `finDeTablaInmediata` de `docxRelleno.js`: sin
+ *  esto, una tabla que cae dentro de un hueco intermedio se borraría junto con la
+ *  prosa que la rodea. */
+function finDeTablaInmediataHtml(html, cursor) {
+  const tras = /^\s*<table(?:\s[^>]*)?>/i.exec(html.slice(cursor));
+  if (!tras) return -1;
+  const inicioTabla = cursor + tras[0].indexOf('<table');
+  return finDeTabla(html, inicioTabla);
+}
 
-  apartados.forEach((a) => {
-    const bloque = localizarBloqueProsaHtml(out, a.inicio, a.fin);
-    if (!bloque) {
-      if (Array.isArray(avisos)) avisos.push('prosa de ' + a.inicio);
-      return;
+/**
+ * Igual que `localizarHitos` de `docxRelleno.js`, pero sobre el HTML de la ruta de
+ * plantilla PDF. Descarta candidatos de más de 160 caracteres: un párrafo de prosa
+ * puede mencionar de pasada el nombre de un hito posterior (p. ej. "la inflación
+ * global ha venido descendiendo..." contiene "inflación global") y un `.includes()`
+ * sobre texto largo lo confundiría con el título real, que siempre es corto.
+ *
+ * @param {string} html
+ * @param {string[]} titulos
+ * @returns {Array<{inicio:number, finPropio:number}|null>}
+ */
+export function localizarHitosHtml(html, titulos) {
+  const texto = String(html || '');
+  const claves = (titulos || []).map(claveTitulo);
+  const resultado = new Array(claves.length).fill(null);
+  if (!claves.length) return resultado;
+
+  RX_BLOQUE.lastIndex = 0;
+  let objetivo = 0;
+  let m;
+  while (objetivo < claves.length && (m = RX_BLOQUE.exec(texto)) !== null) {
+    const plano = textoPlanoHtml(m[2]);
+    if (pareceEntradaDeToc(plano) || plano.length > 160) continue;
+    const clave = claveTitulo(plano);
+    if (clave.includes(claves[objetivo])) {
+      let finPropio = m.index + m[0].length;
+      const finTabla = finDeTablaInmediataHtml(texto, finPropio);
+      if (finTabla >= 0) finPropio = finTabla;
+      resultado[objetivo] = { inicio: m.index, finPropio };
+      objetivo += 1;
     }
-    const narrativaHtml = datosMacro && datosMacro.narrativa && datosMacro.narrativa[a.clave];
-    const encabezado = out.slice(bloque.inicio, bloque.finEncabezado);
-    const cuerpo = narrativaHtml || marcadorApartadoPendienteHtml(a.tema, year);
-    if (!narrativaHtml && Array.isArray(avisos)) avisos.push('narrativa de ' + a.inicio);
-    out = out.slice(0, bloque.inicio) + encabezado + cuerpo + out.slice(bloque.fin);
-  });
+  }
+  return resultado;
+}
 
-  return out;
+/** Igual que `reemplazarPorHitos` de `docxRelleno.js`, pero devuelve el HTML nuevo en
+ *  vez de operar sobre un `sustituidorDeTablas` (esta ruta no tiene ese envoltorio). */
+export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombreParaAvisos) {
+  let salida = String(html || '');
+  const hitos = localizarHitosHtml(salida, titulos);
+  console.log('[tablasHtmlInforme] ' + (nombreParaAvisos || '') + ': hitos encontrados '
+    + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+  for (let i = contenidos.length - 1; i >= 0; i -= 1) {
+    const hitoActual = hitos[i];
+    const hitoSiguiente = hitos[i + 1];
+    if (!hitoActual || !hitoSiguiente) {
+      const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
+      console.warn('[tablasHtmlInforme] ' + aviso);
+      if (Array.isArray(avisos)) avisos.push(aviso);
+      continue;
+    }
+    const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+    const nuevo = contenidos[i](textoHueco);
+    if (nuevo === null) {
+      console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": sin tocar');
+      continue;
+    }
+    console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado');
+    salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
+  }
+  return salida;
+}
+
+/** Marcador genérico para un hueco intermedio con prosa sustancial que no tiene una
+ *  narrativa específica de reemplazo — mismo criterio y mismo umbral que
+ *  `contenidoHuecoIntermedio` de `docxRelleno.js`. */
+const UMBRAL_HUECO_CON_PROSA_HTML = 50;
+function contenidoHuecoIntermedioHtml(textoHueco) {
+  if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
+  return '<p>[Este párrafo del informe de referencia se retiró porque describía cifras y ' +
+    'hechos de otro contribuyente. Redáctelo con información propia de este año antes ' +
+    'de radicar.]</p>';
+}
+
+/**
+ * Generaliza `actualizarApartadosMacroHtml` a TODOS los huecos de III.A/III.B, no
+ * solo el primero — equivalente HTML de la versión final de
+ * `actualizarApartadosMacroOoxml` en `docxRelleno.js`. Sustituye a la función de
+ * arriba: mismo nombre, mismo contrato, cuerpo reescrito.
+ */
+export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
+  const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
+  const tituloColombia = 'Análisis del panorama de la economía colombiana';
+  const narrativaMundial = datosMacro && datosMacro.narrativa && datosMacro.narrativa.mundial;
+  const narrativaColombia = datosMacro && datosMacro.narrativa && datosMacro.narrativa.colombia;
+  console.log('[tablasHtmlInforme] actualizarApartadosMacroHtml: año ' + year
+    + ', narrativa mundial: ' + (narrativaMundial ? 'sí' : 'no (marcador)')
+    + ', narrativa colombia: ' + (narrativaColombia ? 'sí' : 'no (marcador)'));
+
+  const primerHueco = (narrativaHtml, tema) => () => (narrativaHtml || marcadorApartadoPendienteHtml(tema, year));
+
+  let salida = reemplazarHuecosHtml(
+    html,
+    [tituloMundial, 'PIB Mundial', 'Inflación Global', 'por Región/País', tituloColombia],
+    [primerHueco(narrativaMundial, 'mundial'), contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml],
+    avisos, tituloMundial
+  );
+  salida = reemplazarHuecosHtml(
+    salida,
+    [
+      tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
+      'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
+    ],
+    [
+      primerHueco(narrativaColombia, 'colombiana'),
+      contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml,
+      contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml, contenidoHuecoIntermedioHtml,
+    ],
+    avisos, tituloColombia
+  );
+
+  if (!narrativaMundial && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloMundial);
+  if (!narrativaColombia && Array.isArray(avisos)) avisos.push('narrativa de ' + tituloColombia);
+
+  return salida;
+}
+
+/** Ruta HTML/PDF de `actualizarApartadoSectorialOoxml` (`docxRelleno.js`): mismos
+ *  cuatro bloques de prosa de III.C localizados por encabezado, más la tabla "Datos
+ *  Clave del Sector" que regenera `actualizarTablasMotorHtml`/el mecanismo de tabla
+ *  existente — aquí solo se deja intacto ese hueco (`() => null`). */
+export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, year, avisos) {
+  const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
+  console.log('[tablasHtmlInforme] actualizarApartadoSectorialHtml: año ' + year
+    + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
+
+  const marcador = (tema) => '<p>[Actualizar con el análisis del ' + tema + ' del sector para el año gravable ' +
+    year + ' e indicar fuente y fecha de consulta, conforme al numeral 4 del artículo ' +
+    '1.2.2.2.1.5 del Decreto 1625 de 2016.]</p>';
+  const bloque = (narrativaHtml, tema) => () => (narrativaHtml || marcador(tema));
+
+  const salida = reemplazarHuecosHtml(
+    html,
+    [
+      'Análisis del Sector', 'Comportamiento del Sector', 'Datos Clave del Sector',
+      'Importaciones y exportaciones del sector', '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
+      'ANÁLISIS ECONÓMICO',
+    ],
+    [
+      contenidoHuecoIntermedioHtml,
+      bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
+      () => null,
+      bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
+      bloque(entrada && entrada.narrativa.proyeccion, 'proyección del sector'),
+      bloque(entrada && entrada.narrativa.conclusiones, 'conclusiones del sector'),
+    ],
+    avisos, 'Análisis del Sector'
+  );
+
+  if (!entrada && Array.isArray(avisos)) avisos.push('narrativa del Análisis del Sector');
+
+  return salida;
 }
 
 /* Mismo formato que la ruta .docx, y por el mismo formateador: `pctf`. Un hueco visible —y no
