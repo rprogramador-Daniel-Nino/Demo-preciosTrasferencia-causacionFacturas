@@ -14,6 +14,7 @@ import {
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioConclusionRango,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
+  reescribirTextoParrafoOoxml, prefijoDeEncabezado,
 } from './docxRelleno.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 import { resolverSerie } from './analisisMercado.js';
@@ -1587,6 +1588,76 @@ test('actualizarApartadoSectorialOoxml reemplaza los cuatro bloques de prosa y l
   assert.doesNotMatch(salida, /Texto viejo/);
   assert.match(salida, /260\.000/);
   assert.doesNotMatch(salida, /fila vieja/);
+});
+
+test('actualizarApartadoSectorialOoxml escribe los encabezados de III.C con la industria y los años', () => {
+  const xml = [
+    parrafoXml('C. Análisis del Sector de la industria del software y de los videojuegos'),
+    parrafoXml('Comportamiento del Sector de la Industria del Software y de los Videojuegos en 2024 y Comparación con 2023'),
+    parrafoXml('Texto viejo de comportamiento, referencia 2024.'),
+    parrafoXml('Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)'),
+    tablaXml('fila vieja'),
+    parrafoXml('Importaciones y exportaciones del sector de la industria del software y de los videojuegos'),
+    parrafoXml('Texto viejo de comercio exterior, referencia 2024.'),
+    parrafoXml('¿Qué se proyecta para el sector de la industria del software y de los videojuegos en 2025?'),
+    parrafoXml('Texto viejo de proyección, referencia 2024.'),
+    parrafoXml('Conclusiones y Perspectivas'),
+    parrafoXml('Texto viejo de conclusiones, referencia 2024.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2025: {
+        tituloSector: 'de los videojuegos y servicios digitales creativos',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real 2025.</p>',
+          comercioExterior: '<p>Comercio real 2025.</p>',
+          proyeccion: '<p>Proyección real 2025.</p>',
+          conclusiones: '<p>Conclusiones reales 2025.</p>',
+        },
+        datosClaveTabla: [{ indicador: 'Empleo', valorAnterior: '250.000', valorActual: '262.000' }],
+      },
+    },
+  };
+
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  /* La numeración del cliente se conserva. */
+  assert.match(texto, /C\. Análisis del Sector de la industria de los videojuegos y servicios digitales creativos/);
+  assert.match(texto, /Comportamiento del Sector de la Industria de los videojuegos y servicios digitales creativos en 2025 y Comparación con 2024/);
+  assert.match(texto, /Importaciones y exportaciones del sector de la industria de los videojuegos y servicios digitales creativos/);
+  /* La proyección es del año siguiente al gravable. */
+  assert.match(texto, /¿Qué se proyecta para el sector de la industria de los videojuegos y servicios digitales creativos en 2026\?/);
+
+  assert.doesNotMatch(texto, /en 2024 y Comparación con 2023/);
+  assert.doesNotMatch(texto, /del software y de los videojuegos/);
+  assert.match(texto, /Conclusiones y Perspectivas/);
+});
+
+test('reescribirTextoParrafoOoxml deja el texto nuevo en el primer run y vacía los demás', () => {
+  /* Word parte el encabezado en varios runs; el texto nuevo no puede quedar repetido ni
+     partido, y las propiedades de cada run se conservan. */
+  const parrafo = '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Datos Clave del Sector de la Industria del Software</w:t></w:r>'
+    + '<w:r><w:t xml:space="preserve"> y de los Videojuegos (2023 vs. 2024)</w:t></w:r></w:p>';
+  const salida = reescribirTextoParrafoOoxml(parrafo, 'Título nuevo & correcto');
+
+  assert.match(salida, /<w:t xml:space="preserve">Título nuevo &amp; correcto<\/w:t>/);
+  assert.doesNotMatch(salida, /Videojuegos/);
+  assert.doesNotMatch(salida, /del Software/);
+  assert.match(salida, /<w:rPr><w:b\/><\/w:rPr>/, 'se perdió el formato del primer run');
+  assert.strictEqual((salida.match(/<w:r>/g) || []).length, 2, 'no se conservaron los dos runs');
+});
+
+test('prefijoDeEncabezado distingue la numeración del cliente de una primera palabra', () => {
+  assert.strictEqual(prefijoDeEncabezado('C. Análisis del Sector'), 'C. ');
+  assert.strictEqual(prefijoDeEncabezado('III. TENDENCIAS DE LA ECONOMÍA'), 'III. ');
+  assert.strictEqual(prefijoDeEncabezado('1.4 Zona Geográfica'), '1.4 ');
+  /* «Conclusiones» no es un rótulo aunque empiece por una letra mayúscula suelta. */
+  assert.strictEqual(prefijoDeEncabezado('Conclusiones y Perspectivas'), '');
+  assert.strictEqual(prefijoDeEncabezado('Comportamiento del Sector'), '');
+  assert.strictEqual(prefijoDeEncabezado(''), '');
 });
 
 test('actualizarApartadoSectorialOoxml usa el marcador de pendiente si no hay corrida para ese año', () => {
