@@ -1394,8 +1394,11 @@ test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios en
      Mercado Laboral y CONCLUSIONES. El de "INFLACIÓN COLOMBIA" no lleva prosa en este
      fixture (va directo del título de la tabla anterior al de la siguiente), así que
      queda bajo el umbral y no se marca — es el mismo caso que prueba el siguiente test. */
-  const marcador = 'Este párrafo del informe de referencia se retiró';
-  assert.equal((salida.match(new RegExp(marcador, 'g')) || []).length, 4, 'los cuatro huecos con prosa real quedan marcados');
+  assert.doesNotMatch(salida, /Este párrafo del informe de referencia se retiró/);
+  ['la política monetaria', 'la tasa de cambio \\(TRM\\)', 'el mercado laboral en Colombia',
+    'las conclusiones del panorama económico'].forEach((tema) => {
+    assert.match(salida, new RegExp('Actualizar con datos verificados sobre ' + tema));
+  });
 });
 
 test('actualizarApartadosMacroOoxml no toca un hueco intermedio corto (sin prosa real)', () => {
@@ -1413,6 +1416,65 @@ test('actualizarApartadosMacroOoxml no toca un hueco intermedio corto (sin prosa
   const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, []);
   assert.match(salida, /INFLACIÓN MUNDIAL/);
   assert.doesNotMatch(salida, /\[Este párrafo del informe de referencia/);
+});
+
+test('actualizarApartadosMacroOoxml reemplaza el hueco de política monetaria con su propio párrafo y fuente', () => {
+  const xml = [
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto real de Colombia.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+    /* Nota: evitar la frase literal "inflación en Colombia" en esta prosa — coincide
+       con la clave normalizada del título "Inflación en Colombia" y `localizarHitos`
+       (por diseño, ver su comentario) toma por hito cualquier párrafo corto que la
+       incluya, aunque sea prosa y no el encabezado real. */
+    parrafoXml('Texto de END GAME sobre la inflación colombiana, 2024.'),
+    parrafoXml('Inflación en Colombia (2025 vs. Meta 2026)'),
+    parrafoXml('Texto de END GAME sobre política monetaria, 2024.'),
+    parrafoXml('Tasa de Intervención del Banco de la República'),
+    parrafoXml('Texto de END GAME sobre TRM, 2024.'),
+    parrafoXml('Tasa Representativa del Mercado (TRM) Promedio'),
+    parrafoXml('Texto de END GAME sobre desempleo, 2024.'),
+    parrafoXml('Tasa de Desempleo en Colombia'),
+    parrafoXml('Texto de END GAME sobre conclusiones, 2024.'),
+    parrafoXml('Análisis del Sector'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>',
+      politicaMonetaria: '<p>La tasa de intervención cerró en 12,00 % en julio de 2026.</p>',
+    },
+    series: {
+      tasa_intervencion: { fuente: 'Banco de la República', fuenteUrl: 'https://banrep.gov.co/tasa' },
+    },
+  };
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.match(salida, /tasa de intervención cerró en 12,00/);
+  assert.match(salida, /FUENTE: Banco de la República, https:\/\/banrep\.gov\.co\/tasa/);
+  assert.doesNotMatch(salida, /Texto de END GAME sobre política monetaria/);
+  /* El encabezado "Inflación en Colombia" (el hito ANTERIOR a este hueco) no debe
+     desaparecer: si `localizarHitos` lo confunde con la prosa que lo precede, el
+     título real se pierde dentro de un hueco que no le corresponde. */
+  assert.match(salida, /Inflación en Colombia \(2025 vs\. Meta 2026\)/);
+});
+
+test('actualizarApartadosMacroOoxml deja el marcador especifico de tema (no el generico) cuando falta narrativa', () => {
+  const xml = [
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto real de Colombia.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+    parrafoXml('Texto de END GAME sobre la inflación colombiana, 2024, con contenido suficientemente largo.'),
+    parrafoXml('Inflación en Colombia (2025 vs. Meta 2026)'),
+    parrafoXml('Análisis del Sector'),
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>' } };
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, []);
+
+  assert.match(salida, /Actualizar con datos verificados sobre la inflación en Colombia/);
+  assert.doesNotMatch(salida, /este párrafo del informe de referencia se retiró/i);
 });
 
 const tablaXml = (texto) => `<w:tbl><w:tr><w:tc><w:p><w:t>${texto}</w:t></w:p></w:tc></w:tr></w:tbl>`;
@@ -1484,6 +1546,43 @@ test('actualizarApartadoSectorialOoxml usa el marcador de pendiente si no hay co
   assert.doesNotMatch(salida, /Texto viejo/);
   assert.match(salida, /\[Actualizar con el análisis del comportamiento del sector/);
   assert.ok(avisos.length >= 1);
+});
+
+test('actualizarApartadoSectorialOoxml reemplaza el hueco de entrada con la introduccion y sin fuente', () => {
+  const xml = [
+    parrafoXml('Análisis del Sector de la industria del software y los videojuegos'),
+    parrafoXml('Texto de END GAME de introducción al sector, con contenido suficientemente largo para no ser un hueco vacío.'),
+    parrafoXml('Comportamiento del Sector'),
+    parrafoXml('Texto real de comportamiento.'),
+    parrafoXml('Datos Clave del Sector'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: { '2025': { narrativa: {
+      introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
+      comportamiento: '<p>Texto real de comportamiento.</p>',
+    } } },
+  };
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.match(salida, /mostró dinamismo en 2025/);
+  assert.doesNotMatch(salida, /Texto de END GAME de introducción/);
+});
+
+test('actualizarApartadoSectorialOoxml no fabrica un marcador si el hueco de entrada ya estaba vacío', () => {
+  const xml = [
+    parrafoXml('Análisis del Sector de la industria del software y de los videojuegos'),
+    parrafoXml('Comportamiento del Sector'),
+    parrafoXml('Texto real de comportamiento.'),
+    parrafoXml('Datos Clave del Sector'),
+  ].join('');
+
+  const analisisSector = { porAnio: { '2025': { narrativa: {
+    comportamiento: '<p>Texto real de comportamiento.</p>',
+  } } } };
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
+
+  assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
 });
 
 test('el año de la conclusión del rango pasa a ser el gravable, y solo ese', async () => {
