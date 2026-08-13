@@ -20,7 +20,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import {
-  localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml,
+  localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml, filasDe,
 } from './tablasHtmlInforme.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -52,7 +52,11 @@ const OBJETIVOS = [
   { nombres: 'Composición accionaria', filas: filasComposicionAccionaria },
   { nombres: 'Compañías vinculadas', filas: filasCompaniasVinculadas, rotulo: true },
   { nombres: 'Criterios de vinculación', filas: filasCriteriosVinculacion },
-  { nombres: 'Activos a 31 de diciembre', filas: filasActivos, rotulo: true },
+  /* `anioEnEncabezado`: sus columnas se rotulan «2.024» y «A.V. 2024». Es la única de esta
+     lista cuyo ENCABEZADO lleva un dato —las demás rotulan conceptos—, y por eso la bandera va
+     por tabla y no para todas: reescribir un encabezado que es redacción del cliente sería lo
+     contrario de lo que esta ruta conserva. */
+  { nombres: 'Activos a 31 de diciembre', filas: filasActivos, rotulo: true, anioEnEncabezado: true },
 ];
 
 /* Tablas que publican datos DEL CLIENTE y que ningún motor sabe regenerar, porque el
@@ -75,19 +79,71 @@ const SIN_MOTOR = [
   },
 ];
 
-/* Sustituye una ocurrencia: primero las filas y DESPUÉS el rótulo. El orden importa —el
-   rótulo está antes en el documento, así que reescribirlo primero movería los offsets del
-   bloque que ya se localizó—; es el mismo orden que sigue `actualizarTablasMacroHtml`. */
-function sustituir(html, bloque, tabla, conRotulo) {
+/* El año gravable dentro del ENCABEZADO de una tabla. La de activos rotula sus columnas
+   «2.024» y «A.V. 2024», y ese año es un dato: `filasActivos` lo declara así en sus
+   `encabezados`. La ruta .docx los emite —`generarTablaOoxml` recibe `t.encabezados`— pero la
+   de PDF reescribe solo las filas de datos y conservaba el encabezado tal cual, así que el
+   informe de 2025 publicaba las cifras nuevas bajo el año anterior.
+
+   Se sustituye SOLO el año y no el encabezado entero, que es lo que distingue el dato de la
+   redacción: «Cifras Expresadas en pesos colombianos» es texto del cliente y pisarlo con el
+   nuestro sería lo contrario de lo que esta ruta existe para conservar. Y se conserva el
+   separador de miles que traiga —la plantilla escribe «2.024»—, porque cambiarlo a «2025» en
+   una celda y no en la de al lado se ve como un descuido. */
+const RX_ANIO_ENCABEZADO = /\b2(\.?)0\d{2}\b/g;
+
+/* Sustituye una ocurrencia: primero las filas, después el año del encabezado y DESPUÉS el
+   rótulo. El orden importa —el rótulo está antes en el documento, así que reescribirlo primero
+   movería los offsets del bloque que ya se localizó—; es el mismo orden que sigue
+   `actualizarTablasMacroHtml`. */
+function sustituir(html, bloque, tabla, conRotulo, anioEnEncabezado) {
   let out = html.slice(0, bloque.inicio)
     + reescribirFilasHtml(html.slice(bloque.inicio, bloque.fin), tabla.filas)
     + html.slice(bloque.fin);
+
+  /* El año del encabezado, sobre la tabla ya reescrita. Se busca dentro del bloque de la
+     tabla y no en el documento entero: un año suelto en la prosa de alrededor no es este dato.
+     `reescribirFilasHtml` puede cambiar el largo del bloque, así que se relocaliza. */
+  if (anioEnEncabezado) {
+    const desde = bloque.inicio;
+    const hasta = finDeBloqueReescrito(out, desde);
+    if (hasta > desde) {
+      const tramo = out.slice(desde, hasta);
+      const filas = filasDe(tramo);
+      /* Solo la fila de encabezado: en las de datos el año no es un rótulo sino una cifra que
+         `reescribirFilasHtml` ya puso. */
+      if (filas[0]) {
+        const nuevaFila = filas[0].xml.replace(
+          RX_ANIO_ENCABEZADO,
+          (todo, sep) => String(anioEnEncabezado).replace(/^(\d)(\d{3})$/, '$1' + sep + '$2')
+        );
+        if (nuevaFila !== filas[0].xml) {
+          const conFila = tramo.slice(0, filas[0].inicio) + nuevaFila + tramo.slice(filas[0].fin);
+          out = out.slice(0, desde) + conFila + out.slice(hasta);
+        }
+      }
+    }
+  }
 
   if (conRotulo && bloque.rotulo) {
     const nuevo = reescribirRotuloHtml(bloque.rotulo.xml, tabla.titulo || tabla.nombre);
     out = out.slice(0, bloque.rotulo.inicio) + nuevo + out.slice(bloque.rotulo.fin);
   }
   return out;
+}
+
+/* Dónde acaba la `<table>` que abre en `desde`, contando anidamiento: la misma cuenta que hace
+   `localizarTablasHtml`, necesaria otra vez porque reescribir las filas movió el final. */
+function finDeBloqueReescrito(html, desde) {
+  const rx = /<table(?:\s[^>]*)?>|<\/table\s*>/gi;
+  rx.lastIndex = desde;
+  let nivel = 0;
+  let m;
+  while ((m = rx.exec(html)) !== null) {
+    nivel += /^<\//.test(m[0]) ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
 }
 
 /**
@@ -117,7 +173,8 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
         continue;
       }
       for (const bloque of [...bloques].reverse()) {
-        out = sustituir(out, bloque, tabla, objetivo.rotulo);
+        out = sustituir(out, bloque, tabla, objetivo.rotulo,
+          objetivo.anioEnEncabezado ? (Number(estudio.anio) || 2025) : 0);
       }
       continue;
     }
@@ -127,7 +184,8 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
       if (Array.isArray(avisos)) avisos.push(tabla.nombre);
       continue;
     }
-    out = sustituir(out, bloque, tabla, objetivo.rotulo);
+    out = sustituir(out, bloque, tabla, objetivo.rotulo,
+          objetivo.anioEnEncabezado ? (Number(estudio.anio) || 2025) : 0);
   }
 
   /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un
