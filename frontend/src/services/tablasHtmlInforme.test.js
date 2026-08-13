@@ -7,6 +7,7 @@ import {
   actualizarApartadosMacroHtml, localizarHitosHtml, reemplazarHuecosHtml,
   actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
+import { resolverSerie } from './analisisMercado.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
    con la razón social en negrita y la fuente al pie dentro de la propia tabla.
@@ -725,18 +726,82 @@ test('actualizarApartadosMacroHtml reemplaza el hueco de política monetaria con
       politicaMonetaria: '<p>La tasa de intervención cerró en 12,00 % en julio de 2026.</p>',
     },
     series: {
-      tasa_intervencion: { fuente: 'Banco de la República', fuenteUrl: 'https://banrep.gov.co/tasa' },
+      tasa_intervencion: {
+        valores: { 2026: { etiqueta: 'Agosto 2026', valor: '12.00' } },
+        fuente: 'Banco de la República',
+        fuenteUrl: 'https://banrep.gov.co/tasa',
+        fechaConsulta: new Date('2026-08-04'),
+      },
     },
   };
   const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
 
   assert.match(salida, /tasa de intervención cerró en 12,00/);
-  assert.match(salida, /FUENTE: Banco de la República, https:\/\/banrep\.gov\.co\/tasa/);
+  /* Mismo formato que imprime la tabla de esta serie justo debajo (`resolverSerie` en
+     `analisisMercado.js`): URL entre paréntesis y fecha de consulta, no el formato
+     "FUENTE: <fuente>, <url>" (sin fecha) que este módulo fabricaba antes por su cuenta. */
+  assert.match(salida, /FUENTE: Banco de la República \(https:\/\/banrep\.gov\.co\/tasa\), consultado el/);
   assert.doesNotMatch(salida, /Texto de END GAME sobre política monetaria/);
   /* El encabezado "Inflación en Colombia" (el hito ANTERIOR a este hueco) no debe
      desaparecer: si `localizarHitosHtml` lo confunde con la prosa que lo precede, el
      título real se pierde dentro de un hueco que no le corresponde. */
   assert.match(salida, /Inflación en Colombia \(2025 vs\. Meta 2026\)/);
+});
+
+test('actualizarApartadosMacroHtml: cada tema cita la fuente/fecha de SU propia serie, no la de otra', () => {
+  const PARES_TEMA_SERIE = [
+    { tema: 'inflacionMundial', serieClave: 'inflacion_global' },
+    { tema: 'proyeccionMundial', serieClave: 'crecimiento_por_region' },
+    { tema: 'inflacionColombia', serieClave: 'inflacion_colombia' },
+    { tema: 'politicaMonetaria', serieClave: 'tasa_intervencion' },
+    { tema: 'tasaCambio', serieClave: 'trm_promedio' },
+    { tema: 'mercadoLaboral', serieClave: 'desempleo_colombia' },
+  ];
+
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Narrativa mundial.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<h3>INFLACIÓN MUNDIAL</h3>',
+    '<h3>Tasas de Inflación Global (2024-2026)</h3>',
+    '<h3>Proyecciones de Crecimiento del PIB por Región/País (2026)</h3>',
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+    '<p>Narrativa colombia.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    '<h3>Inflación en Colombia (2025 vs. Meta 2026)</h3>',
+    '<h3>Tasa de Intervención del Banco de la República</h3>',
+    '<h3>Tasa Representativa del Mercado (TRM) Promedio</h3>',
+    '<h3>Tasa de Desempleo en Colombia</h3>',
+    '<h2>Análisis del Sector</h2>',
+  ].join('');
+
+  PARES_TEMA_SERIE.forEach(({ tema, serieClave }) => {
+    const datosMacro = {
+      narrativa: {
+        mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>',
+        [tema]: '<p>Narrativa distintiva de ' + tema + '.</p>',
+      },
+      series: {
+        [serieClave]: {
+          valores: { 2026: '1' },
+          fuente: 'Fuente distintiva de ' + serieClave,
+          fuenteUrl: 'https://ejemplo.test/' + serieClave,
+          fechaConsulta: new Date('2026-08-04'),
+        },
+      },
+    };
+    const { fuente: fuenteEsperada } = resolverSerie(datosMacro, serieClave);
+    const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+
+    assert.ok(
+      salida.includes('Narrativa distintiva de ' + tema + '.'),
+      tema + ': no se insertó su propia narrativa'
+    );
+    assert.ok(
+      salida.includes('FUENTE: ' + fuenteEsperada),
+      tema + ': no citó la fuente/fecha de su propia serie (' + serieClave + ')'
+    );
+  });
 });
 
 test('actualizarApartadosMacroHtml deja el marcador especifico de tema (no el generico) cuando falta narrativa', () => {

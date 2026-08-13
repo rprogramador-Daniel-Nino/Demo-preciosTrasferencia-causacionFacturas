@@ -52,6 +52,12 @@ import {
 } from './anexoCHtml.js';
 import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
+/* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
+   `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
+   de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
+   misma fecha de consulta. Sin riesgo de import circular: `analisisMercado.js` no
+   importa de este módulo ni de `tablasHtmlInforme.js`. */
+import { resolverSerie } from './analisisMercado.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -174,14 +180,19 @@ function marcadorApartadoPendiente(tema, year) {
     '1.2.2.2.1.5 del Decreto 1625 de 2016.]';
 }
 
-/** Línea "FUENTE: <fuente>, <url>" para un párrafo de narrativa con tema propio —
- *  misma convención que ya usa el resumen que se le pasa a Claude en
- *  `construirPromptRedaccion` (`functions/analisisMercadoPrompts.js`). Vacío si no hay
- *  URL: no se cita una fuente que no vino de una búsqueda real (`conclusiones`, que es
- *  síntesis y no cita una serie nueva, no lleva esta línea). */
-function parrafoFuenteOoxml(fuente, fuenteUrl) {
-  if (!fuenteUrl) return '';
-  const texto = 'FUENTE: ' + (fuente ? fuente + ', ' : '') + fuenteUrl;
+/** Línea "FUENTE: <fuente>" para un párrafo de narrativa con tema propio, a partir del
+ *  texto YA formateado por `resolverSerie` (analisisMercado.js) — mismo texto,
+ *  paréntesis alrededor de la URL y fecha de consulta incluidos, que la tabla de esa
+ *  misma serie imprime justo debajo (`tablasMacroInforme` en `tablasInforme.js`, que
+ *  también llama a `resolverSerie`). Antes este módulo reformateaba `fuente`/`fuenteUrl`
+ *  por su cuenta ("FUENTE: <fuente>, <url>", sin fecha) y el resultado no coincidía con
+ *  el pie de la tabla ni citaba la fecha que exige el numeral 4 del artículo
+ *  1.2.2.2.1.5 del Decreto 1625 de 2016; ahora reutiliza la misma resolución.
+ *  Vacío si `fuenteTexto` viene vacío (`conclusiones`, que es síntesis y no cita una
+ *  serie nueva, no llama a esta función con nada que mostrar). */
+function parrafoFuenteOoxml(fuenteTexto) {
+  if (!fuenteTexto) return '';
+  const texto = 'FUENTE: ' + fuenteTexto;
   return `<w:p><w:pPr><w:pStyle w:val="Normal"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:b/></w:rPr><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r></w:p>`;
 }
 
@@ -243,7 +254,6 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
   const tituloColombia = 'Análisis del panorama de la economía colombiana';
   const narrativa = (datosMacro && datosMacro.narrativa) || {};
-  const series = (datosMacro && datosMacro.series) || {};
   console.log('[docxRelleno] actualizarApartadosMacroOoxml: año ' + year
     + ', narrativa mundial: ' + (narrativa.mundial ? 'sí' : 'no (marcador)')
     + ', narrativa colombia: ' + (narrativa.colombia ? 'sí' : 'no (marcador)'));
@@ -259,14 +269,17 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
    *  sustancial que retirar — mismo umbral que ya aplicaba `contenidoHuecoIntermedio`
    *  a esta misma posición, para no fabricar un marcador donde el hueco ya venía
    *  vacío (p. ej. "INFLACIÓN MUNDIAL" como subtítulo corto sin desarrollo debajo).
-   *  `serieClave` es la clave en `datosMacro.series` cuya `fuente`/`fuenteUrl`
-   *  acompaña al párrafo — `null` para "conclusiones", que sintetiza y no cita una
-   *  serie nueva. */
+   *  `serieClave` es la clave en `datosMacro.series` que resuelve la fuente/fecha del
+   *  párrafo vía `resolverSerie` — `null` para "conclusiones", que sintetiza y no cita
+   *  una serie nueva. Si `datosMacro.series[serieClave]` no trae `valores` (o falta del
+   *  todo), `resolverSerie` cae al respaldo local (`DATOS_MACRO`/`FUENTES_MACRO`) igual
+   *  que hace la tabla de esa misma serie: preferible citar una fuente conocida y
+   *  estática a no citar ninguna, y mantiene párrafo y tabla en el mismo formato en
+   *  cualquier escenario. */
   const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
     if (narrativaHtml) {
-      const serie = serieClave ? series[serieClave] : null;
-      const fuente = serie ? parrafoFuenteOoxml(serie.fuente, serie.fuenteUrl) : '';
-      return parrafosOoxmlDesdeHtml(narrativaHtml) + fuente;
+      const fuenteTexto = serieClave ? resolverSerie(datosMacro, serieClave).fuente : '';
+      return parrafosOoxmlDesdeHtml(narrativaHtml) + parrafoFuenteOoxml(fuenteTexto);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
     return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
