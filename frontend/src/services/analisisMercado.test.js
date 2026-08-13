@@ -4,6 +4,8 @@ import {
   DATOS_MACRO,
   FUENTES_MACRO,
   generarApartadoSectorial,
+  corridaSectorIncompleta,
+  fuenteDatosClaveSector,
   generarApartadoMundial,
   generarApartadoColombia,
   generarTablaPibMundial,
@@ -386,6 +388,43 @@ test('generarApartadoSectorial arma los 6 títulos en orden con la narrativa gua
   });
   assert.ok(salida.includes('250.000') && salida.includes('260.000'), 'faltan los valores de la tabla de datos clave');
   assert.ok(salida.includes('href="https://dane.gov.co"'), 'falta el enlace de la fuente citada');
+});
+
+test('corridaSectorIncompleta señala la corrida vieja sin párrafo de entrada', () => {
+  const entrada = analisisSectorEjemplo.porAnio[2025];
+  const sinIntro = { ...entrada, narrativa: { ...entrada.narrativa } };
+  delete sinIntro.narrativa.introduccion;
+  assert.strictEqual(corridaSectorIncompleta(sinIntro), true);
+
+  const conIntro = {
+    ...entrada,
+    narrativa: { ...entrada.narrativa, introduccion: '<p>El sector mostró dinamismo en 2025.</p>' },
+  };
+  assert.strictEqual(corridaSectorIncompleta(conIntro), false);
+
+  /* Sin corrida no hay nada que regenerar: el flujo de generación bajo demanda ya se
+     encarga de ese caso, y decir «incompleta» aquí ofrecería un botón de más. */
+  assert.strictEqual(corridaSectorIncompleta(null), false);
+  assert.strictEqual(corridaSectorIncompleta(undefined), false);
+});
+
+test('fuenteDatosClaveSector cita cada fuente una vez, con su URL y la fecha de la corrida', () => {
+  const texto = fuenteDatosClaveSector({
+    actualizadoEn: new Date('2026-08-13T15:42:46Z'),
+    datosClaveTabla: [
+      { fuente: 'ProColombia', fuenteUrl: 'https://procolombia.co/x' },
+      { fuente: 'ProColombia', fuenteUrl: 'https://procolombia.co/x' },
+      { fuente: 'DANE' },
+    ],
+  });
+  assert.strictEqual((texto.match(/ProColombia/g) || []).length, 1);
+  assert.match(texto, /ProColombia \(https:\/\/procolombia\.co\/x\); DANE/);
+  assert.match(texto, /consultado el/);
+
+  /* Sin fuentes no se devuelve una línea hueca: el llamador la usa para decidir si toca
+     la nota al pie de la plantilla o la deja como estaba. */
+  assert.strictEqual(fuenteDatosClaveSector({ datosClaveTabla: [] }), '');
+  assert.strictEqual(fuenteDatosClaveSector(null), '');
 });
 
 test('generarApartadoSectorial sin datosClaveTabla no deja una tabla vacía', () => {

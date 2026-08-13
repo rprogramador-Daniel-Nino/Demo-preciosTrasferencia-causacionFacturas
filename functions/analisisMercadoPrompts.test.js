@@ -33,6 +33,39 @@ test('construirPromptBusqueda pide las 8 series y la ventana de 4 años', () => 
   ['2024', '2025', '2026', '2027'].forEach((a) => assert.ok(prompt.includes(a), 'falta el año ' + a));
 });
 
+test('construirPromptBusqueda nombra dónde buscar la PROYECCIÓN de las series históricas', () => {
+  /* `desempleo_colombia` y `trm_promedio` eran las dos únicas series que volvían sin el año
+     de proyección (medido en Firestore el 2026-08-13: las demás traían 2026 y hasta 2027).
+     La causa es que el prompt las anclaba a DANE y al Banco de la República, que publican el
+     dato realizado y no un pronóstico, así que el modelo omitía ese año — correctamente,
+     porque la regla 3 le prohíbe inventarlo. El informe salía con
+     «Desempleo Proyectado 2026: [Completar…]». */
+  const prompt = construirPromptBusqueda(2026);
+
+  assert.ok(/proyecci[oó]n/i.test(prompt), 'el prompt no menciona la proyección');
+  /* Que se diga explícitamente cuál es el año a proyectar, no solo la ventana. */
+  assert.ok(prompt.includes('2027'), 'no se nombra el año de proyección');
+
+  const proyectables = SERIES_MACRO.filter((s) => s.fuenteProyeccion);
+  assert.ok(proyectables.length >= 2, 'ninguna serie declara fuente de proyección');
+  proyectables.forEach((s) => {
+    assert.ok(prompt.includes(s.fuenteProyeccion),
+      'el prompt no dice dónde buscar la proyección de ' + s.clave);
+  });
+
+  const claves = proyectables.map((s) => s.clave);
+  assert.ok(claves.includes('desempleo_colombia'), 'desempleo_colombia sin fuente de proyección');
+  assert.ok(claves.includes('trm_promedio'), 'trm_promedio sin fuente de proyección');
+});
+
+test('la regla de no inventar sobrevive a la instrucción de proyección', () => {
+  /* Pedirle una proyección no puede convertirse en permiso para estimarla él mismo: la
+     cifra sigue teniendo que salir de una página consultada. */
+  const prompt = construirPromptBusqueda(2026);
+  assert.ok(/no la rellenes con un valor inventado/i.test(prompt));
+  assert.ok(/no estimes|no la calcules|no inventes/i.test(prompt));
+});
+
 test('el prompt manda buscar y NO exige que la respuesta sea solo el JSON', () => {
   /* Esto es lo que tenía muerta la Sección III. Con «Responde ÚNICAMENTE con un objeto
      JSON (sin texto adicional)», Gemini se salta la búsqueda y contesta de memoria:

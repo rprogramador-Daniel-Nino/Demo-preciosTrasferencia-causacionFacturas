@@ -400,7 +400,7 @@ function entradaSector(analisisSector, year) {
 export function tituloSectorial(study, analisisSector, year) {
   const entrada = entradaSector(analisisSector, year);
   if (entrada && entrada.tituloSector) {
-    return 'Análisis del Sector de la industria ' + escaparHtml(entrada.tituloSector);
+    return escaparHtml(titulosSectorial(entrada.tituloSector, year).apartado);
   }
   const ciiu = escaparHtml((study && study.ciiu) || '').trim();
   return ciiu
@@ -476,12 +476,59 @@ export function fuenteDatosClaveSector(entrada) {
   return partes.join('; ') + (fecha ? ', consultado el ' + fecha : '');
 }
 
+/**
+ * Los encabezados de III.C con la industria y los años de ESTE estudio.
+ *
+ * Los usan las tres rutas: `generarApartadoSectorial` los emite al armar el apartado desde
+ * cero, y las dos que parchean una plantilla (`actualizarApartadoSectorialOoxml` y
+ * `actualizarApartadoSectorialHtml`) los escriben encima de los del informe de referencia.
+ * Hasta el 2026-08-13 esas dos no los tocaban —reemplazaban solo el hueco ENTRE
+ * encabezados— y el informe se radicaba con «…en 2024 y Comparación con 2023» y «(2023 vs.
+ * 2024)» sobre prosa y cifras de 2025, que es lo que hacía parecer que III.C no se había
+ * actualizado.
+ *
+ * `proyeccion` va con `year + 1` a propósito: ese apartado es la expectativa del año
+ * siguiente, no del gravable.
+ *
+ * Devuelve texto EN CRUDO, como el resto de los ayudantes de III.C: cada ruta escapa con lo
+ * suyo.
+ */
+export function titulosSectorial(tituloSector, year) {
+  const s = tituloSector || '';
+  return {
+    apartado: 'Análisis del Sector de la industria ' + s,
+    comportamiento: 'Comportamiento del Sector de la Industria ' + s
+      + ' en ' + year + ' y Comparación con ' + (year - 1),
+    datosClave: tituloDatosClaveSector(s, year),
+    comercioExterior: 'Importaciones y exportaciones del sector de la industria ' + s,
+    proyeccion: '¿Qué se proyecta para el sector de la industria ' + s + ' en ' + (year + 1) + '?',
+    /* Sin industria ni años: nada que actualizar, y reescribirlo solo arriesga perder el
+       formato del encabezado de la plantilla. */
+    conclusiones: 'Conclusiones y Perspectivas',
+  };
+}
+
+/**
+ * ¿A la corrida guardada le falta algo que el informe de hoy sí coloca?
+ *
+ * `narrativa.introduccion` se añadió el 2026-08-13 y las corridas anteriores no la traen.
+ * Como la clave de caché es solo actividad+año (`claveActividad`), esas entradas se
+ * reutilizan tal cual: el hueco de entrada de III.C se radica con el marcador de pendiente
+ * para siempre y nada explica por qué. Lo consume `ReporteGenerador` para ofrecer regenerar
+ * a mano — no se regenera sola, porque cuesta una cadena de llamadas a Gemini y Claude.
+ *
+ * @param {object|null} entrada  una entrada de `porAnio`, no el documento completo.
+ */
+export function corridaSectorIncompleta(entrada) {
+  if (!entrada) return false;
+  return !(entrada.narrativa && entrada.narrativa.introduccion);
+}
+
 export function generarApartadoSectorial(study, year, wrap, analisisSector) {
   const marca = typeof wrap === 'function' ? wrap : (v) => v;
   const entrada = entradaSector(analisisSector, year);
 
   if (entrada) {
-    const nombreSector = escaparHtml(entrada.tituloSector);
     const filas = filasDatosClaveSector(entrada.datosClaveTabla).map((f) => f.map(escaparHtml));
     const tabla = filas.length
       ? tablaHTML(
@@ -497,16 +544,18 @@ export function generarApartadoSectorial(study, year, wrap, analisisSector) {
         '\n</p>\n'
       : '';
 
+    const titulos = titulosSectorial(entrada.tituloSector, year);
+    const encabezado = (texto) => '<p>\n<strong>' + escaparHtml(texto) + '</strong>\n</p>\n';
+
     return (
-      '<p>\n<strong>Comportamiento del Sector de la Industria ' + nombreSector + ' en ' + year +
-      ' y Comparación con ' + (year - 1) + '</strong>\n</p>\n' +
+      encabezado(titulos.comportamiento) +
       entrada.narrativa.comportamiento +
       tabla +
-      '<p>\n<strong>Importaciones y exportaciones del sector de la industria ' + nombreSector + '</strong>\n</p>\n' +
+      encabezado(titulos.comercioExterior) +
       entrada.narrativa.comercioExterior +
-      '<p>\n<strong>¿Qué se proyecta para el sector de la industria ' + nombreSector + ' en ' + (year + 1) + '?</strong>\n</p>\n' +
+      encabezado(titulos.proyeccion) +
       entrada.narrativa.proyeccion +
-      '<p>\n<strong>Conclusiones y Perspectivas</strong>\n</p>\n' +
+      encabezado(titulos.conclusiones) +
       entrada.narrativa.conclusiones +
       listaFuentes
     );
