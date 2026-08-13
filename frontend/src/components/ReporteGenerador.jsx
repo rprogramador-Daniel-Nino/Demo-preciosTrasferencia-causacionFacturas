@@ -262,7 +262,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          nada que hacer, solo esperar a que este mismo aviso se actualice solo. */
       avisos.push(
         'el análisis del sector (III.C) se está generando para esta actividad y año — ' +
-        'puede tardar uno o dos minutos, este aviso se actualiza solo cuando esté listo'
+        'puede tardar dos o tres minutos, este aviso se actualiza solo cuando esté listo'
       );
     } else if (motivoFalloSector) {
       /* Distinguir "no hay nada público que citar" de un error técnico: la primera no se
@@ -1634,7 +1634,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       {sectorEnCurso && (
         <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-          Generando el análisis del sector (III.C) para esta actividad y año — puede tardar uno o dos minutos.
+          Generando el análisis del sector (III.C) para esta actividad y año — puede tardar dos o tres minutos.
         </div>
       )}
       {sectorListo && !sectorIncompleto && (
@@ -1656,7 +1656,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
             type="button"
             onClick={regenerarSector}
             className="shrink-0 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/40 font-medium"
-            title="Rehace la corrida del sector para esta actividad y año, aunque ya haya una guardada (tarda uno o dos minutos)"
+            title="Rehace la corrida del sector para esta actividad y año, aunque ya haya una guardada (tarda dos o tres minutos)"
           >
             Regenerar III.C
           </button>
