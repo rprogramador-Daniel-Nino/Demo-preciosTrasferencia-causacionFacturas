@@ -672,6 +672,38 @@ function textoPorId(items, estilos = new Map()) {
     }
     if (item.hasEOL) saltoPendiente = true;
   }
+
+  // Post-procesamiento para reparar fórmulas matemáticas de LaTeX corruptas
+  for (const [id, runs] of porId.entries()) {
+    const textoCompleto = runs.map((r) => r.texto).join('');
+    const normalized = textoCompleto.replace(/\s+/g, ' ').trim();
+    if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAAA') || normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA')) {
+      const estilo = runs[0] ? {
+        negrita: runs[0].negrita,
+        cursiva: runs[0].cursiva,
+        familia: runs[0].familia,
+        tamano: runs[0].tamano,
+      } : { familia: 'Arial', tamano: 12 };
+
+      if (ultimoTipoAjuste === 'AP') {
+        porId.set(id, [{
+          ...estilo,
+          texto: 'AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))'
+        }]);
+      } else {
+        porId.set(id, [{
+          ...estilo,
+          texto: 'AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))'
+        }]);
+      }
+    } else if (normalized === 'AAAAAATTTT AA' || normalized === 'AAAAAATTTT R') {
+      porId.set(id, []);
+    } else if ((normalized.includes('TATTTTTT') || normalized.includes('TTAATTTTTT') || normalized.includes('TTTTTT')) && 
+               (normalized.includes('(1 + AA)') || normalized.includes('(1+AA)') || normalized.includes('(1 + R)') || normalized.includes('(1+R)'))) {
+      porId.set(id, []);
+    }
+  }
+
   return porId;
 }
 
@@ -868,35 +900,8 @@ function demath(char) {
 /**
  * Normaliza una cadena de texto, traduciendo cualquier caracter matemático corrupto
  * (procedente de fórmulas de LaTeX o editores de ecuaciones) a su letra ASCII equivalente legible.
- * 
- * Si se detecta un bloque correspondiente a las ecuaciones de ajuste de Cuentas por Cobrar
- * o Cuentas por Pagar (que se extraen como tres líneas separadas debido a las fracciones),
- * reconstruye automáticamente la fórmula limpia en la línea principal y vacía las otras dos.
  */
-export function normalizarCaracteresMatematicos(str, tipo) {
+export function normalizarCaracteresMatematicos(str) {
   if (typeof str !== 'string') return str;
-  let res = [...str].map(demath).join('');
-  const normalized = res.replace(/\s+/g, ' ').trim();
-
-  // Detecta el cuerpo principal de la fórmula (Fila 2 de la fracción)
-  if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA') && normalized.includes('RR (1 + RR)')) {
-    if (tipo === 'AP') {
-      return 'AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))';
-    } else {
-      return 'AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))';
-    }
-  }
-
-  // Detecta la línea del numerador de la fracción (Fila 1 de la fracción) para vaciarla
-  if (normalized === 'AAAAAATTTT AA' || normalized === 'AAAAAATTTT R') {
-    return '';
-  }
-
-  // Detecta la línea del denominador de la fracción (Fila 3 de la fracción) para vaciarla
-  if ((normalized.includes('TATTTTTT') || normalized.includes('TTAATTTTTT') || normalized.includes('TTTTTT')) && 
-      (normalized.includes('(1 + AA)') || normalized.includes('(1+AA)') || normalized.includes('(1 + R)') || normalized.includes('(1+R)'))) {
-    return '';
-  }
-
-  return res;
+  return [...str].map(demath).join('');
 }
