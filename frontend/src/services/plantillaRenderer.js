@@ -7,6 +7,7 @@ import { valorDeCampo } from './plantillaVocabulario.js';
 import { resaltarValor } from './estiloDocumento.js';
 import {
   actualizarTablasMotorHtml, actualizarTablasMacroHtml, actualizarApartadosMacroHtml,
+  actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
@@ -39,9 +40,10 @@ const RX_MARCA = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
  * @param {string} htmlMarcado
  * @param {object} estudio
  * @param {Array} [recursos]
- * @param {{datosMacro?:object}} [opciones]  `datosMacro` alimenta las ocho tablas de
- *        tendencias de la economía; sin él se usan las series de respaldo de
- *        `analisisMercado.js`, igual que en la ruta .docx.
+ * @param {{datosMacro?:object, analisisSector?:object}} [opciones]  `datosMacro` alimenta
+ *        las ocho tablas y la prosa de tendencias de la economía (III.A/III.B); sin él
+ *        se usan las series de respaldo de `analisisMercado.js`, igual que en la ruta
+ *        .docx. `analisisSector` hace lo mismo para la prosa y la tabla de III.C.
  */
 export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
   const vacios = new Set();
@@ -62,6 +64,8 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
   html = actualizarTablasOperacionesHtml(html, estudio, avisosTablas);
   html = actualizarApartadosMacroHtml(
     html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
+  html = actualizarApartadoSectorialHtml(
+    html, opciones.analisisSector || null, estudio, Number(estudio && estudio.anio) || 2025, avisosTablas);
   html = actualizarTablasMacroHtml(
     html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
   /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su
