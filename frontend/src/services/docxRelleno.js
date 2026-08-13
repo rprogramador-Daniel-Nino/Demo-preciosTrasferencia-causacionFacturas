@@ -55,6 +55,7 @@ import { nameKey } from './comparablesEngine.js';
 /* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
+
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
    de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
@@ -1080,9 +1081,49 @@ function sustituidorDeTablas(xmlInicial, avisos) {
   };
 }
 
+/* Reemplaza quirúrgicamente los párrafos corruptos de las fórmulas de ajuste de LaTeX por ecuaciones
+   matemáticas nativas de Microsoft Word (OMML) con formato perfecto. */
+export function actualizarFormulasMatematicasOoxml(xml) {
+  let salida = String(xml || '');
+
+  const XML_AR = `<w:p><w:pPr><w:spacing w:after="120" w:before="120"/><w:jc w:val="center"/></w:pPr><m:oMath><m:r><m:t>AR Adjustment = </m:t></m:r><m:d><m:dPr/><m:e><m:d><m:dPr/><m:e><m:f><m:num><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANC</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:num><m:den><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:den></m:f><m:r><m:t> * </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> - </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANC</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> * </m:t></m:r><m:d><m:dPr/><m:e><m:f><m:num><m:r><m:t>R</m:t></m:r></m:num><m:den><m:r><m:t>1 + R</m:t></m:r></m:den></m:f></m:e></m:d></m:oMath></w:p>`;
+
+  const XML_AP = `<w:p><w:pPr><w:spacing w:after="120" w:before="120"/><w:jc w:val="center"/></w:pPr><m:oMath><m:r><m:t>AP Adjustment = </m:t></m:r><m:d><m:dPr/><m:e><m:d><m:dPr/><m:e><m:f><m:num><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANP</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:num><m:den><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:den></m:f><m:r><m:t> * </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> - </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANP</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> * </m:t></m:r><m:d><m:dPr/><m:e><m:f><m:num><m:r><m:t>R</m:t></m:r></m:num><m:den><m:r><m:t>1 + R</m:t></m:r></m:den></m:f></m:e></m:d></m:oMath></w:p>`;
+
+  const reemplazarFormulaSiguiente = (tituloKeyword, xmlFormula) => {
+    let cursor = 0;
+    for (;;) {
+      const idx = salida.indexOf(tituloKeyword, cursor);
+      if (idx === -1) break;
+
+      // Buscamos el siguiente párrafo <w:p>
+      const nextP = salida.indexOf('<w:p', idx + tituloKeyword.length);
+      if (nextP === -1) break;
+
+      const finP = salida.indexOf('</w:p>', nextP);
+      if (finP === -1) break;
+
+      const finPFull = finP + '</w:p>'.length;
+      
+      // Reemplazamos el párrafo entero con la fórmula matemática nativa
+      salida = salida.slice(0, nextP) + xmlFormula + salida.slice(finPFull);
+      cursor = nextP + xmlFormula.length;
+    }
+  };
+
+  reemplazarFormulaSiguiente('FORMULA AJUSTE CUENTAS POR COBRAR', XML_AR);
+  reemplazarFormulaSiguiente('FORMULA AJUSTE CUENTAS POR PAGAR', XML_AP);
+
+  return salida;
+}
+
 
 export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
+  
+  // Reemplazamos las fórmulas de LaTeX corruptas por el motor matemático nativo de Word (OMML)
+  xml = actualizarFormulasMatematicasOoxml(xml);
+
   const doc = sustituidorDeTablas(xml, avisos);
   const reemplazar = (...args) => doc.reemplazar(...args);
 
