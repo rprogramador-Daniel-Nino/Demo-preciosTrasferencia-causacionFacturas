@@ -427,6 +427,27 @@ export async function leerAnalisisSector(claveActividad) {
   return instantanea.exists() ? instantanea.data() : null;
 }
 
+const NARRATIVA_MACRO_ESTUDIO = 'narrativaMacroPorEstudio';
+
+/** Narrativa macro redactada en vivo para ESTE estudio (no el documento global
+ *  `analisisMercado/actual` — este es el caché por estudio de la redacción en vivo,
+ *  para no volver a llamar a Claude si ya se redactó para la misma corrida de
+ *  series). null si nunca se redactó para este estudio. */
+export async function leerNarrativaMacroEstudio(estudioId) {
+  if (!estudioId) return null;
+  const instantanea = await getDoc(doc(db, NARRATIVA_MACRO_ESTUDIO, estudioId));
+  return instantanea.exists() ? instantanea.data() : null;
+}
+
+/** Guarda el resultado de una redacción en vivo para este estudio, con la fecha de
+ *  la corrida de series (`analisisMercado.actualizadoEn`) que la originó — así
+ *  `necesitaRedaccion` (analisisMercadoRedaccion.js) puede saber si el caché sigue
+ *  vigente o si las series se refrescaron después. */
+export async function guardarNarrativaMacroEstudio(estudioId, seriesActualizadoEnMs, narrativa) {
+  if (!estudioId) return;
+  await setDoc(doc(db, NARRATIVA_MACRO_ESTUDIO, estudioId), { seriesActualizadoEnMs, narrativa });
+}
+
 /* ══════════════════════ migraciones ══════════════════════ */
 
 const MARCA_MIGRACION = 'pt:migracion:firestore';

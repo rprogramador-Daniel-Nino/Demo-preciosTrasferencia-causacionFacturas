@@ -2,7 +2,6 @@ import axios from 'axios';
 import { extraerJSON } from './comparablesEngine.js';
 
 const MODELO_REDACCION = 'claude-haiku-4-5-20251001';
-const PREFIJO_CACHE = 'pt:narrativaMacro:';
 
 /** Campos de tema "mejor si están, no bloqueantes" — mismo contrato que
  *  functions/analisisMercadoPrompts.js:CAMPOS_TEMA_OPCIONALES. Duplicado a propósito:
@@ -94,34 +93,15 @@ export function parsearRespuestaRedaccionMacro(texto) {
 /** true si hace falta redactar en vivo: hay series de `analisisMercado` (si no hay
  *  ni siquiera eso, nada que redactar, el batch mensual tampoco ha corrido nunca) y
  *  o no hay caché para este estudio, o el caché es de una corrida de series más
- *  vieja que la vigente. */
-export function necesitaRedaccion(estudioId, analisisMercado) {
+ *  vieja que la vigente. `cache` es lo que devolvió `leerNarrativaMacroEstudio`
+ *  (firestoreRepo.js) — esta función es pura, no toca Firestore. */
+export function necesitaRedaccion(analisisMercado, cache) {
   if (!analisisMercado || !analisisMercado.actualizadoEn) return false;
-  const cache = leerNarrativaMacroCache(estudioId);
   if (!cache) return true;
   const vigente = analisisMercado.actualizadoEn.toMillis
     ? analisisMercado.actualizadoEn.toMillis()
     : Number(analisisMercado.actualizadoEn);
   return cache.seriesActualizadoEnMs < vigente;
-}
-
-export function leerNarrativaMacroCache(estudioId) {
-  if (!estudioId) return null;
-  const crudo = localStorage.getItem(PREFIJO_CACHE + estudioId);
-  if (!crudo) return null;
-  try {
-    return JSON.parse(crudo);
-  } catch {
-    return null;
-  }
-}
-
-export function guardarNarrativaMacroCache(estudioId, seriesActualizadoEnMs, narrativa) {
-  if (!estudioId) return;
-  localStorage.setItem(
-    PREFIJO_CACHE + estudioId,
-    JSON.stringify({ seriesActualizadoEnMs, narrativa })
-  );
 }
 
 /* Mismo patrón de reintento en 429 que descripcionComparables.js:postClaudeWithRetry. */

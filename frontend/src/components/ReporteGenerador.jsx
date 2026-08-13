@@ -15,10 +15,10 @@ import {
   guardarHuecos, leerHuecos,
   guardarDocx, leerDocx, guardarDocxMarcado, leerDocxMarcado, borrarDocxMarcado,
 } from '../services/plantillaStore';
-import { leerAnalisisMercado, leerAnalisisSector } from '../services/firestoreRepo';
 import {
-  necesitaRedaccion, redactarNarrativaMacroEnVivo, guardarNarrativaMacroCache, leerNarrativaMacroCache,
-} from '../services/analisisMercadoRedaccion';
+  leerAnalisisMercado, leerAnalisisSector, leerNarrativaMacroEstudio, guardarNarrativaMacroEstudio,
+} from '../services/firestoreRepo';
+import { necesitaRedaccion, redactarNarrativaMacroEnVivo } from '../services/analisisMercadoRedaccion';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
 import {
   proponerMarcas, aplicarMarcas,
@@ -103,33 +103,31 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
 
-  /* Dispara la redacción en vivo si hace falta, o aplica el caché de localStorage si ya
+  /* Dispara la redacción en vivo si hace falta, o aplica el caché de Firestore si ya
      existe uno vigente — mismo criterio en la carga inicial y en "Actualizar información".
      `datos` es lo que acaba de devolver leerAnalisisMercado() (puede ser null). */
-  function aplicarNarrativaMacro(datos) {
+  async function aplicarNarrativaMacro(datos) {
     if (!datos) return;
-    if (necesitaRedaccion(estudioId, datos)) {
+    const cache = await leerNarrativaMacroEstudio(estudioId);
+    if (necesitaRedaccion(datos, cache)) {
       setRedactandoMacro(true);
       redactarNarrativaMacroEnVivo(datos.series || {}, Number(study && study.anio) || 2025)
-        .then((narrativaEnVivo) => {
+        .then(async (narrativaEnVivo) => {
           if (!narrativaEnVivo) return; // se queda con el marcador especifico, no bloquea nada
           const seriesActualizadoEnMs = datos.actualizadoEn && datos.actualizadoEn.toMillis
             ? datos.actualizadoEn.toMillis() : Date.now();
-          guardarNarrativaMacroCache(estudioId, seriesActualizadoEnMs, narrativaEnVivo);
+          await guardarNarrativaMacroEstudio(estudioId, seriesActualizadoEnMs, narrativaEnVivo);
           setAnalisisMercado((actual) => ({
             ...actual,
             narrativa: { ...(actual && actual.narrativa), ...narrativaEnVivo },
           }));
         })
         .finally(() => setRedactandoMacro(false));
-    } else {
-      const cache = leerNarrativaMacroCache(estudioId);
-      if (cache) {
-        setAnalisisMercado((actual) => ({
-          ...actual,
-          narrativa: { ...(actual && actual.narrativa), ...cache.narrativa },
-        }));
-      }
+    } else if (cache) {
+      setAnalisisMercado((actual) => ({
+        ...actual,
+        narrativa: { ...(actual && actual.narrativa), ...cache.narrativa },
+      }));
     }
   }
 
