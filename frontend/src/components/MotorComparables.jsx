@@ -710,6 +710,46 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     } : prev));
   };
 
+  /* Lo mismo para la comparable que el analista retira A MANO con la papelera del paso 4. El
+     embudo tiene que seguir cuadrando igual: sin esto la fila desaparecía de la pantalla y el
+     informe seguía declarando las aceptadas de antes, así que la tabla de razones de rechazo
+     decía una cifra y la de márgenes listaba otra. Y el descuadre no se veía, porque los conteos
+     del embudo no habían cambiado y seguían sumando el universo evaluado.
+
+     Se guarda la LISTA de las retiradas y no un contador: así retirar dos veces la misma no la
+     cuenta dos veces, y `devolverAMuestra` puede deshacerlo. `filasRazonesRechazo` suma su
+     longitud a las diferencias funcionales, el mismo destino que la reserva. */
+  const retirarDeMuestra = (comp) => {
+    const clave = (comp && comp.nameKey) || nameKey((comp && comp.name) || '');
+    /* Una fila en blanco no es una comparable: no hay nada que anotar. */
+    if (!clave) return;
+    setSelectionFunnel((prev) => {
+      if (!prev) return prev;
+      const ya = Array.isArray(prev.retiradasManual) ? prev.retiradasManual : [];
+      if (ya.includes(clave)) return prev;
+      return {
+        ...prev,
+        seleccionadas: Math.max(0, (Number(prev.seleccionadas) || 0) - 1),
+        retiradasManual: [...ya, clave],
+      };
+    });
+  };
+
+  /* Deshace el retiro manual de la comparable que vuelve a la muestra. */
+  const devolverAMuestra = (nombre) => {
+    const clave = nameKey(nombre || '');
+    if (!clave) return;
+    setSelectionFunnel((prev) => {
+      const ya = (prev && Array.isArray(prev.retiradasManual)) ? prev.retiradasManual : [];
+      if (!ya.includes(clave)) return prev;
+      return {
+        ...prev,
+        seleccionadas: (Number(prev.seleccionadas) || 0) + 1,
+        retiradasManual: ya.filter((k) => k !== clave),
+      };
+    });
+  };
+
   /* Guarda las páginas rasterizadas de esta comparable para el ANEXO B. Se combina con
      lo que ya había: dos cargas sucesivas sobre comparables distintas no deben
      pisarse entre sí. */
@@ -1054,16 +1094,30 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const next = [...comparables];
     next[index][key] = value;
     setComparables(next);
+    /* Si el nombre que se escribe es el de una comparable retirada a mano antes, se deshace ese
+       retiro: es lo que permite corregir un borrado por error sin dejar el embudo contando una
+       baja que ya no existe. */
+    if (key === 'name') devolverAMuestra(value);
   };
 
   const addComparable = () => {
     setComparables([...comparables, {
-      name: '', amb: 'Int', s: '', c: '', op: '', ar: '', inv: '', ap: '', ppe: '', sic: '', id: Date.now().toString()
+      name: '', amb: 'Int', s: '', c: '', op: '', ar: '', inv: '', ap: '', ppe: '', sic: '', id: Date.now().toString(),
+      /* Nace fuera del motor, así que nunca estuvo en el embudo: retirarla no puede descontar
+         una aceptada que el embudo no contó. Sin esta marca, añadir una a mano y volver a
+         quitarla dejaba la tabla de razones de rechazo con una baja inventada. */
+      aMano: true,
     }]);
   };
 
   const removeComparable = (index) => {
+    const fila = comparables[index];
     setComparables(comparables.filter((_, i) => i !== index));
+    /* Y se anota en el embudo, como hace la retirada automática por falta de estado financiero.
+       Quitar la fila y no anotarla dejaba el informe declarando más comparables aceptadas de las
+       que la muestra tiene, sin que nada lo advirtiera. */
+    if (!fila || fila.aMano) return;
+    retirarDeMuestra(fila);
   };
 
   // Calculations for Interquartile Range

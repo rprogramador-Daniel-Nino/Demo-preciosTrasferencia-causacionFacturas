@@ -100,6 +100,45 @@ test('la fila de diferencias funcionales aparece aunque solo la sostengan las re
   assert.ok(cuadra, '1 + 9 = 10');
 });
 
+test('la comparable que el analista retira a mano también va a las diferencias funcionales', () => {
+  /* El borrado con la papelera del paso 4 solo quitaba la fila de la pantalla. El embudo seguía
+     declarando las aceptadas de antes, así que el informe decía una cifra de comparables
+     aceptadas y la tabla de márgenes listaba otra —una menos—, con el rango calculado sobre esa
+     otra. Y el descuadre no se veía: los conteos del embudo no habían cambiado y seguían sumando
+     el universo, así que `cuadra` daba true y nada avisaba antes de radicar.
+
+     El destino es el mismo que ya les da el ANEXO C, que clasifica por el estado real de la
+     muestra: una comparable que sale de ella y no tiene motivo de rechazo cae en diferencias
+     funcionales. Con esto la Tabla 16 dice lo que el anexo sustenta. */
+  const conRetiroManual = { ...embudoReal, seleccionadas: 7, retiradasManual: ['acme'] };
+  const { filas, cuadra } = filasRazonesRechazo(conRetiroManual);
+  assert.ok(!filas.some((f) => f.clave === 'retiradasManual'), 'no puede tener fila propia');
+  const rigor = filas.find((f) => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.cuantas, 43, '5 por rigor + 25 por actividad + 12 de reserva + 1 a mano');
+  const aceptadas = filas.find((f) => f.clave === 'aceptadas');
+  assert.strictEqual(aceptadas.cuantas, 7, 'la tabla declara la muestra que de verdad quedó');
+  assert.ok(cuadra, 'la suma sigue dando el universo evaluado');
+});
+
+test('retirar dos veces la misma comparable no la cuenta dos veces', () => {
+  /* Por eso el embudo guarda la LISTA de retiradas y no un contador: un contador se incrementaría
+     otra vez y la tabla declararía una baja que no existe. */
+  const unaVez = filasRazonesRechazo({ ...embudoReal, seleccionadas: 7, retiradasManual: ['acme'] });
+  const dosVeces = filasRazonesRechazo({ ...embudoReal, seleccionadas: 7, retiradasManual: ['acme'] });
+  assert.deepStrictEqual(dosVeces.filas, unaVez.filas);
+});
+
+test('un embudo guardado antes de este cambio sigue cuadrando', () => {
+  /* Los estudios ya guardados no traen `retiradasManual`. No puede convertirse en un NaN ni en
+     una fila fantasma. */
+  const viejo = { ...embudoReal };
+  delete viejo.retiradasManual;
+  const { filas, cuadra } = filasRazonesRechazo(viejo);
+  const rigor = filas.find((f) => f.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.cuantas, 42, 'el conteo es el de siempre: 5 + 25 + 12 de reserva');
+  assert.ok(cuadra);
+});
+
 test('un embudo sin `sinEeff` sigue cuadrando igual', () => {
   /* Los estudios guardados antes de este cambio no traen la clave. */
   const { cuadra } = filasRazonesRechazo(embudoReal);

@@ -261,3 +261,71 @@ test('la tabla de fuentes de información no se avisa: no arrastra datos del cli
   actualizarTablasOperacionesHtml(html, ESTUDIO_COMPLETO, avisos);
   assert.ok(!avisos.some((a) => a.includes('Fuentes de Información')), 'no debe avisarse');
 });
+
+/* ══════ el año del encabezado de la tabla de activos ══════ */
+
+/* Forma REAL de la Tabla 10 en el HTML extraído del PDF: el encabezado rotula sus dos columnas
+   con el año gravable, y la plantilla trae el del informe anterior con separador de miles. */
+const TABLA_ACTIVOS =
+  '<p><strong> Tabla 10. Activos a 31 de diciembre de 2024</strong></p>' +
+  '<table>' +
+  '<tr><th><p><strong> Cifras Expresadas en pesos colombianos</strong></p></th>' +
+  '<th><p><strong> 2.024</strong></p></th>' +
+  '<th><p><strong> A.V. 2024</strong></p></th></tr>' +
+  '<tr><th><p> Efectivo y equivalentes de efectivo</p></th>' +
+  '<td><p> 87.957.645</p></td><td><p> 4.42%</p></td></tr>' +
+  '</table>';
+
+test('el año del encabezado de los activos pasa al del estudio', () => {
+  /* La ruta .docx ya lo hacía —`generarTablaOoxml` recibe los `encabezados` del descriptor, que
+     los construye con el año—, pero la de PDF reescribía solo las filas de datos y conservaba el
+     encabezado tal cual: el informe de 2025 publicaba las cifras nuevas bajo «2.024» y
+     «A.V. 2024». Se reportó sobre el documento generado. */
+  const salida = actualizarTablasOperacionesHtml(TABLA_ACTIVOS, { ...ESTUDIO_COMPLETO, anio: 2025 }, []);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  assert.ok(/2\.025/.test(texto), 'la columna del año sigue en 2024: ' + texto);
+  assert.ok(/A\.V\. 2025/.test(texto), 'la columna del A.V. sigue en 2024: ' + texto);
+  assert.ok(!/2\.024|A\.V\. 2024/.test(texto), 'sobrevive el año de la plantilla: ' + texto);
+});
+
+test('se conserva el separador de miles que traía la plantilla', () => {
+  /* La plantilla escribe «2.024» con punto. Emitir «2025» en esa celda y «A.V. 2025» en la de al
+     lado se lee como un descuido, así que el separador se respeta tal como venía. */
+  const salida = actualizarTablasOperacionesHtml(TABLA_ACTIVOS, { ...ESTUDIO_COMPLETO, anio: 2025 }, []);
+  const texto = salida.replace(/<[^>]*>/g, ' ');
+  assert.ok(texto.includes('2.025'), 'perdió el punto de miles de la columna del año');
+  assert.ok(texto.includes('A.V. 2025'), 'el A.V. no lleva el año sin separador, y debía');
+});
+
+test('la redacción del encabezado no se toca, solo el año', () => {
+  /* «Cifras Expresadas en pesos colombianos» es texto del cliente. Reescribir el encabezado
+     entero con el nuestro sería lo contrario de lo que esta ruta existe para conservar. */
+  const salida = actualizarTablasOperacionesHtml(TABLA_ACTIVOS, { ...ESTUDIO_COMPLETO, anio: 2025 }, []);
+  assert.ok(salida.includes('Cifras Expresadas en pesos colombianos'),
+    'se pisó la redacción del cliente');
+  /* Y el `<strong>` de la celda sigue ahí: el énfasis de la plantilla es parte del formato. */
+  assert.match(salida, /<th><p><strong>[^<]*2\.025<\/strong><\/p><\/th>/,
+    'se perdió el markup del encabezado');
+});
+
+test('el año de una fila de DATOS no se confunde con el del encabezado', () => {
+  /* En las filas de datos las cifras las pone `reescribirFilasHtml`; ahí un número que se parezca
+     a un año no es un rótulo. La sustitución se limita a la primera fila. */
+  const conAnioEnDatos = TABLA_ACTIVOS.replace(
+    '<td><p> 87.957.645</p></td>', '<td><p> 2.024</p></td>');
+  const salida = actualizarTablasOperacionesHtml(
+    conAnioEnDatos, { ...ESTUDIO_COMPLETO, anio: 2025, t_cash: 2024 }, []);
+  /* La fila de datos se reescribió con la cifra del estudio, no con un año sustituido. */
+  const filas = salida.split('<tr>');
+  assert.ok(filas.length >= 3, 'la tabla perdió filas');
+  assert.ok(/2\.025/.test(filas[1]), 'el encabezado no se actualizó');
+});
+
+test('las demás tablas no tocan su encabezado', () => {
+  /* La bandera va por tabla: la de activos es la única cuyo encabezado lleva un dato. En la
+     Tabla 1 los encabezados son conceptos y deben quedarse como los redactó el cliente. */
+  const salida = actualizarTablasOperacionesHtml(TABLA_1, { ...ESTUDIO_COMPLETO, anio: 2025 }, []);
+  assert.ok(salida.includes('Concepto de Operaciones a analizar'), 'se tocó un encabezado ajeno');
+  assert.ok(salida.includes('Monto de la Operación analizar'), 'se tocó un encabezado ajeno');
+});

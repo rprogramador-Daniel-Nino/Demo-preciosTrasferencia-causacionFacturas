@@ -820,3 +820,22 @@ test('la llamada de la cita es la referencia de Word, no un dígito escrito', as
   assert.ok(!/<w:t[^>]*>1<\/w:t>/.test(parrafo[0]),
     'el número de la llamada sigue escrito a mano en el párrafo');
 });
+
+test('las fórmulas de ajuste de LaTeX se reemplazan con el motor matemático nativo de Word (OMML)', async () => {
+  const html =
+    '<p>AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))</p>' +
+    '<p>AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))</p>';
+  const { doc } = await abrir(html);
+
+  // Verificamos que se hayan creado los bloques de Office Math (m:oMath)
+  assert.match(doc, /<m:oMath>/, 'falta el bloque oMath de Word');
+  
+  // Verificamos que se hayan creado las fracciones matemáticas nativas (m:f)
+  assert.match(doc, /<m:f>/, 'falta la fracción m:f de Word');
+  
+  // Verificamos que se hayan creado los subíndices matemáticos nativos (m:sSub)
+  assert.match(doc, /<m:sSub>/, 'falta el subíndice m:sSub de Word');
+
+  // Verificamos que se hayan creado los paréntesis de ajuste matemático nativo (m:d)
+  assert.match(doc, /<m:d>/, 'falta el paréntesis m:d de Word');
+});

@@ -52,6 +52,9 @@ import {
 } from './anexoCHtml.js';
 import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
+/* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
+   así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
+import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
    de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
@@ -1189,19 +1192,28 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     }
   }
 
-  /* La frase que comenta el rango, debajo de la tabla: «…se ubica entre el percentil 25
-     (X) y (Y) percentil 75, la mediana con (Z)». La tabla se rehacía con el estudio y la
-     frase se quedaba con las cifras del informe anterior, contradiciéndola en el mismo
-     documento. El orden —P25, P75, mediana— es el de la redacción de la plantilla, no el
-     de la tabla, que lista la mediana en medio. */
-  doc.aplicar((x) => actualizarProsaTrasTabla(
-    x, 'Rango Intercuartil',
-    [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
-    avisos,
-  ));
+  /* La frase que comenta el rango, debajo de la tabla, y el año que menciona.
 
-  /* Y el año que esa misma conclusión menciona. */
-  doc.aplicar((x) => actualizarAnioConclusionRango(x, year, avisos));
+     Primero por las palabras que introducen cada cifra (`prosaRangoInforme.js`), que es la
+     misma función que atiende la ruta de plantilla PDF: así las dos rutas producen la misma
+     frase, sea la plantilla base un .docx o un PDF, y el orden en que la redacción liste los
+     cuartiles deja de importar.
+
+     Y sólo si eso no reconoció nada, por POSICIÓN, que es lo que se hacía: la primera cifra es
+     el percentil 25, la segunda el 75 y la tercera la mediana, el orden de la redacción de la
+     plantilla de este cliente («…se ubica entre el percentil 25 (X) y (Y) percentil 75, la
+     mediana con (Z)»). Se conserva como respaldo porque cubre redacciones donde la cifra no va
+     detrás de su rótulo, y porque es la que está probada contra el .docx real. */
+  const antesDeProsa = doc.xml;
+  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
+  if (doc.xml === antesDeProsa) {
+    doc.aplicar((x) => actualizarProsaTrasTabla(
+      x, 'Rango Intercuartil',
+      [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
+      avisos,
+    ));
+    doc.aplicar((x) => actualizarAnioConclusionRango(x, year, avisos));
+  }
 
   /* 13. Margen Operacional Compañías Comparables.
 
