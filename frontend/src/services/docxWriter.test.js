@@ -676,3 +676,147 @@ test('el índice del .docx asocia hipervínculos internos (redirecciones) a los 
   assert.match(doc, /<w:hyperlink[^>]*w:anchor="heading_ref_1"/, 'falta el hipervínculo del h1 en el índice');
   assert.match(doc, /<w:hyperlink[^>]*w:anchor="heading_ref_2"/, 'falta el hipervínculo del h2 en el índice');
 });
+
+/* ── Notas al pie ──────────────────────────────────────────────────────────────────────────
+   El informe lleva sus citas legales al pie de la hoja. El árbol del PDF las ancla detrás del
+   párrafo que las cita, así que emitirlas ahí las dejaba en mitad de la página y empujaba el
+   resto del texto hacia abajo: el diseño de las páginas siguientes dejaba de parecerse al
+   original. Se emiten como notas al pie de VERDAD para que Word las coloque, las numere y las
+   mueva al repaginar. */
+
+/* El mismo informe tal como lo emitía el lector 8, que es el que sigue guardado en IndexedDB: la
+   nota en el flujo con su número dentro, y la llamada como un dígito en letra pequeña sin `sup`.
+   Es lo que ejercita la vía de respaldo, y se deriva del PDF real para que no sea una fixture
+   inventada que pueda dejar de parecerse al informe. */
+const comoElLector8 = (html) => html
+  .replace(
+    /<div data-nota-pie="(\d+)">([\s\S]*?)<\/div>/g,
+    (_, n, cuerpo) => cuerpo.replace(/^<p>/, '<p><span style="font-size:5pt"> ' + n + '</span>')
+  )
+  .replace(/<sup data-ref-nota="\d+">(\d+)<\/sup>/g, '<span style="font-size:8pt">$1</span>');
+
+test('las citas del informe salen como notas al pie de Word, no como párrafos', async () => {
+  const ref = await referencia();
+  const zip = new PizZip(await aDocxBuffer({ html: ref.html, recursos: ref.imagenes }));
+
+  /* La parte del documento donde viven las notas, y su relación: sin ellas Word no las muestra
+     aunque el cuerpo traiga las referencias. */
+  const notas = zip.file('word/footnotes.xml');
+  assert.ok(notas, 'el .docx salió sin word/footnotes.xml');
+  assert.match(zip.file('word/_rels/document.xml.rels').asText(), /footnotes\.xml/,
+    'las notas no están declaradas en las relaciones del documento');
+  assert.match(zip.file('[Content_Types].xml').asText(), /footnotes/,
+    'falta el tipo de contenido de las notas');
+
+  /* Las 42 del informe, cada una con su referencia en el cuerpo. Los dos separadores que Word
+     necesita —la línea y la de continuación— van además de las notas, de ahí el 44. */
+  assert.equal((notas.asText().match(/<w:footnote /g) || []).length, 44,
+    'no salieron las 42 notas del informe');
+  assert.equal(
+    (zip.file('word/document.xml').asText().match(/footnoteReference/g) || []).length, 42,
+    'no hay una referencia por nota en el cuerpo'
+  );
+});
+
+test('el texto de la cita va en la nota y no se repite en el cuerpo', async () => {
+  const ref = await referencia();
+  const zip = new PizZip(await aDocxBuffer({ html: ref.html, recursos: ref.imagenes }));
+  const doc = zip.file('word/document.xml').asText();
+  const notas = zip.file('word/footnotes.xml').asText();
+
+  /* La primera cita del informe, la del artículo 260-2, y la última, la de la muestra
+     estadística: al pie y sólo al pie. Si siguieran en el cuerpo seguirían ocupando el espacio
+     que descuadraba la página. */
+  for (const cita of ['En virtud de lo expresado en', 'En una muestra estadística cuyos']) {
+    assert.ok(notas.includes(cita), 'la cita no llegó a la nota: ' + cita);
+    assert.ok(!doc.includes(cita), 'la cita sigue en el cuerpo del documento: ' + cita);
+  }
+
+  /* Una nota de dos párrafos llega entera: la primera del informe cita el artículo y después lo
+     transcribe. */
+  assert.ok(notas.includes('están obligados a determinar'),
+    'se perdió el segundo párrafo de la primera nota');
+
+  /* Y el párrafo que la citaba conserva su texto: la nota se fue, el cuerpo se queda. */
+  assert.ok(doc.includes('de acuerdo al artículo 1 del decreto 2120'),
+    'el cuerpo perdió el texto que rodeaba a una llamada');
+});
+
+test('una plantilla del lector anterior también saca sus citas al pie', async () => {
+  /* Es lo que evita obligar a subir otra vez el PDF y a volver a marcar con IA sólo para
+     arreglar el diseño: la plantilla ya marcada sigue viva en IndexedDB. */
+  const ref = await referencia();
+  const html = comoElLector8(ref.html);
+  assert.ok(!/data-nota-pie|data-ref-nota/.test(html),
+    'la fixture del lector 8 no debería llevar marcas del 9');
+
+  const zip = new PizZip(await aDocxBuffer({ html, recursos: ref.imagenes }));
+  const doc = zip.file('word/document.xml').asText();
+  const notas = zip.file('word/footnotes.xml');
+  assert.ok(notas, 'sin footnotes.xml: el respaldo no reconoció ninguna cita');
+  assert.equal((notas.asText().match(/<w:footnote /g) || []).length, 44,
+    'el respaldo no reconoció las 42 citas del informe');
+  assert.equal((doc.match(/footnoteReference/g) || []).length, 42,
+    'el respaldo no emparejó cada cita con su llamada');
+  assert.ok(!doc.includes('En virtud de lo expresado en'),
+    'la cita sigue en el cuerpo con el respaldo');
+});
+
+test('un párrafo que empieza por un número no es una cita al pie', async () => {
+  /* En el informe hay una razón social que empieza por número, «11 BIT STUDIOS S.A.», y vive en
+     una celda de tabla. Tomarla por cita la sacaría de su fila y la mandaría al pie de la hoja.
+     Lo que la salva es que el reconocimiento no entra en las tablas. */
+  const html =
+    '<div class="pagina" data-pagina="1">' +
+    '<p>El comparable seleccionado<span style="font-size:8pt">1</span> es europeo.</p>' +
+    '<table><tr><td><span style="font-size:9pt">11 BIT STUDIOS S.A.</span></td></tr></table>' +
+    '<p><span style="font-size:8pt">1 Estatuto tributario, Articulo 206-4.</span></p>' +
+    '</div>';
+  const { zip, doc } = await abrir(html);
+  assert.ok(doc.includes('11 BIT STUDIOS S.A.'), 'la razón social salió del cuerpo');
+  assert.match(doc, /<w:tbl>/, 'la tabla se deshizo');
+  /* Y la cita de verdad sí se fue al pie. */
+  const notas = zip.file('word/footnotes.xml');
+  assert.ok(notas && notas.asText().includes('Estatuto tributario'),
+    'la cita real no llegó a la nota');
+  assert.ok(!doc.includes('Estatuto tributario'), 'la cita real sigue en el cuerpo');
+});
+
+test('una cita sin llamada en el texto se queda en el cuerpo y avisa', async () => {
+  /* En Word una nota al pie sin llamada no se ve. Perder texto de un informe que se radica ante
+     la DIAN es peor que dejarlo donde estaba, así que se conserva y se dice por consola. */
+  const html =
+    '<div class="pagina" data-pagina="1">' +
+    '<p>Un párrafo del cuerpo sin ninguna llamada.</p>' +
+    '<div data-nota-pie="7"><p><span style="font-size:8pt">Cita sin dueño.</span></p></div>' +
+    '</div>';
+  const avisos = [];
+  const original = console.warn;
+  console.warn = (m) => { avisos.push(String(m)); };
+  let doc;
+  try {
+    ({ doc } = await abrir(html));
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(doc.includes('Cita sin dueño.'), 'se perdió el texto de una cita sin llamada');
+  assert.ok(avisos.some((a) => /cita al pie 7 no tiene llamada/.test(a)),
+    'no avisó de la cita sin llamada: ' + avisos.join(' | '));
+});
+
+test('la llamada de la cita es la referencia de Word, no un dígito escrito', async () => {
+  /* Antes el número llegaba como texto en letra pequeña, a media altura de línea. Como
+     referencia de Word es lo que arrastra la nota al pie de la hoja donde acabe cayendo. */
+  const html =
+    '<div class="pagina" data-pagina="1">' +
+    '<p>Naturaleza <em>Arm’s Length</em><sup data-ref-nota="1">1</sup> de la operación.</p>' +
+    '<div data-nota-pie="1"><p><span style="font-size:8pt">Art. 260-2.</span></p></div>' +
+    '</div>';
+  const { doc } = await abrir(html);
+  assert.match(doc, /<w:footnoteReference w:id="1"/, 'la llamada no es una referencia de Word');
+  /* El dígito ya no está escrito en el párrafo: lo pone Word al numerar. */
+  const parrafo = /<w:p>[\s\S]*?Naturaleza[\s\S]*?<\/w:p>/.exec(doc);
+  assert.ok(parrafo, 'no se encontró el párrafo de la llamada');
+  assert.ok(!/<w:t[^>]*>1<\/w:t>/.test(parrafo[0]),
+    'el número de la llamada sigue escrito a mano en el párrafo');
+});
