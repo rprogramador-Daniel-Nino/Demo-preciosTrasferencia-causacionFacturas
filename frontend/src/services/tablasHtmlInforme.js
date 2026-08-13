@@ -39,6 +39,12 @@ import {
 } from './tablasInforme.js';
 import { claveTitulo, numeroDeTabla } from './docxRelleno.js';
 import { pctf } from '../utils/calculations.js';
+/* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
+   `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
+   de la misma serie que va justo debajo citan la fuente en el mismo formato, con la
+   misma fecha de consulta. Sin riesgo de import circular: `analisisMercado.js` no
+   importa de este módulo ni de `docxRelleno.js`. */
+import { resolverSerie } from './analisisMercado.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
 export function textoPlanoHtml(fragmento) {
@@ -552,12 +558,15 @@ function marcadorApartadoPendienteHtml(tema, year) {
     '1.2.2.2.1.5 del Decreto 1625 de 2016.]</p>';
 }
 
-/** Línea "FUENTE: <fuente>, <url>" para un párrafo de narrativa con tema propio —
- *  equivalente HTML de `parrafoFuenteOoxml` (docxRelleno.js); misma convención. Vacío
- *  si no hay URL: no se cita una fuente que no vino de una búsqueda real. */
-function parrafoFuenteHtml(fuente, fuenteUrl) {
-  if (!fuenteUrl) return '';
-  const texto = 'FUENTE: ' + (fuente ? fuente + ', ' : '') + fuenteUrl;
+/** Línea "FUENTE: <fuente>" para un párrafo de narrativa con tema propio, a partir del
+ *  texto YA formateado por `resolverSerie` (analisisMercado.js) — equivalente HTML de
+ *  `parrafoFuenteOoxml` (docxRelleno.js). Mismo texto, con paréntesis alrededor de la
+ *  URL y fecha de consulta incluidos, que la tabla de esa misma serie imprime justo
+ *  debajo (`tablasMacroInforme` en `tablasInforme.js`, que también llama a
+ *  `resolverSerie`). Vacío si `fuenteTexto` viene vacío. */
+function parrafoFuenteHtml(fuenteTexto) {
+  if (!fuenteTexto) return '';
+  const texto = 'FUENTE: ' + fuenteTexto;
   return '<p><strong>' + escaparHtml(texto) + '</strong></p>';
 }
 
@@ -676,7 +685,6 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
   const tituloColombia = 'Análisis del panorama de la economía colombiana';
   const narrativa = (datosMacro && datosMacro.narrativa) || {};
-  const series = (datosMacro && datosMacro.series) || {};
   console.log('[tablasHtmlInforme] actualizarApartadosMacroHtml: año ' + year
     + ', narrativa mundial: ' + (narrativa.mundial ? 'sí' : 'no (marcador)')
     + ', narrativa colombia: ' + (narrativa.colombia ? 'sí' : 'no (marcador)'));
@@ -687,12 +695,17 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
    *  tema; marcador específico (no el genérico) si no, y solo si había prosa
    *  sustancial que retirar — el umbral SOLO gatea la rama sin narrativa: cuando sí
    *  hay narrativa lista se inserta siempre, sin importar cuánto medía el hueco
-   *  viejo (mismo criterio asimétrico que `temaHueco` en docxRelleno.js). */
+   *  viejo (mismo criterio asimétrico que `temaHueco` en docxRelleno.js).
+   *  `serieClave` resuelve la fuente/fecha del párrafo vía `resolverSerie` — `null`
+   *  para "conclusiones", que sintetiza y no cita una serie nueva. Si
+   *  `datosMacro.series[serieClave]` no trae `valores` (o falta del todo),
+   *  `resolverSerie` cae al respaldo local igual que hace la tabla de esa misma serie:
+   *  preferible citar una fuente conocida y estática a no citar ninguna, y mantiene
+   *  párrafo y tabla en el mismo formato en cualquier escenario. */
   const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
     if (narrativaHtml) {
-      const serie = serieClave ? series[serieClave] : null;
-      const fuente = serie ? parrafoFuenteHtml(serie.fuente, serie.fuenteUrl) : '';
-      return narrativaHtml + fuente;
+      const fuenteTexto = serieClave ? resolverSerie(datosMacro, serieClave).fuente : '';
+      return narrativaHtml + parrafoFuenteHtml(fuenteTexto);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
     return '<p>' + escaparHtml(marcadorTemaMacroPendienteHtml(tema, year)) + '</p>';
