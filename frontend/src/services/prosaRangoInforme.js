@@ -57,6 +57,37 @@ const ANCLAS = [
     clave: 'tpli',
     rx: new RegExp('((?:se\\s+(?:sit[úu]a|ubica|encuentra)\\s+en\\b)' + HUECO + ')(' + RX_PCT + ')', 'i'),
   },
+  /* El indicador del contribuyente sale en el informe con cuatro redacciones distintas, y las
+     tres siguientes son las que faltaban. Medidas sobre el informe de referencia:
+
+       «…una rentabilidad para el Margen Operacional (MO) dentro de los Márgenes Transaccionales
+        de Utilidad de Operación (TU), de (4.985 %) en las operaciones…»
+       «…generó una rentabilidad operacional de 4.985 %, en la operación de otros servicios…»
+       «…para dispositivos móviles de 4.985 %, en su operación, ubicándose sobre los parámetros…»
+
+     Se ancla en cada giro concreto y NO en un «de» seguido de cifra, que aparece por todo el
+     informe. Tampoco en «la única cifra del párrafo»: hay uno que dice «El rango de los
+     indicadores de rentabilidad fue reducido […] con este fin 25 %», donde ese 25 % es el
+     cuartil del método y no el resultado de nadie. */
+  {
+    clave: 'tpli',
+    rx: new RegExp('((?:rentabilidad|margen)\\s+operacional' + ENLACE + '\\s+de' + HUECO
+      + '\\(?' + HUECO + ')(' + RX_PCT + ')', 'i'),
+  },
+  {
+    /* `HUECO` y no `\s*` entre el rótulo y la coma: en el informe el rótulo va en negrita y la
+       coma queda fuera —«<strong>…de Operación (TU)</strong>, de (4.985 %)»—, así que entre los
+       dos hay una etiqueta de cierre. Con `\s*` el ancla no llegaba a la cifra y este párrafo
+       —el que se reportó— salía sin actualizar aunque en aislado pareciera funcionar. */
+    clave: 'tpli',
+    rx: new RegExp('(\\(\\s*TU\\s*\\)' + HUECO + ',?' + HUECO + 'de' + HUECO + '\\(?' + HUECO + ')('
+      + RX_PCT + ')', 'i'),
+  },
+  {
+    clave: 'tpli',
+    cifraPrimero: true,
+    rx: new RegExp('(' + RX_PCT + ')' + '\\)?\\s*,?\\s*en\\s+su\\s+operaci[óo]n', 'i'),
+  },
   {
     clave: 'med',
     rx: new RegExp('((?:la\\s+)?mediana' + ENLACE + HUECO + '\\(' + HUECO + ')(' + RX_PCT + ')', 'i'),
@@ -87,10 +118,19 @@ const RX_ANIO = new RegExp('((?:ajustado|analizado|operacional)\\s+durante\\s+el
 export const PARRAFO_HTML = /<p\b[^>]*>[\s\S]*?<\/p>/gi;
 export const PARRAFO_OOXML = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/gi;
 
-/* ¿Este párrafo es el que comenta el rango? Se reconoce porque nombra un cuartil o sitúa el
-   indicador. Una celda de la tabla del rango dice «Mediana» a secas, sin el paréntesis que las
-   anclas exigen, así que no puede confundirse con la frase. */
-const RX_ES_PROSA_RANGO = /percentil\s+(?:25|75)|mediana|se\s+(?:sit[úu]a|ubica)\s+en/i;
+/* ¿Este párrafo es el que comenta el rango? Se reconoce porque nombra un cuartil, sitúa el
+   indicador o atribuye una rentabilidad operacional al contribuyente. Una celda de la tabla del
+   rango dice «Mediana» a secas, sin el paréntesis que las anclas exigen, así que no puede
+   confundirse con la frase.
+
+   Los tres últimos giros no estaban, y por eso dos de los cuatro párrafos que citan el indicador
+   se descartaban antes de mirarles las cifras: no nombran ningún cuartil. Son «…una rentabilidad
+   para el Margen Operacional (MO) dentro de los […] (TU), de (4.985 %)…» y «…generó una
+   rentabilidad operacional de 4.985 %…». Reconocerlos no basta por sí solo para tocarlos: dentro
+   siguen mandando las anclas, y el párrafo que dice «El rango de los indicadores de rentabilidad
+   fue reducido […] con este fin 25 %» no encaja en ninguna. */
+const RX_ES_PROSA_RANGO =
+  /percentil\s+(?:25|75)|mediana|se\s+(?:sit[úu]a|ubica)\s+en|rentabilidad\s+operacional|\(\s*TU\s*\)|en\s+su\s+operaci[óo]n/i;
 
 /**
  * Pone en la prosa que comenta el rango las cifras y el año del estudio.

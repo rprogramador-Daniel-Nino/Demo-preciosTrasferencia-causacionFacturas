@@ -175,6 +175,60 @@ test('sin muestra no se inventan percentiles', () => {
   assert.ok(salida.includes('durante el 2025'), 'el año no se actualizó');
 });
 
+/* ══════ el indicador del contribuyente sale con cuatro redacciones ══════ */
+
+/* Las cuatro, tal como las trae el informe de referencia. La primera es la que se reportó: la
+   frase del rango de arriba ya salía con las cifras del estudio y ésta seguía con la de la
+   plantilla, en la página siguiente. */
+const REDACCIONES_INDICADOR = [
+  ['el rótulo en negrita y la cifra entre paréntesis',
+    '<p>Los resultados representan que la empresa obtuvo una rentabilidad para el '
+    + '<strong>Margen Operacional (MO) </strong>dentro de los <strong>Márgenes Transaccionales '
+    + 'de Utilidad de Operación (TU)</strong>, de (4.985%) en las operaciones con sus '
+    + 'vinculados económicos del exterior.</p>'],
+  ['«generó una rentabilidad operacional de X»',
+    '<p>Al realizar la comparación con el margen operacional de la compañía END GAME, generó '
+    + 'una rentabilidad operacional de 4.985%, en la operación de otros servicios (07).</p>'],
+  ['«de X, en su operación»',
+    '<p>END GAME genero una rentabilidad operacional relacionada con videojuegos para '
+    + 'dispositivos móviles de 4.985%, en su operación, ubicándose entre la mediana (-1.075%) '
+    + 'y el percentil 75 (6.418%).</p>'],
+  ['«se sitúa en X»',
+    '<p>el comportamiento del Margen Operacional se sitúa en 4.985%, el cual se encuentra entre '
+    + 'la mediana (-1.075%) y el percentil 75 (6.418%).</p>'],
+];
+
+for (const [nombre, html] of REDACCIONES_INDICADOR) {
+  test('el indicador se actualiza con ' + nombre, () => {
+    const salida = plano(actualizarProsaRango(html, estudio, []));
+    assert.ok(salida.includes(deLaTabla.tpli),
+      'el indicador no es el de la tabla: ' + salida);
+    assert.ok(!salida.includes('4.985%'), 'sobrevive la cifra de la plantilla: ' + salida);
+  });
+}
+
+test('la negrita del rótulo no impide llegar a la cifra', () => {
+  /* En el informe el rótulo va en negrita y la coma queda fuera: «<strong>…(TU)</strong>, de
+     (4.985 %)». Con un ancla que solo admitiera espacios entre los dos, el párrafo salía sin
+     actualizar aunque en una prueba con el texto plano pareciera funcionar. Ése fue el defecto:
+     se corrigió en aislado y seguía mal en el documento. */
+  const html = REDACCIONES_INDICADOR[0][1];
+  assert.match(html, /<\/strong>,\s*de/, 'la fixture perdió la etiqueta que causaba el fallo');
+  const salida = plano(actualizarProsaRango(html, estudio, []));
+  assert.ok(salida.includes('(TU), de (' + deLaTabla.tpli + ')'), 'no llegó a la cifra: ' + salida);
+});
+
+test('el 25 % que describe el método no es el indicador de nadie', () => {
+  /* «…se eliminó el 25 % superior e inferior de las observaciones…» describe cómo se recorta el
+     rango. Es la razón por la que el indicador se ancla en giros concretos y no en «la única
+     cifra del párrafo». */
+  const html = '<p>El rango de los indicadores de rentabilidad fue reducido para incrementar el '
+    + 'nivel de confianza; se eliminó el 25% superior e inferior de las observaciones.</p>';
+  const salida = plano(actualizarProsaRango(html, estudio, []));
+  assert.ok(salida.includes('el 25% superior e inferior'),
+    'se reescribió el 25 % del método: ' + salida);
+});
+
 test('aplicarlo dos veces sobre el mismo texto da el mismo resultado', () => {
   /* La vista previa se re-renderiza a cada cambio del estudio, así que la función corre muchas
      veces sobre su propia salida. */
