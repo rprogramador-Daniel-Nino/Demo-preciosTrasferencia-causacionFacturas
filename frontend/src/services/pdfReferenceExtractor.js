@@ -33,8 +33,9 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      5 — cada página del original envuelta, para que el salto caiga donde debe
      6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo
      7 — cada imagen con el tamaño que le da el PDF, y el encabezado en su lado
-     8 — la orientación de cada página, para la sección apaisada */
-export const VERSION_EXTRACTOR = 8;
+     8 — la orientación de cada página, para la sección apaisada
+     9 — las citas legales apartadas como notas al pie, con su llamada marcada */
+export const VERSION_EXTRACTOR = 9;
 
 /* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
    del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
@@ -49,10 +50,22 @@ const MAPA_ETIQUETAS = {
      la otra. Es lo que hacía que el índice se viera desordenado.
      `TOC` no se mapea: envolverlo añadiría un bloque sin efecto visible. */
   TOCI: 'p',
-  /* Las notas también son bloque. Si no, la nota al pie se fundía con el párrafo
-     que la precede y parecía parte del texto. */
-  Note: 'p',
+  /* `Note` no se mapea: no es un párrafo del cuerpo sino una nota al pie, y `aHTML` la
+     aparta antes de llegar aquí. Ponerla en el flujo —lo que se hacía— la dejaba en medio
+     de la página, empujando el resto del texto hacia abajo, mientras el informe la lleva
+     al pie de la hoja. */
 };
+
+/* La llamada de una nota al pie: en el árbol del PDF es un `Link` cuyo texto es sólo el
+   número. Los otros `Link` del informe son direcciones web —hay varias dentro de las notas
+   de la sección III— y no se tocan. */
+const RX_SOLO_NUMERO = /^\d{1,3}$/;
+
+/* El número con el que la nota empieza su propio texto. Word pone el suyo al emitirla como
+   nota al pie de verdad, así que este se quita del cuerpo o saldría duplicado ("1 1 En
+   virtud de…"). Se salta las etiquetas de apertura para llegar al primer texto visible: el
+   número viene envuelto en el `span` que declara su cuerpo de 5 puntos. */
+const RX_NUMERO_INICIAL = /^((?:<[^>]*>|\s)*)(\d{1,3})/;
 
 const escapar = (s) =>
   String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -194,7 +207,12 @@ export async function extraerReferencia(datos) {
   const bloques = leidas.map(({ pagina: n, arbol, porId, textoPlano, orientacion }) => {
     if (arbol) {
       const figuras = [];
-      const htmlStruct = aHTML(arbol, porId, figuras, n, base);
+      /* Las notas de la página van al final de su bloque, detrás de todo el texto. Es donde
+         el informe las lleva, y donde la vista previa las muestra sin más CSS que el que
+         las pinta pequeñas. El .docx no depende de esta posición —las saca del cuerpo y las
+         emite como notas al pie de Word—, pero la ruta HTML sí. */
+      const notas = [];
+      const htmlStruct = aHTML(arbol, porId, figuras, n, base, notas) + notas.join('');
       figurasPorPagina.set(n, figuras);
 
       /* Respaldo por página: si el árbol no rindió texto (documento etiquetado
@@ -460,6 +478,10 @@ export function loQueFaltaPorVersion(version) {
                'tabla, y el documento se infla a cientos de hojas; además el anexo ' +
                'llega con una sola página de las quince');
   }
+  if (version < 9) {
+    falta.push('las citas legales no van apartadas, así que el .docx tiene que ' +
+               'reconocerlas por su forma en vez de por lo que el PDF declara');
+  }
   return falta;
 }
 
@@ -695,8 +717,13 @@ const textoDeRuns = (runs) => (runs || []).map((r) => r.texto).join('');
    `figuras` recoge, en orden de documento, el bbox de cada nodo `Figure`, y en su
    lugar queda un marcador. Así la imagen acaba donde el informe la puso —entre
    los párrafos que la rodean— y no amontonada al final de la página, que es lo
-   que hacía que el Word generado no se pareciera al PDF de origen. */
-function aHTML(nodo, porId, figuras, pagina, base) {
+   que hacía que el Word generado no se pareciera al PDF de origen.
+
+   `notas` recoge las notas al pie, que salen del flujo por el motivo contrario: el árbol
+   del PDF las ancla justo detrás del párrafo que las cita —medido: las 42 del informe—, y
+   emitirlas ahí las ponía en mitad de la página. Quien llama las vuelca al final de la
+   página; el .docx las convierte además en notas al pie de Word. */
+function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
   if (!nodo) return '';
   if (nodo.type === 'content') return runsAHTML(porId.get(nodo.id), base);
 
@@ -704,6 +731,36 @@ function aHTML(nodo, porId, figuras, pagina, base) {
     const indice = figuras.length;
     figuras.push({ bbox: nodo.bbox || null, alt: nodo.alt || '' });
     return '<!--FIG:' + pagina + ':' + indice + '-->';
+  }
+
+  /* La nota al pie. Su número sale de su propio texto y no de un contador, para que
+     coincida con el de la llamada: el informe las numera de corrido, 1 a 42, y es ese
+     número el que empareja las dos mitades. Si una nota no lo trajera, se cae al orden de
+     aparición dentro de la página, que es lo único que se sabe sin él. */
+  if (nodo.role === 'Note') {
+    const dentro = (nodo.children || [])
+      .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+      .join('');
+    const m = RX_NUMERO_INICIAL.exec(dentro);
+    const numero = m ? m[2] : String(notas.length + 1);
+    /* Sólo el número: el resto del contenido se conserva tal cual, etiquetas incluidas. */
+    const cuerpo = m ? dentro.replace(RX_NUMERO_INICIAL, '$1') : dentro;
+    notas.push('<div data-nota-pie="' + numero + '">' + cuerpo + '</div>');
+    return '';
+  }
+
+  /* La llamada, marcada para que el .docx la sustituya por la referencia de Word y la
+     vista previa la pinte como superíndice. Hasta ahora llegaba como un dígito a cuerpo
+     de 8 puntos a media altura de línea, indistinguible de un número cualquiera. */
+  if (nodo.role === 'Link') {
+    const dentro = (nodo.children || [])
+      .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+      .join('');
+    const texto = dentro.replace(/<[^>]*>/g, '').trim();
+    if (RX_SOLO_NUMERO.test(texto)) {
+      return '<sup data-ref-nota="' + texto + '">' + texto + '</sup>';
+    }
+    return dentro;
   }
 
   /* Una fila sólo puede contener celdas. El PDF de referencia cuelga además un `P`
@@ -719,7 +776,7 @@ function aHTML(nodo, porId, figuras, pagina, base) {
   if (nodo.role === 'TR') {
     const celdas = [];
     for (const h of nodo.children || []) {
-      const html = aHTML(h, porId, figuras, pagina, base);
+      const html = aHTML(h, porId, figuras, pagina, base, notas);
       if (h.role === 'TD' || h.role === 'TH') {
         celdas.push(html);
         continue;
@@ -733,7 +790,7 @@ function aHTML(nodo, porId, figuras, pagina, base) {
   }
 
   const hijos = (nodo.children || [])
-    .map((h) => aHTML(h, porId, figuras, pagina, base))
+    .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
     .join('');
   const etiqueta = MAPA_ETIQUETAS[nodo.role];
   return etiqueta ? '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>' : hijos;
