@@ -340,3 +340,20 @@ test('sin tipo de operación en ninguna fila el concepto queda vacío y no por d
   const res = await parseExcelOperations(workbookToFakeFile(wb));
   assert.strictEqual(res.vinc_tipo, null);
 });
+
+test('si el archivo tiene solo operaciones de egreso, se ingieren como primarias y se marca egreso true', async () => {
+  const filas = [];
+  for (let i = 0; i < 9; i++) filas.push(['(portada)']);
+  filas.push(ENCABEZADO);
+  filas.push(['2.', 'OPERACIONES DE EGRESO']);
+  filas.push(['EGRESO SAS', '222', 'PANAMA', '', 'COMPRA', '31', '', '1001', '5088', '', 9999]);
+  const wb = workbookConHoja('Op. Vinculados Economicos', filas);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.egreso, true, 'se reconoce que el archivo es de egreso');
+  assert.strictEqual(res.monto, 9999, 'el egreso se sumó al no haber ingresos');
+  assert.strictEqual(res.vinc, 'EGRESO SAS');
+  assert.strictEqual(res.vinc_tipo, 'COMPRA (31)');
+  assert.deepStrictEqual(res.egresosDescartados, { filas: 0, monto: 0 }, 'los egresos no se descartan');
+});

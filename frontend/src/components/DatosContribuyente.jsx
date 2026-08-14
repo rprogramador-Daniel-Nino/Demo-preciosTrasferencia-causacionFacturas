@@ -240,8 +240,8 @@ export default function DatosContribuyente({ study, updateStudy }) {
             <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Criterio de Vinculación</label>
               <select
-                value={study.vinc_tipo || ''}
-                onChange={(e) => handleFieldChange('vinc_tipo', e.target.value)}
+                value={study.tipo_vinculacion || ''}
+                onChange={(e) => handleFieldChange('tipo_vinculacion', e.target.value)}
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100"
               >
                 <option value="">Seleccione un tipo</option>

@@ -34,7 +34,8 @@ export async function parseExcelOperations(file) {
       { n: 'Op. Prestamos Paraisos Fiscales', regimen: 'PARAISOS' }
     ];
 
-    const rowsParsed = [];
+    const rowsParsedIngreso = [];
+    const rowsParsedEgreso = [];
     let mainVinculado = '';
     let mainVinculadoId = '';
     let mainPais = '';
@@ -104,11 +105,12 @@ export async function parseExcelOperations(file) {
 
       /* Las operaciones de la hoja se acumulan aquí y no en `rowsParsed`, porque para
          decidir si la columna 'Cod' sirve de filtro hay que haberlas visto todas. */
-      const candidatas = [];
+      const candidatasIngreso = [];
+      const candidatasEgreso = [];
 
       let currentTipo = '';
       // Las hojas 'Op. Vinculados Economicos' y 'Op. Paraisos Fiscales' listan
-      // primero "1. OPERACIONES DE INGRESO" y luego "2. OPERACIONES DE
+      // primero "1. OPERACIONES DE INGRESO" and luego "2. OPERACIONES DE
       // EGRESO" en la misma hoja. Solo las operaciones de ingreso deben
       // sumarse al monto de la Tabla 3 (Transacciones Inter compañía); las de
       // egreso pertenecen a otro formato y se colaban en el total porque el
@@ -162,10 +164,18 @@ export async function parseExcelOperations(file) {
         if (monto > 0 && currentSeccion === 'EGRESO') {
           egresosFilas++;
           egresosMonto += monto;
+          candidatasEgreso.push({
+            vinculado: nom,
+            nit,
+            pais,
+            tipo: tipoConCodigo(currentTipo, cod),
+            monto,
+            cod
+          });
         }
 
         if (monto > 0 && currentSeccion === 'INGRESO') {
-          candidatas.push({
+          candidatasIngreso.push({
             vinculado: nom,
             nit,
             pais,
@@ -185,11 +195,30 @@ export async function parseExcelOperations(file) {
          Exigirla siempre descartaba la hoja entera de esos contribuyentes y el monto
          salía vacío sin ninguna señal de por qué. Si nadie la diligenció no distingue
          nada, así que no puede filtrar. */
-      const codEnUso = candidatas.some(c => c.cod !== '');
-      candidatas.forEach(({ cod, ...operacion }) => {
-        if (!codEnUso || cod !== '') rowsParsed.push(operacion);
+      const codEnUsoIngreso = candidatasIngreso.some(c => c.cod !== '');
+      candidatasIngreso.forEach(({ cod, ...operacion }) => {
+        if (!codEnUsoIngreso || cod !== '') rowsParsedIngreso.push(operacion);
+      });
+
+      const codEnUsoEgreso = candidatasEgreso.some(c => c.cod !== '');
+      candidatasEgreso.forEach(({ cod, ...operacion }) => {
+        if (!codEnUsoEgreso || cod !== '') rowsParsedEgreso.push(operacion);
       });
     });
+
+    let rowsParsed = [];
+    let esEgreso = false;
+
+    if (rowsParsedIngreso.length > 0) {
+      rowsParsed = rowsParsedIngreso;
+      esEgreso = false;
+    } else if (rowsParsedEgreso.length > 0) {
+      rowsParsed = rowsParsedEgreso;
+      esEgreso = true;
+      // Ya que los egresos se ingieren como operaciones del estudio, no se consideran descartados
+      egresosFilas = 0;
+      egresosMonto = 0;
+    }
 
     // Calcular el monto total y el tipo de operación principal
     const totalMonto = rowsParsed.reduce((acc, curr) => acc + curr.monto, 0);
@@ -260,7 +289,8 @@ export async function parseExcelOperations(file) {
       contrapartes: contrapartes.size,
       idsDivergentes,
       egresosDescartados: { filas: egresosFilas, monto: egresosMonto },
-      rows: rowsParsed
+      rows: rowsParsed,
+      egreso: esEgreso
     };
   } catch (err) {
     console.error("Error parsing Excel operations file:", err);

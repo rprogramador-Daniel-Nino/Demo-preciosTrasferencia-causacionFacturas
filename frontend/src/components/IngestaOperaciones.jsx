@@ -25,7 +25,8 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           pais_vinc: res.pais_vinc,
           vinc_tipo: res.vinc_tipo,
           monto: valMonto,
-          monto_operacion: valMonto
+          monto_operacion: valMonto,
+          egreso: res.egreso || false
         });
         const avisos = [];
         /* Con varias contrapartes el total es la suma de todas y el estudio se queda
