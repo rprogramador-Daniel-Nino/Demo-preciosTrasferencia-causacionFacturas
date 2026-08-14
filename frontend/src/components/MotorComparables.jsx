@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
-import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso } from '../services/comparablesEngine';
+import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import {
@@ -617,7 +617,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         anotar('Sin actividad detectada: la especialidad pesa 15 % en lugar de 40 %.', 'aviso');
       }
 
-      const nTarget = engineConfig.nTarget || 12;
+      /* El cupo que el motor aplicó de verdad: nunca por debajo de `MINIMO_COMPARABLES`,
+         aunque el paso 2 pida menos. */
+      const nTarget = result.cupo;
       const finales = result.seleccionadas;
       setComparables(finales);
       /* Detalle por candidata para el Excel de soporte: `scoreCandidates` ya lo
@@ -638,6 +640,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         seleccionadas: finales.length,
         objetivo: nTarget,
         reserva: result.reserva.length,
+        /* Cuántas entraron ampliando el criterio a actividades afines. Hay que declararlo en
+           el informe, así que tiene que verse en pantalla y no solo en el detalle por fila. */
+        ampliadas: result.ampliadas || 0,
+        relacionadasDisponibles: result.relacionadasDisponibles || 0,
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -647,10 +653,24 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         ? ` (${deContinuidad} del estudio anterior + ${finales.length - deContinuidad} nuevas)`
         : '';
 
+      /* La ampliación a actividades afines se dice siempre que ocurre: es una decisión
+         metodológica que hay que sustentar en el informe, no un detalle de implementación. */
+      const ampliadas = result.ampliadas || 0;
+      if (ampliadas) {
+        anotar(`${ampliadas} entraron por actividad relacionada, no idéntica, para no bajar de ` +
+          `${MINIMO_COMPARABLES} comparables. Revíselas una a una: hay que justificar en el informe ` +
+          'la ampliación del criterio de búsqueda.', 'aviso');
+      }
+
       if (result.continuidadExcedeObjetivo) {
         anotar(`El estudio anterior aporta ${deContinuidad} comparables, más que las ${nTarget} pedidas: ` +
           'no se descarta ninguna, porque retirar una comparable ya aceptada hay que justificarlo en el informe. ' +
           'Suba el N objetivo o revise la matriz del año anterior.', 'aviso');
+      } else if (finales.length < MINIMO_COMPARABLES) {
+        anotar(`Solo ${finales.length} comparables${composicion}, por debajo del mínimo de ${MINIMO_COMPARABLES}: ` +
+          'ni ampliando a actividades relacionadas alcanza. Afloje los filtros del paso 2 —la pérdida operativa y ' +
+          'el holding son los que más descartan—, revise la actividad detectada o traiga un universo más amplio ' +
+          'de Capital IQ.', 'error');
       } else if (finales.length < nTarget) {
         anotar(`Solo ${finales.length} de las ${nTarget} buscadas${composicion}: no quedan más candidatas válidas. ` +
           'Amplíe los criterios del paso 2.', 'aviso');
@@ -1767,13 +1787,30 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     {selectionFunnel.seleccionadas}
                   </b>
                   {selectionFunnel.objetivo ? <span className="text-zinc-400"> de {selectionFunnel.objetivo}</span> : null}
+                  {selectionFunnel.ampliadas ? (
+                    <span className="text-zinc-400"> ({selectionFunnel.ampliadas} por actividad relacionada)</span>
+                  ) : null}
                 </div>
               </div>
-              {selectionFunnel.objetivo && selectionFunnel.seleccionadas < selectionFunnel.objetivo && (
+              {/* La ampliación a actividades afines se declara aquí y no solo en el registro:
+                  es lo que hay que sustentar en el informe si la DIAN lo pregunta. */}
+              {selectionFunnel.ampliadas ? (
+                <div className="text-amber-600 dark:text-amber-400">
+                  {selectionFunnel.ampliadas} de las seleccionadas no son de la misma actividad sino de una
+                  relacionada, y entraron para no bajar del mínimo de {MINIMO_COMPARABLES}. Revíselas: la ampliación
+                  del criterio de búsqueda hay que justificarla en el informe.
+                </div>
+              ) : null}
+              {selectionFunnel.seleccionadas < MINIMO_COMPARABLES ? (
+                <div className="text-red-600 dark:text-red-400">
+                  Por debajo del mínimo de {MINIMO_COMPARABLES}: ni ampliando a actividades relacionadas alcanza.
+                  Afloje los filtros del paso 2, revise la actividad detectada o traiga un universo más amplio.
+                </div>
+              ) : selectionFunnel.objetivo && selectionFunnel.seleccionadas < selectionFunnel.objetivo ? (
                 <div className="text-amber-600 dark:text-amber-400">
                   No se alcanzó el objetivo: tras la curación no quedó reserva suficiente. Amplíe los criterios del paso 2 o revise la actividad detectada.
                 </div>
-              )}
+              ) : null}
             </div>
           )}
         </div>
@@ -2195,6 +2232,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     {row.esContinuidad && (
                       <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400">
                         Continuidad
+                      </span>
+                    )}
+                    {/* La que no es de la misma actividad sino de una afín, y entró para no bajar
+                        del mínimo. Va marcada en su fila y no solo en el embudo: es la que hay
+                        que mirar una a una y sustentar en el informe. */}
+                    {row.entroPorAmpliacion && (
+                      <span
+                        className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
+                        title={`Actividad relacionada, no idéntica. Entró para no bajar de ${MINIMO_COMPARABLES} comparables.`
+                          + (row.razones ? ' · ' + row.razones : '')}
+                      >
+                        Actividad relacionada
                       </span>
                     )}
                   </td>
