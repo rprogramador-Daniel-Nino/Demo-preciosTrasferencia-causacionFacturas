@@ -30,6 +30,7 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
+import { FORMULAS, ROTULOS_FORMULA, ooxmlDeFormula } from './formulasOmml.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
@@ -611,6 +612,29 @@ function finDeFila(xml, desde) {
 }
 
 /**
+ * Fin del `<w:p>` que empieza en `desde`, contando anidamiento. -1 si no cierra.
+ *
+ * Un párrafo puede contener otro: los cuadros de texto cuelgan un cuerpo entero de
+ * `w:txbxContent`. Y el `(?:\s[^>]*)?` antes del `>` no es adorno: sin él la regex casaría
+ * también con `<w:pPr>`, `<w:proofErr>` y `<w:permStart>`, que es exactamente lo que hacía que
+ * buscar el párrafo siguiente con `indexOf('<w:p', …)` metiera la ecuación dentro del párrafo
+ * del rótulo y dejara el documento con más aperturas que cierres. Los `<w:p/>` autocerrados no
+ * cuentan como apertura.
+ */
+function finDeParrafo(xml, desde) {
+  const rx = /<w:p(?:\s[^>]*?)?(\/?)>|<\/w:p>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    if (m[0] === '</w:p>') nivel -= 1;
+    else if (m[1] === '/') { if (nivel === 0) return m.index + m[0].length; }
+    else nivel += 1;
+    if (nivel === 0 && m[0] === '</w:p>') return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/**
  * Tablas cuyo título no las precede, sino que es su PRIMERA FILA.
  *
  * Así trae la plantilla de referencia la «Tabla 20. Tabla de rangos» del final del informe:
@@ -692,7 +716,10 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
       const resto = texto.slice(cursor);
       const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
       if (!hueco) break;
-      if (textoPlanoOoxml(hueco[0]).trim()) break;
+      /* Un párrafo que sólo lleva una ecuación no tiene ningún `<w:t>` y a `textoPlanoOoxml` le
+         parece vacío. No es un hueco de maquetación: es contenido, y tragárselo dentro del bloque
+         de la tabla lo borraría al sustituirla. */
+      if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
       cursor += hueco[0].length;
     }
     const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(cursor));
@@ -729,13 +756,51 @@ function finDeTablaInmediata(texto, cursor) {
     const resto = texto.slice(c);
     const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
     if (!hueco) break;
-    if (textoPlanoOoxml(hueco[0]).trim()) break;
+    /* Igual que en `localizarBloqueTabla`: una ecuación no es un hueco vacío. */
+    if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
     c += hueco[0].length;
   }
   const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(c));
   if (!tras) return -1;
   const inicioTabla = c + tras[0].indexOf('<w:tbl');
   return finDeTabla(texto, inicioTabla);
+}
+
+/* Lo que Word intercala entre dos párrafos sin que sea contenido: marcas de libro, avisos del
+   corrector ortográfico, permisos de edición y anclas de comentario. */
+const RUIDO_ENTRE_PARRAFOS =
+  /^\s*(?:<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>|<w:permStart[^>]*\/?>|<w:permEnd[^>]*\/?>|<w:commentRangeStart[^>]*\/?>|<w:commentRangeEnd[^>]*\/?>)/;
+
+/**
+ * El párrafo HERMANO que sigue a `cursor` en el cuerpo del documento.
+ *
+ * Devuelve `{inicio, fin, xml}` si lo que viene es un párrafo, o `{bloqueado}` si es una tabla,
+ * un control de contenido, el `w:sectPr` o el final del cuerpo. Distinguirlo importa: buscar el
+ * siguiente `<w:p` a pelo se mete dentro de la primera celda cuando al párrafo le sigue una
+ * tabla, y sustituirlo destruye el contenido de esa celda.
+ */
+function parrafoHermanoSiguiente(xml, cursor) {
+  let c = cursor;
+  for (; ;) {
+    const ruido = RUIDO_ENTRE_PARRAFOS.exec(xml.slice(c));
+    if (!ruido) break;
+    c += ruido[0].length;
+  }
+  const resto = xml.slice(c);
+  const espacios = /^\s*/.exec(resto)[0].length;
+  const desde = c + espacios;
+  const cabeza = xml.slice(desde, desde + 12);
+
+  if (/^<w:tbl[\s>]/.test(cabeza)) return { bloqueado: 'tabla', desde };
+  if (/^<w:sdt[\s>]/.test(cabeza)) return { bloqueado: 'sdt', desde };
+  if (/^<w:sectPr[\s>]/.test(cabeza) || /^<\/w:body>/.test(cabeza)) {
+    return { bloqueado: 'fin', desde };
+  }
+  if (!/^<w:p[\s>/]/.test(cabeza)) return { bloqueado: 'fin', desde };
+
+  const fin = finDeParrafo(xml, desde);
+  if (fin < 0) return { bloqueado: 'fin', desde };
+  return { inicio: desde, fin, xml: xml.slice(desde, fin) };
 }
 
 /**
@@ -1081,48 +1146,94 @@ function sustituidorDeTablas(xmlInicial, avisos) {
   };
 }
 
-/* Reemplaza quirúrgicamente los párrafos corruptos de las fórmulas de ajuste de LaTeX por ecuaciones
-   matemáticas nativas de Microsoft Word (OMML) con formato perfecto. */
-export function actualizarFormulasMatematicasOoxml(xml) {
+/* Un párrafo que hay que sustituir por la ecuación: o es la versión en una línea que escribe el
+   calco del PDF, o son las letras corruptas que salieron del editor de ecuaciones, o está vacío,
+   o ya es la ecuación (y entonces se rehace igual, para que pasar dos veces dé lo mismo). */
+const pareceLaEcuacion = (texto, fragmento) => (
+  /Adjustment\s*=/i.test(texto)
+  || /[A-Z\u{1D400}-\u{1D7FF}]{4,}/u.test(texto)
+  || !texto.trim()
+  || /<m:oMath[ >]/.test(fragmento)
+);
+
+/**
+ * Escribe las dos ecuaciones de ajuste con el motor matemático de Word (OMML), donde la plantilla
+ * las anuncia con su rótulo.
+ *
+ * Localiza el rótulo recorriendo PÁRRAFOS y comparando su texto plano, no buscando la cadena en
+ * el XML: Word parte el texto de un párrafo en varios `<w:r><w:t>` por revisiones o por el
+ * corrector —y «FORMULA» sin tilde es justo lo que el corrector subraya—, y entonces la cadena
+ * literal no existe en el XML y la búsqueda fallaba en silencio.
+ *
+ * Qué dice la ecuación lo decide `formulasOmml.js`, que es la misma fuente que usa el calco
+ * del PDF en `docxWriter.js`.
+ *
+ * @param {string} xml
+ * @param {string[]} [avisos] recoge las ecuaciones que no se pudieron escribir
+ */
+export function actualizarFormulasMatematicasOoxml(xml, avisos) {
   let salida = String(xml || '');
+  const anotar = (m) => { if (Array.isArray(avisos)) avisos.push(m); };
+  let insertadas = 0;
 
-  const XML_AR = `<w:p><w:pPr><w:spacing w:after="120" w:before="120"/><w:jc w:val="center"/></w:pPr><m:oMath><m:r><m:t>AR Adjustment = </m:t></m:r><m:d><m:dPr/><m:e><m:d><m:dPr/><m:e><m:f><m:num><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANC</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:num><m:den><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:den></m:f><m:r><m:t> * </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> - </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANC</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> * </m:t></m:r><m:d><m:dPr/><m:e><m:f><m:num><m:r><m:t>R</m:t></m:r></m:num><m:den><m:r><m:t>1 + R</m:t></m:r></m:den></m:f></m:e></m:d></m:oMath></w:p>`;
+  for (const tipo of ['AR', 'AP']) {
+    const rotulos = ROTULOS_FORMULA[tipo];
+    const claves = rotulos.map(claveTitulo);
+    const comoSeLlama = tipo === 'AR'
+      ? 'la ecuación del ajuste de cuentas por cobrar'
+      : 'la ecuación del ajuste de cuentas por pagar';
 
-  const XML_AP = `<w:p><w:pPr><w:spacing w:after="120" w:before="120"/><w:jc w:val="center"/></w:pPr><m:oMath><m:r><m:t>AP Adjustment = </m:t></m:r><m:d><m:dPr/><m:e><m:d><m:dPr/><m:e><m:f><m:num><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANP</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:num><m:den><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>TP</m:t></m:r></m:sub></m:sSub></m:den></m:f><m:r><m:t> * </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>TNS</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> - </m:t></m:r><m:sSub><m:sSubPr/><m:e><m:r><m:t>ANP</m:t></m:r></m:e><m:sub><m:r><m:t>comp</m:t></m:r></m:sub></m:sSub></m:e></m:d><m:r><m:t> * </m:t></m:r><m:d><m:dPr/><m:e><m:f><m:num><m:r><m:t>R</m:t></m:r></m:num><m:den><m:r><m:t>1 + R</m:t></m:r></m:den></m:f></m:e></m:d></m:oMath></w:p>`;
-
-  const reemplazarFormulaSiguiente = (tituloKeyword, xmlFormula) => {
-    let cursor = 0;
-    for (;;) {
-      const idx = salida.indexOf(tituloKeyword, cursor);
-      if (idx === -1) break;
-
-      // Buscamos el siguiente párrafo <w:p>
-      const nextP = salida.indexOf('<w:p', idx + tituloKeyword.length);
-      if (nextP === -1) break;
-
-      const finP = salida.indexOf('</w:p>', nextP);
-      if (finP === -1) break;
-
-      const finPFull = finP + '</w:p>'.length;
-      
-      // Reemplazamos el párrafo entero con la fórmula matemática nativa
-      salida = salida.slice(0, nextP) + xmlFormula + salida.slice(finPFull);
-      cursor = nextP + xmlFormula.length;
+    /* Regex local y no `PARRAFO_OOXML`: ese es `/gi` compartido con `prosaRangoInforme.js` y
+       arrastra su `lastIndex` entre llamadas. */
+    const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+    let rotulo = null;
+    let p;
+    while ((p = rxParrafo.exec(salida)) !== null) {
+      /* Las entradas del índice llevan el rótulo igual que el cuerpo. Reemplazar ahí inyecta una
+         segunda ecuación dentro del índice y se lleva por delante el párrafo que la seguía. Se
+         descartan por tres vías independientes: el campo PAGEREF que Word pone en toda entrada de
+         índice —el mismo filtro que ya usan `localizarBloqueProsa` y `localizarHitos`—, el estilo
+         de índice (`TDC1..9` en Word en español, `TOC1..9` en inglés) y la comparación EXACTA,
+         que además descarta la entrada con el número de página pegado. */
+      if (p[0].includes('PAGEREF')) continue;
+      if (/<w:pStyle\s+w:val="(?:TDC|TOC|Tdc|Toc)\d/.test(p[0])) continue;
+      const clave = claveTitulo(textoPlanoOoxml(p[0]));
+      if (!clave || !claves.includes(clave)) continue;
+      rotulo = { fin: p.index + p[0].length };
+      break;
     }
-  };
 
-  reemplazarFormulaSiguiente('FORMULA AJUSTE CUENTAS POR COBRAR', XML_AR);
-  reemplazarFormulaSiguiente('FORMULA AJUSTE CUENTAS POR PAGAR', XML_AP);
+    if (!rotulo) {
+      anotar(`${comoSeLlama} (el rótulo «${rotulos[0]}»)`);
+      continue;
+    }
 
-  return salida;
+    const hermano = parrafoHermanoSiguiente(salida, rotulo.fin);
+    const ecuacion = ooxmlDeFormula(FORMULAS[tipo]);
+
+    if (hermano.bloqueado || !pareceLaEcuacion(textoPlanoOoxml(hermano.xml), hermano.xml)) {
+      /* No se sabe qué hay detrás del rótulo en el .docx del cliente: puede ser la basura del
+         PDF, pero también una ecuación suya o el párrafo «Dónde:». Se inserta sin borrar y se
+         avisa; perder texto de un informe que se radica es peor que dejar algo repetido. */
+      salida = salida.slice(0, rotulo.fin) + ecuacion + salida.slice(rotulo.fin);
+      insertadas++;
+      console.warn('[relleno] tras el rótulo de', comoSeLlama,
+        'no había un párrafo sustituible, se insertó la ecuación sin borrar nada');
+      anotar(`${comoSeLlama}: se escribió detrás del rótulo sin borrar lo que había, `
+        + 'porque no parecía la ecuación vieja');
+      continue;
+    }
+
+    salida = salida.slice(0, hermano.inicio) + ecuacion + salida.slice(hermano.fin);
+    insertadas++;
+  }
+
+  return insertadas ? asegurarNamespaceM(salida) : salida;
 }
 
 
 export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   if (!estudio) return xml;
-  
-  // Reemplazamos las fórmulas de LaTeX corruptas por el motor matemático nativo de Word (OMML)
-  xml = actualizarFormulasMatematicasOoxml(xml);
 
   const doc = sustituidorDeTablas(xml, avisos);
   const reemplazar = (...args) => doc.reemplazar(...args);
@@ -1444,7 +1555,28 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   });
 
   doc.render(colecciones);
-  return { zip: doc.getZip(), camposVacios: [...camposVacios], avisosTablas };
+
+  const zipFinal = doc.getZip();
+  insertarFormulasAjuste(zipFinal, avisosTablas);
+  return { zip: zipFinal, camposVacios: [...camposVacios], avisosTablas };
+}
+
+/**
+ * Las ecuaciones de ajuste, DESPUÉS del render.
+ *
+ * Por el mismo motivo que las imágenes: docxtemplater no debe ver este XML. Su configuración
+ * incluye `m:t` entre las etiquetas de texto de plantilla, así que una llave dentro de una
+ * ecuación se tomaría por un marcador y `nullGetter` la sustituiría por un guion largo, en
+ * silencio. Hoy ninguna de las dos lleva llaves; el día que alguien las toque, esto lo cubre.
+ *
+ * @param {PizZip} zip
+ * @param {string[]} [avisos]
+ */
+export function insertarFormulasAjuste(zip, avisos) {
+  const xml = zip.file(RUTA_DOC).asText();
+  const salida = actualizarFormulasMatematicasOoxml(xml, avisos);
+  if (salida !== xml) zip.file(RUTA_DOC, salida);
+  return { cambiado: salida !== xml };
 }
 
 /** El mayor rId ya usado, para no repetir ninguno al añadir relaciones. */
@@ -1467,6 +1599,16 @@ const NS_WP = 'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordpr
 function asegurarNamespaceWp(xml) {
   if (/xmlns:wp=/.test(xml)) return xml;
   return xml.replace(/<w:document\b([^>]*)>/, (todo, attrs) => `<w:document${attrs} ${NS_WP}>`);
+}
+
+/* El namespace de las ecuaciones. Word siempre lo declara, pero el .docx del cliente puede venir
+   de LibreOffice o de Google Docs sin una sola ecuación, y entonces no está: al insertar la
+   nuestra, Word abre el archivo diciendo que está dañado. */
+const NS_M = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
+
+function asegurarNamespaceM(xml) {
+  if (/xmlns:m=/.test(xml)) return xml;
+  return xml.replace(/<w:document\b([^>]*)>/, (todo, attrs) => `<w:document${attrs} ${NS_M}>`);
 }
 
 /** El `<w:p>` con la imagen, centrado y a tamaño dado en EMU. */

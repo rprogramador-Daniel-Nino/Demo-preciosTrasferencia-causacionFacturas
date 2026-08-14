@@ -81,6 +81,12 @@ export const REGLAS_DOCUMENTO = [
   ['strong', 'font-weight:bold'],
   ['em', 'font-style:italic'],
   ['p,li,td', 'text-align:justify;margin:0;padding:0'],
+  /* Las ecuaciones de ajuste de capital. En pantalla y en el `.doc` se ven como una línea de
+     texto —centrada y en la tipografía matemática, que es lo más cerca que se puede estar sin
+     un motor de fórmulas—; en el `.docx` se sustituyen por la ecuación de Word de verdad. Va
+     después de `p` para ganarle la justificación. */
+  ['p[data-formula]', "text-align:center;font-family:'Cambria Math','Cambria',serif;" +
+                      'font-style:italic;margin:8px 0'],
   /* Red de seguridad de las imágenes. Cada una lleva ya el tamaño que le da el PDF,
      pero esta regla es la que impide que una sin medida —una plantilla vieja, un .docx
      por mammoth— desborde la hoja. No la había en el .doc, y como el previo sí la

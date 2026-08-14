@@ -15,7 +15,9 @@ import {
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
+  actualizarFormulasMatematicasOoxml,
 } from './docxRelleno.js';
+import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 import { resolverSerie } from './analisisMercado.js';
 
@@ -1775,4 +1777,184 @@ test('sin la frase de la conclusión se avisa; con un año ilegible también', a
   const sinAnio = [];
   actualizarAnioConclusionRango(xml, undefined, sinAnio);
   assert.match(sinAnio[0], /no se pudo leer el año gravable/);
+});
+
+/* ══════════════════ Ecuaciones de ajuste (OMML) ══════════════════ */
+
+const ROTULO_AR = 'FORMULA AJUSTE CUENTAS POR COBRAR';
+const ROTULO_AP = 'FORMULA AJUSTE CUENTAS POR PAGAR';
+/* Lo que el editor de ecuaciones del PDF deja en la plantilla: letras colapsadas al mismo code
+   point y rombos de reemplazo donde iban las barras y los paréntesis. */
+const BASURA = '𝐴'.repeat(24) + '�'.repeat(8);
+
+const docDe = (zip) => zip.file(RUTA_DOC_TEST).asText();
+const cuentaEn = (xml, etiqueta) => (xml.match(new RegExp(etiqueta, 'g')) || []).length;
+
+test('la ecuación de ajuste se escribe con el motor matemático de Word', async () => {
+  const buf = await plantilla([
+    parrafo(ROTULO_AR), parrafo(BASURA),
+    parrafo(ROTULO_AP), parrafo(BASURA),
+  ]);
+  const { zip, avisosTablas } = renderizarDocx(buf, ESTUDIO);
+  const xml = docDe(zip);
+
+  assert.strictEqual(cuentaEn(xml, '<m:oMath>'), 2, 'no son dos ecuaciones');
+  /* La forma exacta la fija `formulasOmml.test.js`; aquí basta con que sea la de la plantilla. */
+  assert.strictEqual(cuentaEn(xml, '<m:d>'), 10, 'no son cinco paréntesis por ecuación');
+  assert.ok(xml.includes('<m:t>ANC</m:t>') && xml.includes('<m:t>ANP</m:t>'),
+    'las dos ecuaciones promedian la misma cuenta');
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(xml), 'sobrevive la basura del editor de ecuaciones');
+  /* Los rótulos se quedan: en la plantilla se leen como un renglón más. */
+  assert.ok(textoDe(zip, RUTA_DOC_TEST).includes(ROTULO_AR));
+  assert.ok(!avisosTablas.some((a) => /ecuación/.test(a)), 'avisó de una ecuación que sí escribió');
+});
+
+test('el rótulo vale aunque Word lo haya partido en varios runs', async () => {
+  /* El defecto que dejaba la basura en el informe sin decir nada: se buscaba la cadena entera en
+     el XML crudo, y Word parte el texto por rsid o por el corrector —«FORMULA» sin tilde es justo
+     lo que subraya—, así que la cadena no existía y no se sustituía nada. */
+  const buf = await plantilla([
+    parrafo('FORMULA AJUSTE ', 'CUENTAS POR ', { text: 'PAGAR', bold: true }),
+    parrafo(BASURA),
+  ]);
+  const { zip } = renderizarDocx(buf, ESTUDIO);
+  const xml = docDe(zip);
+  assert.strictEqual(cuentaEn(xml, '<m:oMath>'), 1, 'no se reconoció el rótulo partido en runs');
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(xml), 'sobrevive la basura');
+});
+
+test('la entrada del índice no se lleva la ecuación ni borra lo que la sigue', async () => {
+  /* El rótulo aparece igual en la tabla de contenido. Reemplazar ahí inyectaba una segunda
+     ecuación dentro del índice y borraba el párrafo siguiente. */
+  const buf = await plantilla([parrafo('x'), parrafo(ROTULO_AR), parrafo(BASURA)]);
+  const conIndice = docDe(new PizZip(buf)).replace(
+    '<w:p><w:r><w:t xml:space="preserve">x</w:t></w:r></w:p>',
+    '<w:p><w:pPr><w:pStyle w:val="TDC1"/></w:pPr><w:r>'
+    + '<w:instrText> PAGEREF _Toc123 \\h </w:instrText>'
+    + '<w:t>' + ROTULO_AR + '</w:t><w:t>80</w:t></w:r></w:p>'
+    + '<w:p><w:r><w:t>victima del indice</w:t></w:r></w:p>');
+  assert.ok(conIndice.includes('PAGEREF'), 'el montaje del test no insertó la entrada del índice');
+
+  const salida = actualizarFormulasMatematicasOoxml(conIndice, []);
+  assert.strictEqual(cuentaEn(salida, '<m:oMath>'), 1, 'se escribió también dentro del índice');
+  assert.ok(salida.includes('victima del indice'), 'se borró el párrafo que seguía al índice');
+});
+
+test('una tabla tras el rótulo no se destruye', async () => {
+  /* Buscar el siguiente `<w:p` a pelo entraba en la primera celda y la vaciaba. */
+  const buf = await plantilla([
+    parrafo(ROTULO_AP),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [new TableRow({ children: [new TableCell({ children: [parrafo('celda uno')] })] })],
+    }),
+  ]);
+  const avisos = [];
+  const salida = actualizarFormulasMatematicasOoxml(docDe(new PizZip(buf)), avisos);
+
+  assert.ok(salida.includes('celda uno'), 'se destruyó el contenido de la celda');
+  assert.strictEqual(cuentaEn(salida, '<m:oMath>'), 1);
+  const celda = /<w:tc>[\s\S]*?<\/w:tc>/.exec(salida);
+  assert.ok(!celda[0].includes('<m:oMath>'), 'la ecuación quedó dentro de la celda');
+  /* Y entre el rótulo y la tabla, no después de ella. */
+  assert.ok(salida.indexOf('<m:oMath>') < salida.indexOf('<w:tbl'));
+  assert.ok(avisos.some((a) => /ecuación/.test(a)), 'no se avisó de que hubo que insertar');
+});
+
+test('un aviso del corrector tras el rótulo no desbalancea el documento', async () => {
+  /* `indexOf('<w:p', …)` casaba con `<w:proofErr`, y la ecuación acababa ANIDADA dentro del
+     párrafo del rótulo: tres aperturas, dos cierres, y Word declaraba el .docx dañado. */
+  const buf = await plantilla([parrafo(ROTULO_AR), parrafo(BASURA)]);
+  const conProofErr = docDe(new PizZip(buf)).replace(
+    '<w:t xml:space="preserve">' + ROTULO_AR + '</w:t></w:r>',
+    '<w:t xml:space="preserve">' + ROTULO_AR + '</w:t></w:r><w:proofErr w:type="spellEnd"/>');
+  assert.ok(conProofErr.includes('proofErr'), 'el montaje del test no insertó el aviso');
+
+  const salida = actualizarFormulasMatematicasOoxml(conProofErr, []);
+  assert.strictEqual(cuentaEn(salida, '<w:p(?:\\s[^>]*)?>'), cuentaEn(salida, '</w:p>'),
+    'el documento quedó con más aperturas de párrafo que cierres');
+  assert.strictEqual(cuentaEn(salida, '<m:oMath>'), 1);
+});
+
+test('una plantilla sin el namespace de ecuaciones lo recupera', async () => {
+  /* Un .docx de LibreOffice o de Google Docs sin una sola ecuación puede no declarar `xmlns:m`, y
+     entonces Word abre el resultado diciendo que está dañado. La librería `docx` sí lo declara,
+     así que hay que quitarlo a mano para que el test pruebe algo. */
+  const buf = await plantilla([parrafo(ROTULO_AR), parrafo(BASURA)]);
+  const sinNs = docDe(new PizZip(buf)).replace(/\s*xmlns:m="[^"]*"/, '');
+  assert.ok(!/xmlns:m=/.test(sinNs), 'el montaje del test no quitó el namespace');
+
+  const salida = actualizarFormulasMatematicasOoxml(sinNs, []);
+  assert.strictEqual(cuentaEn(salida, 'xmlns:m='), 1, 'el namespace falta o se duplicó');
+});
+
+test('el namespace de ecuaciones no se duplica si ya estaba', async () => {
+  const buf = await plantilla([parrafo(ROTULO_AR), parrafo(BASURA)]);
+  const salida = actualizarFormulasMatematicasOoxml(docDe(new PizZip(buf)), []);
+  assert.strictEqual(cuentaEn(salida, 'xmlns:m='), 1);
+});
+
+test('sin el rótulo se avisa en vez de callar', async () => {
+  const buf = await plantilla([parrafo('El informe no anuncia ninguna ecuación.')]);
+  const { zip, avisosTablas } = renderizarDocx(buf, ESTUDIO);
+  assert.ok(!docDe(zip).includes('<m:oMath>'));
+  assert.strictEqual(avisosTablas.filter((a) => /ecuación del ajuste/.test(a)).length, 2,
+    'no se avisó de las dos ecuaciones que faltan');
+});
+
+test('lo que sigue al rótulo se conserva si no parece la ecuación vieja', async () => {
+  /* No se sabe qué trae el .docx del cliente detrás del rótulo. Si no parece la ecuación, se
+     escribe la nueva sin borrar: perder texto de un informe que se radica es peor. */
+  const buf = await plantilla([
+    parrafo(ROTULO_AP), parrafo('Dónde: Comp = Contribuyente comparable'),
+  ]);
+  const avisos = [];
+  const salida = actualizarFormulasMatematicasOoxml(docDe(new PizZip(buf)), avisos);
+  assert.ok(salida.includes('Contribuyente comparable'), 'se borró un párrafo de prosa');
+  assert.strictEqual(cuentaEn(salida, '<m:oMath>'), 1);
+  assert.ok(avisos.some((a) => /sin borrar/.test(a)));
+});
+
+test('escribir las ecuaciones dos veces da el mismo resultado', async () => {
+  const buf = await plantilla([
+    parrafo(ROTULO_AR), parrafo(BASURA), parrafo(ROTULO_AP), parrafo(BASURA),
+  ]);
+  const una = actualizarFormulasMatematicasOoxml(docDe(new PizZip(buf)), []);
+  const dos = actualizarFormulasMatematicasOoxml(una, []);
+  assert.strictEqual(dos, una);
+  assert.strictEqual(cuentaEn(dos, '<m:oMath>'), 2);
+});
+
+test('docxtemplater no toca el texto de dentro de la ecuación', async () => {
+  /* Su configuración incluye `m:t` entre las etiquetas de texto de plantilla, así que una llave
+     dentro de la ecuación se tomaría por marcador y saldría un guion largo. Por eso la inyección
+     va después del render. Si alguien la devuelve a antes, este test se entera. */
+  const buf = await plantilla([
+    parrafo('La sociedad {ent} declara.'), parrafo(ROTULO_AR), parrafo(BASURA),
+  ]);
+  const { zip } = renderizarDocx(buf, ESTUDIO);
+  const xml = docDe(zip);
+  assert.ok(textoDe(zip, RUTA_DOC_TEST).includes('ACME COLOMBIA S.A.S'), 'el campo no se resolvió');
+  assert.ok(xml.includes('<m:t>AR Adjustment = </m:t>'), 'el texto de la ecuación llegó tocado');
+  assert.ok(!xml.includes('<m:t>' + SIN_DATO + '</m:t>'),
+    'docxtemplater escribió dentro de la ecuación');
+});
+
+test('una ecuación entre el título de una tabla y su tabla no se la traga el bloque', async () => {
+  /* `textoPlanoOoxml` sólo lee los `<w:t>`, así que un párrafo con sólo una ecuación le parece
+     vacío y `localizarBloqueTabla` lo contaba como hueco de maquetación: al sustituir la tabla,
+     la ecuación se iba con ella. */
+  const buf = await plantilla([
+    parrafo('Tabla 1. Composición accionaria'),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [new TableRow({ children: [new TableCell({ children: [parrafo('a')] })] })],
+    }),
+  ]);
+  const conEcuacion = docDe(new PizZip(buf))
+    .replace('<w:tbl>', ooxmlDeFormula(FORMULA_AR) + '<w:tbl>');
+  assert.ok(conEcuacion.includes('<m:oMath>'), 'el montaje del test no insertó la ecuación');
+
+  const bloque = localizarBloqueTabla(conEcuacion, 'Composición accionaria');
+  assert.strictEqual(bloque, null, 'el bloque de la tabla se tragó el párrafo de la ecuación');
 });
