@@ -53,6 +53,11 @@ import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage
 const URL_ANALISIS_SECTOR =
   'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector';
 
+/* Actividad+año cuya corrida ya se intentó rehacer en esta página. Vive fuera del
+   componente a propósito: sobrevive a que el estudio se cierre y se vuelva a abrir, que es
+   cuando el efecto se volvería a disparar y pediría otra corrida por lo mismo. */
+const SECTOR_REGENERADO = new Set();
+
 /* El endpoint SIEMPRE rehace la corrida y la sobrescribe con `merge`: la decisión de
    reutilizar lo guardado es de aquí, no de la función. Por eso sirve igual para la
    generación bajo demanda y para regenerar a mano una corrida vieja. */
@@ -197,10 +202,31 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       try {
         let doc = await leerAnalisisSector(clave);
         const yaTieneEsteAnio = doc && doc.porAnio && doc.porAnio[String(year)];
-        if (!yaTieneEsteAnio) {
+        /* Una corrida anterior al 2026-08-13 no trae `narrativa.introduccion`, y como la
+           clave de caché es solo actividad+año se reutilizaría tal cual: el hueco de entrada
+           de III.C saldría con el marcador de pendiente para siempre. Se rehace sola, porque
+           dejar una casilla por completar en la Sección III no es una opción.
+
+           `SECTOR_REGENERADO` acota el gasto: como mucho un intento por actividad+año en toda
+           la vida de la página. Si la corrida nueva vuelve a salir sin introducción —el campo
+           es opcional en el parseo a propósito, para no perder el resto de la redacción por
+           él— no se reintenta en bucle; queda el botón «Regenerar III.C» para insistir a
+           mano. */
+        const incompleta = yaTieneEsteAnio && corridaSectorIncompleta(yaTieneEsteAnio);
+        const claveIntento = clave + ':' + year;
+        const rehacer = incompleta && !SECTOR_REGENERADO.has(claveIntento);
+        if (rehacer) SECTOR_REGENERADO.add(claveIntento);
+
+        if (!yaTieneEsteAnio || rehacer) {
           if (vivo) setSectorEnCurso(true);
           try {
             doc = await pedirAnalisisSector(actividadTexto, year);
+          } catch (err) {
+            /* Si la que falla es la REGENERACIÓN, se conserva la corrida vieja: incompleta
+               es mejor que ninguna —trae comportamiento, comercio exterior, proyección y
+               conclusiones— y el marcador del hueco de entrada ya avisa de lo que falta. */
+            if (!yaTieneEsteAnio) throw err;
+            console.error('No se pudo rehacer la corrida del sector; se conserva la anterior:', err);
           } finally {
             if (vivo) setSectorEnCurso(false);
           }
@@ -236,7 +262,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          nada que hacer, solo esperar a que este mismo aviso se actualice solo. */
       avisos.push(
         'el análisis del sector (III.C) se está generando para esta actividad y año — ' +
-        'puede tardar uno o dos minutos, este aviso se actualiza solo cuando esté listo'
+        'puede tardar dos o tres minutos, este aviso se actualiza solo cuando esté listo'
       );
     } else if (motivoFalloSector) {
       /* Distinguir "no hay nada público que citar" de un error técnico: la primera no se
@@ -1608,7 +1634,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       {sectorEnCurso && (
         <div className="bg-sky-50 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 rounded-xl px-5 py-3 text-xs leading-relaxed flex items-center gap-2">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-          Generando el análisis del sector (III.C) para esta actividad y año — puede tardar uno o dos minutos.
+          Generando el análisis del sector (III.C) para esta actividad y año — puede tardar dos o tres minutos.
         </div>
       )}
       {sectorListo && !sectorIncompleto && (
@@ -1630,7 +1656,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
             type="button"
             onClick={regenerarSector}
             className="shrink-0 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/40 font-medium"
-            title="Rehace la corrida del sector para esta actividad y año, aunque ya haya una guardada (tarda uno o dos minutos)"
+            title="Rehace la corrida del sector para esta actividad y año, aunque ya haya una guardada (tarda dos o tres minutos)"
           >
             Regenerar III.C
           </button>
