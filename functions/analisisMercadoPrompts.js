@@ -25,21 +25,47 @@ function extraerJSON(texto) {
 }
 
 /* Las 8 series de DATOS_MACRO (frontend/src/services/analisisMercado.js), sin
-   meta_inflacion_banrep porque es una meta de política fija, no una serie que buscar. */
+   meta_inflacion_banrep porque es una meta de política fija, no una serie que buscar.
+
+   `fuenteProyeccion` está en las series cuyo publicador SOLO da el dato realizado. Medido
+   en Firestore el 2026-08-13, `desempleo_colombia` y `trm_promedio` eran las dos únicas que
+   volvían sin el año de proyección —las demás traían hasta anioActual+2—, y la causa era
+   esta: preguntar por «la tasa de desempleo de Colombia (DANE, GEIH)» para 2026 no tiene
+   respuesta, porque el DANE publica lo ocurrido, no un pronóstico. El modelo omitía ese año
+   bien (la regla 3 le prohíbe inventarlo) y el informe salía con «Desempleo Proyectado 2026:
+   [Completar…]». Quien sí pronostica es otro: el FMI, la OCDE, Fedesarrollo o la Encuesta de
+   Expectativas del propio Banco de la República. */
 const SERIES_MACRO = [
   { clave: 'pib_mundial', pregunta: 'crecimiento porcentual del PIB mundial (FMI, World Economic Outlook)' },
   { clave: 'pib_colombia', pregunta: 'crecimiento porcentual del PIB de Colombia (DANE / FMI)' },
   { clave: 'inflacion_global', pregunta: 'inflación global promedio (OCDE / FMI)' },
   { clave: 'inflacion_colombia', pregunta: 'inflación anual de Colombia, variación del IPC (DANE)' },
   { clave: 'tasa_intervencion', pregunta: 'tasa de intervención del Banco de la República de Colombia, con la fecha de cada decisión relevante' },
-  { clave: 'trm_promedio', pregunta: 'TRM promedio anual de Colombia (Banco de la República)' },
-  { clave: 'desempleo_colombia', pregunta: 'tasa de desempleo de Colombia (DANE, GEIH)' },
+  {
+    clave: 'trm_promedio',
+    pregunta: 'TRM promedio anual de Colombia (Banco de la República)',
+    fuenteProyeccion: 'la Encuesta Mensual de Expectativas de Analistas Económicos del Banco de la República, o las proyecciones de tasa de cambio de Bancolombia, Corficolombiana o Fedesarrollo',
+  },
+  {
+    clave: 'desempleo_colombia',
+    pregunta: 'tasa de desempleo de Colombia (DANE, GEIH)',
+    fuenteProyeccion: 'las proyecciones de desempleo del FMI (World Economic Outlook), la OCDE, Fedesarrollo o la Encuesta Mensual de Expectativas de Analistas Económicos del Banco de la República',
+  },
   { clave: 'crecimiento_por_region', pregunta: 'proyecciones de crecimiento del PIB por región/país: Mundial, Estados Unidos, China, América Latina, Colombia (FMI/OCDE)' },
 ];
 
 function construirPromptBusqueda(anioActual) {
   const anios = [anioActual - 2, anioActual - 1, anioActual, anioActual + 1];
+  const anioProyeccion = anioActual + 1;
   const lista = SERIES_MACRO.map((s) => '- "' + s.clave + '": ' + s.pregunta + '.').join('\n');
+
+  /* La instrucción va aparte de la lista de series y nombra el año explícitamente: dentro de
+     la lista, «(DANE, GEIH)» pesa más que la ventana de años y el modelo se queda con el
+     publicador histórico. */
+  const proyecciones = SERIES_MACRO
+    .filter((s) => s.fuenteProyeccion)
+    .map((s) => '- "' + s.clave + '": para ' + anioProyeccion + ' consulta ' + s.fuenteProyeccion + '.')
+    .join('\n');
 
   /* «Responde ÚNICAMENTE con un objeto JSON» era lo que rompía esta corrida: con esa
      exigencia de formato el modelo se salta la búsqueda y contesta de memoria. Devolvía las
@@ -53,6 +79,24 @@ function construirPromptBusqueda(anioActual) {
     'cifras que recuerdes: cada valor tiene que salir de una página que hayas consultado en ' +
     'esta misma respuesta, y quiero ver citadas esas fuentes.\n\n' +
     'Series, para los años ' + anios.join(', ') + ':\n\n' + lista + '\n\n' +
+    'El año ' + anioProyeccion + ' es de PROYECCIÓN y lo quiero para TODAS las series. Ojo: ' +
+    'algunas de las fuentes de arriba solo publican el dato ya ocurrido, no un pronóstico, ' +
+    'así que para ese año hay que buscar en quien sí proyecta:\n\n' + proyecciones + '\n\n' +
+    'Si la primera institución que consultes no lo publica, NO te rindas ni dejes el año ' +
+    'vacío: sigue buscando en las demás de esa lista y, si ninguna lo trae, en cualquier otro ' +
+    'pronóstico publicado y atribuible (banco central, banca de inversión, gremio, centro de ' +
+    'investigación económica). Un año sin cifra obliga a completarlo a mano después, así que ' +
+    'agota la búsqueda antes de omitirlo.\n\n' +
+    'Cuando la cifra de un año venga de una fuente DISTINTA de la principal de esa serie ' +
+    '—que es lo normal en el año de proyección—, no la des como un número suelto: devuélvela ' +
+    'con SU propia fuente y SU propia URL, así:\n' +
+    '  "desempleo_colombia": { "valores": { "' + (anioProyeccion - 1) + '": "8.9", "' + anioProyeccion +
+    '": { "valor": "8.5", "fuente": "FMI, WEO Octubre ' + anioProyeccion + '", "fuenteUrl": "https://..." } }, ' +
+    '"fuente": "DANE, GEIH", "fuenteUrl": "https://..." }\n' +
+    'Ese enlace se publica en la propia celda del informe, para que quien lo lea pueda ' +
+    'verificar el pronóstico sin salir del documento. Sin él la cifra no sirve.\n\n' +
+    'Esa proyección también tiene que salir de una página que hayas consultado: no la ' +
+    'estimes tú ni la extrapoles de los años anteriores.\n\n' +
     'Cuando termines de buscar, incluye en tu respuesta un objeto JSON con esta forma (puede ' +
     'ir acompañado del texto y las citas que necesites; lo que importa es que el JSON esté ' +
     'completo y bien formado):\n' +

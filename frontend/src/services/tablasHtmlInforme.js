@@ -37,7 +37,7 @@ import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
   filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme,
 } from './tablasInforme.js';
-import { claveTitulo, numeroDeTabla } from './docxRelleno.js';
+import { claveTitulo, numeroDeTabla, prefijoDeEncabezado } from './docxRelleno.js';
 import { pctf } from '../utils/calculations.js';
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -46,7 +46,7 @@ import { pctf } from '../utils/calculations.js';
    importa de este módulo ni de `docxRelleno.js`. */
 import {
   resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
-  fuenteDatosClaveSector,
+  fuenteDatosClaveSector, titulosSectorial,
 } from './analisisMercado.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
@@ -748,6 +748,34 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
 }
 
 /**
+ * Escribe los encabezados de III.C con la industria y los años del estudio — equivalente
+ * HTML de `reescribirEncabezadosOoxml` (`docxRelleno.js`), y por el mismo motivo:
+ * `reemplazarHuecosHtml` solo toca el hueco ENTRE encabezados, así que estos se quedaban
+ * con los del informe de referencia.
+ *
+ * De atrás hacia adelante, porque cada reescritura mueve los índices de lo que va después.
+ * La numeración del cliente («C. ») se conserva, igual que `reescribirRotuloHtml` conserva
+ * el «Tabla N.».
+ *
+ * @param {Array<{inicio:number}|null>} hitos  de `localizarHitosHtml`.
+ * @param {Array<string|null>} titulos  uno por hito; `null` deja ese encabezado como está.
+ */
+function reescribirEncabezadosHtml(html, hitos, titulos) {
+  let salida = String(html || '');
+  for (let i = titulos.length - 1; i >= 0; i -= 1) {
+    const hito = hitos[i];
+    if (!hito || !titulos[i]) continue;
+    const m = /^<(p|h[1-6])(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/i.exec(salida.slice(hito.inicio));
+    if (!m) continue;
+    const nuevo = reescribirRotuloHtml(
+      m[0], prefijoDeEncabezado(textoPlanoHtml(m[0])) + titulos[i]);
+    if (nuevo === m[0]) continue;
+    salida = salida.slice(0, hito.inicio) + nuevo + salida.slice(hito.inicio + m[0].length);
+  }
+  return salida;
+}
+
+/**
  * Regenera la tabla «Datos Clave del Sector» sobre la de la plantilla.
  *
  * Mismo trabajo que hace la ruta .docx dentro de `actualizarApartadoSectorialOoxml`, pero
@@ -841,13 +869,15 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     return bloque(narrativaHtml, tema)();
   };
 
-  const salida = reemplazarHuecosHtml(
+  const titulos = [
+    'Análisis del Sector', 'Comportamiento del Sector', 'Datos Clave del Sector',
+    'Importaciones y exportaciones del sector', '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
+    'ANÁLISIS ECONÓMICO',
+  ];
+
+  let salida = reemplazarHuecosHtml(
     html,
-    [
-      'Análisis del Sector', 'Comportamiento del Sector', 'Datos Clave del Sector',
-      'Importaciones y exportaciones del sector', '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
-      'ANÁLISIS ECONÓMICO',
-    ],
+    titulos,
     [
       bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
       bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
@@ -867,6 +897,19 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
   );
 
   if (!entrada && Array.isArray(avisos)) avisos.push('narrativa del Análisis del Sector');
+
+  /* Los encabezados van después de la prosa y se relocalizan sobre la salida ya modificada.
+     "Datos Clave del Sector" queda fuera —su rótulo lo reescribe `regenerarTablaDatosClave`
+     junto con la tabla— y "Conclusiones y Perspectivas" también, porque no lleva industria
+     ni años. */
+  if (entrada) {
+    const t = titulosSectorial(entrada.tituloSector, year);
+    salida = reescribirEncabezadosHtml(
+      salida,
+      localizarHitosHtml(salida, titulos),
+      [t.apartado, t.comportamiento, null, t.comercioExterior, t.proyeccion, null, null]
+    );
+  }
 
   return regenerarTablaDatosClave(salida, entrada, year, avisos);
 }

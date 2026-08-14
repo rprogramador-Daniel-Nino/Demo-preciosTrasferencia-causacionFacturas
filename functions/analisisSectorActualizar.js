@@ -97,6 +97,13 @@ async function redactarSector(claudeApiKey, geminiApiKey, datosConfiables, activ
     prompt: construirPromptRedaccionSector(datosConfiables, actividad, year),
     claudeApiKey, geminiApiKey,
     modeloClaude: CLAUDE_MODEL, modeloGemini: GEMINI_MODEL,
+    /* Los 4096 por defecto de `redactarConFallback` no alcanzan desde que
+       `construirPromptRedaccionSector` exige mínimos por apartado: 200+450+350+350+450 son
+       1.800 palabras de piso, que en español pasan de 3.000 tokens antes de contar el JSON,
+       las etiquetas <p> y las fuentes citadas. Con 4096 la respuesta se cortaba a media
+       redacción y `extraerJSON` fallaba con «llaves sin cerrar» — la corrida entera se
+       perdía con un 502, verificado en vivo el 2026-08-13. */
+    maxTokens: 12288,
   });
   return parsearRespuestaRedaccionSector(texto);
 }

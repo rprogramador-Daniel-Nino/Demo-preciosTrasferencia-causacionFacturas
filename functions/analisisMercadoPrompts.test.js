@@ -33,6 +33,73 @@ test('construirPromptBusqueda pide las 8 series y la ventana de 4 años', () => 
   ['2024', '2025', '2026', '2027'].forEach((a) => assert.ok(prompt.includes(a), 'falta el año ' + a));
 });
 
+test('construirPromptBusqueda nombra dónde buscar la PROYECCIÓN de las series históricas', () => {
+  /* `desempleo_colombia` y `trm_promedio` eran las dos únicas series que volvían sin el año
+     de proyección (medido en Firestore el 2026-08-13: las demás traían 2026 y hasta 2027).
+     La causa es que el prompt las anclaba a DANE y al Banco de la República, que publican el
+     dato realizado y no un pronóstico, así que el modelo omitía ese año — correctamente,
+     porque la regla 3 le prohíbe inventarlo. El informe salía con
+     «Desempleo Proyectado 2026: [Completar…]». */
+  const prompt = construirPromptBusqueda(2026);
+
+  assert.ok(/proyecci[oó]n/i.test(prompt), 'el prompt no menciona la proyección');
+  /* Que se diga explícitamente cuál es el año a proyectar, no solo la ventana. */
+  assert.ok(prompt.includes('2027'), 'no se nombra el año de proyección');
+
+  const proyectables = SERIES_MACRO.filter((s) => s.fuenteProyeccion);
+  assert.ok(proyectables.length >= 2, 'ninguna serie declara fuente de proyección');
+  proyectables.forEach((s) => {
+    assert.ok(prompt.includes(s.fuenteProyeccion),
+      'el prompt no dice dónde buscar la proyección de ' + s.clave);
+  });
+
+  const claves = proyectables.map((s) => s.clave);
+  assert.ok(claves.includes('desempleo_colombia'), 'desempleo_colombia sin fuente de proyección');
+  assert.ok(claves.includes('trm_promedio'), 'trm_promedio sin fuente de proyección');
+});
+
+test('el prompt manda insistir en otra fuente y devolver el enlace pegado a ese valor', () => {
+  /* Dejar «[Completar…]» en el informe no es una salida aceptable: es trabajo que queda
+     para quien lo radica. Si el publicador habitual no proyecta, hay que buscar en quien
+     sí, y el valor tiene que traer SU propia fuente y URL —no la del pie de la tabla, que
+     respalda otra cosa— para poder verificarlo. */
+  const prompt = construirPromptBusqueda(2026);
+
+  assert.ok(/no te rindas|sigue buscando|insiste/i.test(prompt),
+    'el prompt no manda insistir en otra fuente');
+  /* La forma por valor, con su fuente y su URL. */
+  assert.ok(/"valor"\s*:/.test(prompt), 'el prompt no muestra la forma { valor, fuente, fuenteUrl }');
+  assert.ok(/fuenteUrl/.test(prompt));
+  assert.ok(/distinta|distinto|otra fuente/i.test(prompt),
+    'no se explica cuándo usar la forma con fuente propia');
+});
+
+test('parsearRespuestaBusqueda conserva la fuente propia de un valor de proyección', () => {
+  const texto = JSON.stringify({
+    desempleo_colombia: {
+      valores: {
+        2025: '8.9',
+        2026: { valor: '8.5', fuente: 'FMI, WEO', fuenteUrl: 'https://www.imf.org/weo' },
+      },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.deepStrictEqual(series.desempleo_colombia.valores[2026], {
+    valor: '8.5', fuente: 'FMI, WEO', fuenteUrl: 'https://www.imf.org/weo',
+  });
+  assert.strictEqual(series.desempleo_colombia.valores[2025], '8.9');
+});
+
+test('la regla de no inventar sobrevive a la instrucción de proyección', () => {
+  /* Pedirle una proyección no puede convertirse en permiso para estimarla él mismo: la
+     cifra sigue teniendo que salir de una página consultada. */
+  const prompt = construirPromptBusqueda(2026);
+  assert.ok(/no la rellenes con un valor inventado/i.test(prompt));
+  assert.ok(/no estimes|no la calcules|no inventes/i.test(prompt));
+});
+
 test('el prompt manda buscar y NO exige que la respuesta sea solo el JSON', () => {
   /* Esto es lo que tenía muerta la Sección III. Con «Responde ÚNICAMENTE con un objeto
      JSON (sin texto adicional)», Gemini se salta la búsqueda y contesta de memoria:
