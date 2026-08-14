@@ -37,10 +37,13 @@
 import { filasRazonesRechazo, ETIQUETAS_MOTIVO, FUNDIDOS_EN_RIGOR } from './tablasInforme.js';
 import { textoPlanoHtml, filasDe, celdasDe } from './tablasHtmlInforme.js';
 import { localizarAnexo } from './anexoBHtml.js';
+import { nombreDeAnexo } from './anexosPlantilla.js';
 import { reescribirFilasHtml } from './tablasHtmlInforme.js';
 
-/** Con este nombre se reporta el anexo cuando no se puede regenerar. */
-export const NOMBRE_ANEXO_C = 'ANEXO C. Matriz de Rechazo';
+/* Con este nombre se reporta el anexo cuando no se puede regenerar. Sin letra: si hay que
+   nombrarlo en un aviso es porque no se encontró, y entonces no hay letra que citar —además de
+   que la del informe de referencia no vale para todas las plantillas—. */
+export const NOMBRE_ANEXO_C = nombreDeAnexo('matriz');
 
 /** La fila que cierra el resumen. */
 export const ETIQUETA_TOTAL = 'TOTAL, UNIVERSO';
@@ -229,7 +232,10 @@ export function actualizarAnexoCHtml(html, estudio, avisos) {
   const study = estudio || {};
   const anotar = (texto) => { if (Array.isArray(avisos)) avisos.push(texto); };
 
-  const zonaC = localizarAnexo(salida, 'c');
+  /* Por el nombre y no por la letra: en el informe de referencia la matriz es el ANEXO C, pero
+     en otra plantilla ese ANEXO C pueden ser las descripciones de comparables, y reescribirlo
+     con la matriz destruiría el anexo equivocado. */
+  const zonaC = localizarAnexo(salida, 'matriz');
   if (!zonaC) { anotar(NOMBRE_ANEXO_C); return salida; }
 
   const zona = salida.slice(zonaC.inicio, zonaC.fin);

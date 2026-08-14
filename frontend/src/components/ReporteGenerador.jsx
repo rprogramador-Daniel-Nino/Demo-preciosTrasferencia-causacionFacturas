@@ -1280,22 +1280,29 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
               'Complétalos antes de radicar.',
           });
         }
-        /* Las tablas que el motor no encontró en la plantilla. Sin este aviso se radican con
-           las cifras del informe del que salió la plantilla, y nadie se entera. */
+        /* Lo que el motor no pudo actualizar en la plantilla. Sin este aviso se radica con las
+           cifras del informe del que salió la plantilla, y nadie se entera.
+
+           La lista mezcla nombres de tabla y avisos que ya traen su propia explicación —los de
+           los anexos dicen qué anexo falta y cómo se busca—, así que el encabezado no puede dar
+           por hecho que todo sea «una tabla no encontrada». Mismo criterio que en la ruta de
+           plantilla marcada. */
         if (avisosTablas && avisosTablas.length) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',
-            texto: 'No se encontraron en tu plantilla ' + avisosTablas.length + ' tabla(s) (' +
-              avisosTablas.join(', ') + '), así que conservan el contenido que ya traían. ' +
-              'Revísalas una por una antes de radicar.',
+            texto: 'Esto no se actualizó con los datos del estudio: ' + avisosTablas.join(' · ') +
+              '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
+              'revísalo antes de radicar.',
           });
         }
         if ((study.eeffImages || []).length && imagenesInsertadas === 0) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',
+            /* El anexo se busca por su NOMBRE y no por su letra —la numeración es de cada
+               informe—, así que el aviso tampoco puede pedir una letra concreta. */
             texto: 'El anexo de estados financieros no se insertó: la plantilla no trae un ' +
-              'encabezado «ANEXO A» donde anclarlo, ni el centinela ' + CENTINELA_ANEXO + '. ' +
-              'Añade uno de los dos al Word y vuelve a subirlo.',
+              'encabezado de anexo que se llame «Estados financieros» donde anclarlo, ni el ' +
+              'centinela ' + CENTINELA_ANEXO + '. Añade uno de los dos al Word y vuelve a subirlo.',
           });
         }
         setAvisos((previos) => [...previos.filter((a) => a.origen !== 'docx'), ...nuevos]);

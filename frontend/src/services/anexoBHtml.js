@@ -33,6 +33,14 @@
 import {
   textoPlanoHtml, envolturaDe, filasDe, celdasDe, escaparTextoHtml,
 } from './tablasHtmlInforme.js';
+/* Qué anexo es cada uno se decide por su NOMBRE, con la misma tabla que usa la ruta del .docx
+   del cliente (`docxRelleno.js`): la numeración es de cada informe. Buscar «ANEXO B» dejaba
+   sin rellenar el anexo de comparables de toda plantilla que no lo llame así —MC Internacional
+   los numera A, C, D, E, F y ahí es el ANEXO C—, y buscar «ANEXO C» para la matriz de rechazo
+   habría escrito la matriz encima de las descripciones. */
+import {
+  interpretarEncabezadoAnexo, resolverAnexos, nombreDeAnexo,
+} from './anexosPlantilla.js';
 
 /* Una entrada del índice lleva el número de página pegado al final y NO abre sección: el
    índice repite «ANEXO B. Descripciones de comparables…55». Sin esta condición la búsqueda
@@ -44,8 +52,9 @@ const RX_BLOQUE_TEXTO = /<(p|h[1-6])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi;
 /** Reconoce la cabecera de un bloque: la tabla que nombra a la compañía comparable. */
 const RX_CABECERA_BLOQUE = /nombre de la compa/i;
 
-/** Con este nombre se reporta el anexo cuando no se puede regenerar. */
-export const NOMBRE_ANEXO_B = 'ANEXO B. Descripciones de comparables y Estados Financieros';
+/* Con este nombre se reporta el anexo cuando no se puede regenerar. Sin letra: si hay que
+   nombrarlo en un aviso es porque no se encontró, y entonces no hay letra que citar. */
+export const NOMBRE_ANEXO_B = nombreDeAnexo('descripciones');
 
 /**
  * Los rubros del ANEXO B, en el orden en que van en el informe.
@@ -74,46 +83,57 @@ export const RUBROS_BALANCE = [
 ];
 
 /**
- * Dónde empieza y acaba la sección de un anexo.
+ * Los encabezados de anexo del CUERPO del informe, en orden de aparición.
  *
- * Del encabezado del anexo al del siguiente, o al final del documento si no hay otro. Se
- * descartan las entradas del índice, donde el título llega con el número de página pegado.
+ * Se descartan las entradas del índice por dos vías: el número de página pegado al título y,
+ * si un mismo anexo sale dos veces, quedarse con la ÚLTIMA —el índice va al principio—.
  *
  * @param {string} html
- * @param {string} letra  la del anexo: 'b', 'c', …
- * @returns {{inicio:number, fin:number, titulo:string}|null} `inicio` queda DESPUÉS del
- *          encabezado, que no hay que tocar.
+ * @returns {Array<{letra:string, titulo:string, clave:string, inicio:number, fin:number}>}
+ *          `inicio` queda DESPUÉS del encabezado, que no hay que tocar, y `fin` en el
+ *          encabezado del anexo siguiente.
  */
-export function localizarAnexo(html, letra) {
+export function localizarAnexosHtml(html) {
   const texto = String(html || '');
-  const buscada = String(letra || '').trim().toLowerCase();
-  if (!/^[a-z]$/.test(buscada)) return null;
-
-  const rxAbre = new RegExp('^anexo\\s*' + buscada + '\\b', 'i');
-  /* Cualquier anexo con letra POSTERIOR cierra el que se busca. Se compara la letra en vez
-     de fijar un rango en la expresión: así vale para cualquiera sin escribir uno por uno. */
-  const cierra = (t) => {
-    const m = /^anexo\s*([a-z])\b/i.exec(t);
-    return !!m && m[1].toLowerCase() > buscada;
-  };
-
   RX_BLOQUE_TEXTO.lastIndex = 0;
-  let inicio = -1, titulo = '', fin = texto.length, m;
+  const anexos = [];
+  let m;
   while ((m = RX_BLOQUE_TEXTO.exec(texto)) !== null) {
     const t = textoPlanoHtml(m[2]);
     if (!t || RX_ENTRADA_INDICE.test(t)) continue;
-    if (inicio < 0) {
-      if (rxAbre.test(t)) { inicio = m.index + m[0].length; titulo = t; }
-      continue;
-    }
-    if (cierra(t)) { fin = m.index; break; }
+    const cabeza = interpretarEncabezadoAnexo(t);
+    if (!cabeza) continue;
+    anexos.push({ ...cabeza, arranque: m.index, inicio: m.index + m[0].length, fin: -1 });
   }
-  return inicio < 0 ? null : { inicio, fin, titulo };
+
+  const delCuerpo = anexos.filter(
+    (a, i) => !anexos.some((otro, j) => j > i && otro.clave === a.clave));
+  delCuerpo.forEach((a, i) => {
+    const siguiente = delCuerpo[i + 1];
+    a.fin = siguiente ? siguiente.arranque : texto.length;
+  });
+  return delCuerpo;
 }
 
-/** La sección del ANEXO B. */
+/**
+ * Dónde empieza y acaba la sección de un anexo, buscándolo POR NOMBRE.
+ *
+ * El corte es el encabezado del anexo siguiente EN ORDEN DE APARICIÓN, y no el del siguiente
+ * por orden alfabético: una plantilla puede traerlos como A, C, D, F, E —MC Internacional lo
+ * hace— y ahí la letra no dice qué va después.
+ *
+ * @param {string} html
+ * @param {'descripciones'|'matriz'|'eeff'} id
+ * @returns {{inicio:number, fin:number, titulo:string, letra:string}|null} `inicio` queda
+ *          DESPUÉS del encabezado, que no hay que tocar.
+ */
+export function localizarAnexo(html, id) {
+  return resolverAnexos(localizarAnexosHtml(html))[id] || null;
+}
+
+/** La sección del anexo de descripciones de comparables. */
 export function localizarAnexoB(html) {
-  return localizarAnexo(html, 'b');
+  return localizarAnexo(html, 'descripciones');
 }
 
 /**
