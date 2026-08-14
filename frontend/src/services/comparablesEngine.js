@@ -154,6 +154,14 @@ export function extraerTicker(name) {
   return m ? m[1] : '';
 }
 
+/** Quita el sufijo de bolsa/ticker que Capital IQ agrega al nombre, p. ej.
+ * "Akatsuki Inc. (TSE:3932)" → "Akatsuki Inc.". Se usa junto con `extraerTicker`
+ * para no perder el ticker: éste se guarda en su propio campo antes de limpiar
+ * el nombre que se muestra en la interfaz y en los reportes. */
+export function limpiarNombreIQ(name) {
+  return String(name || '').replace(/\s*\([A-Za-z]+:[A-Za-z0-9.-]+\)\s*$/, '').trim();
+}
+
 /**
  * Parsea archivo de Capital IQ (.xlsx, .xls, .csv).
  *
@@ -241,8 +249,11 @@ export async function importCapitalIQExcel(file, onProgress) {
           const row = json[i];
           if (!row || !row[nameIdx]) { saltadas++; continue; }
 
-          const name = String(row[nameIdx]).trim();
-          if (!name) { saltadas++; continue; }
+          const nombreCrudo = String(row[nameIdx]).trim();
+          if (!nombreCrudo) { saltadas++; continue; }
+
+          const tickerIQ = extraerTicker(nombreCrudo);
+          const name = limpiarNombreIQ(nombreCrudo);
 
           /* Capital IQ agrega al final de «Screening» una fila de nota legal
              ("*Denotes proprietary information.") escrita en la misma columna del
@@ -286,7 +297,7 @@ export async function importCapitalIQExcel(file, onProgress) {
             id: idIQ || `ciq_${i}`,
             name,
             nameKey: nameKey(name),
-            ticker: extraerTicker(name),
+            ticker: tickerIQ,
             amb: country && !/colombia/i.test(country) ? 'Int' : 'Nac',
             country: country || 'Internacional',
             s,
