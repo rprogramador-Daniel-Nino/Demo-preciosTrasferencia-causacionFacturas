@@ -11,7 +11,7 @@ import {
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, CURACION_LOTE, enriquecerUniverso,
-  MINIMO_COMPARABLES, gradoDeActividad,
+  MINIMO_COMPARABLES, gradoDeActividad, consultarGemini,
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -1596,5 +1596,51 @@ test('un veredicto que ya trae grados sí se reutiliza', async () => {
     assert.strictEqual(v.relacionadas, 1);
   } finally {
     restore();
+  }
+});
+
+/* --- `consultarGemini` la usan la curación y el marcado de la plantilla --- */
+
+test('consultarGemini reintenta el 504 con el que /api/gemini se corta a sí mismo', async () => {
+  /* Ese 504 no viene de un servidor ajeno: lo emite nuestra propia función cuando Gemini pasa
+     de 50 s, para poder contestar algo legible antes de que el borde de Hosting tumbe la
+     conexión a los 60 (ver GEMINI_CORTE_MS en functions/index.js). Está pensado para
+     reintentarse, y quien lo ignora pierde su trabajo: el marcado de la plantilla lo ignoraba
+     y dejaba tramos enteros del informe sin marcar, con los datos del cliente anterior
+     dentro. */
+  const original = axios.post;
+  let intentos = 0;
+  axios.post = async () => {
+    if (++intentos === 1) {
+      const err = new Error('Request failed with status code 504');
+      err.response = {
+        status: 504,
+        data: { error: 'La consulta a Gemini superó el tiempo disponible.' },
+      };
+      throw err;
+    }
+    return { data: { candidates: [{ content: { parts: [{ text: '{"marcas":[]}' }] } }] } };
+  };
+  try {
+    const texto = await consultarGemini('un prompt cualquiera', { pausaBaseMs: 0 });
+    assert.strictEqual(texto, '{"marcas":[]}');
+    assert.strictEqual(intentos, 2, 'un intento cortado y uno que sale');
+  } finally {
+    axios.post = original;
+  }
+});
+
+test('consultarGemini deja elegir el modelo, para no divergir del resto del sistema', async () => {
+  const original = axios.post;
+  const cuerpos = [];
+  axios.post = async (url, body) => {
+    cuerpos.push({ url, model: body.model });
+    return { data: { candidates: [{ content: { parts: [{ text: 'ok' }] } }] } };
+  };
+  try {
+    await consultarGemini('x', { modelo: 'gemini-3.5-flash' });
+    assert.deepStrictEqual(cuerpos, [{ url: '/api/gemini', model: 'gemini-3.5-flash' }]);
+  } finally {
+    axios.post = original;
   }
 });

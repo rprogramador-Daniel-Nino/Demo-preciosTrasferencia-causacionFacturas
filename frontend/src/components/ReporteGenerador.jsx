@@ -751,7 +751,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      sin marcar. Devuelve '' cuando todo salió bien, para no poner un banner que
      no dice nada. */
   const resumirMarcado = ({
-    trozosEnviados, trozosFallidos, rechazadasPorVocabulario,
+    trozosEnviados, trozosFallidos, tramosPartidos, rechazadasPorVocabulario,
     bloqueadasPorZona, bloqueadasPorGuarda,
   }, { reintentable = true } = {}) => {
     const lineas = [];
@@ -769,6 +769,14 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
                     ? 'Puedes cancelar y volver a subir el PDF para marcarlo otra vez.'
                     : 'El marcado ya quedó guardado: revisa a mano esos tramos del documento ' +
                       'antes de radicar.'));
+    }
+    /* Los tramos que solo salieron partiéndolos. No es un fallo —ese texto quedó marcado—,
+       pero es la señal de que las peticiones van al límite del plazo de `/api/gemini`: si el
+       número es alto, esta plantilla necesita trozos más pequeños. */
+    if (tramosPartidos) {
+      lineas.push(tramosPartidos + ' tramo(s) tardaron demasiado y hubo que partirlos en dos ' +
+                  'para que la IA los alcanzara a leer. Quedaron marcados: no hay nada que ' +
+                  'revisar por esto, pero el marcado de esta plantilla va justo de tiempo.');
     }
     if (rechazadasPorVocabulario) {
       lineas.push(rechazadasPorVocabulario + ' propuesta(s) se rechazaron porque el campo no está ' +

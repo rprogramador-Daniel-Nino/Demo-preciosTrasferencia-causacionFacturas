@@ -6,9 +6,8 @@
    insertando etiquetas garantiza que altere texto por el camino —una tilde, una
    cifra, un párrafo resumido— y este documento se radica ante la DIAN. */
 
-import axios from 'axios';
 import { VOCABULARIO, esCampoValido } from './plantillaVocabulario.js';
-import { extraerJSON } from './comparablesEngine.js';
+import { extraerJSON, consultarGemini } from './comparablesEngine.js';
 
 /* Trocea el HTML en segmentos de texto y de etiqueta. La búsqueda solo entra en
    los de texto: buscar sobre el HTML crudo permitiría marcar dentro de un
@@ -457,15 +456,28 @@ const promptDe = (trozo) =>
   'aparición de ese texto, 2 para la segunda, y así. Si no hay nada que marcar, responde ' +
   '{"marcas":[]}.';
 
-/* Llamada real al proxy. Se aísla aquí para que los tests inyecten la suya. */
+/* Llamada real al proxy. Se aísla aquí para que los tests inyecten la suya.
+
+   CON REINTENTO, y no es un adorno: `/api/gemini` se corta a sí mismo a los 50 s para poder
+   contestar antes de que el borde de Hosting tumbe la conexión a los 60, y lo que devuelve
+   entonces es un 504 pensado explícitamente para reintentarse (ver `GEMINI_CORTE_MS` en
+   `functions/index.js`). Este marcado lo ignoraba: con veinte o cincuenta trozos en vuelo
+   basta que uno se encole para que su tramo del documento quede sin marcar, y ahí siguen los
+   datos del contribuyente anterior. `consultarGemini` es la misma función que usa la curación
+   de comparables, así que también distingue el 429 por tope de gasto agotado, donde reintentar
+   solo gasta tiempo. */
 async function pedirAlModelo(prompt) {
-  const respuesta = await axios.post('/api/gemini', {
-    model: 'gemini-3.5-flash',
-    contents: [{ parts: [{ text: prompt }] }],
-  });
-  /* Todas las partes, no solo la primera: los modelos parten la respuesta. */
-  return (respuesta.data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  return consultarGemini(prompt, { modelo: MODELO_MARCADO, etiqueta: 'marcado' });
 }
+
+/* El mismo que usa el resto del sistema. Ver la nota de `GEMINI_MODELO_CURACION`: este
+   nombre vive también en `server.js` y `functions/index.js`, y hay que mantener los tres
+   iguales. */
+const MODELO_MARCADO = 'gemini-3.5-flash';
+
+/* Por debajo de esto no se parte un tramo que falla: si una petición de 3 000 caracteres no
+   sale, el problema ya no es el tamaño y seguir partiendo solo multiplica las llamadas. */
+const MINIMO_TRAMO = 3000;
 
 /* Devuelve `{ marcas, trozosEnviados, trozosFallidos, rechazadasPorVocabulario }`.
    No solo las marcas: un marcado parcial silencioso es el fallo que este
@@ -486,6 +498,10 @@ export async function proponerMarcas(html, opciones = {}) {
   let trozosEnviados = 0;
   let trozosFallidos = 0;
   let rechazadasPorVocabulario = 0;
+  /* Cuántos tramos hubo que partir para que salieran. No es un fallo —el texto quedó
+     marcado—, pero es la señal de que las peticiones van al límite del plazo de
+     `/api/gemini`: si sube, el trozo por defecto es demasiado grande para esta plantilla. */
+  let tramosPartidos = 0;
 
   /* El documento se indexa una sola vez y de ahí sale todo: cuántas apariciones
      de un fragmento quedan antes del trozo actual (para traducir la ocurrencia)
@@ -555,66 +571,106 @@ export async function proponerMarcas(html, opciones = {}) {
   let siguiente = 0;
   let terminados = 0;
 
+  /* Un tramo del documento: se pide al modelo y cada ocurrencia local se traduce a global
+     con el desplazamiento del tramo. Está separado del recorrido de trozos para poder
+     repetirlo sobre las MITADES de un trozo que no salió. Propaga el error de la llamada, y
+     no acumula nada hasta que la respuesta está parseada: así reintentar la misma región no
+     puede duplicar marcas. */
+  const marcarTramo = async (tramo, inicioDelTramo, salida) => {
+    const previas = (fragmento) =>
+      apariciones(fragmento).filter((a) => a.offset < inicioDelTramo).length;
+
+    const texto = await pedir(promptDe(tramo));
+    const json = extraerJSON(texto);
+    for (const m of (json && json.marcas) || []) {
+      if (!m || !m.fragmento) continue;
+      if (!esCampoValido(m.campo)) {
+        /* El modelo estaba diciendo "aquí hay un dato del cliente anterior"
+           con un nombre que no existe. Descartarlo sin contarlo pierde el
+           aviso. */
+        rechazadasPorVocabulario++;
+        continue;
+      }
+      const fragmento = String(m.fragmento);
+      const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
+      const ocurrencia = previas(fragmento) + local;
+      const donde = apariciones(fragmento)[ocurrencia - 1];
+      /* La asociación «este texto es este campo» se guarda SIEMPRE, incluso si esta
+         aparición concreta se rechaza. Lo que el modelo afirmó es de qué dato se trata;
+         el rechazo es sobre el sitio. Perder la asociación dejaría el documento sin
+         marcar ese dato en ninguna parte, que es peor que marcarlo donde no va. */
+      asociaciones.push({ fragmento, campo: m.campo });
+
+      if (motivoDeRechazo(fragmento, donde)) {
+        /* El modelo señaló un sitio donde ese dato no puede ir: dentro del ANEXO B, en
+           una serie histórica, en una cita, o partiendo una palabra por la mitad. La
+           extensión recorre después todas las apariciones y ahí se cuenta el bloqueo,
+           una sola vez por aparición. */
+        continue;
+      }
+      salida.push({
+        fragmento,
+        campo: m.campo,
+        ocurrencia,
+        /* Contexto para el revisor humano. Sale del mismo índice, así que
+           corresponde exactamente a la aparición que se va a marcar. Es null
+           si la ocurrencia traducida no existe —el modelo devolvió un
+           fragmento que reescribió—, y entonces el revisor muestra solo el
+           fragmento. */
+        contexto: donde
+          ? contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60)
+          : null,
+      });
+    }
+  };
+
+  /* Y si el tramo falla, se parte en dos y se prueban las mitades.
+     `pedir` ya reintentó por su cuenta los fallos transitorios, así que llegar aquí
+     significa que esta petición concreta no sale: o tarda más de los 50 s que se da
+     `/api/gemini`, o el modelo devolvió algo sin JSON dentro. Las dos cosas mejoran con
+     menos texto —«Reintente con menos elementos por consulta», dice el propio 504— y la
+     alternativa es perder el tramo, que no es un fallo cosmético: ese texto se radica con
+     los datos del contribuyente anterior. */
+  const marcarConReparto = async (tramo, inicio, salida) => {
+    try {
+      await marcarTramo(tramo, inicio, salida);
+      return true;
+    } catch (err) {
+      if (tramo.length < MINIMO_TRAMO * 2) {
+        console.error('[marcado] tramo de ' + tramo.length + ' caracteres, sin partir más:', err);
+        return false;
+      }
+      const mitades = trocear(tramo, Math.ceil(tramo.length / 2));
+      if (mitades.length < 2) {
+        /* Un tramo sin ningún '<' por donde cortar: una sola etiqueta enorme, o texto
+           corrido. Partirlo por el medio rompería el HTML y desplazaría las ocurrencias. */
+        console.error('[marcado] tramo de ' + tramo.length + ' caracteres, indivisible:', err);
+        return false;
+      }
+      console.warn('[marcado] tramo de ' + tramo.length + ' caracteres partido en '
+        + mitades.length + ' tras fallar: ' + (err && err.message));
+      tramosPartidos++;
+      let offset = inicio;
+      let completo = true;
+      for (const mitad of mitades) {
+        if (!await marcarConReparto(mitad, offset, salida)) completo = false;
+        offset += mitad.length;
+      }
+      return completo;
+    }
+  };
+
   const trabajar = async () => {
     for (; ;) {
       const i = siguiente++;
       if (i >= trozos.length) return;
 
-      const inicioDelTrozo = inicios[i];
-      const previas = (fragmento) =>
-        apariciones(fragmento).filter((a) => a.offset < inicioDelTrozo).length;
-
       const delTrozo = [];
-      try {
-        const texto = await pedir(promptDe(trozos[i]));
-        const json = extraerJSON(texto);
-        for (const m of (json && json.marcas) || []) {
-          if (!m || !m.fragmento) continue;
-          if (!esCampoValido(m.campo)) {
-            /* El modelo estaba diciendo "aquí hay un dato del cliente anterior"
-               con un nombre que no existe. Descartarlo sin contarlo pierde el
-               aviso. */
-            rechazadasPorVocabulario++;
-            continue;
-          }
-          const fragmento = String(m.fragmento);
-          const local = Number(m.ocurrencia) > 0 ? Number(m.ocurrencia) : 1;
-          const ocurrencia = previas(fragmento) + local;
-          const donde = apariciones(fragmento)[ocurrencia - 1];
-          /* La asociación «este texto es este campo» se guarda SIEMPRE, incluso si esta
-             aparición concreta se rechaza. Lo que el modelo afirmó es de qué dato se trata;
-             el rechazo es sobre el sitio. Perder la asociación dejaría el documento sin
-             marcar ese dato en ninguna parte, que es peor que marcarlo donde no va. */
-          asociaciones.push({ fragmento, campo: m.campo });
-
-          if (motivoDeRechazo(fragmento, donde)) {
-            /* El modelo señaló un sitio donde ese dato no puede ir: dentro del ANEXO B, en
-               una serie histórica, en una cita, o partiendo una palabra por la mitad. La
-               extensión recorre después todas las apariciones y ahí se cuenta el bloqueo,
-               una sola vez por aparición. */
-            continue;
-          }
-          delTrozo.push({
-            fragmento,
-            campo: m.campo,
-            ocurrencia,
-            /* Contexto para el revisor humano. Sale del mismo índice, así que
-               corresponde exactamente a la aparición que se va a marcar. Es null
-               si la ocurrencia traducida no existe —el modelo devolvió un
-               fragmento que reescribió—, y entonces el revisor muestra solo el
-               fragmento. */
-            contexto: donde
-              ? contextoDe(textos, donde.corrida, donde.pos, fragmento.length, 60)
-              : null,
-          });
-        }
-      } catch (err) {
-        /* Un trozo que falla no debe tumbar el marcado entero: son decenas de
-           llamadas y perder todo por una es inaceptable. Pero se cuenta, y aquí
-           caen tanto el fallo de la llamada como la respuesta sin JSON. */
-        trozosFallidos++;
-        console.error('[marcado] trozo ' + (i + 1) + ' de ' + trozos.length + ':', err);
-      }
+      /* Fallido es lo que se perdió DE VERDAD. Un trozo que salió partiéndolo en dos está
+         marcado; contarlo como fallido mandaría a revisar a mano un tramo que sí se marcó, y
+         el aviso perdería su valor. Si solo una mitad se pierde, sí cuenta: parte de ese
+         texto quedó sin marcar. */
+      if (!await marcarConReparto(trozos[i], inicios[i], delTrozo)) trozosFallidos++;
 
       porTrozo[i] = delTrozo;
       trozosEnviados++;
@@ -691,6 +747,7 @@ export async function proponerMarcas(html, opciones = {}) {
     marcas,
     trozosEnviados,
     trozosFallidos,
+    tramosPartidos,
     rechazadasPorVocabulario,
     extendidas,
     /* Lo que las guardas dejaron fuera. Publicarlo es parte del diseño: un bloqueo

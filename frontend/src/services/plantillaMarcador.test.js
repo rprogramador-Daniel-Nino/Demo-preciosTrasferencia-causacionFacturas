@@ -206,6 +206,88 @@ test('una respuesta que no trae JSON no rompe y cuenta como trozo fallido', asyn
   assert.strictEqual(r.trozosFallidos, 1);
 });
 
+/* --- Un tramo que no sale se parte en dos, en vez de perderse ---
+
+   `/api/gemini` se corta a sí mismo a los 50 s y devuelve un 504 pensado para reintentarse:
+   con cincuenta trozos en vuelo basta que uno se encole para que su tramo quede sin marcar, y
+   ahí siguen los datos del contribuyente anterior. El reintento vive en `consultarGemini`;
+   esto es el paso siguiente, para cuando el tramo es demasiado grande para una sola petición
+   —«Reintente con menos elementos por consulta», dice el propio error—. --- */
+
+/* Un tramo suficientemente grande para que se pueda partir (el mínimo son 3 000). */
+const parrafoLargo = (texto) => '<p>' + texto + ' ' + 'relleno '.repeat(500) + '</p>';
+
+test('un tramo que falla se parte en dos y el texto acaba marcado', async () => {
+  const html = parrafoLargo('ACME S.A.S factura') + parrafoLargo('y ACME S.A.S concluye');
+  const vistos = [];
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 100000,   // un solo trozo, para que el reparto sea el único camino
+    pedir: async (prompt) => {
+      vistos.push(prompt.length);
+      /* La primera petición —el trozo entero— es la que no sale. Las mitades sí. */
+      if (vistos.length === 1) {
+        const err = new Error('La consulta a Gemini superó el tiempo disponible.');
+        err.status = 504;
+        throw err;
+      }
+      /* Como el modelo: solo propone lo que hay en SU tramo. Un tramo sin la razón social
+         no la señala, y el reparto puede dejar alguno así. */
+      const marcas = prompt.includes('ACME S.A.S')
+        ? [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }] : [];
+      return JSON.stringify({ marcas });
+    },
+  });
+
+  assert.strictEqual(r.trozosFallidos, 0, 'no se perdió nada, así que no hay trozo fallido');
+  assert.strictEqual(r.tramosPartidos, 1, 'y consta que hubo que partir uno');
+  assert.ok(vistos.length >= 3, 'una petición por el tramo entero y una por cada mitad');
+  assert.ok(vistos[1] < vistos[0], 'las mitades son más cortas que el tramo que falló');
+  /* Las dos apariciones quedan marcadas: la del modelo y la que completa la extensión. */
+  assert.deepStrictEqual(r.marcas.map((m) => m.ocurrencia).sort(), [1, 2]);
+  r.marcas.forEach((m) => assert.strictEqual(m.campo, 'ent'));
+});
+
+test('al partir un tramo las ocurrencias siguen siendo las del documento completo', async () => {
+  /* Lo que no puede pasar: que la mitad de atrás numere sus apariciones desde 1 y la marca
+     caiga en la aparición equivocada, dejando el dato del cliente anterior en otro sitio. */
+  const html = parrafoLargo('primera ACME S.A.S') + parrafoLargo('segunda ACME S.A.S');
+  let llamada = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 100000,
+    pedir: async (prompt) => {
+      llamada++;
+      if (llamada === 1) throw new Error('504');
+      /* Cada mitad ve UNA aparición y la numera como su primera. */
+      const marcas = prompt.includes('ACME S.A.S')
+        ? [{ fragmento: 'ACME S.A.S', campo: 'ent', ocurrencia: 1 }] : [];
+      return JSON.stringify({ marcas });
+    },
+  });
+
+  const propuestas = r.marcas.filter((m) => !m.extendida).map((m) => m.ocurrencia).sort();
+  assert.deepStrictEqual(propuestas, [1, 2],
+    'la segunda mitad traduce su «primera aparición» a la segunda del documento');
+
+  const { html: marcado, aplicadas } = aplicarMarcas(html, r.marcas);
+  assert.strictEqual(aplicadas, 2, 'las dos apariciones se marcan');
+  assert.strictEqual((marcado.match(/data-campo="ent"/g) || []).length, 2);
+});
+
+test('un tramo que falla siempre se cuenta, sin partirse indefinidamente', async () => {
+  const html = parrafoLargo('ACME S.A.S');
+  let llamadas = 0;
+  const r = await proponerMarcas(html, {
+    maxCaracteres: 100000,
+    pedir: async () => { llamadas++; throw new Error('504'); },
+  });
+
+  assert.strictEqual(r.trozosFallidos, 1, 'el tramo perdido tiene que quedar contado');
+  assert.deepStrictEqual(r.marcas, []);
+  /* El reparto para en 3 000 caracteres: sin ese suelo, un tramo que falla siempre se
+     trocearía hasta el carácter y serían cientos de llamadas contra un endpoint caído. */
+  assert.ok(llamadas < 20, 'y el reparto no se descontrola: ' + llamadas + ' llamadas');
+});
+
 /* --- Bloqueante 1: la ocurrencia se numeraba por trozo y se contaba por
    documento. El caso reproducido: tres apariciones de la misma razón social,
    una en el trozo 1 y dos en el trozo 2. El modelo, que solo ve su trozo,
