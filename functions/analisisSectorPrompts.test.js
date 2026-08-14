@@ -208,6 +208,71 @@ test('construirPromptRedaccionSector pide el apartado "introduccion"', () => {
   assert.ok(prompt.includes('introduccion'), 'el prompt no pide "introduccion"');
 });
 
+test('el prompt fija una extensión mínima para cada apartado de III.C', () => {
+  /* Medido sobre las tres últimas corridas el 2026-08-13: introducción ~70 palabras en 1
+     párrafo, comportamiento ~250 en 2, comercio exterior ~160 en 1, proyección ~120 en 1 y
+     conclusiones ~250 en 2. Para el análisis de sector de un informe local eso se queda
+     corto, y el prompt no pedía un mínimo explícito de ninguno. */
+  const prompt = construirPromptRedaccionSector(
+    { datosClaveTabla: [], datosComportamiento: [], datosComercioExterior: [], datosProyeccion: [] },
+    'videojuegos', 2025);
+
+  for (const campo of ['introduccion', 'comportamiento', 'comercioExterior', 'proyeccion', 'conclusiones']) {
+    const i = prompt.indexOf('"' + campo + '"');
+    assert.ok(i > 0, 'el prompt no menciona ' + campo);
+    const bloque = prompt.slice(i, i + 900);
+    assert.ok(/\d{3}\s*palabras/.test(bloque),
+      'no se le fija un mínimo de palabras a "' + campo + '"');
+  }
+
+  /* Extenderse NO puede volverse permiso para rellenar ni para inventar cifras. */
+  assert.ok(/no rellenes|sin rellenar|no repitas la misma cifra/i.test(prompt),
+    'no advierte contra el relleno');
+  assert.ok(/NO menciones ninguna cifra que no esté en los datos/i.test(prompt),
+    'se perdió la prohibición de inventar cifras');
+});
+
+test('el prompt explica CÓMO extenderse sin inventar datos', () => {
+  /* Si solo se le pide longitud, la saca repitiendo la cifra o adornando. Se le dice que la
+     extensión sale de desarrollar el mecanismo y la implicación, que es analisis y no relleno. */
+  const prompt = construirPromptRedaccionSector(
+    { datosClaveTabla: [], datosComportamiento: [], datosComercioExterior: [], datosProyeccion: [] },
+    'videojuegos', 2025);
+  assert.ok(/implicaci|mecanismo|por qué/i.test(prompt));
+  assert.ok(/parte examinada/i.test(prompt));
+});
+
+test('el prompt pide una introducción desarrollada, no un par de frases', () => {
+  /* La primera versión pedía «1-2 frases» y salían ~470 caracteres: el usuario la reportó
+     como demasiado corta el 2026-08-13. Es el párrafo de entrada de III.C, el que sitúa el
+     sector antes del detalle, y tiene que sostenerse solo. */
+  const prompt = construirPromptRedaccionSector(
+    { datosClaveTabla: [], datosComportamiento: [], datosComercioExterior: [], datosProyeccion: [] },
+    'videojuegos', 2025);
+
+  assert.ok(!/1-2 frases/.test(prompt), 'el prompt sigue pidiendo 1-2 frases');
+  assert.ok(/2 a 3 párrafos|2-3 párrafos/i.test(prompt), 'no pide párrafos desarrollados');
+  /* Y que no se convierta en un resumen de los otros apartados. */
+  assert.ok(/no adelantes|sin adelantar|no repitas/i.test(prompt),
+    'no advierte contra adelantar el contenido de los otros apartados');
+});
+
+test('parsearRespuestaRedaccionSector acepta la introducción aunque venga corta', () => {
+  /* Pedirla más larga no puede volverse un motivo de descarte: una introducción corta es
+     mejor que ninguna, porque sin ella el hueco de III.C sale con el marcador de
+     pendiente, que es justo lo que no queremos volver a ver. */
+  const texto = JSON.stringify({
+    tituloSector: 'de videojuegos',
+    introduccion: '<p>El sector de videojuegos creció en 2025 de forma sostenida.</p>',
+    comportamiento: '<p>El sector generó 250.000 empleos, un 13,7% más que en 2024.</p>',
+    comercioExterior: '<p>Las exportaciones sumaron USD 655 millones en el Q3.</p>',
+    proyeccion: '<p>Se proyecta un CAGR del 11% hasta 2035 según el estudio citado.</p>',
+    conclusiones: '<p>El sector crece pero con márgenes bajo presión competitiva.</p>',
+  });
+  const r = parsearRespuestaRedaccionSector(texto);
+  assert.ok(r.introduccion.includes('creció en 2025'));
+});
+
 test('parsearRespuestaRedaccionSector incluye "introduccion" cuando viene con contenido', () => {
   const texto = JSON.stringify({
     tituloSector: 'de los videojuegos',

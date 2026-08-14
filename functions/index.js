@@ -361,8 +361,14 @@ exports.actualizarAnalisisMercadoScheduled = onSchedule(
    ReporteGenerador.jsx. Este corte es un respaldo para el propio límite de
    180 s de la función (Cloud Run responde su propio 504 sin cuerpo JSON si
    se deja llegar hasta ahí) — no es el mismo problema que GEMINI_CORTE_MS
-   resuelve para /api/gemini, que es el corte de 60 s del rewrite de Hosting. */
-const ANALISIS_SECTOR_CORTE_MS = 170_000;
+   resuelve para /api/gemini, que es el corte de 60 s del rewrite de Hosting.
+
+   Subido de 170 s a 350 s (y el `timeoutSeconds` de la función de 180 a 360) el
+   2026-08-13, al fijar mínimos por apartado en `construirPromptRedaccionSector`:
+   la redacción pasó de ~820 a ~2.600 palabras y una corrida medida en vivo tardó
+   163 s. Con el corte anterior quedaban siete segundos de margen, así que la
+   primera corrida un poco más lenta se habría caído con un 504. */
+const ANALISIS_SECTOR_CORTE_MS = 350_000;
 
 // Análisis del Sector (III.C), bajo demanda: a diferencia del cron mensual de
 // arriba (un solo documento global), este se dispara desde el frontend la
@@ -371,7 +377,7 @@ const ANALISIS_SECTOR_CORTE_MS = 170_000;
 // Los estudios siguientes con la misma actividad leen el resultado guardado
 // sin volver a consumir Gemini/Claude.
 exports.generarAnalisisSector = onRequest(
-  { secrets: [GEMINI_API_KEY, ANTHROPIC_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 180 },
+  { secrets: [GEMINI_API_KEY, ANTHROPIC_API_KEY], region: 'us-central1', cors: true, timeoutSeconds: 360 },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed' });
