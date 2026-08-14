@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
-  normalizarCaracteresMatematicos,
+  normalizarCaracteresMatematicos, textoPorId,
 } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
@@ -471,10 +471,10 @@ test('normalizarCaracteresMatematicos traduce simbolos matematicos de LaTeX/Unic
   assert.strictEqual(normalizarCaracteresMatematicos('𝐴𝑅 Adjustment'), 'AR Adjustment');
 
   /* Ecuación corrupta real de la plantilla: caracteres cursivos y negritas mezclados. Esta
-     función solo TRADUCE caracteres; quien reconoce y rearma las fórmulas es el
-     post-procesamiento de `textoPorId`, que trabaja sobre los runs de un nodo y no sobre una
-     cadena suelta —una fórmula abarca varios items del PDF, así que desde una sola cadena no se
-     puede reconocer—. El test siguiente cubre esa parte contra el PDF real. */
+     función solo TRADUCE caracteres; quien reconoce las ecuaciones es `esFormulaCorrupta`
+     (`formulasOmml.js`), sobre el texto CRUDO de todo el nodo y no sobre una cadena suelta —una
+     ecuación abarca varios items del PDF, así que desde una sola cadena no se puede reconocer—.
+     Aquí sigue haciendo falta para la prosa que lleva alguna letra matemática suelta. */
   const ecuacionCorrupta = '𝐴𝐴𝐴𝐴𝐴𝐴𝑇𝑇𝑇𝑇 𝐴𝐴';
   assert.strictEqual(
     normalizarCaracteresMatematicos(ecuacionCorrupta).replace(/\s+/g, ' '), 'AAAAAATTTT AA');
@@ -484,30 +484,81 @@ test('normalizarCaracteresMatematicos traduce simbolos matematicos de LaTeX/Unic
   assert.strictEqual(normalizarCaracteresMatematicos(combinadas), 'JKLQx');
 });
 
-test('las fórmulas de ajuste llegan legibles al informe, no como letras corruptas', async () => {
-  /* El PDF entrega cada ecuación de ajuste repartida en tres renglones —numerador, cuerpo y
-     denominador de la fracción— y con los caracteres del editor de ecuaciones corruptos: lo que
-     llega es «AAAA AAAAAAAAAAAAAAAAAAA RR (1 + RR)». Sueltos no dicen nada, así que el cuerpo se
-     rearma entero y los otros dos renglones se descartan.
+test('las ecuaciones de ajuste llegan marcadas, no como letras corruptas', async () => {
+  /* El PDF entrega cada ecuación con los caracteres del editor de ecuaciones perdidos: la fuente
+     no lleva tabla `ToUnicode`, así que todas las letras de un mismo estilo colapsan al mismo
+     code point y las barras de fracción y los paréntesis extensibles llegan como U+FFFD. No hay
+     nada que leer: hay que reconocer el nodo y volver a escribir la ecuación.
 
      Se comprueba contra el PDF real y no con una cadena inventada, que es lo que este arreglo
      necesitaba: la reconstrucción vivió primero dentro de `normalizarCaracteresMatematicos`, que
-     recibe una cadena a la vez y por eso no podía ver una fórmula repartida en varios items. Un
+     recibe una cadena a la vez y por eso no podía ver una ecuación repartida en varios items. Un
      test sobre esa función pasaba mientras el informe seguía saliendo con las letras corruptas. */
   const r = await extraer();
-  const texto = r.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
 
-  assert.ok(texto.includes('AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))'),
-    'la fórmula del ajuste de cuentas por COBRAR no llegó rearmada');
-  assert.ok(texto.includes('AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))'),
-    'la fórmula del ajuste de cuentas por PAGAR no llegó rearmada');
+  /* La marca es lo que el .docx lee para escribir la ecuación con el motor matemático de Word.
+     Una de cada, ni más ni menos: dos querría decir que también se marcó la entrada del índice. */
+  assert.equal((r.html.match(/data-formula="AR"/g) || []).length, 1,
+    'no hay exactamente una ecuación marcada como ajuste de cuentas por cobrar');
+  assert.equal((r.html.match(/data-formula="AP"/g) || []).length, 1,
+    'no hay exactamente una ecuación marcada como ajuste de cuentas por pagar');
 
-  /* Cada una bajo su rótulo: es lo que decide si el ajuste es de cobrar o de pagar. */
-  const iCobrar = texto.indexOf('FORMULA AJUSTE CUENTAS POR COBRAR');
-  const iAr = texto.indexOf('AR Adjustment = ');
-  assert.ok(iCobrar >= 0 && iAr > iCobrar, 'la fórmula de cobrar no sigue a su rótulo');
+  /* Cada una bajo su rótulo: es lo que decide si el ajuste es de cobrar o de pagar. Y el de pagar
+     está en la página anterior a su ecuación, así que este orden también prueba que el estado
+     cruza las páginas. */
+  const orden = ['FORMULA AJUSTE CUENTAS POR COBRAR', 'data-formula="AR"',
+                 'FORMULA AJUSTE CUENTAS POR PAGAR', 'data-formula="AP"'].map((t) => r.html.indexOf(t));
+  for (let i = 0; i < orden.length; i++) {
+    assert.ok(orden[i] >= 0 && (i === 0 || orden[i] > orden[i - 1]),
+      `«${['rótulo de cobrar', 'ecuación de cobrar', 'rótulo de pagar', 'ecuación de pagar'][i]}» está fuera de sitio`);
+  }
 
-  /* Y no quedan renglones de letras corruptas dando vueltas. */
-  assert.ok(!/AAAAAATTTT/.test(texto), 'sobrevive el numerador suelto de la fracción');
-  assert.ok(!/AAAA AAAAAAAAAAAAAAAAAAA/.test(texto), 'sobrevive el cuerpo sin rearmar');
+  /* La aserción que de verdad cierra el agujero, porque no depende de la forma que tenga la
+     basura: si otro PDF colapsa a otra letra, o si un día deja de reconocerse un nodo, aquí se
+     ve. La versión anterior comprobaba una racha concreta de aes y por eso callaba. */
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(r.html),
+    'sobrevive un carácter del editor de ecuaciones del PDF');
+  assert.ok(!/�/.test(r.html), 'sobrevive un carácter de reemplazo del PDF');
+});
+
+test('dos ecuaciones en la misma página no salen las dos del mismo ajuste', () => {
+  /* En el informe de referencia cada una está en su página, así que el defecto no se veía: el
+     tipo se leía del estado FINAL tras recorrer la página en vez de anotarlo al abrir cada nodo,
+     y con las dos juntas ambas habrían salido como la de pagar. */
+  const items = [
+    { type: 'beginMarkedContent', id: 'r1' },
+    { str: 'FORMULA AJUSTE CUENTAS POR COBRAR', height: 12 },
+    { type: 'endMarkedContent' },
+    { type: 'beginMarkedContent', id: 'f1' },
+    { str: '𝐴'.repeat(20) + '�'.repeat(6), height: 12 },
+    { type: 'endMarkedContent' },
+    { type: 'beginMarkedContent', id: 'r2' },
+    { str: 'FORMULA AJUSTE CUENTAS POR PAGAR', height: 12 },
+    { type: 'endMarkedContent' },
+    { type: 'beginMarkedContent', id: 'f2' },
+    { str: '𝐴'.repeat(20) + '�'.repeat(6), height: 12 },
+    { type: 'endMarkedContent' },
+  ];
+  const { formulaPorId } = textoPorId(items);
+  assert.equal(formulaPorId.get('f1'), 'AR');
+  assert.equal(formulaPorId.get('f2'), 'AP');
+});
+
+test('el rótulo vale aunque esté en la página anterior a su ecuación', () => {
+  /* Es el caso real: el rótulo del ajuste de cuentas por pagar está en la página 85 y su ecuación
+     en la 86. `textoPorId` se llama una vez por página, así que el estado tiene que ser del
+     documento; si se reiniciara en cada página, la de pagar saldría escrita como la de cobrar. */
+  const estadoAjuste = { tipo: null };
+  textoPorId([
+    { type: 'beginMarkedContent', id: 'r' },
+    { str: 'FORMULA AJUSTE CUENTAS POR PAGAR', height: 12 },
+    { type: 'endMarkedContent' },
+  ], new Map(), estadoAjuste);
+
+  const { formulaPorId } = textoPorId([
+    { type: 'beginMarkedContent', id: 'f' },
+    { str: '𝐴'.repeat(20) + '�'.repeat(6), height: 12 },
+    { type: 'endMarkedContent' },
+  ], new Map(), estadoAjuste);
+  assert.equal(formulaPorId.get('f'), 'AP');
 });

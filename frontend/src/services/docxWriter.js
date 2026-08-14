@@ -21,6 +21,9 @@ import {
 } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
+import {
+  FORMULAS, PREFIJOS_PLANOS_FORMULA, esFormulaCorrupta, tipoDeAjusteDe,
+} from './formulasOmml.js';
 
 /* `docx` mide las fuentes en medios puntos: Arial 12 son 24. */
 const mediosPuntos = (pt) => Math.round((Number(pt) || 12) * 2);
@@ -325,86 +328,34 @@ const CAJA_TEXTO = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
 
 const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
 
-/* ── Fórmulas Matemáticas Nativas de Word ──────────────────────────────────────────────────
-   Cuando se exporta el reporte a Word, las ecuaciones de ajuste de LaTeX no deben salir como
-   texto plano lineal (tipo "AR Adjustment = (((ANC_TP / TNS_TP)..."). En su lugar, usamos el
-   motor matemático nativo de Microsoft Word (OMML) para que las renderice perfectamente como
-   ecuaciones reales con fracciones, paréntesis y subíndices, idéntico al PDF original. */
-const sub = (base, subText) => new MathSubScript({
-  children: [new MathRun(base)],
-  subScript: [new MathRun(subText)],
-});
+/* ── Las ecuaciones de ajuste, con el motor matemático de Word ────────────────────────────
+   Las ecuaciones del informe no pueden salir como texto en una línea («AR Adjustment = (((ANC_TP
+   / TNS_TP)…»): van con OMML, el motor nativo de Word, que las dibuja con fracciones verticales,
+   paréntesis escalados y subíndices, como en la plantilla.
 
-const formulaAR = () => new Paragraph({
-  children: [
-    new DocxMath({
-      children: [
-        new MathRun('AR Adjustment = '),
-        new MathRoundBrackets({
-          children: [
-            new MathRoundBrackets({
-              children: [
-                new MathFraction({
-                  numerator: [sub('ANC', 'TP')],
-                  denominator: [sub('TNS', 'TP')],
-                }),
-                new MathRun(' * '),
-                sub('TNS', 'comp'),
-              ],
-            }),
-            new MathRun(' - '),
-            sub('ANC', 'comp'),
-          ],
-        }),
-        new MathRun(' * '),
-        new MathRoundBrackets({
-          children: [
-            new MathFraction({
-              numerator: [new MathRun('R')],
-              denominator: [new MathRun('1 + R')],
-            }),
-          ],
-        }),
-      ],
-    }),
-  ],
-  spacing: { before: 120, after: 120 },
-  alignment: AlignmentType.CENTER,
-});
+   Qué dice cada ecuación lo decide `formulasOmml.js`, no este archivo: la misma descripción la
+   renderiza `docxRelleno.js` a OOXML crudo para el .docx del cliente, y un test compara byte a
+   byte lo que sale por las dos. */
+const nodoDeFormula = (n) => {
+  if (n.t === 'txt') return new MathRun(n.v);
+  if (n.t === 'sub') {
+    return new MathSubScript({
+      children: [new MathRun(n.base)],
+      subScript: [new MathRun(n.indice)],
+    });
+  }
+  if (n.t === 'frac') {
+    return new MathFraction({
+      numerator: n.num.map(nodoDeFormula),
+      denominator: n.den.map(nodoDeFormula),
+    });
+  }
+  if (n.t === 'par') return new MathRoundBrackets({ children: n.hijos.map(nodoDeFormula) });
+  throw new Error(`nodo de fórmula desconocido: ${n && n.t}`);
+};
 
-const formulaAP = () => new Paragraph({
-  children: [
-    new DocxMath({
-      children: [
-        new MathRun('AP Adjustment = '),
-        new MathRoundBrackets({
-          children: [
-            new MathRoundBrackets({
-              children: [
-                new MathFraction({
-                  numerator: [sub('ANP', 'TP')],
-                  denominator: [sub('TNS', 'TP')],
-                }),
-                new MathRun(' * '),
-                sub('TNS', 'comp'),
-              ],
-            }),
-            new MathRun(' - '),
-            sub('ANP', 'comp'),
-          ],
-        }),
-        new MathRun(' * '),
-        new MathRoundBrackets({
-          children: [
-            new MathFraction({
-              numerator: [new MathRun('R')],
-              denominator: [new MathRun('1 + R')],
-            }),
-          ],
-        }),
-      ],
-    }),
-  ],
+export const docxDeFormula = (arbol) => new Paragraph({
+  children: [new DocxMath({ children: arbol.map(nodoDeFormula) })],
   spacing: { before: 120, after: 120 },
   alignment: AlignmentType.CENTER,
 });
@@ -426,6 +377,12 @@ function traductor({
   /* Puesta mientras se emite el contenido de una nota, para que `bloquesDe` no la confunda con
      el cuerpo y la descarte. */
   let enNota = false;
+  /* De qué ajuste habla el documento en este punto, para decidir si una ecuación es la de
+     cobrar o la de pagar. Sirve al respaldo de `parrafoDe`, que reconoce ecuaciones corruptas en
+     plantillas guardadas por lectores anteriores: ahí el HTML no trae la marca y el rótulo es lo
+     único que las distingue. `bloquesDe` recorre en orden de documento, así que basta con
+     anotarlo al pasar. */
+  let ultimoAjuste = null;
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -521,6 +478,22 @@ function traductor({
     return salida;
   }
 
+  /* Reconoce una ecuación de ajuste en una plantilla que no trae la marca `data-formula`, para
+     que quien no haya vuelto a subir el PDF no se lleve la basura en el .docx.
+
+     Dos formas, por antigüedad. La de los lectores 9 y 10 escribe la ecuación en una línea, y se
+     reconoce por el prefijo. La anterior no llegó a reconocerla y dejó el texto tal como salió
+     del PDF: letras colapsadas al mismo code point y rombos de reemplazo. Esa se reconoce por la
+     firma, y de qué ajuste es lo dice el rótulo que la precede. */
+  function formulaHeredada(texto) {
+    const s = String(texto || '').trim();
+    for (const tipo of ['AR', 'AP']) {
+      if (s.includes(PREFIJOS_PLANOS_FORMULA[tipo])) return tipo;
+    }
+    if (esFormulaCorrupta(s)) return ultimoAjuste || 'AR';
+    return null;
+  }
+
   /* El título y el número, con el tabulador de Word en medio. Es lo que mantiene la fila de
      puntos pegada al margen derecho cuando la métrica de la fuente cambia.
      Y con redirección (InternalHyperlink) al marcador (Bookmark) de la sección correspondiente. */
@@ -554,22 +527,28 @@ function traductor({
 
   function parrafoDe(nodo, runs = runsDe(nodo)) {
     const nivel = NIVELES[nodo.etiqueta];
+    const texto = textoDe(nodo);
+
+    /* El rótulo que abre cada ecuación. Se queda como párrafo —en la plantilla se lee como un
+       renglón más—, pero de paso dice de qué ajuste habla lo que viene. */
+    const rotulo = tipoDeAjusteDe(texto);
+    if (rotulo) ultimoAjuste = rotulo;
+
+    /* La ecuación de ajuste, por tres caminos, del más fiable al último recurso. El atributo va
+       primero: es lo que el extractor declara, y un dato declarado gana a cualquier prueba sobre
+       la forma del texto —si no, una ecuación con puntos suspensivos y un número al final se
+       tomaría por entrada del índice—. */
+    const tipoFormula = FORMULAS[nodo.atributos && nodo.atributos['data-formula']]
+      ? nodo.atributos['data-formula']
+      : formulaHeredada(texto);
+    if (tipoFormula) return docxDeFormula(FORMULAS[tipoFormula]);
 
     /* Entrada del índice: se detecta sobre el texto plano del bloque. El extractor ya pone
        cada entrada en su propio párrafo (rol TOCI), así que el texto del bloque es la entrada
        completa. */
     if (!nivel) {
-      const m = RX_ENTRADA_INDICE.exec(textoDe(nodo));
+      const m = RX_ENTRADA_INDICE.exec(texto);
       if (m && m[1].trim()) return parrafoDeIndice(m[1].trim(), m[2]);
-
-      // Si es una de las fórmulas de ajuste normalizadas de LaTeX, usamos el motor matemático de Word
-      const texto = textoDe(nodo).trim();
-      if (texto.includes('AR Adjustment = (((ANC_TP / TNS_TP)')) {
-        return formulaAR();
-      }
-      if (texto.includes('AP Adjustment = (((ANP_TP / TNS_TP)')) {
-        return formulaAP();
-      }
     }
 
     // Si es una cabecera/sección, la envolvemos en un Bookmark con su ID correspondiente
