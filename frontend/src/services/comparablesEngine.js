@@ -471,6 +471,10 @@ function medianaDe(valores) {
 export function scoreCandidates(candidates, config, companyActivity = '', priorComps = [], contexto = {}) {
   const {
     nTarget = 12,
+    /* Piso del tamaño de la muestra. Parámetro y no constante incrustada para poder probar la
+       mecánica del cupo con números pequeños, y por si el despacho cambia el suelo. La
+       aplicación nunca lo pasa: usa el de siempre. */
+    minimo = MINIMO_COMPARABLES,
     perdidaOp = 'excluir',
     holding = 'excluir',
     control = 'excluir',
@@ -543,11 +547,18 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        inclusión ya se sustentó en su momento. */
     const idIQ = cand.id ? String(cand.id).trim() : '';
     const ia = iaPorId && idIQ ? iaPorId[idIQ] : null;
+    const grado = gradoDeActividad(ia);
     if (!descartada && iaPorId && idIQ && !String(cand.desc || '').trim() && !esContinuidad) {
       rechazar('ia', 'sinDescripcion', `Sin descripción del negocio para verificar la actividad (ID ${idIQ}).`);
-    } else if (!descartada && ia && ia.coincide === false && !esContinuidad) {
+    } else if (!descartada && grado === 'DISTINTA' && !esContinuidad) {
       rechazar('ia', 'actividadDistinta', `Curación IA: la descripción del negocio no coincide con la actividad${ia.motivo ? ' (' + ia.motivo + ')' : ''}.`);
     }
+
+    /* Actividad afín, no idéntica. No se descarta ni entra por derecho propio: queda válida
+       pero en segunda fila, y solo se recurre a ella si las de misma actividad no llenan el
+       cupo. Las de continuidad nunca se marcan así: su inclusión ya se sustentó el año
+       anterior y no necesitan la ampliación del criterio para entrar. */
+    const esRelacionada = grado === 'RELACIONADA' && !esContinuidad;
 
     /* ── perfil funcional ──
        El dictamen de la IA manda cuando afirma algo: lee la Business Description
@@ -577,10 +588,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        Si la IA ya confirmó la coincidencia sobre la descripción real, se toma su
        veredicto en lugar de recontar palabras clave. */
     const act = coincidenciaActividad(
-      ia && ia.coincide ? { ...cand, iaCoincide: true } : cand,
+      grado === 'MISMA' ? { ...cand, iaCoincide: true } : cand,
       companyActivity
     );
-    const fEspecialidad = act.factor;
+    /* La afín no puede puntuar como la idéntica: compite dentro de su propia fila, y ahí lo
+       que las ordena es el resto de factores. El tope refleja que la IA la reconoció como del
+       nicho —así no cae por debajo de una que la heurística no supo leer— sin igualarla a la
+       que sí es la misma actividad. */
+    const fEspecialidad = esRelacionada ? Math.max(act.factor, 0.55) : act.factor;
 
     /* ── geografía ── */
     let fGeo = 1;
@@ -618,7 +633,8 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 
     const razones = [
       'perfil ' + perfil.toLowerCase(),
-      hayAct ? (fEspecialidad >= 0.5 ? `coincide con la actividad (${act.hits} coincidencias)` : `coincidencia parcial (${act.hits})`) : '',
+      esRelacionada ? `actividad relacionada${ia && ia.motivo ? ' (' + ia.motivo + ')' : ''}` : '',
+      hayAct && !esRelacionada ? (fEspecialidad >= 0.5 ? `coincide con la actividad (${act.hits} coincidencias)` : `coincidencia parcial (${act.hits})`) : '',
       geo !== 'ninguna' && region === geo ? `región prioritaria (${cand.country || ''})` : '',
       distancia !== null && distancia < 1 ? 'tamaño próximo al de la parte examinada' : '',
       cand.hasLoss ? `con pérdida operativa (${perdidaOp})` : '',
@@ -633,6 +649,8 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       factores: { perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano, rentabilidad: fRent },
       razones,
       esContinuidad,
+      gradoActividad: grado || '',
+      esRelacionada,
       descartada,
       motivoRechazo,
       categoriaRechazo,
@@ -655,8 +673,26 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const continuidadIncluidas = validas.filter(c => c.esContinuidad);
   const otrasValidas = validas.filter(c => !c.esContinuidad);
 
-  const cupoRestante = Math.max(0, nTarget - continuidadIncluidas.length);
-  const seleccionadas = [...continuidadIncluidas, ...otrasValidas.slice(0, cupoRestante)];
+  /* El N del paso 2 manda cuando pide más que el mínimo; por debajo de `MINIMO_COMPARABLES` no
+     se baja. Poner 6 en el paso 2 no puede producir una muestra de 6. */
+  const cupo = Math.max(minimo, nTarget);
+  const cupoRestante = Math.max(0, cupo - continuidadIncluidas.length);
+
+  /* Dos filas, y la segunda solo se toca si la primera no llena el cupo: primero las de misma
+     actividad, y las de actividad afín después. Es la ampliación del criterio de búsqueda que
+     el informe tiene que justificar, así que se hace de forma mínima y queda marcada por
+     candidata (`entroPorAmpliacion`) en vez de diluirse en el orden por puntaje. */
+  const mismas = otrasValidas.filter(c => !c.esRelacionada);
+  const afines = otrasValidas.filter(c => c.esRelacionada);
+
+  const deMisma = mismas.slice(0, cupoRestante);
+  const faltan = Math.max(0, cupoRestante - deMisma.length);
+  const deAmpliacion = afines.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
+
+  const seleccionadas = [...continuidadIncluidas, ...deMisma, ...deAmpliacion];
+  /* Las afines que no hicieron falta vuelven a la reserva, detrás de las de misma actividad:
+     si el analista sube el N objetivo, se echa mano primero de las idénticas. */
+  const reserva = [...mismas.slice(deMisma.length), ...afines.slice(deAmpliacion.length)];
 
   return {
     evaluadas: evaluated.length,
@@ -687,12 +723,20 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        la curación por IA descarte sin quedarse corto de comparables. Se corta en el cupo
        restante, no en `nTarget`, o las que la continuidad desplazó aparecerían a la vez
        como seleccionadas y como reserva. */
-    reserva: otrasValidas.slice(cupoRestante),
+    reserva,
+    /* Cuántas entraron ampliando el criterio a actividades afines, y cuántas más había
+       disponibles. Lo primero hay que declararlo en el informe; lo segundo dice si el techo lo
+       pone el universo o el cupo. */
+    ampliadas: deAmpliacion.length,
+    relacionadasDisponibles: afines.length,
+    /* El cupo de verdad aplicado, que no tiene por qué ser el N que el usuario escribió: por
+       debajo de `MINIMO_COMPARABLES` no se baja. */
+    cupo,
     /* Cuántas vienen del estudio anterior y si por sí solas ya pasan del objetivo: en
        ese caso no se recorta ninguna —descartar una comparable aceptada el año pasado
        exige justificarlo en el informe— y la muestra queda por encima de lo pedido. */
     continuidad: continuidadIncluidas.length,
-    continuidadExcedeObjetivo: continuidadIncluidas.length > nTarget,
+    continuidadExcedeObjetivo: continuidadIncluidas.length > cupo,
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,
@@ -852,6 +896,30 @@ function bloqueConfirmadas(priorComps) {
    con 502 desde el borde y dejaban sin curar a sus 60 candidatas. Con 20 el lote
    baja a ~12-15 s y queda margen para un pico de latencia del modelo. No subirlo
    sin medir cuánto tarda el lote de verdad. */
+/* Tamaño mínimo de la muestra. Es un piso, no un objetivo: el N del paso 2 manda cuando pide
+   más, pero nunca se baja de aquí. Un rango intercuartil sobre menos observaciones deja de
+   sostenerse, y el estudio se radica ante la DIAN con ese rango. */
+export const MINIMO_COMPARABLES = 10;
+
+/* Cuánto se parece la actividad de una candidata a la de la parte examinada. La curación
+   devolvía un sí/no, y con un criterio tan estrecho como «la misma actividad específica» todo
+   lo afín caía del mismo lado que lo ajeno: en un estudio real rechazó 188 de 270 y la muestra
+   quedó en 6. Graduarlo permite ampliar el criterio solo lo necesario para llegar al mínimo, y
+   dejar dicho cuáles entraron así para justificarlo en el informe. */
+export const GRADOS_ACTIVIDAD = new Set(['MISMA', 'RELACIONADA', 'DISTINTA']);
+
+/* El grado de un dictamen, tolerando los veredictos guardados antes de que existiera: ahí solo
+   hay `coincide`, y un `false` de entonces significaba «no es la misma actividad específica»,
+   que es exactamente DISTINTA bajo el criterio viejo. Se reevalúan al volver a curar. */
+export function gradoDeActividad(dictamen) {
+  if (!dictamen) return null;
+  const grado = String(dictamen.grado || '').trim().toUpperCase();
+  if (GRADOS_ACTIVIDAD.has(grado)) return grado;
+  if (dictamen.coincide === true) return 'MISMA';
+  if (dictamen.coincide === false) return 'DISTINTA';
+  return null;
+}
+
 export const CURACION_LOTE = 20;
 export const CURACION_CONCURRENCIA = 3;
 /* Se usa para estimar la espera y avisarla desde el principio. */
@@ -984,6 +1052,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
        rastro de un lote caído era un console.error que nadie ve. */
     errores: [],
     omitida: null,
+    relacionadas: 0,
   };
 
   if (!actividad) {
@@ -1010,14 +1079,30 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
      actividad es la misma —es el criterio contra el que se evaluó cada candidata— y
      solo para los identificadores ya presentes: relajar un filtro admite candidatas
      nuevas, y esas sí hay que curarlas. */
-  const previo = veredictoPrevio && veredictoPrevio.porId &&
+  const previoCrudo = veredictoPrevio && veredictoPrevio.porId &&
     String(veredictoPrevio.actividadUsada || '').trim() === actividad
     ? veredictoPrevio.porId
     : null;
 
+  /* Y solo los dictámenes que traen el grado. Los guardados antes de que existiera únicamente
+     dicen sí/no bajo el criterio estricto de entonces —«la misma actividad específica»—, así
+     que sus «no» esconden tanto las verdaderamente distintas como las afines. Reutilizarlos
+     dejaría el estudio sin una sola candidata relacionada y la muestra seguiría corta sin que
+     se entienda por qué: exactamente la trampa de un artefacto cacheado que el sistema da por
+     al día. Se vuelven a consultar, que es lo único que puede producir el grado. */
+  const previo = previoCrudo
+    ? Object.fromEntries(Object.entries(previoCrudo).filter(([, d]) => d && d.grado))
+    : null;
+  const sinGrado = previoCrudo ? Object.keys(previoCrudo).length - Object.keys(previo).length : 0;
+  if (sinGrado) {
+    console.warn(`[curación IA] ${sinGrado} dictamen(es) guardados con el formato anterior ` +
+      '(sin grado de actividad): se vuelven a consultar.');
+  }
+
   const idsConsiderados = conDatos.map(c => String(c.id).trim());
-  const contarCoincidencias = () =>
-    idsConsiderados.filter(id => veredicto.porId[id] && veredicto.porId[id].coincide).length;
+  const contarGrado = (grado) =>
+    idsConsiderados.filter(id => gradoDeActividad(veredicto.porId[id]) === grado).length;
+  const contarCoincidencias = () => contarGrado('MISMA');
 
   const evaluables = previo ? conDatos.filter(c => !previo[String(c.id).trim()]) : conDatos;
   veredicto.reutilizadas = conDatos.length - evaluables.length;
@@ -1029,11 +1114,14 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
 
   if (!evaluables.length) {
     veredicto.coinciden = contarCoincidencias();
+    veredicto.relacionadas = contarGrado('RELACIONADA');
     avisar({
       etapa: 'fin', evaluadas: 0, total: conDatos.length, fallidas: 0,
       reutilizadas: veredicto.reutilizadas, coinciden: veredicto.coinciden,
+      relacionadas: veredicto.relacionadas,
       mensaje: `Sin consultas nuevas: las ${veredicto.reutilizadas} candidatas ya estaban curadas para esta actividad · ` +
-        `${veredicto.coinciden} coinciden`,
+        `${veredicto.coinciden} coinciden` +
+        (veredicto.relacionadas ? ` · ${veredicto.relacionadas} de actividad relacionada` : ''),
     });
     return veredicto;
   }
@@ -1063,9 +1151,15 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       'La empresa examinada tiene esta actividad económica real:\n"' + actividad + '"\n\n' +
       referencia +
       'A continuación hay una lista de empresas candidatas con su descripción de negocio real (habitualmente en inglés). ' +
-      'Para cada una, decide si su actividad real coincide con la de la empresa examinada (mismo tipo de negocio, ' +
-      'mismos productos o servicios, o función equivalente), sin importar el idioma en que esté escrita la descripción. ' +
-      'No la aceptes solo por pertenecer al mismo sector amplio: debe ser la misma actividad específica.\n\n' +
+      'Para cada una, gradúa cuánto se parece su actividad real a la de la empresa examinada, sin importar el idioma ' +
+      'en que esté escrita la descripción:\n' +
+      '- "MISMA": el mismo tipo de negocio, los mismos productos o servicios, o una función equivalente.\n' +
+      '- "RELACIONADA": actividad afín dentro de la misma cadena de valor o del mismo nicho —otro eslabón, un ' +
+      'producto o servicio vecino, o la misma función sobre un mercado contiguo—, de modo que sus márgenes son ' +
+      'razonablemente comparables aunque no sea idéntica. Pertenecer al mismo sector amplio NO basta.\n' +
+      '- "DISTINTA": otro negocio. Úsalo también cuando el único parecido sea el sector amplio.\n\n' +
+      'Sé estricto con "MISMA" y honesto con "RELACIONADA": no fuerces a "MISMA" lo que solo es afín, ni mandes a ' +
+      '"DISTINTA" lo que de verdad comparte cadena de valor o nicho.\n\n' +
       'Clasifica también el perfil funcional de cada candidata, según las funciones y los riesgos que asume:\n' +
       '- "SERVICIO": presta servicios, fabrica o desarrolla por encargo de terceros; no explota propiedad ' +
       'intelectual propia ni asume el riesgo de mercado del producto final.\n' +
@@ -1074,7 +1168,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       '- "INDEFINIDO": la descripción no alcanza para decidirlo. Úsalo en lugar de adivinar.\n\n' +
       'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
       'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
-      '{"resultados":[{"id":"","coincide":true,"perfil":"SERVICIO","motivo":""}]}\n' +
+      '{"resultados":[{"id":"","grado":"MISMA","perfil":"SERVICIO","motivo":""}]}\n' +
       '"motivo" debe ser brevísimo (máximo 12 palabras, sin explicaciones largas). ' +
       'Incluye una entrada por cada ID recibido, en el mismo orden.';
 
@@ -1086,8 +1180,20 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
         /* El perfil se acepta solo si es uno de los cuatro valores pedidos: un texto
            libre del modelo no puede acabar decidiendo un descarte por rigor. */
         const perfil = String(r.perfil || '').trim().toUpperCase();
+        /* Igual que el perfil: solo se acepta uno de los tres grados pedidos. Un texto libre
+           del modelo no puede acabar decidiendo si una comparable entra en la muestra. Si el
+           modelo se sale del guion —o contesta con el `coincide` del formato anterior—, manda
+           lo que diga `coincide`, y si tampoco está se toma por DISTINTA, que es como se
+           comportaba antes ante una respuesta ilegible. */
+        const gradoCrudo = String(r.grado || '').trim().toUpperCase();
+        const grado = GRADOS_ACTIVIDAD.has(gradoCrudo)
+          ? gradoCrudo
+          : (r.coincide === true ? 'MISMA' : 'DISTINTA');
         veredicto.porId[String(r.id).trim()] = {
-          coincide: !!r.coincide,
+          grado,
+          /* Se conserva para no romper los estudios ya guardados ni lo que lo lea fuera de
+             aquí: significa lo mismo que antes, «es la misma actividad». */
+          coincide: grado === 'MISMA',
           motivo: r.motivo || '',
           perfil: (PERFILES_DETERMINADOS.has(perfil) || perfil === 'INDEFINIDO') ? perfil : '',
         };
@@ -1119,14 +1225,20 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
      reutilizados de una corrida con más candidatas, y contarlos daría un total que
      no cuadra con el embudo. */
   const coinciden = contarCoincidencias();
+  const relacionadas = contarGrado('RELACIONADA');
   veredicto.coinciden = coinciden;
+  /* Las de actividad afín. No entran a la muestra por sí solas: son con las que el motor
+     completa el cupo cuando las de misma actividad no llegan al mínimo. */
+  veredicto.relacionadas = relacionadas;
+  const resumen = `${coinciden} de ${conDatos.length} coinciden con la actividad` +
+    (relacionadas ? ` · ${relacionadas} de actividad relacionada, disponibles para completar la muestra` : '');
   avisar({
     etapa: 'fin',
     evaluadas: veredicto.evaluadas, total: conDatos.length, fallidas: veredicto.fallidas,
-    reutilizadas: veredicto.reutilizadas, coinciden, errores: veredicto.errores,
+    reutilizadas: veredicto.reutilizadas, coinciden, relacionadas, errores: veredicto.errores,
     mensaje: veredicto.fallidas
-      ? `${coinciden} de ${conDatos.length} coinciden con la actividad · ${veredicto.fallidas} no se pudieron evaluar (se dejan pasar sin descartarlas)`
-      : `${coinciden} de ${conDatos.length} coinciden con la actividad`,
+      ? `${resumen} · ${veredicto.fallidas} no se pudieron evaluar (se dejan pasar sin descartarlas)`
+      : resumen,
   });
 
   return veredicto;

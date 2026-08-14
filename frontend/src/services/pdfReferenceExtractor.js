@@ -5,6 +5,7 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { fraccionDePagina, detectarPaginasDeAnexo } from './clasificadorImagenes.js';
 import { codificarPNG, aBase64 } from './png.js';
+import { TEXTOS_PLANOS_FORMULA, esFormulaCorrupta, tipoDeAjusteDe } from './formulasOmml.js';
 
 /* En Node la librería desactiva el worker y autoconfigura esta ruta, por eso
    los tests pasan sin tocar nada. En el navegador no: getDocument construye el
@@ -34,8 +35,10 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      6 — filas de tabla sin párrafos sueltos dentro, y el anexo completo
      7 — cada imagen con el tamaño que le da el PDF, y el encabezado en su lado
      8 — la orientación de cada página, para la sección apaisada
-     9 — las citas legales apartadas como notas al pie, con su llamada marcada */
-export const VERSION_EXTRACTOR = 9;
+     9 — las citas legales apartadas como notas al pie, con su llamada marcada
+    10 — las ecuaciones de ajuste marcadas, para que el .docx las escriba con el motor
+         matemático de Word en vez de dejar las letras corruptas del PDF */
+export const VERSION_EXTRACTOR = 10;
 
 /* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
    del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
@@ -115,6 +118,9 @@ export async function extraerReferencia(datos) {
   const leidas = [];
   const censoEstilos = new Map();
   let etiquetado = false;
+  /* De qué ajuste habla el informe en cada momento. Cruza las páginas a propósito: el rótulo de
+     la ecuación de cuentas por pagar está en la página 85 y la ecuación en la 86. */
+  const estadoAjuste = { tipo: null };
 
   for (let n = 1; n <= doc.numPages; n++) {
     const pagina = await doc.getPage(n);
@@ -134,18 +140,14 @@ export async function extraerReferencia(datos) {
        y ni una letra dentro. */
     const texto = await pagina.getTextContent({ includeMarkedContent: true });
     const estilos = await estilosDeFuente(pagina, texto.items);
-    const porId = textoPorId(texto.items, estilos);
+    const { porId, formulaPorId } = textoPorId(texto.items, estilos, estadoAjuste);
     contarEstilos(porId, censoEstilos);
     /* Los items marcadores no traen `str`; sin el `|| ''` se colarían literales
        "undefined" en el texto de las páginas sin etiquetar. */
-    let ultimoTipoAjustePlano = 'AR';
     const textoPlano = texto.items
       .map((i) => {
         if (!i.str) return i.hasEOL ? ' ' : '';
-        const upper = i.str.toUpperCase();
-        if (upper.includes('COBRAR')) ultimoTipoAjustePlano = 'AR';
-        if (upper.includes('PAGAR')) ultimoTipoAjustePlano = 'AP';
-        return (i.hasEOL ? ' ' : '') + normalizarCaracteresMatematicos(i.str, ultimoTipoAjustePlano);
+        return (i.hasEOL ? ' ' : '') + normalizarCaracteresMatematicos(i.str);
       })
       .join('')
       .trim();
@@ -154,7 +156,7 @@ export async function extraerReferencia(datos) {
     /* Orientación de la página. El informe de referencia trae una apaisada de 112, y sin
        decirlo esa página sale vertical y su contenido no cabe. */
     const orientacion = dimPagina.ancho > dimPagina.alto ? 'apaisada' : 'vertical';
-    leidas.push({ pagina: n, arbol, porId, textoPlano, orientacion });
+    leidas.push({ pagina: n, arbol, porId, formulaPorId, textoPlano, orientacion });
 
     /* La matriz acumulada es la única forma de saber a qué tamaño se dibuja
        una imagen: los argumentos de paintImageXObject traen los píxeles
@@ -204,7 +206,7 @@ export async function extraerReferencia(datos) {
 
   /* --- El cuerpo del documento, y con él el HTML --- */
   const base = estiloDominante(censoEstilos);
-  const bloques = leidas.map(({ pagina: n, arbol, porId, textoPlano, orientacion }) => {
+  const bloques = leidas.map(({ pagina: n, arbol, porId, formulaPorId, textoPlano, orientacion }) => {
     if (arbol) {
       const figuras = [];
       /* Las notas de la página van al final de su bloque, detrás de todo el texto. Es donde
@@ -212,7 +214,7 @@ export async function extraerReferencia(datos) {
          las pinta pequeñas. El .docx no depende de esta posición —las saca del cuerpo y las
          emite como notas al pie de Word—, pero la ruta HTML sí. */
       const notas = [];
-      const htmlStruct = aHTML(arbol, porId, figuras, n, base, notas) + notas.join('');
+      const htmlStruct = aHTML(arbol, porId, figuras, n, base, notas, formulaPorId) + notas.join('');
       figurasPorPagina.set(n, figuras);
 
       /* Respaldo por página: si el árbol no rindió texto (documento etiquetado
@@ -482,6 +484,10 @@ export function loQueFaltaPorVersion(version) {
     falta.push('las citas legales no van apartadas, así que el .docx tiene que ' +
                'reconocerlas por su forma en vez de por lo que el PDF declara');
   }
+  if (version < 10) {
+    falta.push('las ecuaciones de ajuste de capital salen como letras repetidas y rombos ' +
+               '(«AAAA AAAAAAAAAAAAAAAAAAAA = …») en vez de como ecuaciones de Word');
+  }
   return falta;
 }
 
@@ -608,8 +614,23 @@ function estiloDominante(censo) {
   return { familia, tamano: Number(tamano) || 12 };
 }
 
-function textoPorId(items, estilos = new Map()) {
+/* `estadoAjuste` es de DOCUMENTO, no de página: esta función se llama una vez por página y en el
+   informe de referencia el rótulo «FORMULA AJUSTE CUENTAS POR PAGAR» está en la página 85 y su
+   ecuación en la 86. Reiniciarlo en cada página haría que la de pagar se escribiera como la de
+   cobrar. Devuelve además `formulaPorId`, con qué nodos son una ecuación y de cuál de los dos
+   ajustes. */
+export function textoPorId(items, estilos = new Map(), estadoAjuste = { tipo: null }) {
   const porId = new Map();
+  const formulaPorId = new Map();
+  /* De qué ajuste hablaba el documento cuando cada nodo empezó a recibir texto. Anotarlo al abrir
+     —y no leer el estado final tras recorrer la página— es lo que permite que dos ecuaciones en
+     la misma página salgan cada una con su ajuste. */
+  const tipoAlAbrir = new Map();
+  /* El texto tal como sale del PDF, sin traducir. La firma de una ecuación hay que buscarla aquí:
+     `normalizarCaracteresMatematicos` convierte a ASCII justo los caracteres que la delatan. Y
+     hay que buscarla sobre el nodo entero, no ítem a ítem: el PDF corta la ecuación en un ítem
+     por cambio de fuente y ninguno por separado llega al umbral. */
+  const crudoPorId = new Map();
   const pilaMarcas = [];
   /* El salto de línea vale un espacio, pero no se puede pegar a un item fijo:
      unas veces `hasEOL` viene en un item vacío que abre el renglón siguiente y
@@ -622,7 +643,6 @@ function textoPorId(items, estilos = new Map()) {
      nombre del cliente anterior. Los cortes sin `hasEOL` se unen sin nada:
      ahí el renglón sólo se partió por un cambio de fuente. */
   let saltoPendiente = false;
-  let ultimoTipoAjuste = 'AR';
   for (const item of items) {
     if (item.type === 'beginMarkedContent' || item.type === 'beginMarkedContentProps') {
       pilaMarcas.push(item.id || null);
@@ -633,15 +653,18 @@ function textoPorId(items, estilos = new Map()) {
       continue;
     }
     if (item.str) {
-      const upper = item.str.toUpperCase();
-      if (upper.includes('COBRAR')) ultimoTipoAjuste = 'AR';
-      if (upper.includes('PAGAR')) ultimoTipoAjuste = 'AP';
+      const rotulo = tipoDeAjusteDe(item.str);
+      if (rotulo) estadoAjuste.tipo = rotulo;
 
-      const strLimpia = normalizarCaracteresMatematicos(item.str, ultimoTipoAjuste);
+      const strLimpia = normalizarCaracteresMatematicos(item.str);
       const id = pilaMarcas[pilaMarcas.length - 1];
       if (id) {
         const runs = porId.get(id) || [];
-        if (!porId.has(id)) porId.set(id, runs);
+        if (!porId.has(id)) {
+          porId.set(id, runs);
+          tipoAlAbrir.set(id, estadoAjuste.tipo);
+        }
+        crudoPorId.set(id, (crudoPorId.get(id) || '') + item.str);
 
         const e = estilos.get(item.fontName) || {};
         const estilo = {
@@ -673,38 +696,22 @@ function textoPorId(items, estilos = new Map()) {
     if (item.hasEOL) saltoPendiente = true;
   }
 
-  // Post-procesamiento para reparar fórmulas matemáticas de LaTeX corruptas
-  for (const [id, runs] of porId.entries()) {
-    const textoCompleto = runs.map((r) => r.texto).join('');
-    const normalized = textoCompleto.replace(/\s+/g, ' ').trim();
-    if (normalized.includes('AAAA AAAAAAAAAAAAAAAAAAAA') || normalized.includes('AAAA AAAAAAAAAAAAAAAAAAA')) {
-      const estilo = runs[0] ? {
-        negrita: runs[0].negrita,
-        cursiva: runs[0].cursiva,
-        familia: runs[0].familia,
-        tamano: runs[0].tamano,
-      } : { familia: 'Arial', tamano: 12 };
-
-      if (ultimoTipoAjuste === 'AP') {
-        porId.set(id, [{
-          ...estilo,
-          texto: 'AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))'
-        }]);
-      } else {
-        porId.set(id, [{
-          ...estilo,
-          texto: 'AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))'
-        }]);
-      }
-    } else if (normalized === 'AAAAAATTTT AA' || normalized === 'AAAAAATTTT R') {
-      porId.set(id, []);
-    } else if ((normalized.includes('TATTTTTT') || normalized.includes('TTAATTTTTT') || normalized.includes('TTTTTT')) && 
-               (normalized.includes('(1 + AA)') || normalized.includes('(1+AA)') || normalized.includes('(1 + R)') || normalized.includes('(1+R)'))) {
-      porId.set(id, []);
-    }
+  /* Qué nodos son una ecuación del editor del PDF, y de cuál de los dos ajustes. El texto se
+     sustituye aquí mismo por la ecuación escrita en una línea: es lo que se lee en la vista
+     previa y lo que cuenta el marcador de campos. El .docx la cambia luego por la ecuación de
+     Word, guiándose por la marca `data-formula` que `aHTML` saca de este mapa. */
+  for (const [id, crudo] of crudoPorId.entries()) {
+    if (!esFormulaCorrupta(crudo)) continue;
+    const tipo = tipoAlAbrir.get(id) || estadoAjuste.tipo || 'AR';
+    formulaPorId.set(id, tipo);
+    const runs = porId.get(id) || [];
+    const estilo = runs[0]
+      ? { negrita: runs[0].negrita, cursiva: runs[0].cursiva, familia: runs[0].familia, tamano: runs[0].tamano }
+      : { negrita: false, cursiva: false, familia: 'Arial', tamano: 12 };
+    porId.set(id, [{ ...estilo, texto: TEXTOS_PLANOS_FORMULA[tipo] }]);
   }
 
-  return porId;
+  return { porId, formulaPorId };
 }
 
 const mismoEstilo = (a, b) =>
@@ -755,9 +762,47 @@ const textoDeRuns = (runs) => (runs || []).map((r) => r.texto).join('');
    del PDF las ancla justo detrás del párrafo que las cita —medido: las 42 del informe—, y
    emitirlas ahí las ponía en mitad de la página. Quien llama las vuelca al final de la
    página; el .docx las convierte además en notas al pie de Word. */
-function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
+/* De qué ajuste es la ecuación que ocupa este bloque, o `null` si no lo es. Pide que TODOS sus
+   nodos de contenido sean la ecuación —y que haya al menos uno—: un párrafo que sólo la contenga
+   a ella se sustituye entero, pero uno que además lleve prosa se deja en paz. */
+function formulaDeBloque(nodo, formulaPorId) {
+  if (!formulaPorId.size) return null;
+  let tipo = null;
+  const recorrer = (n) => {
+    if (!n) return true;
+    if (n.type === 'content') {
+      const suyo = formulaPorId.get(n.id);
+      if (!suyo) return false;
+      tipo = tipo || suyo;
+      return true;
+    }
+    return (n.children || []).every(recorrer);
+  };
+  return recorrer(nodo) && tipo ? tipo : null;
+}
+
+function aHTML(nodo, porId, figuras, pagina, base, notas = [], formulaPorId = new Map()) {
   if (!nodo) return '';
-  if (nodo.type === 'content') return runsAHTML(porId.get(nodo.id), base);
+  if (nodo.type === 'content') {
+    /* Red por si la ecuación no ocupa un bloque entero y el `<p>` de más abajo no llega a
+       emitirse: el texto sale legible igual, y el .docx lo reconoce por su prefijo. */
+    const suelta = formulaPorId.get(nodo.id);
+    if (suelta) {
+      return '<span data-formula="' + suelta + '">' + escapar(TEXTOS_PLANOS_FORMULA[suelta]) + '</span>';
+    }
+    return runsAHTML(porId.get(nodo.id), base);
+  }
+
+  /* La ecuación de ajuste, marcada. El atributo es lo que el .docx lee para escribirla con el
+     motor matemático de Word; el texto de dentro es lo que se ve en la vista previa y lo que
+     cuenta el marcador de campos, que trabaja sobre texto visible. Va como texto y no como
+     MathML porque la exportación a `.doc` es HTML que abre Word, y Word no entiende MathML: lo
+     aplanaría a «ANPTPTNSTP…», peor que ahora. */
+  const tipoFormula = formulaDeBloque(nodo, formulaPorId);
+  if (tipoFormula) {
+    return '<p data-formula="' + tipoFormula + '">'
+      + escapar(TEXTOS_PLANOS_FORMULA[tipoFormula]) + '</p>';
+  }
 
   if (nodo.role === 'Figure') {
     const indice = figuras.length;
@@ -771,7 +816,7 @@ function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
      aparición dentro de la página, que es lo único que se sabe sin él. */
   if (nodo.role === 'Note') {
     const dentro = (nodo.children || [])
-      .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+      .map((h) => aHTML(h, porId, figuras, pagina, base, notas, formulaPorId))
       .join('');
     const m = RX_NUMERO_INICIAL.exec(dentro);
     const numero = m ? m[2] : String(notas.length + 1);
@@ -786,7 +831,7 @@ function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
      de 8 puntos a media altura de línea, indistinguible de un número cualquiera. */
   if (nodo.role === 'Link') {
     const dentro = (nodo.children || [])
-      .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+      .map((h) => aHTML(h, porId, figuras, pagina, base, notas, formulaPorId))
       .join('');
     const texto = dentro.replace(/<[^>]*>/g, '').trim();
     if (RX_SOLO_NUMERO.test(texto)) {
@@ -808,7 +853,7 @@ function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
   if (nodo.role === 'TR') {
     const celdas = [];
     for (const h of nodo.children || []) {
-      const html = aHTML(h, porId, figuras, pagina, base, notas);
+      const html = aHTML(h, porId, figuras, pagina, base, notas, formulaPorId);
       if (h.role === 'TD' || h.role === 'TH') {
         celdas.push(html);
         continue;
@@ -822,7 +867,7 @@ function aHTML(nodo, porId, figuras, pagina, base, notas = []) {
   }
 
   const hijos = (nodo.children || [])
-    .map((h) => aHTML(h, porId, figuras, pagina, base, notas))
+    .map((h) => aHTML(h, porId, figuras, pagina, base, notas, formulaPorId))
     .join('');
   const etiqueta = MAPA_ETIQUETAS[nodo.role];
   return etiqueta ? '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>' : hijos;

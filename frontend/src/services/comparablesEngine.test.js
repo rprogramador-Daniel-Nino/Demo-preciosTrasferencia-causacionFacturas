@@ -10,7 +10,8 @@ import {
   scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
-  parsearCriteriosScreening, CURACION_LOTE, enriquecerUniverso
+  parsearCriteriosScreening, CURACION_LOTE, enriquecerUniverso,
+  MINIMO_COMPARABLES, gradoDeActividad,
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -92,7 +93,12 @@ function mockGemini(decidir, opciones = {}) {
               text: (opciones.envolver || (s => s))(JSON.stringify({
                 resultados: lista.map(c => ({
                   id: c.id,
-                  coincide: decidir(c),
+                  /* Con `opciones.grado` el modelo contesta con el grado de actividad, que es lo
+                     que pide el prompt; sin él contesta con el `coincide` del formato anterior,
+                     que es lo que sigue haciendo un modelo que ignora el campo nuevo. */
+                  ...(opciones.grado
+                    ? { grado: opciones.grado(c) }
+                    : { coincide: decidir(c) }),
                   motivo: 'motivo breve',
                   ...(opciones.perfil ? { perfil: opciones.perfil(c) } : {}),
                 }))
@@ -158,6 +164,10 @@ test('una candidata de continuidad ya no se descarta por falta de descripción',
 });
 
 /* ══════ el cupo N objetivo es el tamaño de la muestra final ══════
+   Estos cuatro prueban la MECÁNICA del cupo con números pequeños, así que pasan `minimo: 0`
+   para apartar el piso de `MINIMO_COMPARABLES` y poder pedir 2, 3 o 4. El piso tiene sus
+   propios tests más abajo; la aplicación nunca pasa `minimo`.
+
    Antes las de continuidad se sumaban al margen de `nTarget`, así que pedir 12 con 7 del
    estudio anterior devolvía 19 comparables. El número que el usuario escribe es el
    tamaño final: la continuidad entra primero y ocupa parte de ese cupo. */
@@ -170,7 +180,7 @@ test('las candidatas de continuidad cuentan dentro del cupo, no aparte', () => {
     { id: '4', name: 'Nueva Dos', nameKey: nameKey('Nueva Dos'), s: 100, op: 10 },
   ];
   const priorComps = [{ name: 'Continuidad Uno' }, { name: 'Continuidad Dos' }];
-  const r = scoreCandidates(candidatas, { nTarget: 3 }, '', priorComps);
+  const r = scoreCandidates(candidatas, { nTarget: 3, minimo: 0 }, '', priorComps);
 
   assert.strictEqual(r.seleccionadas.length, 3, 'pedidas 3, devueltas 3');
   assert.strictEqual(r.continuidad, 2);
@@ -208,7 +218,7 @@ test('la continuidad no se recorta cuando por sí sola pasa del objetivo', () =>
     { id: '4', name: 'Nueva', nameKey: nameKey('Nueva'), s: 100, op: 10 },
   ];
   const priorComps = [{ name: 'Previa Uno' }, { name: 'Previa Dos' }, { name: 'Previa Tres' }];
-  const r = scoreCandidates(candidatas, { nTarget: 2 }, '', priorComps);
+  const r = scoreCandidates(candidatas, { nTarget: 2, minimo: 0 }, '', priorComps);
 
   assert.strictEqual(r.seleccionadas.length, 3, 'las tres de continuidad se conservan');
   assert.strictEqual(r.seleccionadas.filter(c => !c.esContinuidad).length, 0,
@@ -221,7 +231,7 @@ test('sin continuidad el cupo se comporta igual que antes', () => {
   const candidatas = Array.from({ length: 10 }, (_, i) => ({
     id: 'C' + i, name: 'Comp ' + i, nameKey: nameKey('Comp ' + i), s: 100, op: 10,
   }));
-  const r = scoreCandidates(candidatas, { nTarget: 4 }, '', []);
+  const r = scoreCandidates(candidatas, { nTarget: 4, minimo: 0 }, '', []);
   assert.strictEqual(r.seleccionadas.length, 4);
   assert.strictEqual(r.continuidad, 0);
   assert.strictEqual(r.reserva.length, 6);
@@ -235,7 +245,7 @@ test('una comparable no aparece a la vez en la muestra y en la reserva', () => {
     { id: '2', name: 'Nueva Uno', nameKey: nameKey('Nueva Uno'), s: 100, op: 10 },
     { id: '3', name: 'Nueva Dos', nameKey: nameKey('Nueva Dos'), s: 100, op: 10 },
   ];
-  const r = scoreCandidates(candidatas, { nTarget: 2 }, '', [{ name: 'Previa' }]);
+  const r = scoreCandidates(candidatas, { nTarget: 2, minimo: 0 }, '', [{ name: 'Previa' }]);
   const enMuestra = new Set(r.seleccionadas.map(c => c.id));
   r.reserva.forEach(c => assert.ok(!enMuestra.has(c.id), c.name + ' está en la muestra y en la reserva'));
   assert.strictEqual(r.seleccionadas.length, 2);
@@ -841,7 +851,7 @@ test('scoreCandidates: la especialidad pesa 40 % con actividad y 15 % sin ella',
 
 test('scoreCandidates devuelve reserva para poder reponer lo que la IA descarte', () => {
   const candidatas = Array.from({ length: 10 }, (_, i) => ({ id: 'C' + i, name: 'Comp ' + i, desc: '', s: 1000, op: 100 }));
-  const r = scoreCandidates(candidatas, { nTarget: 3 }, '', [], {});
+  const r = scoreCandidates(candidatas, { nTarget: 3, minimo: 0 }, '', [], {});
   assert.strictEqual(r.seleccionadas.length, 3);
   assert.strictEqual(r.reserva.length, 7, 'las válidas que no entraron al TOP-N quedan disponibles');
 });
@@ -1358,4 +1368,233 @@ test('la selección tampoco se contagia entre homónimas', () => {
   const [nable, otra] = enriquecerUniverso(universo, seleccionadas, null);
   assert.strictEqual(otra.seleccionada, true);
   assert.strictEqual(nable.seleccionada, false, 'la homónima no queda marcada como comparable del estudio');
+});
+
+/* ══════ Mínimo de comparables y ampliación a actividades relacionadas ══════
+   Caso real que lo motivó: un universo de 270 candidatas del que la curación rechazaba 188 por
+   no ser «la misma actividad específica», y la muestra quedaba en 6. Un rango intercuartil
+   sobre 6 observaciones no se sostiene, y el estudio se radica con ese rango. La IA pasa a
+   graduar —misma, relacionada, distinta— y el motor amplía a las relacionadas solo lo justo
+   para no bajar de `MINIMO_COMPARABLES`. */
+
+/** Candidatas con dictamen de la IA, para no repetir el andamiaje en cada test. */
+const conGrado = (n, grado, prefijo) => Array.from({ length: n }, (_, i) => ({
+  id: prefijo + i, name: prefijo + ' ' + i, desc: 'descripcion del negocio', s: 100, op: 10, grado,
+}));
+const veredictoDe = (candidatas) => ({
+  porId: Object.fromEntries(candidatas.map(c => [c.id, { grado: c.grado, motivo: '', perfil: 'SERVICIO' }])),
+});
+
+test('el mínimo es un piso: pedir menos en el paso 2 no encoge la muestra', () => {
+  const candidatas = conGrado(20, 'MISMA', 'C');
+  const r = scoreCandidates(candidatas, { nTarget: 6 }, '', [], { iaMatch: veredictoDe(candidatas) });
+  assert.strictEqual(r.seleccionadas.length, MINIMO_COMPARABLES,
+    'con 6 pedidas la muestra sigue siendo de ' + MINIMO_COMPARABLES);
+  assert.strictEqual(r.cupo, MINIMO_COMPARABLES);
+});
+
+test('el N del paso 2 manda cuando pide más que el mínimo', () => {
+  const candidatas = conGrado(30, 'MISMA', 'C');
+  const r = scoreCandidates(candidatas, { nTarget: 15 }, '', [], { iaMatch: veredictoDe(candidatas) });
+  assert.strictEqual(r.seleccionadas.length, 15, 'el piso no puede recortar lo que el analista pide');
+  assert.strictEqual(r.cupo, 15);
+  assert.strictEqual(r.ampliadas, 0, 'con 30 de la misma actividad no hace falta ampliar');
+});
+
+test('la actividad relacionada completa la muestra cuando la idéntica no alcanza', () => {
+  /* El caso del usuario en pequeño: pocas de misma actividad y muchas afines. */
+  const candidatas = [...conGrado(6, 'MISMA', 'M'), ...conGrado(20, 'RELACIONADA', 'R')];
+  const r = scoreCandidates(candidatas, { nTarget: 12 }, '', [], { iaMatch: veredictoDe(candidatas) });
+
+  assert.strictEqual(r.seleccionadas.length, 12);
+  assert.strictEqual(r.ampliadas, 6, 'se amplía solo lo que falta: 6 idénticas + 6 afines');
+  assert.strictEqual(r.seleccionadas.filter(c => c.entroPorAmpliacion).length, 6);
+  /* Las idénticas van primero: la ampliación es el último recurso, no un empate por puntaje. */
+  r.seleccionadas.slice(0, 6).forEach(c => assert.ok(!c.entroPorAmpliacion,
+    c.name + ' desplazó a una de misma actividad'));
+  assert.strictEqual(r.relacionadasDisponibles, 20);
+});
+
+test('no se amplía ni una comparable de más', () => {
+  /* Con las idénticas justas para el cupo, ninguna afín entra: ampliar el criterio de búsqueda
+     hay que justificarlo en el informe, así que se hace solo cuando hace falta. */
+  const candidatas = [...conGrado(10, 'MISMA', 'M'), ...conGrado(10, 'RELACIONADA', 'R')];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [], { iaMatch: veredictoDe(candidatas) });
+  assert.strictEqual(r.ampliadas, 0);
+  assert.strictEqual(r.seleccionadas.length, 10);
+  r.seleccionadas.forEach(c => assert.ok(!c.entroPorAmpliacion, 'se amplió sin necesidad'));
+});
+
+test('la actividad relacionada no se descarta: queda en reserva si no hizo falta', () => {
+  const candidatas = [...conGrado(12, 'MISMA', 'M'), ...conGrado(5, 'RELACIONADA', 'R')];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [], { iaMatch: veredictoDe(candidatas) });
+
+  assert.strictEqual(r.rechazadas.length, 0, 'una actividad afín no es motivo de rechazo');
+  assert.strictEqual(r.reserva.length, 7, 'las 2 idénticas sobrantes y las 5 afines');
+  /* Y las idénticas van delante en la reserva: si el analista sube el N, se echa mano de ellas
+     antes que de las afines. */
+  assert.ok(!r.reserva[0].esRelacionada, 'la reserva empieza por las de misma actividad');
+});
+
+test('la actividad distinta sigue descartándose', () => {
+  const candidatas = [...conGrado(3, 'MISMA', 'M'), ...conGrado(4, 'DISTINTA', 'D')];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [], { iaMatch: veredictoDe(candidatas) });
+
+  assert.strictEqual(r.seleccionadas.length, 3, 'no se rellena con lo que no es comparable');
+  assert.strictEqual(r.rechazadas.length, 4);
+  assert.strictEqual(r.rechazadasPorMotivo.actividadDistinta, 4);
+  /* Y queda por debajo del mínimo, que es lo que la pantalla tiene que decir en rojo: el motor
+     no inventa comparables para cuadrar un número. */
+  assert.ok(r.seleccionadas.length < MINIMO_COMPARABLES);
+});
+
+test('una comparable de continuidad nunca cuenta como ampliación', () => {
+  /* Aunque la IA la juzgue solo afín: su inclusión se sustentó el año anterior y no necesita
+     la ampliación del criterio para entrar. */
+  const candidatas = [
+    { id: 'P', name: 'Previa', nameKey: nameKey('Previa'), desc: 'x', s: 100, op: 10, grado: 'RELACIONADA' },
+    ...conGrado(12, 'MISMA', 'M'),
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [{ name: 'Previa' }],
+    { iaMatch: veredictoDe(candidatas) });
+
+  const previa = r.seleccionadas.find(c => c.id === 'P');
+  assert.ok(previa, 'la de continuidad tiene que entrar');
+  assert.strictEqual(previa.esRelacionada, false);
+  assert.ok(!previa.entroPorAmpliacion);
+  assert.strictEqual(r.ampliadas, 0);
+});
+
+test('un veredicto guardado antes de que existieran los grados se sigue entendiendo', () => {
+  /* Los estudios ya guardados traen `coincide` y ningún `grado`. Un `false` de entonces se
+     emitió bajo el criterio estricto, así que equivale a DISTINTA. */
+  assert.strictEqual(gradoDeActividad({ coincide: true }), 'MISMA');
+  assert.strictEqual(gradoDeActividad({ coincide: false }), 'DISTINTA');
+  assert.strictEqual(gradoDeActividad({ grado: 'RELACIONADA' }), 'RELACIONADA');
+  /* El grado manda sobre el booleano cuando están los dos. */
+  assert.strictEqual(gradoDeActividad({ grado: 'RELACIONADA', coincide: false }), 'RELACIONADA');
+  /* Un dictamen que no se puede leer es «sin dictamen», no «descártala»: perder una comparable
+     por un fallo de formato es peor que dejarla competir por puntaje. La normalización al
+     escribir ya garantiza que lo guardado traiga siempre uno de los tres grados. */
+  assert.strictEqual(gradoDeActividad({ grado: 'inventado' }), null);
+  assert.strictEqual(gradoDeActividad(null), null);
+  assert.strictEqual(gradoDeActividad({}), null);
+
+  const candidatas = [
+    { id: 'A', name: 'Vieja Si', desc: 'x', s: 100, op: 10 },
+    { id: 'B', name: 'Vieja No', desc: 'x', s: 100, op: 10 },
+  ];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [], {
+    iaMatch: { porId: { A: { coincide: true }, B: { coincide: false } } },
+  });
+  assert.strictEqual(r.seleccionadas.length, 1);
+  assert.strictEqual(r.seleccionadas[0].id, 'A');
+});
+
+test('la ampliación queda marcada en la comparable, para justificarla en el informe', () => {
+  const candidatas = [...conGrado(1, 'MISMA', 'M'), ...conGrado(3, 'RELACIONADA', 'R')];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [], { iaMatch: veredictoDe(candidatas) });
+
+  const ampliada = r.seleccionadas.find(c => c.entroPorAmpliacion);
+  assert.ok(ampliada, 'ninguna quedó marcada');
+  assert.strictEqual(ampliada.gradoActividad, 'RELACIONADA');
+  assert.match(ampliada.razones, /actividad relacionada/,
+    'la razón visible tiene que decirlo, no solo una bandera interna');
+});
+
+test('la curación pide el grado de actividad y lo guarda', async () => {
+  const { restore, llamadas } = mockGemini(() => true, {
+    grado: (c) => (c.id === 'A' ? 'MISMA' : 'RELACIONADA'),
+  });
+  try {
+    const candidatas = [
+      { id: 'A', name: 'A SA', desc: 'software development services' },
+      { id: 'B', name: 'B SA', desc: 'game publishing' },
+    ];
+    const v = await curateCandidatesWithGemini(candidatas, 'desarrollo de software');
+
+    const enviado = llamadas[0].contents[0].parts[0].text;
+    assert.match(enviado, /"grado":"MISMA"/, 'el prompt tiene que pedir el grado');
+    assert.match(enviado, /RELACIONADA/, 'y explicar el grado intermedio');
+
+    assert.strictEqual(v.porId.A.grado, 'MISMA');
+    assert.strictEqual(v.porId.B.grado, 'RELACIONADA');
+    /* `coincide` se conserva con el sentido de siempre: «es la misma actividad». */
+    assert.strictEqual(v.porId.A.coincide, true);
+    assert.strictEqual(v.porId.B.coincide, false);
+    assert.strictEqual(v.coinciden, 1);
+    assert.strictEqual(v.relacionadas, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('un modelo que contesta con el formato anterior se sigue entendiendo', async () => {
+  /* El mock sin `opciones.grado` responde con `coincide`, como haría un modelo que ignora el
+     campo nuevo. No puede quedar todo el universo descartado por eso. */
+  const { restore } = mockGemini((c) => c.id === 'A');
+  try {
+    const candidatas = [
+      { id: 'A', name: 'A SA', desc: 'software development services' },
+      { id: 'B', name: 'B SA', desc: 'iron ore mining' },
+    ];
+    const v = await curateCandidatesWithGemini(candidatas, 'desarrollo de software');
+    assert.strictEqual(v.porId.A.grado, 'MISMA');
+    assert.strictEqual(v.porId.B.grado, 'DISTINTA');
+    assert.strictEqual(v.coinciden, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('un veredicto guardado sin grados no se reutiliza: se vuelve a curar', async () => {
+  /* Es la trampa del artefacto cacheado: los estudios curados antes de que existiera el grado
+     solo dicen sí/no bajo el criterio estricto de entonces, así que sus «no» mezclan las
+     verdaderamente distintas con las afines. Darlos por buenos dejaría el estudio sin una sola
+     candidata relacionada y la muestra seguiría corta sin que se entienda por qué. */
+  const { restore, llamadas } = mockGemini(() => true, { grado: () => 'RELACIONADA' });
+  try {
+    const candidatas = [
+      { id: 'A', name: 'A SA', desc: 'software development services' },
+      { id: 'B', name: 'B SA', desc: 'game publishing' },
+    ];
+    const viejo = {
+      actividadUsada: 'desarrollo de software',
+      porId: { A: { coincide: true }, B: { coincide: false } },
+    };
+    const v = await curateCandidatesWithGemini(candidatas, 'desarrollo de software',
+      { veredictoPrevio: viejo });
+
+    assert.strictEqual(llamadas.length, 1, 'tenía que volver a consultar');
+    assert.strictEqual(v.reutilizadas, 0, 'no se reutilizó ningún dictamen del formato viejo');
+    assert.strictEqual(v.porId.B.grado, 'RELACIONADA',
+      'y la que antes era un «no» seco ahora puede resultar afín');
+  } finally {
+    restore();
+  }
+});
+
+test('un veredicto que ya trae grados sí se reutiliza', async () => {
+  /* La contrapartida del anterior: volver a curar cuesta dinero, así que solo se rehace lo que
+     de verdad no sirve. */
+  const { restore, llamadas } = mockGemini(() => true, { grado: () => 'MISMA' });
+  try {
+    const candidatas = [
+      { id: 'A', name: 'A SA', desc: 'software development services' },
+      { id: 'B', name: 'B SA', desc: 'software development services' },
+    ];
+    const previo = {
+      actividadUsada: 'desarrollo de software',
+      porId: { A: { grado: 'MISMA', coincide: true }, B: { grado: 'RELACIONADA', coincide: false } },
+    };
+    const v = await curateCandidatesWithGemini(candidatas, 'desarrollo de software',
+      { veredictoPrevio: previo });
+
+    assert.strictEqual(llamadas.length, 0, 'no hacía falta ninguna consulta');
+    assert.strictEqual(v.reutilizadas, 2);
+    assert.strictEqual(v.coinciden, 1);
+    assert.strictEqual(v.relacionadas, 1);
+  } finally {
+    restore();
+  }
 });

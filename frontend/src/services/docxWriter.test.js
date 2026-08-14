@@ -821,21 +821,52 @@ test('la llamada de la cita es la referencia de Word, no un dígito escrito', as
     'el número de la llamada sigue escrito a mano en el párrafo');
 });
 
-test('las fórmulas de ajuste de LaTeX se reemplazan con el motor matemático nativo de Word (OMML)', async () => {
-  const html =
-    '<p>AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))</p>' +
-    '<p>AP Adjustment = (((ANP_TP / TNS_TP) * TNS_comp) - ANP_comp) * (R / (1 + R))</p>';
-  const { doc } = await abrir(html);
-
-  // Verificamos que se hayan creado los bloques de Office Math (m:oMath)
+test('la ecuación marcada sale con el motor matemático de Word', async () => {
+  /* `data-formula` es lo que el extractor declara al leer el PDF. La forma exacta del OMML la
+     fija `formulasOmml.test.js`; aquí sólo importa que la marca llegue a la ecuación. */
+  const { doc } = await abrir('<p data-formula="AP">lo que diga el texto da igual</p>');
   assert.match(doc, /<m:oMath>/, 'falta el bloque oMath de Word');
-  
-  // Verificamos que se hayan creado las fracciones matemáticas nativas (m:f)
-  assert.match(doc, /<m:f>/, 'falta la fracción m:f de Word');
-  
-  // Verificamos que se hayan creado los subíndices matemáticos nativos (m:sSub)
-  assert.match(doc, /<m:sSub>/, 'falta el subíndice m:sSub de Word');
+  assert.match(doc, /<m:t>AP Adjustment = <\/m:t>/, 'no es la ecuación del ajuste de pagar');
+  assert.ok(!doc.includes('lo que diga el texto'),
+    'el texto de respaldo se coló en el documento en vez de la ecuación');
+});
 
-  // Verificamos que se hayan creado los paréntesis de ajuste matemático nativo (m:d)
-  assert.match(doc, /<m:d>/, 'falta el paréntesis m:d de Word');
+test('la marca gana a la heurística de la entrada del índice', async () => {
+  /* Una ecuación seguida de un número parece una entrada del índice si se la juzga por la forma.
+     Un dato declarado por el extractor gana a cualquier prueba sobre el texto. */
+  const { doc } = await abrir('<p data-formula="AR">AR Adjustment ....... 33</p>');
+  assert.match(doc, /<m:oMath>/, 'la ecuación se tomó por una entrada del índice');
+  assert.match(doc, /<m:t>ANC<\/m:t>/, 'no es la ecuación del ajuste de cobrar');
+});
+
+test('la marca sobrevive a que alguien edite el párrafo en la vista previa', async () => {
+  /* La vista previa es un `contentEditable` que reescribe el HTML con `innerHTML`. Los `data-*`
+     se serializan enteros, así que la ecuación no depende de que el texto quede intacto. */
+  const { doc } = await abrir(
+    '<p data-formula="AP">AP Adjustment <span data-campo="anio">2024</span> tocado a mano</p>');
+  assert.match(doc, /<m:oMath>/);
+  assert.ok(!doc.includes('tocado a mano'), 'se emitió el párrafo editado en vez de la ecuación');
+});
+
+test('una plantilla guardada por un lector anterior no se lleva la basura al .docx', async () => {
+  /* Dos formas heredadas. La de los lectores 9 y 10 escribe la ecuación en una línea; la
+     anterior ni la reconoció y dejó lo que salió del PDF: letras colapsadas al mismo code point
+     y rombos de reemplazo. De qué ajuste es lo dice el rótulo que la precede. */
+  const lineal = await abrir(
+    '<p>AR Adjustment = (((ANC_TP / TNS_TP) * TNS_comp) - ANC_comp) * (R / (1 + R))</p>');
+  assert.match(lineal.doc, /<m:oMath>/, 'no se reconoció la ecuación en una línea del lector 9');
+  assert.match(lineal.doc, /<m:t>ANC<\/m:t>/);
+
+  const corrupta = await abrir(
+    '<p>FORMULA AJUSTE CUENTAS POR PAGAR</p>' +
+    '<p>' + '𝐴'.repeat(24) + '�'.repeat(8) + '</p>');
+  assert.match(corrupta.doc, /<m:oMath>/, 'no se reconoció la ecuación corrupta');
+  assert.match(corrupta.doc, /<m:t>ANP<\/m:t>/, 'el rótulo de pagar no decidió el ajuste');
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(corrupta.doc), 'la basura del PDF llegó al .docx');
+});
+
+test('un párrafo normal no se convierte en ecuación', async () => {
+  const { doc } = await abrir(
+    '<p>El ajuste de las cuentas por pagar se calcula sobre el promedio del año</p>');
+  assert.ok(!doc.includes('<m:oMath>'), 'se emitió una ecuación donde sólo había prosa');
 });
