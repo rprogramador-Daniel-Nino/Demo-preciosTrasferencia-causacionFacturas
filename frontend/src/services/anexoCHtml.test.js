@@ -120,7 +120,7 @@ test('sin embudo se publican todos los grupos de la matriz, con su etiqueta', ()
 /* ══════ Localización ══════ */
 
 test('la zona del anexo se localiza por su encabezado, no por la entrada del índice', () => {
-  const z = localizarAnexo(PLANTILLA, 'c');
+  const z = localizarAnexo(PLANTILLA, 'matriz');
   assert.ok(z);
   const zona = PLANTILLA.slice(z.inicio, z.fin);
   assert.ok(zona.includes('11 BIT STUDIOS'), 'la zona contiene los listados');
@@ -129,7 +129,7 @@ test('la zona del anexo se localiza por su encabezado, no por la entrada del ín
 });
 
 test('las tablas del anexo se clasifican en resumen y listados', () => {
-  const z = localizarAnexo(PLANTILLA, 'c');
+  const z = localizarAnexo(PLANTILLA, 'matriz');
   const { resumen, listados } = tablasAnexoC(PLANTILLA.slice(z.inicio, z.fin));
   assert.ok(resumen, 'el resumen se reconoce por su encabezado, que es lo único que tiene');
   assert.strictEqual(listados.length, 3);
@@ -138,7 +138,7 @@ test('las tablas del anexo se clasifican en resumen y listados', () => {
 /* ══════ Reescritura ══════ */
 
 test('un listado se rellena con las compañías, numeradas y con su letra', () => {
-  const z = localizarAnexo(PLANTILLA, 'c');
+  const z = localizarAnexo(PLANTILLA, 'matriz');
   const { listados } = tablasAnexoC(PLANTILLA.slice(z.inicio, z.fin));
   const grupo = {
     clave: 'holding', etiqueta: 'Compañías holding o de grupo (en la razón social)',
@@ -160,7 +160,7 @@ test('el anexo queda con una tabla por grupo y el resumen cuadrado', () => {
   const salida = actualizarAnexoCHtml(PLANTILLA, ESTUDIO, avisos);
   assert.deepStrictEqual(avisos, []);
 
-  const z = localizarAnexo(salida, 'c');
+  const z = localizarAnexo(salida, 'matriz');
   const zona = salida.slice(z.inicio, z.fin);
   const { resumen, listados } = tablasAnexoC(zona);
   assert.strictEqual(listados.length, 4, 'cuatro grupos con compañías');
@@ -181,7 +181,7 @@ test('los conteos del resumen son el tamaño real de cada listado', () => {
   /* El resumen del anexo tiene que cuadrar con su propio detalle: si dijera 327 y el listado
      trajera 2, el anexo se contradice a sí mismo delante de quien lo revise. */
   const salida = actualizarAnexoCHtml(PLANTILLA, ESTUDIO, []);
-  const z = localizarAnexo(salida, 'c');
+  const z = localizarAnexo(salida, 'matriz');
   const zona = salida.slice(z.inicio, z.fin);
   const { resumen, listados } = tablasAnexoC(zona);
   const textoResumen = textoPlanoHtml(zona.slice(resumen.inicio, resumen.fin));

@@ -977,13 +977,23 @@ function esCuotaAgotada(err) {
  *
  * Si se agotan los intentos lanza el último error con `status` adjunto, para que
  * quien reporte el fallo pueda decir de qué se trató en lugar de «error desconocido».
+ *
+ * Se exporta porque el reintento no es asunto de la curación: `/api/gemini` corta a los
+ * 50 s y devuelve un 504 pensado para reintentarse (ver `GEMINI_CORTE_MS` en
+ * `functions/index.js`), así que cualquier llamador que lo ignore pierde su trabajo. El
+ * marcado de la plantilla lo ignoraba y perdía tramos enteros del documento sin marcar.
+ * `etiqueta` solo cambia el prefijo del log, para saber qué se está reintentando.
  */
-async function consultarGemini(prompt, { reintentos, pausaBaseMs }) {
+export async function consultarGemini(prompt, opciones = {}) {
+  const {
+    reintentos = CURACION_REINTENTOS, pausaBaseMs = CURACION_PAUSA_BASE_MS,
+    modelo = GEMINI_MODELO_CURACION, etiqueta = 'curación IA',
+  } = opciones;
   let ultimo;
   for (let intento = 0; intento <= reintentos; intento++) {
     try {
       const respuesta = await axios.post('/api/gemini', {
-        model: GEMINI_MODELO_CURACION,
+        model: modelo,
         contents: [{ parts: [{ text: prompt }] }],
       });
       /* todas las partes, no solo la primera: los modelos parten la respuesta */
@@ -1002,7 +1012,7 @@ async function consultarGemini(prompt, { reintentos, pausaBaseMs }) {
       /* espera creciente con jitter, para que los lotes en vuelo no vuelvan a
          chocar todos en el mismo instante */
       const espera = pausaBaseMs * (2 ** intento) * (0.75 + Math.random() * 0.5);
-      console.warn(`[curación IA] ${status ? 'HTTP ' + status : 'fallo de red'}; ` +
+      console.warn(`[${etiqueta}] ${status ? 'HTTP ' + status : 'fallo de red'}; ` +
         `reintento ${intento + 1} de ${reintentos} en ${Math.round(espera / 1000)} s`);
       await dormir(espera);
     }

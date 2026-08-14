@@ -86,6 +86,34 @@ test('el anexo cierra en el final del documento si no hay ANEXO C', () => {
   assert.strictEqual(z.fin, html.length);
 });
 
+test('el anexo se localiza por su nombre aunque la plantilla lo numere de otro modo', () => {
+  /* La numeración es de cada informe: el de MC Internacional lleva sus anexos A, C, D, E, F
+     —sin B— y ahí las descripciones de comparables son el ANEXO C. Buscando la letra, este
+     anexo no se rellenaba y el informe se radicaba con las comparables del cliente anterior. */
+  const html = '<h1>ANEXO A. Estados Financieros</h1><p>eeff</p>'
+    + '<h1>ANEXO C. Descripciones de comparables y Estados Financieros</h1>'
+    + bloque('AKATSUKI INC.', 'Akatsuki se dedica al juego.', RESULTADOS_AKATSUKI, BALANCE_AKATSUKI)
+    + '<h1>ANEXO D. Matriz de Rechazo</h1><p>matriz</p>';
+
+  const z = localizarAnexoB(html);
+  assert.ok(z, 'tiene que encontrarlo');
+  assert.strictEqual(z.letra, 'C', 'y saber con qué letra lo llama esta plantilla');
+  const zona = html.slice(z.inicio, z.fin);
+  assert.ok(zona.includes('AKATSUKI'), 'la zona son sus bloques');
+  assert.ok(!zona.includes('ANEXO D'), 'y cierra antes de la matriz de rechazo');
+  assert.ok(!zona.includes('eeff'), 'sin tocar el anexo de estados financieros');
+});
+
+test('el anexo de comparables no se confunde con el de estados financieros', () => {
+  /* Los dos títulos dicen «Estados Financieros». Si el genérico ganara, las descripciones se
+     escribirían sobre el anexo del contribuyente. */
+  const html = '<h1>ANEXO A. Estados Financieros</h1><p>eeff del contribuyente</p>'
+    + '<h1>ANEXO C. Descripciones de comparables y Estados Financieros</h1><p>fichas</p>';
+  const z = localizarAnexoB(html);
+  assert.strictEqual(z.letra, 'C');
+  assert.ok(!html.slice(z.inicio, z.fin).includes('eeff del contribuyente'));
+});
+
 /* ══════ Bloques ══════ */
 
 test('cada bloque agrupa la tabla del nombre con sus dos tablas de cifras', () => {
