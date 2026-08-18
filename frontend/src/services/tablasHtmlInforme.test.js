@@ -648,6 +648,34 @@ test('localizarHitosHtml: un título ausente no bloquea los que vienen después'
   assert.ok(hitos[3], '"Conclusiones y Perspectivas" también debe encontrarse');
 });
 
+test('reemplazarHuecosHtml inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {
+  const html = '<h2>Encabezado A</h2><p>Prosa de A.</p><h2>Encabezado C</h2>';
+  const avisos = [];
+  const salida = reemplazarHuecosHtml(
+    html,
+    ['Encabezado A', 'Encabezado B', 'Encabezado C'],
+    [() => null, () => '<p>Contenido de B, sin ancla propia.</p>'],
+    avisos, 'III.X'
+  );
+  assert.match(salida, /Contenido de B, sin ancla propia\./);
+  assert.ok(salida.indexOf('Contenido de B') < salida.indexOf('Encabezado C'));
+  assert.ok(avisos.some((a) => /no se encontró "Encabezado B" o "Encabezado C"/.test(a)));
+  assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
+});
+
+test('reemplazarHuecosHtml NO inserta de respaldo si ni siquiera el límite final aparece', () => {
+  const html = '<p>Un documento que no tiene nada que ver con esta cadena de títulos.</p>';
+  const avisos = [];
+  const salida = reemplazarHuecosHtml(
+    html,
+    ['Encabezado A', 'Encabezado B', 'Encabezado C'],
+    [() => '<p>No debería aparecer.</p>', () => '<p>Tampoco esto.</p>'],
+    avisos, 'III.X'
+  );
+  assert.doesNotMatch(salida, /No debería aparecer/);
+  assert.doesNotMatch(salida, /Tampoco esto/);
+});
+
 test('reemplazarHuecosHtml protege una tabla que cae justo después de un hito', () => {
   const html = '<h2>Encabezado A</h2><table><tr><td>dato real</td></tr></table><h2>Encabezado B</h2>';
   const salida = reemplazarHuecosHtml(html, ['Encabezado A', 'Encabezado B'], [() => '<p>marcador</p>'], []);

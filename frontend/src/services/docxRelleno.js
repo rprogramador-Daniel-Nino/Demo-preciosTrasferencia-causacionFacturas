@@ -953,6 +953,24 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
       + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
     let salida = actual;
+
+    /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
+       siguiente— no aparece en la plantilla bajo NINGUNA redacción: no está mal escrito,
+       la sección nunca existió ahí (plantilla más vieja que la sección que se quiere
+       insertar). El último título de la lista es siempre un límite —sin generador propio
+       en `contenidos`—, así que si se encuentra sirve de sitio de respaldo: mejor un
+       párrafo al final de esta sección que perder en silencio un contenido que sí se
+       generó. Se ajusta con cada edición que caiga antes de él, en el mismo recorrido de
+       atrás hacia adelante, para no apuntar a un índice viejo. Misma lógica que
+       `reemplazarHuecosHtml` de `tablasHtmlInforme.js`. */
+    /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
+       nunca existió aquí" de "la plantilla no tiene nada que ver con esta cadena de
+       títulos" (la mayoría de las plantillas de prueba, por ejemplo): insertar al final
+       del documento sería un despropósito en ese segundo caso. El respaldo solo se activa
+       cuando el límite final SÍ se encontró. */
+    const ultimoHito = hitos[hitos.length - 1];
+    let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
+
     for (let i = contenidos.length - 1; i >= 0; i -= 1) {
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
@@ -960,6 +978,21 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
         const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
         console.warn('[docxRelleno] ' + aviso);
         if (Array.isArray(avisos)) avisos.push(aviso);
+        if (cursorRespaldo !== null) {
+          const nuevo = contenidos[i]('');
+          if (nuevo !== null) {
+            console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+              '": sin ancla, insertado de respaldo al final de la sección');
+            if (Array.isArray(avisos)) {
+              avisos.push(
+                (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+                'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
+                'revisa el orden antes de radicar'
+              );
+            }
+            salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
+          }
+        }
         continue;
       }
       const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
@@ -970,6 +1003,9 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       }
       console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
         + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+      if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
+        cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
+      }
       salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
     }
     return salida;
