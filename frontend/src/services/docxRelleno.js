@@ -952,6 +952,26 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     const hitos = localizarHitos(actual, titulos);
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
       + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+    /* UN aviso por rótulo ausente, y no uno por cada par de rótulos consecutivos que no
+       se pudo delimitar. Cada rótulo delimita dos apartados —el que cierra y el que
+       abre—, así que el aviso por pares repetía la misma causa dos veces y una cadena de
+       siete rótulos rota por el primero producía seis líneas idénticas en el fondo. Lo
+       que quien radica necesita saber es qué rótulo escribe distinto su plantilla: eso se
+       arregla una vez y descuelga todos los apartados que dependían de él. */
+    titulos.forEach((titulo, i) => {
+      if (hitos[i]) return;
+      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+        + '», así que los apartados que delimita se quedan como están en la plantilla';
+      console.warn('[docxRelleno] ' + aviso);
+      if (!Array.isArray(avisos)) return;
+      /* Y ni siquiera una vez por sección: el rótulo que CIERRA una cadena es el que ABRE
+         la siguiente —«Análisis del Sector» cierra la economía colombiana y abre el
+         sector—, así que sin esto el mismo rótulo ausente se avisa dos veces, con dos
+         encabezados distintos y la misma causa detrás. Se compara por el rótulo
+         entrecomillado, que es lo único que el usuario tiene que ir a corregir. */
+      if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+      avisos.push(aviso);
+    });
     let salida = actual;
 
     /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
@@ -975,9 +995,8 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
       if (!hitoActual || !hitoSiguiente) {
-        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
-        console.warn('[docxRelleno] ' + aviso);
-        if (Array.isArray(avisos)) avisos.push(aviso);
+        /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando
+           el rótulo ausente que lo causa. Aquí solo queda el respaldo. */
         if (cursorRespaldo !== null) {
           const nuevo = contenidos[i]('');
           if (nuevo !== null) {

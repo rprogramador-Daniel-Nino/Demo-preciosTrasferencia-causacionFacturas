@@ -1316,6 +1316,29 @@ test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanza
   assert.ok(hitos[2], 'un título ausente no debe bloquear los que vienen después');
 });
 
+/* Un rótulo que la plantilla escribe de otro modo no puede arrastrar a los que vienen
+   detrás. Antes el recorrido esperaba el rótulo `objetivo` sin avanzar, así que se comía
+   el resto del documento y toda la cadena salía null; medido sobre el informe de un
+   segundo cliente daba 0 de 7 hitos con dos de esos rótulos presentes en el texto. */
+test('localizarHitos no pierde los hitos que siguen a un rótulo ausente', () => {
+  const xml = parrafoXml('Uno') + parrafoXml('Tres') + parrafoXml('Cuatro');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres', 'Cuatro']);
+  assert.ok(hitos[0], 'el primero se encuentra');
+  assert.equal(hitos[1], null, '«Dos» no está en esta plantilla');
+  assert.ok(hitos[2], '«Tres» se encuentra aunque falte el rótulo anterior');
+  assert.ok(hitos[3], 'y «Cuatro» también');
+  assert.ok(hitos[2].inicio < hitos[3].inicio, 'en orden documental');
+});
+
+test('localizarHitos sigue prefiriendo el rótulo esperado cuando sí está', () => {
+  /* El look-ahead no puede adelantarse: con los dos rótulos presentes, cada uno tiene
+     que caer en su propio párrafo y en su propia posición de la lista. */
+  const xml = parrafoXml('Uno') + parrafoXml('Dos');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos']);
+  assert.equal(hitos[0].inicio, xml.indexOf(parrafoXml('Uno')));
+  assert.equal(hitos[1].inicio, xml.indexOf(parrafoXml('Dos')));
+});
+
 test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {
   const entradaToc = '<w:p><w:r><w:t>Uno</w:t></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
   const xml = entradaToc + parrafoXml('Uno') + parrafoXml('Dos');
@@ -1377,7 +1400,7 @@ test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falt
   assert.match(doc.xml, /Contenido de B, sin ancla propia\./);
   /* Antes del límite final, no después: se insertó DENTRO de la sección. */
   assert.ok(doc.xml.indexOf('Contenido de B') < doc.xml.indexOf('Encabezado C'));
-  assert.ok(avisos.some((a) => /no se encontró "Encabezado B" o "Encabezado C"/.test(a)));
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
   assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
 });
 
@@ -1395,6 +1418,35 @@ test('reemplazarPorHitos NO inserta de respaldo si ni siquiera el límite final 
   );
   assert.doesNotMatch(doc.xml, /No debería aparecer/);
   assert.doesNotMatch(doc.xml, /Tampoco esto/);
+});
+
+test('reemplazarPorHitos avisa una vez por rótulo ausente, no una por par consecutivo', () => {
+  /* Cada rótulo delimita DOS apartados, así que el aviso por pares contaba la misma
+     causa dos veces: con «Dos» y «Tres» ausentes salían tres avisos de par para dos
+     rótulos, y una cadena de siete rotos por el primero producía seis líneas. Se filtran
+     los avisos de respaldo, que son otra cosa y sí van uno por apartado insertado. */
+  const xml = parrafoXml('Uno') + parrafoXml('Prosa.') + parrafoXml('Cuatro');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(doc, ['Uno', 'Dos', 'Tres', 'Cuatro'],
+    [() => 'a', () => 'b', () => 'c'], avisos, 'III.B');
+  const porRotulo = avisos.filter((a) => a.includes('no se encontró el rótulo'));
+  assert.equal(porRotulo.length, 2, 'uno por cada rótulo que falta, no tres por los pares');
+  assert.ok(porRotulo.some((a) => a.includes('«Dos»')), 'nombra el rótulo «Dos»');
+  assert.ok(porRotulo.some((a) => a.includes('«Tres»')), 'nombra el rótulo «Tres»');
+});
+
+/* El respaldo INSERTA en el cursor, no reemplaza el tramo, y esa distinción es la que
+   permite recuperar el contenido sin arriesgar nada: cuando el rótulo ausente solo está
+   escrito de otro modo, su subsección sigue en el documento y debe sobrevivir. */
+test('el respaldo no se lleva la subsección intermedia cuyo rótulo no se reconoció', () => {
+  const xml = parrafoXml('Uno') + parrafoXml('Rotulo escrito de otro modo')
+    + parrafoXml('Prosa que hay que conservar.') + parrafoXml('Cuatro');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Uno', 'Dos', 'Cuatro'],
+    [() => parrafoXml('nuevo'), () => parrafoXml('nuevo')], [], 'III.B');
+  assert.match(doc.xml, /Prosa que hay que conservar\./, 'no se borra el texto del cliente');
+  assert.match(doc.xml, /Rotulo escrito de otro modo/, 'ni su encabezado');
 });
 
 test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {

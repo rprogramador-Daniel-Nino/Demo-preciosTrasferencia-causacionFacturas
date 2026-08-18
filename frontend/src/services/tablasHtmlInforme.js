@@ -660,6 +660,20 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
   console.log('[tablasHtmlInforme] ' + (nombreParaAvisos || '') + ': hitos encontrados '
     + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
 
+  /* UN aviso por rótulo ausente, no uno por par consecutivo. Mismo criterio y mismo
+     texto que `reemplazarPorHitos` en `docxRelleno.js`, donde está la explicación. */
+  titulos.forEach((titulo, i) => {
+    if (hitos[i]) return;
+    const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+      + '», así que los apartados que delimita se quedan como están en la plantilla';
+    console.warn('[tablasHtmlInforme] ' + aviso);
+    if (!Array.isArray(avisos)) return;
+    /* Un rótulo cierra una cadena y abre la siguiente, así que sin esto se avisaría dos
+       veces del mismo. Ver la nota de `reemplazarPorHitos` en `docxRelleno.js`. */
+    if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+    avisos.push(aviso);
+  });
+
   /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
      siguiente— no aparece en el documento de referencia bajo NINGUNA redacción (no es
      que esté mal escrito: la sección nunca existió ahí, típico de una referencia más
@@ -683,9 +697,8 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
     const hitoActual = hitos[i];
     const hitoSiguiente = hitos[i + 1];
     if (!hitoActual || !hitoSiguiente) {
-      const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
-      console.warn('[tablasHtmlInforme] ' + aviso);
-      if (Array.isArray(avisos)) avisos.push(aviso);
+      /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando el
+         rótulo ausente que lo causa. Aquí solo queda el respaldo. */
       /* Sin el límite final tampoco hay dónde poner un respaldo: seguir con el
          comportamiento de siempre (avisar y no tocar nada). */
       if (cursorRespaldo !== null) {
