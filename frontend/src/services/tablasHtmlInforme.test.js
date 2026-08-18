@@ -630,6 +630,24 @@ test('localizarHitosHtml no confunde un párrafo de prosa largo con el título r
   assert.equal(hitos[1].inicio, html.indexOf('<h3>Inflación Global'), 'encontró el encabezado real, no el párrafo de prosa que lo menciona de pasada');
 });
 
+test('localizarHitosHtml: un título ausente no bloquea los que vienen después', () => {
+  /* Un informe de referencia que predata un título —el caso de una plantilla más
+     vieja que la sección que se busca insertar— no puede dejar sin buscar TODO lo
+     que sigue: antes el cursor se quedaba clavado en el título ausente para siempre. */
+  const html = [
+    '<h3>Análisis del Sector</h3>',
+    '<h3>Datos Clave del Sector</h3>',
+    '<h3>Conclusiones y Perspectivas</h3>',
+  ].join('');
+  const hitos = localizarHitosHtml(
+    html, ['Análisis del Sector', 'Comportamiento del Sector', 'Datos Clave del Sector', 'Conclusiones y Perspectivas']
+  );
+  assert.ok(hitos[0]);
+  assert.equal(hitos[1], null, '"Comportamiento del Sector" no está en este documento');
+  assert.ok(hitos[2], '"Datos Clave del Sector" sí está, y debe encontrarse pese al hueco anterior');
+  assert.ok(hitos[3], '"Conclusiones y Perspectivas" también debe encontrarse');
+});
+
 test('reemplazarHuecosHtml protege una tabla que cae justo después de un hito', () => {
   const html = '<h2>Encabezado A</h2><table><tr><td>dato real</td></tr></table><h2>Encabezado B</h2>';
   const salida = reemplazarHuecosHtml(html, ['Encabezado A', 'Encabezado B'], [() => '<p>marcador</p>'], []);

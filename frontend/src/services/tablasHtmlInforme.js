@@ -621,20 +621,33 @@ export function localizarHitosHtml(html, titulos) {
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
+  /* Candidatos: cada bloque con pinta de título, en orden de aparición, recogidos de
+     una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
+     por el documento: si ese título no aparecía —o aparecía con otra redacción, como
+     en un informe de referencia más viejo que el título que se busca—, el cursor se
+     quedaba clavado ahí y NINGUNO de los títulos siguientes llegaba siquiera a
+     probarse, aunque sí existieran más adelante. Es lo mismo que le pasa a
+     `localizarHitos` de `docxRelleno.js`, y se arregla igual: con los candidatos ya
+     listados, un título que falta se salta sin mover el cursor de los que le siguen. */
+  const candidatos = [];
   RX_BLOQUE.lastIndex = 0;
-  let objetivo = 0;
   let m;
-  while (objetivo < claves.length && (m = RX_BLOQUE.exec(texto)) !== null) {
+  while ((m = RX_BLOQUE.exec(texto)) !== null) {
     const plano = textoPlanoHtml(m[2]);
     if (pareceEntradaDeToc(plano) || plano.length > 160) continue;
-    const clave = claveTitulo(plano);
-    if (clave.includes(claves[objetivo])) {
-      let finPropio = m.index + m[0].length;
-      const finTabla = finDeTablaInmediataHtml(texto, finPropio);
-      if (finTabla >= 0) finPropio = finTabla;
-      resultado[objetivo] = { inicio: m.index, finPropio };
-      objetivo += 1;
-    }
+    candidatos.push({ inicio: m.index, fin: m.index + m[0].length, clave: claveTitulo(plano) });
+  }
+
+  let desde = 0;
+  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+    let k = desde;
+    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    if (k >= candidatos.length) continue;
+    let finPropio = candidatos[k].fin;
+    const finTabla = finDeTablaInmediataHtml(texto, finPropio);
+    if (finTabla >= 0) finPropio = finTabla;
+    resultado[objetivo] = { inicio: candidatos[k].inicio, finPropio };
+    desde = k + 1;
   }
   return resultado;
 }

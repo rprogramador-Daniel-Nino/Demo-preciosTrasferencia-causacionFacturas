@@ -1310,6 +1310,10 @@ test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanza
   const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres']);
   assert.ok(hitos[0]);
   assert.equal(hitos[1], null);
+  /* Que "Dos" no aparezca —una plantilla de referencia más vieja que ese título— no
+     puede impedir que "Tres" sí se encuentre después: antes el cursor se quedaba
+     clavado en "Dos" para siempre y ningún título posterior llegaba a probarse. */
+  assert.ok(hitos[2], 'un título ausente no debe bloquear los que vienen después');
 });
 
 test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {

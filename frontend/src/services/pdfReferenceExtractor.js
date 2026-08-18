@@ -345,6 +345,24 @@ export async function extraerReferencia(datos) {
     }
   }
 
+  /* Un artefacto real —el logo del encabezado— se repite en casi todas las páginas del
+     documento. Una imagen suelta del cuerpo que el PDF no etiquetó con un nodo Figure
+     (una foto, un gráfico) se cuela por el mismo hueco: nada más arriba distingue "no
+     tiene Figure porque es el logo" de "no tiene Figure porque el PDF está mal
+     etiquetado". Sin este filtro esa imagen —de cualquier tamaño, a veces más alta que
+     media página— se sumaba al bloque de encabezado y se repetía en TODAS las páginas
+     junto al logo real, invadiendo el cuerpo. */
+  const minRepeticiones = Math.max(3, Math.round(leidas.length * 0.2));
+  const artefactosFiltrados = artefactos.filter((a) => a.paginas.length >= minRepeticiones);
+  if (artefactosFiltrados.length < artefactos.length) {
+    console.warn(
+      '[pdfReferenceExtractor] se descartó(aron) ' +
+      (artefactos.length - artefactosFiltrados.length) + ' imagen(es) que no se repitió(eron) ' +
+      'lo bastante para ser el logo del encabezado (mínimo ' + minRepeticiones + ' de ' +
+      leidas.length + ' páginas).'
+    );
+  }
+
   /* Cada figura se resuelve donde el árbol la declaró. Una figura sin dibujo que
      la reclame —el emparejamiento falló, o el objeto no se pudo decodificar— se
      reporta en vez de desaparecer: en esta ruta el silencio ya costó dos fallos
@@ -371,7 +389,7 @@ export async function extraerReferencia(datos) {
   /* Lado y primera página del encabezado, tomados del PDF y no supuestos. Se anotan en
      el HTML para que la exportación y la vista previa los coloquen igual sin volver a
      leer el PDF, que ya no está cuando se descarga el documento. */
-  const primerArtefacto = artefactos[0];
+  const primerArtefacto = artefactosFiltrados[0];
   const ladoEncabezado = primerArtefacto
     ? (primerArtefacto.centroX > primerArtefacto.anchoPagina * 0.6 ? 'derecha'
       : primerArtefacto.centroX < primerArtefacto.anchoPagina * 0.4 ? 'izquierda' : 'centro')
@@ -381,10 +399,10 @@ export async function extraerReferencia(datos) {
      grande de la portada, que es lo que se veía en el documento generado. */
   const desdePagina = primerArtefacto ? Math.min(...primerArtefacto.paginas) : 1;
 
-  const cabecera = artefactos.length
+  const cabecera = artefactosFiltrados.length
     ? '<div data-encabezado="1" data-lado="' + ladoEncabezado + '"' +
       ' data-desde-pagina="' + desdePagina + '">' +
-      artefactos.map((a) => a.marca).join('') + '</div>'
+      artefactosFiltrados.map((a) => a.marca).join('') + '</div>'
     : '';
 
   /* El cuerpo del documento viaja dentro del propio HTML. Es lo que permite que
