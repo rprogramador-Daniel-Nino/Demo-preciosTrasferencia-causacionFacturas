@@ -182,6 +182,19 @@ test('un bucle sin elementos no deja filas ni marcadores', async () => {
   assert.ok(!texto.includes('nombre'), 'y sin restos del bucle');
 });
 
+test('un bucle huérfano en la plantilla no tumba el render completo', async () => {
+  /* Si el marcado dejó `{/coleccion}` sin su `{#coleccion}` -algo que pasaba en
+     silencio cuando la celda de apertura no tenía `<w:t>`, ver `escribirEnCelda` en
+     `docxPlantilla.js`-, Docxtemplater revienta con "Unopened loop" y ningún informe se
+     genera, aunque el resto del documento esté perfecto. */
+  const buf = await plantilla([parrafo('Antes. {/razonesRechazo} Después.')]);
+  const { zip, avisosTablas } = renderizarDocx(buf, ESTUDIO, { colecciones: { razonesRechazo: [] } });
+  const texto = textoDe(zip, 'word/document.xml');
+  assert.ok(!texto.includes('{'), 'el tag suelto se retira en vez de reventar el render');
+  assert.ok(texto.includes('Antes.') && texto.includes('Después.'), 'el resto del párrafo no se toca');
+  assert.ok(avisosTablas.some((a) => a.includes('razonesRechazo')), 'se avisa del bucle desbalanceado');
+});
+
 test('dentro de un bucle manda el elemento, no el estudio', async () => {
   /* `{ent}` dentro de una fila de comparables debe ser el de la fila si la
      colección lo trae; si no, cae al estudio. */

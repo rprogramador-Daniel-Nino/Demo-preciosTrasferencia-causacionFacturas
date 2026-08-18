@@ -1610,6 +1610,28 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
  *          generar, qué campos salieron sin dato y qué tablas no se encontraron en la
  *          plantilla, para poder avisar de ambas cosas antes de radicar.
  */
+/**
+ * Si el marcado dejó un bucle de Docxtemplater desbalanceado —una celda sin `<w:t>`
+ * donde escribir `{#coleccion}` o `{/coleccion}` se lo tragó en silencio, ver
+ * `escribirEnCelda` en `docxPlantilla.js`—, Docxtemplater revienta el render COMPLETO
+ * con "Unopened/Unclosed loop" aunque el resto del documento esté perfecto. Se detecta
+ * contando aperturas y cierres de la colección y, si no cuadran, se retira el tag suelto
+ * en vez de tumbar la generación entera de un informe que se radica ante la DIAN: la
+ * fila que debía repetirse se queda como texto fijo de la plantilla.
+ */
+function quitarBucleSiDesbalanceado(xml, nombre, avisos) {
+  const apertura = '{#' + nombre + '}';
+  const cierre = '{/' + nombre + '}';
+  const nAbre = xml.split(apertura).length - 1;
+  const nCierra = xml.split(cierre).length - 1;
+  if (nAbre === nCierra) return xml;
+  if (Array.isArray(avisos)) {
+    avisos.push(`el bucle "${nombre}" de la plantilla quedó desbalanceado, se ignoró para no bloquear la generación`);
+  }
+  console.warn(`[relleno] bucle "${nombre}" desbalanceado (${nAbre} apertura(s), ${nCierra} cierre(s)); se retira`);
+  return xml.split(apertura).join('').split(cierre).join('');
+}
+
 export function renderizarDocx(binario, estudio, opciones = {}) {
   const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
   const camposVacios = new Set();
@@ -1628,6 +1650,9 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
+  Object.keys(colecciones).forEach((nombre) => {
+    xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
+  });
   zip.file(RUTA_DOC, xml);
 
   const doc = new Docxtemplater(zip, {
