@@ -90,6 +90,30 @@ test('el CSS y el JavaScript se descartan, pero no se llevan lo que sigue', () =
   assert.equal(r2.hijos[1].etiqueta, 'p');
 });
 
+test('un <style>/<script> sin cierre no se traga el resto del documento', () => {
+  /* Antes, sin el cierre de `</style>`/`</script>` en lo que quedaba de HTML, se
+     descartaba TODO el texto restante (`ultimo = html.length`). En un documento de
+     cientos de páginas eso podía vaciar el resto del informe en el .docx sin ningún
+     aviso. Ahora el bloque se trata como vacío y el parseo sigue con normalidad. */
+  const original = console.warn;
+  const avisos = [];
+  console.warn = (msg) => avisos.push(msg);
+  try {
+    /* El contenido crudo que sigue a la etiqueta sin cerrar puede colarse como texto
+       —es el precio de no perder el resto del documento—, así que se comprueba que
+       "sigue el informe" está presente, no que sea el único texto. */
+    const r1 = htmlAArbol('<style>.x { color: red; }<p>sigue el informe</p>');
+    assert(textoDe(r1).includes('sigue el informe'));
+    const r2 = htmlAArbol('<script>if (a < b) x();<p>sigue el informe</p>');
+    assert(textoDe(r2).includes('sigue el informe'));
+    assert.equal(avisos.length, 2, 'debe avisar de cada etiqueta cruda sin cerrar');
+    assert.match(avisos[0], /<style>/);
+    assert.match(avisos[1], /<script>/);
+  } finally {
+    console.warn = original;
+  }
+});
+
 test('una declaración no es contenido', () => {
   /* DOCTYPE, comentarios HTML de declaración, etc. son marcas de control, no contenido. */
   assert.equal(textoDe(htmlAArbol('<!DOCTYPE html><p>a</p>')), 'a');

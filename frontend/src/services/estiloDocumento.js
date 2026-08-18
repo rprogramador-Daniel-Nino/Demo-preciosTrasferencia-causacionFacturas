@@ -26,9 +26,9 @@ export const HOJA = {
   pie: '2cm',
   /* Distancia del borde del papel al encabezado y al pie. */
   borde: '1.25cm',
-  /* Con encabezado la caja de texto arranca más abajo: el borde más el alto del logo. */
+  /* Alto del logo cuando el extractor no anotó ninguno. Con encabezado la caja de
+     texto arranca más abajo: ver `arribaConLogoCm`, que sí usa el alto real. */
   altoEncabezado: '1.5cm',
-  conEncabezado: '3.4cm',
 };
 
 /* OOXML mide en twips: 1/20 de punto, 1440 por pulgada, 566,929 por centímetro. La hoja del
@@ -62,6 +62,31 @@ export const HOJA_TWIPS = {
   pie: cmATwips(medidaEnCm(HOJA.pie)),
   borde: cmATwips(medidaEnCm(HOJA.borde)),
 };
+
+/* Aire entre el borde inferior del logo y la primera línea de texto. Sin esto un logo
+   que mida justo lo que el hueco reserva quedaría pegado al párrafo siguiente. */
+const AIRE_TRAS_LOGO_CM = 0.3;
+
+/* Cuánto hay que bajar el inicio del texto para que quepa un logo de este alto, en cm.
+   Una sola cuenta para la previsualización (`cssDeHojas`) y el .docx (`docxWriter.js`):
+   antes cada uno la hacía por su lado —o no la hacía— y un logo más alto que el hueco
+   fijo de 3,4cm (pensado para el 1,5cm por defecto) invadía el cuerpo en los dos sitios
+   por igual, sin que ninguno se enterara del alto real del otro. */
+export function arribaConLogoCm(altoLogoCm) {
+  const alto = Number(altoLogoCm) > 0 ? Number(altoLogoCm) : medidaEnCm(HOJA.altoEncabezado);
+  return medidaEnCm(HOJA.borde) + alto + AIRE_TRAS_LOGO_CM;
+}
+
+/* El alto del logo tal como lo dejó el extractor en el `style` de sus imágenes: puede
+   haber más de una (el encabezado concatena todos los artefactos que encontró), así que
+   se toma la más alta, no la primera — una imagen chica adelante no puede esconder que
+   otra más atrás desborda el hueco reservado. */
+export function altoMaximoDeEncabezado(htmlEncabezado) {
+  const alturas = [...String(htmlEncabezado || '').matchAll(/height:\s*([\d.]+)cm/g)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return alturas.length ? Math.max(...alturas) : null;
+}
 
 export const REGLAS_DOCUMENTO = [
   ['h1', 'font-size:1.5em;color:#0E1726;border-bottom:2px solid #0FA3A1;padding-bottom:6px;margin:0;padding:0'],
@@ -141,12 +166,15 @@ export function cuerpoDe(base) {
 
    `logo` es la data URL del encabezado, o null si el documento no trae. */
 export function cssDeHojas({ base, logo, lado = 'centro', enLaPortada = true, alto } = {}) {
-  const arriba = logo ? HOJA.conEncabezado : HOJA.margen;
   /* El logo se ancla al lado que el PDF le da, y con el alto que le da. Antes iba
      siempre a la izquierda y a 1,5 cm fijos, y el del informe de referencia va a la
      derecha y mide 1,23 cm. */
   const anclaje = lado === 'derecha' ? 'right center' : lado === 'izquierda' ? 'left center' : 'center';
   const altoLogo = alto || HOJA.altoEncabezado;
+  /* El hueco de arriba se calcula sobre el alto REAL del logo, no sobre una constante
+     pensada para el 1,5cm por defecto: un logo de 5,53cm (el del informe de referencia)
+     o uno mayor invadía el cuerpo aunque este número diga lo contrario. */
+  const arriba = logo ? arribaConLogoCm(medidaEnCm(altoLogo)).toFixed(2) + 'cm' : HOJA.margen;
   return (
     /* Fondo gris de mesa de trabajo: es lo que hace que la hoja se lea como hoja.
        El alto va acotado y el scroll es interno: son 112 hojas de 27.9 cm, y sin esto

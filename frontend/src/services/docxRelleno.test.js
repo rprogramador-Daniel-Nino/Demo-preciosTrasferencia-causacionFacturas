@@ -1310,6 +1310,10 @@ test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanza
   const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres']);
   assert.ok(hitos[0]);
   assert.equal(hitos[1], null);
+  /* Que "Dos" no aparezca —una plantilla de referencia más vieja que ese título— no
+     puede impedir que "Tres" sí se encuentre después: antes el cursor se quedaba
+     clavado en "Dos" para siempre y ningún título posterior llegaba a probarse. */
+  assert.ok(hitos[2], 'un título ausente no debe bloquear los que vienen después');
 });
 
 test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {
@@ -1351,6 +1355,46 @@ test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () =
   reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => 'nunca se usa'], avisos, 'III.A');
   assert.equal(avisos.length, 1);
   assert.match(avisos[0], /III\.A/);
+});
+
+test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {
+  /* Una plantilla más vieja que "Encabezado B" no puede impedir que el contenido de
+     "Encabezado B" se inserte en algún lado: se apoya en "Encabezado C", que sí existe
+     (el límite de la sección siguiente), en vez de perderse en silencio. */
+  const xml = [
+    parrafoXml('Encabezado A'),
+    parrafoXml('Prosa de A.'),
+    parrafoXml('Encabezado C'),
+  ].join('');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(
+    doc,
+    ['Encabezado A', 'Encabezado B', 'Encabezado C'],
+    [() => null, () => parrafoXml('Contenido de B, sin ancla propia.')],
+    avisos, 'III.X'
+  );
+  assert.match(doc.xml, /Contenido de B, sin ancla propia\./);
+  /* Antes del límite final, no después: se insertó DENTRO de la sección. */
+  assert.ok(doc.xml.indexOf('Contenido de B') < doc.xml.indexOf('Encabezado C'));
+  assert.ok(avisos.some((a) => /no se encontró "Encabezado B" o "Encabezado C"/.test(a)));
+  assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
+});
+
+test('reemplazarPorHitos NO inserta de respaldo si ni siquiera el límite final aparece', () => {
+  /* Sin ningún título de la cadena en el documento, no hay evidencia de que esta
+     sección exista aquí en absoluto: mejor no tocar nada que adivinar un lugar. */
+  const xml = parrafoXml('Un documento que no tiene nada que ver con esta cadena de títulos.');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(
+    doc,
+    ['Encabezado A', 'Encabezado B', 'Encabezado C'],
+    [() => parrafoXml('No debería aparecer.'), () => parrafoXml('Tampoco esto.')],
+    avisos, 'III.X'
+  );
+  assert.doesNotMatch(doc.xml, /No debería aparecer/);
+  assert.doesNotMatch(doc.xml, /Tampoco esto/);
 });
 
 test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {

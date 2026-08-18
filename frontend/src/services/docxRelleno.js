@@ -888,10 +888,17 @@ export function localizarHitos(xml, titulos) {
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
+  /* Candidatos: cada párrafo con pinta de título, en orden de aparición, recogidos de
+     una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
+     por el documento: si ese título no aparecía —o aparecía con otra redacción, como
+     en una plantilla de referencia más vieja que el título que se busca—, el cursor se
+     quedaba clavado ahí y NINGUNO de los títulos siguientes llegaba siquiera a
+     probarse, aunque sí existieran más adelante. Con los candidatos ya listados, un
+     título que falta se salta sin mover el cursor de búsqueda de los que le siguen. */
+  const candidatos = [];
   const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
-  let objetivo = 0;
   let m;
-  while (objetivo < claves.length && (m = rxParrafo.exec(texto)) !== null) {
+  while ((m = rxParrafo.exec(texto)) !== null) {
     if (m[0].includes('PAGEREF')) continue;
     const textoParrafo = textoPlanoOoxml(m[0]);
     /* Un párrafo de prosa puede mencionar de pasada el nombre de un hito posterior
@@ -900,19 +907,28 @@ export function localizarHitos(xml, titulos) {
        (encabezados de apartado, nombres de tabla) siempre son cortos; se descarta
        cualquier candidato que no lo sea y se sigue buscando uno más adelante. */
     if (textoParrafo.length > 160) continue;
-    const clave = claveTitulo(textoParrafo);
-    if (clave.includes(claves[objetivo])) {
-      /* Si el hito es el título de una tabla —caso normal para los nombres de
-         `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
-         no justo tras el título: si no, la tabla completa (y su "FUENTE:") cae dentro
-         del hueco que se reemplaza, y `actualizarTablasMacroOoxml` deja de encontrar
-         el título para regenerarla en el siguiente paso. */
-      let finPropio = m.index + m[0].length;
-      const finTabla = finDeTablaInmediata(texto, finPropio);
-      if (finTabla >= 0) finPropio = finTabla;
-      resultado[objetivo] = { inicio: m.index, finPropio };
-      objetivo += 1;
-    }
+    candidatos.push({ inicio: m.index, fin: m.index + m[0].length, clave: claveTitulo(textoParrafo) });
+  }
+
+  /* Se exige que los que sí aparecen lo hagan en ESE orden: la búsqueda del título
+     `i+1` empieza después del candidato del título `i`, nunca antes ni desde el
+     principio, así una tabla que se llame igual que un encabezado posterior no se
+     confunde con él. */
+  let desde = 0;
+  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+    let k = desde;
+    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    if (k >= candidatos.length) continue;
+    /* Si el hito es el título de una tabla —caso normal para los nombres de
+       `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
+       no justo tras el título: si no, la tabla completa (y su "FUENTE:") cae dentro
+       del hueco que se reemplaza, y `actualizarTablasMacroOoxml` deja de encontrar
+       el título para regenerarla en el siguiente paso. */
+    let finPropio = candidatos[k].fin;
+    const finTabla = finDeTablaInmediata(texto, finPropio);
+    if (finTabla >= 0) finPropio = finTabla;
+    resultado[objetivo] = { inicio: candidatos[k].inicio, finPropio };
+    desde = k + 1;
   }
   return resultado;
 }
@@ -937,6 +953,24 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
       + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
     let salida = actual;
+
+    /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
+       siguiente— no aparece en la plantilla bajo NINGUNA redacción: no está mal escrito,
+       la sección nunca existió ahí (plantilla más vieja que la sección que se quiere
+       insertar). El último título de la lista es siempre un límite —sin generador propio
+       en `contenidos`—, así que si se encuentra sirve de sitio de respaldo: mejor un
+       párrafo al final de esta sección que perder en silencio un contenido que sí se
+       generó. Se ajusta con cada edición que caiga antes de él, en el mismo recorrido de
+       atrás hacia adelante, para no apuntar a un índice viejo. Misma lógica que
+       `reemplazarHuecosHtml` de `tablasHtmlInforme.js`. */
+    /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
+       nunca existió aquí" de "la plantilla no tiene nada que ver con esta cadena de
+       títulos" (la mayoría de las plantillas de prueba, por ejemplo): insertar al final
+       del documento sería un despropósito en ese segundo caso. El respaldo solo se activa
+       cuando el límite final SÍ se encontró. */
+    const ultimoHito = hitos[hitos.length - 1];
+    let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
+
     for (let i = contenidos.length - 1; i >= 0; i -= 1) {
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
@@ -944,6 +978,21 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
         const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
         console.warn('[docxRelleno] ' + aviso);
         if (Array.isArray(avisos)) avisos.push(aviso);
+        if (cursorRespaldo !== null) {
+          const nuevo = contenidos[i]('');
+          if (nuevo !== null) {
+            console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+              '": sin ancla, insertado de respaldo al final de la sección');
+            if (Array.isArray(avisos)) {
+              avisos.push(
+                (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+                'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
+                'revisa el orden antes de radicar'
+              );
+            }
+            salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
+          }
+        }
         continue;
       }
       const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
@@ -954,6 +1003,9 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       }
       console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
         + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+      if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
+        cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
+      }
       salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
     }
     return salida;

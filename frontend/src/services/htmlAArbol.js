@@ -100,9 +100,17 @@ export function htmlAArbol(html) {
           ultimo = rx.lastIndex + match.index + match[0].length;
           rx.lastIndex = ultimo;
         } else {
-          /* Si no aparece el cierre, descarta hasta el final. */
-          ultimo = html.length;
-          rx.lastIndex = html.length;
+          /* Si no aparece el cierre, NO se descarta el resto del documento: eso es
+             justamente lo que este archivo dice que no puede pasar (línea 10-11). Se
+             trata el bloque como vacío y se sigue el parseo normal justo después de la
+             etiqueta de apertura — `ultimo`/`rx.lastIndex` ya apuntan ahí—, aunque el
+             contenido crudo que sigue (si lo hay) se lea como si fuera HTML. Perder ese
+             tramo mal etiquetado es aceptable; perder el resto de un informe que se
+             radica ante la DIAN no lo es. */
+          console.warn(
+            '[htmlAArbol] <' + etiqueta + '> sin cierre en la posición ' + m.index +
+            ': se recupera el resto del documento en vez de descartarlo.'
+          );
         }
         continue;
       }
