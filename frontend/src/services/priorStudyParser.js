@@ -46,14 +46,22 @@ Reglas para los campos de las comparables:
   informe no lo trae para esa empresa, usa null. No lo estimes ni lo calcules.
 - No inventes ningún valor: lo que no esté en el documento va como cadena vacía o null.`;
 
+/* `/api/gemini` se corta a sí mismo a los 50 s y devuelve un 504 pensado para
+   reintentarse (ver `GEMINI_CORTE_MS` en `functions/index.js`) — un informe del año
+   anterior largo, leído por OCR, tarda más que eso con facilidad. Retener solo el 429
+   perdía ese reintento y con él la lectura entera del informe. Mismo criterio que
+   `eeffParser.js`. */
+const ESTADOS_REINTENTABLES = [408, 425, 429, 500, 502, 503, 504];
+
 async function postGeminiWithRetry(payload, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await axios.post('/api/gemini', payload);
       return response;
     } catch (err) {
-      const is429 = err.response && err.response.status === 429;
-      if (is429 && attempt < maxRetries) {
+      const status = err.response && err.response.status;
+      const pasajero = status === undefined || ESTADOS_REINTENTABLES.includes(status);
+      if (pasajero && attempt < maxRetries) {
         const delayMs = attempt * 3000;
         await new Promise(r => setTimeout(r, delayMs));
       } else {

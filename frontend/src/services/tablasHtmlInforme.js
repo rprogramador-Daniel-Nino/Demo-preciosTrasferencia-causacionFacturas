@@ -621,20 +621,33 @@ export function localizarHitosHtml(html, titulos) {
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
+  /* Candidatos: cada bloque con pinta de título, en orden de aparición, recogidos de
+     una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
+     por el documento: si ese título no aparecía —o aparecía con otra redacción, como
+     en un informe de referencia más viejo que el título que se busca—, el cursor se
+     quedaba clavado ahí y NINGUNO de los títulos siguientes llegaba siquiera a
+     probarse, aunque sí existieran más adelante. Es lo mismo que le pasa a
+     `localizarHitos` de `docxRelleno.js`, y se arregla igual: con los candidatos ya
+     listados, un título que falta se salta sin mover el cursor de los que le siguen. */
+  const candidatos = [];
   RX_BLOQUE.lastIndex = 0;
-  let objetivo = 0;
   let m;
-  while (objetivo < claves.length && (m = RX_BLOQUE.exec(texto)) !== null) {
+  while ((m = RX_BLOQUE.exec(texto)) !== null) {
     const plano = textoPlanoHtml(m[2]);
     if (pareceEntradaDeToc(plano) || plano.length > 160) continue;
-    const clave = claveTitulo(plano);
-    if (clave.includes(claves[objetivo])) {
-      let finPropio = m.index + m[0].length;
-      const finTabla = finDeTablaInmediataHtml(texto, finPropio);
-      if (finTabla >= 0) finPropio = finTabla;
-      resultado[objetivo] = { inicio: m.index, finPropio };
-      objetivo += 1;
-    }
+    candidatos.push({ inicio: m.index, fin: m.index + m[0].length, clave: claveTitulo(plano) });
+  }
+
+  let desde = 0;
+  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+    let k = desde;
+    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    if (k >= candidatos.length) continue;
+    let finPropio = candidatos[k].fin;
+    const finTabla = finDeTablaInmediataHtml(texto, finPropio);
+    if (finTabla >= 0) finPropio = finTabla;
+    resultado[objetivo] = { inicio: candidatos[k].inicio, finPropio };
+    desde = k + 1;
   }
   return resultado;
 }
@@ -646,6 +659,26 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
   const hitos = localizarHitosHtml(salida, titulos);
   console.log('[tablasHtmlInforme] ' + (nombreParaAvisos || '') + ': hitos encontrados '
     + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+
+  /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
+     siguiente— no aparece en el documento de referencia bajo NINGUNA redacción (no es
+     que esté mal escrito: la sección nunca existió ahí, típico de una referencia más
+     vieja que la sección que se quiere insertar). El último título de la lista es
+     siempre un límite —el encabezado de la sección o tabla que viene después, sin
+     generador propio en `contenidos`—, así que si se encuentra sirve de sitio de
+     respaldo: mejor un párrafo al final de esta sección que perder en silencio un
+     contenido que sí se generó. Se ajusta con cada edición que caiga antes de él, en el
+     mismo recorrido de atrás hacia adelante, para no apuntar a un índice viejo. */
+  /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
+     nunca existió aquí" (una plantilla completamente ajena a esta cadena de títulos,
+     como la mayoría de los documentos de prueba) de "sí existe, solo falta un título
+     intermedio": en el primer caso, insertar al final del documento sería un despropósito
+     — meter párrafos de sector en una plantilla que no tiene ninguna sección de
+     Tendencias de la Economía. Por eso el respaldo solo se activa cuando el límite final
+     SÍ se encontró: ahí sí se sabe que esta sección existe en algún punto del documento. */
+  const ultimoHito = hitos[hitos.length - 1];
+  let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
+
   for (let i = contenidos.length - 1; i >= 0; i -= 1) {
     const hitoActual = hitos[i];
     const hitoSiguiente = hitos[i + 1];
@@ -653,6 +686,28 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
       const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
       console.warn('[tablasHtmlInforme] ' + aviso);
       if (Array.isArray(avisos)) avisos.push(aviso);
+      /* Sin el límite final tampoco hay dónde poner un respaldo: seguir con el
+         comportamiento de siempre (avisar y no tocar nada). */
+      if (cursorRespaldo !== null) {
+        /* Se prueba igual, como si el hueco viejo viniera vacío: los generadores que sí
+           tienen contenido real (narrativa ya redactada) lo devuelven sin importar el
+           texto viejo; los que solo fabrican un marcador de "pendiente" cuando había
+           prosa sustancial que retirar no fabrican nada de la nada, así que aquí no
+           inventan un marcador que antes no existía. */
+        const nuevo = contenidos[i]('');
+        if (nuevo !== null) {
+          console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+            '": sin ancla, insertado de respaldo al final de la sección');
+          if (Array.isArray(avisos)) {
+            avisos.push(
+              (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+              'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
+              'revisa el orden antes de radicar'
+            );
+          }
+          salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
+        }
+      }
       continue;
     }
     const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
@@ -662,6 +717,9 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
       continue;
     }
     console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado');
+    if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
+      cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
+    }
     salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
   }
   return salida;

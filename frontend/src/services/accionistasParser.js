@@ -19,16 +19,24 @@ const ACCIONISTAS_PROMPT = `Eres un contador público y auditor. Lee este certif
 
 Responde ÚNICAMENTE con el JSON estricto sin marcas markdown.`;
 
+/* `/api/gemini` se corta a sí mismo a los 50 s y devuelve un 504 pensado para
+   reintentarse (ver `GEMINI_CORTE_MS` en `functions/index.js`). Retener solo el 429
+   perdía ese reintento y con él la lectura entera del certificado. Mismo criterio que
+   `eeffParser.js`. */
+const ESTADOS_REINTENTABLES = [408, 425, 429, 500, 502, 503, 504];
+
 async function postGeminiWithRetry(payload, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await axios.post('/api/gemini', payload);
       return response;
     } catch (err) {
-      const is429 = err.response && err.response.status === 429;
-      if (is429 && attempt < maxRetries) {
+      const status = err.response && err.response.status;
+      const pasajero = status === undefined || ESTADOS_REINTENTABLES.includes(status);
+      if (pasajero && attempt < maxRetries) {
         const delayMs = attempt * 3000;
-        console.warn(`[Gemini OCR Accionistas] HTTP 429. Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
+        console.warn(`[Gemini OCR Accionistas] ${status ? 'HTTP ' + status : 'fallo de red'}. ` +
+          `Reintentando en ${delayMs / 1000}s... (Intento ${attempt}/${maxRetries})`);
         await new Promise(r => setTimeout(r, delayMs));
       } else {
         throw err;

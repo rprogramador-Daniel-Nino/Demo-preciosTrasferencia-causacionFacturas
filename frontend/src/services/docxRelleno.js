@@ -49,8 +49,14 @@ import {
 /* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
    definición de la matriz para las dos salidas del informe. */
 import {
-  gruposDelAnexoC, filasResumenAnexoC, tituloDeGrupoAnexoC, NOMBRE_ANEXO_C,
+  gruposDelAnexoC, filasResumenAnexoC, tituloDeGrupoAnexoC,
 } from './anexoCHtml.js';
+/* Qué anexo es cada uno se decide por su NOMBRE y no por su letra, con la misma tabla que
+   usa la ruta de plantilla marcada (`anexoBHtml.js`): la numeración es de cada informe y
+   no se repite entre clientes. */
+import {
+  interpretarEncabezadoAnexo, resolverAnexos, rotuloAnexo, nombreDeAnexo,
+} from './anexosPlantilla.js';
 import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
 /* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
@@ -635,6 +641,23 @@ function finDeParrafo(xml, desde) {
 }
 
 /**
+ * Apertura del `<w:p>` que CONTIENE la posición dada. -1 si no hay ninguna antes.
+ *
+ * La contrapartida de `finDeParrafo`, y por el mismo motivo: `lastIndexOf('<w:p', …)` casa
+ * con `<w:pPr`, `<w:pStyle` y `<w:pict`, así que el «inicio del párrafo» acababa a mitad de
+ * las propiedades y cortar ahí desbalanceaba el documento.
+ */
+function inicioDeParrafo(xml, posicion) {
+  const rx = /<w:p(?:\s[^>]*?)?>/g;
+  let inicio = -1, m;
+  while ((m = rx.exec(xml)) !== null) {
+    if (m.index > posicion) break;
+    inicio = m.index;
+  }
+  return inicio;
+}
+
+/**
  * Tablas cuyo título no las precede, sino que es su PRIMERA FILA.
  *
  * Así trae la plantilla de referencia la «Tabla 20. Tabla de rangos» del final del informe:
@@ -865,10 +888,17 @@ export function localizarHitos(xml, titulos) {
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
+  /* Candidatos: cada párrafo con pinta de título, en orden de aparición, recogidos de
+     una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
+     por el documento: si ese título no aparecía —o aparecía con otra redacción, como
+     en una plantilla de referencia más vieja que el título que se busca—, el cursor se
+     quedaba clavado ahí y NINGUNO de los títulos siguientes llegaba siquiera a
+     probarse, aunque sí existieran más adelante. Con los candidatos ya listados, un
+     título que falta se salta sin mover el cursor de búsqueda de los que le siguen. */
+  const candidatos = [];
   const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
-  let objetivo = 0;
   let m;
-  while (objetivo < claves.length && (m = rxParrafo.exec(texto)) !== null) {
+  while ((m = rxParrafo.exec(texto)) !== null) {
     if (m[0].includes('PAGEREF')) continue;
     const textoParrafo = textoPlanoOoxml(m[0]);
     /* Un párrafo de prosa puede mencionar de pasada el nombre de un hito posterior
@@ -877,19 +907,28 @@ export function localizarHitos(xml, titulos) {
        (encabezados de apartado, nombres de tabla) siempre son cortos; se descarta
        cualquier candidato que no lo sea y se sigue buscando uno más adelante. */
     if (textoParrafo.length > 160) continue;
-    const clave = claveTitulo(textoParrafo);
-    if (clave.includes(claves[objetivo])) {
-      /* Si el hito es el título de una tabla —caso normal para los nombres de
-         `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
-         no justo tras el título: si no, la tabla completa (y su "FUENTE:") cae dentro
-         del hueco que se reemplaza, y `actualizarTablasMacroOoxml` deja de encontrar
-         el título para regenerarla en el siguiente paso. */
-      let finPropio = m.index + m[0].length;
-      const finTabla = finDeTablaInmediata(texto, finPropio);
-      if (finTabla >= 0) finPropio = finTabla;
-      resultado[objetivo] = { inicio: m.index, finPropio };
-      objetivo += 1;
-    }
+    candidatos.push({ inicio: m.index, fin: m.index + m[0].length, clave: claveTitulo(textoParrafo) });
+  }
+
+  /* Se exige que los que sí aparecen lo hagan en ESE orden: la búsqueda del título
+     `i+1` empieza después del candidato del título `i`, nunca antes ni desde el
+     principio, así una tabla que se llame igual que un encabezado posterior no se
+     confunde con él. */
+  let desde = 0;
+  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+    let k = desde;
+    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    if (k >= candidatos.length) continue;
+    /* Si el hito es el título de una tabla —caso normal para los nombres de
+       `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
+       no justo tras el título: si no, la tabla completa (y su "FUENTE:") cae dentro
+       del hueco que se reemplaza, y `actualizarTablasMacroOoxml` deja de encontrar
+       el título para regenerarla en el siguiente paso. */
+    let finPropio = candidatos[k].fin;
+    const finTabla = finDeTablaInmediata(texto, finPropio);
+    if (finTabla >= 0) finPropio = finTabla;
+    resultado[objetivo] = { inicio: candidatos[k].inicio, finPropio };
+    desde = k + 1;
   }
   return resultado;
 }
@@ -914,6 +953,24 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
       + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
     let salida = actual;
+
+    /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
+       siguiente— no aparece en la plantilla bajo NINGUNA redacción: no está mal escrito,
+       la sección nunca existió ahí (plantilla más vieja que la sección que se quiere
+       insertar). El último título de la lista es siempre un límite —sin generador propio
+       en `contenidos`—, así que si se encuentra sirve de sitio de respaldo: mejor un
+       párrafo al final de esta sección que perder en silencio un contenido que sí se
+       generó. Se ajusta con cada edición que caiga antes de él, en el mismo recorrido de
+       atrás hacia adelante, para no apuntar a un índice viejo. Misma lógica que
+       `reemplazarHuecosHtml` de `tablasHtmlInforme.js`. */
+    /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
+       nunca existió aquí" de "la plantilla no tiene nada que ver con esta cadena de
+       títulos" (la mayoría de las plantillas de prueba, por ejemplo): insertar al final
+       del documento sería un despropósito en ese segundo caso. El respaldo solo se activa
+       cuando el límite final SÍ se encontró. */
+    const ultimoHito = hitos[hitos.length - 1];
+    let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
+
     for (let i = contenidos.length - 1; i >= 0; i -= 1) {
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
@@ -921,6 +978,21 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
         const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
         console.warn('[docxRelleno] ' + aviso);
         if (Array.isArray(avisos)) avisos.push(aviso);
+        if (cursorRespaldo !== null) {
+          const nuevo = contenidos[i]('');
+          if (nuevo !== null) {
+            console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+              '": sin ancla, insertado de respaldo al final de la sección');
+            if (Array.isArray(avisos)) {
+              avisos.push(
+                (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+                'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
+                'revisa el orden antes de radicar'
+              );
+            }
+            salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
+          }
+        }
         continue;
       }
       const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
@@ -931,6 +1003,9 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       }
       console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
         + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+      if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
+        cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
+      }
       salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
     }
     return salida;
@@ -1575,8 +1650,9 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
 export function insertarFormulasAjuste(zip, avisos) {
   const xml = zip.file(RUTA_DOC).asText();
   const salida = actualizarFormulasMatematicasOoxml(xml, avisos);
-  if (salida !== xml) zip.file(RUTA_DOC, salida);
-  return { cambiado: salida !== xml };
+  if (salida === xml) return { cambiado: false };
+  const escrito = escribirDocSiEsValido(zip, salida, avisos, 'Ecuaciones de ajuste');
+  return { cambiado: escrito };
 }
 
 /** El mayor rId ya usado, para no repetir ninguno al añadir relaciones. */
@@ -1667,25 +1743,26 @@ export function desdeDataUrl(dataUrl) {
  *
  * @param {PizZip} zip
  * @param {Array<{dataUrl?:string, datos?:Uint8Array, ext?:string, anchoCm?:number, altoCm?:number}>} imagenes
- * @param {{centinela?:string}} [opciones]
+ * @param {{centinela?:string, avisos?:string[]}} [opciones]
  * @returns {{insertadas:number}}
  */
 export function insertarImagenes(zip, imagenes, opciones = {}) {
   const centinela = opciones.centinela || CENTINELA_ANEXO;
+  const avisos = opciones.avisos;
   const lista = (imagenes || []).filter(Boolean);
 
-  let xml = zip.file(RUTA_DOC).asText();
+  const xml = zip.file(RUTA_DOC).asText();
   const posicion = xml.indexOf(centinela);
   if (posicion === -1) return { insertadas: 0 };
 
-  /* El párrafo que contiene el centinela, acotado por índice y no por una regex de
-     párrafo: `<w:p>` puede venir sin atributos y las regex con lookahead fallan ahí.
-     Era el mismo enfoque de `reemplazarAnexoB`, que vivía en el mapper por literales y
-     se retiró con él; aquí se conserva porque el problema de las regex es el mismo. */
-  const inicio = xml.lastIndexOf('<w:p', posicion);
-  const cierre = xml.indexOf('</w:p>', posicion);
-  if (inicio === -1 || cierre === -1) return { insertadas: 0 };
-  const fin = cierre + '</w:p>'.length;
+  /* El párrafo que contiene el centinela. La apertura se busca con la regex que exige un
+     espacio, un `>` o un `/` detrás de `<w:p`: `lastIndexOf('<w:p', …)` a secas casaba con
+     `<w:pPr`, `<w:pStyle` y `<w:pict`, y el corte partía un elemento por la mitad. El cierre
+     lo da `finDeParrafo`, que cuenta anidamiento —un cuadro de texto cuelga párrafos dentro
+     de otro— en vez de parar en el primer `</w:p>`. */
+  const inicio = inicioDeParrafo(xml, posicion);
+  const fin = inicio === -1 ? -1 : finDeParrafo(xml, inicio);
+  if (inicio === -1 || fin < 0) return { insertadas: 0 };
 
   let rels = zip.file(RUTA_RELS).asText();
   let ct = zip.file(RUTA_CT).asText();
@@ -1722,10 +1799,14 @@ export function insertarImagenes(zip, imagenes, opciones = {}) {
     }));
   });
 
-  xml = asegurarNamespaceWp(xml.slice(0, inicio) + parrafos.join('') + xml.slice(fin));
-  zip.file(RUTA_DOC, xml);
   zip.file(RUTA_RELS, rels);
   zip.file(RUTA_CT, ct);
+
+  const candidato = asegurarNamespaceWp(
+    xml.slice(0, inicio) + parrafos.join('') + xml.slice(fin));
+  if (!escribirDocSiEsValido(zip, candidato, avisos, 'Páginas del anexo de estados financieros')) {
+    return { insertadas: 0 };
+  }
   return { insertadas: parrafos.length };
 }
 
@@ -1827,44 +1908,207 @@ export function filasEriAnexoA(estudio) {
   return filas;
 }
 
-/** El párrafo del encabezado de un anexo, o null si el documento no lo trae. */
-function bloqueDeAnexo(xml, letra, letraSiguiente) {
-  const rx = (l) => new RegExp(
-    '<w:p(?:\\s[^>]*)?>(?:(?!</w:p>)[\\s\\S])*?ANEXO\\s+' + l + '(?:(?!</w:p>)[\\s\\S])*?</w:p>', 'i');
-  const inicio = rx(letra).exec(xml);
-  if (!inicio) return null;
-  const siguiente = letraSiguiente ? rx(letraSiguiente).exec(xml) : null;
-  const fin = siguiente && siguiente.index > inicio.index ? siguiente.index : xml.length;
-  return { inicio: inicio.index, fin };
+/* ─────────────────────────────────────────────────────────────────────────────
+   LOCALIZAR LOS ANEXOS.
+
+   Sustituye al `bloqueDeAnexo` que buscaba «ANEXO <letra>» con una regex sobre el XML
+   crudo. Aquel fallaba de tres maneras, las tres reproducidas con la plantilla de MC
+   Internacional:
+
+   · Anclaba en la TABLA DE CONTENIDO, que repite el título de cada anexo antes de que
+     aparezca el del cuerpo. El anexo se rellenaba dentro del índice —al 4 % del
+     documento— y el anexo de verdad se radicaba con los datos del cliente anterior. En el
+     informe de referencia llevaba pasando sin que se notara.
+   · Cerraba el bloque en `xml.length` cuando no encontraba el anexo siguiente. Esa
+     plantilla numera A, C, D, E, F: al no haber «ANEXO B» se borraban 5,9 MB de
+     `word/document.xml` —`</w:body></w:document>` incluidos— y del .docx resultante
+     mammoth solo sabía decir «Hierarchy request error: Only one element can be added and
+     only after doctype», que es lo que llegaba al panel de radicación.
+   · No veía los encabezados partidos en varios runs (`<w:t>ANEXO </w:t>…<w:t>D. Matriz…`),
+     que es como quedan en cuanto alguien los edita en Word. Es el mismo fallo que ya se
+     corrigió para los rótulos de las ecuaciones de ajuste.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Los encabezados de anexo del CUERPO del documento, en orden de aparición.
+ *
+ * @param {string} xml
+ * @returns {Array<{letra:string, titulo:string, nombre:string, clave:string, inicio:number,
+ *                  finEncabezado:number, fin:number}>}
+ *          `inicio` es el arranque del párrafo del encabezado y `finEncabezado` su cierre,
+ *          de modo que el contenido del anexo se puede reemplazar conservando su rótulo.
+ *          `fin` es el arranque del anexo siguiente o, para el último, el `<w:sectPr>` del
+ *          cuerpo. Los anexos sin un corte válido NO se devuelven: mejor dejar uno sin
+ *          rellenar que cortar a ciegas.
+ */
+export function localizarAnexosOoxml(xml) {
+  const texto = String(xml || '');
+  const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+  const anexos = [];
+  let p;
+  while ((p = rxParrafo.exec(texto)) !== null) {
+    /* La tabla de contenido repite el título de cada anexo en un párrafo con un campo
+       PAGEREF. Mismo filtro que `localizarBloqueProsa` y por el mismo motivo. */
+    if (p[0].includes('PAGEREF')) continue;
+    const cabeza = interpretarEncabezadoAnexo(textoPlanoOoxml(p[0]));
+    if (!cabeza) continue;
+    const finEncabezado = finDeParrafo(texto, p.index);
+    if (finEncabezado < 0) continue;
+    anexos.push({ ...cabeza, inicio: p.index, finEncabezado, fin: -1 });
+  }
+
+  /* Y si un anexo aparece dos veces con el mismo nombre, la ÚLTIMA es la del cuerpo: el índice
+     va al principio del documento. Es la tercera red contra el índice, después del campo
+     PAGEREF y del número de página pegado al título, y la única que sigue valiendo cuando el
+     índice se escribió a mano y sin numerar. */
+  const delCuerpo = anexos.filter(
+    (a, i) => !anexos.some((otro, j) => j > i && otro.clave === a.clave));
+
+  /* El corte de cada anexo es el arranque del siguiente. Para el último, el `<w:sectPr>` del
+     cuerpo —el tamaño de página y los márgenes del informe viven ahí— o el cierre del cuerpo
+     si la plantilla no lo trae. NUNCA `xml.length`: ahí es donde están los cierres de la
+     raíz, y llevárselos deja un archivo que ninguna herramienta puede abrir. */
+  const cierreCuerpo = texto.lastIndexOf('</w:body>');
+  delCuerpo.forEach((a, i) => {
+    const siguiente = delCuerpo[i + 1];
+    if (siguiente) { a.fin = siguiente.inicio; return; }
+    const sect = texto.indexOf('<w:sectPr', a.finEncabezado);
+    a.fin = sect >= 0 ? sect : cierreCuerpo;
+  });
+
+  return delCuerpo.filter((a) => a.fin >= a.finEncabezado);
+}
+
+/** Los anexos que este módulo rellena, resueltos por su nombre. */
+export function anexosDelDocumento(xml) {
+  return resolverAnexos(localizarAnexosOoxml(xml));
+}
+
+/** Empuja un aviso si hay dónde recogerlo. */
+function anotarAviso(avisos, texto) {
+  if (Array.isArray(avisos)) avisos.push(texto);
+}
+
+/** El aviso de un anexo que no se pudo localizar. */
+function avisoAnexoNoHallado(id) {
+  return nombreDeAnexo(id) + ': la plantilla no trae, en el cuerpo del documento, un '
+    + 'encabezado de anexo con ese nombre, así que se deja como estaba. Comprueba cómo está '
+    + 'rotulado en tu Word: la letra da igual, el nombre es lo que se busca.';
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   GUARDA DE INTEGRIDAD.
+
+   Todo lo que va después del render corta y pega `word/document.xml` por índices. Un índice
+   mal calculado no lanza ningún error: produce un .docx que Word declara dañado, o del que
+   mammoth solo dice «Hierarchy request error». Nadie puede leer eso y el informe llega a
+   radicación roto.
+
+   Así que ninguna cirugía escribe directamente: pasan por aquí y lo que no cuadra no se
+   aplica. Un anexo sin rehacer es un aviso que se ve y se corrige; un archivo que no abre,
+   no.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Cuántas aperturas de `nombre` quedan sin cerrar. Los autocerrados no cuentan. */
+function balanceDeEtiqueta(xml, nombre) {
+  const rx = new RegExp(`<${nombre}(?:\\s[^>]*?)?(/?)>|</${nombre}>`, 'g');
+  let abiertos = 0;
+  let m;
+  while ((m = rx.exec(xml)) !== null) {
+    if (m[0].startsWith('</')) abiertos -= 1;
+    else if (m[1] !== '/') abiertos += 1;
+  }
+  return abiertos;
 }
 
 /**
- * Llena el ANEXO A con los estados financieros del contribuyente y sus páginas de soporte.
+ * Qué le impide a `xml` ser el cuerpo de un .docx. Cadena vacía si está bien.
+ *
+ * Se comprueba lo que rompen los cortes por índice: que la raíz cierre una sola vez y al
+ * final, y que los elementos que estas cirugías mueven en bloque —párrafos, tablas, filas
+ * y celdas— queden balanceados.
+ */
+export function problemaDeIntegridadOoxml(xml) {
+  const texto = String(xml || '');
+  const cuerpos = (texto.match(/<\/w:body>/g) || []).length;
+  const raices = (texto.match(/<\/w:document>/g) || []).length;
+  if (cuerpos !== 1 || raices !== 1) {
+    return `el documento no cierra una sola vez (${cuerpos} </w:body>, ${raices} </w:document>)`;
+  }
+  if (!/<\/w:body>\s*<\/w:document>\s*$/.test(texto)) {
+    return 'el documento no termina en </w:body></w:document>';
+  }
+  for (const etiqueta of ['w:p', 'w:tbl', 'w:tr', 'w:tc']) {
+    const balance = balanceDeEtiqueta(texto, etiqueta);
+    if (balance > 0) return `quedan ${balance} <${etiqueta}> sin cerrar`;
+    if (balance < 0) return `sobran ${-balance} </${etiqueta}>`;
+  }
+  return '';
+}
+
+/**
+ * Escribe `word/document.xml` solo si el resultado sigue siendo un documento válido.
+ *
+ * @param {PizZip} zip
+ * @param {string} xmlNuevo
+ * @param {string[]} [avisos]
+ * @param {string} etiqueta  con qué nombre se reporta la cirugía que no se pudo aplicar.
+ * @returns {boolean} si se escribió.
+ */
+function escribirDocSiEsValido(zip, xmlNuevo, avisos, etiqueta) {
+  const problema = problemaDeIntegridadOoxml(xmlNuevo);
+  if (problema) {
+    anotarAviso(avisos, `${etiqueta}: no se pudo reescribir sin romper el documento `
+      + `(${problema}), así que se deja como estaba. Revísalo antes de radicar y avisa: `
+      + 'es un defecto del generador, no de tu plantilla.');
+    return false;
+  }
+  zip.file(RUTA_DOC, xmlNuevo);
+  return true;
+}
+
+/**
+ * Llena el anexo de estados financieros del contribuyente y sus páginas de soporte.
+ *
+ * El anexo se localiza por su NOMBRE, con la letra que le dé la plantilla: en el informe de
+ * referencia es el ANEXO A, pero eso es cosa de cada informe.
  *
  * @param {PizZip} zip
  * @param {object} estudio
- * @param {{imagenes?:Array<{dataUrl?:string, datos?:Uint8Array, ext?:string}>}} [opciones]
+ * @param {{imagenes?:Array<{dataUrl?:string, datos?:Uint8Array, ext?:string}>, avisos?:string[]}}
+ *        [opciones]  `avisos` recoge por qué no se pudo rellenar, si es el caso.
  * @returns {{insertadas:number}} cuántas páginas de soporte entraron.
  */
 export function insertarAnexoA(zip, estudio, opciones = {}) {
-  let xml = zip.file(RUTA_DOC).asText();
-  const bloque = bloqueDeAnexo(xml, 'A', 'B');
-  if (!bloque) return { insertadas: 0 };
+  const avisos = opciones.avisos;
+  const xml = zip.file(RUTA_DOC).asText();
+  const anexo = anexosDelDocumento(xml).eeff;
+  if (!anexo) {
+    anotarAviso(avisos, avisoAnexoNoHallado('eeff'));
+    return { insertadas: 0 };
+  }
 
   const year = Number(estudio && estudio.anio) || 2025;
   const entidad = (estudio && estudio.ent) || 'la Compañía';
+  const rotulo = rotuloAnexo('eeff', anexo.letra, { entidad });
 
-  let nuevo = '<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr><w:r><w:rPr><w:b/></w:rPr>'
-    + `<w:t>ANEXO A. Estados financieros ${escaparXml(entidad)}</w:t></w:r></w:p>`;
+  /* El párrafo del encabezado de la plantilla se conserva —su estilo, su nivel de esquema y
+     el marcador al que apunta el índice— y solo se le reescribe el texto. La letra es la que
+     trae el documento: escribir «ANEXO A» en un informe que numera A, C, D no rompe nada
+     visible, pero deja el cuerpo contradiciendo a su propio índice. Y el nombre del
+     contribuyente es el del estudio, porque el informe de referencia trae el del cliente
+     anterior pegado al título («ANEXO A. Estados financieros END GAME INTERACTIVE COLOMBIA
+     SAS») y conservarlo sería radicar su nombre. */
+  let nuevo = reescribirTextoParrafoOoxml(xml.slice(anexo.inicio, anexo.finEncabezado), rotulo);
 
   if (!traeCifrasEeff(estudio)) {
-    /* Mismo aviso que el ANEXO B usa para una comparable sin estado financiero: el hueco
+    /* Mismo aviso que el anexo de comparables usa para una sin estado financiero: el hueco
        tiene que verse. Lo que NO puede quedarse es el anexo del informe anterior. */
     nuevo += '<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/>'
       + '<w:b/></w:rPr><w:t>Pendiente: carga el PDF de estados financieros en el paso de '
       + 'ingesta de cifras para que este anexo se llene.</w:t></w:r></w:p>';
-    xml = xml.slice(0, bloque.inicio) + nuevo + xml.slice(bloque.fin);
-    zip.file(RUTA_DOC, xml);
+    escribirDocSiEsValido(
+      zip, xml.slice(0, anexo.inicio) + nuevo + xml.slice(anexo.fin), avisos, rotulo);
     return { insertadas: 0 };
   }
 
@@ -1909,10 +2153,16 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
     insertadas++;
   });
 
-  xml = asegurarNamespaceWp(xml.slice(0, bloque.inicio) + nuevo + xml.slice(bloque.fin));
-  zip.file(RUTA_DOC, xml);
+  /* Las relaciones y los content-types se escriben aunque el cuerpo se descarte: son
+     añadidos, y una relación que nadie usa es legal en OOXML, mientras que una imagen ya
+     metida en `word/media/` cuya extensión no esté declarada en `[Content_Types].xml` hace
+     que Word declare dañado el paquete entero. */
   zip.file(RUTA_RELS, rels);
   zip.file(RUTA_CT, ct);
+
+  const candidato = asegurarNamespaceWp(
+    xml.slice(0, anexo.inicio) + nuevo + xml.slice(anexo.fin));
+  if (!escribirDocSiEsValido(zip, candidato, avisos, rotulo)) return { insertadas: 0 };
   return { insertadas };
 }
 
@@ -1949,7 +2199,9 @@ export function insertarAnexoC(zip, estudio) {
     return {
       reescrito: false,
       grupos: 0,
-      aviso: NOMBRE_ANEXO_C + ': el estudio no trae la matriz del universo evaluado, así que el '
+      /* Por el nombre y sin letra: aquí todavía no se ha localizado el anexo, así que no hay
+         letra que citar, y la del informe de referencia no vale para todas las plantillas. */
+      aviso: nombreDeAnexo('matriz') + ': el estudio no trae la matriz del universo evaluado, así que el '
         + 'anexo se deja como estaba. Abre el paso 3 del motor de comparables con el cribado de '
         + 'Capital IQ cargado para que se calcule.',
     };
@@ -1957,33 +2209,31 @@ export function insertarAnexoC(zip, estudio) {
 
   const xml = zip.file(RUTA_DOC).asText();
 
-  /* La ÚLTIMA aparición, no la primera: «ANEXO C» sale también en la tabla de contenidos,
-     que va al principio del documento. Cortar ahí se llevaría por delante el informe
-     entero. */
-  const rx = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO\s+C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
-  let inicio = -1;
-  for (let m = rx.exec(xml); m; m = rx.exec(xml)) inicio = m.index;
-  if (inicio < 0) {
-    return { reescrito: false, grupos: 0, aviso: NOMBRE_ANEXO_C };
+  /* Por el nombre y no por la letra: en el informe de referencia la matriz es el ANEXO C,
+     pero en el de MC Internacional el ANEXO C son las descripciones de comparables y la
+     matriz es el D. Buscar la letra escribía la matriz encima del anexo equivocado. */
+  const anexo = anexosDelDocumento(xml).matriz;
+  if (!anexo) {
+    return { reescrito: false, grupos: 0, aviso: avisoAnexoNoHallado('matriz') };
   }
 
-  /* El anexo cierra el documento, pero `<w:sectPr>` —el tamaño de página y los márgenes del
-     cuerpo— vive al final y hay que conservarlo: sin él Word abre el archivo con la
-     configuración por defecto y la maquetación del informe se pierde. */
-  const sect = xml.indexOf('<w:sectPr', inicio);
-  const fin = sect >= 0 ? sect : xml.lastIndexOf('</w:body>');
-
   const universo = Number(study.matrizRechazo && study.matrizRechazo.universo) || 0;
+  const rotulo = rotuloAnexo('matriz', anexo.letra);
 
-  let nuevo = '<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr>'
-    + `<w:r><w:rPr><w:b/></w:rPr><w:t>${escaparXml(NOMBRE_ANEXO_C)}</w:t></w:r></w:p>`;
+  /* Se conserva el párrafo del encabezado y solo se le reescribe el texto, con la letra de la
+     plantilla: así el rótulo sigue siendo el que anuncia el índice. */
+  let nuevo = reescribirTextoParrafoOoxml(xml.slice(anexo.inicio, anexo.finEncabezado), rotulo);
   nuevo += '\n' + generarTablaOoxml('', CAB_RESUMEN_ANEXO_C, filasResumenAnexoC(grupos, universo));
   grupos.forEach((g) => {
     const filas = g.companias.map((nombre, i) => [String(i + 1), nombre, g.letra]);
     nuevo += '\n' + generarTablaOoxml(tituloDeGrupoAnexoC(g), CAB_LISTADO_ANEXO_C, filas);
   });
 
-  zip.file(RUTA_DOC, xml.slice(0, inicio) + nuevo + xml.slice(fin));
+  const avisos = [];
+  const candidato = xml.slice(0, anexo.inicio) + nuevo + xml.slice(anexo.fin);
+  if (!escribirDocSiEsValido(zip, candidato, avisos, rotulo)) {
+    return { reescrito: false, grupos: 0, aviso: avisos[0] };
+  }
   return { reescrito: true, grupos: grupos.length, aviso: null };
 }
 
@@ -1995,9 +2245,10 @@ export function insertarAnexoC(zip, estudio) {
  *
  * @param {PizZip} zip
  * @param {object} estudio
+ * @param {string[]} [avisos]  recoge por qué no se pudo rellenar, si es el caso.
  * @returns {{insertadas:number}}
  */
-export function insertarImagenesAnexoB(zip, estudio) {
+export function insertarImagenesAnexoB(zip, estudio, avisos) {
   /* TODAS las comparables de la muestra, tengan o no estado financiero cargado. El filtro
      por `eeffArchivo` dejaba fuera del anexo a las que faltaban, y el anexo se radicaba con
      los bloques del contribuyente anterior en su lugar. Las que no traen documento salen con
@@ -2006,27 +2257,21 @@ export function insertarImagenesAnexoB(zip, estudio) {
   const comparables = ((estudio && estudio.comparables) || []).filter((c) => c && c.name);
   if (!comparables.length) return { insertadas: 0 };
 
-  let xml = zip.file(RUTA_DOC).asText();
+  const xml = zip.file(RUTA_DOC).asText();
 
-  /* La sección del ANEXO B en el CUERPO, que es la ÚLTIMA aparición y no la primera: el
-     título sale también en la tabla de contenidos, al principio del documento. Con la
-     primera, `inicioB` y `finB` caían los dos dentro del índice —a 300 caracteres uno del
-     otro— y este relleno escribía las descripciones y los estados financieros ahí,
-     destruyendo la entrada del índice y dejando el ANEXO B de verdad con lo que trajera la
-     plantilla: el del año anterior. Se veía como si el anexo no se generara. */
-  const rxB = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO B(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
-  const rxC = /<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?ANEXO C(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/gi;
-
-  let inicioB = -1;
-  for (let m = rxB.exec(xml); m; m = rxB.exec(xml)) inicioB = m.index;
-  if (inicioB < 0) return { insertadas: 0 };
-
-  /* Y el corte, en la primera mención del ANEXO C que venga DESPUÉS del cuerpo del B:
-     las del índice quedan detrás y tomarlas dejaría `finB` por delante de `inicioB`. */
-  let finB = xml.length;
-  for (let m = rxC.exec(xml); m; m = rxC.exec(xml)) {
-    if (m.index > inicioB) { finB = m.index; break; }
+  /* El anexo de descripciones, localizado por su nombre. Antes se buscaba «ANEXO B» y se
+     cortaba en «ANEXO C», las dos por regex sobre el XML crudo y tomando la última aparición
+     para saltarse el índice. Eso dejaba dos agujeros: en una plantilla que numere sus anexos
+     de otro modo —MC Internacional los lleva A, C, D, E, F y ahí las descripciones son el
+     ANEXO C— no encontraba nada y el anexo se radicaba con las comparables del cliente
+     anterior; y si el de descripciones era el último, `finB` se iba a `xml.length` y la
+     reescritura se llevaba `</w:body></w:document>`. */
+  const anexo = anexosDelDocumento(xml).descripciones;
+  if (!anexo) {
+    anotarAviso(avisos, avisoAnexoNoHallado('descripciones'));
+    return { insertadas: 0 };
   }
+  const rotulo = rotuloAnexo('descripciones', anexo.letra);
 
   let rels = zip.file(RUTA_RELS).asText();
   let ct = zip.file(RUTA_CT).asText();
@@ -2034,7 +2279,10 @@ export function insertarImagenesAnexoB(zip, estudio) {
   let idDibujo = siguienteIdDibujo(xml);
 
   const imagenesPorComparable = (estudio && estudio.eeffImagenesComparables) || {};
-  let nuevoXmlB = `<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:keepNext/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>ANEXO B. Descripciones de comparables y Estados Financieros</w:t></w:r></w:p>`;
+  /* El encabezado de la plantilla, con su texto reescrito y su letra: la del informe de
+     referencia trae el nombre correcto, pero en otra plantilla este anexo puede ser el C. */
+  let nuevoXmlB = reescribirTextoParrafoOoxml(
+    xml.slice(anexo.inicio, anexo.finEncabezado), rotulo);
 
   let totalInsertadas = 0;
 
@@ -2087,10 +2335,14 @@ export function insertarImagenesAnexoB(zip, estudio) {
     }
   });
 
-  xml = asegurarNamespaceWp(xml.slice(0, inicioB) + nuevoXmlB + xml.slice(finB));
-  zip.file(RUTA_DOC, xml);
+  /* Igual que en el anexo de estados financieros: relaciones y content-types se escriben
+     aunque el cuerpo se descarte, porque las imágenes ya están en el paquete. */
   zip.file(RUTA_RELS, rels);
   zip.file(RUTA_CT, ct);
+
+  const candidato = asegurarNamespaceWp(
+    xml.slice(0, anexo.inicio) + nuevoXmlB + xml.slice(anexo.fin));
+  if (!escribirDocSiEsValido(zip, candidato, avisos, rotulo)) return { insertadas: 0 };
 
   return { insertadas: totalInsertadas };
 }
@@ -2107,17 +2359,18 @@ export function rellenarDocx({
   binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
 }) {
   const { zip, camposVacios, avisosTablas } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
-  const { insertadas } = insertarImagenes(zip, imagenesAnexo);
-  /* El ANEXO A siempre se rearma —sus tablas salen de la ingesta—, pero las páginas del PDF
-     solo van aquí si el centinela no se las llevó ya: con las dos vías activas el anexo
-     saldría con el escaneo repetido. */
+  const { insertadas } = insertarImagenes(zip, imagenesAnexo, { avisos: avisosTablas });
+  /* El anexo de estados financieros siempre se rearma —sus tablas salen de la ingesta—, pero
+     las páginas del PDF solo van aquí si el centinela no se las llevó ya: con las dos vías
+     activas el anexo saldría con el escaneo repetido. */
   const { insertadas: insertadasA } = insertarAnexoA(zip, estudio, {
     imagenes: insertadas > 0 ? [] : imagenesAnexo,
+    avisos: avisosTablas,
   });
-  const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio);
+  const { insertadas: insertadasB } = insertarImagenesAnexoB(zip, estudio, avisosTablas);
 
-  /* Después del ANEXO B: aquel delimita su sección buscando dónde empieza el ANEXO C, así
-     que reescribir el C antes le movería el corte. Su aviso viaja con los de las tablas
+  /* Después del anexo de descripciones: los anexos se delimitan unos con otros, así que
+     reescribir la matriz antes le movería el corte. Su aviso viaja con los de las tablas
      —es el mismo canal que ya publica el generador— para que un anexo sin rehacer no pase
      inadvertido. */
   const anexoC = insertarAnexoC(zip, estudio);

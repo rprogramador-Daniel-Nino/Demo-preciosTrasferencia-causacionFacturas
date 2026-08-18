@@ -17,7 +17,7 @@ import {
   FootnoteReferenceRun,
 } from 'docx';
 import {
-  HOJA_TWIPS, cmAPixeles, medidaEnCm, FACTOR_TABLA,
+  HOJA_TWIPS, cmAPixeles, cmATwips, medidaEnCm, FACTOR_TABLA, arribaConLogoCm, altoMaximoDeEncabezado,
 } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
@@ -55,7 +55,12 @@ function encabezadoDe(html) {
   if (!m) return null;
   const lado = (/data-lado="([^"]+)"/.exec(m[1]) || [])[1] || 'centro';
   const desde = Number((/data-desde-pagina="(\d+)"/.exec(m[1]) || [])[1] || 1);
-  return { bloque: m[0], contenido: m[2], lado, enLaPortada: desde <= 1 };
+  /* Alto real del logo (o del más alto, si el encabezado trae más de uno concatenado):
+     el margen de la página tiene que reservar sitio para él en vez de un hueco fijo. */
+  return {
+    bloque: m[0], contenido: m[2], lado, enLaPortada: desde <= 1,
+    alto: altoMaximoDeEncabezado(m[2]),
+  };
 }
 
 const ALINEACION = {
@@ -862,6 +867,14 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
 
   const paginas = paginasDe(arbol);
 
+  /* El margen superior tiene que reservar el alto real del logo, no el hueco fijo
+     pensado para un logo chico: uno de 5,53cm (o más) se comía las primeras líneas del
+     cuerpo con `PAGINA.margin.top` sin tocar. Misma cuenta que usa la previsualización
+     (`cssDeHojas`), para que las dos salidas no puedan divergir. */
+  const paginaConEncabezado = enc
+    ? { ...PAGINA, margin: { ...PAGINA.margin, top: cmATwips(arribaConLogoCm(enc.alto)) } }
+    : PAGINA;
+
   /* Sin páginas marcadas —la plantilla maestra, o un .docx por mammoth— se emite una sola
      sección corrida. Mejor eso que inventar una paginación que el original no tiene. */
   const cuerpoCorrido = paginas.length ? [] : bloquesDe(arbol);
@@ -869,8 +882,8 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
     ? tandasDe(paginas).map((t, iTanda) => ({
       properties: {
         page: t.orientacion === 'apaisada'
-          ? { ...PAGINA, size: { ...PAGINA.size, orientation: PageOrientation.LANDSCAPE } }
-          : PAGINA,
+          ? { ...paginaConEncabezado, size: { ...PAGINA.size, orientation: PageOrientation.LANDSCAPE } }
+          : paginaConEncabezado,
         /* `titlePage` deja la primera página sin encabezado: Word sólo sabe distinguir la
            primera de las demás. El informe de referencia no lo lleva hasta la página 5, así
            que las páginas 2 a 4 seguirán llevándolo. Para eso harían falta más secciones, y
@@ -887,7 +900,7 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
     }))
     : [{
       properties: {
-        page: PAGINA,
+        page: paginaConEncabezado,
         /* Misma regla que arriba: es la única sección, así que ella hace de "primera". */
         ...(cabecera && !enc.enLaPortada ? { titlePage: true } : {}),
       },

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT } from './eeffParser.js';
+import { EEFF_PROMPT, EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT } from './eeffParser.js';
 
 const CAMPOS_NUEVOS_ANEXO_B = [
   'propiedad_planta_equipo',
@@ -52,8 +52,8 @@ test('el prompt de lote pide pagina_inicio y pagina_fin por empresa, sobre el PD
 
 /* ══════ La IA no debe convertir la escala por su cuenta ══════ */
 
-test('los dos prompts prohíben a la IA convertir la cifra aunque el documento declare la unidad', () => {
-  [EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT].forEach((prompt) => {
+test('los tres prompts prohíben a la IA convertir la cifra aunque el documento declare la unidad', () => {
+  [EEFF_PROMPT, EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT].forEach((prompt) => {
     assert.match(prompt, /nunca.{0,20}multipliques.{0,20}ni.{0,20}conviert/i, 'falta prohibir la conversión');
     assert.match(prompt, /28,81[\s\S]{0,80}millones[\s\S]{0,40}28\.81[\s\S]{0,40}(no|NO)[\s\S]{0,20}28810000/,
       'falta el ejemplo concreto que fija qué significa "tal cual"');
@@ -61,7 +61,7 @@ test('los dos prompts prohíben a la IA convertir la cifra aunque el documento d
 });
 
 test('la regla de escala aplica sin excepción, aunque el documento rotule la columna en miles o millones', () => {
-  [EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT].forEach((prompt) => {
+  [EEFF_PROMPT, EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT].forEach((prompt) => {
     assert.match(prompt, /obligatoria.{0,10}y sin excepci[oó]n/i);
   });
 });

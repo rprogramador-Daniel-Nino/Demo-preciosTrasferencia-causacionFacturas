@@ -16,6 +16,7 @@ import {
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
   actualizarFormulasMatematicasOoxml,
+  localizarAnexosOoxml, anexosDelDocumento, problemaDeIntegridadOoxml,
 } from './docxRelleno.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
@@ -1145,7 +1146,10 @@ test('sin matriz en el estudio el ANEXO C se deja como estaba, con aviso', async
   const zip = await zipConAnexoC();
   const r = insertarAnexoC(zip, { embudoSeleccion: ESTUDIO_ANEXO_C.embudoSeleccion });
   assert.strictEqual(r.reescrito, false);
-  assert.match(r.aviso, /ANEXO C/);
+  /* El aviso nombra el anexo y NO su letra: aquí todavía no se ha localizado en la plantilla,
+     y la letra del informe de referencia no vale para todas —MC Internacional numera sus
+     anexos A, C, D, E, F y ahí la matriz de rechazo es el D—. */
+  assert.match(r.aviso, /Matriz de Rechazo/);
   assert.ok(textoDe(zip, RUTA_DOC_TEST).includes('MATRIZ VIEJA'), 'no se toca la plantilla');
 });
 
@@ -1306,6 +1310,10 @@ test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanza
   const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres']);
   assert.ok(hitos[0]);
   assert.equal(hitos[1], null);
+  /* Que "Dos" no aparezca —una plantilla de referencia más vieja que ese título— no
+     puede impedir que "Tres" sí se encuentre después: antes el cursor se quedaba
+     clavado en "Dos" para siempre y ningún título posterior llegaba a probarse. */
+  assert.ok(hitos[2], 'un título ausente no debe bloquear los que vienen después');
 });
 
 test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {
@@ -1347,6 +1355,46 @@ test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () =
   reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => 'nunca se usa'], avisos, 'III.A');
   assert.equal(avisos.length, 1);
   assert.match(avisos[0], /III\.A/);
+});
+
+test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {
+  /* Una plantilla más vieja que "Encabezado B" no puede impedir que el contenido de
+     "Encabezado B" se inserte en algún lado: se apoya en "Encabezado C", que sí existe
+     (el límite de la sección siguiente), en vez de perderse en silencio. */
+  const xml = [
+    parrafoXml('Encabezado A'),
+    parrafoXml('Prosa de A.'),
+    parrafoXml('Encabezado C'),
+  ].join('');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(
+    doc,
+    ['Encabezado A', 'Encabezado B', 'Encabezado C'],
+    [() => null, () => parrafoXml('Contenido de B, sin ancla propia.')],
+    avisos, 'III.X'
+  );
+  assert.match(doc.xml, /Contenido de B, sin ancla propia\./);
+  /* Antes del límite final, no después: se insertó DENTRO de la sección. */
+  assert.ok(doc.xml.indexOf('Contenido de B') < doc.xml.indexOf('Encabezado C'));
+  assert.ok(avisos.some((a) => /no se encontró "Encabezado B" o "Encabezado C"/.test(a)));
+  assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
+});
+
+test('reemplazarPorHitos NO inserta de respaldo si ni siquiera el límite final aparece', () => {
+  /* Sin ningún título de la cadena en el documento, no hay evidencia de que esta
+     sección exista aquí en absoluto: mejor no tocar nada que adivinar un lugar. */
+  const xml = parrafoXml('Un documento que no tiene nada que ver con esta cadena de títulos.');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(
+    doc,
+    ['Encabezado A', 'Encabezado B', 'Encabezado C'],
+    [() => parrafoXml('No debería aparecer.'), () => parrafoXml('Tampoco esto.')],
+    avisos, 'III.X'
+  );
+  assert.doesNotMatch(doc.xml, /No debería aparecer/);
+  assert.doesNotMatch(doc.xml, /Tampoco esto/);
 });
 
 test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {
@@ -1957,4 +2005,160 @@ test('una ecuación entre el título de una tabla y su tabla no se la traga el b
 
   const bloque = localizarBloqueTabla(conEcuacion, 'Composición accionaria');
   assert.strictEqual(bloque, null, 'el bloque de la tabla se tragó el párrafo de la ecuación');
+});
+
+/* ══════════════════ Numeración de los anexos: multiempresa ══════════════════ */
+
+/* La plantilla de MC Internacional, reducida a lo que importa: los anexos van A, C, D, E, F
+   —no hay B—, el índice repite los títulos con su número de página, y los encabezados del
+   cuerpo vienen PARTIDOS en varios runs, que es como los deja Word en cuanto alguien los
+   edita. Sobre esta forma, el localizador por letra borraba 5,9 MB de `word/document.xml`
+   y dejaba un archivo que ni mammoth podía abrir para la vista previa. */
+const conAnexosSinB = () => ''
+  + '<w:p><w:t>ANEXO A. Estados Financieros52</w:t></w:p>'
+  + '<w:p><w:t>ANEXO C. Descripciones de comparables y Estados Financieros86</w:t></w:p>'
+  + '<w:p><w:t>ANEXO D. Matriz de Rechazo95</w:t></w:p>'
+  + '<w:p><w:t>Cuerpo del informe que no se puede perder.</w:t></w:p>'
+  + '<w:p><w:t>ANEXO </w:t><w:t>A. Estados Financieros</w:t></w:p>'
+  + '<w:p><w:t>EEFF DEL CLIENTE ANTERIOR</w:t></w:p>'
+  + '<w:p><w:t>ANEXO </w:t><w:t>C. Descripciones de comparables y Estados Financieros</w:t></w:p>'
+  + '<w:p><w:t>FICHAS DEL CLIENTE ANTERIOR</w:t></w:p>'
+  + '<w:p><w:t>ANEXO </w:t><w:t>D. Matriz de Rechazo</w:t></w:p>'
+  + '<w:p><w:t>MATRIZ DEL CLIENTE ANTERIOR</w:t></w:p>';
+
+async function zipSinAnexoB() {
+  const buf = await plantilla([parrafo('Informe')]);
+  const zip = new PizZip(buf);
+  zip.file(RUTA_DOC_TEST, zip.file(RUTA_DOC_TEST).asText()
+    .replace('</w:body>', conAnexosSinB() + '</w:body>'));
+  return zip;
+}
+
+test('los anexos se localizan en el cuerpo aunque el título esté partido en runs', async () => {
+  const zip = await zipSinAnexoB();
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  const anexos = localizarAnexosOoxml(xml);
+  assert.deepStrictEqual(anexos.map((a) => a.letra), ['A', 'C', 'D'],
+    'los tres del cuerpo, y ninguna entrada del índice');
+
+  const porNombre = anexosDelDocumento(xml);
+  assert.strictEqual(porNombre.eeff.letra, 'A');
+  assert.strictEqual(porNombre.descripciones.letra, 'C', 'aquí las descripciones son el C');
+  assert.strictEqual(porNombre.matriz.letra, 'D', 'y la matriz de rechazo el D');
+});
+
+test('el anexo de estados financieros no se lleva el documento cuando no hay ANEXO B', async () => {
+  /* La regresión que rompía la vista previa: `bloqueDeAnexo` cerraba en `xml.length` al no
+     encontrar «ANEXO B», así que se llevaba `</w:body></w:document>` y todo lo de en medio. */
+  const zip = await zipSinAnexoB();
+  const antes = zip.file(RUTA_DOC_TEST).asText();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.strictEqual(problemaDeIntegridadOoxml(xml), '', 'el documento tiene que seguir cerrando');
+  assert.ok(xml.length > antes.length * 0.9, 'y no perder el cuerpo del informe');
+  assert.ok(!texto.includes('EEFF DEL CLIENTE ANTERIOR'), 'el anexo se rehace');
+  assert.match(texto, /Estado de Situación Financiera/);
+  assert.ok(texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'y el anexo siguiente no se toca');
+  assert.ok(texto.includes('MATRIZ DEL CLIENTE ANTERIOR'), 'ni el de después');
+  assert.ok(texto.includes('Cuerpo del informe que no se puede perder'), 'ni el cuerpo');
+});
+
+test('cada anexo se rellena por su nombre y no por su letra', async () => {
+  /* En esta plantilla el ANEXO C son las descripciones y el D la matriz. Buscando la letra,
+     las descripciones no se escribían en ninguna parte y la matriz caía sobre el anexo
+     equivocado, borrando de paso todo lo que le seguía. */
+  const zip = await zipSinAnexoB();
+  insertarImagenesAnexoB(zip, {
+    comparables: [{ name: 'ACME COMPARABLE SA', descActividad: 'Desarrolla videojuegos.' }],
+  });
+  insertarAnexoC(zip, ESTUDIO_ANEXO_C);
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('ACME COMPARABLE SA'), 'las descripciones van al anexo C de esta plantilla');
+  assert.ok(!texto.includes('FICHAS DEL CLIENTE ANTERIOR'));
+  assert.ok(texto.includes('RIGOR UNO'), 'y la matriz al D');
+  assert.ok(!texto.includes('MATRIZ DEL CLIENTE ANTERIOR'));
+  assert.strictEqual(problemaDeIntegridadOoxml(zip.file(RUTA_DOC_TEST).asText()), '');
+});
+
+test('los rótulos conservan la letra de la plantilla', async () => {
+  /* Escribir «ANEXO B. Descripciones…» en un informe que numera A, C, D deja el cuerpo
+     contradiciendo a su propio índice. Lo que sí se reescribe es el nombre del
+     contribuyente, que en la plantilla es el del cliente anterior. */
+  const zip = await zipSinAnexoB();
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  insertarImagenesAnexoB(zip, { comparables: [{ name: 'ACME SA', descActividad: 'x' }] });
+  insertarAnexoC(zip, ESTUDIO_ANEXO_C);
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.match(texto, /ANEXO A\. Estados financieros ACME COLOMBIA S\.A\.S/);
+  assert.match(texto, /ANEXO C\. Descripciones de comparables/);
+  assert.match(texto, /ANEXO D\. Matriz de Rechazo/);
+  assert.ok(!/ANEXO B\./.test(texto), 'no se inventa un ANEXO B que esta plantilla no tiene');
+});
+
+test('el índice con campos PAGEREF no se toma por el encabezado del anexo', async () => {
+  /* Así trae Word la tabla de contenido, y es donde anclaba el localizador viejo: el anexo
+     se rellenaba al 4 % del documento y el de verdad se radicaba con los datos anteriores. */
+  const buf = await plantilla([parrafo('Informe')]);
+  const zip = new PizZip(buf);
+  const indice = '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+    + '<w:r><w:instrText> PAGEREF _Toc123 \\h </w:instrText></w:r>'
+    + '<w:r><w:t>ANEXO A. Estados financieros</w:t></w:r>'
+    + '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>';
+  zip.file(RUTA_DOC_TEST, zip.file(RUTA_DOC_TEST).asText()
+    .replace('</w:body>', indice + conAnexoA() + '</w:body>'));
+
+  const anexos = localizarAnexosOoxml(zip.file(RUTA_DOC_TEST).asText());
+  assert.deepStrictEqual(anexos.map((a) => a.letra), ['A', 'B'], 'solo los del cuerpo');
+  insertarAnexoA(zip, ESTUDIO_EEFF, {});
+  assert.match(textoDe(zip, RUTA_DOC_TEST), /ANEXO A\. Estados financieros<?/);
+  assert.ok(!textoDe(zip, RUTA_DOC_TEST).includes('páginas del informe anterior'));
+});
+
+test('un anexo que la plantilla no trae se avisa en vez de romper nada', async () => {
+  const buf = await plantilla([parrafo('Informe sin anexos')]);
+  const zip = new PizZip(buf);
+  const antes = zip.file(RUTA_DOC_TEST).asText();
+  const avisos = [];
+
+  insertarAnexoA(zip, ESTUDIO_EEFF, { avisos });
+  insertarImagenesAnexoB(zip, { comparables: [{ name: 'ACME SA', descActividad: 'x' }] }, avisos);
+
+  assert.strictEqual(zip.file(RUTA_DOC_TEST).asText(), antes, 'el documento no se toca');
+  assert.strictEqual(avisos.length, 2, 'y los dos anexos se reportan');
+  assert.match(avisos.join(' | '), /Estados financieros del contribuyente/);
+  assert.match(avisos.join(' | '), /Descripciones de comparables/);
+});
+
+/* ══════════════════ Guarda de integridad ══════════════════ */
+
+test('la guarda reconoce un documento bien cerrado y uno partido', () => {
+  const bueno = '<w:document><w:body><w:p><w:pPr/><w:t>x</w:t></w:p></w:body></w:document>';
+  assert.strictEqual(problemaDeIntegridadOoxml(bueno), '');
+
+  assert.match(problemaDeIntegridadOoxml('<w:document><w:body><w:p><w:t>x</w:t>'),
+    /no cierra una sola vez/, 'lo que dejaba el corte hasta xml.length');
+  assert.match(problemaDeIntegridadOoxml(
+    '<w:document><w:body><w:p><w:p><w:t>x</w:t></w:p></w:body></w:document>'),
+    /<w:p> sin cerrar/, 'el párrafo anidado que Word declara dañado');
+  assert.match(problemaDeIntegridadOoxml(
+    '<w:document><w:body><w:p/></w:p></w:body></w:document>'),
+    /sobran 1 <\/w:p>/, 'y el cierre de más');
+});
+
+test('una cirugía que rompería el documento no se aplica y se avisa', async () => {
+  /* La red de seguridad: antes, un corte mal calculado producía un .docx del que mammoth solo
+     sabía decir «Hierarchy request error», y eso era todo lo que llegaba a quien radica. */
+  const zip = await zipConAnexoA();
+  const roto = zip.file(RUTA_DOC_TEST).asText().replace('</w:body></w:document>', '');
+  zip.file(RUTA_DOC_TEST, roto);
+  const avisos = [];
+
+  const { insertadas } = insertarAnexoA(zip, ESTUDIO_EEFF, { avisos });
+  assert.strictEqual(insertadas, 0);
+  assert.strictEqual(zip.file(RUTA_DOC_TEST).asText(), roto, 'no se escribe nada encima');
+  assert.match(avisos.join(' '), /no se pudo reescribir sin romper el documento/);
 });

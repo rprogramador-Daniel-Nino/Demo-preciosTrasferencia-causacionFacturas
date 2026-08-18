@@ -3,7 +3,7 @@ import axios from 'axios';
 /**
  * Prompt para la lectura de Estados Financieros del Contribuyente por Gemini Vision OCR.
  */
-const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
+export const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
 Extrae las cifras del ESTADO DE RESULTADOS y del ESTADO DE SITUACIÓN FINANCIERA del ejercicio más reciente que aparezca.
 
 Campos del Estado de Situación Financiera (Balance General) a extraer:
@@ -27,7 +27,7 @@ Campos del Estado de Resultados (P&L):
 
 Reglas:
 · Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo.
-· Devuelve los valores en UNIDADES de la moneda. Si el estado está expresado en miles o millones, multiplica y di en qué unidad venía.
+· Regla de escala, obligatoria y sin excepción: cada cifra numérica va EXACTAMENTE como aparece impresa en el documento, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así el documento diga "en miles" o "en millones" en el encabezado. Si el documento imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa para que otra parte del sistema decida qué hacer con ella; no es una instrucción para que tú calcules nada.
 · Si un concepto no aparece, usa null. NO estimes, NO deduzcas por diferencia, NO inventes.
 
 Devuelve SOLO este JSON estricto sin marcas markdown:
@@ -163,10 +163,7 @@ export async function parseEeffWithGeminiOCR(file) {
 
           const extractVal = (obj) => {
             if (!obj || typeof obj.valor !== 'number') return null;
-            let v = obj.valor;
-            if (parsed.unidad_origen === 'miles') v *= 1000;
-            if (parsed.unidad_origen === 'millones') v *= 1000000;
-            return v;
+            return obj.valor;
           };
 
           resolve({

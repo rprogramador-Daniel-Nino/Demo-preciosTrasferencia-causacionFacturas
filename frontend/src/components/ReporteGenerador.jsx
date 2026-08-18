@@ -34,6 +34,7 @@ import {
 import { evaluarRadicacion } from '../services/semaforoRadicacion.js';
 import {
   cssDeHojas, cssDeExportacion, cssDeWord, conSaltosDePagina, conTamanoDeImagen,
+  altoMaximoDeEncabezado,
 } from '../services/estiloDocumento.js';
 import { aDocxBlob } from '../services/docxWriter.js';
 import PizZip from 'pizzip';
@@ -250,7 +251,20 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
   const avisosDeMercado = (htmlBase) => {
     const d = diagnosticarCobertura(htmlBase, study, analisisMercado, analisisSector);
     const avisos = [];
-    if (!d.sectorialCubierto) {
+    /* Mismo chequeo que dispara (o no) el análisis en el efecto de arriba. Antes, sin
+       actividad ni objeto o sin año gravable, el efecto se limitaba a `setAnalisisSector
+       (null)` sin avisar nada — a diferencia de los otros tres motivos de falla, que sí
+       llegan aquí. El estudio quedaba sin análisis de sector y sin ninguna pista de por
+       qué, indistinguible en pantalla de un simple "todavía no corrió". */
+    const actividadTexto = ((study && (study.actividad_especifica || study.objeto)) || '').trim();
+    const anioValido = Number(study && study.anio) > 0;
+    if (!actividadTexto || !anioValido) {
+      avisos.push(
+        'no hay actividad económica ni objeto social registrado en el estudio' +
+        (anioValido ? '' : ', o falta el año gravable') +
+        ': no se puede generar el análisis del sector (III.C) hasta completar ese dato'
+      );
+    } else if (!d.sectorialCubierto) {
       avisos.push(
         'esta plantilla no trae la sección del análisis del sector, así que no se ' +
         'reemplazó por la actividad de la compañía: revísala a mano'
@@ -751,7 +765,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      sin marcar. Devuelve '' cuando todo salió bien, para no poner un banner que
      no dice nada. */
   const resumirMarcado = ({
-    trozosEnviados, trozosFallidos, rechazadasPorVocabulario,
+    trozosEnviados, trozosFallidos, tramosPartidos, rechazadasPorVocabulario,
     bloqueadasPorZona, bloqueadasPorGuarda,
   }, { reintentable = true } = {}) => {
     const lineas = [];
@@ -769,6 +783,14 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
                     ? 'Puedes cancelar y volver a subir el PDF para marcarlo otra vez.'
                     : 'El marcado ya quedó guardado: revisa a mano esos tramos del documento ' +
                       'antes de radicar.'));
+    }
+    /* Los tramos que solo salieron partiéndolos. No es un fallo —ese texto quedó marcado—,
+       pero es la señal de que las peticiones van al límite del plazo de `/api/gemini`: si el
+       número es alto, esta plantilla necesita trozos más pequeños. */
+    if (tramosPartidos) {
+      lineas.push(tramosPartidos + ' tramo(s) tardaron demasiado y hubo que partirlos en dos ' +
+                  'para que la IA los alcanzara a leer. Quedaron marcados: no hay nada que ' +
+                  'revisar por esto, pero el marcado de esta plantilla va justo de tiempo.');
     }
     if (rechazadasPorVocabulario) {
       lineas.push(rechazadasPorVocabulario + ' propuesta(s) se rechazaron porque el campo no está ' +
@@ -1131,7 +1153,11 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
     if (!enc) return null;
     const lado = (/data-lado="([^"]+)"/.exec(enc[1]) || [])[1] || 'centro';
     const desde = Number((/data-desde-pagina="(\d+)"/.exec(enc[1]) || [])[1] || 1);
-    const alto = (/height:([\d.]+cm)/.exec(enc[2]) || [])[1] || null;
+    /* La más alta de todas las imágenes del encabezado, no la primera: el bloque puede
+       traer más de una concatenada, y una chica adelante no puede esconder que otra más
+       atrás desborda el hueco reservado. */
+    const altoCm = altoMaximoDeEncabezado(enc[2]);
+    const alto = altoCm ? altoCm + 'cm' : null;
     return {
       bloque: enc[0], contenido: enc[2], lado, alto, enLaPortada: desde <= 1,
     };
@@ -1280,22 +1306,29 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
               'Complétalos antes de radicar.',
           });
         }
-        /* Las tablas que el motor no encontró en la plantilla. Sin este aviso se radican con
-           las cifras del informe del que salió la plantilla, y nadie se entera. */
+        /* Lo que el motor no pudo actualizar en la plantilla. Sin este aviso se radica con las
+           cifras del informe del que salió la plantilla, y nadie se entera.
+
+           La lista mezcla nombres de tabla y avisos que ya traen su propia explicación —los de
+           los anexos dicen qué anexo falta y cómo se busca—, así que el encabezado no puede dar
+           por hecho que todo sea «una tabla no encontrada». Mismo criterio que en la ruta de
+           plantilla marcada. */
         if (avisosTablas && avisosTablas.length) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',
-            texto: 'No se encontraron en tu plantilla ' + avisosTablas.length + ' tabla(s) (' +
-              avisosTablas.join(', ') + '), así que conservan el contenido que ya traían. ' +
-              'Revísalas una por una antes de radicar.',
+            texto: 'Esto no se actualizó con los datos del estudio: ' + avisosTablas.join(' · ') +
+              '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
+              'revísalo antes de radicar.',
           });
         }
         if ((study.eeffImages || []).length && imagenesInsertadas === 0) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',
+            /* El anexo se busca por su NOMBRE y no por su letra —la numeración es de cada
+               informe—, así que el aviso tampoco puede pedir una letra concreta. */
             texto: 'El anexo de estados financieros no se insertó: la plantilla no trae un ' +
-              'encabezado «ANEXO A» donde anclarlo, ni el centinela ' + CENTINELA_ANEXO + '. ' +
-              'Añade uno de los dos al Word y vuelve a subirlo.',
+              'encabezado de anexo que se llame «Estados financieros» donde anclarlo, ni el ' +
+              'centinela ' + CENTINELA_ANEXO + '. Añade uno de los dos al Word y vuelve a subirlo.',
           });
         }
         setAvisos((previos) => [...previos.filter((a) => a.origen !== 'docx'), ...nuevos]);
@@ -1310,6 +1343,11 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
          sustituido más tiempo del que dura la llamada, ni siquiera si ésta lanza. */
       const warnOriginal = console.warn;
       let avisoAnexo = null;
+      /* Igual que el aviso del anexo: `htmlAArbol` avisa por consola cuando una etiqueta
+         cruda (`<script>`/`<style>`) sin cierre lo obliga a recuperar el resto del
+         documento en vez de descartarlo. Puede pasar más de una vez, así que se acumulan
+         todos los avisos, no solo el último. */
+      const avisosRecuperacion = [];
       console.warn = (mensaje, ...resto) => {
         if (typeof mensaje === 'string' && mensaje.startsWith('[docxWriter] el anexo trae')) {
           const m = /trae (\d+) página\(s\) para sólo (\d+) hueco\(s\) en el informe: sobran (\d+)/
@@ -1319,6 +1357,12 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
               'para sólo ' + m[2] + ' hueco(s) en el informe: sobran ' + m[3] + ' página(s) que ' +
               'no van a entrar en el documento. Revísalo antes de radicar.';
           }
+        }
+        if (typeof mensaje === 'string' && mensaje.startsWith('[htmlAArbol]')) {
+          avisosRecuperacion.push(
+            'El documento traía una etiqueta sin cerrar que pudo haber perdido texto: ' +
+            mensaje.replace('[htmlAArbol] ', '') + ' Revisa esa parte del informe antes de radicar.'
+          );
         }
         warnOriginal(mensaje, ...resto);
       };
@@ -1355,6 +1399,9 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
       }
       if (avisoAnexo) {
         nuevosAvisos.push({ nivel: 'aviso', origen: 'docx', texto: avisoAnexo });
+      }
+      for (const texto of avisosRecuperacion) {
+        nuevosAvisos.push({ nivel: 'aviso', origen: 'docx', texto });
       }
       /* Reemplaza, no acumula. Los avisos del render de la plantilla (los demás `setAvisos` de
          este archivo) también reemplazan la lista entera porque se recalculan de cero cada vez;

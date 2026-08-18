@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   HOJA, REGLAS_DOCUMENTO, reglasDocumento, cuerpoDe, cssDeHojas, cssDeExportacion, cssDeWord,
   CLASE_VALOR, resaltarValor, cmATwips, cmAPixeles, medidaEnCm, HOJA_TWIPS,
-  conSaltosDePagina, conTamanoDeImagen,
+  conSaltosDePagina, conTamanoDeImagen, arribaConLogoCm, altoMaximoDeEncabezado,
 } from './estiloDocumento.js';
 
 test('la pantalla y el .doc llevan las mismas reglas de documento', () => {
@@ -35,7 +35,8 @@ test('la hoja de la pantalla mide lo mismo que la de Word', () => {
 test('con encabezado la caja de texto baja, y el logo del cuerpo se oculta', () => {
   const conLogo = cssDeHojas({ logo: 'data:image/png;base64,AAA' });
   const sinLogo = cssDeHojas({});
-  assert.ok(conLogo.includes('padding:' + HOJA.conEncabezado));
+  const arribaPorDefecto = arribaConLogoCm(medidaEnCm(HOJA.altoEncabezado)).toFixed(2) + 'cm';
+  assert.ok(conLogo.includes('padding:' + arribaPorDefecto));
   assert.ok(sinLogo.includes('padding:' + HOJA.margen));
   /* El logo se repite arriba de cada hoja como pseudoelemento, así que el del flujo
      tiene que desaparecer: si no, en la portada salía dos veces. */
@@ -168,6 +169,25 @@ test('el alto del logo del previo sale del documento', () => {
     .includes('height:1.23cm'));
   assert.ok(cssDeHojas({ logo: 'data:image/png;base64,A' })
     .includes('height:' + HOJA.altoEncabezado));
+});
+
+test('un logo más alto que el hueco por defecto no invade el cuerpo', () => {
+  /* El logo del informe de referencia de PROMOCIONES FANTASTICAS mide 5,53cm: con el
+     hueco fijo de 3,4cm (pensado para 1,5cm) invadía el cuerpo. El padding tiene que
+     crecer con el alto real del logo, no quedarse en la constante. */
+  const css = cssDeHojas({ logo: 'data:image/png;base64,A', alto: '5.53cm' });
+  const arribaEsperado = arribaConLogoCm(5.53).toFixed(2) + 'cm';
+  assert.ok(css.includes('padding:' + arribaEsperado));
+  const arribaCm = medidaEnCm(arribaEsperado);
+  assert.ok(arribaCm > 5.53 + medidaEnCm(HOJA.borde),
+    'el hueco reservado (' + arribaCm + 'cm) tiene que superar el alto del logo más el borde');
+});
+
+test('altoMaximoDeEncabezado toma la imagen más alta, no la primera', () => {
+  const encabezado = '<img style="width:2cm;height:1.23cm" /><img style="width:3cm;height:5.53cm" />';
+  assert.equal(altoMaximoDeEncabezado(encabezado), 5.53);
+  assert.equal(altoMaximoDeEncabezado('<p>sin imágenes</p>'), null);
+  assert.equal(altoMaximoDeEncabezado(''), null);
 });
 
 test('el CSS del .doc no usa pseudoclases que Word no entiende', () => {
