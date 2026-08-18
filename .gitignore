@@ -112,3 +112,10 @@ _tmp_*.mjs
 *.tmp.mjs
 
 parche/
+
+# Insumos de prueba de MC Internacional: 35,6 MB de PDFs, .xlsm, .doc y un .zip
+# que no aportan nada al repo y bloqueaban la compuerta de árbol limpio de
+# revisar-ramas-equipo en cada integración. Solo esta carpeta, no
+# «Archivos Prueba/» entera: ahí hay 59 archivos ya versionados que el equipo
+# comparte, y un patrón más ancho ocultaría los que agreguen los compañeros.
+Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/MC Internacional/
