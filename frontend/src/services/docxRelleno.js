@@ -38,6 +38,7 @@ import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
   filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
+  NOMBRES_TABLA_ADICIONAL,
 } from './tablasOperaciones.js';
 /* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
    este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
@@ -911,7 +912,7 @@ function candidatosBloqueTabla(xml, nombres) {
  * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
  */
 export function localizarBloqueTabla(xml, nombres, opciones = {}) {
-  const candidatos = candidatosBloqueTabla(xml, nombres);
+  const candidatos = descartarPorNombre(candidatosBloqueTabla(xml, nombres), opciones.excluir);
   if (!candidatos.length) return null;
 
   /* El número solo desempata. Si la plantilla renumeró y ninguno coincide, se sigue
@@ -921,6 +922,31 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   const finalistas = porNumero.length ? porNumero : candidatos;
   const i = Number(opciones.ocurrencia) || 0;
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+/**
+ * Descarta los candidatos cuyo rótulo contiene alguno de los nombres excluidos.
+ *
+ * La búsqueda casa por INCLUSIÓN, y hay tablas cuyo nombre contiene el de otra: «Operación
+ * adicional Transacciones Intercompañía» contiene «Transacciones Intercompañía», así que las
+ * dos la reclamarían. Sin esto, la ficha del vinculado acabaría escrita encima de la tabla de
+ * la operación adicional —o al revés—, y las dos declaran cosas distintas ante la DIAN.
+ *
+ * Se aplica a los NOMBRES, no a los números: el prefijo «Tabla N.» se renumera entre
+ * plantillas y no sirve para distinguir nada.
+ *
+ * @param {Array} candidatos
+ * @param {string[]} [excluir]
+ * @returns {Array}
+ */
+export function descartarPorNombre(candidatos, excluir) {
+  const claves = (Array.isArray(excluir) ? excluir : [excluir])
+    .map(claveTitulo).filter(Boolean);
+  if (!claves.length) return candidatos;
+  return candidatos.filter((c) => {
+    const clave = claveTitulo(c && c.titulo);
+    return !clave || !claves.some((e) => clave.includes(e));
+  });
 }
 
 /**
@@ -1581,8 +1607,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     );
     /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
        segunda, y el localizador trabaja sobre posiciones del XML. */
-    reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 1 });
-    reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 0 });
+    /* `excluir`: hay plantillas que rotulan la tabla de la sección 4 como «Operación adicional
+       Transacciones Inter compañía», y el localizador casa por inclusión, así que sin el veto
+       la ficha del vinculado se escribiría encima de aquélla. */
+    const soloTx = { excluir: NOMBRES_TABLA_ADICIONAL };
+    reemplazar('Transacciones Inter compañía', tablaTx, { ...soloTx, ocurrencia: 1 });
+    reemplazar('Transacciones Inter compañía', tablaTx, { ...soloTx, ocurrencia: 0 });
   }
 
   /* 3-bis. Operación adicional Transacciones Intercompañía — la sección «4. Información
@@ -1597,7 +1627,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      La plantilla puede traerla en columnas o en ficha vertical, como pasa con el rango: se
      mira cuántas columnas declara la que ya está ahí en vez de imponer una forma. */
   if (tieneOperacionAdicional(estudio)) {
-    reemplazar('Operación adicional Transacciones Intercompañía', (b, xmlBloque) => {
+    reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => {
       const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
       const t = columnas > 0 && columnas <= 2
         ? filasOperacionAdicionalFicha(estudio)

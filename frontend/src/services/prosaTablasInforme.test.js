@@ -397,3 +397,63 @@ test('la tasa entra también por la función que corre las cuatro familias', () 
   const salida = plano(actualizarProsaTablas('<p>' + FRASE_PRIME + '</p>', estudio, []));
   assert.ok(salida.includes('fue de 7,37% EA'), 'la tasa no entró por actualizarProsaTablas');
 });
+
+/* ════════ Multiempresa: cada firma redacta lo mismo de otra manera ════════ */
+
+/* El sistema no genera el informe desde cero: rellena la plantilla del cliente, y esa
+   plantilla la redactó otra firma. Anclar en el giro exacto de un informe concreto es
+   garantizar que el siguiente cliente vuelva a radicar los datos del anterior. Lo que se
+   ancla es la palabra que NOMBRA el dato —valor, monto, importe— y lo que va alrededor se
+   admite en sus variantes. */
+
+const REDACCIONES_MONTO = [
+  ['«por un valor total de $ X»',
+    'En el año 2019, ACME tuvo operaciones de ingreso con sus vinculados económicos por un '
+    + 'valor total de $ 3.435.357.400'],
+  ['«por valor de $X», sin el artículo',
+    'La transacción con el vinculado se realizó por valor de $3.435.357.400 durante el '
+    + 'ejercicio fiscal.'],
+  ['«por un monto de X»',
+    'Las operaciones de ingreso con vinculados se hicieron por un monto de 3.435.357.400 '
+    + 'pesos colombianos.'],
+  ['«cuyo importe asciende a X»',
+    'Operaciones con vinculados económicos cuyo importe asciende a $ 3.435.357.400.'],
+  ['«la suma total de X»',
+    'La suma total de 3.435.357.400 corresponde a las operaciones de ingreso del período.'],
+];
+
+for (const [nombre, frase] of REDACCIONES_MONTO) {
+  test('el monto se actualiza con ' + nombre, () => {
+    const salida = plano(actualizarProsaOperaciones('<p>' + frase + '</p>', estudio, []));
+    assert.ok(salida.includes(MONTO), 'el monto no entró: ' + salida);
+    assert.ok(!salida.includes('3.435.357.400'), 'sobrevive el de la plantilla: ' + salida);
+  });
+}
+
+const REDACCIONES_ANIO_MARGENES = [
+  ['«correspondientes al año»',
+    'El siguiente cuadro presenta las utilidades operacionales sobre ventas de las compañías '
+    + 'comparables para los estados financieros correspondientes al año 2019:'],
+  ['«relativos al año»',
+    'Márgenes obtenidos por las compañías comparables, relativos al año 2019.'],
+  ['«del año»',
+    'Estados financieros de las compañías comparables del año 2019, según la base consultada.'],
+];
+
+for (const [nombre, frase] of REDACCIONES_ANIO_MARGENES) {
+  test('el año de los márgenes se actualiza con ' + nombre, () => {
+    const salida = plano(actualizarProsaMargenes('<p>' + frase + '</p>', estudio, []));
+    assert.ok(salida.includes('año 2025'), 'el año no entró: ' + salida);
+    assert.ok(!salida.includes('2019'), 'sobrevive el año de la plantilla: ' + salida);
+  });
+}
+
+test('el ejercicio fiscal se reconoce con cualquier participio', () => {
+  for (const participio of ['finalizado', 'terminado', 'cerrado', 'concluido']) {
+    const frase = 'La transacción efectuada durante el ejercicio fiscal ' + participio
+      + ' el 31 de diciembre de 2019 fue el ingreso por un valor de $ 3.435.357.400.';
+    const salida = plano(actualizarProsaOperaciones('<p>' + frase + '</p>', estudio, []));
+    assert.ok(salida.includes('31 de diciembre de 2025'),
+      'no se actualizó con «' + participio + '»: ' + salida);
+  }
+});

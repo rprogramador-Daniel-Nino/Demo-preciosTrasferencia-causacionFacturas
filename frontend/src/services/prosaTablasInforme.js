@@ -148,16 +148,24 @@ export function actualizarProsaMuestra(texto, estudio, avisos, opciones = {}) {
 /* ══════════════════ operaciones con el vinculado ══════════════════ */
 
 const RX_ES_PROSA_OPERACIONES = new RegExp(
-  '(?:por' + HUECO + 'un' + HUECO + 'valor)'
+  '(?:por' + HUECO + '(?:un' + HUECO + ')?(?:valor|monto|importe|suma))'
   + '|(?:operaciones\\s+de\\s+(?:ingreso|egreso))'
-  + '|(?:transacci[óo]n\\s+efectuada)', 'i');
+  + '|(?:transacci(?:[óo]n|ones)\\s+(?:efectuada|realizada))'
+  + '|(?:vinculados?\\s+econ[óo]micos?)', 'i');
+
+/* Cómo introduce cada plantilla el monto. Una firma escribe «por un valor total de $ X», otra
+   «por valor de $X», otra «por un monto de X» y otra «cuyo importe asciende a X». Lo estable
+   no es el giro sino la palabra que nombra la cifra —valor, monto, importe, suma— seguida de
+   un conector corto; lo demás cambia con cada cliente. */
+const INTRO_MONTO = '(?:valor|monto|importe|suma)'
+  + '(?:\\s+(?:total|neto|bruto|global))?'
+  + '(?:\\s+(?:de|por|a|que\\s+asciende\\s+a|asciende\\s+a|equivalente\\s+a))?';
 
 const ANCLAS_OPERACIONES = [
   {
     clave: 'monto',
     grupoCifra: 2,
-    rx: new RegExp('(por\\s+un\\s+valor(?:\\s+total)?\\s+de' + HUECO + '\\$?' + HUECO + ')('
-      + MONTO + ')', 'i'),
+    rx: new RegExp('(' + INTRO_MONTO + HUECO + '\\$?' + HUECO + ')(' + MONTO + ')', 'i'),
   },
 ];
 
@@ -182,8 +190,10 @@ export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}
        —el ejercicio gravable cierra el 31 de diciembre—, sólo el año. */
     {
       clave: 'anio',
-      rx: new RegExp('(finalizado\\s+el\\s+\\d{1,2}\\s+de\\s+[a-záéíóú]+\\s+de' + HUECO
-        + ')(20\\d{2})', 'gi'),
+      /* «finalizado», pero también «terminado» o «cerrado»: el ejercicio se cierra el 31 de
+         diciembre en todas las plantillas y lo único que cambia es el participio. */
+      rx: new RegExp('((?:finalizad|terminad|cerrad|concluid)o\\s+(?:el\\s+)?'
+        + '\\d{1,2}\\s+de\\s+[a-záéíóú]+\\s+de' + HUECO + ')(20\\d{2})', 'gi'),
       valor: anio,
     },
     /* «En el año 2024, END GAME […] tuvo operaciones de ingreso…». Sólo si en ESE párrafo se
@@ -216,9 +226,13 @@ export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}
 
 /* ══════════════════ márgenes de las comparables ══════════════════ */
 
+/* El párrafo que presenta la tabla de márgenes. Se reconoce por lo que anuncia —las utilidades
+   o los márgenes del conjunto de comparables, o sus estados financieros— y no por un giro
+   literal: cada firma lo redacta a su manera y el año que hay que corregir es el mismo. */
 const RX_ES_PROSA_MARGENES = new RegExp(
   '(?:utilidades' + HUECO + 'operacionales)'
-  + '|(?:correspondientes\\s+al\\s+a[ñn]o)', 'i');
+  + '|(?:m[áa]rgenes' + HUECO + '(?:de|del|obtenidos))'
+  + '|(?:estados\\s+financieros' + HUECO + '(?:correspondientes|de\\s+las|del\\s+a[ñn]o))', 'i');
 
 /* Cómo nombra el informe cada indicador. Sirve para avisar, no para sustituir. */
 const NOMBRES_PLI = {
@@ -250,7 +264,11 @@ export function actualizarProsaMargenes(texto, estudio, avisos, opciones = {}) {
     valores: {},
     sustituciones: anio ? [{
       clave: 'anio',
-      rx: new RegExp('(correspondientes\\s+al\\s+a[ñn]o' + HUECO + ')(20\\d{2})', 'gi'),
+      /* «correspondientes al año 2024», «relativos al año 2024», «del año 2024», «para el año
+         2024». Se exige la palabra «año» delante: sin ella, «de 2024» casaría cualquier fecha
+         suelta del párrafo. */
+      rx: new RegExp('((?:correspondiente|relativo|referid)?[so]?\\s*(?:al|del|para\\s+el|de)?'
+        + '\\s*a[ñn]o' + HUECO + ')(20\\d{2})', 'gi'),
       valor: anio,
     }] : [],
     avisos,

@@ -135,6 +135,28 @@ export function filasTransaccionesIntercompania(estudio) {
    todas las filas de la sección y no fila a fila. */
 export const UMBRAL_OPERACION_ADICIONAL = 2500000000;
 
+/* Cómo rotula cada plantilla esta tabla. Se busca por NOMBRE y no por número, y con varias
+   redacciones porque ninguna firma titula igual: unas escriben «Intercompañía» junto y otras
+   «Inter compañía»; unas dicen «Operación adicional» y otras «Operaciones adicionales» o
+   «Información adicional». El localizador casa por inclusión, así que basta con que el rótulo
+   de la plantilla contenga una de éstas.
+
+   El último es a propósito el más corto: es el que salva a la plantilla que rotula la tabla
+   solo como «Operación adicional», sin repetir «Transacciones». */
+export const NOMBRES_TABLA_ADICIONAL = [
+  'Operación adicional Transacciones Intercompañía',
+  'Operación adicional Transacciones Inter compañía',
+  'Operaciones adicionales Transacciones Intercompañía',
+  'Información adicional Transacciones Intercompañía',
+  'Operaciones adicionales',
+  'Operación adicional',
+];
+
+/* Y lo que NO es esta tabla aunque su nombre la contenga. «Operación adicional Transacciones
+   Inter compañía» contiene «Transacciones Inter compañía», que es la Tabla 3: sin este veto
+   las dos se reclamarían y la ficha del vinculado acabaría escrita sobre la otra. */
+export const NOMBRES_TABLA_TRANSACCIONES = 'Transacciones Inter compañía';
+
 /**
  * ¿El estudio tiene información adicional que haya que declarar?
  *
