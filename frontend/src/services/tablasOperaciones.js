@@ -20,6 +20,12 @@ const SIN_DATO = '—';
 
 const wrap = (v) => String(v == null || v === '' ? SIN_DATO : v);
 
+/** Un monto ya formateado, o «—». Mismo formateador que el resto del informe. */
+const montoTexto = (v) => {
+  const n = num(v);
+  return n === null ? SIN_DATO : fmt(n);
+};
+
 /**
  * El concepto de la operación, partido en descripción y código DIAN.
  *
@@ -115,6 +121,104 @@ export function filasTransaccionesIntercompania(estudio) {
       ['Tipo de operaciones (' + (e.egreso ? 'Egreso' : 'Ingreso') + ')', wrap(e.vinc_tipo)],
       ['Monto en pesos', montoDeLaOperacion(e)],
     ],
+    fuente: 'Información de ' + (e.ent || 'la Compañía') + '.',
+  };
+}
+
+/* ══════════════════ Operación adicional (códigos DIAN 61 a 63) ══════════════════ */
+
+/* Desde cuánto la información adicional del formato entra al informe.
+   Son operaciones que NO se reflejan en el Estado de Resultados —préstamos con vinculados,
+   reintegros de gastos, operaciones a nombre de vinculados—, así que no sustentan el rango
+   ni el monto de la operación analizada; se declaran aparte y solo cuando pesan. Criterio
+   del usuario (2026-08-19): dos mil quinientos millones de pesos, medidos sobre la SUMA de
+   todas las filas de la sección y no fila a fila. */
+export const UMBRAL_OPERACION_ADICIONAL = 2500000000;
+
+/**
+ * ¿El estudio tiene información adicional que haya que declarar?
+ *
+ * Las dos condiciones son necesarias y las pidió el usuario en ese orden: que el formato
+ * TRAIGA la sección, y que su total SUPERE el umbral. Si falta cualquiera de las dos, el
+ * informe sale exactamente como salía antes de que esto existiera — sin la tabla, sin un
+ * hueco y sin un rótulo huérfano.
+ *
+ * @param {object} estudio
+ * @returns {boolean}
+ */
+export function tieneOperacionAdicional(estudio) {
+  const ad = estudio && estudio.operacionAdicional;
+  if (!ad || !Array.isArray(ad.filas) || !ad.filas.length) return false;
+  return montoOperacionAdicional(estudio) > UMBRAL_OPERACION_ADICIONAL;
+}
+
+/** El total de la información adicional, sumado de sus filas si no viene ya calculado. */
+export function montoOperacionAdicional(estudio) {
+  const ad = (estudio && estudio.operacionAdicional) || null;
+  if (!ad) return 0;
+  const guardado = num(ad.monto);
+  if (guardado !== null && guardado > 0) return guardado;
+  return (ad.filas || []).reduce((acc, f) => acc + (num(f.monto) || 0), 0);
+}
+
+/**
+ * Tabla «Operación adicional Transacciones Intercompañía», en horizontal: una fila por
+ * operación declarada en la sección 4 del formato.
+ *
+ * Devuelve `null` cuando no aplica, y quien la publica tiene que respetarlo: escribir la
+ * tabla vacía dejaría en el informe un rótulo sin datos, y escribirla con lo que la
+ * plantilla traía la dejaría con las operaciones del cliente anterior.
+ *
+ * @param {object} estudio
+ * @returns {{nombre:string, encabezados:string[], filas:string[][], fuente:string}|null}
+ */
+export function filasOperacionAdicional(estudio) {
+  if (!tieneOperacionAdicional(estudio)) return null;
+  const e = estudio || {};
+  const filas = e.operacionAdicional.filas.map((f) => [
+    wrap(f.vinculado),
+    wrap(f.nit),
+    wrap(f.pais),
+    wrap(f.tipo),
+    montoTexto(f.monto),
+  ]);
+  return {
+    nombre: 'Operación adicional Transacciones Intercompañía',
+    encabezados: ['Compañía vinculada', 'Identificación fiscal', 'País - Residencia fiscal',
+      'Tipo de operación', 'Monto en pesos'],
+    filas,
+    fuente: 'Información de ' + (e.ent || 'la Compañía') + '.',
+  };
+}
+
+/**
+ * La misma tabla en ficha vertical, para la plantilla que la trae con dos columnas —igual
+ * que «Transacciones Inter compañía», de la que toma el nombre—.
+ *
+ * Con más de una operación adicional se publica el total y se detalla cada una en su propia
+ * fila: una ficha de etiqueta y valor no admite varias contrapartes en columnas, y perder
+ * las demás en silencio sería declarar de menos.
+ *
+ * @param {object} estudio
+ * @returns {{nombre:string, encabezados:string[], filas:string[][], fuente:string}|null}
+ */
+export function filasOperacionAdicionalFicha(estudio) {
+  if (!tieneOperacionAdicional(estudio)) return null;
+  const e = estudio || {};
+  const ops = e.operacionAdicional.filas;
+  const primera = ops[0];
+  const filas = [
+    ['Razón social', wrap(primera.vinculado)],
+    ['Identificación fiscal', wrap(primera.nit)],
+    ['País - Residencia fiscal', wrap(primera.pais)],
+    ['Tipo de vinculación', wrap(e.tipo_vinculacion || 'Art 260-1 E-T Inciso 1')],
+  ];
+  for (const op of ops) filas.push(['Tipo de operación', wrap(op.tipo)]);
+  filas.push(['Monto en pesos', montoTexto(montoOperacionAdicional(e))]);
+  return {
+    nombre: 'Operación adicional Transacciones Intercompañía',
+    encabezados: ['Compañía vinculada', ''],
+    filas,
     fuente: 'Información de ' + (e.ent || 'la Compañía') + '.',
   };
 }

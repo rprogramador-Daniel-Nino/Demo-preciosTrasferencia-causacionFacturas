@@ -25,6 +25,7 @@ import {
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+  filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
 } from './tablasOperaciones.js';
 import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 
@@ -186,6 +187,26 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
     }
     out = sustituir(out, bloque, tabla, objetivo.rotulo,
           objetivo.anioEnEncabezado ? (Number(estudio.anio) || 2025) : 0);
+  }
+
+  /* «Operación adicional Transacciones Intercompañía» va fuera del bucle porque es la única
+     tabla que puede NO corresponder: se publica solo si el formato trajo la sección «4.
+     Información adicional» y su total supera el umbral. Si no, la plantilla se queda como
+     está —sin tabla vacía y sin un aviso de tabla ausente, que ahí no significaría nada—.
+
+     La plantilla puede traerla en ficha vertical o en columnas, igual que el rango, así que
+     se mira la forma de la que ya está en vez de imponer una. */
+  if (tieneOperacionAdicional(estudio)) {
+    const nombreAdicional = 'Operación adicional Transacciones Intercompañía';
+    const bloque = localizarTablaHtml(out, nombreAdicional);
+    if (bloque) {
+      const tabla = bloque.columnas > 0 && bloque.columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      out = sustituir(out, bloque, tabla, false, 0);
+    } else if (Array.isArray(avisos)) {
+      avisos.push(nombreAdicional);
+    }
   }
 
   /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un

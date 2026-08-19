@@ -34,6 +34,7 @@ import { FORMULAS, ROTULOS_FORMULA, ooxmlDeFormula } from './formulasOmml.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+  filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
 } from './tablasOperaciones.js';
 /* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
    este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
@@ -1240,7 +1241,13 @@ function sustituidorDeTablas(xmlInicial, avisos) {
         }
         return false;
       }
-      out = out.slice(0, bloque.inicio) + generar(bloque) + out.slice(bloque.fin);
+      /* El generador recibe también el XML de la tabla que va a sustituir. Casi ninguno lo
+         necesita, pero hay tablas que la plantilla trae en dos formas —en ficha vertical o
+         en columnas— y la única manera de no imponer una es mirar cuántas columnas tiene la
+         que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
+      out = out.slice(0, bloque.inicio)
+        + generar(bloque, out.slice(bloque.inicio, bloque.fin))
+        + out.slice(bloque.fin);
       return true;
     },
     /* Para lo que no es sustituir una tabla entera —la prosa que la describe, por ejemplo—.
@@ -1412,6 +1419,29 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
        segunda, y el localizador trabaja sobre posiciones del XML. */
     reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 1 });
     reemplazar('Transacciones Inter compañía', tablaTx, { ocurrencia: 0 });
+  }
+
+  /* 3-bis. Operación adicional Transacciones Intercompañía — la sección «4. Información
+     adicional» del formato (códigos DIAN 61 a 63: préstamos, reintegros y operaciones a
+     nombre de vinculados que no se reflejan en el Estado de Resultados).
+
+     SOLO si el formato la trajo y su total supera el umbral. Si no, no se toca nada: la
+     plantilla se queda como estaba, sin tabla vacía y sin rótulo huérfano. Por eso va dentro
+     del `if` y no dentro del generador — pedir la sustitución y devolver la tabla vieja
+     dejaría además un aviso de tabla ausente que no significa nada.
+
+     La plantilla puede traerla en columnas o en ficha vertical, como pasa con el rango: se
+     mira cuántas columnas declara la que ya está ahí en vez de imponer una forma. */
+  if (tieneOperacionAdicional(estudio)) {
+    reemplazar('Operación adicional Transacciones Intercompañía', (b, xmlBloque) => {
+      const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
+      const t = columnas > 0 && columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      return generarTablaOoxml(
+        tituloDe(b, t.nombre), t.encabezados, t.filas, escaparXml(t.fuente)
+      );
+    });
   }
 
   // 4. Método de Precios de Transferencia Aplicable
