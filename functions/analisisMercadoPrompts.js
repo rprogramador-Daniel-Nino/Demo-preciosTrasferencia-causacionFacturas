@@ -56,15 +56,23 @@ const SERIES_MACRO = [
 
 function construirPromptBusqueda(anioActual) {
   const anios = [anioActual - 2, anioActual - 1, anioActual, anioActual + 1];
-  const anioProyeccion = anioActual + 1;
+  /* Dos años, no uno: este cron es global y no sabe para qué informe se va a usar cada
+     corrida. Un informe de año gravable `anioActual - 1` —el caso más común, un informe que
+     se radica el año después del que declara— necesita `anioActual` como SU año de
+     proyección, porque el DANE todavía no cerró ese año. Uno de año gravable `anioActual`
+     necesita `anioActual + 1`. Pedir solo `anioActual + 1` (como antes) dejaba sin cubrir el
+     primer caso: para el cron `anioActual` es simplemente "el año en curso", así que la
+     pregunta genérica de DANE/GEIH no encontraba nada (el año no ha cerrado) y el informe
+     salía con «Desempleo Proyectado <anioActual>: [Completar...]». */
+  const aniosProyeccion = [anioActual, anioActual + 1];
   const lista = SERIES_MACRO.map((s) => '- "' + s.clave + '": ' + s.pregunta + '.').join('\n');
 
-  /* La instrucción va aparte de la lista de series y nombra el año explícitamente: dentro de
+  /* La instrucción va aparte de la lista de series y nombra los años explícitamente: dentro de
      la lista, «(DANE, GEIH)» pesa más que la ventana de años y el modelo se queda con el
      publicador histórico. */
   const proyecciones = SERIES_MACRO
     .filter((s) => s.fuenteProyeccion)
-    .map((s) => '- "' + s.clave + '": para ' + anioProyeccion + ' consulta ' + s.fuenteProyeccion + '.')
+    .map((s) => '- "' + s.clave + '": para ' + aniosProyeccion.join(' y ') + ' consulta ' + s.fuenteProyeccion + '.')
     .join('\n');
 
   /* «Responde ÚNICAMENTE con un objeto JSON» era lo que rompía esta corrida: con esa
@@ -79,24 +87,27 @@ function construirPromptBusqueda(anioActual) {
     'cifras que recuerdes: cada valor tiene que salir de una página que hayas consultado en ' +
     'esta misma respuesta, y quiero ver citadas esas fuentes.\n\n' +
     'Series, para los años ' + anios.join(', ') + ':\n\n' + lista + '\n\n' +
-    'El año ' + anioProyeccion + ' es de PROYECCIÓN y lo quiero para TODAS las series. Ojo: ' +
-    'algunas de las fuentes de arriba solo publican el dato ya ocurrido, no un pronóstico, ' +
-    'así que para ese año hay que buscar en quien sí proyecta:\n\n' + proyecciones + '\n\n' +
+    'Los años ' + aniosProyeccion.join(' y ') + ' pueden ser de PROYECCIÓN —según cuál sea el año ' +
+    'gravable del informe que use esta corrida, uno de los dos es "el año siguiente" que hay que ' +
+    'proyectar— y los quiero para TODAS las series. Ojo: algunas de las fuentes de arriba solo ' +
+    'publican el dato ya ocurrido, no un pronóstico, así que para esos dos años hay que buscar en ' +
+    'quien sí proyecta:\n\n' + proyecciones + '\n\n' +
     'Si la primera institución que consultes no lo publica, NO te rindas ni dejes el año ' +
     'vacío: sigue buscando en las demás de esa lista y, si ninguna lo trae, en cualquier otro ' +
     'pronóstico publicado y atribuible (banco central, banca de inversión, gremio, centro de ' +
     'investigación económica). Un año sin cifra obliga a completarlo a mano después, así que ' +
     'agota la búsqueda antes de omitirlo.\n\n' +
     'Cuando la cifra de un año venga de una fuente DISTINTA de la principal de esa serie ' +
-    '—que es lo normal en el año de proyección—, no la des como un número suelto: devuélvela ' +
+    '—que es lo normal en un año de proyección—, no la des como un número suelto: devuélvela ' +
     'con SU propia fuente y SU propia URL, así:\n' +
-    '  "desempleo_colombia": { "valores": { "' + (anioProyeccion - 1) + '": "8.9", "' + anioProyeccion +
-    '": { "valor": "8.5", "fuente": "FMI, WEO Octubre ' + anioProyeccion + '", "fuenteUrl": "https://..." } }, ' +
-    '"fuente": "DANE, GEIH", "fuenteUrl": "https://..." }\n' +
+    '  "desempleo_colombia": { "valores": { "' + (anioActual - 1) + '": "8.9", "' + anioActual +
+    '": { "valor": "8.7", "fuente": "FMI, WEO Octubre ' + anioActual + '", "fuenteUrl": "https://..." }, "' +
+    (anioActual + 1) + '": { "valor": "8.5", "fuente": "FMI, WEO Octubre ' + anioActual +
+    '", "fuenteUrl": "https://..." } }, "fuente": "DANE, GEIH", "fuenteUrl": "https://..." }\n' +
     'Ese enlace se publica en la propia celda del informe, para que quien lo lea pueda ' +
     'verificar el pronóstico sin salir del documento. Sin él la cifra no sirve.\n\n' +
-    'Esa proyección también tiene que salir de una página que hayas consultado: no la ' +
-    'estimes tú ni la extrapoles de los años anteriores.\n\n' +
+    'Esas proyecciones también tienen que salir de una página que hayas consultado: no las ' +
+    'estimes tú ni las extrapoles de los años anteriores.\n\n' +
     'Cuando termines de buscar, incluye en tu respuesta un objeto JSON con esta forma (puede ' +
     'ir acompañado del texto y las citas que necesites; lo que importa es que el JSON esté ' +
     'completo y bien formado):\n' +
@@ -123,10 +134,42 @@ function construirPromptBusqueda(anioActual) {
  *  puede coincidir jamás. La fuenteUrl queda como cita del modelo (que sí
  *  acaba de hacer una búsqueda real), no como algo verificado en esa URL
  *  puntual. */
+/** Un valor anual con forma `{valor, fuente, fuenteUrl}` —la que usan los años de
+ *  proyección con fuente distinta a la principal de la serie—, no un número o
+ *  string suelto ni el arreglo de `crecimiento_por_region`. */
+function esValorConFuentePropia(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
 function parsearRespuestaBusqueda(texto, groundingChunks) {
   const bruto = extraerJSON(texto);
   const huboBusquedaReal = Array.isArray(groundingChunks) && groundingChunks.length > 0;
   const clavesValidas = new Set(SERIES_MACRO.map((s) => s.clave));
+
+  /* Las 8 series se piden en una sola llamada, y ahí es fácil que el modelo le pegue a
+     una serie la cita que encontró para otra: en producción (2026-08-19) devolvió el
+     mismo artículo —sobre el crecimiento del PIB— como fuenteUrl tanto de
+     `pib_colombia` como de `desempleo_colombia`, y ese enlace además daba 404. Antes de
+     armar el resultado se registra, por cada URL vista (la de nivel de serie y la de
+     cada año con fuente propia), qué claves de serie la reclaman como suya. La misma
+     URL repetida DENTRO de una sola serie es normal —un solo informe puede cubrir
+     varios años—, así que solo cuenta cuando aparece en más de una clave distinta. */
+  const clavesPorUrl = new Map();
+  const registrarUrl = (clave, url) => {
+    if (!url) return;
+    if (!clavesPorUrl.has(url)) clavesPorUrl.set(url, new Set());
+    clavesPorUrl.get(url).add(clave);
+  };
+  Object.keys(bruto).forEach((clave) => {
+    if (!clavesValidas.has(clave)) return;
+    const entrada = bruto[clave];
+    if (!entrada || typeof entrada.valores !== 'object' || entrada.valores === null) return;
+    registrarUrl(clave, entrada.fuenteUrl);
+    Object.values(entrada.valores).forEach((v) => {
+      if (esValorConFuentePropia(v)) registrarUrl(clave, v.fuenteUrl);
+    });
+  });
+  const urlSospechosa = (url) => !!url && clavesPorUrl.get(url).size > 1;
 
   const series = {};
   Object.keys(bruto).forEach((clave) => {
@@ -134,10 +177,22 @@ function parsearRespuestaBusqueda(texto, groundingChunks) {
     const entrada = bruto[clave];
     if (!entrada || typeof entrada.valores !== 'object' || entrada.valores === null) return;
 
+    /* Se descarta SOLO la URL sospechosa, nunca la cifra ni el nombre de la fuente: no
+       hay forma de saber a cuál de las dos series pertenece de verdad, pero la cifra en
+       sí no viene en duda por eso. `fuenteDelValor` (analisisMercado.js) ya sabe omitir
+       la URL cuando viene vacía y publicar solo el nombre de la fuente. */
+    const valores = {};
+    Object.keys(entrada.valores).forEach((anio) => {
+      const v = entrada.valores[anio];
+      valores[anio] = esValorConFuentePropia(v) && urlSospechosa(v.fuenteUrl)
+        ? { ...v, fuenteUrl: null }
+        : v;
+    });
+
     series[clave] = {
-      valores: entrada.valores,
+      valores,
       fuente: entrada.fuente || 'Fuente sin especificar',
-      fuenteUrl: huboBusquedaReal ? (entrada.fuenteUrl || null) : null,
+      fuenteUrl: huboBusquedaReal && !urlSospechosa(entrada.fuenteUrl) ? (entrada.fuenteUrl || null) : null,
       confiable: huboBusquedaReal,
     };
   });

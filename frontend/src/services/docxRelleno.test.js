@@ -1441,6 +1441,24 @@ test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', ()
   assert.ok(hitos[0].inicio > entradaToc.length - 1);
 });
 
+test('localizarHitos acepta un arreglo de sinónimos por posición', () => {
+  /* El contenido es universal (la sección de desempleo es la misma para todos los
+     informes), pero el .docx de cada contribuyente es un archivo distinto que un
+     consultor distinto redactó en su momento — "Tasa de Desempleo" y "Desempleo en
+     Colombia" son el mismo apartado con otra redacción, no dos secciones distintas. */
+  const xml = [parrafoXml('Uno'), parrafoXml('Tasa de Desempleo'), parrafoXml('Tres')].join('');
+  const hitos = localizarHitos(xml, ['Uno', ['Desempleo en Colombia', 'Tasa de Desempleo'], 'Tres']);
+  assert.ok(hitos[1], 'debió reconocer el sinónimo "Tasa de Desempleo"');
+  assert.ok(hitos[0].finPropio <= hitos[1].inicio);
+  assert.ok(hitos[1].finPropio <= hitos[2].inicio);
+});
+
+test('localizarHitos con sinónimos no encuentra nada si ninguno de los dos aparece', () => {
+  const xml = [parrafoXml('Uno'), parrafoXml('Otra cosa'), parrafoXml('Tres')].join('');
+  const hitos = localizarHitos(xml, ['Uno', ['Desempleo en Colombia', 'Tasa de Desempleo'], 'Tres']);
+  assert.equal(hitos[1], null);
+});
+
 test('reemplazarPorHitos reemplaza el hueco cuando la función de contenido devuelve texto', () => {
   const xml = [
     parrafoXml('Encabezado A'),
@@ -1473,6 +1491,34 @@ test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () =
   reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => 'nunca se usa'], avisos, 'III.A');
   assert.equal(avisos.length, 1);
   assert.match(avisos[0], /III\.A/);
+});
+
+test('reemplazarPorHitos encuentra el hito con un sinónimo, y el aviso muestra un nombre legible si falla', () => {
+  /* Camino positivo: la plantilla trae "Tasa de Desempleo" en vez de "Desempleo en
+     Colombia" y aun así debe localizar el hueco. */
+  const xmlOk = [parrafoXml('Encabezado A'), parrafoXml('Tasa de Desempleo')].join('');
+  const docOk = { xmlInterno: xmlOk, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(
+    docOk,
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => parrafoXml('Prosa nueva.')],
+    []
+  );
+  assert.match(docOk.xml, /Prosa nueva\./);
+
+  /* Camino negativo: sin ninguno de los dos sinónimos, el aviso debe leerse como texto —
+     "Desempleo en Colombia", el primero de la lista— y no como `[object Object]`. */
+  const xmlFalta = parrafoXml('Encabezado A');
+  const docFalta = { xmlInterno: xmlFalta, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(
+    docFalta,
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => 'nunca se usa'],
+    avisos
+  );
+  assert.ok(avisos.some((a) => a.includes('Desempleo en Colombia')));
+  assert.ok(!avisos.some((a) => a.includes('[object Object]')));
 });
 
 test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {

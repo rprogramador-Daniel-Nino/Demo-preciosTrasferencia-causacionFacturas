@@ -617,7 +617,12 @@ function finDeTablaInmediataHtml(html, cursor) {
  */
 export function localizarHitosHtml(html, titulos) {
   const texto = String(html || '');
-  const claves = (titulos || []).map(claveTitulo);
+  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
+     traer redacciones distintas según qué consultor escribió el documento de referencia de
+     ese cliente ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
+     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
+     Mismo mecanismo que `localizarHitos` de `docxRelleno.js`. */
+  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
@@ -641,7 +646,7 @@ export function localizarHitosHtml(html, titulos) {
   let desde = 0;
   for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
     if (k >= candidatos.length) continue;
     let finPropio = candidatos[k].fin;
     const finTabla = finDeTablaInmediataHtml(texto, finPropio);
@@ -654,11 +659,16 @@ export function localizarHitosHtml(html, titulos) {
 
 /** Igual que `reemplazarPorHitos` de `docxRelleno.js`, pero devuelve el HTML nuevo en
  *  vez de operar sobre un `sustituidorDeTablas` (esta ruta no tiene ese envoltorio). */
+/** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
+ *  sinónimos si trae varios — mismo criterio que `docxRelleno.js`. */
+const etiquetaTituloHtml = (t) => (Array.isArray(t) ? t[0] : t);
+
 export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombreParaAvisos) {
   let salida = String(html || '');
   const hitos = localizarHitosHtml(salida, titulos);
+  const etiquetas = titulos.map(etiquetaTituloHtml);
   console.log('[tablasHtmlInforme] ' + (nombreParaAvisos || '') + ': hitos encontrados '
-    + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+    + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + etiquetas.join(' → ') + ')');
 
   /* UN aviso por rótulo ausente, no uno por par consecutivo. Mismo criterio y mismo
      texto que `reemplazarPorHitos` en `docxRelleno.js`, donde está la explicación. */
@@ -709,11 +719,11 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
            inventan un marcador que antes no existía. */
         const nuevo = contenidos[i]('');
         if (nuevo !== null) {
-          console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+          console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
             '": sin ancla, insertado de respaldo al final de la sección');
           if (Array.isArray(avisos)) {
             avisos.push(
-              (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+              (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
               'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
               'revisa el orden antes de radicar'
             );
@@ -726,10 +736,10 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
     const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
     const nuevo = contenidos[i](textoHueco);
     if (nuevo === null) {
-      console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": sin tocar');
+      console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
       continue;
     }
-    console.log('[tablasHtmlInforme] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado');
+    console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado');
     if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
       cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
     }
@@ -799,7 +809,9 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
     salida,
     [
       tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
-      'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
+      'Tasa Representativa del Mercado',
+      ['Desempleo en Colombia', 'Tasa de Desempleo', 'Mercado Laboral en Colombia'],
+      'Análisis del Sector',
     ],
     [
       primerHueco(narrativa.colombia, 'colombiana'),

@@ -94,6 +94,54 @@ const conEncabezado = (filasDeDatos) => {
   return workbookConHoja('Op. Vinculados Economicos', filas);
 };
 
+/** Como `conEncabezado`, pero con el nombre de hoja a elección (para probar variantes). */
+const conEncabezadoEnHoja = (nombreHoja, filasDeDatos) => {
+  const filas = [];
+  for (let i = 0; i < 9; i++) filas.push(['(portada)']);
+  filas.push(ENCABEZADO);
+  filasDeDatos.forEach((f) => filas.push(f));
+  return workbookConHoja(nombreHoja, filas);
+};
+
+test('una hoja titulada distinto al literal de referencia igual se reconoce por palabra clave', async () => {
+  /* Caso real de un cliente (Symtek): su hoja se llama "OPERACIONES CON VINCULADOS", no
+     "Op. Vinculados Economicos". El contenido es el mismo formato DIAN, pero exigir el
+     nombre exacto dejaba la hoja entera sin leer y el usuario veía "no se encontraron
+     las hojas esperadas" con datos reales delante. */
+  const wb = conEncabezadoEnHoja('OPERACIONES CON VINCULADOS', [
+    ['TRINIDAD CEMENT LIMITED', '193174', 'Trinidad y Tobago', 'Puerto España', 'venta de bienes', '', '', '1007', '4001', '', 380899599],
+  ]);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.vinc, 'TRINIDAD CEMENT LIMITED');
+  assert.strictEqual(res.monto, 380899599);
+});
+
+test('una hoja de préstamos truncada a 31 caracteres ("...CON VINC") también se reconoce', async () => {
+  /* El límite de 31 caracteres de Excel trunca "Operaciones Prestamos Con Vinculados" hasta
+     dejar solo "VINC" del final, sin llegar a "VINCULADOS". */
+  const wb = conEncabezadoEnHoja('OPERACIONES PRESTAMOS CON VINC', [
+    ['ACME PRESTAMOS SAS', '900123456', 'MEXICO', '', 'INTERESES', '', '', '1007', '4001', '', 700000],
+  ]);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.vinc, 'ACME PRESTAMOS SAS');
+  assert.strictEqual(res.monto, 700000);
+});
+
+test('una hoja sin "vinc" ni "paraiso" en el nombre se ignora, como antes', async () => {
+  const wb = conEncabezadoEnHoja('SEGMENTACION OPERACIONES', [
+    ['NO DEBERIA LEERSE', '900999999', 'MEXICO', '', 'VENTA', '', '', '1007', '4001', '', 999],
+  ]);
+
+  const res = await parseExcelOperations(workbookToFakeFile(wb));
+
+  assert.strictEqual(res.vinc, null);
+  assert.strictEqual(res.monto, null);
+});
+
 test('la columna Cod vacía en toda la hoja no descarta las operaciones', async () => {
   /* «Cod» es opcional en el formato: quien escribe el tipo de operación en texto la deja
      en blanco. Exigirla siempre descartaba la hoja entera de ese contribuyente y el monto
