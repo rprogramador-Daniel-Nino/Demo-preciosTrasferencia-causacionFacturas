@@ -7,6 +7,7 @@
 
 import { fmt, pctf, num, UVT_VALUES } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
+import { resolverComposicionAccionaria } from './tablasContribuyente.js';
 
 const EEFF = [
   ['t_cash', 'Efectivo'],
@@ -123,7 +124,7 @@ export function valorDeCampo(estudio, campo, opciones = {}) {
   }
 
   if (campo === 'capital_pagado' || campo === 'total_acciones') {
-    const bruto = estudio[campo];
+    const bruto = resolverComposicionAccionaria(estudio)[campo];
     if (bruto === undefined || bruto === null || bruto === '') return null;
     const numerico = num(bruto);
     return numerico === null ? null : fmt(numerico);
@@ -167,7 +168,7 @@ export function valorDeCampo(estudio, campo, opciones = {}) {
   }
 
   if (campo.startsWith('accionista.')) {
-    const a = (estudio.accionistas || [])[0];
+    const a = resolverComposicionAccionaria(estudio).accionistas[0];
     if (!a) return null;
     const clave = campo.slice(11);
     if (clave === 'participacion' || clave === 'participacion_pct') {

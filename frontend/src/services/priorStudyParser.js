@@ -30,6 +30,17 @@ Devuelve ÚNICAMENTE un JSON estricto sin marcas markdown con esta estructura:
       "pli": "Indicador de rentabilidad con el que se evaluó (por ejemplo: Margen Operacional, Margen Neto de Costos y Gastos, Berry); cadena vacía si no aparece",
       "margen": 0.0
     }
+  ],
+  "capital_pagado": 0,
+  "total_acciones": 0,
+  "accionistas": [
+    {
+      "nombre": "Nombre del accionista o razón social, tal como aparece en el informe",
+      "pais": "País de residencia fiscal del accionista; cadena vacía si no aparece",
+      "acciones": 0,
+      "valor_capital": 0,
+      "participacion_pct": 0
+    }
   ]
 }
 
@@ -44,7 +55,9 @@ Reglas para los campos de las comparables:
 - "margen" es el margen o indicador de rentabilidad de esa comparable como número decimal
   (por ejemplo 0.0725 para 7,25 %, o 7.25 si el informe lo expresa en porcentaje). Si el
   informe no lo trae para esa empresa, usa null. No lo estimes ni lo calcules.
-- No inventes ningún valor: lo que no esté en el documento va como cadena vacía o null.`;
+- No inventes ningún valor: lo que no esté en el documento va como cadena vacía o null.
+- Igual criterio para "accionistas": si el informe no trae composición accionaria, devuelve
+  la lista vacía. No copies accionistas de otra sección del informe ni infieras porcentajes.`;
 
 /* `/api/gemini` se corta a sí mismo a los 50 s y devuelve un 504 pensado para
    reintentarse (ver `GEMINI_CORTE_MS` en `functions/index.js`) — un informe del año
@@ -115,6 +128,9 @@ export async function parsePriorStudyFile(file) {
         anio_gravable: parsed.anio_gravable || null,
         vinculado: parsed.vinculado || null,
         comparables: parsed.comparables || [],
+        capital_pagado: parsed.capital_pagado || null,
+        total_acciones: parsed.total_acciones || null,
+        accionistas: parsed.accionistas || [],
         filename: file.name
       };
     }
@@ -153,6 +169,9 @@ export async function parsePriorStudyFile(file) {
             anio_gravable: parsed.anio_gravable || null,
             vinculado: parsed.vinculado || null,
             comparables: parsed.comparables || [],
+            capital_pagado: parsed.capital_pagado || null,
+            total_acciones: parsed.total_acciones || null,
+            accionistas: parsed.accionistas || [],
             filename: file.name
           });
         } else {
