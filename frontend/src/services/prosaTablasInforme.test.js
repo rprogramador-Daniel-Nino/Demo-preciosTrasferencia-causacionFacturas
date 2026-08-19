@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   actualizarProsaMuestra, actualizarProsaOperaciones, actualizarProsaMargenes,
-  actualizarProsaTablas,
+  actualizarProsaAjustes, actualizarProsaTablas,
 } from './prosaTablasInforme.js';
 import { PARRAFO_OOXML } from './prosaVecindad.js';
 import { filasMuestraComparables, filasRazonesRechazo } from './tablasInforme.js';
@@ -317,4 +317,83 @@ test('una frase de la muestra final no se toma por el universo', () => {
   const salida = plano(actualizarProsaMuestra(html, estudio, []));
   assert.ok(salida.includes('conformada por ' + ACEPTADAS), 'no entró el conteo: ' + salida);
   assert.ok(!salida.includes(UNIVERSO), 'se escribió el universo donde va la muestra: ' + salida);
+});
+
+/* ════════ Ajustes a las comparables: la tasa de interés (Prime Rate) ════════ */
+
+/* Literal del informe, con el salto de línea de la cita de la FED. La tasa que declara es la
+   del informe del que salió la plantilla; el motor calcula el ajuste con `estudio.prime`, así
+   que el documento afirmaba una tasa que no es la que sustenta sus propios números. */
+const FRASE_PRIME = 'La tasa de interés que se utiliza para los ajustes de los comparables es '
+  + '‘’Tasa Prime Rate Promedio” definida por la Reserva Federal de los Estados '
+  + 'Unidos de Norteamérica (FED) como la "Average majority prime rate charged by banks on '
+  + 'short-term loans to business. quoted on an investment basis". Esta tasa durante el 2024 '
+  + 'fue de 8.31% EA.';
+
+test('la tasa de los ajustes es la del estudio, no la del informe de referencia', () => {
+  const salida = plano(actualizarProsaAjustes('<p>' + FRASE_PRIME + '</p>', estudio, []));
+  assert.ok(salida.includes('fue de 7,37% EA'), 'la tasa no entró: ' + salida);
+  assert.ok(!salida.includes('8.31'), 'sobrevive la tasa de la plantilla: ' + salida);
+});
+
+test('el año de esa frase se actualiza con la tasa', () => {
+  const salida = plano(actualizarProsaAjustes('<p>' + FRASE_PRIME + '</p>', estudio, []));
+  assert.ok(salida.includes('durante el 2025'), 'el año no se actualizó: ' + salida);
+});
+
+test('el «% EA» de la plantilla se conserva tal cual', () => {
+  /* El grupo del ancla es SOLO el número: el signo y la unidad son redacción del cliente y
+     cambiarlos por «7,370 %» haría que la frase cambiara de aspecto sin necesidad. */
+  for (const [frase, esperado] of [
+    ['Esta tasa durante el 2024 fue de 8.31% EA.', 'fue de 7,37% EA'],
+    ['Esta tasa durante el año 2024 fue del 8.31 % E.A. según la FED.', 'fue del 7,37 % E.A.'],
+  ]) {
+    const salida = plano(actualizarProsaAjustes('<p>' + frase + '</p>', estudio, []));
+    assert.ok(salida.includes(esperado), 'no se conservó la unidad: ' + salida);
+  }
+});
+
+test('la frase partida por el salto de página también se actualiza', () => {
+  /* La cita de la FED ocupa varias líneas y el extractor puede dejar la frase de la tasa en un
+     párrafo que ya no dice «prime». */
+  const suelta = 'short-term loans to business. quoted on an investment basis". Esta tasa '
+    + 'durante el 2024 fue de 8.31% EA.';
+  const salida = plano(actualizarProsaAjustes('<p>' + suelta + '</p>', estudio, []));
+  assert.ok(salida.includes('fue de 7,37% EA'), 'la tasa no entró: ' + salida);
+});
+
+test('un párrafo que no habla de la tasa no se toca aunque diga «fue de X%»', () => {
+  /* «fue de» seguido de un porcentaje aparece por todo el informe; lo que acota el ancla es
+     que el párrafo hable de la tasa de los ajustes. */
+  const ajeno = '<p>El margen operacional de la compañía fue de 4.985% en la operación de '
+    + 'compra neta de inventarios para distribución.</p>';
+  assert.equal(actualizarProsaAjustes(ajeno, estudio, []), ajeno);
+});
+
+test('sin tasa en el estudio no se escribe nada', () => {
+  /* Pasa cuando el estudio no aplica ajuste por capital de trabajo: la plantilla conserva su
+     frase, que es lo que corresponde. Un «—» donde había un número sería peor. */
+  const html = '<p>Tasa Prime Rate. Esta tasa durante el 2024 fue de 8.31% EA.</p>';
+  const salida = actualizarProsaAjustes(html, { anio: 2025 }, []);
+  assert.ok(salida.includes('8.31'), 'se tocó la tasa sin tenerla');
+  assert.ok(salida.includes('2024'), 'se tocó el año sin haber colocado la tasa');
+});
+
+test('la misma función atiende el .docx', () => {
+  const ooxml = '<w:p><w:r><w:t xml:space="preserve">Tasa Prime Rate. Esta tasa durante el 2024 '
+    + 'fue de </w:t></w:r><w:r><w:t>8.31</w:t></w:r><w:r><w:t>% EA.</w:t></w:r></w:p>';
+  const salida = actualizarProsaAjustes(ooxml, estudio, [], { rxParrafo: PARRAFO_OOXML });
+  assert.ok(plano(salida).includes('fue de 7,37% EA'), 'la tasa no entró: ' + plano(salida));
+  assert.equal((salida.match(/<w:r>/g) || []).length, (ooxml.match(/<w:r>/g) || []).length,
+    'cambió el número de runs');
+});
+
+test('aplicar dos veces la tasa da el mismo resultado', () => {
+  const una = actualizarProsaAjustes('<p>' + FRASE_PRIME + '</p>', estudio, []);
+  assert.equal(actualizarProsaAjustes(una, estudio, []), una);
+});
+
+test('la tasa entra también por la función que corre las cuatro familias', () => {
+  const salida = plano(actualizarProsaTablas('<p>' + FRASE_PRIME + '</p>', estudio, []));
+  assert.ok(salida.includes('fue de 7,37% EA'), 'la tasa no entró por actualizarProsaTablas');
 });

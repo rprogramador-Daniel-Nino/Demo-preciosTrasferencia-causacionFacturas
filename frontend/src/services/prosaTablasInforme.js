@@ -41,6 +41,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { filasRazonesRechazo, filasMuestraComparables } from './tablasInforme.js';
+import { num } from '../utils/calculations.js';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { sincronizarCifrasDeProsa, HUECO, PARRAFO_HTML } from './prosaVecindad.js';
 
@@ -294,7 +295,79 @@ function nombraEnProsaDeMargenes(texto, rxParrafo, ajeno, propio) {
   return false;
 }
 
-/* ══════════════════ las tres, en el orden en que salen en el informe ══════════════════ */
+/* ══════════════════ ajustes a las comparables: la tasa de interés ══════════════════ */
+
+const RX_ES_PROSA_AJUSTES = new RegExp(
+  '(?:prime' + HUECO + 'rate)'
+  + '|(?:tasa' + HUECO + 'prime)'
+  /* La cita de la FED ocupa varias líneas y el extractor puede partirla en el salto de
+     página, dejando la frase de la tasa en un párrafo que ya no dice «prime». */
+  + '|(?:esta\\s+tasa\\s+durante)', 'i');
+
+/* La tasa, sin el «%»: el grupo es SOLO el número. Así el «% EA» que la plantilla escriba
+   —con espacio o sin él, con «EA» o con «E.A.»— se queda tal cual, y esta frase no cambia de
+   aspecto por haberle corregido la cifra. */
+const TASA = '\\d+(?:[.,]\\d+)?';
+
+const ANCLAS_AJUSTES = [
+  {
+    clave: 'prime',
+    grupoCifra: 2,
+    rx: new RegExp('((?:fue|es|asciende\\s+a)\\s+(?:de\\s+|del\\s+)?' + HUECO + ')('
+      + TASA + ')(?=' + HUECO + '%)', 'i'),
+  },
+];
+
+/**
+ * Pone en la prosa de los ajustes la tasa de interés que el estudio usa de verdad.
+ *
+ * «…"Average majority prime rate charged by banks on short-term loans to business". Esta tasa
+ * durante el 2025 fue de 8.31% EA.» El motor calcula el ajuste por capital de trabajo con
+ * `estudio.prime` —la que se escribe en la ingesta de cifras y la que publica el Excel de
+ * soporte—, pero esta frase se quedaba con la del informe del que salió la plantilla. El
+ * documento declaraba entonces una tasa que no es la que sustenta sus propios números.
+ *
+ * @param {string} texto
+ * @param {object} estudio
+ * @param {string[]} [avisos]
+ * @param {{rxParrafo?:RegExp, reporte?:object}} [opciones]
+ * @returns {string}
+ */
+export function actualizarProsaAjustes(texto, estudio, avisos, opciones = {}) {
+  const study = estudio || {};
+  const tasa = num(study.prime);
+  /* Sin tasa no hay nada que corregir, y escribir un «—» donde la plantilla tenía un número
+     es peor que el número viejo. Pasa cuando el estudio no aplica ajuste (`useadj` en falso):
+     la plantilla conserva su frase, que es lo que corresponde. */
+  const valor = tasa === null || !(tasa > 0)
+    ? null
+    : tasa.toLocaleString('es-CO', { maximumFractionDigits: 3 });
+
+  return sincronizarCifrasDeProsa(texto, {
+    rxParrafo: opciones.rxParrafo || PARRAFO_HTML,
+    reconocedor: RX_ES_PROSA_AJUSTES,
+    rotulos: [],
+    anclas: ANCLAS_AJUSTES,
+    valores: { prime: valor },
+    /* El año de esa misma frase, y sólo si la tasa se colocó ahí: «durante el 20XX» aparece en
+       todo el informe y lo que lo hace seguro no es la frase, es haber acertado la tasa en ese
+       mismo párrafo. */
+    sustituciones: anioDe(study) ? [{
+      clave: 'anio',
+      rx: new RegExp('(durante\\s+el\\s+(?:a[ñn]o\\s+)?' + HUECO + ')(20\\d{2})', 'gi'),
+      valor: anioDe(study),
+      soloConCifras: true,
+    }] : [],
+    avisos,
+    reporte: opciones.reporte,
+    mensajes: {
+      sinCifras: 'el informe cita la tasa de interés de los ajustes («Prime Rate»), pero no '
+        + 'está donde se esperaba: se queda la del informe de referencia',
+    },
+  });
+}
+
+/* ══════════════════ las cuatro, en el orden en que salen en el informe ══════════════════ */
 
 /**
  * Corre las tres familias sobre el mismo texto. Es el punto único de enganche, para que las dos
@@ -310,5 +383,6 @@ function nombraEnProsaDeMargenes(texto, rxParrafo, ajeno, propio) {
 export function actualizarProsaTablas(texto, estudio, avisos, opciones = {}) {
   let salida = actualizarProsaOperaciones(texto, estudio, avisos, opciones);
   salida = actualizarProsaMuestra(salida, estudio, avisos, opciones);
+  salida = actualizarProsaAjustes(salida, estudio, avisos, opciones);
   return actualizarProsaMargenes(salida, estudio, avisos, opciones);
 }
