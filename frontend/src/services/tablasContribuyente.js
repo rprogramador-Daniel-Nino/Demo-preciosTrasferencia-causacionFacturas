@@ -49,15 +49,46 @@ export function verticalSobreActivos(estudio) {
 }
 
 /**
+ * Composición accionaria efectiva: el certificado cargado en el estudio actual tiene
+ * prioridad; si no hay accionistas cargados ahí, se usa la composición heredada de
+ * `estudio.estudioAnterior` (el mismo informe del año anterior que alimenta el Motor de
+ * Comparables). Excepción deliberada al criterio de «nunca heredar en silencio»: a
+ * diferencia de una cifra que cambia cada año (UVT, resultados financieros), la
+ * composición accionaria es un hecho estructural que normalmente no cambia de un año a
+ * otro, y por eso se hereda sin marca visual cuando falta el certificado actual.
+ */
+export function resolverComposicionAccionaria(estudio) {
+  const actual = estudio && estudio.accionistas;
+  if (Array.isArray(actual) && actual.length) {
+    return {
+      accionistas: actual,
+      capital_pagado: estudio.capital_pagado,
+      total_acciones: estudio.total_acciones,
+    };
+  }
+  const anterior = estudio && estudio.estudioAnterior;
+  const heredados = anterior && anterior.accionistas;
+  if (Array.isArray(heredados) && heredados.length) {
+    return {
+      accionistas: heredados,
+      capital_pagado: anterior.capital_pagado,
+      total_acciones: anterior.total_acciones,
+    };
+  }
+  return { accionistas: [], capital_pagado: null, total_acciones: null };
+}
+
+/**
  * Tabla 6 — «Composición accionaria», con la fila de totales al cierre.
  *
  * La fila de total se emite siempre, incluso sin accionistas: es lo que delata que falta
- * cargar el certificado, en vez de dejar en el documento los accionistas de la plantilla.
+ * cargar el certificado (y no hay dato heredado del año anterior), en vez de dejar en el
+ * documento los accionistas de la plantilla.
  *
  * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
  */
 export function filasComposicionAccionaria(estudio) {
-  const accionistas = (estudio && estudio.accionistas) || [];
+  const { accionistas } = resolverComposicionAccionaria(estudio);
 
   const filas = accionistas.map((a) => [
     wrap(a.nombre),

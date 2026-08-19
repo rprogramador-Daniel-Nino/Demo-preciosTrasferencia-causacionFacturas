@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Upload, FileText, CheckCircle, AlertTriangle, Loader2, Users, FileCheck } from 'lucide-react';
 import axios from 'axios';
 import { parseAccionistasWithGeminiOCR } from '../services/accionistasParser';
+import { resolverComposicionAccionaria } from '../services/tablasContribuyente';
 import { fmt } from '../utils/calculations';
 
 export default function DatosContribuyente({ study, updateStudy }) {
@@ -10,6 +11,10 @@ export default function DatosContribuyente({ study, updateStudy }) {
   const [loadingAccionistas, setLoadingAccionistas] = useState(false);
   const [extractionMsg, setExtractionMsg] = useState('');
   const [accionistasMsg, setAccionistasMsg] = useState('');
+
+  /* El certificado cargado en este estudio tiene prioridad; sin él, se hereda la
+     composición accionaria del informe del año anterior (ver resolverComposicionAccionaria). */
+  const { accionistas: accionistasEfectivos } = resolverComposicionAccionaria(study);
 
   const handleFieldChange = (key, value) => {
     updateStudy({ [key]: value });
@@ -160,7 +165,7 @@ export default function DatosContribuyente({ study, updateStudy }) {
         </div>
 
         {/* Tabla de Composición Accionaria Extraída */}
-        {study.accionistas && study.accionistas.length > 0 && (
+        {accionistasEfectivos.length > 0 && (
           <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
             <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-2">
               <Users className="w-5 h-5 text-[#0FA3A1]" />
@@ -179,7 +184,7 @@ export default function DatosContribuyente({ study, updateStudy }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 font-mono">
-                  {study.accionistas.map((acc, idx) => (
+                  {accionistasEfectivos.map((acc, idx) => (
                     <tr key={idx} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30">
                       <td className="py-2.5 px-3 font-semibold text-zinc-900 dark:text-zinc-100 font-sans">{acc.nombre}</td>
                       {/* Hueco visible, no un país por defecto: «ESTADOS UNIDOS» era el
