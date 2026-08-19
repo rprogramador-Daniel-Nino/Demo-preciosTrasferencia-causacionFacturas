@@ -45,6 +45,7 @@ export { verticalSobreActivos };
 import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
+  filasCriteriosScreening,
 } from './tablasInforme.js';
 /* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
    definición de la matriz para las dos salidas del informe. */
@@ -89,6 +90,12 @@ const RUTA_DOC = 'word/document.xml';
 
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
+
+/** Nombre con el que la plantilla del cliente rotula la tabla de criterios de búsqueda.
+ *  No se importa de `tablasHtmlInforme.js`: esa dirección de import ya existe al revés
+ *  (`tablasHtmlInforme.js` importa `claveTitulo`/`numeroDeTabla` de aquí), y traer la
+ *  constante desde allí crearía un ciclo. */
+const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 
 /**
@@ -619,6 +626,112 @@ function finDeFila(xml, desde) {
   return -1;
 }
 
+/** Fin del `<w:tc>` que empieza en `desde`, contando anidamiento (una celda puede traer
+ *  una tabla anidada con sus propios `<w:tc>`). Mismo patrón que `finDeTabla`/`finDeFila`. */
+function finDeCelda(xml, desde) {
+  const rx = /<w:tc(?:\s[^>]*)?>|<\/w:tc>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '</w:tc>' ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/** Las `<w:tr>` de una tabla OOXML, con su XML y posición. Análogo a `filasDe`
+ *  (`tablasHtmlInforme.js`) pero apoyado en `finDeFila`, que ya cuenta anidamiento. */
+function filasDeOoxml(tablaXml) {
+  const texto = String(tablaXml || '');
+  const filas = [];
+  const rx = /<w:tr(?:\s[^>]*)?>/g;
+  let m;
+  while ((m = rx.exec(texto)) !== null) {
+    const fin = finDeFila(texto, m.index);
+    if (fin < 0) break;
+    filas.push({ xml: texto.slice(m.index, fin), inicio: m.index, fin });
+    rx.lastIndex = fin;
+  }
+  return filas;
+}
+
+/** Las `<w:tc>` de una fila OOXML, con su XML completo (`tcPr` —bordes, sombreado,
+ *  `gridSpan`, `vMerge`— incluida). Análogo a `celdasDe` (`tablasHtmlInforme.js`). */
+function celdasDeOoxml(filaXml) {
+  const texto = String(filaXml || '');
+  const celdas = [];
+  const rx = /<w:tc(?:\s[^>]*)?>/g;
+  let m;
+  while ((m = rx.exec(texto)) !== null) {
+    const fin = finDeCelda(texto, m.index);
+    if (fin < 0) break;
+    celdas.push({ xml: texto.slice(m.index, fin), inicio: m.index, fin });
+    rx.lastIndex = fin;
+  }
+  return celdas;
+}
+
+/**
+ * Reescribe las filas de datos de una tabla OOXML conservando su encabezado y el «molde»
+ * de sus celdas (bordes, sombreado, `gridSpan`/`vMerge`) — equivalente de `reescribirFilasHtml`
+ * (`tablasHtmlInforme.js`) para la ruta .docx.
+ *
+ * Hace falta porque «Códigos SIC utilizados» no es una tabla rectangular uniforme como las
+ * que arma `generarTablaOoxml`: alterna una fila de 2 celdas (etiqueta/valor) con una fila de
+ * 1 celda fusionada (el conector «Y»/«O»), y generarla desde cero perdería esa fusión.
+ *
+ * @param {string} tablaXml  el bloque «título + `<w:tbl>`» (o solo la tabla); basta con que
+ *        contenga la tabla en algún punto, porque el parseo busca `<w:tr>` directamente y el
+ *        párrafo de título, si lo hay, no tiene ninguno.
+ * @param {Array<string[]>} filas  una entrada `[conector]` o `[etiqueta, valor]` por fila —
+ *        la forma que ya produce `filasCriteriosScreening` (`tablasInforme.js`).
+ * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
+ *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
+ *        detección de la fila de fuente.
+ * @returns {string} el XML con las filas de cuerpo nuevas, o el original si no hay molde.
+ */
+export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
+  const tabla = String(tablaXml || '');
+  const encabezados = Math.max(1, Number(opciones.filasEncabezado) || 1);
+  const todas = filasDeOoxml(tabla);
+  if (todas.length <= encabezados) return tabla;
+
+  /* Misma heurística de pie de fuente que `reescribirFilasHtml`: la última fila se conserva
+     intacta cuando es de una sola celda y el resto de la tabla tiene más de una. No se
+     regenera aquí — es la misma decisión ya tomada en la ruta HTML, no algo que decidir de
+     nuevo: el pie «Fuente: ... publicado en ...» no se recalcula en ninguna de las dos rutas. */
+  const columnas = celdasDeOoxml(todas[encabezados - 1].xml).length;
+  const ultima = todas[todas.length - 1];
+  const esPie = opciones.pie !== false
+    && todas.length > encabezados + 1
+    && columnas > 1
+    && celdasDeOoxml(ultima.xml).length === 1;
+
+  const cuerpo = todas.slice(encabezados, esPie ? todas.length - 1 : todas.length);
+  if (!cuerpo.length) return tabla;
+
+  /* Moldes: una fila de dos celdas y una de una sola, representativas del cuerpo existente.
+     Se clona su XML COMPLETO —`tcPr` incluida, con el `gridSpan` de la fila del conector— y
+     solo se sustituye el texto con `reescribirTextoParrafoOoxml`; así no hace falta
+     reconstruir la fusión a mano. */
+  const filasCuerpo = cuerpo.map((f) => celdasDeOoxml(f.xml));
+  const moldeDos = filasCuerpo.find((cs) => cs.length === 2);
+  const moldeUno = filasCuerpo.find((cs) => cs.length === 1);
+  if (!moldeDos && !moldeUno) return tabla;
+
+  const nuevas = (filas || []).map((valores) => {
+    const vals = valores || [];
+    const molde = vals.length === 1 ? (moldeUno || moldeDos) : (moldeDos || moldeUno);
+    if (!molde) return '';
+    const celdas = molde.map((c, i) => reescribirTextoParrafoOoxml(
+      c.xml, String(vals[Math.min(i, vals.length - 1)] ?? '')
+    )).join('');
+    return '<w:tr>' + celdas + '</w:tr>';
+  }).join('');
+
+  return tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
+}
+
 /**
  * Fin del `<w:p>` que empieza en `desde`, contando anidamiento. -1 si no cierra.
  *
@@ -720,10 +833,10 @@ function candidatosPorFilaTitulo(texto, claves) {
  *                  `ocurrencia`: cuál tomar si quedan varias (0 = la primera).
  * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
  */
-export function localizarBloqueTabla(xml, nombres, opciones = {}) {
+function candidatosBloqueTabla(xml, nombres) {
   const texto = String(xml || '');
   const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
-  if (!claves.length) return null;
+  if (!claves.length) return [];
 
   const candidatos = [];
   const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
@@ -760,7 +873,21 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
      sobre lo que `ocurrencia` cuenta: «la primera» tiene que ser la primera que se lee. */
   candidatos.push(...candidatosPorFilaTitulo(texto, claves));
   candidatos.sort((a, b) => a.inicio - b.inicio);
+  return candidatos;
+}
 
+/**
+ * Bloque «párrafo del título + la tabla que le sigue» cuyo título coincide con
+ * alguno de los nombres dados.
+ *
+ * @param xml       el `document.xml` completo.
+ * @param nombres   nombre canónico de la tabla, o varios sinónimos.
+ * @param opciones  `numeros`: números con los que desambiguar dos tablas homónimas.
+ *                  `ocurrencia`: cuál tomar si quedan varias (0 = la primera).
+ * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
+ */
+export function localizarBloqueTabla(xml, nombres, opciones = {}) {
+  const candidatos = candidatosBloqueTabla(xml, nombres);
   if (!candidatos.length) return null;
 
   /* El número solo desempata. Si la plantilla renumeró y ninguno coincide, se sigue
@@ -770,6 +897,21 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   const finalistas = porNumero.length ? porNumero : candidatos;
   const i = Number(opciones.ocurrencia) || 0;
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+/**
+ * TODAS las tablas cuyo título coincide con alguno de los nombres dados, en orden de
+ * documento — equivalente OOXML de `localizarTablasHtml` (`tablasHtmlInforme.js`).
+ *
+ * Hace falta cuando la decisión de qué conservar y qué borrar depende de ver el conjunto
+ * completo de una vez (p. ej. «Códigos SIC utilizados», que puede venir hasta tres veces
+ * con el mismo nombre), y no de pedir una ocurrencia a la vez como hace
+ * `localizarBloqueTabla`.
+ *
+ * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}[]}
+ */
+export function localizarBloquesTabla(xml, nombres) {
+  return candidatosBloqueTabla(xml, nombres);
 }
 
 /* Si justo después de `cursor` viene una tabla —saltando párrafos vacíos, marcas de
@@ -1464,6 +1606,56 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       `Información Base Datos ${dbFuente}.`
     );
   }, { numeros: [16] });
+
+  /* 10.5. Códigos SIC utilizados (Criterios de búsqueda). La plantilla trae esta tabla hasta
+     tres veces —Ryan LLC, Capital IQ y Refinitiv— y el sistema hoy usa únicamente Capital IQ
+     como fuente del cribado. Mismo criterio, mismo motivo y misma fuente de datos
+     (`filasCriteriosScreening`, `tablasInforme.js`) que la ruta de plantilla PDF
+     (`actualizarTablasMotorHtml`, `tablasHtmlInforme.js:406-444`): sin este bloque, esta era
+     la única tabla del motor que la ruta .docx nunca tocaba, y se radicaba con el cribado del
+     año y la fuente (Capital IQ/Refinitiv) del informe del que salió la plantilla —
+     reportado con capturas de un informe real el 2026-08-18.
+
+     Sin `numeros` claros y con un número de ocurrencias distinto de 3, no hay forma de saber
+     con certeza cuál copia es la real: se deja tal cual y se avisa, en vez de arriesgar borrar
+     o mezclar la copia equivocada — mismo criterio que ya sigue este módulo ante ambigüedad
+     (ver «Rango Intercuartil»/«Tabla de rangos» más abajo). */
+  doc.aplicar((actual) => {
+    const criterios = filasCriteriosScreening(estudio);
+    if (!criterios.length) {
+      if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+      return actual;
+    }
+    const bloques = localizarBloquesTabla(actual, TABLA_CRITERIOS);
+    if (!bloques.length) {
+      if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+      return actual;
+    }
+
+    let salida = actual;
+    let tocada = false;
+    /* De atrás hacia adelante, como en Transacciones Inter compañía y en Rango Intercuartil:
+       borrar o reescribir mueve los índices de lo que va después en el documento. */
+    for (const bloque of [...bloques].reverse()) {
+      const idx = bloques.indexOf(bloque);
+      const esParaEliminar = bloque.numero === 13 || bloque.numero === 15
+        || (bloque.numero !== 14 && bloques.length === 3 && (idx === 0 || idx === 2));
+      const esParaConservar = bloque.numero === 14
+        || (bloque.numero == null && bloques.length === 3 && idx === 1);
+
+      if (esParaEliminar) {
+        salida = salida.slice(0, bloque.inicio) + salida.slice(bloque.fin);
+        tocada = true;
+      } else if (esParaConservar) {
+        salida = salida.slice(0, bloque.inicio)
+          + reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios)
+          + salida.slice(bloque.fin);
+        tocada = true;
+      }
+    }
+    if (!tocada && Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+    return salida;
+  });
 
   // 11. Muestra Compañías comparables
   reemplazar('Muestra Compañías comparables', (b) => {

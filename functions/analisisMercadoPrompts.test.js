@@ -9,6 +9,9 @@ const {
   parsearRespuestaRedaccion,
   armarDocumentoFirestore,
 } = require('./analisisMercadoPrompts');
+const { URLS_BLOQUEADAS } = require('./urlsBloqueadas');
+
+const URL_BLOQUEADA = [...URLS_BLOQUEADAS][0];
 
 /* Narrativas de prueba con largo realista. parsearRespuestaRedaccion exige un
    mínimo por apartado, así que «<p>A</p>» ya no pasa la validación — y no debe
@@ -191,6 +194,31 @@ test('parsearRespuestaBusqueda no toca la URL de nivel de serie cuando es de esa
   assert.strictEqual(series.pib_mundial.fuenteUrl, 'https://www.imf.org/weo-mundial');
 });
 
+test('parsearRespuestaBusqueda descarta una URL de la lista negra a nivel de serie', () => {
+  /* La lista negra guarda URLs que un humano ya confirmó rotas a mano (ver
+     urlsBloqueadas.js) — una corrida nueva no puede volver a colarla, aunque no haya
+     ninguna otra serie reclamándola (ese es el caso que sí cubre urlSospechosa). */
+  const texto = JSON.stringify({
+    pib_mundial: { valores: { 2026: '3.2' }, fuente: 'FMI, WEO', fuenteUrl: URL_BLOQUEADA },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.strictEqual(series.pib_mundial.fuenteUrl, null);
+  assert.strictEqual(series.pib_mundial.valores[2026], '3.2', 'se perdió la cifra por una URL bloqueada');
+});
+
+test('parsearRespuestaBusqueda descarta una URL de la lista negra en un valor con fuente propia', () => {
+  const texto = JSON.stringify({
+    desempleo_colombia: {
+      valores: { 2026: { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: URL_BLOQUEADA } },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.deepStrictEqual(series.desempleo_colombia.valores[2026],
+    { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: null });
+});
+
 test('la regla de no inventar sobrevive a la instrucción de proyección', () => {
   /* Pedirle una proyección no puede convertirse en permiso para estimarla él mismo: la
      cifra sigue teniendo que salir de una página consultada. */
@@ -355,6 +383,18 @@ test('parsearRespuestaRedaccion degrada una fuentesCitadas malformada a [] sin l
     assert.deepStrictEqual(salida.fuentesCitadas, [], 'no se degradó a [] con: ' + JSON.stringify(caso));
     assert.strictEqual(salida.mundial, MUNDIAL_OK, 'se perdió la narrativa por un campo de apoyo');
   });
+});
+
+test('parsearRespuestaRedaccion descarta una fuenteCitada cuya URL está en la lista negra', () => {
+  const salida = parsearRespuestaRedaccion(JSON.stringify({
+    mundial: MUNDIAL_OK,
+    colombia: COLOMBIA_OK,
+    fuentesCitadas: [
+      { titulo: 'DANE', url: 'https://dane.gov.co' },
+      { titulo: 'Artículo roto', url: URL_BLOQUEADA },
+    ],
+  }));
+  assert.deepStrictEqual(salida.fuentesCitadas, [{ titulo: 'DANE', url: 'https://dane.gov.co' }]);
 });
 
 test('parsearRespuestaRedaccion conserva las fuentes válidas y descarta solo las incompletas', () => {
