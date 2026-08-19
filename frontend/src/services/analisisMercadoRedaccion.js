@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { extraerJSON } from './comparablesEngine.js';
+import { esUrlBloqueada } from './urlsBloqueadas.js';
 
 const MODELO_REDACCION = 'claude-haiku-4-5-20251001';
 
@@ -78,6 +79,7 @@ export function parsearRespuestaRedaccionMacro(texto) {
   const fuentesCitadas = Array.isArray(bruto.fuentesCitadas)
     ? bruto.fuentesCitadas.filter(
         (f) => f && typeof f.titulo === 'string' && typeof f.url === 'string' && f.titulo && f.url
+          && !esUrlBloqueada(f.url)
       ).map((f) => ({ titulo: f.titulo, url: f.url }))
     : [];
 

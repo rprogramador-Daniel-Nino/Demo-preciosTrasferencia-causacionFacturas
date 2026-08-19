@@ -1,3 +1,5 @@
+const { esUrlBloqueada } = require('./urlsBloqueadas');
+
 /* Puerto de extraerJSONDeRespuestaIA (index.html:1994-2012): escanea llaves
    balanceadas respetando cadenas, porque los modelos casi siempre envuelven el JSON
    en prosa o marcas markdown y JSON.parse(texto.trim()) falla apenas sobra una
@@ -184,15 +186,16 @@ function parsearRespuestaBusqueda(texto, groundingChunks) {
     const valores = {};
     Object.keys(entrada.valores).forEach((anio) => {
       const v = entrada.valores[anio];
-      valores[anio] = esValorConFuentePropia(v) && urlSospechosa(v.fuenteUrl)
-        ? { ...v, fuenteUrl: null }
-        : v;
+      const urlInvalida = esValorConFuentePropia(v)
+        && (urlSospechosa(v.fuenteUrl) || esUrlBloqueada(v.fuenteUrl));
+      valores[anio] = urlInvalida ? { ...v, fuenteUrl: null } : v;
     });
 
     series[clave] = {
       valores,
       fuente: entrada.fuente || 'Fuente sin especificar',
-      fuenteUrl: huboBusquedaReal && !urlSospechosa(entrada.fuenteUrl) ? (entrada.fuenteUrl || null) : null,
+      fuenteUrl: huboBusquedaReal && !urlSospechosa(entrada.fuenteUrl) && !esUrlBloqueada(entrada.fuenteUrl)
+        ? (entrada.fuenteUrl || null) : null,
       confiable: huboBusquedaReal,
     };
   });
@@ -278,6 +281,7 @@ function parsearRespuestaRedaccion(texto) {
   const fuentesCitadas = Array.isArray(bruto.fuentesCitadas)
     ? bruto.fuentesCitadas.filter(
         (f) => f && typeof f.titulo === 'string' && typeof f.url === 'string' && f.titulo && f.url
+          && !esUrlBloqueada(f.url)
       ).map((f) => ({ titulo: f.titulo, url: f.url }))
     : [];
 

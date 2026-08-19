@@ -6,6 +6,8 @@
    abajo y functions/analisisSectorActualizar.js, que decide cuándo generar
    uno nuevo. */
 
+const { esUrlBloqueada } = require('./urlsBloqueadas');
+
 /* Mismo puerto de extraerJSONDeRespuestaIA que usa analisisMercadoPrompts.js
    (index.html:1994-2012) — se duplica aquí por la misma razón que allá: este
    módulo no comparte código con index.html ni con frontend/src. */
@@ -159,7 +161,7 @@ function parsearRespuestaBusquedaSector(texto, webSearchQueries) {
       valorAnterior: typeof f.valorAnterior === 'string' ? f.valorAnterior : '',
       valorActual: f.valorActual,
       fuente: f.fuente || 'Fuente sin especificar',
-      fuenteUrl: huboBusquedaReal ? (f.fuenteUrl || null) : null,
+      fuenteUrl: huboBusquedaReal && !esUrlBloqueada(f.fuenteUrl) ? (f.fuenteUrl || null) : null,
       confiable: huboBusquedaReal,
     }));
 
@@ -169,7 +171,7 @@ function parsearRespuestaBusquedaSector(texto, webSearchQueries) {
       .map((f) => ({
         dato: f.dato,
         fuente: f.fuente || 'Fuente sin especificar',
-        fuenteUrl: huboBusquedaReal ? (f.fuenteUrl || null) : null,
+        fuenteUrl: huboBusquedaReal && !esUrlBloqueada(f.fuenteUrl) ? (f.fuenteUrl || null) : null,
         confiable: huboBusquedaReal,
       }));
 
@@ -285,7 +287,8 @@ function parsearRespuestaRedaccionSector(texto) {
     }
   }
   const fuentesCitadas = (Array.isArray(bruto.fuentesCitadas) ? bruto.fuentesCitadas : [])
-    .filter((f) => f && typeof f.titulo === 'string' && f.titulo.trim() && typeof f.url === 'string' && f.url.trim());
+    .filter((f) => f && typeof f.titulo === 'string' && f.titulo.trim() && typeof f.url === 'string' && f.url.trim()
+      && !esUrlBloqueada(f.url));
 
   const resultado = {
     tituloSector: bruto.tituloSector.trim(),

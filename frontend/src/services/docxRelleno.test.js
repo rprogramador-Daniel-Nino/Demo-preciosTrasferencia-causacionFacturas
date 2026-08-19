@@ -11,6 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
+  localizarBloquesTabla, reescribirFilasOoxml,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioConclusionRango,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
@@ -612,6 +613,146 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
   assert.ok(xmlActualizado.includes('Tabla 10. Activos a 31 de diciembre de 2024'), 'No se reemplazó la Tabla 10');
   assert.ok(xmlActualizado.includes('5.000.000'), 'Falta el valor del efectivo formateado en la Tabla 10');
   assert.ok(xmlActualizado.includes('5,000 %'), 'Falta el análisis vertical de efectivo en la Tabla 10');
+});
+
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Códigos SIC utilizados (Criterios de búsqueda), ruta .docx.
+
+   Mismo defecto y mismo arreglo ya probado en `tablasHtmlInforme.test.js` para la ruta
+   HTML: la tabla se radicaba con el cribado del informe del que salió la plantilla. Estos
+   tests son el espejo OOXML de esos, con la forma real de la tabla (fila de 2 celdas por
+   criterio, fila de 1 celda fusionada para el conector «Y»/«O»).
+   ───────────────────────────────────────────────────────────────────────────── */
+
+const filaDosCeldasOoxml = (a, b) =>
+  '<w:tr><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p><w:t>' + a + '</w:t></w:p></w:tc>'
+  + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>' + b + '</w:t></w:p></w:tc></w:tr>';
+
+const filaUnaCeldaOoxml = (c) =>
+  '<w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:t>' + c + '</w:t></w:p></w:tc></w:tr>';
+
+const tablaSicOoxml = (numero, cuerpo, fuente) =>
+  '<w:p><w:t>' + (numero != null ? 'Tabla ' + numero + '. ' : '') + 'Códigos SIC utilizados</w:t></w:p><w:tbl>'
+  + filaDosCeldasOoxml('Criterio de búsqueda', '')
+  + cuerpo
+  + (fuente ? filaUnaCeldaOoxml(fuente) : '')
+  + '</w:tbl>';
+
+const CUERPO_SIC_VIEJO = filaDosCeldasOoxml('Código SIC primario:', 'Entre 1111 y 2222')
+  + filaUnaCeldaOoxml('Y')
+  + filaDosCeldasOoxml('Palabra clave:', 'Contiene viejo');
+
+const ESTUDIO_SIC = {
+  anio: 2025, ent: 'ACME', pli: 'MO',
+  criteriosScreening: [
+    { conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' },
+    { conector: 'O', etiqueta: 'Palabra clave:', valor: 'Contiene juegos' },
+  ],
+};
+
+test('Códigos SIC: tabla única (Tabla 14) se reescribe con los criterios del estudio', () => {
+  const xml = tablaSicOoxml(
+    14, CUERPO_SIC_VIEJO,
+    'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025 por Standard &amp; Poor&apos;s.'
+  );
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los criterios nuevos');
+  assert.ok(salida.includes('Contiene juegos'), 'falta la palabra clave nueva');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'sobrevivió el criterio anterior');
+  assert.ok(!salida.includes('Contiene viejo'), 'sobrevivió la palabra clave anterior');
+  assert.ok(salida.includes('Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025'),
+    'el pie de fuente no debe regenerarse');
+  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'la fila del conector conserva su fusión');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'la tabla sí estaba y sí se pudo reescribir');
+});
+
+test('Códigos SIC: tres ocurrencias numeradas 13/14/15 eliminan 13 y 15, conservan la 14', () => {
+  const xml = tablaSicOoxml(13, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + '<w:p><w:t>Medio.</w:t></w:p>'
+    + tablaSicOoxml(14, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + '<w:p><w:t>Medio.</w:t></w:p>'
+    + tablaSicOoxml(15, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Tabla 13. Códigos SIC utilizados'), 'se eliminó la tabla 13');
+  assert.ok(!salida.includes('Tabla 15. Códigos SIC utilizados'), 'se eliminó la tabla 15');
+  assert.ok(salida.includes('Tabla 14. Códigos SIC utilizados'), 'se conservó la tabla 14');
+  assert.strictEqual((salida.match(/Entre 7371 y 7375/g) || []).length, 1,
+    'solo la tabla 14 trae los criterios nuevos');
+  assert.ok(salida.includes('<w:t>Medio.</w:t>'), 'el texto intercalado entre las tres tablas sobrevive');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
+});
+
+test('Códigos SIC: tres ocurrencias SIN numerar eliminan la primera y la tercera por posición', () => {
+  const xml = tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.')
+    + tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual((salida.match(/Códigos SIC utilizados/g) || []).length, 1,
+    'solo debe sobrevivir una copia de la tabla');
+  assert.ok(salida.includes('Fuente: Capital IQ.'), 'sobrevivió la del medio');
+  assert.ok(!salida.includes('Fuente: Ryan LLC.'), 'se eliminó la primera');
+  assert.ok(!salida.includes('Fuente: Refinitiv.'), 'se eliminó la tercera');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la que sobrevive trae los criterios nuevos');
+});
+
+test('Códigos SIC: sin criteriosScreening no se toca nada y se avisa', () => {
+  const xml = tablaSicOoxml(14, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+
+  assert.ok(salida.includes('Entre 1111 y 2222'), 'la tabla debe quedar exactamente igual');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('Códigos SIC: dos ocurrencias sin numerar (ni 13/14/15) no se tocan y se avisa', () => {
+  /* El caso real reportado: la plantilla trae la tabla dos veces, ninguna numerada 13/14/15.
+     Sin forma de saber cuál es la copia vigente, se prefiere no arriesgar borrar o mezclar la
+     equivocada antes que adivinar — mismo criterio que el resto del módulo ante ambigüedad. */
+  const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de fundamentos de Refinitiv, publicado en octubre de 2024.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual(salida, xml, 'ninguna de las dos copias debe alterarse');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, gridSpan) en las filas nuevas', () => {
+  const cuerpoConSombreado = '<w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="FFF2CC"/></w:tcPr>'
+    + '<w:p><w:t>Código SIC primario:</w:t></w:p></w:tc>'
+    + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>'
+    + filaUnaCeldaOoxml('Y');
+  const tabla = tablaSicOoxml(null, cuerpoConSombreado, 'Fuente: Capital IQ.');
+
+  const salida = reescribirFilasOoxml(tabla, [
+    ['Código SIC primario:', 'Entre 7371 y 7375'],
+    ['O'],
+  ]);
+
+  assert.match(salida, /<w:shd w:val="clear" w:fill="FFF2CC"\/>/, 'se perdió el sombreado del molde');
+  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'se perdió el gridSpan del molde del conector');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los valores nuevos');
+  assert.ok(salida.includes('Fuente: Capital IQ.'), 'el pie de fuente no debe tocarse');
+});
+
+test('localizarBloquesTabla devuelve todas las ocurrencias homónimas en orden de documento', () => {
+  const xml = tablaSicOoxml(13, CUERPO_SIC_VIEJO, 'a')
+    + tablaSicOoxml(14, CUERPO_SIC_VIEJO, 'b')
+    + tablaSicOoxml(15, CUERPO_SIC_VIEJO, 'c');
+  const bloques = localizarBloquesTabla(xml, 'Códigos SIC utilizados');
+
+  assert.strictEqual(bloques.length, 3);
+  assert.deepStrictEqual(bloques.map((b) => b.numero), [13, 14, 15]);
+  assert.ok(bloques[0].inicio < bloques[1].inicio && bloques[1].inicio < bloques[2].inicio,
+    'deben venir en orden de documento');
 });
 
 
