@@ -63,6 +63,7 @@ import { nameKey } from './comparablesEngine.js';
 /* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
+import { actualizarProsaTablas } from './prosaTablasInforme.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -1107,6 +1108,26 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     const etiquetas = titulos.map(etiquetaTitulo);
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
       + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + etiquetas.join(' → ') + ')');
+    /* UN aviso por rótulo ausente, y no uno por cada par de rótulos consecutivos que no
+       se pudo delimitar. Cada rótulo delimita dos apartados —el que cierra y el que
+       abre—, así que el aviso por pares repetía la misma causa dos veces y una cadena de
+       siete rótulos rota por el primero producía seis líneas idénticas en el fondo. Lo
+       que quien radica necesita saber es qué rótulo escribe distinto su plantilla: eso se
+       arregla una vez y descuelga todos los apartados que dependían de él. */
+    titulos.forEach((titulo, i) => {
+      if (hitos[i]) return;
+      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+        + '», así que los apartados que delimita se quedan como están en la plantilla';
+      console.warn('[docxRelleno] ' + aviso);
+      if (!Array.isArray(avisos)) return;
+      /* Y ni siquiera una vez por sección: el rótulo que CIERRA una cadena es el que ABRE
+         la siguiente —«Análisis del Sector» cierra la economía colombiana y abre el
+         sector—, así que sin esto el mismo rótulo ausente se avisa dos veces, con dos
+         encabezados distintos y la misma causa detrás. Se compara por el rótulo
+         entrecomillado, que es lo único que el usuario tiene que ir a corregir. */
+      if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+      avisos.push(aviso);
+    });
     let salida = actual;
 
     /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
@@ -1130,9 +1151,8 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
       if (!hitoActual || !hitoSiguiente) {
-        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + etiquetas[i] + '" o "' + etiquetas[i + 1] + '"';
-        console.warn('[docxRelleno] ' + aviso);
-        if (Array.isArray(avisos)) avisos.push(aviso);
+        /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando
+           el rótulo ausente que lo causa. Aquí solo queda el respaldo. */
         if (cursorRespaldo !== null) {
           const nuevo = contenidos[i]('');
           if (nuevo !== null) {
@@ -1718,16 +1738,33 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      plantilla de este cliente («…se ubica entre el percentil 25 (X) y (Y) percentil 75, la
      mediana con (Z)»). Se conserva como respaldo porque cubre redacciones donde la cifra no va
      detrás de su rótulo, y porque es la que está probada contra el .docx real. */
+  const reporteProsa = {};
   const antesDeProsa = doc.xml;
-  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
+  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos,
+    { rxParrafo: PARRAFO_OOXML, reporte: reporteProsa }));
   if (doc.xml === antesDeProsa) {
     doc.aplicar((x) => actualizarProsaTrasTabla(
       x, 'Rango Intercuartil',
       [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
       avisos,
     ));
+  }
+  /* El año va SIEMPRE, y no sólo cuando el respaldo posicional entra. Estaba dentro del `if`, y
+     eso funcionaba mientras las plantillas que necesitaban el año fueran justo las que la prosa
+     no sabía tocar. Al emparejar por cercanía, la frase de la plantilla que escribe las cifras
+     sin paréntesis ya se actualiza —el `if` deja de entrar— y con él se habría ido el «ajustado
+     durante el 20XX», que en esa plantilla vive en otro párrafo. Se salta si la prosa ya lo puso,
+     porque entonces el aviso sería el mismo recado dos veces en el panel. */
+  if (!reporteProsa.anioPuesto) {
     doc.aplicar((x) => actualizarAnioConclusionRango(x, year, avisos));
   }
+
+  /* Las otras frases que citan cifras de una tabla: cuántas comparables se identificaron y
+     cuántas quedaron, el monto de la operación con el vinculado y el año de los estados
+     financieros de las comparables. Van por la misma función que la ruta del PDF, con el
+     delimitador de párrafo de Word, para que las dos rutas no puedan quedarse una con menos
+     arreglos que la otra. */
+  doc.aplicar((x) => actualizarProsaTablas(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
 
   /* 13. Margen Operacional Compañías Comparables.
 

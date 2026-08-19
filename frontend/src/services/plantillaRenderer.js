@@ -10,6 +10,7 @@ import {
   actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
 import { actualizarProsaRango } from './prosaRangoInforme.js';
+import { actualizarProsaTablas } from './prosaTablasInforme.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 import { actualizarAnexoCHtml } from './anexoCHtml.js';
@@ -83,6 +84,11 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      radicaba con las cifras del informe de referencia mientras la tabla de arriba ya traía las
      del estudio. La misma función atiende la ruta .docx, cambiando cómo se delimita el párrafo. */
   html = actualizarProsaRango(html, estudio, avisosTablas);
+  /* Y por el mismo motivo, las otras frases que citan cifras de una tabla: cuántas comparables
+     se identificaron y cuántas quedaron, el monto de la operación con el vinculado y el año de
+     los estados financieros de las comparables. Ninguna de esas cifras es un campo que el
+     marcado alcance de forma fiable, así que se radicaban con las del informe de referencia. */
+  html = actualizarProsaTablas(html, estudio, avisosTablas);
 
   html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);
