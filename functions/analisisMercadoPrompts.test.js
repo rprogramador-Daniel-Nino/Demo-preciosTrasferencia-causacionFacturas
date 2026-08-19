@@ -125,6 +125,72 @@ test('parsearRespuestaBusqueda conserva la fuente propia de un valor de proyecci
   assert.strictEqual(series.desempleo_colombia.valores[2025], '8.9');
 });
 
+test('parsearRespuestaBusqueda descarta una URL que dos series distintas reclaman como propia', () => {
+  /* Caso real de producción (2026-08-19): la misma URL —un artículo sobre el
+     crecimiento del PIB— salió como fuenteUrl tanto de pib_colombia como de
+     desempleo_colombia, y encima daba 404. No hay forma de saber a cuál de las dos
+     pertenece de verdad, así que se descarta en ambas; la cifra y el nombre de la
+     fuente se conservan. */
+  const urlCompartida = 'https://www.swissinfo.ch/spa/el-fmi-reduce-la-prevision';
+  const texto = JSON.stringify({
+    pib_colombia: {
+      valores: { 2026: '2.3', 2027: { valor: '2.5', fuente: 'FMI, WEO', fuenteUrl: urlCompartida } },
+      fuente: 'DANE, Cuentas Nacionales',
+      fuenteUrl: 'https://www.dane.gov.co/cuentas-nacionales',
+    },
+    desempleo_colombia: {
+      valores: {
+        2025: '8.9',
+        2026: { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: urlCompartida },
+      },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+
+  assert.deepStrictEqual(series.pib_colombia.valores[2027],
+    { valor: '2.5', fuente: 'FMI, WEO', fuenteUrl: null });
+  assert.deepStrictEqual(series.desempleo_colombia.valores[2026],
+    { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: null });
+  /* Las fuentes de nivel de serie no se comparten entre estas dos, así que no se tocan. */
+  assert.strictEqual(series.pib_colombia.fuenteUrl, 'https://www.dane.gov.co/cuentas-nacionales');
+  assert.strictEqual(series.desempleo_colombia.fuenteUrl, 'https://www.dane.gov.co/geih');
+});
+
+test('parsearRespuestaBusqueda conserva una URL repetida DENTRO de la misma serie', () => {
+  /* Un solo informe del FMI puede cubrir varios años de la MISMA serie -eso no es el
+     caso sospechoso, es lo normal-, así que no se descarta. */
+  const urlDelInforme = 'https://www.imf.org/weo-abril-2026';
+  const texto = JSON.stringify({
+    desempleo_colombia: {
+      valores: {
+        2025: '8.9',
+        2026: { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: urlDelInforme },
+        2027: { valor: '10.0', fuente: 'FMI, WEO', fuenteUrl: urlDelInforme },
+      },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+
+  assert.strictEqual(series.desempleo_colombia.valores[2026].fuenteUrl, urlDelInforme);
+  assert.strictEqual(series.desempleo_colombia.valores[2027].fuenteUrl, urlDelInforme);
+});
+
+test('parsearRespuestaBusqueda no toca la URL de nivel de serie cuando es de esa serie sola', () => {
+  const texto = JSON.stringify({
+    pib_mundial: {
+      valores: { 2026: '3.2' },
+      fuente: 'FMI, WEO',
+      fuenteUrl: 'https://www.imf.org/weo-mundial',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.strictEqual(series.pib_mundial.fuenteUrl, 'https://www.imf.org/weo-mundial');
+});
+
 test('la regla de no inventar sobrevive a la instrucción de proyección', () => {
   /* Pedirle una proyección no puede convertirse en permiso para estimarla él mismo: la
      cifra sigue teniendo que salir de una página consultada. */

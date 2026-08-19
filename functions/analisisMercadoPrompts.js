@@ -134,10 +134,42 @@ function construirPromptBusqueda(anioActual) {
  *  puede coincidir jamás. La fuenteUrl queda como cita del modelo (que sí
  *  acaba de hacer una búsqueda real), no como algo verificado en esa URL
  *  puntual. */
+/** Un valor anual con forma `{valor, fuente, fuenteUrl}` —la que usan los años de
+ *  proyección con fuente distinta a la principal de la serie—, no un número o
+ *  string suelto ni el arreglo de `crecimiento_por_region`. */
+function esValorConFuentePropia(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
 function parsearRespuestaBusqueda(texto, groundingChunks) {
   const bruto = extraerJSON(texto);
   const huboBusquedaReal = Array.isArray(groundingChunks) && groundingChunks.length > 0;
   const clavesValidas = new Set(SERIES_MACRO.map((s) => s.clave));
+
+  /* Las 8 series se piden en una sola llamada, y ahí es fácil que el modelo le pegue a
+     una serie la cita que encontró para otra: en producción (2026-08-19) devolvió el
+     mismo artículo —sobre el crecimiento del PIB— como fuenteUrl tanto de
+     `pib_colombia` como de `desempleo_colombia`, y ese enlace además daba 404. Antes de
+     armar el resultado se registra, por cada URL vista (la de nivel de serie y la de
+     cada año con fuente propia), qué claves de serie la reclaman como suya. La misma
+     URL repetida DENTRO de una sola serie es normal —un solo informe puede cubrir
+     varios años—, así que solo cuenta cuando aparece en más de una clave distinta. */
+  const clavesPorUrl = new Map();
+  const registrarUrl = (clave, url) => {
+    if (!url) return;
+    if (!clavesPorUrl.has(url)) clavesPorUrl.set(url, new Set());
+    clavesPorUrl.get(url).add(clave);
+  };
+  Object.keys(bruto).forEach((clave) => {
+    if (!clavesValidas.has(clave)) return;
+    const entrada = bruto[clave];
+    if (!entrada || typeof entrada.valores !== 'object' || entrada.valores === null) return;
+    registrarUrl(clave, entrada.fuenteUrl);
+    Object.values(entrada.valores).forEach((v) => {
+      if (esValorConFuentePropia(v)) registrarUrl(clave, v.fuenteUrl);
+    });
+  });
+  const urlSospechosa = (url) => !!url && clavesPorUrl.get(url).size > 1;
 
   const series = {};
   Object.keys(bruto).forEach((clave) => {
@@ -145,10 +177,22 @@ function parsearRespuestaBusqueda(texto, groundingChunks) {
     const entrada = bruto[clave];
     if (!entrada || typeof entrada.valores !== 'object' || entrada.valores === null) return;
 
+    /* Se descarta SOLO la URL sospechosa, nunca la cifra ni el nombre de la fuente: no
+       hay forma de saber a cuál de las dos series pertenece de verdad, pero la cifra en
+       sí no viene en duda por eso. `fuenteDelValor` (analisisMercado.js) ya sabe omitir
+       la URL cuando viene vacía y publicar solo el nombre de la fuente. */
+    const valores = {};
+    Object.keys(entrada.valores).forEach((anio) => {
+      const v = entrada.valores[anio];
+      valores[anio] = esValorConFuentePropia(v) && urlSospechosa(v.fuenteUrl)
+        ? { ...v, fuenteUrl: null }
+        : v;
+    });
+
     series[clave] = {
-      valores: entrada.valores,
+      valores,
       fuente: entrada.fuente || 'Fuente sin especificar',
-      fuenteUrl: huboBusquedaReal ? (entrada.fuenteUrl || null) : null,
+      fuenteUrl: huboBusquedaReal && !urlSospechosa(entrada.fuenteUrl) ? (entrada.fuenteUrl || null) : null,
       confiable: huboBusquedaReal,
     };
   });
