@@ -256,10 +256,29 @@ debajo del umbral del año gravable—:
 - HTML: se quitan `bloque.rotulo` y el tramo `bloque.inicio..fin`.
 - En las dos rutas hay que llevarse además la línea «FUENTE:» que queda detrás: no está
   dentro del bloque localizado, y sin esto queda huérfana bajo la tabla siguiente.
-- Aviso al banner de generación: «se eliminó la Tabla N · Operación adicional Transacciones
-  Intercompañía: el Excel no trae operaciones de la sección 4 que superen los 45.000 UVT».
 - **La numeración de las demás tablas no se toca**, ni al eliminar ni al regenerar: sigue
   siendo la de la plantilla, igual que para todas las otras tablas del informe.
+
+**El borrado no genera aviso, y eso es deliberado.** El arreglo `avisosTablas` que llenan
+todos los motores se publica como «No se encontró en la plantilla: X»
+(`semaforoRadicacion.js:60`) y alimenta el semáforo de radicación. Un borrado intencionado
+no es una tabla que no se encontró, y decirlo ahí sería falso. La matriz completa:
+
+| Tabla en la plantilla | Operación adicional declarable | Qué hace |
+|---|---|---|
+| sí | sí | se regenera con los datos del estudio, sin aviso |
+| sí | no | se elimina con su rótulo y su línea FUENTE, sin aviso |
+| no | sí | aviso existente: «No se encontró en la plantilla: Operación adicional Transacciones Intercompañía» |
+| no | no | nada, sin aviso |
+
+La última fila sigue el criterio que ya documenta `tablasOperacionesHtml.js:66-70` para la
+Tabla 11: avisar de algo que no hacía falta cubrir es un falso «no cubierto», y es así como
+se enseña a la gente a no leer el banner.
+
+Que el borrado ocurrió se dice **en el paso 2**, en ámbar, antes de generar: es donde el
+usuario puede hacer algo al respecto. No se abre un canal de avisos nuevo —exigiría tocar
+`plantillaRenderer.js`, la forma de retorno de `construirDocxDelEstudio`,
+`semaforoRadicacion.js` y `ReporteGenerador.jsx`— para repetir un dato que ya está dicho.
 
 ## Pruebas
 
@@ -292,8 +311,10 @@ debajo del umbral del año gravable—:
 - por debajo del umbral, la tabla, su rótulo y su línea «FUENTE:» desaparecen, y el resto
   del documento queda intacto —incluidos los números de las tablas siguientes, que no se
   renumeran;
-- sin operación adicional en el estudio, mismo resultado y un aviso en `avisos`;
-- plantilla sin la tabla → aviso, sin insertar nada.
+- sin operación adicional en el estudio, mismo resultado y **sin** aviso en `avisos`: un
+  borrado intencionado no es una tabla que no se encontró;
+- plantilla sin la tabla y con operación declarable → aviso, sin insertar nada;
+- plantilla sin la tabla y sin operación declarable → sin aviso.
 
 La previsualización del paso 2 es visual: verificación manual en el navegador con los dos
 archivos disponibles —`Downloads/Informacion Operaciones PT 2025-1 (1).xlsx` (sección 4 con
