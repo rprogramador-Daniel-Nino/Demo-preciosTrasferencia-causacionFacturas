@@ -10,14 +10,15 @@
 import {
   Document, Packer, Paragraph, TextRun, Header, Footer, PageNumber, AlignmentType, HeadingLevel,
   PositionalTab, PositionalTabAlignment, PositionalTabLeader,
-  Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
+  Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, VerticalAlignTable,
   ImageRun, LevelFormat, PageBreak, PageOrientation,
   Bookmark, InternalHyperlink,
   Math as DocxMath, MathFraction, MathSubScript, MathRoundBrackets, MathRun,
   FootnoteReferenceRun,
 } from 'docx';
 import {
-  HOJA_TWIPS, cmAPixeles, cmATwips, medidaEnCm, FACTOR_TABLA, arribaConLogoCm, altoMaximoDeEncabezado,
+  HOJA_TWIPS, cmAPixeles, cmATwips, medidaEnCm, PUNTOS_TABLA, FUENTE_TABLA,
+  arribaConLogoCm, altoMaximoDeEncabezado,
 } from './estiloDocumento.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
@@ -331,7 +332,26 @@ export function notasAlPieDe(arbol) {
    entera. */
 const CAJA_TEXTO = HOJA_TWIPS.ancho - 2 * HOJA_TWIPS.margen;
 
-const BORDE = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' };
+/* La rejilla de las tablas del informe, en octavos de punto: 1px del modelo son 0,75pt = 6, y
+   el contorno de 1,5px son 1,5pt = 12 (se redondea hacia arriba: 9 se ve casi igual que 6 y
+   entonces el contorno no se distingue de la rejilla, que es justo lo que hay que evitar).
+
+   Van en la TABLA y no en la celda, y esa es la diferencia con lo que había. En OOXML
+   `tblBorders` se aplica donde la celda no declara `tcBorders`, así que declararlos una vez
+   arriba da un contorno más grueso que la rejilla sin tener que calcular, celda a celda, cuál
+   toca el borde de la tabla — sobre las 890 filas del informe. Antes cada celda declaraba sus
+   cuatro caras iguales y el contorno exterior salía del mismo grosor que el interior. */
+const BORDE_EXTERIOR = { style: BorderStyle.SINGLE, size: 12, color: '000000' };
+const BORDE_REJILLA = { style: BorderStyle.SINGLE, size: 6, color: '000000' };
+const BORDES_TABLA = {
+  top: BORDE_EXTERIOR, bottom: BORDE_EXTERIOR, left: BORDE_EXTERIOR, right: BORDE_EXTERIOR,
+  insideHorizontal: BORDE_REJILLA, insideVertical: BORDE_REJILLA,
+};
+
+/* El `padding:5px 6px` del modelo, en twips (1440 por pulgada, 96 px por pulgada): 5px = 75,
+   6px = 90. Word trae 108 a los lados y 0 arriba y abajo por defecto, así que sin esto las
+   filas del archivo salen más apretadas en vertical que las del previo. */
+const MARGENES_CELDA = { top: 75, bottom: 75, left: 90, right: 90 };
 
 /* ── Las ecuaciones de ajuste, con el motor matemático de Word ────────────────────────────
    Las ecuaciones del informe no pueden salir como texto en una línea («AR Adjustment = (((ANC_TP
@@ -371,8 +391,12 @@ export const docxDeFormula = (arbol) => new Paragraph({
    último parámetro de las cinco— se descartó a propósito: es más ruido que un cierre y hay que
    tocar las cinco firmas dos veces, una ahora y otra en la tarea 10. Se llama una vez por
    documento desde `construirDocumento`. */
+/* `tamanoBase` ya no entra: lo usaba solo la celda de tabla, para emitirla al 90 % del cuerpo.
+   Desde que la tabla lleva tipografía propia y fija (`PUNTOS_TABLA`, `FUENTE_TABLA`) no hay
+   nada que derivar del cuerpo aquí — el tamaño del documento sigue saliendo de `base` y lo
+   aplica `estilosPorDefecto`, no este traductor. */
 function traductor({
-  porId, anexo = [], tamanoBase = 24, cabeceras = [],
+  porId, anexo = [], cabeceras = [],
   notas = new Map(), numeroDeNodo = new Map(), llamadaDeNodo = new Map(),
 }) {
   /* Qué notas tienen llamada en el texto y por tanto pueden salir al pie. Una que no la tenga se
@@ -530,7 +554,10 @@ function traductor({
     });
   };
 
-  function parrafoDe(nodo, runs = runsDe(nodo)) {
+  /* `alineacion`: la del cuerpo del informe es justificada, pero dentro de una celda va
+     centrada (modelo del usuario, 2026-08-19). Se pasa como argumento porque es propiedad del
+     párrafo: en `heredado`, que viaja a los runs, no tendría efecto. */
+  function parrafoDe(nodo, runs = runsDe(nodo), alineacion = AlignmentType.JUSTIFIED) {
     const nivel = NIVELES[nodo.etiqueta];
     const texto = textoDe(nodo);
 
@@ -570,7 +597,7 @@ function traductor({
     }
 
     return new Paragraph({
-      ...(nivel ? { heading: nivel } : { alignment: AlignmentType.JUSTIFIED }),
+      ...(nivel ? { heading: nivel } : { alignment: alineacion }),
       children: runs,
       spacing: { before: 0, after: 0, line: 276 },
       ...(nivel === HeadingLevel.HEADING_1 ? { pageBreakBefore: true } : {}),
@@ -616,6 +643,8 @@ function traductor({
     return new Table({
       columnWidths: anchos,
       width: { size: CAJA_TEXTO, type: WidthType.DXA },
+      borders: BORDES_TABLA,
+      margins: MARGENES_CELDA,
       rows: conCeldas.map((f) => new TableRow({
         children: celdasDe(f).map((c, i) => {
           /* El heredado tiene que llegar hasta los párrafos que arma `bloquesDe`, no quedarse
@@ -629,10 +658,19 @@ function traductor({
              declare su propio `font-size` lo sobrescribe después, en `runsDeHijo`, que es lo
              correcto: ahí manda lo que dice el PDF. */
           const heredadoCelda = {
-            size: Math.round(tamanoBase * FACTOR_TABLA),
-            ...(c.etiqueta === 'th' ? { color: 'FFFFFF' } : {}),
+            size: PUNTOS_TABLA * 2,
+            font: FUENTE_TABLA,
+            /* El color y la negrita, sólo en la cabecera. En las celdas de datos el negro es el
+               valor de fábrica y declararlo añadiría dos etiquetas por celda sobre las 2291
+               celdas del informe sin cambiar nada de lo que se ve. La negrita del `th` va
+               explícita porque el navegador se la pone por defecto al previo y OOXML no tiene
+               tal defecto: sin esto, pantalla y archivo divergían en toda cabecera. */
+            ...(c.etiqueta === 'th' ? { color: '000000', bold: true } : {}),
           };
-          const todo = bloquesDe(c, [], heredadoCelda);
+          /* Centrado, que es lo que pide el modelo del usuario. Va como argumento y no dentro de
+             `heredado` porque la alineación es propiedad del PÁRRAFO y no del run: `heredado`
+             viaja a los `TextRun` y ahí no tiene efecto. */
+          const todo = bloquesDe(c, [], heredadoCelda, AlignmentType.CENTER);
           /* Los párrafos vacíos de una celda se descartan, y sólo dentro de una celda.
              El PDF cuelga un `<p>` vacío delante del contenido de 432 de las 2291 celdas del
              informe —el 19 %—, que es la marca de párrafo que Word deja al exportar la tabla.
@@ -652,8 +690,10 @@ function traductor({
             width: { size: anchos[i] ?? ancho, type: WidthType.DXA },
             /* CLEAR y no SOLID: la skill lo marca porque SOLID sale negro. */
             ...(c.etiqueta === 'th'
-              ? { shading: { type: ShadingType.CLEAR, fill: '0E1726' } } : {}),
-            borders: { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE },
+              ? { shading: { type: ShadingType.CLEAR, fill: '999999' } } : {}),
+            /* Sin `borders`: los declara la tabla, y declararlos aquí pisaría el contorno
+               grueso con la rejilla fina. Ver `BORDES_TABLA`. */
+            verticalAlign: VerticalAlignTable.CENTER,
             /* Una celda de OOXML necesita al menos un párrafo: una celda vacía sin ninguno
                da un documento que Word tiene que reparar. */
             children: contenido.length ? contenido : [new Paragraph({ children: [] })],
@@ -700,11 +740,11 @@ function traductor({
      vuelcan como un párrafo al toparse con el siguiente bloque. Así el orden del documento se
      conserva: si se emitieran al final, el texto de después de una tabla saldría antes que
      ella. */
-  function bloquesDe(nodo, salida = [], heredado = {}) {
+  function bloquesDe(nodo, salida = [], heredado = {}, alineacion = AlignmentType.JUSTIFIED) {
     let sueltos = [];
     const volcar = () => {
       if (!sueltos.length) return;
-      salida.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: sueltos, spacing: { before: 0, after: 0, line: 276 } }));
+      salida.push(new Paragraph({ alignment: alineacion, children: sueltos, spacing: { before: 0, after: 0, line: 276 } }));
       sueltos = [];
     };
     for (const h of nodo.hijos || []) {
@@ -745,6 +785,7 @@ function traductor({
           if (li.etiqueta !== 'li') continue;
           salida.push(new Paragraph({
             numbering: { reference: 'vinetas', level: 0 },
+            alignment: alineacion,
             children: runsDe(li, heredado),
             spacing: { before: 0, after: 0, line: 276 },
           }));
@@ -757,11 +798,11 @@ function traductor({
         /* Un párrafo vacío sigue siendo un párrafo: la portada del informe se centra con 35
            seguidos. Se emite también sin runs, salvo que sea sólo un envoltorio de otros
            bloques —ahí el párrafo vacío no existía en el original—. */
-        if (runs.length || !dentro.length) salida.push(parrafoDe(h, runs));
-        for (const b of dentro) bloquesDe({ hijos: [b] }, salida, heredado);
+        if (runs.length || !dentro.length) salida.push(parrafoDe(h, runs, alineacion));
+        for (const b of dentro) bloquesDe({ hijos: [b] }, salida, heredado, alineacion);
         continue;
       }
-      bloquesDe(h, salida, heredado);
+      bloquesDe(h, salida, heredado, alineacion);
     }
     volcar();
     return salida;
@@ -852,7 +893,7 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
   /* El cuerpo base se pasa al traductor porque de él sale el tamaño reducido de las tablas:
      el mismo 0,9 que la vista previa aplica por CSS. */
   const { bloquesDe, runsDe, notasDeWord } = traductor({
-    porId, anexo, tamanoBase: mediosPuntos(base.tamano), cabeceras,
+    porId, anexo, cabeceras,
     notas, numeroDeNodo, llamadaDeNodo,
   });
 

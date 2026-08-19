@@ -5,6 +5,9 @@ import {
   CLASE_VALOR, resaltarValor, cmATwips, cmAPixeles, medidaEnCm, HOJA_TWIPS,
   conSaltosDePagina, conTamanoDeImagen, arribaConLogoCm, altoMaximoDeEncabezado,
 } from './estiloDocumento.js';
+/* De namespace y no por nombre: un export que todavía no existe rompe la CARGA del módulo y
+   tumba el archivo entero, en vez de fallar la aserción que lo comprueba. */
+import * as estilo from './estiloDocumento.js';
 
 test('la pantalla y el .doc llevan las mismas reglas de documento', () => {
   /* Este es el punto del módulo. Estaban escritas dos veces —una en el previo, otra en
@@ -90,9 +93,11 @@ test('el encabezado de Word sólo se declara si el documento lo trae', () => {
 });
 
 test('reglasDocumento acota cada selector de una lista, no sólo el primero', () => {
-  /* `p,li,td` acotado a medias dejaría `li` y `td` sueltos pintando la interfaz. */
+  /* `p,li` acotado a medias dejaría `li` suelto pintando la interfaz. `td p,th p,td li` es
+     el caso duro: son selectores de dos partes y el prefijo va delante de la primera. */
   const r = reglasDocumento('.x ');
-  assert.ok(r.includes('.x p,.x li,.x td{text-align:justify;margin:0;padding:0}'));
+  assert.ok(r.includes('.x p,.x li{text-align:justify;margin:0;padding:0}'));
+  assert.ok(r.includes('.x td p,.x th p,.x td li{text-align:center;margin:0;padding:0}'));
 });
 
 test('el resaltado de pantalla no puede llegar al documento', () => {
@@ -331,4 +336,54 @@ test('conTamanoDeImagen auto-escala imágenes que exceden el ancho de la caja', 
   assert.match(r, /width="627"/);
   assert.match(r, /height="314"/);
   assert.match(r, /style="width:16\.59cm;height:8\.29cm"/);
+});
+
+/* ── Estilo de las tablas del informe ──
+   El aspecto lo fijó el usuario (2026-08-19) con un modelo HTML: bordes negros, cabecera
+   gris con letra negra en negrita, celdas blancas, Arial, todo centrado. Antes era una
+   cabecera azul oscuro (#0E1726) con letra blanca y celdas justificadas. Los tres tests que
+   siguen son lo que impide que una de las dos salidas se quede atrás cuando alguien retoque
+   la otra: la misma clase de asimetría pantalla/archivo que ya costó cuatro fallos aquí. */
+
+test('la cabecera de tabla va gris con letra negra en pantalla y en el .doc', () => {
+  const previo = cssDeHojas({ base: { familia: 'Arial', tamano: 12 } });
+  const doc = cssDeExportacion({ familia: 'Arial', tamano: 12 });
+  for (const [donde, css] of [['el previo', previo], ['la exportación', doc]]) {
+    assert.ok(css.includes('background:#999999'), donde + ' no pinta la cabecera de gris');
+    assert.ok(css.includes('border:1px solid #000000'), donde + ' no lleva bordes negros');
+    assert.ok(css.includes('border:1.5px solid #000000'),
+      donde + ' no lleva el borde exterior grueso');
+    assert.ok(!css.includes('#0E1726;color:#fff'), donde + ' conserva la cabecera oscura');
+  }
+  /* El previo declara `.pagina *{color:inherit}` para que el papel se vea blanco también en
+     tema oscuro, y eso pisa el color de la cabecera: hace falta la excepción explícita, y
+     ahora en negro. Con `#fff` la cabecera gris quedaría con letra blanca, ilegible. */
+  assert.ok(previo.includes('.hojas .pagina th{color:#000000}'));
+});
+
+test('las celdas van centradas aunque su contenido venga envuelto en un párrafo', () => {
+  /* Las celdas de la plantilla son `<td><p>AKATSUKI INC.</p></td>`: el extractor emite el
+     `P` de dentro de la celda como párrafo. La regla `p{text-align:justify}` gana sobre la
+     herencia del `td`, así que sin una regla propia para `td p` el centrado no se ve —el
+     texto sigue justificado dentro de una celda que se cree centrada—. */
+  const doc = cssDeExportacion({ familia: 'Arial', tamano: 12 });
+  assert.ok(doc.includes('td p,th p,td li{text-align:center;margin:0;padding:0}'),
+    'falta la regla que centra el párrafo de dentro de la celda');
+  /* Y el `td` sale de la regla de justificado, o volvería a ganarle por ir después. */
+  assert.ok(doc.includes('p,li{text-align:justify'), 'la regla de justificado cambió de forma');
+  assert.ok(!doc.includes('p,li,td{text-align:justify'), 'el td sigue justificándose');
+});
+
+test('la letra de las tablas es Arial 10pt y no la del cuerpo del cliente', () => {
+  /* Decisión del usuario (2026-08-19): la tabla se ve igual en todos los informes, aunque el
+     PDF del cliente venga en otra tipografía. Se usa a propósito una base DISTINTA de Arial
+     12: con Arial 12 el test pasaría igual si la regla heredara del cuerpo, y no demostraría
+     nada. 10 pt y no los 9,75 del modelo (13px) porque OOXML mide en medios puntos y 9,75 no
+     es entero: redondear aquí es lo que impide que el previo y el .docx se separen. */
+  const doc = cssDeExportacion({ familia: 'Times New Roman', tamano: 11 });
+  assert.ok(doc.includes("body{font-family:'Times New Roman',Arial,sans-serif;font-size:11pt"),
+    'el cuerpo debe seguir saliendo del PDF del cliente');
+  assert.ok(doc.includes('font-family:Arial,Helvetica,sans-serif;font-size:10pt'),
+    'la tabla no fija su propia tipografía');
+  assert.equal(estilo.PUNTOS_TABLA, 10);
 });

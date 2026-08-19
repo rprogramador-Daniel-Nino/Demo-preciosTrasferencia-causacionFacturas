@@ -30,6 +30,9 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
+/* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
+   impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
+import { PUNTOS_TABLA, FUENTE_TABLA } from './estiloDocumento.js';
 import { FORMULAS, ROTULOS_FORMULA, ooxmlDeFormula } from './formulasOmml.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -47,6 +50,7 @@ import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
   filasCriteriosScreening,
+  enMayusculas, filasEnMayusculas,
 } from './tablasInforme.js';
 /* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
    definición de la matriz para las dos salidas del informe. */
@@ -115,9 +119,13 @@ const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 export function coleccionesDelEstudio(estudio) {
   const study = estudio || {};
 
+  /* En mayúscula, como las otras dos rutas hacia esta misma tabla. Estas colecciones alimentan
+     el bucle de la plantilla .docx marcada (`envolverTablaEnBucle`), que es la tercera: sin
+     esto el informe salía en mayúscula por dos caminos y en caja mixta por el otro. Las
+     razones de rechazo y los accionistas, más abajo, se quedan como están. */
   const comparables = filasComparablesInforme(study).map((f, i) => ({
     n: String(i + 1),
-    nombre: f.nombre,
+    nombre: enMayusculas(f.nombre),
     ambito: AMBITO[f.amb] || '',
     margen: pctf(f.noAjustado),
     margenAjustado: pctf(f.ajustado),
@@ -156,31 +164,45 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
   const colCount = cabeceras.length;
   const colWidth = Math.round(9405 / colCount); // 9405 dxa es el ancho útil aproximado
 
+  /* Tipografía de la celda, la misma para toda la tabla y sin heredar del documento: antes no
+     se declaraba ninguna, así que la misma tabla salía a 12 pt en un informe y a 10 en otro
+     según la letra que el extractor hubiera leído del PDF. OOXML mide en medios puntos. */
+  const letra = `<w:rFonts w:ascii="${FUENTE_TABLA}" w:hAnsi="${FUENTE_TABLA}"/>`
+    + `<w:sz w:val="${PUNTOS_TABLA * 2}"/>`;
+  /* Un borde de la rejilla. `sz` va en octavos de punto: los 6 de la rejilla son el 1px del
+     modelo y los 12 del contorno, sus 1,5px. */
+  const borde = (lado, sz) => `<w:${lado} w:val="single" w:sz="${sz}" w:space="0" w:color="000000"/>`;
+  const celda = (texto, cabecera) =>
+    `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>`
+    + (cabecera ? `<w:shd w:val="clear" w:color="auto" w:fill="999999"/>` : '')
+    + `<w:vAlign w:val="center"/></w:tcPr>`
+    + `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr>${letra}`
+    + (cabecera ? `<w:color w:val="000000"/><w:b/>` : '')
+    + `</w:rPr><w:t>${escaparXml(texto)}</w:t></w:r></w:p></w:tc>`;
+
   let xml = `<w:p><w:pPr><w:keepNext/><w:outlineLvl w:val="9"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escaparXml(titulo)}</w:t></w:r></w:p>`;
   xml += `<w:tbl>`;
+  /* Rejilla negra completa. Antes `left`, `right` e `insideV` eran `none` y el resto un gris
+     claro (#E2E8F0): la tabla salía sin bordes verticales mientras el previo los pintaba.
+     `tblCellMar` es el `padding:5px 6px` del modelo en twips —Word trae 108 a los lados y CERO
+     arriba y abajo por defecto, así que sin esto las filas del archivo salen más apretadas—. */
   xml += `<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="9405" w:type="dxa"/><w:tblBorders>`
-    + `<w:top w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`
-    + `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`
-    + `<w:insideH w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`
-    + `<w:left w:val="none"/><w:right w:val="none"/><w:insideV w:val="none"/>`
-    + `</w:tblBorders></w:tblPr>`;
+    + borde('top', 12) + borde('bottom', 12) + borde('left', 12) + borde('right', 12)
+    + borde('insideH', 6) + borde('insideV', 6)
+    + `</w:tblBorders>`
+    + `<w:tblCellMar><w:top w:w="75" w:type="dxa"/><w:left w:w="90" w:type="dxa"/>`
+    + `<w:bottom w:w="75" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar>`
+    + `</w:tblPr>`;
 
   // Headers
   xml += `<w:tr><w:trPr><w:tblHeader/></w:trPr>`;
-  cabeceras.forEach((h) => {
-    xml += `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0E1726"/></w:tcPr>`
-      + `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:color w:val="FFFFFF"/><w:b/></w:rPr>`
-      + `<w:t>${escaparXml(h)}</w:t></w:r></w:p></w:tc>`;
-  });
+  cabeceras.forEach((h) => { xml += celda(h, true); });
   xml += `</w:tr>`;
 
   // Rows
   filas.forEach((f) => {
     xml += `<w:tr>`;
-    f.forEach((celda) => {
-      xml += `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/></w:tcPr>`
-        + `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>${escaparXml(celda)}</w:t></w:r></w:p></w:tc>`;
-    });
+    f.forEach((c) => { xml += celda(c, false); });
     xml += `</w:tr>`;
   });
 
@@ -1713,11 +1735,14 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       String(f.numero), f.nombre, f.ambito,
     ]);
     const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
+    /* Todo en mayúscula menos el rótulo: en la ruta de PDF el rótulo vive FUERA de la tabla y
+       no se sube, así que subirlo aquí separaría las dos salidas. La línea de fuente sí, porque
+       allá va dentro de la tabla y sube con ella. */
     return generarTablaOoxml(
       tituloDe(b, 'Muestra Compañías comparables'),
-      ['Número', 'Nombre de la Compañía', 'Ámbito'],
-      filas17,
-      `Información Base Datos ${dbFuente}`
+      ['Número', 'Nombre de la Compañía', 'Ámbito'].map(enMayusculas),
+      filasEnMayusculas(filas17),
+      enMayusculas(`Información Base Datos ${dbFuente}`)
     );
   }, { numeros: [17] });
 
@@ -1819,11 +1844,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         pStr(f.ajustado)
       ]);
       const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      /* En mayúscula, menos el rótulo: ver el comentario de la muestra. */
       return generarTablaOoxml(
         tituloDe(b, 'Margen Operacional Compañías Comparables'),
         ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
-        filas19,
-        `Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`
+        filasEnMayusculas(filas19),
+        enMayusculas(`Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`)
       );
     };
     /* Sin `numeros`: el prefijo «Tabla N.» cambia de una plantilla a otra —y hay plantillas que
@@ -2520,10 +2546,14 @@ export function insertarAnexoC(zip, estudio) {
   /* Se conserva el párrafo del encabezado y solo se le reescribe el texto, con la letra de la
      plantilla: así el rótulo sigue siendo el que anuncia el índice. */
   let nuevo = reescribirTextoParrafoOoxml(xml.slice(anexo.inicio, anexo.finEncabezado), rotulo);
-  nuevo += '\n' + generarTablaOoxml('', CAB_RESUMEN_ANEXO_C, filasResumenAnexoC(grupos, universo));
+  /* El anexo entero en mayúscula, encabezados incluidos (usuario, 2026-08-19). El título de
+     cada grupo ya salía así de `tituloDeGrupoAnexoC`. */
+  nuevo += '\n' + generarTablaOoxml('', CAB_RESUMEN_ANEXO_C.map(enMayusculas),
+    filasEnMayusculas(filasResumenAnexoC(grupos, universo)));
   grupos.forEach((g) => {
     const filas = g.companias.map((nombre, i) => [String(i + 1), nombre, g.letra]);
-    nuevo += '\n' + generarTablaOoxml(tituloDeGrupoAnexoC(g), CAB_LISTADO_ANEXO_C, filas);
+    nuevo += '\n' + generarTablaOoxml(tituloDeGrupoAnexoC(g),
+      CAB_LISTADO_ANEXO_C.map(enMayusculas), filasEnMayusculas(filas));
   });
 
   const avisos = [];

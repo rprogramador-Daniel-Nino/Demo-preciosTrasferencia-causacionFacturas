@@ -222,3 +222,41 @@ test('un anexo sin resumen o sin listados se deja como está', () => {
 test('la etiqueta del total es la que usa la plantilla', () => {
   assert.strictEqual(ETIQUETA_TOTAL, 'TOTAL, UNIVERSO');
 });
+
+/* ══════ Mayúsculas ══════
+   Requisito del usuario (2026-08-19): el ANEXO C entero en mayúscula —la matriz de rechazo y
+   los listados—, encabezados incluidos. La «Tabla 16. Razones de rechazo» del CUERPO queda
+   fuera; su test vive en `tablasHtmlInforme.test.js`, que es donde se regenera. */
+
+test('el ANEXO C se publica entero en mayúscula, encabezados incluidos', () => {
+  /* Encabezados en caja mixta a propósito: los de la plantilla de END GAME ya vienen en
+     mayúscula, así que con ellos el test pasaría aunque no se subiera nada. */
+  const plantilla = '<h1>ANEXO C. Matriz de Rechazo</h1>'
+    + RESUMEN.replace('FILTRO APLICADO INTERNACIONALES', 'Filtro aplicado internacionales')
+    + listado('Diferencias funcionales', [['1', 'Viejo Nombre Sa', 'A']])
+        .replace('NOMBRE DE LA COMPAÑÍA', 'Nombre de la Compañía')
+    + '<h1>ANEXO D. Metodología</h1>';
+
+  const universo = [
+    { name: 'Zeta Comparable Ltd', seleccionada: true, motivoClave: '' },
+    { name: 'Holding Uno Sa', seleccionada: false, motivoClave: 'holding' },
+  ];
+  const estudio = {
+    embudoSeleccion: { evaluadas: 2, seleccionadas: 1, reserva: 0, porMotivo: { holding: 1 } },
+    matrizRechazo: matrizDeRechazo(universo),
+  };
+  const salida = actualizarAnexoCHtml(plantilla, estudio, []);
+
+  /* Los listados: la razón social que publica el anexo. */
+  assert.match(salida, /ZETA COMPARABLE LTD/, 'la razón social no subió');
+  assert.ok(!salida.includes('Zeta Comparable Ltd'));
+  assert.match(salida, /HOLDING UNO SA/);
+  /* El encabezado de columnas, que es de la plantilla: sube la caja, no las palabras. */
+  assert.match(salida, /NOMBRE DE LA COMPAÑÍA/, 'el encabezado del listado no subió');
+  assert.ok(!salida.includes('Nombre de la Compañía'));
+  /* La matriz de rechazo: sus etiquetas vienen en caja mixta del cuerpo del informe. */
+  assert.ok(!/Compañías holding/.test(salida), 'la etiqueta de la matriz no subió');
+  assert.match(salida, /Filtro aplicado internacionales/i);
+  assert.ok(!salida.includes('Filtro aplicado internacionales'),
+    'el encabezado de la matriz no subió');
+});

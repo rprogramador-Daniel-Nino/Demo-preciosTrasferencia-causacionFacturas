@@ -259,20 +259,74 @@ test('una tabla sin ninguna fila válida no se emite', async () => {
   assert.match(doc, /después/);
 });
 
-test('la letra del encabezado de tabla sale blanca sobre el fondo oscuro', async () => {
-  /* Antes, el fallback que ponía `color: 'FFFFFF'` era código muerto: `bloquesDe` siempre
-     vuelca el texto suelto de una celda como párrafo (el `volcar()` final, fuera del `for`),
-     así que la rama que llevaba el color nunca se alcanzaba y los encabezados salían con
-     letra oscura sobre el fondo `#0E1726` — ilegibles. */
+test('la letra del encabezado de tabla sale negra y en negrita sobre el gris', async () => {
+  /* Antes, el fallback que ponía el color era código muerto: `bloquesDe` siempre vuelca el
+     texto suelto de una celda como párrafo (el `volcar()` final, fuera del `for`), así que la
+     rama que llevaba el color nunca se alcanzaba y los encabezados salían con letra oscura
+     sobre un fondo oscuro — ilegibles. Desde el 2026-08-19 el fondo es gris (#999999) y la
+     letra negra en negrita, por el modelo que fijó el usuario. La negrita va explícita: en el
+     previo la pone el navegador por defecto para `th`, y el .docx no tiene tal defecto, así
+     que sin esto la pantalla y el archivo divergían en toda cabecera del informe. */
   const { doc } = await abrir(
     '<table><tr><th>Concepto</th><th>Valor</th></tr><tr><td>Activo</td></tr></table>');
-  assert.match(doc, /<w:color w:val="FFFFFF"\/>/);
-  assert.match(doc, /w:val="clear"/);
-  const blancos = (doc.match(/<w:color w:val="FFFFFF"\/>/g) || []).length;
-  assert.equal(blancos, 2, 'debe haber un <w:color w:val="FFFFFF"/> por cada th, ni uno más');
-  /* La celda de datos (`td`) no lleva el color del encabezado. */
+  assert.match(doc, /<w:shd[^>]*w:fill="999999"[^>]*\/>/);
+  assert.match(doc, /<w:shd[^>]*w:val="clear"[^>]*\/>/, 'CLEAR y no SOLID: SOLID sale negro');
+  const negros = (doc.match(/<w:color w:val="000000"\/>/g) || []).length;
+  assert.equal(negros, 2, 'debe haber un <w:color w:val="000000"/> por cada th, ni uno más');
+  assert.equal((doc.match(/<w:b\/>/g) || []).length, 2, 'cada th va en negrita, y sólo los th');
+  assert.doesNotMatch(doc, /FFFFFF/, 'queda letra blanca de la cabecera vieja');
+  assert.doesNotMatch(doc, /0E1726/, 'queda el fondo oscuro viejo');
+  /* La celda de datos (`td`) no lleva ni el relleno ni la negrita del encabezado. */
   const celdaActivo = /<w:tc>(?:(?!<w:tc>)[\s\S])*?Activo[\s\S]*?<\/w:tc>/.exec(doc)[0];
-  assert.doesNotMatch(celdaActivo, /w:color="FFFFFF"/);
+  assert.doesNotMatch(celdaActivo, /w:fill="999999"/);
+});
+
+test('la rejilla de la tabla es negra, con el borde exterior más grueso', async () => {
+  /* El modelo del usuario lleva rejilla completa: 1px negro entre celdas y 1,5px alrededor.
+     Antes eran bordes #E2E8F0 en las cuatro caras de CADA celda, lo que dejaba el contorno
+     exterior del mismo grosor que el interior. Los bordes van en la TABLA y no en la celda a
+     propósito: en OOXML `tblBorders` se aplica donde la celda no declara los suyos, y es la
+     única forma de que el contorno sea más grueso que la rejilla sin calcular, celda a celda,
+     cuál toca el borde de la tabla — sobre las 890 filas del informe. En octavos de punto:
+     1px = 0,75pt = 6; 1,5px = 1,5pt = 12 (el redondeo hacia arriba se ve mejor que 9). */
+  const { doc } = await abrir('<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>');
+  const bordes = /<w:tblBorders>([\s\S]*?)<\/w:tblBorders>/.exec(doc);
+  assert.ok(bordes, 'la tabla no declara bordes propios');
+  /* Atributo a atributo y no como cadena literal: `docx` los emite en su propio orden
+     (val, color, sz) y fijarlo aquí ataría el test a un detalle de la librería en vez de a
+     lo que el informe tiene que llevar. */
+  const atributosDe = (nombre) => new RegExp('<w:' + nombre + '\\s([^>]*)/>').exec(bordes[1]);
+  for (const [lados, sz, que] of [
+    [['top', 'bottom', 'left', 'right'], '12', 'el borde exterior'],
+    [['insideH', 'insideV'], '6', 'la rejilla'],
+  ]) {
+    for (const lado of lados) {
+      const attrs = atributosDe(lado);
+      assert.ok(attrs, 'falta ' + que + ' ' + lado);
+      assert.match(attrs[1], /w:val="single"/, que + ' ' + lado + ' no es una línea simple');
+      assert.match(attrs[1], /w:color="000000"/, que + ' ' + lado + ' no es negro');
+      assert.match(attrs[1], new RegExp('w:sz="' + sz + '"'), que + ' ' + lado + ' no mide lo debido');
+    }
+  }
+  assert.doesNotMatch(doc, /E2E8F0/, 'queda el borde gris claro viejo');
+  /* Y la celda ya no declara los suyos, o pisaría el contorno grueso de la tabla. */
+  assert.doesNotMatch(doc, /<w:tcBorders>/, 'la celda sigue declarando bordes propios');
+});
+
+test('las celdas van centradas y a 10 pt en Arial, sin heredar del cuerpo', async () => {
+  /* Decisión del usuario (2026-08-19): la tabla se ve igual en todos los informes. Se usa una
+     base DISTINTA a propósito —Times New Roman 14, que son 28 medios puntos— porque con Arial
+     12 el test pasaría igual si la celda heredara del cuerpo, y no demostraría nada. */
+  const { doc } = await abrir(
+    '<div data-extractor="7" data-estilo-base="Times New Roman|14"></div>' +
+    '<table><tr><td>Activo</td></tr></table>');
+  const celda = /<w:tc>[\s\S]*?<\/w:tc>/.exec(doc)[0];
+  assert.match(celda, /<w:sz w:val="20"\/>/, 'la celda no va a 10 pt');
+  assert.doesNotMatch(celda, /<w:sz w:val="28"\/>/, 'la celda heredó el cuerpo de 14 pt');
+  assert.match(celda, /w:ascii="Arial"/, 'la celda no va en Arial');
+  assert.doesNotMatch(celda, /w:ascii="Times New Roman"/, 'la celda heredó la letra del cuerpo');
+  assert.match(celda, /<w:jc w:val="center"\/>/, 'el párrafo de la celda no va centrado');
+  assert.match(celda, /<w:vAlign w:val="center"\/>/, 'la celda no va centrada en vertical');
 });
 
 test('una tabla dentro de una celda no se aplana en la de fuera', async () => {

@@ -40,10 +40,21 @@ const TWIPS_POR_CM = 1440 / 2.54;
    saldrían un 33 % más grandes. */
 const PIXELES_POR_CM = 96 / 2.54;
 
-/* Factor de tamaño de letra de las tablas: el 0,9 del `font-size:0.9em` de REGLAS_DOCUMENTO,
-   en un solo sitio para que la vista previa y el .docx no puedan separarse. La pantalla lo
-   aplica por CSS; el writer lo multiplica sobre el cuerpo. */
-export const FACTOR_TABLA = 0.9;
+/* Tipografía de las tablas, en un solo sitio para que las tres salidas no puedan separarse.
+
+   Es FIJA y no heredada, por decisión del usuario (2026-08-19): la tabla se ve igual en todos
+   los informes aunque el PDF del cliente venga en otra letra. Antes era un factor —el 0,9 de
+   `font-size:0.9em`— que multiplicaba el cuerpo, así que el tamaño de la tabla dependía de lo
+   que el extractor hubiera leído del PDF.
+
+   10 pt y no los 9,75 del modelo que fijó el usuario (13px a 96 ppp): OOXML mide en MEDIOS
+   puntos, y 9,75 pt son 19,5 medios puntos, que no es entero. Redondear aquí, una vez, es lo
+   que impide que el previo emita 9,75 y el .docx 10 y que las dos caras se separen por un
+   redondeo que nadie ve venir. La diferencia con el modelo es un tercio de píxel. */
+export const PUNTOS_TABLA = 10;
+/* Con reservas para el navegador; en OOXML sólo cabe el nombre de la familia. */
+export const FUENTE_TABLA = 'Arial';
+export const FUENTE_TABLA_CSS = FUENTE_TABLA + ',Helvetica,sans-serif';
 
 export const cmATwips = (cm) => Math.round((Number(cm) || 0) * TWIPS_POR_CM);
 export const cmAPixeles = (cm) => Math.round((Number(cm) || 0) * PIXELES_POR_CM);
@@ -93,19 +104,37 @@ export const REGLAS_DOCUMENTO = [
   ['h2', 'font-size:1.2em;color:#0E1726;border-bottom:1px solid #E2E8F0;' +
          'padding-bottom:4px;margin:0;padding:0'],
   ['h3', 'font-size:1.05em;color:#0E1726;margin:0;padding:0'],
-  /* El `0.9em` de la tabla no es decoración: la vista previa lo aplica desde siempre, así que
-     el texto de las tablas se ve al 90 % del cuerpo. El writer del .docx tiene que aplicar el
-     MISMO factor —lo hace con `FACTOR_TABLA`— o pantalla y archivo divergen en el 99 % del texto
-     de tabla del informe: 2311 nodos de 2333, medido. Es la misma clase de asimetría
-     pantalla/archivo que ya costó cuatro fallos en este proyecto. */
-  ['table', 'width:100%;border-collapse:collapse;margin:16px 0;font-size:0.9em'],
-  ['th', 'background:#0E1726;color:#fff;text-align:left;padding:8px 12px'],
-  ['td', 'padding:8px 12px;border-bottom:1px solid #E2E8F0'],
+  /* El aspecto de las tablas lo fijó el usuario (2026-08-19) con un modelo HTML: rejilla negra
+     completa, cabecera gris con letra negra en negrita, celdas blancas y todo centrado. Antes
+     era una cabecera azul oscuro (#0E1726) con letra blanca y sin bordes verticales.
+
+     La tipografía y el tamaño van aquí y no se heredan del cuerpo: ver `PUNTOS_TABLA`. Los tres
+     emisores del informe —esta hoja para el previo y el .doc, `docxWriter.js` y
+     `generarTablaOoxml` en `docxRelleno.js` para el .docx— tienen que decir lo mismo, o pantalla
+     y archivo divergen en el 99 % del texto de tabla del informe: 2311 nodos de 2333, medido.
+     Es la misma clase de asimetría que ya costó cuatro fallos en este proyecto.
+
+     `table-layout:fixed` reparte las columnas a partes iguales sin mirar el contenido, que es
+     lo que hace el writer del .docx con sus `columnWidths`: sin esto una razón social larga
+     ensancha su columna en pantalla y no en el archivo. */
+  ['table', 'width:100%;border-collapse:collapse;margin:16px 0;table-layout:fixed;' +
+            'font-family:' + FUENTE_TABLA_CSS + ';font-size:' + PUNTOS_TABLA + 'pt;' +
+            'border:1.5px solid #000000'],
+  ['th', 'border:1px solid #000000;background:#999999;color:#000000;font-weight:bold;' +
+         'padding:5px 6px;text-align:center;vertical-align:middle;word-break:break-word'],
+  ['td', 'border:1px solid #000000;background:#FFFFFF;color:#000000;font-weight:normal;' +
+         'padding:5px 6px;text-align:center;vertical-align:middle;word-break:break-word'],
   /* Word ignora un `<strong>` anidado en un `<span>` con estilo si no se le dice que el
      peso se hereda; con esto la negrita del informe llega intacta. */
   ['strong', 'font-weight:bold'],
   ['em', 'font-style:italic'],
-  ['p,li,td', 'text-align:justify;margin:0;padding:0'],
+  ['p,li', 'text-align:justify;margin:0;padding:0'],
+  /* El `td` ya NO se justifica, pero sacarlo de la regla de arriba no basta: las celdas de la
+     plantilla son `<td><p>AKATSUKI INC.</p></td>` —el extractor emite el `P` de dentro de la
+     celda como párrafo— y `p{text-align:justify}` le gana a la herencia del `td`. Sin esta
+     regla el texto sigue justificado dentro de una celda que se cree centrada. Va por
+     especificidad (0,0,2 contra 0,0,1), no por orden. */
+  ['td p,th p,td li', 'text-align:center;margin:0;padding:0'],
   /* Las ecuaciones de ajuste de capital. En pantalla y en el `.doc` se ven como una línea de
      texto —centrada y en la tipografía matemática, que es lo más cerca que se puede estar sin
      un motor de fórmulas—; en el `.docx` se sustituyen por la ecuación de Word de verdad. Va
@@ -189,7 +218,10 @@ export function cssDeHojas({ base, logo, lado = 'centro', enLaPortada = true, al
     'line-height:1.15;' + cuerpoDe(base) + '}' +
     /* Papel blanco también en tema oscuro: el previo es la hoja, no la interfaz. */
     '.hojas .pagina *{color:inherit}' +
-    '.hojas .pagina th{color:#fff}' +
+    /* `*{color:inherit}` pisa el color de la cabecera, así que hace falta la excepción. En
+       NEGRO desde que la cabecera es gris: con el `#fff` de antes quedaría letra blanca sobre
+       gris, ilegible en pantalla mientras el archivo se ve bien. */
+    '.hojas .pagina th{color:#000000}' +
     /* Número de hoja, el mismo que Word pondrá en el pie con el campo PAGE. */
     '.hojas .pagina::after{content:counter(hoja);position:absolute;left:0;right:0;' +
     'bottom:' + HOJA.borde + ';text-align:center;font-size:9pt;color:#71717a}' +
