@@ -109,3 +109,24 @@ test('la envoltura del resaltado no se escapa, solo el valor', () => {
   assert.ok(!r.html.includes('style='), 'el resaltado no debe llevar estilo inline');
   assert.ok(r.html.includes('&amp;'), 'el ampersand del valor debe estar escapado');
 });
+
+test('la prosa que cita cifras de una tabla llega al HTML renderizado', () => {
+  /* Va por la ruta completa —`renderizar`— y no por la función suelta: el enganche de la prosa
+     del rango se descartó una vez en silencio porque se asignaba a una variable local, la prueba
+     de la función pasaba y el informe salía igual. */
+  const conMuestra = {
+    ...estudio,
+    monto_operacion: 5230114900,
+    embudoSeleccion: { evaluadas: 500, seleccionadas: 3, reserva: 0, porMotivo: { actividad: 497 } },
+  };
+  const marcado = '<p>A partir del anterior criterio se identificó un total de 442 Compañías '
+    + 'comparables potenciales.</p>'
+    + '<p>Tuvo operaciones de ingreso con sus vinculados por un valor total de '
+    + '$ 3.435.357.400</p>';
+  const r = renderizar(marcado, conMuestra);
+
+  assert.ok(r.html.includes('un total de 500 Compañías'), 'el universo no entró: ' + r.html);
+  assert.ok(r.html.includes('$ 5.230.114.900'), 'el monto no entró: ' + r.html);
+  assert.ok(!r.html.includes('442'), 'sobrevive el conteo del informe de referencia');
+  assert.ok(!r.html.includes('3.435.357.400'), 'sobrevive el monto del informe de referencia');
+});

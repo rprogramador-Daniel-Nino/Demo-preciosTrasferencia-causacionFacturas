@@ -1029,6 +1029,88 @@ test('si la descripción no trae las cifras esperadas se deja como estaba', asyn
   assert.match(avisos[0], /no trae las 2 cifras que se esperaban/);
 });
 
+test('una plantilla cuya frase sí se actualizó no se queda sin el año de la conclusión', async () => {
+  /* El año estaba dentro del `if` que dispara el respaldo posicional, y eso funcionaba mientras
+     las plantillas que necesitaban el año fueran justo las que la prosa no sabía tocar. Esta
+     escribe las cifras sin paréntesis —«…entre 10.925% percentil 25 y 17.258% percentil 75 y la
+     mediana con 15.356%»—, que ahora sí se actualizan por cercanía, así que el `if` ya no entra;
+     y su «ajustado durante el» vive en otro párrafo, donde la prosa del rango no llega. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 6. Rango Intercuartil'),
+    tablaRango(),
+    parrafo('Como se observa en el cuadro anterior, el rango Intercuartil obtenido por las '
+      + 'compañías comparables se ubica entre 10.925% percentil 25 y 17.258% percentil 75 y la '
+      + 'mediana con 15.356%.'),
+    parrafo('El margen de las comparables ajustado durante el 2019 se calculó con la '
+      + 'metodología descrita en el apartado anterior.'),
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO, anio: 2025, pli: 'MO', cmode: 'all', useadj: false, prime: '7.37',
+      t_s: 1000, t_c: 600, t_op: 100,
+      comparables: [
+        { name: 'Uno', s: 1000, c: 600, op: 100 },
+        { name: 'Dos', s: 2000, c: 1600, op: 260 },
+        { name: 'Tres', s: 3000, c: 2400, op: 300 },
+        { name: 'Cuatro', s: 1500, c: 900, op: 200 },
+      ],
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('ajustado durante el 2025'),
+    'el año de la conclusión se quedó en el de la plantilla: ' + texto);
+  /* Y la frase, que es lo que dejaba de disparar el respaldo, sí trae las cifras del estudio. */
+  ['10.925%', '17.258%', '15.356%'].forEach((v) => assert.ok(!texto.includes(v),
+    'sobrevive la cifra ' + v + ' del informe de referencia'));
+});
+
+test('la prosa de la muestra y de la operación llega al documento que se descarga', async () => {
+  /* Por la ruta completa y no por la función suelta, por lo mismo que la del rango: el primer
+     enganche de aquélla se descartaba en silencio porque escribía sobre una variable local, la
+     prueba de la función pasaba y el informe salía igual. */
+  const buf = await plantilla([
+    parrafo('A partir del anterior criterio de búsqueda se identificó un total de 442 '
+      + 'Compañías comparables potenciales.'),
+    parrafo('De esta manera, después de aplicar dichos criterios, quedaron 13 compañías '
+      + 'comparables.'),
+    parrafo('En el año 2019, ACME tuvo operaciones de ingreso con sus vinculados económicos '
+      + 'por un valor total de $ 3.435.357.400'),
+    parrafo('El siguiente cuadro presenta las utilidades operacionales sobre ventas para el '
+      + 'conjunto de compañías comparables para los estados financieros correspondientes al '
+      + 'año 2019:'),
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO, anio: 2025, pli: 'MO', cmode: 'all', useadj: false, prime: '7.37',
+      monto_operacion: 5230114900,
+      t_s: 1000, t_c: 600, t_op: 100,
+      embudoSeleccion: {
+        evaluadas: 500, seleccionadas: 4, reserva: 0, porMotivo: { actividad: 496 },
+      },
+      comparables: [
+        { name: 'Uno', s: 1000, c: 600, op: 100 },
+        { name: 'Dos', s: 2000, c: 1600, op: 260 },
+        { name: 'Tres', s: 3000, c: 2400, op: 300 },
+        { name: 'Cuatro', s: 1500, c: 900, op: 200 },
+      ],
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('un total de 500 Compañías'), 'el universo no llegó al .docx');
+  assert.ok(texto.includes('quedaron 4 compañías comparables'), 'las aceptadas no llegaron');
+  assert.ok(texto.includes('$ 5.230.114.900'), 'el monto no llegó al .docx');
+  assert.ok(texto.includes('En el año 2025'), 'el año de la operación no llegó');
+  assert.ok(texto.includes('correspondientes al año 2025'), 'el año de los márgenes no llegó');
+  ['442', '3.435.357.400'].forEach((v) => assert.ok(!texto.includes(v),
+    'sobrevive ' + v + ' del informe de referencia'));
+});
+
 /* ══════════════════ ANEXO B — descripciones de comparables ══════════════════ */
 
 test('el ANEXO B se escribe en el cuerpo y no dentro del índice', async () => {

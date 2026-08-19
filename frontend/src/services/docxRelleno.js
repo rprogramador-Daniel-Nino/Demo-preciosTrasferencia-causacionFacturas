@@ -62,6 +62,7 @@ import { nameKey } from './comparablesEngine.js';
 /* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
+import { actualizarProsaTablas } from './prosaTablasInforme.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -1532,16 +1533,33 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      plantilla de este cliente («…se ubica entre el percentil 25 (X) y (Y) percentil 75, la
      mediana con (Z)»). Se conserva como respaldo porque cubre redacciones donde la cifra no va
      detrás de su rótulo, y porque es la que está probada contra el .docx real. */
+  const reporteProsa = {};
   const antesDeProsa = doc.xml;
-  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
+  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos,
+    { rxParrafo: PARRAFO_OOXML, reporte: reporteProsa }));
   if (doc.xml === antesDeProsa) {
     doc.aplicar((x) => actualizarProsaTrasTabla(
       x, 'Rango Intercuartil',
       [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
       avisos,
     ));
+  }
+  /* El año va SIEMPRE, y no sólo cuando el respaldo posicional entra. Estaba dentro del `if`, y
+     eso funcionaba mientras las plantillas que necesitaban el año fueran justo las que la prosa
+     no sabía tocar. Al emparejar por cercanía, la frase de la plantilla que escribe las cifras
+     sin paréntesis ya se actualiza —el `if` deja de entrar— y con él se habría ido el «ajustado
+     durante el 20XX», que en esa plantilla vive en otro párrafo. Se salta si la prosa ya lo puso,
+     porque entonces el aviso sería el mismo recado dos veces en el panel. */
+  if (!reporteProsa.anioPuesto) {
     doc.aplicar((x) => actualizarAnioConclusionRango(x, year, avisos));
   }
+
+  /* Las otras frases que citan cifras de una tabla: cuántas comparables se identificaron y
+     cuántas quedaron, el monto de la operación con el vinculado y el año de los estados
+     financieros de las comparables. Van por la misma función que la ruta del PDF, con el
+     delimitador de párrafo de Word, para que las dos rutas no puedan quedarse una con menos
+     arreglos que la otra. */
+  doc.aplicar((x) => actualizarProsaTablas(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
 
   /* 13. Margen Operacional Compañías Comparables.
 
