@@ -56,15 +56,23 @@ const SERIES_MACRO = [
 
 function construirPromptBusqueda(anioActual) {
   const anios = [anioActual - 2, anioActual - 1, anioActual, anioActual + 1];
-  const anioProyeccion = anioActual + 1;
+  /* Dos años, no uno: este cron es global y no sabe para qué informe se va a usar cada
+     corrida. Un informe de año gravable `anioActual - 1` —el caso más común, un informe que
+     se radica el año después del que declara— necesita `anioActual` como SU año de
+     proyección, porque el DANE todavía no cerró ese año. Uno de año gravable `anioActual`
+     necesita `anioActual + 1`. Pedir solo `anioActual + 1` (como antes) dejaba sin cubrir el
+     primer caso: para el cron `anioActual` es simplemente "el año en curso", así que la
+     pregunta genérica de DANE/GEIH no encontraba nada (el año no ha cerrado) y el informe
+     salía con «Desempleo Proyectado <anioActual>: [Completar...]». */
+  const aniosProyeccion = [anioActual, anioActual + 1];
   const lista = SERIES_MACRO.map((s) => '- "' + s.clave + '": ' + s.pregunta + '.').join('\n');
 
-  /* La instrucción va aparte de la lista de series y nombra el año explícitamente: dentro de
+  /* La instrucción va aparte de la lista de series y nombra los años explícitamente: dentro de
      la lista, «(DANE, GEIH)» pesa más que la ventana de años y el modelo se queda con el
      publicador histórico. */
   const proyecciones = SERIES_MACRO
     .filter((s) => s.fuenteProyeccion)
-    .map((s) => '- "' + s.clave + '": para ' + anioProyeccion + ' consulta ' + s.fuenteProyeccion + '.')
+    .map((s) => '- "' + s.clave + '": para ' + aniosProyeccion.join(' y ') + ' consulta ' + s.fuenteProyeccion + '.')
     .join('\n');
 
   /* «Responde ÚNICAMENTE con un objeto JSON» era lo que rompía esta corrida: con esa
@@ -79,24 +87,27 @@ function construirPromptBusqueda(anioActual) {
     'cifras que recuerdes: cada valor tiene que salir de una página que hayas consultado en ' +
     'esta misma respuesta, y quiero ver citadas esas fuentes.\n\n' +
     'Series, para los años ' + anios.join(', ') + ':\n\n' + lista + '\n\n' +
-    'El año ' + anioProyeccion + ' es de PROYECCIÓN y lo quiero para TODAS las series. Ojo: ' +
-    'algunas de las fuentes de arriba solo publican el dato ya ocurrido, no un pronóstico, ' +
-    'así que para ese año hay que buscar en quien sí proyecta:\n\n' + proyecciones + '\n\n' +
+    'Los años ' + aniosProyeccion.join(' y ') + ' pueden ser de PROYECCIÓN —según cuál sea el año ' +
+    'gravable del informe que use esta corrida, uno de los dos es "el año siguiente" que hay que ' +
+    'proyectar— y los quiero para TODAS las series. Ojo: algunas de las fuentes de arriba solo ' +
+    'publican el dato ya ocurrido, no un pronóstico, así que para esos dos años hay que buscar en ' +
+    'quien sí proyecta:\n\n' + proyecciones + '\n\n' +
     'Si la primera institución que consultes no lo publica, NO te rindas ni dejes el año ' +
     'vacío: sigue buscando en las demás de esa lista y, si ninguna lo trae, en cualquier otro ' +
     'pronóstico publicado y atribuible (banco central, banca de inversión, gremio, centro de ' +
     'investigación económica). Un año sin cifra obliga a completarlo a mano después, así que ' +
     'agota la búsqueda antes de omitirlo.\n\n' +
     'Cuando la cifra de un año venga de una fuente DISTINTA de la principal de esa serie ' +
-    '—que es lo normal en el año de proyección—, no la des como un número suelto: devuélvela ' +
+    '—que es lo normal en un año de proyección—, no la des como un número suelto: devuélvela ' +
     'con SU propia fuente y SU propia URL, así:\n' +
-    '  "desempleo_colombia": { "valores": { "' + (anioProyeccion - 1) + '": "8.9", "' + anioProyeccion +
-    '": { "valor": "8.5", "fuente": "FMI, WEO Octubre ' + anioProyeccion + '", "fuenteUrl": "https://..." } }, ' +
-    '"fuente": "DANE, GEIH", "fuenteUrl": "https://..." }\n' +
+    '  "desempleo_colombia": { "valores": { "' + (anioActual - 1) + '": "8.9", "' + anioActual +
+    '": { "valor": "8.7", "fuente": "FMI, WEO Octubre ' + anioActual + '", "fuenteUrl": "https://..." }, "' +
+    (anioActual + 1) + '": { "valor": "8.5", "fuente": "FMI, WEO Octubre ' + anioActual +
+    '", "fuenteUrl": "https://..." } }, "fuente": "DANE, GEIH", "fuenteUrl": "https://..." }\n' +
     'Ese enlace se publica en la propia celda del informe, para que quien lo lea pueda ' +
     'verificar el pronóstico sin salir del documento. Sin él la cifra no sirve.\n\n' +
-    'Esa proyección también tiene que salir de una página que hayas consultado: no la ' +
-    'estimes tú ni la extrapoles de los años anteriores.\n\n' +
+    'Esas proyecciones también tienen que salir de una página que hayas consultado: no las ' +
+    'estimes tú ni las extrapoles de los años anteriores.\n\n' +
     'Cuando termines de buscar, incluye en tu respuesta un objeto JSON con esta forma (puede ' +
     'ir acompañado del texto y las citas que necesites; lo que importa es que el JSON esté ' +
     'completo y bien formado):\n' +

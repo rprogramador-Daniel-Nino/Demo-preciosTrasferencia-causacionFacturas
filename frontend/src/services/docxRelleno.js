@@ -315,7 +315,9 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
     doc,
     [
       tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
-      'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
+      'Tasa Representativa del Mercado',
+      ['Desempleo en Colombia', 'Tasa de Desempleo', 'Mercado Laboral en Colombia'],
+      'Análisis del Sector',
     ],
     [
       primerHueco(narrativa.colombia, 'colombiana'),
@@ -884,7 +886,12 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
  */
 export function localizarHitos(xml, titulos) {
   const texto = String(xml || '');
-  const claves = (titulos || []).map(claveTitulo);
+  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
+     traer redacciones distintas según qué consultor escribió la plantilla de ese cliente
+     en su momento ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
+     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
+     Mismo mecanismo que ya usa `localizarBloqueTabla` para nombres de tabla. */
+  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
@@ -917,7 +924,7 @@ export function localizarHitos(xml, titulos) {
   let desde = 0;
   for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
     if (k >= candidatos.length) continue;
     /* Si el hito es el título de una tabla —caso normal para los nombres de
        `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
@@ -947,11 +954,17 @@ export function localizarHitos(xml, titulos) {
  * @param {string[]} [avisos]
  * @param {string} [nombreParaAvisos]
  */
+/** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
+ *  sinónimos si trae varios (`['Desempleo en Colombia', 'Tasa de Desempleo', ...]`) — para
+ *  avisos y logs, nunca la representación por defecto de un arreglo. */
+const etiquetaTitulo = (t) => (Array.isArray(t) ? t[0] : t);
+
 export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaAvisos) {
   doc.aplicar((actual) => {
     const hitos = localizarHitos(actual, titulos);
+    const etiquetas = titulos.map(etiquetaTitulo);
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
-      + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+      + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + etiquetas.join(' → ') + ')');
     let salida = actual;
 
     /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
@@ -975,17 +988,17 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
       if (!hitoActual || !hitoSiguiente) {
-        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
+        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + etiquetas[i] + '" o "' + etiquetas[i + 1] + '"';
         console.warn('[docxRelleno] ' + aviso);
         if (Array.isArray(avisos)) avisos.push(aviso);
         if (cursorRespaldo !== null) {
           const nuevo = contenidos[i]('');
           if (nuevo !== null) {
-            console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+            console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
               '": sin ancla, insertado de respaldo al final de la sección');
             if (Array.isArray(avisos)) {
               avisos.push(
-                (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+                (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
                 'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
                 'revisa el orden antes de radicar'
               );
@@ -998,10 +1011,10 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
       const nuevo = contenidos[i](textoHueco);
       if (nuevo === null) {
-        console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": sin tocar');
+        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
         continue;
       }
-      console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
+      console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
         + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
       if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
         cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);

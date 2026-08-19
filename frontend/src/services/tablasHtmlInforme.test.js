@@ -682,6 +682,37 @@ test('reemplazarHuecosHtml protege una tabla que cae justo después de un hito',
   assert.match(salida, /<table><tr><td>dato real/, 'la tabla entera sigue intacta, sin texto insertado dentro');
 });
 
+test('localizarHitosHtml acepta un arreglo de sinónimos por posición', () => {
+  /* El contenido es universal (la sección de desempleo es la misma para todos los
+     informes), pero el documento de referencia de cada contribuyente es un archivo
+     distinto que un consultor distinto redactó en su momento — "Tasa de Desempleo" y
+     "Desempleo en Colombia" son el mismo apartado con otra redacción. */
+  const html = '<h3>Uno</h3><h3>Tasa de Desempleo</h3><h3>Tres</h3>';
+  const hitos = localizarHitosHtml(html, ['Uno', ['Desempleo en Colombia', 'Tasa de Desempleo'], 'Tres']);
+  assert.ok(hitos[1], 'debió reconocer el sinónimo "Tasa de Desempleo"');
+});
+
+test('reemplazarHuecosHtml encuentra el hito con un sinónimo, y el aviso muestra un nombre legible si falla', () => {
+  const htmlOk = '<h2>Encabezado A</h2><h2>Tasa de Desempleo</h2>';
+  const salidaOk = reemplazarHuecosHtml(
+    htmlOk,
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => '<p>Prosa nueva.</p>'],
+    []
+  );
+  assert.match(salidaOk, /Prosa nueva\./);
+
+  const avisos = [];
+  reemplazarHuecosHtml(
+    '<h2>Encabezado A</h2>',
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => 'nunca se usa'],
+    avisos
+  );
+  assert.ok(avisos.some((a) => a.includes('Desempleo en Colombia')));
+  assert.ok(!avisos.some((a) => a.includes('[object Object]')));
+});
+
 test('actualizarApartadoSectorialHtml reemplaza los cuatro bloques y deja intacta la tabla de datos clave', () => {
   const html = [
     '<h2>Análisis del Sector de la industria del software y de los videojuegos</h2>',
