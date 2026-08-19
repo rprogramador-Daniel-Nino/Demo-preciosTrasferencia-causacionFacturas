@@ -17,6 +17,7 @@ import {
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
   actualizarFormulasMatematicasOoxml,
   localizarAnexosOoxml, anexosDelDocumento, problemaDeIntegridadOoxml,
+  generarTablaOoxml,
 } from './docxRelleno.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
@@ -845,7 +846,10 @@ test('la tabla de márgenes se actualiza con cualquier prefijo, sin tocar las de
     assert.ok(!salida.includes('márgenes viejos'), `con «${rotulo}» debe actualizarse`);
     assert.ok(salida.includes('vieja'), 'y la tabla de definiciones del método quedar intacta');
     assert.match(salida, /MO NO AJUSTADO/, 'la tabla regenerada es la de márgenes');
-    assert.ok(salida.includes('Alfa SA'), 'con los comparables del estudio');
+    /* En mayúscula desde el 2026-08-19: esta tabla es una de las que el usuario pidió subir.
+       El estudio la trae como «Alfa SA», así que esto comprueba de paso que el que sube es el
+       generador y no el dato de entrada. */
+    assert.ok(salida.includes('ALFA SA'), 'con los comparables del estudio');
     assert.ok(!avisos.includes('Margen Operacional Compañías Comparables'),
       'no debe reportarse como ausente una tabla que sí estaba');
   }
@@ -1121,7 +1125,15 @@ test('el ANEXO C se rehace con la matriz del estudio', async () => {
   const texto = textoDe(zip, RUTA_DOC_TEST);
   assert.ok(!texto.includes('MATRIZ VIEJA'), 'la matriz de la plantilla tiene que irse');
   assert.ok(!texto.includes('327'), 'y con ella sus conteos del año pasado');
-  assert.ok(texto.includes('Diferencias funcionales'), 'el resumen lleva la fila fundida');
+  /* En MAYÚSCULA desde el 2026-08-19: el ANEXO C entero va en mayúscula por pedido del
+     usuario, y su resumen es parte del anexo. La «Tabla 16. Razones de rechazo» del CUERPO,
+     que publica esta misma fila, sigue en caja mixta — su test está más abajo.
+
+     Se comprueba que la caja mixta DESAPARECIÓ y no que la mayúscula aparece: el título del
+     grupo ya se emitía en mayúscula (`tituloDeGrupoAnexoC`), así que buscar «DIFERENCIAS
+     FUNCIONALES» daba verde aunque el resumen siguiera en caja mixta. */
+  assert.ok(texto.includes('DIFERENCIAS FUNCIONALES'), 'el resumen lleva la fila fundida');
+  assert.ok(!texto.includes('Diferencias funcionales'), 'el resumen del anexo no subió');
   ['ACT UNO', 'RIGOR UNO', 'HOLD UNO', 'PERD UNO', 'OK UNO'].forEach((c) =>
     assert.ok(texto.includes(c), `la compañía ${c} tiene que aparecer en su listado`));
 });
@@ -2161,4 +2173,127 @@ test('una cirugía que rompería el documento no se aplica y se avisa', async ()
   assert.strictEqual(insertadas, 0);
   assert.strictEqual(zip.file(RUTA_DOC_TEST).asText(), roto, 'no se escribe nada encima');
   assert.match(avisos.join(' '), /no se pudo reescribir sin romper el documento/);
+});
+
+/* ── Estilo de las tablas que esta ruta genera de cero ──
+   `generarTablaOoxml` arma las tablas del .docx cuando la plantilla es un .docx (Tablas 3/12,
+   15, 16, 19, 20, rango, anexos B y C, datos macro). Es el tercer emisor del informe, junto al
+   CSS de `estiloDocumento.js` y el writer de `docxWriter.js`, y los tres tienen que decir lo
+   mismo: si uno se queda atrás, el cliente ve una tabla distinta según por qué ruta salió su
+   informe, que es exactamente el fallo que este proyecto ya pagó cuatro veces. */
+
+const tablaDe = (xml) => /<w:tbl>[\s\S]*?<\/w:tbl>/.exec(xml)[0];
+
+test('la tabla generada lleva la rejilla negra completa, no media rejilla gris', () => {
+  /* `left`, `right` e `insideV` eran `<w:val="none"/>`: la tabla salía sin bordes verticales,
+     mientras el previo los pintaba. El modelo del usuario (2026-08-19) lleva rejilla completa
+     en negro, con el contorno más grueso. En octavos de punto: 1px = 6, 1,5px = 12. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['A', 'B'], [['1', '2']]));
+  const bordes = /<w:tblBorders>([\s\S]*?)<\/w:tblBorders>/.exec(tbl)[1];
+  for (const [lados, sz] of [[['top', 'bottom', 'left', 'right'], '12'], [['insideH', 'insideV'], '6']]) {
+    for (const lado of lados) {
+      assert.match(bordes, new RegExp('<w:' + lado + ' w:val="single" w:sz="' + sz +
+        '" w:space="0" w:color="000000"/>'), 'el borde ' + lado + ' no es el del modelo');
+    }
+  }
+  assert.doesNotMatch(bordes, /none/, 'quedan lados sin borde');
+  assert.doesNotMatch(tbl, /E2E8F0/, 'queda el gris claro viejo');
+});
+
+test('la cabecera de la tabla generada va gris con letra negra', () => {
+  const tbl = tablaDe(generarTablaOoxml('T', ['Concepto'], [['dato']]));
+  assert.match(tbl, /<w:shd w:val="clear" w:color="auto" w:fill="999999"\/>/);
+  assert.match(tbl, /<w:color w:val="000000"\/>/);
+  assert.doesNotMatch(tbl, /0E1726/, 'queda el fondo oscuro viejo');
+  assert.doesNotMatch(tbl, /FFFFFF/, 'queda la letra blanca vieja');
+});
+
+test('las celdas de la tabla generada van centradas y en Arial 10pt', () => {
+  /* Antes iban `w:jc w:val="left"` y sin tipografía propia, así que heredaban el cuerpo del
+     documento: la misma tabla salía a 12 pt en un informe y a 10 en otro. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['Concepto'], [['dato']]));
+  assert.equal((tbl.match(/<w:jc w:val="center"\/>/g) || []).length, 2,
+    'cabecera y dato tienen que ir centrados los dos');
+  assert.doesNotMatch(tbl, /w:val="left"/, 'queda una celda alineada a la izquierda');
+  assert.equal((tbl.match(/<w:vAlign w:val="center"\/>/g) || []).length, 2,
+    'las dos celdas van centradas en vertical');
+  assert.equal((tbl.match(/<w:rFonts w:ascii="Arial" w:hAnsi="Arial"\/>/g) || []).length, 2);
+  assert.equal((tbl.match(/<w:sz w:val="20"\/>/g) || []).length, 2);
+});
+
+test('la tabla generada respeta el aire de celda del modelo', () => {
+  /* `padding:5px 6px` en twips. Word trae 108 a los lados y CERO arriba y abajo por defecto,
+     así que sin esto las filas del archivo salen más apretadas que las del previo. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['A'], [['1']]));
+  const mar = /<w:tblCellMar>([\s\S]*?)<\/w:tblCellMar>/.exec(tbl);
+  assert.ok(mar, 'la tabla no declara márgenes de celda');
+  assert.match(mar[1], /<w:top w:w="75" w:type="dxa"\/>/);
+  assert.match(mar[1], /<w:left w:w="90" w:type="dxa"\/>/);
+  assert.match(mar[1], /<w:bottom w:w="75" w:type="dxa"\/>/);
+  assert.match(mar[1], /<w:right w:w="90" w:type="dxa"\/>/);
+});
+
+/* ══════ Mayúsculas ══════
+   Requisito del usuario (2026-08-19): la tabla de márgenes, la de la muestra y el ANEXO C
+   entero se publican en mayúscula, encabezados incluidos. La «Tabla 16. Razones de rechazo»
+   queda fuera, y es la razón de que esto no se aplique dentro de `generarTablaOoxml`: ahí
+   subiría TODA tabla del informe. Sube quien arma las filas, tabla por tabla. */
+
+const ESTUDIO_MIXTO_DOCX = {
+  anio: 2025, ent: 'ACME COLOMBIA SAS', pli: 'MO', cmode: 'all',
+  t_s: 10000, t_c: 7000, t_op: 2000,
+  embudoSeleccion: { evaluadas: 100, seleccionadas: 2, reserva: 0, porMotivo: { holding: 30 } },
+  comparables: [
+    { name: 'Zeta Comparable Ltd', amb: 'Int', s: 5000, c: 3500, op: 900 },
+    { name: 'Omega Comparable Plc', amb: 'Int', s: 8000, c: 5600, op: 1600 },
+  ],
+};
+
+test('.docx: la muestra y los márgenes se emiten en mayúscula, encabezado incluido', () => {
+  const xml = conTabla('<w:p><w:t>Tabla 17. Muestra Compañías comparables</w:t></w:p>')
+    + conTabla('<w:p><w:t>Tabla 19. Margen Operacional Compañías Comparables</w:t></w:p>');
+  const texto = textoPlanoOoxml(actualizarTablasOperacionesOoxml(xml, ESTUDIO_MIXTO_DOCX));
+  assert.match(texto, /ZETA COMPARABLE LTD/, 'la razón social no subió');
+  assert.ok(!texto.includes('Zeta Comparable Ltd'));
+  assert.match(texto, /OMEGA COMPARABLE PLC/);
+  /* El encabezado que emite esta ruta: `['Número', 'Nombre de la Compañía', 'Ámbito']`. */
+  assert.match(texto, /NOMBRE DE LA COMPAÑÍA/, 'el encabezado de la muestra no subió');
+  assert.ok(!texto.includes('Nombre de la Compañía'));
+});
+
+test('.docx: las razones de rechazo NO se pasan a mayúscula', () => {
+  /* La excepción que pidió el usuario, con su propio test: una excepción sin test es una
+     regla que alguien va a "arreglar" el día que le parezca inconsistente. */
+  const xml = conTabla('<w:p><w:t>Tabla 16. Razones de rechazo</w:t></w:p>');
+  const texto = textoPlanoOoxml(actualizarTablasOperacionesOoxml(xml, ESTUDIO_MIXTO_DOCX));
+  assert.match(texto, /Compañías holding o de grupo/, 'la razón de rechazo se pasó a mayúscula');
+});
+
+test('coleccionesDelEstudio sube las comparables y deja las razones como están', () => {
+  /* Estas colecciones alimentan el bucle de la plantilla .docx marcada (`envolverTablaEnBucle`),
+     que es una TERCERA ruta hacia la misma tabla de comparables: sin esto, el informe salía en
+     mayúscula por dos caminos y en caja mixta por el otro. */
+  const { comparables, razonesRechazo } = coleccionesDelEstudio(ESTUDIO_MIXTO_DOCX);
+  assert.strictEqual(comparables[0].nombre, 'ZETA COMPARABLE LTD');
+  assert.strictEqual(comparables[0].ambito, 'INTERNACIONAL');
+  assert.ok(razonesRechazo.length, 'el estudio de prueba tiene que traer razones');
+  assert.match(razonesRechazo[0].criterio, /[a-záéíóúñ]/,
+    'las razones de rechazo tienen que conservar su caja mixta');
+});
+
+test('el ANEXO C del .docx se emite entero en mayúscula', async () => {
+  const zip = await zipConAnexoC();
+  insertarAnexoC(zip, {
+    embudoSeleccion: { evaluadas: 3, seleccionadas: 1, reserva: 0, porMotivo: { holding: 1 } },
+    matrizRechazo: {
+      universo: 3,
+      porMotivo: { holding: ['Holding Uno Sa'], aceptadas: ['Zeta Comparable Ltd'] },
+    },
+  });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.ok(texto.includes('HOLDING UNO SA'), 'la razón social del listado no subió');
+  assert.ok(!texto.includes('Holding Uno Sa'));
+  assert.ok(texto.includes('ZETA COMPARABLE LTD'));
+  /* Y el encabezado del listado, que esta ruta emite como `['Nº', 'NOMBRE DE LA COMPAÑÍA', …]`. */
+  assert.ok(texto.includes('NOMBRE DE LA COMPAÑÍA'));
 });

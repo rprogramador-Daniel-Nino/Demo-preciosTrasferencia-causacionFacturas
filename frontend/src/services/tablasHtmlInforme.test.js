@@ -7,6 +7,9 @@ import {
   actualizarApartadosMacroHtml, localizarHitosHtml, reemplazarHuecosHtml,
   actualizarApartadoSectorialHtml,
 } from './tablasHtmlInforme.js';
+/* De namespace: un export que todavía no existe rompe la CARGA del módulo y tumba el archivo
+   entero, en vez de fallar la aserción que lo comprueba. */
+import * as tablas from './tablasHtmlInforme.js';
 import { resolverSerie } from './analisisMercado.js';
 
 /* Tabla como la emite el extractor de PDF: HTML semántico, sin estilos en las celdas,
@@ -1098,4 +1101,78 @@ test('actualizarApartadoSectorialHtml inserta la introduccion aunque el hueco de
 
   assert.match(salida, /mostró dinamismo en 2025/);
   assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
+});
+
+/* ══════ Mayúsculas ══════
+   Requisito del usuario (2026-08-19): la data de la tabla de márgenes, la de la muestra y todo
+   el ANEXO C se publica en mayúscula, encabezados incluidos. La tabla de RAZONES DE RECHAZO
+   queda fuera, explícitamente. */
+
+test('mayusculasEnTablaHtml sube el texto sin tocar el marcado ni las entidades', () => {
+  /* `&nbsp;` en mayúscula es `&NBSP;`, que no es una entidad: Word la imprimiría en crudo en
+     medio del informe. Las letras acentuadas llegan como UTF-8 y `toUpperCase` las resuelve
+     bien (ó → Ó); son las entidades con nombre las que hay que dejar en paz. */
+  const tabla = '<table>'
+    + '<tr><th>Nombre de la Compañía</th></tr>'
+    + '<tr><td><span style="font-size:9pt">Información&nbsp;base &amp; datos</span></td></tr>'
+    + '</table>';
+  const salida = tablas.mayusculasEnTablaHtml(tabla);
+  assert.ok(salida.includes('<th>NOMBRE DE LA COMPAÑÍA</th>'), 'el encabezado no subió');
+  assert.ok(salida.includes('INFORMACIÓN&nbsp;BASE &amp; DATOS'), 'el texto no subió bien');
+  assert.ok(salida.includes('style="font-size:9pt"'), 'se tocó un atributo');
+  assert.ok(salida.includes('<span '), 'se tocó el nombre de una etiqueta');
+  assert.ok(!salida.includes('&NBSP;'), 'la entidad se rompió');
+  assert.ok(!salida.includes('&AMP;'), 'la entidad se rompió');
+});
+
+test('una letra acentuada escrita como entidad sube a su entidad mayúscula', () => {
+  /* El extractor de PDF emite las tildes como UTF-8, pero una plantilla que llegó por otro
+     camino puede traerlas como entidad. Dejarlas intactas publicaba «INFORMACIóN» —una
+     minúscula en medio de una celda en mayúsculas—, visto en la prueba de humo del 2026-08-19.
+     `&oacute;` y `&Oacute;` son entidades distintas y la segunda es la que toca. */
+  const salida = tablas.mayusculasEnTablaHtml(
+    '<table><tr><td>Informaci&oacute;n de la compa&ntilde;&iacute;a</td></tr></table>');
+  assert.ok(salida.includes('INFORMACI&Oacute;N DE LA COMPA&Ntilde;&Iacute;A'),
+    'las entidades de letra acentuada no subieron: ' + salida);
+});
+
+/* Las mismas comparables, con la caja mezclada que traen las bases de datos. */
+const ESTUDIO_MIXTO = {
+  ...ESTUDIO,
+  comparables: [
+    { name: 'Zeta Comparable Ltd', s: 5000, c: 3500, op: 900, amb: 'Int' },
+    { name: 'Omega Comparable Plc', s: 8000, c: 5600, op: 1600, amb: 'Int' },
+  ],
+};
+
+test('la muestra de comparables se publica en mayúscula, encabezado incluido', () => {
+  const html = '<p>Tabla 17. Muestra Compañías comparables</p>'
+    + TABLA_3COL(['Número', 'Nombre de la Compañía', 'Ámbito']);
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO_MIXTO, []);
+  assert.match(salida, /ZETA COMPARABLE LTD/);
+  assert.ok(!salida.includes('Zeta Comparable Ltd'), 'quedó una razón social sin subir');
+  assert.match(salida, /NOMBRE DE LA COMPAÑÍA/, 'el encabezado de la plantilla no subió');
+  assert.ok(!salida.includes('Nombre de la Compañía'));
+});
+
+test('los márgenes de las comparables se publican en mayúscula', () => {
+  const html = conRotulo('Tabla 19. Margen Operacional Compañías Comparables',
+    '<table><tr><th>Comparables</th><th>MO no ajustado</th><th>MO ajustado</th></tr>'
+    + '<tr><td><strong>viejo</strong></td><td>1%</td><td>2%</td></tr></table>');
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO_MIXTO, []);
+  assert.match(salida, /OMEGA COMPARABLE PLC/);
+  assert.ok(!salida.includes('Omega Comparable Plc'));
+  assert.match(salida, /MO NO AJUSTADO/, 'el encabezado no subió');
+  assert.ok(!salida.includes('MO no ajustado'));
+});
+
+test('las razones de rechazo NO se pasan a mayúscula', () => {
+  /* Excluida a mano por el usuario (2026-08-19). Va con su propio test porque es una
+     excepción a una regla, y una excepción sin test es una regla que alguien va a
+     "arreglar" el día que le parezca inconsistente. */
+  const html = '<p>Tabla 16. Razones de rechazo</p>'
+    + TABLA_3COL(['Filtro aplicado', 'Filtros aplicado', 'N° por filtro']);
+  const salida = actualizarTablasMotorHtml(html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, []);
+  assert.match(salida, /Compañías holding o de grupo/, 'la razón de rechazo se pasó a mayúscula');
+  assert.match(salida, /Filtro aplicado/, 'el encabezado de razones se pasó a mayúscula');
 });
