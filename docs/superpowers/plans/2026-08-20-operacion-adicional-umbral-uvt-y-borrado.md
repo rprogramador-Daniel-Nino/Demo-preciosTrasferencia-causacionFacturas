@@ -676,6 +676,194 @@ git commit -m "fix: la tabla de operacion adicional se elimina cuando no hay nad
 
 ---
 
+### Task 3: El monto de la operación adicional, visible en el resumen del paso 2
+
+**Files:**
+- Modify: `frontend/src/components/IngestaOperaciones.jsx:186-220` (el recuadro «Resumen de
+  Operación Extraída») y `:231` (la condición de la tarjeta de detalle)
+- Verificación manual en el navegador; este componente no tiene pruebas unitarias
+  (`CLAUDE.md`: los cambios visuales se verifican a mano)
+
+**Interfaces:**
+- Consumes, de `frontend/src/services/tablasOperaciones.js`: `montoOperacionAdicional(estudio)`
+  → number (0 cuando no hay sección 4), `umbralOperacionAdicional(anio)` → number,
+  `tieneOperacionAdicional(estudio)` → boolean. Las tres ya están importadas en el componente.
+  De `frontend/src/utils/calculations.js`: `fmt`.
+- Produces: nada hacia otros módulos. Solo interfaz.
+
+**Por qué.** El pedido del usuario era que el monto de operación de la sección «4. Información
+adicional» **se pueda ver en la sección de resumen** del paso 2. Hoy:
+
+- El recuadro «Resumen de Operación Extraída» (`:186`) lee del estudio, así que sobrevive a
+  salir del paso y volver, pero **no tiene ninguna celda para la operación adicional**.
+- La tarjeta de detalle (`:231`) sí muestra el monto, pero está condicionada a
+  `tieneOperacionAdicional(study)`: **solo por encima del umbral**.
+- Debajo del umbral el monto solo aparece en `excelMsg`, que es `useState('')` (`:12`) —
+  estado del componente. Al navegar al paso 3 y volver, el mensaje se pierde y el monto queda
+  invisible aunque `study.operacionAdicional.monto` lo tenga guardado.
+
+El resultado es que el caso donde MÁS falta saber la cifra —la sección existe, no llega al
+umbral, y por lo tanto la tabla se borra del informe (Task 2)— es justo el caso donde la
+cifra no se ve.
+
+**Qué NO hacer.** No borrar ni recortar la tarjeta de detalle de `72a3163`: su tabla fila por
+fila con vinculado, país, tipo y monto es información que el resumen no puede dar, y la nota
+de que no se suma al monto analizado es necesaria donde está. Esta tarea **añade** una celda
+al resumen y **amplía** cuándo se dibuja la tarjeta; no reemplaza nada.
+
+- [ ] **Step 1: Añadir la celda al resumen**
+
+El recuadro de `:186` tiene una rejilla `grid-cols-1 md:grid-cols-2 gap-4` con cuatro celdas:
+concepto, monto total, compañía vinculada, país e ID. Añadir una quinta al final de esa
+rejilla, **solo cuando el estudio trae la sección 4** —`study.operacionAdicional` no nulo—,
+que ocupe el ancho completo para que no descuadre la simetría de las cuatro anteriores:
+
+```jsx
+            {/* El monto de la sección «4. Información adicional» del formato, en el resumen y
+                no solo en la tarjeta de detalle de abajo. Va aquí porque este recuadro lee del
+                ESTUDIO y sobrevive a salir del paso y volver, mientras el mensaje de carga es
+                estado del componente y se pierde. Sin esto, el caso en que más falta saber la
+                cifra —la sección existe, no llega al umbral y por eso la tabla se borra del
+                informe— era justo el que no la mostraba.
+
+                Ámbar y no verde: no es el monto analizado. La leyenda dice cuál de las dos
+                cosas va a pasar en el informe, que es lo que el usuario necesita antes de
+                generar. */}
+            {study.operacionAdicional && (
+              <div className="md:col-span-2 p-4 rounded-xl bg-amber-50/50 dark:bg-amber-950/10 border border-amber-200 dark:border-amber-900/30 space-y-1">
+                <span className="text-xs text-amber-700 dark:text-amber-500 font-semibold uppercase tracking-wider block">
+                  Monto de Operación · Información Adicional (códigos 61 a 63)
+                </span>
+                <span className="text-xl font-bold text-amber-700 dark:text-amber-500 font-mono block">
+                  COP $ {fmt(montoOperacionAdicional(study))}
+                </span>
+                <span className="text-xs text-zinc-500 block">
+                  {tieneOperacionAdicional(study)
+                    ? `Supera el umbral de 45.000 UVT (COP $ ${fmt(umbralOperacionAdicional(study.anio))}): se declara en la tabla «Operación adicional Transacciones Intercompañía» del informe.`
+                    : `No supera el umbral de 45.000 UVT (COP $ ${fmt(umbralOperacionAdicional(study.anio))}): esa tabla se elimina del informe.`}
+                </span>
+              </div>
+            )}
+```
+
+Nota para el implementador: la condición de visibilidad del recuadro entero (`:186`) es
+`(study.vinc_tipo || study.vinc || montoOperacion(study) !== null)`. Añadir
+`|| study.operacionAdicional` para que el resumen aparezca también cuando lo único que trajo
+el archivo es la sección 4 — que es posible: la sección 1 del archivo de referencia de
+MONTACHEM está vacía.
+
+- [ ] **Step 2: Dibujar la tarjeta de detalle también por debajo del umbral**
+
+La condición de `:231` pasa de `tieneOperacionAdicional(study)` a `study.operacionAdicional`,
+y su encabezado deja de afirmar que se va a publicar. El cuerpo de la tarjeta —la tabla fila
+por fila y la nota de que no se suma— **no se toca**.
+
+Sustituir el comentario que precede a la tarjeta y su encabezado por:
+
+```jsx
+      {/* Operación adicional — sección «4. Información adicional» del formato (códigos DIAN
+          61 a 63: préstamos, reintegros y operaciones a nombre de vinculados que no se
+          reflejan en el Estado de Resultados).
+
+          Se dibuja siempre que el formato TRAIGA la sección, supere o no el umbral. Antes
+          solo aparecía por encima, con el criterio de que enseñar una tarjeta de algo que no
+          va a salir en el informe hace esperarlo ahí. Pero el monto se leyó del archivo y es
+          un dato del estudio: esconderlo dejaba la cifra viva solo en el mensaje de carga,
+          que es estado del componente y se pierde al salir del paso y volver. Y desde que la
+          tabla se ELIMINA del informe cuando no llega al umbral, saber por qué desapareció
+          importa más, no menos. Lo que hace el trabajo de no crear expectativa es la
+          leyenda, que dice explícitamente cuál de las dos cosas va a pasar. */}
+      {study.operacionAdicional && (
+        <div className="bg-white dark:bg-[#0c0c0f] border border-amber-200 dark:border-amber-900/40 rounded-xl p-6 shadow-sm space-y-4">
+          <div className="flex items-start gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50">
+                Operación Adicional Detectada
+              </h3>
+              <p className="text-xs text-zinc-500">
+                Información adicional del formato (códigos 61 a 63) por COP $ {fmt(montoOperacionAdicional(study))}
+                {tieneOperacionAdicional(study)
+                  ? `, que supera los COP $ ${fmt(umbralOperacionAdicional(study.anio))}. Se publicará en la tabla «Operación adicional Transacciones Intercompañía».`
+                  : `, que no supera los COP $ ${fmt(umbralOperacionAdicional(study.anio))}. No se publica en el informe, y la tabla que traiga la plantilla se elimina.`}
+              </p>
+            </div>
+          </div>
+```
+
+**Ojo con el acceso a las filas:** el cuerpo de la tarjeta hace
+`study.operacionAdicional.filas.map(...)`. Con la condición nueva sigue estando protegido
+—`study.operacionAdicional` es la guarda—, pero el parser garantiza `filas` no vacío cuando
+el objeto existe (`excelOperationsParser.js:372` lo construye solo `if (filasAdicionales.length)`).
+Si un estudio guardado antes trajera el objeto sin `filas`, el `.map` rompería la pantalla:
+usar `(study.operacionAdicional.filas || [])` en el `.map` para que no dependa de eso.
+
+- [ ] **Step 3: Verificar el lint y el build**
+
+Run: `npm run lint --prefix frontend`
+Expected: sin hallazgos.
+
+Run: `npm test`
+Expected: 100 % en verde. Este componente no tiene pruebas propias, pero la suite confirma
+que no se rompió ningún import.
+
+Run: `npm run build`
+Expected: build limpio.
+
+- [ ] **Step 4: Verificación manual en el navegador**
+
+```bash
+npm start
+```
+
+Abrir `http://localhost:3000`, crear un estudio, poner año gravable 2025 en el paso 1 e ir al
+paso 2.
+
+**Caso A — sección 4 por encima del umbral.** Cargar
+`D:\G\Juan-Mendez\Downloads\Informacion Operaciones PT 2025-1 (1).xlsx`. Comprobar:
+- en «Resumen de Operación Extraída» aparece la celda ámbar con
+  **`COP $ 14.516.485.850`** y la leyenda «Supera el umbral de 45.000 UVT
+  (COP $ 2.240.955.000): se declara…»;
+- si dice `2.926.256.260` está leyendo la columna «Saldo 2025» y el defecto es del parser, no
+  de esta tarea;
+- si dice `COP $ 2.500.000.000` como umbral, la Task 1 no quedó bien;
+- debajo, la tarjeta «Operación Adicional Detectada» con su tabla de una fila.
+
+**Caso B — el mismo archivo, por debajo del umbral.** Cambiar el año gravable del estudio a
+un año cuyo UVT deje el monto por debajo no es posible (ningún UVT de la tabla lo consigue con
+14.516 millones), así que forzarlo: en la consola del navegador,
+`const k='pt:study:<id>'; const s=JSON.parse(localStorage.getItem(k)); s.operacionAdicional.monto=500000000; s.operacionAdicional.filas[0].monto=500000000; localStorage.setItem(k,JSON.stringify(s));`
+y recargar. Comprobar:
+- la celda del resumen sigue visible, con `COP $ 500.000.000` y la leyenda «No supera el
+  umbral… esa tabla se elimina del informe»;
+- la tarjeta de detalle también sigue visible, con el mismo mensaje;
+- **ir al paso 3 y volver al paso 2:** las dos siguen ahí. Es el defecto que esta tarea
+  cierra — antes, al volver, el monto había desaparecido.
+
+**Caso C — sin sección 4.** Cargar
+`frontend\Archivos Prueba\Información Operaciones PT 2025-2 modificado cr.xlsx`, cuya sección
+4 está vacía. Comprobar que ni la celda del resumen ni la tarjeta aparecen, y que el resto
+del paso 2 queda igual que antes.
+
+Los tres casos, en **tema claro y oscuro**.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/components/IngestaOperaciones.jsx
+git commit -m "feat: el monto de la operacion adicional se ve en el resumen del paso 2"
+```
+
+- [ ] **Step 6: Regenerar el compilado**
+
+```bash
+npm run build
+git add public/gestor-reportes
+git commit -m "chore: regenerar public/gestor-reportes"
+```
+
+---
+
 ## Verificación final
 
 - [ ] `npm test` — 100 % en verde, con ~15 pruebas más que al empezar (1607 → ~1622).
@@ -690,3 +878,7 @@ git commit -m "fix: la tabla de operacion adicional se elimina cuando no hay nad
 - [ ] Verificación manual en el navegador del paso 2 con
       `D:\G\Juan-Mendez\Downloads\Informacion Operaciones PT 2025-1 (1).xlsx`: la tarjeta de
       operación adicional cita `COP $ 2.240.955.000` como umbral, no `2.500.000.000`.
+- [ ] El monto de la operación adicional se ve en «Resumen de Operación Extraída», y sigue
+      visible al salir del paso 2 y volver, tanto por encima como por debajo del umbral.
+- [ ] La tarjeta de detalle fila por fila de `72a3163` sigue intacta, con su tabla y su nota
+      de que el monto no se suma al analizado.
