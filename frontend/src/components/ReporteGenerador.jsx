@@ -45,6 +45,7 @@ import {
 } from '../services/plantillaNube.js';
 import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage.js';
 import { projectIdFirebase } from '../services/firebase.js';
+import { parseAccionistasFromDocument } from '../services/accionistasParser.js';
 
 /* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector: ese path pasa
    por el rewrite de Firebase Hosting, que corta cualquier petición a los 60 s sin importar
@@ -72,7 +73,7 @@ async function pedirAnalisisSector(actividad, year) {
   return { porAnio: { [String(year)]: resp.data.entrada } };
 }
 
-export default function ReporteGenerador({ study, estudioId, usuario }) {
+export default function ReporteGenerador({ study, updateStudy, estudioId, usuario }) {
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   /* `customTemplateLoaded` vivía aquí y se ha retirado: su único cometido era impedir
@@ -652,6 +653,20 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
     setLoading(true);
+
+    // Fallback de extracción de composición accionaria desde la plantilla del cliente
+    if (typeof updateStudy === 'function') {
+      parseAccionistasFromDocument(file).then((datosAccionistas) => {
+        if (datosAccionistas && datosAccionistas.accionistas && datosAccionistas.accionistas.length > 0) {
+          updateStudy({
+            plantillaAccionistas: datosAccionistas
+          });
+        }
+      }).catch((err) => {
+        console.warn('[plantilla] No se pudo extraer composición accionaria:', err);
+      });
+    }
+
     const reader = new FileReader();
     reader.readAsArrayBuffer(file);
     reader.onload = async (e) => {

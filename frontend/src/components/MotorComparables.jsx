@@ -256,7 +256,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           accionistas: result.accionistas || []
         };
         setEstudioAnteriorInfo(info);
-        setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad y ${result.comparables.length} comparables de la tabla anterior.`);
+        updateStudy({
+          estudioAnterior: info,
+          ...(result.actividad_especifica ? { actividad_especifica: result.actividad_especifica } : {})
+        });
+        const msgAcc = result.accionistas && result.accionistas.length > 0
+          ? ` · ${result.accionistas.length} accionista(s)`
+          : '';
+        setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad, ${result.comparables.length} comparables${msgAcc}.`);
 
         /* Las empresas del informe se llevan al catálogo compartido del equipo. Antes
            se quedaban dentro de este estudio y solo servían para reconocer
