@@ -76,10 +76,18 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      `plantillaActiva`, que es el dato real. */
   const [recursosCargados, setRecursosCargados] = useState([]);
   /* Cifras y narrativa de la Sección III, refrescadas mensualmente por
-     `actualizarAnalisisMercadoScheduled`. null mientras carga o si Firestore no
-     responde — los generadores de analisisMercado.js caen al respaldo local
-     embebido en el código cuando reciben null. */
-  const [analisisMercado, setAnalisisMercado] = useState(null);
+     `actualizarAnalisisMercadoScheduled`. `undefined` MIENTRAS la lectura de Firestore
+     está en vuelo; `null` cuando ya respondió y no hay nada (falló, o el cron no ha
+     corrido nunca) — los generadores de analisisMercado.js caen al respaldo local
+     embebido en el código cuando reciben null.
+
+     La distinción entre «todavía no sé» y «no hay» es el arreglo: con un solo `null`
+     para las dos cosas, el informe se armaba en el instante del montaje —antes de que
+     Firestore contestara— y III.A/III.B salían con el marcador de pendiente teniendo la
+     narrativa disponible. La vista previa se corregía sola al llegar el dato (este
+     estado está en las dependencias del efecto que renderiza), pero un .docx descargado
+     en esa ventana se iba con el marcador dentro y ya no se corregía. */
+  const [analisisMercado, setAnalisisMercado] = useState(undefined);
   /* true mientras la redacción en vivo de la narrativa macro está en curso — mismo
      propósito que sectorEnCurso más abajo, pero mucho más corta (un solo round-trip
      a Claude/Gemini, sin búsqueda: segundos, no minutos). */
@@ -499,6 +507,12 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
      `vivo` evita escribir estado si el componente se desmonta antes de que
      IndexedDB responda. */
   useEffect(() => {
+    /* No se renderiza nada mientras no se sepa si hay análisis de mercado: `analisisMercado`
+       está en las dependencias, así que este efecto se repite en cuanto la lectura responda
+       (con el documento o con null). Antes esta primera pasada armaba el informe completo con
+       la Sección III en blanco —narrativa de III.A/III.B al marcador de pendiente— y esa
+       copia era la que se descargaba si alguien pulsaba «Descargar Word» en esos segundos. */
+    if (analisisMercado === undefined) return undefined;
     let vivo = true;
     (async () => {
       /* Defensivo: si estudioId cambia mientras hay marcas propuestas
@@ -1279,6 +1293,21 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
 
   const descargarDocx = async () => {
     if (generandoDocxRef.current) return;
+    /* El botón ya sale deshabilitado en este estado, pero eso depende de que React haya
+       repintado; el archivo se va del sistema y no se corrige después, así que la
+       comprobación se repite aquí. */
+    if (analisisMercado === undefined) {
+      setVeredictoRadicacion({
+        listo: false,
+        bloqueantes: [
+          'Todavía se está leyendo el análisis de mercado de la Sección III. Si el ' +
+          'documento se genera ahora, III.A y III.B salen con el marcador de pendiente ' +
+          'aunque la narrativa exista. Espera a que aparezca la vista previa.',
+        ],
+        advertencias: [],
+      });
+      return;
+    }
     generandoDocxRef.current = true;
     setGenerandoDocx(true);
     try {
@@ -1641,7 +1670,7 @@ export default function ReporteGenerador({ study, estudioId, usuario }) {
           </button>
           <button
             onClick={descargarDocx}
-            disabled={generandoDocx}
+            disabled={generandoDocx || analisisMercado === undefined}
             title="Word real (OOXML): saltos de página, encabezado y tablas exactos"
             className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
