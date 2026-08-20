@@ -4,7 +4,7 @@ import { fmt, montoOperacion } from '../utils/calculations';
 import { parseExcelOperations } from '../services/excelOperationsParser';
 import { avisoIdentificacionVinculado } from '../services/cotejoVinculado';
 import {
-  UMBRAL_OPERACION_ADICIONAL, tieneOperacionAdicional, montoOperacionAdicional,
+  umbralOperacionAdicional, tieneOperacionAdicional, montoOperacionAdicional,
 } from '../services/tablasOperaciones';
 
 export default function IngestaOperaciones({ study, updateStudy }) {
@@ -81,7 +81,7 @@ export default function IngestaOperaciones({ study, updateStudy }) {
            su propia tabla. Se avisa en los dos sentidos: cuando entra, para que se revise; y
            cuando se leyó pero no llega al umbral, para que nadie la busque en el informe. */
         const ad = res.operacionAdicional;
-        if (ad && ad.monto > UMBRAL_OPERACION_ADICIONAL) {
+        if (ad && ad.monto > umbralOperacionAdicional(study.anio)) {
           avisos.push(
             `ℹ el archivo trae información adicional (códigos 61 a 63) por COP $ ${fmt(ad.monto)} ` +
             `en ${ad.filas.length} ${ad.filas.length === 1 ? 'operación' : 'operaciones'}: ` +
@@ -91,7 +91,7 @@ export default function IngestaOperaciones({ study, updateStudy }) {
         } else if (ad) {
           avisos.push(
             `ℹ el archivo trae información adicional por COP $ ${fmt(ad.monto)}, que no supera ` +
-            `los COP $ ${fmt(UMBRAL_OPERACION_ADICIONAL)}: no se publica en el informe`
+            `los COP $ ${fmt(umbralOperacionAdicional(study.anio))}: no se publica en el informe`
           );
         }
         const aviso = avisos.length ? ' · ' + avisos.join(' · ') : '';
@@ -238,7 +238,7 @@ export default function IngestaOperaciones({ study, updateStudy }) {
               </h3>
               <p className="text-xs text-zinc-500">
                 Información adicional del formato (códigos 61 a 63) por COP $ {fmt(montoOperacionAdicional(study))},
-                que supera los COP $ {fmt(UMBRAL_OPERACION_ADICIONAL)}. Se publicará en la tabla
+                que supera los COP $ {fmt(umbralOperacionAdicional(study.anio))}. Se publicará en la tabla
                 «Operación adicional Transacciones Intercompañía».
               </p>
             </div>

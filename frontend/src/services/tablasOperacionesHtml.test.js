@@ -371,10 +371,11 @@ test('la operación adicional que supera el umbral se publica en su tabla', () =
 
 test('sin superar el umbral, la tabla se queda exactamente como estaba', () => {
   /* Lo pidió así el usuario: si el formato no trae la sección o no supera el valor, el
-     informe sale como salía antes de que esto existiera. */
-  const casi = { filas: ADICIONAL.filas, monto: 2400000000 };
+     informe sale como salía antes de que esto existiera. El umbral de 2025 son los
+     45.000 UVT (2.240.955.000): este monto queda justo debajo. */
+  const casi = { filas: ADICIONAL.filas, monto: 2200000000 };
   const salida = actualizarTablasOperacionesHtml(
-    INFORME_CON_ADICIONAL, { ...ESTUDIO, operacionAdicional: casi });
+    INFORME_CON_ADICIONAL, { ...ESTUDIO, anio: 2025, operacionAdicional: casi });
   assert.ok(salida.includes('9.999.999.999'), 'se tocó una tabla que no correspondía');
   assert.ok(!salida.includes('MONTACHEM'), 'se publicó una operación que no supera el umbral');
 });
@@ -385,9 +386,11 @@ test('sin sección de información adicional, la tabla tampoco se toca', () => {
 });
 
 test('justo en el umbral no se publica: tiene que superarlo', () => {
-  const justo = { filas: ADICIONAL.filas, monto: 2500000000 };
+  /* Exactamente en el umbral de 45.000 UVT de 2025: la norma habla de operaciones que lo
+     SUPEREN, así que este monto no se declara. */
+  const justo = { filas: ADICIONAL.filas, monto: 2240955000 };
   const salida = actualizarTablasOperacionesHtml(
-    INFORME_CON_ADICIONAL, { ...ESTUDIO, operacionAdicional: justo });
+    INFORME_CON_ADICIONAL, { ...ESTUDIO, anio: 2025, operacionAdicional: justo });
   assert.ok(salida.includes('9.999.999.999'), 'se publicó estando justo en el umbral');
 });
 

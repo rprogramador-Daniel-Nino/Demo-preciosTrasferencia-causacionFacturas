@@ -2562,13 +2562,14 @@ test('la operación adicional que supera el umbral llega al .docx', async () => 
 
 test('sin superar el umbral, la tabla del .docx se queda como estaba', async () => {
   /* Es la condición que puso el usuario: si el formato no la trae o no supera el valor, el
-     informe sale como salía antes. */
+     informe sale como salía antes. ESTUDIO declara anio: '2024', cuyo umbral de 45.000 UVT
+     es 2.117.925.000: este monto queda justo debajo. */
   const buf = await plantillaConAdicional();
   const { salida } = rellenarDocx({
     binario: buf,
     estudio: {
       ...ESTUDIO,
-      operacionAdicional: { filas: ADICIONAL_DOCX.filas, monto: 2400000000 },
+      operacionAdicional: { filas: ADICIONAL_DOCX.filas, monto: 2100000000 },
     },
     tipoSalida: 'uint8array',
   });
