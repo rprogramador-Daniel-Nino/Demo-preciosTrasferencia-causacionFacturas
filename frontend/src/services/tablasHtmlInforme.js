@@ -657,7 +657,12 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
         if (esParaEliminar) {
           // Eliminamos la tabla entera incluyendo el párrafo de su rótulo si existe
           const inicioEliminar = bloque.rotulo ? bloque.rotulo.inicio : bloque.inicio;
-          salida = salida.slice(0, inicioEliminar) + salida.slice(bloque.fin);
+          /* Y su línea de fuente, si la trae: no está dentro del bloque —acaba en
+             `</table>`— y dejarla quedaría huérfana bajo la Tabla 14 que sí se conserva,
+             atribuyéndole el origen (Ryan LLC, Refinitiv) de una tabla que ya no está. */
+          const fuente = elementoFuenteSiguiente(salida, bloque.fin);
+          const finEliminar = fuente ? fuente.fin : bloque.fin;
+          salida = salida.slice(0, inicioEliminar) + salida.slice(finEliminar);
         } else {
           // Conservamos la Tabla 14 (Capital IQ) y la reescribimos con los criterios reales
           salida = salida.slice(0, bloque.inicio)
@@ -719,6 +724,18 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
        esto el informe sale con el nombre del cliente del que se tomó la plantilla. */
     if (esHorizontal) tabla = reescribirCeldaHtml(tabla, 0, 0, nombreContribuyente);
     salida = salida.slice(0, oc.inicio) + tabla + salida.slice(oc.fin);
+
+    /* Solo la horizontal cita fuente propia, igual que en la ruta .docx (`docxRelleno.js`,
+       Rango Intercuartil, `numeros: [5]`): «Información suministrada por la Administración
+       de la Compañía.». La vertical no emite ninguna en ninguna de las dos rutas, así que su
+       línea —si la trae la plantilla— no se toca. */
+    if (esHorizontal) {
+      const finBloque = finDeTabla(salida, oc.inicio);
+      if (finBloque > oc.inicio) {
+        salida = reescribirFuenteHtml(
+          salida, finBloque, 'Información suministrada por la Administración de la Compañía.');
+      }
+    }
     if (!esHorizontal) verticalesHechas++;
   }
   /* Si solo se encontró la horizontal, el rango del análisis se queda con los datos de la

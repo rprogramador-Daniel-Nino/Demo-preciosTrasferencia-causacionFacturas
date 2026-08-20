@@ -1486,14 +1486,11 @@ function sustituidorDeTablas(xmlInicial, avisos) {
     borrar(nombres, opciones) {
       const bloque = localizarBloqueTabla(out, nombres, opciones);
       if (!bloque) return false;
-      /* La fuente vive detrás del cierre de la tabla, fuera del bloque. Al sustituir no
-         importa —el generador emite la suya—, pero al borrar quedaría huérfana bajo la tabla
-         siguiente, atribuyéndole un origen que no es el suyo. */
-      let fin = bloque.fin;
-      const hermano = parrafoHermanoSiguiente(out, fin);
-      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
-        fin = hermano.fin;
-      }
+      /* La fuente vive detrás del cierre de la tabla, fuera del bloque, y puede venir tras un
+         párrafo vacío que Word deja al exportar. Al sustituir no importa —el generador emite
+         la suya—, pero al borrar quedaría huérfana bajo la tabla siguiente, atribuyéndole un
+         origen que no es el suyo. */
+      const fin = finDeFuenteSiguienteOoxml(out, bloque.fin);
       out = out.slice(0, bloque.inicio) + out.slice(fin);
       return true;
     },
@@ -1506,13 +1503,9 @@ function sustituidorDeTablas(xmlInicial, avisos) {
     insertar(nombresAncla, generar, opciones) {
       const ancla = localizarBloqueTabla(out, nombresAncla, opciones);
       if (!ancla) return false;
-      /* Después de la línea FUENTE del ancla: colarse entre la tabla y su fuente se la
-         atribuiría a la tabla nueva. */
-      let fin = ancla.fin;
-      const hermano = parrafoHermanoSiguiente(out, fin);
-      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
-        fin = hermano.fin;
-      }
+      /* Después de la línea FUENTE del ancla —saltando un párrafo vacío intercalado, si lo
+         hay—: colarse entre la tabla y su fuente se la atribuiría a la tabla nueva. */
+      const fin = finDeFuenteSiguienteOoxml(out, ancla.fin);
       out = out.slice(0, fin) + generar(ancla) + out.slice(fin);
       return true;
     },

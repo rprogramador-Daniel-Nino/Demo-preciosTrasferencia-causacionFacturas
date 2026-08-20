@@ -336,6 +336,39 @@ test('el encabezado de la horizontal deja de nombrar al contribuyente anterior',
   assert.match(salida, /<th><p>Percentil 25<\/p><\/th>/, 'el resto del encabezado intacto');
 });
 
+test('la línea de fuente de la horizontal del rango se reescribe, no se deja la del cliente anterior', () => {
+  /* Igual que la ruta .docx (`docxRelleno.js`, Rango Intercuartil, `numeros: [5]`): solo la
+     horizontal emite fuente propia («Información suministrada por la Administración de la
+     Compañía.»); la vertical no lleva fuente en ninguna de las dos rutas. */
+  const horizontal = '<table>'
+    + '<tr><th><p>ACME</p></th><th><p>Percentil 25</p></th><th><p>Mediana</p></th><th><p>Percentil 75</p></th></tr>'
+    + '<tr><td><p>v1</p></td><td><p>v2</p></td><td><p>v3</p></td><td><p>v4</p></td></tr>'
+    + '</table>' + '<p><strong>FUENTE: Información de CLIENTE ANTERIOR S.A.</strong></p>';
+  const salida = actualizarTablasMotorHtml('<p>Tabla 5. Rango Intercuartil</p>' + horizontal, ESTUDIO, []);
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió la fuente del cliente anterior');
+  assert.match(salida, /FUENTE: Información suministrada por la Administración de la Compañía\./);
+});
+
+test('al eliminar las Tablas 13/15 redundantes de Códigos SIC se lleva su línea de fuente huérfana', () => {
+  /* Las tablas que se borran (13 y 15) pueden traer su propia línea de fuente detrás —Ryan LLC,
+     Refinitiv—, y no está dentro del bloque que se recorta: sin llevársela, queda huérfana bajo
+     la Tabla 14 que sí se conserva, atribuyéndole un origen que no es el suyo. */
+  const conFuente = (n, fuente) =>
+    '<p><strong> Tabla ' + n + '. Códigos SIC utilizados</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr></table>' +
+    '<p><strong>FUENTE: ' + fuente + '</strong></p>';
+  const html = conFuente(13, 'Ryan LLC.') + '<p> Medio.</p>'
+    + conFuente(14, 'Capital IQ.') + '<p> Medio.</p>' + conFuente(15, 'Refinitiv.');
+  const estudio = {
+    criteriosScreening: [{ conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' }],
+  };
+  const salida = actualizarTablasMotorHtml(html, estudio, []);
+  assert.ok(!salida.includes('FUENTE: Ryan LLC.'), 'la fuente de la tabla 13 borrada quedó huérfana');
+  assert.ok(!salida.includes('FUENTE: Refinitiv.'), 'la fuente de la tabla 15 borrada quedó huérfana');
+  assert.match(salida, /FUENTE: Capital IQ\./, 'la fuente de la tabla 14 conservada sigue ahí');
+});
+
 test('reescribirCeldaHtml solo toca la celda pedida', () => {
   const tabla = '<table><tr><th><p>A</p></th><th><p>B</p></th></tr>'
     + '<tr><td><p>C</p></td><td><p>D</p></td></tr></table>';
@@ -1244,11 +1277,11 @@ test('las razones de rechazo NO se pasan a mayúscula', () => {
   const salida = actualizarTablasMotorHtml(html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, []);
   assert.match(salida, /Compañías holding o de grupo/, 'la razón de rechazo se pasó a mayúscula');
   assert.match(salida, /Filtro aplicado/, 'el encabezado de razones se pasó a mayúscula');
-  });
+});
 
-  /* ══════ Reescritura de fuentes (reescribirFuenteHtml) ══════ */
+/* ══════ Reescritura de fuentes (reescribirFuenteHtml) ══════ */
 
-  test('reescribirFuenteHtml reemplaza todo el contenido del párrafo previniendo fugas con runs partidos', () => {
+test('reescribirFuenteHtml reemplaza todo el contenido del párrafo previniendo fugas con runs partidos', () => {
   const casos = [
     {
       entrada: '<p><strong>FUENTE:</strong> Información suministrada por CLIENTE ANTERIOR S.A.</p>',
@@ -1269,18 +1302,18 @@ test('las razones de rechazo NO se pasan a mayúscula', () => {
     assert.strictEqual(salida, esperado);
     assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el cliente anterior');
   }
-  });
+});
 
-  test('reescribirFuenteHtml reconoce FUENTES en plural', () => {
+test('reescribirFuenteHtml reconoce FUENTES en plural', () => {
   const entrada = '<p><strong>FUENTES:</strong> Información de CLIENTE ANTERIOR S.A.</p>';
   const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
   assert.strictEqual(salida, '<p><strong>FUENTES: la Administración de la Compañía.</strong></p>');
   assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el cliente anterior en plural');
-  });
+});
 
-  test('reescribirFuenteHtml no modifica si no hay línea de fuente', () => {
+test('reescribirFuenteHtml no modifica si no hay línea de fuente', () => {
   const entrada = '<p>Prosa que sigue.</p>';
   const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
   assert.strictEqual(salida, entrada);
-  });
+});
 

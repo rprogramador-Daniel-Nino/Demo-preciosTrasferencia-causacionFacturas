@@ -55,7 +55,7 @@ const OBJETIVOS = [
      adicional Transacciones Inter compañía», y el rótulo casa por inclusión, así que sin el
      veto la ficha del vinculado se escribiría encima de aquélla. */
   {
-    nombres: 'Transacciones Inter compañía', filas: filasTransaccionesIntercompania,
+    nombres: NOMBRES_TABLA_TRANSACCIONES, filas: filasTransaccionesIntercompania,
     todas: true, excluir: NOMBRES_TABLA_ADICIONAL,
   },
   { nombres: 'Método de Precios de Transferencia', filas: filasMetodoAplicable },
