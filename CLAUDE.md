@@ -70,6 +70,39 @@ la requiere desde ahí, así que esas dos no pueden divergir. El PHP
 (`Cpanel/public_html/api/fallback-gemini.php`) **sí** es un port a mano: al cambiar la
 lógica, cámbialo también.
 
+### Dos entornos: producción y pruebas
+
+| Entorno | Proyecto Firebase | URL | Despliegue |
+|---|---|---|---|
+| Producción | `precios-trasnferencia` | https://precios-trasnferencia.web.app | `firebase deploy` |
+| Pruebas | `precios-trasnferencia-pruebas` | https://precios-trasnferencia-pruebas.web.app | `firebase deploy -P pruebas` |
+
+Los alias están en `.firebaserc`. Pruebas es un proyecto aparte y completo: su propio
+Firestore, su propio Auth, sus propias functions y su propio bucket, así que nada de lo que
+se pruebe ahí toca los estudios reales. Las **API keys de IA sí son las mismas** (decisión
+del 2026-08-20), de modo que probar descuenta del mismo tope de Anthropic y de Gemini que
+usa producción.
+
+**Un solo bundle sirve a los dos.** El proyecto se resuelve en tiempo de ejecución por el
+dominio, en `frontend/src/services/firebase.js`; no hay `vite build --mode pruebas` porque
+las dos compilaciones irían al mismo `public/gestor-reportes`, que está trackeado en git, y
+el bundle de pruebas quedaría a un `git commit` de publicarse en producción apuntando a la
+base de pruebas. Las llamadas a `/api/*` son relativas y las resuelve el rewrite de cada
+proyecto; la única URL absoluta —`URL_ANALISIS_SECTOR` en `ReporteGenerador.jsx`— se
+construye con `projectIdFirebase`. Para apuntar el `npm run dev` local a pruebas:
+`localStorage.setItem('pt:entorno-firebase', 'pruebas')` en la consola del navegador.
+
+**El CORS del bucket de pruebas se aplica a mano**, igual que se hizo en producción y por lo
+que explica `storage.rules`: `firebase deploy` no lo toca.
+
+```bash
+gcloud storage buckets update gs://precios-trasnferencia-pruebas.firebasestorage.app --cors-file=storage.cors.json
+```
+
+La corrida programada `actualizarAnalisisMercadoScheduled` existe en los dos proyectos: una
+vez al mes (día 10, 6:00 Bogotá) y en pruebas gasta cuota de IA como en producción. Si
+molesta, pausar su job en Cloud Scheduler en lugar de retirarla del código.
+
 ### Persistencia
 
 Sin base de datos por defecto: `localStorage` directo, con `pt:study:<id>` para el

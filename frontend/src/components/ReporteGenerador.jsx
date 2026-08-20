@@ -44,15 +44,20 @@ import {
   subirPlantillaDelEstudio, descargarPlantillaDelEstudio, restaurarPlantillaEnLocal,
 } from '../services/plantillaNube.js';
 import { bucketAusente, AVISO_STORAGE_APAGADO } from '../services/cribadoStorage.js';
+import { projectIdFirebase } from '../services/firebase.js';
 
 /* Llamada directa a la URL de la función, NO a /api/generar-analisis-sector: ese path pasa
    por el rewrite de Firebase Hosting, que corta cualquier petición a los 60 s sin importar
    el timeoutSeconds de la función (ver el comentario junto a GEMINI_CORTE_MS en
    functions/index.js). La cadena Gemini→Gemini→Claude de este endpoint puede tardar más que
    eso —el navegador recibía un 502 opaco del borde aunque la función siguiera viva dentro de
-   su propio límite de 180 s—. La función ya tiene cors:true. */
+   su propio límite de 180 s—. La función ya tiene cors:true.
+
+   El proyecto sale de `projectIdFirebase` y no escrito a mano: al ser absoluta, esta URL era
+   lo único que seguía apuntando a producción desde el entorno de pruebas, así que probar ahí
+   gastaba la cuota de IA de producción y escribía el análisis del sector en su Firestore. */
 const URL_ANALISIS_SECTOR =
-  'https://us-central1-precios-trasnferencia.cloudfunctions.net/generarAnalisisSector';
+  `https://us-central1-${projectIdFirebase}.cloudfunctions.net/generarAnalisisSector`;
 
 /* Actividad+año cuya corrida ya se intentó rehacer en esta página. Vive fuera del
    componente a propósito: sobrevive a que el estudio se cierre y se vuelva a abrir, que es
