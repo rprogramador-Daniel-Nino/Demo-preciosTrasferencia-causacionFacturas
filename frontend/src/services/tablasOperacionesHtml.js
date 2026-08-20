@@ -21,7 +21,7 @@
 
 import {
   localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml, filasDe,
-  borrarTablaHtml,
+  borrarTablaHtml, reescribirFuenteHtml,
 } from './tablasHtmlInforme.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -132,6 +132,16 @@ function sustituir(html, bloque, tabla, conRotulo, anioEnEncabezado) {
         }
       }
     }
+  }
+
+  /* La línea de fuente que la plantilla trae detrás de la tabla: nombra al contribuyente del
+     informe de referencia y hasta ahora no se tocaba, así que el informe salía publicándolo
+     debajo de la tabla y en negrita. Se relocaliza el final del bloque porque reescribir las
+     filas pudo cambiar su largo. Va ANTES de reescribir el rótulo, que está antes en el
+     documento y movería los offsets si se reescribiera primero. */
+  if (tabla.fuente) {
+    const finBloque = finDeBloqueReescrito(out, bloque.inicio);
+    if (finBloque > bloque.inicio) out = reescribirFuenteHtml(out, finBloque, tabla.fuente);
   }
 
   if (conRotulo && bloque.rotulo) {

@@ -373,6 +373,37 @@ export function reescribirFilasHtml(tablaHtml, filas, opciones = {}) {
 }
 
 /**
+ * Reescribe el texto de la línea «FUENTE: …» que sigue a un bloque, conservando su marcado.
+ *
+ * Esta ruta no emite líneas de fuente: conserva las de la plantilla y cambia el dato, igual
+ * que hace con las filas. Borrarla dejaría la tabla sin fuente, e inventarla donde el cliente
+ * no la puso cambiaría la maqueta de su informe.
+ *
+ * @param {string} html
+ * @param {number} desde  el offset donde acaba el bloque de la tabla.
+ * @param {string} fuente el texto nuevo, sin el prefijo «FUENTE: ».
+ * @returns {string} el html con la línea reescrita, o igual si no había ninguna.
+ */
+export function reescribirFuenteHtml(html, desde, fuente) {
+  const texto = String(html || '');
+  if (!fuente) return texto;
+
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(desde));
+  if (!siguiente) return texto;
+  const plano = textoPlanoHtml(siguiente[0]);
+  if (!/^\s*fuente\s*:/i.test(plano)) return texto;
+
+  /* Se sustituye SOLO el texto que sigue a «FUENTE:», dentro del marcado que trae la
+     plantilla: el prefijo, la negrita y las etiquetas son suyos. */
+  const reescrito = siguiente[0].replace(
+    /(fuente\s*:)([^<]*)/i,
+    (todo, prefijo) => prefijo + ' ' + escaparTextoHtml(fuente)
+  );
+  const inicio = desde + siguiente.index;
+  return texto.slice(0, inicio) + reescrito + texto.slice(inicio + siguiente[0].length);
+}
+
+/**
  * Reescribe el texto de una celda concreta, conservando su envoltura.
  *
  * Se usa para el encabezado de la versión horizontal del rango, cuya primera celda es el

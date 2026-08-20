@@ -2686,6 +2686,44 @@ test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
   assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
 });
 
+/* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
+
+test('la línea FUENTE de la plantilla no queda huérfana ni duplicada tras sustituir', () => {
+  /* El motor reemplazaba la tabla y dejaba debajo, en negrita, el nombre del contribuyente
+     anterior — y además añadía la suya, así que el informe salía con dos líneas FUENTE. */
+  const xml =
+    '<w:p><w:t>Tabla 1. Operaciones de Ingreso</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Prosa que sigue.</w:t></w:p>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', vinc_id: '900',
+    pais_vinc: 'MEXICO', vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió la fuente del cliente anterior');
+  assert.strictEqual((salida.match(/FUENTE:/g) || []).length, 1, 'la línea FUENTE quedó duplicada');
+  assert.ok(salida.includes('Prosa que sigue.'), 'se llevó prosa del informe');
+});
+
+test('sin fuente en la tabla nueva, la de la plantilla se conserva', () => {
+  /* Si el generador no emite fuente y borráramos la vieja, el informe perdería una línea que
+     sí era del cliente. Se borra solo cuando hay con qué reemplazarla. */
+  const xml =
+    '<w:p><w:t>Rango Intercuartil</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Una nota de la plantilla.</w:t></w:p>';
+
+  /* `generarTablaOoxml` con `fuente` vacía no emite la línea; la prueba comprueba la guarda
+     directamente sobre la primitiva para no depender de qué tabla del informe la tenga. */
+  const conFuente = generarTablaOoxml('T', ['a'], [['b']], 'Algo.');
+  const sinFuente = generarTablaOoxml('T', ['a'], [['b']], '');
+  assert.ok(conFuente.includes('FUENTE:'), 'con fuente debe emitirla');
+  assert.ok(!sinFuente.includes('FUENTE:'), 'sin fuente no debe emitirla');
+  assert.ok(xml.includes('FUENTE: Una nota de la plantilla.'));
+});
+
 /* ── Estilo de las tablas que esta ruta genera de cero ──
    `generarTablaOoxml` arma las tablas del .docx cuando la plantilla es un .docx (Tablas 3/12,
    15, 16, 19, 20, rango, anexos B y C, datos macro). Es el tercer emisor del informe, junto al

@@ -1434,9 +1434,24 @@ function sustituidorDeTablas(xmlInicial, avisos) {
          necesita, pero hay tablas que la plantilla trae en dos formas —en ficha vertical o
          en columnas— y la única manera de no imponer una es mirar cuántas columnas tiene la
          que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
-      out = out.slice(0, bloque.inicio)
-        + generar(bloque, out.slice(bloque.inicio, bloque.fin))
-        + out.slice(bloque.fin);
+      const nuevo = generar(bloque, out.slice(bloque.inicio, bloque.fin));
+
+      /* La línea «FUENTE: …» de la plantilla vive DETRÁS del cierre de la tabla, fuera del
+         bloque. `generarTablaOoxml` emite la suya, así que dejar la vieja publicaba las dos
+         —y la vieja nombra al contribuyente del informe de referencia, debajo de la tabla y
+         en negrita—. Se absorbe en el tramo que se recorta.
+
+         Solo si la tabla nueva trae fuente: si el generador no emitió ninguna y borráramos la
+         de la plantilla, el informe perdería una línea que sí era del cliente. */
+      let fin = bloque.fin;
+      if (/FUENTE:/.test(nuevo)) {
+        const hermano = parrafoHermanoSiguiente(out, fin);
+        if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+          fin = hermano.fin;
+        }
+      }
+
+      out = out.slice(0, bloque.inicio) + nuevo + out.slice(fin);
       return true;
     },
     /** Quita la tabla, su rótulo y la línea FUENTE que la sigue. `true` si estaba.

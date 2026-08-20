@@ -576,11 +576,11 @@ test('sobre el umbral la tabla se publica, no se borra', () => {
 
   assert.match(salida, /Operación adicional/, 'se borró una tabla que sí había que publicar');
   assert.match(salida, /MONTACHEM INTERNATIONAL INC/);
-  /* El monto es el dato que esta prueba vigila: la línea FUENTE que sigue a la tabla no la
-     toca esta ruta al publicar (comportamiento previo a esta tarea, fuera de su alcance:
-     el `if` de `tieneOperacionAdicional` no se modifica), así que no se comprueba «CLIENTE
-     ANTERIOR» contra el documento completo. */
   assert.ok(!salida.includes('9.999.999.999'), 'sobrevivió el monto del informe anterior');
+  /* Antes de esta tarea la línea FUENTE que sigue a la tabla no se tocaba al publicar, así
+     que el informe salía citando al contribuyente del informe de referencia debajo de la
+     tabla nueva. Ahora se reescribe con la fuente del estudio, igual que las filas. */
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió la fuente del cliente anterior');
 });
 
 test('plantilla sin la tabla y sin nada que declarar: no se toca ni se avisa', () => {
@@ -603,4 +603,53 @@ test('borrarTablaHtml no se lleva un párrafo que no sea la fuente', () => {
 
   assert.ok(!salida.includes('BORRAR'));
   assert.match(salida, /Las anteriores operaciones/, 'se llevó prosa del informe');
+});
+
+/* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
+
+test('la línea FUENTE de la plantilla se reescribe con la del estudio, no se borra', () => {
+  /* Esta ruta conserva el maquetado del cliente: la línea de fuente se queda donde está, con
+     su marcado, y cambia el dato — igual que las filas. Borrarla dejaría la tabla sin fuente. */
+  const html =
+    '<p><strong> Tabla 1. Operaciones de Ingreso</strong></p>' +
+    '<table>' +
+    '<tr><th><p><strong> Concepto de Operaciones a analizar</strong></p></th>' +
+    '<th><p><strong> Nombre vinculado</strong></p></th>' +
+    '<th><p><strong> País vinculado</strong></p></th>' +
+    '<th><p><strong> Monto de la Operación analizar</strong></p></th></tr>' +
+    '<tr><td><p> viejo</p></td><td><p> CLIENTE ANTERIOR</p></td>' +
+    '<td><p> ESPAÑA</p></td><td><p> 9.999.999.999</p></td></tr>' +
+    '</table>' +
+    '<p><strong>FUENTE: Información de CLIENTE ANTERIOR S.A.</strong></p>' +
+    '<p> Prosa que sigue.</p>';
+
+  const salida = actualizarTablasOperacionesHtml(html, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', pais_vinc: 'MEXICO',
+    vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el cliente anterior');
+  assert.match(salida, /FUENTE:/, 'se borró la línea de fuente en vez de reescribirla');
+  assert.match(salida, /<p><strong>FUENTE:/, 'se perdió el marcado de la plantilla');
+  assert.match(salida, /Prosa que sigue/, 'se llevó prosa del informe');
+});
+
+test('sin línea FUENTE en la plantilla no se inventa una', () => {
+  /* Añadirla donde el cliente no la puso cambiaría la maqueta de su informe, que es lo que
+     esta ruta existe para no hacer. */
+  const html =
+    '<p><strong> Tabla 2. Operación analizar</strong></p>' +
+    '<table>' +
+    '<tr><th><p><strong> No. Operaciones de análisis</strong></p></th>' +
+    '<th><p><strong> Descripción</strong></p></th></tr>' +
+    '<tr><td><p> viejo</p></td><td><p> viejo</p></td></tr>' +
+    '</table>' +
+    '<p> Prosa que sigue.</p>';
+
+  const salida = actualizarTablasOperacionesHtml(html, {
+    anio: 2025, ent: 'ACME', vinc_tipo: 'Otros servicios (07)',
+  }, []);
+
+  assert.ok(!salida.includes('FUENTE:'), 'se inventó una línea de fuente');
+  assert.match(salida, /Prosa que sigue/);
 });
