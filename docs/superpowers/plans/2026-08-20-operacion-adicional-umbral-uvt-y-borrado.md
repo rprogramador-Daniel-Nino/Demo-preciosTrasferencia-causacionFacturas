@@ -1,0 +1,1817 @@
+# Operación adicional: umbral en UVT y borrado de la tabla — Plan de implementación
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** que el umbral de la operación adicional se derive de los 45.000 UVT del año
+gravable en vez de una constante fija, y que la tabla del informe se elimine cuando no hay
+operación adicional declarable, en vez de quedarse con los datos del informe anterior.
+
+**Architecture:** la operación adicional (sección «4. Información adicional» del formato,
+códigos DIAN 61 a 63) ya está implementada de punta a punta por Pablo Barreto en `72a3163`:
+el parser la lee con los índices de columna de su propia cabecera, `tablasOperaciones.js`
+define la tabla en sus dos formas —ficha y columnas—, las dos rutas de generación la
+publican y el paso 2 la previsualiza. Este plan cambia solo dos decisiones de ese trabajo.
+
+**Tech Stack:** ESM puro en `frontend/src/services/`, React 19 en `frontend/src/components/`,
+pruebas con `node:test` + `node:assert` vía `npm test`.
+
+**Reemplaza a:** `docs/superpowers/plans/2026-08-19-operacion-adicional-informacion-adicional.md`,
+que quedó obsoleto al integrar `origin/main` y `origin/antoniodev`: sus siete tareas
+construían lo que `72a3163` ya construyó.
+
+**Spec:** `docs/superpowers/specs/2026-08-19-operacion-adicional-informacion-adicional-design.md`
+— vigente en el criterio (45.000 UVT derivados, tabla eliminada cuando no aplica) y obsoleto
+en la implementación que propone, porque describe un árbol anterior a `72a3163`.
+
+## Contexto: qué existe hoy y no hay que rehacer
+
+| Pieza | Dónde |
+|---|---|
+| Lectura de la sección 4 con su propia cabecera | `excelOperationsParser.js:33` (`indicesDeEncabezado`), `:176` (sección `ADICIONAL`), `:372` (campo `operacionAdicional`) |
+| Umbral y predicado | `tablasOperaciones.js:136` (`UMBRAL_OPERACION_ADICIONAL`), `:171` (`tieneOperacionAdicional`), `:178` (`montoOperacionAdicional`) |
+| Rótulos que reconoce | `tablasOperaciones.js:146` (`NOMBRES_TABLA_ADICIONAL`, seis redacciones) |
+| La tabla, en columnas y en ficha | `tablasOperaciones.js:197` y `:228` |
+| Veto para que la Tabla 3 no la pise | `docxRelleno.js:1612` (`soloTx`), `tablasOperacionesHtml.js:57` (`excluir`) |
+| Ruta OOXML | `docxRelleno.js:1628` |
+| Ruta HTML de plantilla | `tablasOperacionesHtml.js:205` |
+| Previsualización del paso 2 | `IngestaOperaciones.jsx:84` (avisos) y `:231` (tarjeta) |
+
+## Global Constraints
+
+- **Todo en español**: código, comentarios, identificadores de dominio, UI y mensajes.
+- **El umbral son 45.000 UVT del año gravable del estudio.** Para 2025,
+  `45.000 × 49.799 = 2.240.955.000`. **Nunca escribir el número como constante:** en 2026 el
+  UVT es 52.300 y el umbral 2.353.500.000.
+- **La comparación es estricta** (`>`): exactamente el umbral NO supera. Es lo que ya hace
+  `tieneOperacionAdicional` (`tablasOperaciones.js:174`) y no cambia.
+- **El umbral se mide sobre la SUMA** de todas las filas de la sección 4, no fila a fila.
+  Criterio ya implementado, no cambia.
+- **No se toca** `monto`, `monto_operacion`, `t_s` ni `egresosDescartados` del estudio: la
+  operación adicional no afecta el estado de resultados y no sustenta el rango.
+- **No se renumera** ninguna tabla del informe, ni al publicar ni al eliminar.
+- **Celda sin dato = `'—'`** (guion largo U+2014).
+- **`npm test` al 100 %** antes de cada commit (1607 pruebas hoy). Lint limpio con
+  `npm run lint --prefix frontend`.
+- **Sin `Co-Authored-By`** en los mensajes de commit.
+- **No reescribir el trabajo de `72a3163`** más allá de lo que estas dos tareas piden. En
+  particular: se conservan las seis redacciones de `NOMBRES_TABLA_ADICIONAL`, la detección
+  ficha-vs-columnas y el detalle fila por fila de la tabla.
+
+---
+
+### Task 1: El umbral se deriva de los 45.000 UVT del año gravable
+
+**Files:**
+- Modify: `frontend/src/services/tablasOperaciones.js:15` (imports), `:130-136` (la constante),
+  `:171-175` (`tieneOperacionAdicional`)
+- Modify: `frontend/src/components/IngestaOperaciones.jsx:7` (import), `:84`, `:94`, `:241`
+- Test: `frontend/src/services/tablasOperaciones.test.js`,
+  `frontend/src/services/tablasOperacionesHtml.test.js:388`
+
+**Interfaces:**
+- Consumes: `getUvtValue(anio)` de `frontend/src/utils/calculations.js:16` — devuelve el UVT
+  del año (2023: 42412, 2024: 47065, 2025: 49799, 2026: 52300) y **47065** para cualquier
+  año desconocido o ausente.
+- Produces, exportado de `tablasOperaciones.js`:
+  - `UVT_UMBRAL_OPERACION_ADICIONAL` → `45000` (number)
+  - `umbralOperacionAdicional(anio: number|string|undefined) → number`
+  - `UMBRAL_OPERACION_ADICIONAL` **desaparece**. Es un cambio de contrato: hay que actualizar
+    sus cuatro llamadores (uno en `tablasOperaciones.js`, tres en `IngestaOperaciones.jsx`).
+  - `tieneOperacionAdicional(estudio)` conserva su firma y su semántica; solo cambia el
+    número contra el que compara.
+
+**Por qué.** El umbral vigente es `2.500.000.000` fijo (`tablasOperaciones.js:136`),
+atribuido en su comentario y en el mensaje de `72a3163` a «criterio del usuario
+(2026-08-19)». El usuario confirmó el 2026-08-20 que el criterio son los **45.000 UVT** del
+art. 260-5 E.T. y del art. 1.2.2.3.2 del Decreto 2120 —2.240.955.000 en 2025—, y que se
+recalcula por año gravable. Una constante fija hace que el estudio de 2026 mida contra el
+umbral de 2025 sin que nadie lo note.
+
+- [ ] **Step 1: Escribir las pruebas que fallan**
+
+Añadir a `frontend/src/services/tablasOperaciones.test.js`. Importar
+`UVT_UMBRAL_OPERACION_ADICIONAL`, `umbralOperacionAdicional` y `tieneOperacionAdicional`.
+
+```js
+/* ── El umbral de la operación adicional, en UVT del año gravable ───────────── */
+
+const conAdicional = (monto, anio) => ({
+  anio,
+  operacionAdicional: {
+    monto,
+    filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+      tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto }],
+  },
+});
+
+test('el umbral son 45.000 UVT del año gravable, no un número escrito a mano', () => {
+  assert.strictEqual(UVT_UMBRAL_OPERACION_ADICIONAL, 45000);
+  /* 2.240.955.000 es el umbral de 2025 y el único que la gente tiene en la cabeza. Escrito
+     como constante, el estudio de 2026 mediría contra él sin avisar. */
+  assert.strictEqual(umbralOperacionAdicional(2025), 2240955000);
+  assert.strictEqual(umbralOperacionAdicional(2024), 2117925000);
+  assert.strictEqual(umbralOperacionAdicional(2026), 2353500000);
+});
+
+test('el año llega como cadena desde el estudio y también resuelve', () => {
+  assert.strictEqual(umbralOperacionAdicional('2025'), 2240955000);
+});
+
+test('un año ausente o desconocido cae en el mismo respaldo que getUvtValue', () => {
+  assert.strictEqual(umbralOperacionAdicional(undefined), 45000 * 47065);
+  assert.strictEqual(umbralOperacionAdicional(1999), 45000 * 47065);
+});
+
+test('el mismo monto declara o no según el año gravable del estudio', () => {
+  /* Es el defecto que este cambio cierra: con la constante fija de 2.500.000.000 los tres
+     años daban el mismo veredicto, y el umbral de cada uno es distinto. */
+  const monto = 2300000000;
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(monto, 2025)), true,
+    '2.300 millones superan los 2.240.955.000 de 2025');
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(monto, 2026)), false,
+    '2.300 millones NO superan los 2.353.500.000 de 2026');
+});
+
+test('exactamente en el umbral no se declara', () => {
+  /* La norma habla de operaciones que SUPEREN 45.000 UVT. */
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(2240955000, 2025)), false);
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(2240955001, 2025)), true);
+});
+
+test('el umbral viejo de 2.500 millones ya no manda', () => {
+  /* Un monto entre el umbral nuevo y el viejo tiene que declararse: con la constante
+     anterior no lo hacía. */
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(2400000000, 2025)), true);
+});
+
+test('sin sección 4 en el formato no hay nada que declarar, sea cual sea el umbral', () => {
+  assert.strictEqual(tieneOperacionAdicional({ anio: 2025 }), false);
+  assert.strictEqual(tieneOperacionAdicional({ anio: 2025, operacionAdicional: null }), false);
+  assert.strictEqual(
+    tieneOperacionAdicional({ anio: 2025, operacionAdicional: { monto: 9e9, filas: [] } }),
+    false, 'la sección sin filas no declara aunque traiga un monto');
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/tablasOperaciones.test.js`
+Expected: FAIL — `UVT_UMBRAL_OPERACION_ADICIONAL` y `umbralOperacionAdicional` no existen.
+
+- [ ] **Step 3: Derivar el umbral en `tablasOperaciones.js`**
+
+En el import de `:15`, añadir `getUvtValue`:
+
+```js
+import { fmt, num, getUvtValue } from '../utils/calculations.js';
+```
+
+Reemplazar el bloque `:130-136` —el comentario de la constante y la constante— por:
+
+```js
+/* Desde cuánto la información adicional del formato entra al informe.
+   Son operaciones que NO se reflejan en el Estado de Resultados —préstamos con vinculados,
+   reintegros de gastos, operaciones a nombre de vinculados—, así que no sustentan el rango
+   ni el monto de la operación analizada; se declaran aparte y solo cuando pesan.
+
+   El umbral son los 45.000 UVT del art. 260-5 E.T. y del art. 1.2.2.3.2 del Decreto 2120 de
+   2017, medidos sobre la SUMA de todas las filas de la sección y no fila a fila.
+
+   SE DERIVA del UVT del año gravable y no se escribe. Antes era la constante 2.500.000.000
+   —2.240.955.000 es el valor de 2025, que es el número que la gente tiene en la cabeza y el
+   que pediría escribir—, pero en 2026 el UVT es 52.300 y el umbral 2.353.500.000: un número
+   fijo hace que el estudio de cada año nuevo mida contra el umbral del anterior sin que
+   nadie lo note. */
+export const UVT_UMBRAL_OPERACION_ADICIONAL = 45000;
+
+/**
+ * El umbral en pesos del año gravable.
+ *
+ * @param {number|string} [anio] año gravable del estudio. Lo que `getUvtValue` no conozca
+ *        cae en su propio respaldo, que es el UVT de 2024.
+ * @returns {number} pesos colombianos.
+ */
+export function umbralOperacionAdicional(anio) {
+  return UVT_UMBRAL_OPERACION_ADICIONAL * getUvtValue(anio);
+}
+```
+
+En `tieneOperacionAdicional` (`:171-175`), la comparación pasa a leer el año del estudio.
+Reemplazar la línea `:174`:
+
+```js
+  return montoOperacionAdicional(estudio) > umbralOperacionAdicional(estudio.anio);
+```
+
+Y en su JSDoc, sustituir la mención al umbral fijo por: `que su total SUPERE el umbral del
+año gravable (45.000 UVT)`.
+
+- [ ] **Step 4: Actualizar los tres llamadores de la UI**
+
+En `frontend/src/components/IngestaOperaciones.jsx:7`, cambiar el nombre importado:
+
+```js
+  umbralOperacionAdicional, tieneOperacionAdicional, montoOperacionAdicional,
+```
+
+En `:84`, la condición del aviso pasa a usar el umbral del año del estudio. **No dupliques
+la comparación**: usa el predicado que ya existe, que es el mismo que decide si la tabla se
+publica y no puede discrepar de él:
+
+```js
+        if (ad && ad.monto > umbralOperacionAdicional(study.anio)) {
+```
+
+En `:94` y en `:241`, sustituir `fmt(UMBRAL_OPERACION_ADICIONAL)` por
+`fmt(umbralOperacionAdicional(study.anio))`.
+
+Nota para el implementador: `study` es una prop del componente y está en el ámbito de
+`handleExcelUpload`. Si el estudio no trae `anio` todavía, `getUvtValue` cae en 47065 y el
+aviso mide contra el umbral de 2024 — es el mismo respaldo que usa el resto del sistema y no
+se inventa otro aquí.
+
+- [ ] **Step 5: Actualizar la prueba de frontera existente**
+
+`frontend/src/services/tablasOperacionesHtml.test.js:388` fija la frontera en el umbral
+viejo:
+
+```js
+  const justo = { filas: ADICIONAL.filas, monto: 2500000000 };
+```
+
+Es una prueba de Pablo y sigue siendo válida — solo cambia el número. Ponerla en el umbral
+nuevo y asegurar que el estudio de ese caso declara `anio: 2025`, para que la frontera sea la
+del año que la prueba dice medir:
+
+```js
+  /* Exactamente en el umbral de 45.000 UVT de 2025: la norma habla de operaciones que lo
+     SUPEREN, así que este monto no se declara. */
+  const justo = { filas: ADICIONAL.filas, monto: 2240955000 };
+```
+
+Revisar el resto de ese archivo y de `docxRelleno.test.js`: cualquier caso que use un monto
+entre 2.240.955.000 y 2.500.000.000 cambia de veredicto con este cambio. Los que usen montos
+muy por encima o muy por debajo no se tocan. Si alguno de esos estudios de prueba no declara
+`anio`, añadírselo: sin año el umbral es el de 2024 y la prueba mediría contra otra cosa que
+la que dice.
+
+- [ ] **Step 6: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/tablasOperaciones.test.js frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.test.js`
+Expected: PASS — las 7 nuevas y todas las anteriores.
+
+- [ ] **Step 7: Correr la suite completa y el lint**
+
+Run: `npm test`
+Expected: 100 % en verde. Presta atención a fallos en archivos que no tocaste: significarían
+un estudio de prueba con un monto en la franja que cambió de veredicto.
+
+Run: `npm run lint --prefix frontend`
+Expected: sin hallazgos. Si oxlint marca `UMBRAL_OPERACION_ADICIONAL` como import sin uso en
+algún sitio, es un llamador que se te quedó.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add frontend/src/services/tablasOperaciones.js frontend/src/services/tablasOperaciones.test.js frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.test.js frontend/src/components/IngestaOperaciones.jsx
+git commit -m "fix: el umbral de la operacion adicional son 45.000 UVT del anio gravable"
+```
+
+---
+
+### Task 2: La tabla se elimina del informe cuando no hay nada que declarar
+
+**Files:**
+- Modify: `frontend/src/services/tablasHtmlInforme.js` — nueva primitiva `borrarTablaHtml`
+- Modify: `frontend/src/services/docxRelleno.js:1421-1449` (`sustituidorDeTablas`, método
+  `borrar`) y `:1628-1638` (la rama de la tabla adicional)
+- Modify: `frontend/src/services/tablasOperacionesHtml.js:22-28` (imports), `:205-216`
+- Test: `frontend/src/services/tablasOperacionesHtml.test.js`,
+  `frontend/src/services/docxRelleno.test.js`
+
+**Interfaces:**
+- Consumes: `tieneOperacionAdicional(estudio)` y `NOMBRES_TABLA_ADICIONAL` de
+  `tablasOperaciones.js` (ya existen); `localizarTablaHtml(html, nombres, opciones)` y
+  `localizarBloqueTabla(xml, nombres, opciones)` (ya aceptan `opciones`); `textoPlanoHtml`
+  (`tablasHtmlInforme.js:53`) y `textoPlanoOoxml` + `parrafoHermanoSiguiente`
+  (`docxRelleno.js:998`, privadas del módulo).
+- Produces:
+  - `borrarTablaHtml(html, bloque) → string`, exportada de `tablasHtmlInforme.js`.
+  - `sustituidorDeTablas(...).borrar(nombres, opciones) → boolean` en `docxRelleno.js`.
+
+**Por qué.** Hoy la publicación de la tabla vive dentro de `if (tieneOperacionAdicional(...))`
+en las dos rutas (`docxRelleno.js:1628`, `tablasOperacionesHtml.js:205`). Cuando el predicado
+es falso **no se toca nada**, que es una decisión deliberada de `72a3163`: *«CUANDO NO APLICA,
+NADA CAMBIA… el informe sale exactamente como salía antes: sin tabla vacía, sin rótulo
+huérfano y sin un aviso de tabla ausente»*.
+
+Ese razonamiento se sostiene si la plantilla **no** trae la tabla. Con una plantilla que sí la
+trae —el informe del año anterior del mismo cliente, que es lo que esta ruta consume— la tabla
+sobrevive con los datos anteriores. Verificado corriendo el motor real contra una plantilla
+con la tabla llena:
+
+```
+FUGA   | sin sección 4 en el Excel
+FUGA   | sección 4 por debajo del umbral
+```
+
+En los dos casos el informe sale con `CLIENTE ANTERIOR S.A.` y `9.999.999.999`. Es la misma
+clase de fuga que el encabezado de `tablasOperaciones.js:10-12` declara como razón de existir
+del módulo, en un documento que se radica ante la DIAN.
+
+**Qué NO cambia.** La matriz completa después de esta tarea:
+
+| Tabla en la plantilla | Operación adicional declarable | Qué pasa |
+|---|---|---|
+| sí | sí | se publica con los datos del estudio, sin aviso — **ya funciona así** |
+| sí | no | **se elimina** con su rótulo y su línea FUENTE, sin aviso — lo nuevo |
+| no | sí | aviso «no se encontró en la plantilla», sin insertar nada — **ya funciona así** |
+| no | no | nada, sin aviso — **ya funciona así** |
+
+**El borrado no genera aviso, y es a propósito.** El arreglo `avisos` se publica como «No se
+encontró en la plantilla: X» (`semaforoRadicacion.js:60`) y alimenta el semáforo de
+radicación. Un borrado intencionado no es una tabla que no se encontró. Que la tabla no va a
+salir se dice en el paso 2, que es donde el usuario puede hacer algo al respecto.
+
+**La línea FUENTE.** El bloque que devuelven los dos localizadores va del rótulo al cierre de
+la tabla; la línea `FUENTE: …` que la plantilla trae **detrás** queda fuera. Al sustituir da
+igual, porque el generador emite la suya. Al borrar, no: queda huérfana bajo la tabla
+siguiente y le atribuye un origen que no es el suyo.
+
+- [ ] **Step 1: Escribir las pruebas que fallan (ruta HTML)**
+
+Añadir a `frontend/src/services/tablasOperacionesHtml.test.js`. Reutilizar los helpers y
+constantes que ya tiene el archivo; importar `borrarTablaHtml` y `localizarTablaHtml` de
+`./tablasHtmlInforme.js` si no están ya importados.
+
+```js
+/* ── La tabla de operación adicional se va cuando no hay nada que declarar ──── */
+
+/* Plantilla = informe del año anterior, con SU tabla de operación adicional llena. Es el
+   caso que importa: mientras el borrado no existía, estas dos cifras viajaban al informe
+   de cualquier cliente. */
+const PLANTILLA_CON_ADICIONAL =
+  '<p> Prosa anterior a la tabla.</p>' +
+  '<p><strong> Tabla 4. Operación adicional Transacciones Intercompañía</strong></p>' +
+  '<table>' +
+  '<tr><th><p><strong> Compañía vinculada</strong></p></th>' +
+  '<th><p><strong> Monto en pesos</strong></p></th></tr>' +
+  '<tr><td><p> CLIENTE ANTERIOR S.A.</p></td><td><p> 9.999.999.999</p></td></tr>' +
+  '</table>' +
+  '<p><strong>FUENTE: Información de CLIENTE ANTERIOR S.A.</strong></p>' +
+  '<p> Prosa posterior a la tabla.</p>';
+
+test('sin sección 4 en el formato, la tabla de la plantilla se elimina', () => {
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_CON_ADICIONAL, { anio: 2025, ent: 'ACME' }, avisos);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el vinculado del informe anterior');
+  assert.ok(!salida.includes('9.999.999.999'), 'sobrevivió el monto del informe anterior');
+  assert.ok(!salida.includes('Operación adicional'), 'sobrevivió el rótulo');
+  assert.ok(!salida.includes('FUENTE: Información de CLIENTE ANTERIOR'), 'quedó la fuente huérfana');
+  /* Y lo de alrededor intacto: se borra la tabla, no el informe. */
+  assert.match(salida, /Prosa anterior a la tabla/);
+  assert.match(salida, /Prosa posterior a la tabla/);
+  assert.ok(!avisos.some((a) => a.toLowerCase().includes('adicional')),
+    'un borrado deliberado no es «no se encontró en la plantilla»');
+});
+
+test('con sección 4 por debajo del umbral, la tabla también se elimina', () => {
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 500000000,
+      filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+        tipo: 'Préstamos con vinculados (61)', monto: 500000000 }],
+    },
+  };
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_CON_ADICIONAL, estudio, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'));
+  assert.ok(!salida.includes('Operación adicional'));
+  /* Y tampoco se cuela la operación que no llegó al umbral. */
+  assert.ok(!salida.includes('BETA GMBH'), 'se publicó una operación que no supera el umbral');
+});
+
+test('sobre el umbral la tabla se publica, no se borra', () => {
+  /* La regresión que este cambio podría causar: borrar de más. */
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_CON_ADICIONAL, estudio, []);
+
+  assert.match(salida, /Operación adicional/, 'se borró una tabla que sí había que publicar');
+  assert.match(salida, /MONTACHEM INTERNATIONAL INC/);
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el vinculado anterior');
+});
+
+test('plantilla sin la tabla y sin nada que declarar: no se toca ni se avisa', () => {
+  const avisos = [];
+  const sinTabla = '<p> Un informe sin tabla de operación adicional.</p>';
+  const salida = actualizarTablasOperacionesHtml(sinTabla, { anio: 2025, ent: 'ACME' }, avisos);
+
+  assert.strictEqual(salida, sinTabla, 'no había nada que borrar');
+  assert.ok(!avisos.some((a) => a.toLowerCase().includes('adicional')));
+});
+
+test('borrarTablaHtml no se lleva un párrafo que no sea la fuente', () => {
+  const html =
+    '<p><strong> Tabla 4. Operación adicional Transacciones Intercompañía</strong></p>' +
+    '<table><tr><th><p> BORRAR</p></th></tr></table>' +
+    '<p> Las anteriores operaciones fueron realizadas con intercompañías.</p>';
+
+  const bloque = localizarTablaHtml(html, 'Operación adicional Transacciones Intercompañía');
+  const salida = borrarTablaHtml(html, bloque);
+
+  assert.ok(!salida.includes('BORRAR'));
+  assert.match(salida, /Las anteriores operaciones/, 'se llevó prosa del informe');
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: FAIL — la primera falla en `assert.ok(!salida.includes('CLIENTE ANTERIOR'))`: hoy
+la tabla se queda como está.
+
+- [ ] **Step 3: La primitiva de borrado en `tablasHtmlInforme.js`**
+
+Junto a las otras primitivas del módulo:
+
+```js
+/* El primer elemento que sigue a un bloque, para poder mirar si es su línea de fuente.
+   Regex local y no compartida: las de este módulo llevan `g` y arrastran `lastIndex`. */
+const RX_ELEMENTO_SIGUIENTE = /^\s*<p(?:\s[^>]*)?>[\s\S]*?<\/p\s*>/i;
+
+/**
+ * Quita del informe una tabla completa: su rótulo, la tabla y la línea de fuente que la
+ * sigue.
+ *
+ * La fuente hay que llevársela a mano porque no está dentro del bloque que devuelve
+ * `localizarTablasHtml` —el bloque acaba en `</table>`—. Al sustituir da igual, porque la
+ * tabla nueva emite la suya; al borrar, una fuente huérfana queda bajo la tabla siguiente y
+ * le atribuye un origen que no es el suyo.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number, fin:number}|null}} bloque
+ * @returns {string}
+ */
+export function borrarTablaHtml(html, bloque) {
+  const texto = String(html || '');
+  if (!bloque) return texto;
+
+  let fin = bloque.fin;
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(fin));
+  if (siguiente && /^\s*fuente\s*:/i.test(textoPlanoHtml(siguiente[0]))) {
+    fin += siguiente[0].length;
+  }
+
+  /* El rótulo va ANTES que la tabla, así que se recorta el tramo entero en un solo corte:
+     borrar primero el rótulo desplazaría los offsets sobre los que se calculó el bloque.
+     `rotulo` es null cuando el título vive dentro de la propia tabla, y entonces ya está
+     dentro del tramo. */
+  const desde = (bloque.rotulo && bloque.rotulo.inicio < bloque.inicio)
+    ? bloque.rotulo.inicio
+    : bloque.inicio;
+  return texto.slice(0, desde) + texto.slice(fin);
+}
+```
+
+- [ ] **Step 4: Borrar en la ruta HTML**
+
+En los imports de `tablasOperacionesHtml.js` (`:22-28`), añadir `borrarTablaHtml` a los que
+vienen de `./tablasHtmlInforme.js`.
+
+En el bloque de `:205-216`, añadir la rama del borrado. El `if` existente no se toca; solo
+gana su `else`, y el comentario de arriba hay que corregirlo porque hoy afirma lo contrario:
+
+```js
+  /* «Operación adicional Transacciones Intercompañía» va fuera del bucle porque es la única
+     tabla que puede NO corresponder: se publica solo si el formato trajo la sección «4.
+     Información adicional» y su total supera el umbral del año gravable.
+
+     Y cuando NO corresponde no basta con dejarla quieta. La plantilla es el informe del año
+     anterior, así que la tabla que ya está ahí trae las operaciones de ese informe: no
+     tocarla las publica como si fueran de este contribuyente. Se elimina con su rótulo y su
+     línea de fuente. Sin aviso: `avisos` se publica como «no se encontró en la plantilla» y
+     alimenta el semáforo de radicación, y un borrado intencionado no es eso. Que la tabla no
+     va a salir se dice en el paso 2 de la ingesta, donde el usuario puede actuar.
+
+     La plantilla puede traerla en ficha vertical o en columnas, igual que el rango, así que
+     se mira la forma de la que ya está en vez de imponer una. */
+  if (tieneOperacionAdicional(estudio)) {
+    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
+    if (bloque) {
+      const tabla = bloque.columnas > 0 && bloque.columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      out = sustituir(out, bloque, tabla, false, 0);
+    } else if (Array.isArray(avisos)) {
+      avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+    }
+  } else {
+    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
+    if (bloque) out = borrarTablaHtml(out, bloque);
+  }
+```
+
+- [ ] **Step 5: Escribir las pruebas que fallan (ruta OOXML)**
+
+Añadir a `frontend/src/services/docxRelleno.test.js`:
+
+```js
+test('sin operación adicional declarable, la tabla del .docx se elimina con su fuente', () => {
+  /* La plantilla es el informe del año anterior. Dejar su tabla quieta publica las
+     operaciones de ese informe como si fueran de este contribuyente. */
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 5. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 5</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME' }, avisos);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el vinculado anterior');
+  assert.ok(!salida.includes('Operación adicional'), 'sobrevivió el rótulo');
+  /* La numeración de lo que sigue NO se toca: la fija la plantilla. */
+  assert.ok(salida.includes('Tabla 5. Método de Precios de Transferencia'),
+    'se renumeró o se perdió la tabla siguiente');
+  assert.ok(!avisos.some((a) => String(a).toLowerCase().includes('adicional')),
+    'un borrado deliberado no es «no se encontró en la plantilla»');
+});
+
+test('por debajo del umbral la tabla del .docx también se elimina', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 500000000,
+      filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+        tipo: 'Préstamos con vinculados (61)', monto: 500000000 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+  assert.ok(!salida.includes('BETA GMBH'), 'se publicó una operación que no supera el umbral');
+});
+
+test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  assert.ok(salida.includes('Operación adicional'), 'se borró una tabla que sí había que publicar');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'));
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+});
+```
+
+- [ ] **Step 6: Borrar en la ruta OOXML**
+
+En `sustituidorDeTablas` (`:1421-1449`), añadir el método junto a `reemplazar`:
+
+```js
+    /** Quita la tabla, su rótulo y la línea FUENTE que la sigue. `true` si estaba.
+     *
+     *  NO anota en `avisos` cuando no la encuentra: ese arreglo se publica como «No se
+     *  encontró en la plantilla: X» y alimenta el semáforo de radicación. Una tabla que se
+     *  quiere borrar y no está es el resultado buscado, no un hallazgo. */
+    borrar(nombres, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) return false;
+      /* La fuente vive detrás del cierre de la tabla, fuera del bloque. Al sustituir no
+         importa —el generador emite la suya—, pero al borrar quedaría huérfana bajo la tabla
+         siguiente, atribuyéndole un origen que no es el suyo. */
+      let fin = bloque.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, bloque.inicio) + out.slice(fin);
+      return true;
+    },
+```
+
+Nota: `parrafoHermanoSiguiente` (`:998`) devuelve `{inicio, fin, xml}` si lo que sigue es un
+párrafo hermano, o `{bloqueado}` si es una tabla, un control de contenido o el final del
+cuerpo — por eso se comprueba `hermano.xml` antes de leerlo.
+
+En la rama de la tabla adicional (`:1628-1638`), añadir el `else` y corregir el comentario que
+hoy afirma que no se toca nada:
+
+```js
+  /* 3-bis. Operación adicional Transacciones Intercompañía — la sección «4. Información
+     adicional» del formato (códigos DIAN 61 a 63: préstamos, reintegros y operaciones a
+     nombre de vinculados que no se reflejan en el Estado de Resultados).
+
+     Se publica SOLO si el formato la trajo y su total supera el umbral del año gravable. Si
+     no, la tabla que la plantilla trae hay que ELIMINARLA: la plantilla es el informe del
+     año anterior, así que sus filas son las operaciones de ese informe y dejarlas quietas
+     las declara como de este contribuyente. Se va con su rótulo y su línea de fuente, y sin
+     aviso —un borrado intencionado no es una tabla que no se encontró—.
+
+     La plantilla puede traerla en columnas o en ficha vertical, como pasa con el rango: se
+     mira cuántas columnas declara la que ya está ahí en vez de imponer una forma. */
+  if (tieneOperacionAdicional(estudio)) {
+    reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => {
+      const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
+      const t = columnas > 0 && columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      return generarTablaOoxml(
+        tituloDe(b, t.nombre), t.encabezados, t.filas, escaparXml(t.fuente)
+      );
+    });
+  } else {
+    doc.borrar(NOMBRES_TABLA_ADICIONAL);
+  }
+```
+
+Nota: `doc` es el objeto que devuelve `sustituidorDeTablas` y ya está en el ámbito de
+`actualizarTablasOperacionesOoxml`; `reemplazar` es su método envuelto (`:1542-1543`).
+
+- [ ] **Step 7: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.test.js`
+Expected: PASS — las 8 nuevas y todas las anteriores. En particular, las pruebas de `72a3163`
+que comprueban «cuando no aplica, nada cambia» pueden fallar ahora: **son la afirmación que
+este cambio corrige**. Si alguna falla porque asegura que la tabla sobrevive, actualízala
+para que asegure lo contrario, conservando su comentario y su intención. Si falla por
+cualquier otro motivo, es una regresión tuya.
+
+- [ ] **Step 8: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add frontend/src/services/tablasHtmlInforme.js frontend/src/services/tablasOperacionesHtml.js frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js
+git commit -m "fix: la tabla de operacion adicional se elimina cuando no hay nada que declarar"
+```
+
+---
+
+### Task 3: El monto de la operación adicional, visible en el resumen del paso 2
+
+**Files:**
+- Modify: `frontend/src/components/IngestaOperaciones.jsx:186-220` (el recuadro «Resumen de
+  Operación Extraída») y `:231` (la condición de la tarjeta de detalle)
+- Verificación manual en el navegador; este componente no tiene pruebas unitarias
+  (`CLAUDE.md`: los cambios visuales se verifican a mano)
+
+**Interfaces:**
+- Consumes, de `frontend/src/services/tablasOperaciones.js`: `montoOperacionAdicional(estudio)`
+  → number (0 cuando no hay sección 4), `umbralOperacionAdicional(anio)` → number,
+  `tieneOperacionAdicional(estudio)` → boolean. Las tres ya están importadas en el componente.
+  De `frontend/src/utils/calculations.js`: `fmt`.
+- Produces: nada hacia otros módulos. Solo interfaz.
+
+**Por qué.** El pedido del usuario era que el monto de operación de la sección «4. Información
+adicional» **se pueda ver en la sección de resumen** del paso 2. Hoy:
+
+- El recuadro «Resumen de Operación Extraída» (`:186`) lee del estudio, así que sobrevive a
+  salir del paso y volver, pero **no tiene ninguna celda para la operación adicional**.
+- La tarjeta de detalle (`:231`) sí muestra el monto, pero está condicionada a
+  `tieneOperacionAdicional(study)`: **solo por encima del umbral**.
+- Debajo del umbral el monto solo aparece en `excelMsg`, que es `useState('')` (`:12`) —
+  estado del componente. Al navegar al paso 3 y volver, el mensaje se pierde y el monto queda
+  invisible aunque `study.operacionAdicional.monto` lo tenga guardado.
+
+El resultado es que el caso donde MÁS falta saber la cifra —la sección existe, no llega al
+umbral, y por lo tanto la tabla se borra del informe (Task 2)— es justo el caso donde la
+cifra no se ve.
+
+**Qué NO hacer.** No borrar ni recortar la tarjeta de detalle de `72a3163`: su tabla fila por
+fila con vinculado, país, tipo y monto es información que el resumen no puede dar, y la nota
+de que no se suma al monto analizado es necesaria donde está. Esta tarea **añade** una celda
+al resumen y **amplía** cuándo se dibuja la tarjeta; no reemplaza nada.
+
+- [ ] **Step 1: Añadir la celda al resumen**
+
+El recuadro de `:186` tiene una rejilla `grid-cols-1 md:grid-cols-2 gap-4` con cuatro celdas:
+concepto, monto total, compañía vinculada, país e ID. Añadir una quinta al final de esa
+rejilla, **solo cuando el estudio trae la sección 4** —`study.operacionAdicional` no nulo—,
+que ocupe el ancho completo para que no descuadre la simetría de las cuatro anteriores:
+
+```jsx
+            {/* El monto de la sección «4. Información adicional» del formato, en el resumen y
+                no solo en la tarjeta de detalle de abajo. Va aquí porque este recuadro lee del
+                ESTUDIO y sobrevive a salir del paso y volver, mientras el mensaje de carga es
+                estado del componente y se pierde. Sin esto, el caso en que más falta saber la
+                cifra —la sección existe, no llega al umbral y por eso la tabla se borra del
+                informe— era justo el que no la mostraba.
+
+                Ámbar y no verde: no es el monto analizado. La leyenda dice cuál de las dos
+                cosas va a pasar en el informe, que es lo que el usuario necesita antes de
+                generar. */}
+            {study.operacionAdicional && (
+              <div className="md:col-span-2 p-4 rounded-xl bg-amber-50/50 dark:bg-amber-950/10 border border-amber-200 dark:border-amber-900/30 space-y-1">
+                <span className="text-xs text-amber-700 dark:text-amber-500 font-semibold uppercase tracking-wider block">
+                  Monto de Operación · Información Adicional (códigos 61 a 63)
+                </span>
+                <span className="text-xl font-bold text-amber-700 dark:text-amber-500 font-mono block">
+                  COP $ {fmt(montoOperacionAdicional(study))}
+                </span>
+                <span className="text-xs text-zinc-500 block">
+                  {tieneOperacionAdicional(study)
+                    ? `Supera el umbral de 45.000 UVT (COP $ ${fmt(umbralOperacionAdicional(study.anio))}): se declara en la tabla «Operación adicional Transacciones Intercompañía» del informe.`
+                    : `No supera el umbral de 45.000 UVT (COP $ ${fmt(umbralOperacionAdicional(study.anio))}): esa tabla se elimina del informe.`}
+                </span>
+              </div>
+            )}
+```
+
+Nota para el implementador: la condición de visibilidad del recuadro entero (`:186`) es
+`(study.vinc_tipo || study.vinc || montoOperacion(study) !== null)`. Añadir
+`|| study.operacionAdicional` para que el resumen aparezca también cuando lo único que trajo
+el archivo es la sección 4 — que es posible: la sección 1 del archivo de referencia de
+MONTACHEM está vacía.
+
+- [ ] **Step 2: Dibujar la tarjeta de detalle también por debajo del umbral**
+
+La condición de `:231` pasa de `tieneOperacionAdicional(study)` a `study.operacionAdicional`,
+y su encabezado deja de afirmar que se va a publicar. El cuerpo de la tarjeta —la tabla fila
+por fila y la nota de que no se suma— **no se toca**.
+
+Sustituir el comentario que precede a la tarjeta y su encabezado por:
+
+```jsx
+      {/* Operación adicional — sección «4. Información adicional» del formato (códigos DIAN
+          61 a 63: préstamos, reintegros y operaciones a nombre de vinculados que no se
+          reflejan en el Estado de Resultados).
+
+          Se dibuja siempre que el formato TRAIGA la sección, supere o no el umbral. Antes
+          solo aparecía por encima, con el criterio de que enseñar una tarjeta de algo que no
+          va a salir en el informe hace esperarlo ahí. Pero el monto se leyó del archivo y es
+          un dato del estudio: esconderlo dejaba la cifra viva solo en el mensaje de carga,
+          que es estado del componente y se pierde al salir del paso y volver. Y desde que la
+          tabla se ELIMINA del informe cuando no llega al umbral, saber por qué desapareció
+          importa más, no menos. Lo que hace el trabajo de no crear expectativa es la
+          leyenda, que dice explícitamente cuál de las dos cosas va a pasar. */}
+      {study.operacionAdicional && (
+        <div className="bg-white dark:bg-[#0c0c0f] border border-amber-200 dark:border-amber-900/40 rounded-xl p-6 shadow-sm space-y-4">
+          <div className="flex items-start gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50">
+                Operación Adicional Detectada
+              </h3>
+              <p className="text-xs text-zinc-500">
+                Información adicional del formato (códigos 61 a 63) por COP $ {fmt(montoOperacionAdicional(study))}
+                {tieneOperacionAdicional(study)
+                  ? `, que supera los COP $ ${fmt(umbralOperacionAdicional(study.anio))}. Se publicará en la tabla «Operación adicional Transacciones Intercompañía».`
+                  : `, que no supera los COP $ ${fmt(umbralOperacionAdicional(study.anio))}. No se publica en el informe, y la tabla que traiga la plantilla se elimina.`}
+              </p>
+            </div>
+          </div>
+```
+
+**Ojo con el acceso a las filas:** el cuerpo de la tarjeta hace
+`study.operacionAdicional.filas.map(...)`. Con la condición nueva sigue estando protegido
+—`study.operacionAdicional` es la guarda—, pero el parser garantiza `filas` no vacío cuando
+el objeto existe (`excelOperationsParser.js:372` lo construye solo `if (filasAdicionales.length)`).
+Si un estudio guardado antes trajera el objeto sin `filas`, el `.map` rompería la pantalla:
+usar `(study.operacionAdicional.filas || [])` en el `.map` para que no dependa de eso.
+
+- [ ] **Step 3: Verificar el lint y el build**
+
+Run: `npm run lint --prefix frontend`
+Expected: sin hallazgos.
+
+Run: `npm test`
+Expected: 100 % en verde. Este componente no tiene pruebas propias, pero la suite confirma
+que no se rompió ningún import.
+
+Run: `npm run build`
+Expected: build limpio.
+
+- [ ] **Step 4: Verificación manual en el navegador**
+
+```bash
+npm start
+```
+
+Abrir `http://localhost:3000`, crear un estudio, poner año gravable 2025 en el paso 1 e ir al
+paso 2.
+
+**Caso A — sección 4 por encima del umbral.** Cargar
+`D:\G\Juan-Mendez\Downloads\Informacion Operaciones PT 2025-1 (1).xlsx`. Comprobar:
+- en «Resumen de Operación Extraída» aparece la celda ámbar con
+  **`COP $ 14.516.485.850`** y la leyenda «Supera el umbral de 45.000 UVT
+  (COP $ 2.240.955.000): se declara…»;
+- si dice `2.926.256.260` está leyendo la columna «Saldo 2025» y el defecto es del parser, no
+  de esta tarea;
+- si dice `COP $ 2.500.000.000` como umbral, la Task 1 no quedó bien;
+- debajo, la tarjeta «Operación Adicional Detectada» con su tabla de una fila.
+
+**Caso B — el mismo archivo, por debajo del umbral.** Cambiar el año gravable del estudio a
+un año cuyo UVT deje el monto por debajo no es posible (ningún UVT de la tabla lo consigue con
+14.516 millones), así que forzarlo: en la consola del navegador,
+`const k='pt:study:<id>'; const s=JSON.parse(localStorage.getItem(k)); s.operacionAdicional.monto=500000000; s.operacionAdicional.filas[0].monto=500000000; localStorage.setItem(k,JSON.stringify(s));`
+y recargar. Comprobar:
+- la celda del resumen sigue visible, con `COP $ 500.000.000` y la leyenda «No supera el
+  umbral… esa tabla se elimina del informe»;
+- la tarjeta de detalle también sigue visible, con el mismo mensaje;
+- **ir al paso 3 y volver al paso 2:** las dos siguen ahí. Es el defecto que esta tarea
+  cierra — antes, al volver, el monto había desaparecido.
+
+**Caso C — sin sección 4.** Cargar
+`frontend\Archivos Prueba\Información Operaciones PT 2025-2 modificado cr.xlsx`, cuya sección
+4 está vacía. Comprobar que ni la celda del resumen ni la tarjeta aparecen, y que el resto
+del paso 2 queda igual que antes.
+
+Los tres casos, en **tema claro y oscuro**.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/components/IngestaOperaciones.jsx
+git commit -m "feat: el monto de la operacion adicional se ve en el resumen del paso 2"
+```
+
+- [ ] **Step 6: Regenerar el compilado**
+
+```bash
+npm run build
+git add public/gestor-reportes
+git commit -m "chore: regenerar public/gestor-reportes"
+```
+
+---
+
+### Task 4: Insertar la tabla cuando la plantilla no la trae
+
+**Files:**
+- Modify: `frontend/src/services/tablasHtmlInforme.js` — nueva primitiva `insertarTablaHtml`
+- Modify: `frontend/src/services/docxRelleno.js` — método `insertar` en `sustituidorDeTablas`
+  y la rama de la tabla adicional en `actualizarTablasOperacionesOoxml`
+- Modify: `frontend/src/services/tablasOperacionesHtml.js` — la rama equivalente
+- Test: `frontend/src/services/tablasOperacionesHtml.test.js`,
+  `frontend/src/services/docxRelleno.test.js`
+
+**Interfaces:**
+- Consumes: `localizarTablaHtml` / `localizarBloqueTabla` con `opciones.excluir`,
+  `reescribirFilasHtml` y `reescribirRotuloHtml` (`tablasHtmlInforme.js:338, :425`),
+  `generarTablaOoxml` (`docxRelleno.js:163`), `filasOperacionAdicionalFicha(estudio)`,
+  `tieneOperacionAdicional(estudio)`, `NOMBRES_TABLA_ADICIONAL`,
+  `NOMBRES_TABLA_TRANSACCIONES` (`tablasOperaciones.js:158`).
+- Produces:
+  - `insertarTablaHtml(html, bloqueAncla, tabla) → string` en `tablasHtmlInforme.js`.
+  - `sustituidorDeTablas(...).insertar(nombresAncla, generar, opciones) → boolean` en
+    `docxRelleno.js`.
+
+**El problema, con evidencia.** Con la Task 2, la matriz queda así:
+
+| Plantilla trae la tabla | Supera el umbral | Qué hace |
+|---|---|---|
+| sí | sí | la reemplaza ✅ |
+| sí | no | la elimina ✅ |
+| **no** | **sí** | **nada — solo un aviso en el banner** ⚠️ |
+| no | no | nada ✅ |
+
+Medido corriendo `actualizarTablasOperacionesHtml` con un estudio de 14.516.485.850 (por
+encima del umbral de 2025) contra una plantilla sin la tabla:
+
+```
+¿aparece en el informe generado?:  NO
+¿se insertó el rótulo?:            NO
+avisos emitidos: [..., "Operación adicional Transacciones Intercompañía"]
+```
+
+La operación hay que declararla, el sistema lo sabe, y el documento sale sin ella. El aviso
+queda entre otros seis de la misma corrida. Confiar en que alguien lea ese banner y escriba la
+tabla a mano en Word no es una garantía.
+
+**El ancla es el NOMBRE, nunca el número.** Requisito del usuario, y coincide con cómo está
+construido el resto: los localizadores casan por nombre y el número «solo desempata»
+(`docxRelleno.js:960-962`), porque la numeración cambia de un informe a otro —la ficha del
+vinculado viene como «Tabla 3» o como «Tabla 12» en la misma plantilla—. La tabla se inserta
+**después del bloque de «Transacciones Inter compañía»**, localizado por nombre y con el veto
+`excluir: NOMBRES_TABLA_ADICIONAL` para no anclar sobre la tabla adicional misma. Es donde el
+informe de referencia la lleva.
+
+Si el ancla tampoco está, no se inserta nada y el aviso se mantiene: sin ancla no hay sitio, y
+pegar la tabla al final del documento sería peor que no ponerla.
+
+**Se inserta DESPUÉS de la línea `FUENTE:` del ancla**, si la trae. Insertar entre la tabla y
+su fuente dejaría la fuente del ancla debajo de la tabla nueva, atribuyéndosela.
+
+**Asimetría entre las dos rutas, y por qué cada una hace lo que hace:**
+
+- **`.docx`:** `generarTablaOoxml(titulo, cabeceras, filas, fuente)` (`:163`) ya fabrica la
+  tabla con la tipografía y los bordes que usa todo el informe, y es lo que emite cada
+  sustitución. Insertar es generar y empalmar.
+- **HTML:** este módulo **no tiene generador de tablas** y no hay que escribirle uno. Su
+  premisa es reescribir lo que la plantilla trae para conservar el maquetado del cliente
+  (`tablasOperacionesHtml.js:4-8`). Así que la tabla insertada es un **clon del marcado del
+  ancla** con las filas y el rótulo reescritos: la Tabla 3 es también una ficha de dos
+  columnas, la misma forma que `filasOperacionAdicionalFicha`, y clonarla hereda el estilo del
+  cliente exactamente. Inventar HTML propio metería una tabla con otra pinta en medio del
+  informe.
+
+**La numeración del rótulo.** No se renumera nada (restricción global). El rótulo insertado
+lleva el número del ancla + 1 cuando el ancla trae número, y va sin número cuando no. Con una
+plantilla que ya tenga una «Tabla 4», eso deja **dos tablas con el mismo número**, y es
+deliberado: la alternativa —renumerar lo que sigue— va contra `docxRelleno.js:1548` y
+`:563-567`. Se emite un aviso propio nombrándolo para que se corrija en Word.
+
+- [ ] **Step 1: Escribir las pruebas que fallan (ruta HTML)**
+
+Añadir a `frontend/src/services/tablasOperacionesHtml.test.js`:
+
+```js
+/* ── Inserción cuando la plantilla no trae la tabla ─────────────────────────── */
+
+/* Ancla = «Transacciones Inter compañía», ficha de dos columnas, con su línea de fuente.
+   Detrás va otra tabla, para comprobar que la inserción cae ENTRE las dos y no encima. */
+const PLANTILLA_SIN_ADICIONAL =
+  '<p><strong> Tabla 3. Transacciones Inter compañía</strong></p>' +
+  '<table>' +
+  '<tr><th colspan="2"><p><strong> Compañía vinculada</strong></p></th></tr>' +
+  '<tr><th><p><strong> Razón social</strong></p></th><td><p> ACME LLC</p></td></tr>' +
+  '<tr><th><p><strong> Monto en pesos</strong></p></th><td><p> 1.000.000</p></td></tr>' +
+  '</table>' +
+  '<p><strong>FUENTE: Información de ACME COLOMBIA S.A.S.</strong></p>' +
+  '<p><strong> Tabla 4. Método de Precios de Transferencia</strong></p>' +
+  '<table><tr><th><p><strong> Código de Operación</strong></p></th></tr></table>';
+
+const ESTUDIO_DECLARABLE = {
+  anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S',
+  vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+  operacionAdicional: {
+    monto: 14516485850,
+    filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+  },
+};
+
+test('sobre el umbral y sin la tabla en la plantilla, la tabla se inserta tras la Tabla 3', () => {
+  /* Antes de esto el informe salía sin la tabla y solo quedaba un aviso entre otros seis:
+     la operación hay que declararla y el documento se radicaba sin ella. */
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, avisos);
+
+  assert.match(salida, /Operación adicional Transacciones Intercompañía/, 'no se insertó el rótulo');
+  assert.match(salida, /MONTACHEM INTERNATIONAL INC/, 'no se insertaron los datos');
+  assert.match(salida, /14\.516\.485\.850/);
+
+  /* La inserción va DESPUÉS de la fuente del ancla y ANTES de la tabla siguiente. */
+  const iFuenteAncla = salida.indexOf('FUENTE: Información de ACME COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuenteAncla > -1, 'se perdió la fuente del ancla');
+  assert.ok(iFuenteAncla < iInsertada, 'la inserción quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'la inserción quedó después de la tabla siguiente');
+
+  /* El ancla intacta: se inserta al lado, no encima. */
+  assert.match(salida, /Tabla 3\. Transacciones Inter compañía/);
+  assert.match(salida, /ACME LLC/);
+});
+
+test('la inserción hereda el marcado del ancla y no inventa una tabla con otra pinta', () => {
+  /* Este módulo existe para conservar el maquetado del cliente. La tabla insertada es un
+     clon del ancla con las filas reescritas, así que sus etiquetas de marcado son las
+     mismas. */
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, []);
+  const desde = salida.indexOf('Operación adicional');
+  const trozo = salida.slice(desde);
+  assert.match(trozo, /<th colspan="2">/, 'no heredó la cabecera combinada del ancla');
+});
+
+test('la inserción avisa de la numeración duplicada', () => {
+  /* La plantilla ya trae una «Tabla 4», así que el rótulo insertado la repite. No se
+     renumera —lo prohíbe el criterio del repo— pero callarlo sería dejar el informe con dos
+     tablas del mismo número sin que nadie lo sepa. */
+  const avisos = [];
+  actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, avisos);
+  assert.ok(avisos.some((a) => /insert/i.test(String(a)) && /numeraci/i.test(String(a))),
+    'no se avisó de la inserción ni de la numeración');
+});
+
+test('sin el ancla en la plantilla no se inserta nada y el aviso se mantiene', () => {
+  /* Sin sitio donde ponerla, pegarla al final sería peor que no ponerla. */
+  const avisos = [];
+  const sinAncla = '<p><strong> Tabla 4. Método de Precios de Transferencia</strong></p>' +
+    '<table><tr><th><p><strong> Código de Operación</strong></p></th></tr></table>';
+
+  const salida = actualizarTablasOperacionesHtml(sinAncla, ESTUDIO_DECLARABLE, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')),
+    'se perdió el aviso de tabla ausente');
+});
+
+test('bajo el umbral y sin la tabla en la plantilla, no se inserta nada ni se avisa', () => {
+  const avisos = [];
+  const estudio = {
+    ...ESTUDIO_DECLARABLE,
+    operacionAdicional: { monto: 500000000, filas: [{ vinculado: 'BETA GMBH', monto: 500000000 }] },
+  };
+
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, estudio, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó una tabla que no hay que declarar');
+  assert.ok(!salida.includes('BETA GMBH'));
+  assert.ok(!avisos.some((a) => String(a).toLowerCase().includes('adicional')));
+});
+
+test('con la tabla YA en la plantilla se sustituye y no se duplica', () => {
+  /* La regresión que esta tarea podría causar: insertar además de sustituir. */
+  const conTabla = PLANTILLA_SIN_ADICIONAL +
+    '<p><strong> Tabla 5. Operación adicional Transacciones Intercompañía</strong></p>' +
+    '<table><tr><th><p><strong> Razón social</strong></p></th><td><p> CLIENTE ANTERIOR S.A.</p></td></tr></table>';
+
+  const salida = actualizarTablasOperacionesHtml(conTabla, ESTUDIO_DECLARABLE, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el vinculado anterior');
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: FAIL — la primera falla en `assert.match(salida, /Operación adicional/)`: hoy no se
+inserta nada.
+
+- [ ] **Step 3: La primitiva de inserción en `tablasHtmlInforme.js`**
+
+Junto a `borrarTablaHtml` (`:219`):
+
+```js
+/**
+ * Inserta una tabla en el informe, después del bloque que sirve de ancla.
+ *
+ * El ancla se localiza por NOMBRE y nunca por número: la numeración cambia de un informe a
+ * otro —la ficha del vinculado viene como «Tabla 3» o como «Tabla 12» en la misma
+ * plantilla— y el resto del módulo ya trabaja así.
+ *
+ * La tabla insertada es un CLON del marcado del ancla con el rótulo y las filas reescritos,
+ * no marcado fabricado aquí. Es la premisa de este módulo: lo que se conserva es el
+ * maquetado del cliente, y una tabla inventada saldría con otra pinta en medio de su
+ * informe. Exige que el ancla tenga la misma forma que la tabla nueva —las dos son fichas
+ * de dos columnas—, que es el caso para el que existe esta función.
+ *
+ * Va después de la línea `FUENTE:` del ancla cuando la trae: colarse entre la tabla y su
+ * fuente se la atribuiría a la tabla nueva.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number,fin:number,xml:string}|null}} ancla
+ * @param {{nombre:string, filas:string[][]}} tabla  lo que va en la tabla nueva.
+ * @param {string} titulo  el rótulo ya compuesto, con su número si corresponde.
+ * @returns {string}
+ */
+export function insertarTablaHtml(html, ancla, tabla, titulo) {
+  const texto = String(html || '');
+  if (!ancla || !tabla) return texto;
+
+  /* Dónde acaba el ancla, contando su línea de fuente. */
+  let fin = ancla.fin;
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(fin));
+  if (siguiente && /^\s*fuente\s*:/i.test(textoPlanoHtml(siguiente[0]))) {
+    fin += siguiente[0].length;
+  }
+
+  /* El clon: el rótulo del ancla con el texto nuevo, y su tabla con las filas nuevas. */
+  const rotuloClon = ancla.rotulo
+    ? reescribirRotuloHtml(ancla.rotulo.xml, titulo)
+    : '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+  const tablaClon = reescribirFilasHtml(texto.slice(ancla.inicio, ancla.fin), tabla.filas);
+
+  return texto.slice(0, fin) + rotuloClon + tablaClon + texto.slice(fin);
+}
+```
+
+Nota: `RX_ELEMENTO_SIGUIENTE` y `textoPlanoHtml` los aporta la Task 2 y ya están en el módulo;
+`reescribirRotuloHtml`, `reescribirFilasHtml` y `escaparTextoHtml` ya existían.
+
+- [ ] **Step 4: Insertar en la ruta HTML**
+
+En `tablasOperacionesHtml.js`, la rama de la tabla adicional (que la Task 2 dejó como
+`if (tieneOperacionAdicional) { … } else { … }`) gana el caso de la tabla ausente. Reemplazar
+el `else if (Array.isArray(avisos)) avisos.push(...)` de la rama de publicación por:
+
+```js
+    } else {
+      /* La plantilla no trae la tabla y la operación hay que declararla: se INSERTA después
+         del bloque de «Transacciones Inter compañía», que es donde el informe de referencia
+         la lleva. El ancla se busca por nombre y con el veto de los nombres de esta misma
+         tabla, para no anclar sobre ella. Sin ancla no hay sitio: se mantiene el aviso y no
+         se pega nada al final del documento, que sería peor que no ponerla. */
+      const ancla = localizarTablaHtml(out, NOMBRES_TABLA_TRANSACCIONES, {
+        excluir: NOMBRES_TABLA_ADICIONAL,
+      });
+      const t = filasOperacionAdicionalFicha(estudio);
+      if (ancla && t) {
+        /* El número del ancla + 1, y sin número si el ancla no lo trae. No se renumera lo que
+           sigue —lo prohíbe el criterio del repo—, así que esto puede repetir un número que
+           ya existe: por eso el aviso lo nombra. */
+        const numeroAncla = numeroDeTabla(ancla.titulo);
+        const titulo = numeroAncla != null
+          ? 'Tabla ' + (numeroAncla + 1) + '. ' + t.nombre
+          : t.nombre;
+        out = insertarTablaHtml(out, ancla, t, titulo);
+        if (Array.isArray(avisos)) {
+          avisos.push(
+            'se insertó la tabla «' + t.nombre + '» después de «' + ancla.titulo
+            + '» porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          );
+        }
+      } else if (Array.isArray(avisos)) {
+        avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+      }
+    }
+```
+
+Añadir a los imports lo que falte: `insertarTablaHtml` y `numeroDeTabla` de
+`./tablasHtmlInforme.js` (`numeroDeTabla` se exporta de `docxRelleno.js:621` — importarla de
+donde ya la tome este módulo, sin duplicarla), `filasOperacionAdicionalFicha` y
+`NOMBRES_TABLA_TRANSACCIONES` de `./tablasOperaciones.js`.
+
+- [ ] **Step 5: Escribir las pruebas que fallan (ruta OOXML)**
+
+Añadir a `frontend/src/services/docxRelleno.test.js`:
+
+```js
+test('sin la tabla en la plantilla y sobre el umbral, se inserta tras Transacciones Inter compañía', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de ACME COLOMBIA S.A.S.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S',
+    vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, avisos);
+
+  assert.ok(salida.includes('Operación adicional Transacciones Intercompañía'),
+    'no se insertó el rótulo');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'), 'no se insertaron los datos');
+  assert.ok(salida.includes('14.516.485.850'));
+
+  /* Después de la fuente del ancla y antes de la tabla siguiente. */
+  const iFuente = salida.indexOf('FUENTE: Información de ACME COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuente > -1 && iFuente < iInsertada, 'quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'quedó después de la tabla siguiente');
+
+  /* La Tabla 3 sustituida con lo suyo, no pisada por la insertada. */
+  assert.ok(salida.includes('900111'), 'falta la identificación fiscal de la Tabla 3');
+  assert.ok(avisos.some((a) => /insert/i.test(String(a))), 'no se avisó de la inserción');
+});
+
+test('sin el ancla no se inserta nada y se mantiene el aviso de tabla ausente', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  }, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')));
+});
+
+test('con la tabla ya en la plantilla se sustituye una vez y no se duplica', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+});
+```
+
+- [ ] **Step 6: Insertar en la ruta OOXML**
+
+En `sustituidorDeTablas`, junto a `reemplazar` y `borrar`:
+
+```js
+    /** Inserta una tabla después del bloque que sirve de ancla, localizada por NOMBRE.
+     *
+     *  `generar` recibe el bloque del ancla, para poder componer el rótulo a partir del
+     *  número que ese bloque traiga. Devuelve `false` —sin anotar nada en `avisos`— cuando el
+     *  ancla no está: quien llama decide qué decir, porque el aviso útil ahí no es «no
+     *  encontré el ancla» sino «no pude poner la tabla que hay que declarar». */
+    insertar(nombresAncla, generar, opciones) {
+      const ancla = localizarBloqueTabla(out, nombresAncla, opciones);
+      if (!ancla) return false;
+      /* Después de la línea FUENTE del ancla: colarse entre la tabla y su fuente se la
+         atribuiría a la tabla nueva. */
+      let fin = ancla.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, fin) + generar(ancla) + out.slice(fin);
+      return true;
+    },
+```
+
+En `actualizarTablasOperacionesOoxml`, la rama de la tabla adicional que la Task 2 dejó pasa a
+distinguir tres casos. `reemplazar` ya devuelve `false` y anota en `avisos` cuando no
+encuentra la tabla, así que hay que evitar ese anotado y decidir aquí — usar `doc.reemplazar`
+no sirve para eso: hay que preguntar primero si la tabla está.
+
+```js
+  if (tieneOperacionAdicional(estudio)) {
+    const emitirAdicional = (b, xmlBloque, titulo) => {
+      const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
+      const t = columnas > 0 && columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      return generarTablaOoxml(
+        titulo != null ? titulo : tituloDe(b, t.nombre),
+        t.encabezados, t.filas, escaparXml(t.fuente)
+      );
+    };
+
+    if (localizarBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL)) {
+      reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque));
+    } else {
+      /* La plantilla no la trae y hay que declararla: se inserta tras «Transacciones Inter
+         compañía», que es donde el informe de referencia la lleva. El ancla se busca por
+         nombre —la numeración no es fiable— y con el veto de los nombres de esta tabla, para
+         no anclar sobre ella. La tabla insertada es una ficha, como el ancla. */
+      const t = filasOperacionAdicionalFicha(estudio);
+      const insertada = doc.insertar(
+        NOMBRES_TABLA_TRANSACCIONES,
+        (ancla) => {
+          /* El número del ancla + 1, sin número si no lo trae. No se renumera lo que sigue,
+             así que esto puede repetir un número existente: el aviso lo nombra. */
+          const titulo = ancla.numero != null
+            ? 'Tabla ' + (ancla.numero + 1) + '. ' + t.nombre
+            : t.nombre;
+          return emitirAdicional(ancla, '', titulo);
+        },
+        { excluir: NOMBRES_TABLA_ADICIONAL }
+      );
+      if (Array.isArray(avisos)) {
+        avisos.push(insertada
+          ? 'se insertó la tabla «' + t.nombre + '» después de «Transacciones Inter compañía»'
+            + ' porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          : NOMBRES_TABLA_ADICIONAL[0]);
+      }
+    }
+  } else {
+    doc.borrar(NOMBRES_TABLA_ADICIONAL);
+  }
+```
+
+Ojo: `emitirAdicional` recibe `''` como `xmlBloque` en la inserción, así que `columnas` sale 0
+y caería en la rama de columnas. Por eso se le pasa la ficha explícitamente: en la inserción
+la forma la elegimos nosotros —ficha, como el ancla— y no hay tabla previa que mirar.
+Verificar que la implementación efectivamente emite la ficha en ese camino.
+
+- [ ] **Step 7: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.test.js`
+Expected: PASS — las 9 nuevas y todas las anteriores. Cualquier prueba previa que asegure que
+«sin la tabla en la plantilla no se inserta nada» cambia de veredicto a propósito: actualizala
+describiendo el comportamiento nuevo. Si una falla por otro motivo, es una regresión.
+
+- [ ] **Step 8: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add frontend/src/services/tablasHtmlInforme.js frontend/src/services/tablasOperacionesHtml.js frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js
+git commit -m "feat: la tabla de operacion adicional se inserta si la plantilla no la trae"
+```
+
+- [ ] **Step 10: Verificación en un .docx real**
+
+Las pruebas usan XML sintético. Antes de cerrar, generar un informe contra la plantilla real y
+abrirlo en Word para confirmar que la tabla insertada no rompe el documento:
+`frontend/Archivos Prueba/Informe Local End Game _ 2024_v2.docx`. Confirmar que Word lo abre
+sin avisos de reparación, que la tabla insertada aparece tras «Transacciones Inter compañía» y
+que se ve con el mismo formato que las demás.
+
+---
+
+### Task 5: La columna de etiquetas de las fichas verticales va en gris
+
+**Files:**
+- Modify: `frontend/src/services/docxRelleno.js:163-210` (`generarTablaOoxml`)
+- Test: `frontend/src/services/docxRelleno.test.js`
+
+**Interfaces:**
+- Consumes: nada de las tareas anteriores.
+- Produces: `generarTablaOoxml(titulo, cabeceras, filas, fuente)` conserva su firma. Cambia
+  solo el sombreado de la primera celda de cada fila **cuando la tabla es una ficha vertical**.
+
+**El estilo que hay que respetar,** dado por el usuario como modelo y ya vigente en el repo
+desde `3d5a03c`: bordes negros de 1px, relleno `#999999` con texto negro y en negrita en las
+celdas de rótulo, celdas de valor en blanco, todo centrado, dos columnas al 45 % / 55 %. Vive
+en tres sitios que deben seguir coincidiendo: `docxRelleno.js:177` (ruta .docx),
+`docxWriter.js:693` (calco del PDF) y `estiloDocumento.js:123` (ruta HTML).
+
+**El defecto, con evidencia.** `generarTablaOoxml` sombrea solo la fila de cabecera: las filas
+de datos se emiten con `celda(c, false)` (`:204`), así que **ninguna** celda de dato lleva
+gris. En una tabla de columnas eso es correcto. En una ficha vertical —etiqueta a la izquierda,
+valor a la derecha— deja la columna de etiquetas en blanco. Salida real del generador para la
+ficha de «Transacciones Intercompañía»:
+
+```
+fila 0: GRIS  "Compañía vinculada"  |  GRIS  ""
+fila 1: blanca "Razón social"  |  blanca "MONTACHEM INTERNATIONAL INC"
+fila 2: blanca "Monto en pesos"  |  blanca "16.410.708.521"
+```
+
+El modelo del usuario tiene «Razón social» y «Monto en pesos» en gris. Afecta a todas las
+fichas del informe en la ruta .docx: Tabla 3, Tabla 12 y la de operación adicional.
+
+La ruta HTML **no** tiene este defecto y no hay que tocarla: `reescribirFilasHtml` conserva los
+`<th>` que trae la plantilla del cliente y el gris lo aporta `estiloDocumento.js:123`.
+
+**Cómo se decide que una tabla es ficha.** Por su forma, no por su nombre: dos columnas y el
+segundo encabezado vacío. Es la misma señal que ya usan las dos rutas para elegir entre
+`filasOperacionAdicionalFicha` y `filasOperacionAdicional` (`docxRelleno.js:1630`,
+`tablasOperacionesHtml.js:208`), así que no se introduce un criterio nuevo. Una tabla de datos
+de dos columnas con los dos encabezados rotulados —no hay ninguna hoy, pero podría haberla—
+no se vería afectada.
+
+- [ ] **Step 1: Escribir las pruebas que fallan**
+
+Añadir a `frontend/src/services/docxRelleno.test.js`. Importar `generarTablaOoxml` si no está.
+
+```js
+/* ── El gris de las fichas verticales ───────────────────────────────────────── */
+
+/* Por fila, qué celdas llevan el relleno #999999. Mira el `w:shd` de cada `<w:tc>`, que es
+   donde el generador escribe el sombreado. */
+const grisPorFila = (xml) => xml.split('<w:tr>').slice(1).map(
+  (fila) => fila.split('<w:tc>').slice(1).map((c) => /w:fill="999999"/.test(c))
+);
+
+test('en una ficha vertical la columna de etiquetas va en gris', () => {
+  /* El estilo del informe pinta en gris los rótulos y en blanco los valores. El generador
+     sombreaba solo la fila de cabecera, así que «Razón social» y «Monto en pesos» salían en
+     blanco: la ficha del vinculado se veía sin su columna de etiquetas. */
+  const xml = generarTablaOoxml(
+    'Tabla 3. Transacciones Intercompañía',
+    ['Compañía vinculada', ''],
+    [['Razón social', 'MONTACHEM INTERNATIONAL INC'], ['Monto en pesos', '16.410.708.521']],
+    'Información de MONTACHEM COLOMBIA S.A.S.'
+  );
+
+  assert.deepStrictEqual(grisPorFila(xml), [
+    [true, true],    // cabecera
+    [true, false],   // etiqueta gris, valor blanco
+    [true, false],
+  ]);
+});
+
+test('en una tabla de columnas las filas de datos siguen en blanco', () => {
+  /* La regresión que este cambio podría causar: pintar de gris la primera columna de las
+     tablas que no son fichas —comparables, rangos, la de operaciones de ingreso—. */
+  const xml = generarTablaOoxml(
+    'Tabla 1. Operaciones de Ingreso',
+    ['Concepto de Operaciones a analizar', 'Nombre vinculado', 'País vinculado', 'Monto'],
+    [['Otros servicios (07)', 'ACME LLC', 'MEXICO', '3.433.542.684']],
+    'Información suministrada por la Administración de la Compañía.'
+  );
+
+  assert.deepStrictEqual(grisPorFila(xml), [
+    [true, true, true, true],
+    [false, false, false, false],
+  ]);
+});
+
+test('una tabla de dos columnas con los dos encabezados rotulados no es una ficha', () => {
+  /* La señal de ficha es el segundo encabezado VACÍO, que es la misma que ya usan las dos
+     rutas para elegir entre la ficha y las columnas. */
+  const xml = generarTablaOoxml(
+    'Tabla 2. Operación analizar',
+    ['No. Operaciones de análisis', 'Descripción'],
+    [['Ingreso (07)', 'Otros servicios']],
+    'Información suministrada por la Administración de la Compañía.'
+  );
+
+  assert.deepStrictEqual(grisPorFila(xml), [[true, true], [false, false]]);
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js`
+Expected: FAIL — la primera espera `[true, false]` en las filas de datos y hoy da
+`[false, false]`.
+
+- [ ] **Step 3: Sombrear la columna de etiquetas**
+
+En `generarTablaOoxml`, antes de emitir las filas, decidir si la tabla es una ficha, y pasar
+`cabecera: true` a la primera celda de cada fila cuando lo es. Reemplazar el bloque
+`// Rows` (`:202-206`) por:
+
+```js
+  /* Una FICHA VERTICAL —dos columnas y el segundo encabezado vacío— lleva su columna de
+     etiquetas en gris, igual que la fila de cabecera: en el estilo del informe el gris marca
+     los rótulos y el blanco los valores, y aquí los rótulos van a la izquierda y no arriba.
+     Sombrear solo la cabecera dejaba «Razón social» y «Monto en pesos» en blanco.
+
+     Se decide por la FORMA y no por el nombre de la tabla, con la misma señal que ya usan las
+     dos rutas para elegir entre la ficha y las columnas: así una tabla nueva no depende de que
+     alguien la añada a una lista. */
+  const esFicha = cabeceras.length === 2 && !String(cabeceras[1] || '').trim();
+
+  // Rows
+  filas.forEach((f) => {
+    xml += `<w:tr>`;
+    f.forEach((c, i) => { xml += celda(c, esFicha && i === 0); });
+```
+
+Nota para el implementador: `celda(texto, cabecera)` (`:174`) ya aplica el relleno `999999`, el
+color negro y la negrita cuando `cabecera` es cierto, y centra siempre. No hace falta un
+tercer estado ni tocar `celda`.
+
+- [ ] **Step 4: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js`
+Expected: PASS — las 3 nuevas y todas las anteriores. Si falla alguna prueba previa que
+comprueba el XML de una ficha carácter a carácter, actualizá el esperado: el cambio de
+sombreado es el objetivo.
+
+- [ ] **Step 5: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js
+git commit -m "fix: la columna de etiquetas de las fichas verticales va en gris en el .docx"
+```
+
+- [ ] **Step 7: Verificación en Word**
+
+Generar un informe contra `frontend/Archivos Prueba/Informe Local End Game _ 2024_v2.docx` y
+abrirlo: la Tabla 3 y la Tabla 12 tienen que verse con la columna izquierda en gris `#999999`,
+texto negro en negrita, valores en blanco y todo centrado — como el modelo del usuario. Las
+tablas de columnas (comparables, rangos, operaciones de ingreso) sin cambios.
+
+---
+
+### Task 6: La línea FUENTE de la plantilla no puede sobrevivir a la sustitución
+
+**Files:**
+- Modify: `frontend/src/services/docxRelleno.js` — `sustituidorDeTablas.reemplazar`
+- Modify: `frontend/src/services/tablasHtmlInforme.js` — nueva primitiva
+  `reescribirFuenteHtml`
+- Modify: `frontend/src/services/tablasOperacionesHtml.js` — `sustituir()`
+- Test: `frontend/src/services/docxRelleno.test.js`,
+  `frontend/src/services/tablasOperacionesHtml.test.js`
+
+**Interfaces:**
+- Consumes: `parrafoHermanoSiguiente` y `textoPlanoOoxml` (`docxRelleno.js`, privadas del
+  módulo), `textoPlanoHtml` y `RX_ELEMENTO_SIGUIENTE` (`tablasHtmlInforme.js`, la segunda la
+  aporta la Task 2).
+- Produces: `reescribirFuenteHtml(html, desde, fuente) → string` en `tablasHtmlInforme.js`.
+  `reemplazar` y `sustituir` conservan sus firmas.
+
+**Hallazgo.** Lo levantó la revisión de la Task 2 como preexistente y fuera de alcance, y al
+medirlo resultó **general a todas las tablas**, no propio de la operación adicional. El bloque
+que devuelven los dos localizadores va del rótulo al cierre de la tabla; la línea `FUENTE: …`
+que la plantilla trae **detrás** queda fuera, y ninguna de las dos rutas la toca al sustituir.
+
+Medido con los motores reales sobre la Tabla 1 («Operaciones de Ingreso»), con un estudio cuyo
+vinculado es «NUEVO VINC» y una plantilla cuya fuente nombra a «CLIENTE ANTERIOR S.A.»:
+
+```
+HTML  FUENTE huérfana sobrevive: SI | líneas FUENTE en la salida: 1
+OOXML FUENTE huérfana sobrevive: SI | líneas FUENTE en la salida: 2
+```
+
+Y sobre la tabla de operación adicional, con la ficha correctamente reemplazada:
+
+```
+dentro de la tabla, «CLIENTE ANTERIOR» sobrevive: no
+el monto viejo 9.999.999.999 sobrevive:           no
+el vinculado nuevo se escribió:                   sí
+la línea FUENTE del cliente anterior sobrevive:   SI  <-- la fuga
+```
+
+O sea: el motor hace bien su trabajo con el contenido de la tabla y publica debajo, en negrita,
+el nombre del contribuyente anterior. En la ruta .docx además duplicado. Es una fuga de datos
+de un cliente a otro en un documento que se radica ante la DIAN, y es exactamente la clase de
+defecto que el encabezado de `tablasOperaciones.js:10-12` declara como razón de existir del
+módulo.
+
+Afecta a las ~22 tablas de los dos motores. Se arregla en las primitivas compartidas, así que
+un solo cambio por ruta cubre todas.
+
+**Las dos rutas necesitan arreglos distintos, y por qué:**
+
+- **`.docx`:** `generarTablaOoxml` ya emite su propia línea `FUENTE:` dentro del bloque nuevo
+  (`:212`). Así que `reemplazar` tiene que **absorber** la línea vieja en el tramo que recorta.
+  **Con una salvedud que no se puede saltar:** solo cuando la tabla nueva trae fuente. Si el
+  generador no emite ninguna y borramos la de la plantilla, el informe pierde una línea que sí
+  era del cliente. La señal es si el XML generado contiene `FUENTE:`.
+- **HTML:** esta ruta no emite líneas de fuente —conserva el maquetado del cliente y solo
+  reescribe filas—, así que borrar la vieja dejaría la tabla sin fuente. Lo correcto es
+  **reescribir su texto** con la fuente que declara la tabla, igual que se reescriben las
+  filas: se conserva el marcado del cliente y cambia el dato.
+
+- [ ] **Step 1: Escribir las pruebas que fallan**
+
+En `frontend/src/services/docxRelleno.test.js`:
+
+```js
+/* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
+
+test('la línea FUENTE de la plantilla no queda huérfana ni duplicada tras sustituir', () => {
+  /* El motor reemplazaba la tabla y dejaba debajo, en negrita, el nombre del contribuyente
+     anterior — y además añadía la suya, así que el informe salía con dos líneas FUENTE. */
+  const xml =
+    '<w:p><w:t>Tabla 1. Operaciones de Ingreso</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Prosa que sigue.</w:t></w:p>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', vinc_id: '900',
+    pais_vinc: 'MEXICO', vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió la fuente del cliente anterior');
+  assert.strictEqual((salida.match(/FUENTE:/g) || []).length, 1, 'la línea FUENTE quedó duplicada');
+  assert.ok(salida.includes('Prosa que sigue.'), 'se llevó prosa del informe');
+});
+
+test('sin fuente en la tabla nueva, la de la plantilla se conserva', () => {
+  /* Si el generador no emite fuente y borráramos la vieja, el informe perdería una línea que
+     sí era del cliente. Se borra solo cuando hay con qué reemplazarla. */
+  const xml =
+    '<w:p><w:t>Rango Intercuartil</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Una nota de la plantilla.</w:t></w:p>';
+
+  /* `generarTablaOoxml` con `fuente` vacía no emite la línea; la prueba comprueba la guarda
+     directamente sobre la primitiva para no depender de qué tabla del informe la tenga. */
+  const conFuente = generarTablaOoxml('T', ['a'], [['b']], 'Algo.');
+  const sinFuente = generarTablaOoxml('T', ['a'], [['b']], '');
+  assert.ok(conFuente.includes('FUENTE:'), 'con fuente debe emitirla');
+  assert.ok(!sinFuente.includes('FUENTE:'), 'sin fuente no debe emitirla');
+  assert.ok(xml.includes('FUENTE: Una nota de la plantilla.'));
+});
+```
+
+En `frontend/src/services/tablasOperacionesHtml.test.js`:
+
+```js
+test('la línea FUENTE de la plantilla se reescribe con la del estudio, no se borra', () => {
+  /* Esta ruta conserva el maquetado del cliente: la línea de fuente se queda donde está, con
+     su marcado, y cambia el dato — igual que las filas. Borrarla dejaría la tabla sin fuente. */
+  const html =
+    '<p><strong> Tabla 1. Operaciones de Ingreso</strong></p>' +
+    '<table>' +
+    '<tr><th><p><strong> Concepto de Operaciones a analizar</strong></p></th>' +
+    '<th><p><strong> Nombre vinculado</strong></p></th>' +
+    '<th><p><strong> País vinculado</strong></p></th>' +
+    '<th><p><strong> Monto de la Operación analizar</strong></p></th></tr>' +
+    '<tr><td><p> viejo</p></td><td><p> CLIENTE ANTERIOR</p></td>' +
+    '<td><p> ESPAÑA</p></td><td><p> 9.999.999.999</p></td></tr>' +
+    '</table>' +
+    '<p><strong>FUENTE: Información de CLIENTE ANTERIOR S.A.</strong></p>' +
+    '<p> Prosa que sigue.</p>';
+
+  const salida = actualizarTablasOperacionesHtml(html, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', pais_vinc: 'MEXICO',
+    vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el cliente anterior');
+  assert.match(salida, /FUENTE:/, 'se borró la línea de fuente en vez de reescribirla');
+  assert.match(salida, /<p><strong>FUENTE:/, 'se perdió el marcado de la plantilla');
+  assert.match(salida, /Prosa que sigue/, 'se llevó prosa del informe');
+});
+
+test('sin línea FUENTE en la plantilla no se inventa una', () => {
+  /* Añadirla donde el cliente no la puso cambiaría la maqueta de su informe, que es lo que
+     esta ruta existe para no hacer. */
+  const html =
+    '<p><strong> Tabla 2. Operación analizar</strong></p>' +
+    '<table>' +
+    '<tr><th><p><strong> No. Operaciones de análisis</strong></p></th>' +
+    '<th><p><strong> Descripción</strong></p></th></tr>' +
+    '<tr><td><p> viejo</p></td><td><p> viejo</p></td></tr>' +
+    '</table>' +
+    '<p> Prosa que sigue.</p>';
+
+  const salida = actualizarTablasOperacionesHtml(html, {
+    anio: 2025, ent: 'ACME', vinc_tipo: 'Otros servicios (07)',
+  }, []);
+
+  assert.ok(!salida.includes('FUENTE:'), 'se inventó una línea de fuente');
+  assert.match(salida, /Prosa que sigue/);
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: FAIL — la primera por `CLIENTE ANTERIOR S.A.` presente y dos líneas `FUENTE:`; la de
+HTML por `CLIENTE ANTERIOR` presente.
+
+- [ ] **Step 3: Absorber la línea vieja en la ruta OOXML**
+
+En `sustituidorDeTablas.reemplazar`, tras localizar el bloque y generar el XML nuevo:
+
+```js
+    reemplazar(nombres, generar, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) {
+        if (Array.isArray(avisos)) {
+          avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+        }
+        return false;
+      }
+      /* El generador recibe también el XML de la tabla que va a sustituir. Casi ninguno lo
+         necesita, pero hay tablas que la plantilla trae en dos formas —en ficha vertical o
+         en columnas— y la única manera de no imponer una es mirar cuántas columnas tiene la
+         que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
+      const nuevo = generar(bloque, out.slice(bloque.inicio, bloque.fin));
+
+      /* La línea «FUENTE: …» de la plantilla vive DETRÁS del cierre de la tabla, fuera del
+         bloque. `generarTablaOoxml` emite la suya, así que dejar la vieja publicaba las dos
+         —y la vieja nombra al contribuyente del informe de referencia, debajo de la tabla y
+         en negrita—. Se absorbe en el tramo que se recorta.
+
+         Solo si la tabla nueva trae fuente: si el generador no emitió ninguna y borráramos la
+         de la plantilla, el informe perdería una línea que sí era del cliente. */
+      let fin = bloque.fin;
+      if (/FUENTE:/.test(nuevo)) {
+        const hermano = parrafoHermanoSiguiente(out, fin);
+        if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+          fin = hermano.fin;
+        }
+      }
+
+      out = out.slice(0, bloque.inicio) + nuevo + out.slice(fin);
+      return true;
+    },
+```
+
+- [ ] **Step 4: Reescribir la línea vieja en la ruta HTML**
+
+En `tablasHtmlInforme.js`, junto a `reescribirFilasHtml`:
+
+```js
+/**
+ * Reescribe el texto de la línea «FUENTE: …» que sigue a un bloque, conservando su marcado.
+ *
+ * Esta ruta no emite líneas de fuente: conserva las de la plantilla y cambia el dato, igual
+ * que hace con las filas. Borrarla dejaría la tabla sin fuente, e inventarla donde el cliente
+ * no la puso cambiaría la maqueta de su informe.
+ *
+ * @param {string} html
+ * @param {number} desde  el offset donde acaba el bloque de la tabla.
+ * @param {string} fuente el texto nuevo, sin el prefijo «FUENTE: ».
+ * @returns {string} el html con la línea reescrita, o igual si no había ninguna.
+ */
+export function reescribirFuenteHtml(html, desde, fuente) {
+  const texto = String(html || '');
+  if (!fuente) return texto;
+
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(desde));
+  if (!siguiente) return texto;
+  const plano = textoPlanoHtml(siguiente[0]);
+  if (!/^\s*fuente\s*:/i.test(plano)) return texto;
+
+  /* Se sustituye SOLO el texto que sigue a «FUENTE:», dentro del marcado que trae la
+     plantilla: el prefijo, la negrita y las etiquetas son suyos. */
+  const reescrito = siguiente[0].replace(
+    /(fuente\s*:)([^<]*)/i,
+    (todo, prefijo) => prefijo + ' ' + escaparTextoHtml(fuente)
+  );
+  const inicio = desde + siguiente.index;
+  return texto.slice(0, inicio) + reescrito + texto.slice(inicio + siguiente[0].length);
+}
+```
+
+En `tablasOperacionesHtml.js`, dentro de `sustituir()`, después de reescribir las filas y el
+año del encabezado y **antes** de reescribir el rótulo (el rótulo va antes en el documento y
+reescribirlo movería los offsets):
+
+```js
+  /* La línea de fuente que la plantilla trae detrás de la tabla: nombra al contribuyente del
+     informe de referencia y hasta ahora no se tocaba, así que el informe salía publicándolo
+     debajo de la tabla y en negrita. Se relocaliza el final del bloque porque reescribir las
+     filas pudo cambiar su largo. */
+  if (tabla.fuente) {
+    const finBloque = finDeBloqueReescrito(out, bloque.inicio);
+    if (finBloque > bloque.inicio) out = reescribirFuenteHtml(out, finBloque, tabla.fuente);
+  }
+```
+
+Añadir `reescribirFuenteHtml` a los imports que este módulo toma de `./tablasHtmlInforme.js`.
+
+Nota: `finDeBloqueReescrito` ya existe en `tablasOperacionesHtml.js` y es lo que usa la rama
+del año en el encabezado por la misma razón.
+
+- [ ] **Step 5: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: PASS — las 4 nuevas y todas las anteriores.
+
+**Atención:** este cambio toca la sustitución de TODAS las tablas, así que pruebas de otros
+módulos pueden moverse. Si alguna esperaba dos líneas `FUENTE:` o la fuente de la plantilla
+intacta, era la afirmación del defecto: actualizala. Si falla por otro motivo, es regresión.
+
+- [ ] **Step 6: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos. Presta atención a `tablasHtmlInforme.test.js`,
+`docxPlantilla.test.js` y `anexoBHtml.test.js`, que ejercitan las mismas primitivas.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js frontend/src/services/tablasHtmlInforme.js frontend/src/services/tablasOperacionesHtml.js frontend/src/services/tablasOperacionesHtml.test.js
+git commit -m "fix: la linea FUENTE de la plantilla no sobrevive a la sustitucion de una tabla"
+```
+
+---
+
+## Verificación final
+
+- [ ] `npm test` — 100 % en verde, con ~15 pruebas más que al empezar (1607 → ~1622).
+- [ ] `npm run lint --prefix frontend` — sin hallazgos.
+- [ ] `npm run build` — limpio, y `public/gestor-reportes/` comiteado.
+- [ ] `umbralOperacionAdicional(2025) === 2240955000` y `(2026) === 2353500000`.
+- [ ] Un monto de 2.300.000.000 declara en un estudio de 2025 y no en uno de 2026.
+- [ ] Con una plantilla que trae la tabla llena y un estudio sin operación adicional
+      declarable, ni `CLIENTE ANTERIOR` ni su monto aparecen en la salida de ninguna de las
+      dos rutas.
+- [ ] Ninguna tabla del informe cambió de número.
+- [ ] Verificación manual en el navegador del paso 2 con
+      `D:\G\Juan-Mendez\Downloads\Informacion Operaciones PT 2025-1 (1).xlsx`: la tarjeta de
+      operación adicional cita `COP $ 2.240.955.000` como umbral, no `2.500.000.000`.
+- [ ] El monto de la operación adicional se ve en «Resumen de Operación Extraída», y sigue
+      visible al salir del paso 2 y volver, tanto por encima como por debajo del umbral.
+- [ ] La tarjeta de detalle fila por fila de `72a3163` sigue intacta, con su tabla y su nota
+      de que el monto no se suma al analizado.
+- [ ] Con una plantilla SIN la tabla y un monto sobre el umbral, la tabla se inserta tras
+      «Transacciones Inter compañía» en las dos rutas, anclada por NOMBRE y nunca por número.
+- [ ] La inserción cae después de la línea FUENTE del ancla, no entre la tabla y su fuente.
+- [ ] Con la tabla YA en la plantilla no se duplica: se sustituye una sola vez.
+- [ ] El .docx generado contra `frontend/Archivos Prueba/Informe Local End Game _ 2024_v2.docx`
+      abre en Word sin avisos de reparación.

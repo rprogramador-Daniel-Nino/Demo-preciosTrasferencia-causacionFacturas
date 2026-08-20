@@ -21,12 +21,14 @@
 
 import {
   localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml, filasDe,
+  borrarTablaHtml, reescribirFuenteHtml, insertarTablaHtml,
 } from './tablasHtmlInforme.js';
+import { numeroDeTabla } from './docxRelleno.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
   filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
-  NOMBRES_TABLA_ADICIONAL,
+  NOMBRES_TABLA_ADICIONAL, NOMBRES_TABLA_TRANSACCIONES,
 } from './tablasOperaciones.js';
 import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 
@@ -133,6 +135,16 @@ function sustituir(html, bloque, tabla, conRotulo, anioEnEncabezado) {
     }
   }
 
+  /* La línea de fuente que la plantilla trae detrás de la tabla: nombra al contribuyente del
+     informe de referencia y hasta ahora no se tocaba, así que el informe salía publicándolo
+     debajo de la tabla y en negrita. Se relocaliza el final del bloque porque reescribir las
+     filas pudo cambiar su largo. Va ANTES de reescribir el rótulo, que está antes en el
+     documento y movería los offsets si se reescribiera primero. */
+  if (tabla.fuente) {
+    const finBloque = finDeBloqueReescrito(out, bloque.inicio);
+    if (finBloque > bloque.inicio) out = reescribirFuenteHtml(out, finBloque, tabla.fuente);
+  }
+
   if (conRotulo && bloque.rotulo) {
     const nuevo = reescribirRotuloHtml(bloque.rotulo.xml, tabla.titulo || tabla.nombre);
     out = out.slice(0, bloque.rotulo.inicio) + nuevo + out.slice(bloque.rotulo.fin);
@@ -198,8 +210,14 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
 
   /* «Operación adicional Transacciones Intercompañía» va fuera del bucle porque es la única
      tabla que puede NO corresponder: se publica solo si el formato trajo la sección «4.
-     Información adicional» y su total supera el umbral. Si no, la plantilla se queda como
-     está —sin tabla vacía y sin un aviso de tabla ausente, que ahí no significaría nada—.
+     Información adicional» y su total supera el umbral del año gravable.
+
+     Y cuando NO corresponde no basta con dejarla quieta. La plantilla es el informe del año
+     anterior, así que la tabla que ya está ahí trae las operaciones de ese informe: no
+     tocarla las publica como si fueran de este contribuyente. Se elimina con su rótulo y su
+     línea de fuente. Sin aviso: `avisos` se publica como «no se encontró en la plantilla» y
+     alimenta el semáforo de radicación, y un borrado intencionado no es eso. Que la tabla no
+     va a salir se dice en el paso 2 de la ingesta, donde el usuario puede actuar.
 
      La plantilla puede traerla en ficha vertical o en columnas, igual que el rango, así que
      se mira la forma de la que ya está en vez de imponer una. */
@@ -210,9 +228,38 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
         ? filasOperacionAdicionalFicha(estudio)
         : filasOperacionAdicional(estudio);
       out = sustituir(out, bloque, tabla, false, 0);
-    } else if (Array.isArray(avisos)) {
-      avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+    } else {
+      /* La plantilla no trae la tabla y la operación hay que declararla: se INSERTA después
+         del bloque de «Transacciones Inter compañía», que es donde el informe de referencia
+         la lleva. El ancla se busca por nombre y con el veto de los nombres de esta misma
+         tabla, para no anclar sobre ella. Sin ancla no hay sitio: se mantiene el aviso y no
+         se pega nada al final del documento, que sería peor que no ponerla. */
+      const ancla = localizarTablaHtml(out, NOMBRES_TABLA_TRANSACCIONES, {
+        excluir: NOMBRES_TABLA_ADICIONAL,
+      });
+      const t = filasOperacionAdicionalFicha(estudio);
+      if (ancla && t) {
+        /* El número del ancla + 1, y sin número si el ancla no lo trae. No se renumera lo que
+           sigue —lo prohíbe el criterio del repo—, así que esto puede repetir un número que
+           ya existe: por eso el aviso lo nombra. */
+        const numeroAncla = numeroDeTabla(ancla.titulo);
+        const titulo = numeroAncla != null
+          ? 'Tabla ' + (numeroAncla + 1) + '. ' + t.nombre
+          : t.nombre;
+        out = insertarTablaHtml(out, ancla, t, titulo);
+        if (Array.isArray(avisos)) {
+          avisos.push(
+            'se insertó la tabla «' + t.nombre + '» después de «' + ancla.titulo
+            + '» porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          );
+        }
+      } else if (Array.isArray(avisos)) {
+        avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+      }
     }
+  } else {
+    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
+    if (bloque) out = borrarTablaHtml(out, bloque);
   }
 
   /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un

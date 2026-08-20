@@ -38,7 +38,7 @@ import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
   filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
-  NOMBRES_TABLA_ADICIONAL,
+  NOMBRES_TABLA_ADICIONAL, NOMBRES_TABLA_TRANSACCIONES,
 } from './tablasOperaciones.js';
 /* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
    este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
@@ -50,8 +50,7 @@ export { verticalSobreActivos };
 import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
-  filasCriteriosScreening,
-  enMayusculas, filasEnMayusculas,
+  enMayusculas, filasEnMayusculas, filasCriteriosScreening, NOMBRES_TABLA_MARGENES,
 } from './tablasInforme.js';
 /* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
    definición de la matriz para las dos salidas del informe. */
@@ -73,6 +72,10 @@ import { deBase64, dimensionesDeImagen } from './png.js';
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
 import { actualizarProsaTablas } from './prosaTablasInforme.js';
+/* El nombre de la base de datos de los comparables, por la misma función que la ruta del PDF.
+   `BASE_DATOS_FUENTE` es además el valor por defecto de la cita al pie de cada tabla del motor:
+   una sola definición para la prosa y para los pies, en las dos rutas. */
+import { actualizarProsaBaseDatos, BASE_DATOS_FUENTE } from './prosaBaseDatos.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -844,6 +847,25 @@ function inicioDeParrafo(xml, posicion) {
   return inicio;
 }
 
+/* Hueco de maquetación entre dos bloques de contenido: un párrafo vacío (o autocerrado), una
+   marca de libro o un aviso del corrector. Word los deja tanto ANTES de una tabla —entre su
+   rótulo y el `<w:tbl>`— como DESPUÉS —entre el cierre de la tabla y su línea «FUENTE:»—, así
+   que el mismo bucle de salto sirve en los dos sentidos: lo usan `candidatosBloqueTabla` y
+   `finDeTablaInmediata` por delante, y `finDeFuenteSiguienteOoxml` por detrás. Un párrafo que
+   solo lleva una ecuación no cuenta como vacío: `textoPlanoOoxml` no le ve texto, pero es
+   contenido, y tragárselo dentro del tramo que se recorta lo borraría. */
+function saltarHuecosOoxml(texto, cursor) {
+  let c = cursor;
+  for (; ;) {
+    const resto = texto.slice(c);
+    const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
+    if (!hueco) break;
+    if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
+    c += hueco[0].length;
+  }
+  return c;
+}
+
 /**
  * Tablas cuyo título no las precede, sino que es su PRIMERA FILA.
  *
@@ -921,17 +943,7 @@ function candidatosBloqueTabla(xml, nombres) {
     /* Entre el título y la tabla la plantilla suele dejar párrafos vacíos. Se saltan
        los que no tienen texto; en cuanto aparece uno con contenido, el título ya no
        era el de esta tabla y se descarta. */
-    let cursor = p.index + p[0].length;
-    for (; ;) {
-      const resto = texto.slice(cursor);
-      const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
-      if (!hueco) break;
-      /* Un párrafo que sólo lleva una ecuación no tiene ningún `<w:t>` y a `textoPlanoOoxml` le
-         parece vacío. No es un hueco de maquetación: es contenido, y tragárselo dentro del bloque
-         de la tabla lo borraría al sustituirla. */
-      if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
-      cursor += hueco[0].length;
-    }
+    const cursor = saltarHuecosOoxml(texto, p.index + p[0].length);
     const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(cursor));
     if (!tras) continue;
 
@@ -1015,15 +1027,7 @@ export function localizarBloquesTabla(xml, nombres) {
    libro y avisos del corrector, igual que `localizarBloqueTabla`—, el índice donde
    termina esa tabla; si no, -1. */
 function finDeTablaInmediata(texto, cursor) {
-  let c = cursor;
-  for (; ;) {
-    const resto = texto.slice(c);
-    const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
-    if (!hueco) break;
-    /* Igual que en `localizarBloqueTabla`: una ecuación no es un hueco vacío. */
-    if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
-    c += hueco[0].length;
-  }
+  const c = saltarHuecosOoxml(texto, cursor);
   const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(c));
   if (!tras) return -1;
   const inicioTabla = c + tras[0].indexOf('<w:tbl');
@@ -1065,6 +1069,32 @@ function parrafoHermanoSiguiente(xml, cursor) {
   const fin = finDeParrafo(xml, desde);
   if (fin < 0) return { bloqueado: 'fin', desde };
   return { inicio: desde, fin, xml: xml.slice(desde, fin) };
+}
+
+/** Si el texto de un párrafo empieza por «FUENTE:» o «FUENTES:» —una tabla que cita varias
+ *  fuentes se rotula así con toda naturalidad, y antes solo se reconocía el singular. */
+const esLineaFuenteOoxml = (texto) => /^\s*fuentes?\s*:/i.test(texto);
+
+/**
+ * Si tras `desde` —saltando los mismos huecos de maquetación que delante de una tabla
+ * (`saltarHuecosOoxml`): párrafos vacíos, marcas de libro, avisos del corrector— viene un
+ * párrafo «FUENTE: …», su final; si no, `desde` sin tocar.
+ *
+ * Reconocer esa línea es la misma pregunta en `reemplazar` (para absorberla), `borrar` (para
+ * llevársela con la tabla) e `insertar` (para no colarse entre la tabla y su fuente):
+ * equivalente en OOXML de `elementoFuenteSiguiente` (`tablasHtmlInforme.js`).
+ *
+ * @param {string} xml
+ * @param {number} desde  el offset donde acaba el bloque de la tabla.
+ * @returns {number}
+ */
+function finDeFuenteSiguienteOoxml(xml, desde) {
+  const cursor = saltarHuecosOoxml(xml, desde);
+  const hermano = parrafoHermanoSiguiente(xml, cursor);
+  if (hermano && hermano.xml && esLineaFuenteOoxml(textoPlanoOoxml(hermano.xml))) {
+    return hermano.fin;
+  }
+  return desde;
 }
 
 /**
@@ -1482,9 +1512,59 @@ function sustituidorDeTablas(xmlInicial, avisos) {
          necesita, pero hay tablas que la plantilla trae en dos formas —en ficha vertical o
          en columnas— y la única manera de no imponer una es mirar cuántas columnas tiene la
          que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
-      out = out.slice(0, bloque.inicio)
-        + generar(bloque, out.slice(bloque.inicio, bloque.fin))
-        + out.slice(bloque.fin);
+      const nuevo = generar(bloque, out.slice(bloque.inicio, bloque.fin));
+
+      /* La línea «FUENTE: …» de la plantilla vive DETRÁS del cierre de la tabla, fuera del
+         bloque. `generarTablaOoxml` emite la suya, así que dejar la vieja publicaba las dos
+         —y la vieja nombra al contribuyente del informe de referencia, debajo de la tabla y
+         en negrita—. Se absorbe en el tramo que se recorta.
+
+         Solo si la tabla nueva trae fuente: si el generador no emitió ninguna y borráramos la
+         de la plantilla, el informe perdería una línea que sí era del cliente. */
+      let fin = bloque.fin;
+      if (/FUENTE/i.test(nuevo)) {
+        fin = finDeFuenteSiguienteOoxml(out, fin);
+      }
+
+      out = out.slice(0, bloque.inicio) + nuevo + out.slice(fin);
+      return true;
+    },
+    /** Quita la tabla, su rótulo y la línea FUENTE que la sigue. `true` si estaba.
+     *
+     *  NO anota en `avisos` cuando no la encuentra: ese arreglo se publica como «No se
+     *  encontró en la plantilla: X» y alimenta el semáforo de radicación. Una tabla que se
+     *  quiere borrar y no está es el resultado buscado, no un hallazgo. */
+    borrar(nombres, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) return false;
+      /* La fuente vive detrás del cierre de la tabla, fuera del bloque. Al sustituir no
+         importa —el generador emite la suya—, pero al borrar quedaría huérfana bajo la tabla
+         siguiente, atribuyéndole un origen que no es el suyo. */
+      let fin = bloque.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, bloque.inicio) + out.slice(fin);
+      return true;
+    },
+    /** Inserta una tabla después del bloque que sirve de ancla, localizada por NOMBRE.
+     *
+     *  `generar` recibe el bloque del ancla, para poder componer el rótulo a partir del
+     *  número que ese bloque traiga. Devuelve `false` —sin anotar nada en `avisos`— cuando el
+     *  ancla no está: quien llama decide qué decir, porque el aviso útil ahí no es «no
+     *  encontré el ancla» sino «no pude poner la tabla que hay que declarar». */
+    insertar(nombresAncla, generar, opciones) {
+      const ancla = localizarBloqueTabla(out, nombresAncla, opciones);
+      if (!ancla) return false;
+      /* Después de la línea FUENTE del ancla: colarse entre la tabla y su fuente se la
+         atribuiría a la tabla nueva. */
+      let fin = ancla.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, fin) + generar(ancla) + out.slice(fin);
       return true;
     },
     /* Para lo que no es sustituir una tabla entera —la prosa que la describe, por ejemplo—.
@@ -1596,6 +1676,15 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   const tituloDe = (bloque, nombre) => (
     bloque && bloque.numero != null ? `Tabla ${bloque.numero}. ${nombre}` : nombre
   );
+  /* El nombre TAL COMO LO ESCRIBE LA PLANTILLA, para las tablas que se buscan por varios
+     nombres. Sin esto, regenerar la tabla de un cliente que la rotula «Margen Operacional
+     Comparables» se la devolvía titulada «Margen Operacional Compañías Comparables»: corregirle
+     las cifras no autoriza a renombrarle la tabla. Si el rótulo no casa con ninguno de los
+     nombres —no debería, es como se encontró el bloque— se usa el canónico. */
+  const nombreSegunPlantilla = (bloque, nombres) => {
+    const clave = claveTitulo(bloque && bloque.titulo);
+    return nombres.find((n) => clave.includes(claveTitulo(n))) || nombres[0];
+  };
   const year = Number(estudio.anio) || 2025;
   const wrap = (v) => String(v == null || v === '' ? '—' : v);
 
@@ -1666,23 +1755,61 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      adicional» del formato (códigos DIAN 61 a 63: préstamos, reintegros y operaciones a
      nombre de vinculados que no se reflejan en el Estado de Resultados).
 
-     SOLO si el formato la trajo y su total supera el umbral. Si no, no se toca nada: la
-     plantilla se queda como estaba, sin tabla vacía y sin rótulo huérfano. Por eso va dentro
-     del `if` y no dentro del generador — pedir la sustitución y devolver la tabla vieja
-     dejaría además un aviso de tabla ausente que no significa nada.
+     Se publica SOLO si el formato la trajo y su total supera el umbral del año gravable. Si
+     no, la tabla que la plantilla trae hay que ELIMINARLA: la plantilla es el informe del
+     año anterior, así que sus filas son las operaciones de ese informe y dejarlas quietas
+     las declara como de este contribuyente. Se va con su rótulo y su línea de fuente, y sin
+     aviso —un borrado intencionado no es una tabla que no se encontró—.
 
      La plantilla puede traerla en columnas o en ficha vertical, como pasa con el rango: se
      mira cuántas columnas declara la que ya está ahí en vez de imponer una forma. */
   if (tieneOperacionAdicional(estudio)) {
-    reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => {
+    /* `ficha`: cuando se sustituye una tabla que ya está, la forma la decide ella misma —se
+       cuentan sus `<w:gridCol>`—; cuando se inserta no hay tabla previa que mirar y el
+       conteo daría 0, así que la decide quien llama. En la inserción la forma la elegimos
+       nosotros: ficha, como el ancla («Transacciones Inter compañía»). */
+    const emitirAdicional = (b, xmlBloque, titulo, ficha) => {
       const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
-      const t = columnas > 0 && columnas <= 2
-        ? filasOperacionAdicionalFicha(estudio)
-        : filasOperacionAdicional(estudio);
+      const t = ficha != null
+        ? (ficha ? filasOperacionAdicionalFicha(estudio) : filasOperacionAdicional(estudio))
+        : (columnas > 0 && columnas <= 2
+          ? filasOperacionAdicionalFicha(estudio)
+          : filasOperacionAdicional(estudio));
       return generarTablaOoxml(
-        tituloDe(b, t.nombre), t.encabezados, t.filas, escaparXml(t.fuente)
+        titulo != null ? titulo : tituloDe(b, t.nombre),
+        t.encabezados, t.filas, escaparXml(t.fuente)
       );
-    });
+    };
+
+    if (localizarBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL)) {
+      reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque));
+    } else {
+      /* La plantilla no la trae y hay que declararla: se inserta tras «Transacciones Inter
+         compañía», que es donde el informe de referencia la lleva. El ancla se busca por
+         nombre —la numeración no es fiable— y con el veto de los nombres de esta tabla, para
+         no anclar sobre ella. La tabla insertada es una ficha, como el ancla. */
+      const t = filasOperacionAdicionalFicha(estudio);
+      const insertada = doc.insertar(
+        NOMBRES_TABLA_TRANSACCIONES,
+        (ancla) => {
+          /* El número del ancla + 1, sin número si no lo trae. No se renumera lo que sigue,
+             así que esto puede repetir un número existente: el aviso lo nombra. */
+          const titulo = ancla.numero != null
+            ? 'Tabla ' + (ancla.numero + 1) + '. ' + t.nombre
+            : t.nombre;
+          return emitirAdicional(ancla, '', titulo, true);
+        },
+        { excluir: NOMBRES_TABLA_ADICIONAL }
+      );
+      if (Array.isArray(avisos)) {
+        avisos.push(insertada
+          ? 'se insertó la tabla «' + t.nombre + '» después de «Transacciones Inter compañía»'
+            + ' porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          : NOMBRES_TABLA_ADICIONAL[0]);
+      }
+    }
+  } else {
+    doc.borrar(NOMBRES_TABLA_ADICIONAL);
   }
 
   // 4. Método de Precios de Transferencia Aplicable
@@ -1747,7 +1874,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       '',
       totalEvaluadas
     ]);
-    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
+    const dbFuente = estudio.database_source || `${BASE_DATOS_FUENTE} Publicado en septiembre de 2025`;
     return generarTablaOoxml(
       tituloDe(b, 'Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)'),
       ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
@@ -1811,7 +1938,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     const filas17 = filasMuestraComparables(estudio).map((f) => [
       String(f.numero), f.nombre, f.ambito,
     ]);
-    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
+    const dbFuente = estudio.database_source || BASE_DATOS_FUENTE;
     /* Todo en mayúscula menos el rótulo: en la ruta de PDF el rótulo vive FUERA de la tabla y
        no se sube, así que subirlo aquí separaría las dos salidas. La línea de fuente sí, porque
        allá va dentro de la tabla y sube con ella. */
@@ -1898,6 +2025,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      arreglos que la otra. */
   doc.aplicar((x) => actualizarProsaTablas(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
 
+  /* El nombre de la base de datos de la que salieron los comparables, por lo mismo: la plantilla
+     es el informe del año anterior y nombra OneSource de Thomson Reuters, mientras el cribado sale
+     de Capital IQ. Va por la misma función que la ruta del PDF, con el delimitador de Word. */
+  doc.aplicar((x) => actualizarProsaBaseDatos(x, avisos, { rxParrafo: PARRAFO_OOXML }));
+
   /* 13. Margen Operacional Compañías Comparables.
 
      Se localiza por el nombre COMPLETO, no por «Margen Operacional» a secas. La clave corta
@@ -1920,10 +2052,10 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         pStr(f.noAjustado),
         pStr(f.ajustado)
       ]);
-      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      const dbFuente = estudio.database_source || BASE_DATOS_FUENTE;
       /* En mayúscula, menos el rótulo: ver el comentario de la muestra. */
       return generarTablaOoxml(
-        tituloDe(b, 'Margen Operacional Compañías Comparables'),
+        tituloDe(b, nombreSegunPlantilla(b, NOMBRES_TABLA_MARGENES)),
         ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
         filasEnMayusculas(filas19),
         enMayusculas(`Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`)
@@ -1939,7 +2071,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
        tocar la de márgenes: dos tablas mal en vez de una. Si el rótulo no está, `reemplazar`
        anota la tabla en los avisos y el panel lo dice antes de radicar, que es lo que este
        mecanismo existe para hacer. */
-    reemplazar('Margen Operacional Compañías Comparables', generarTabla19);
+    reemplazar(NOMBRES_TABLA_MARGENES, generarTabla19);
   }
 
   return doc.xml;

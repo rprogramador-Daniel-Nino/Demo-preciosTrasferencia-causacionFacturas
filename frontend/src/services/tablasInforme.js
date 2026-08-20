@@ -22,6 +22,31 @@ import {
 import { num, pliOf } from '../utils/calculations.js';
 import { traducirCriterio } from './criteriosScreeningEs.js';
 
+/* ══════════════ Nombres de tabla compartidos por las dos rutas ══════════════
+
+   Vive aquí, y no en `docxRelleno.js` ni en `tablasHtmlInforme.js`, porque las dos rutas tienen
+   que buscar exactamente lo mismo y ese par de módulos no puede compartir una constante: hay un
+   ciclo de imports entre ellos (`tablasHtmlInforme` → `docxRelleno` → `anexoCHtml` →
+   `tablasHtmlInforme`), y la constante importada por ese camino llega sin inicializar. Este
+   módulo, que ya es la única fuente de las FILAS de ambas rutas, no participa del ciclo.
+
+   Los nombres de la tabla de márgenes son DOS porque la palabra «Compañías» no está en todas las
+   plantillas: el informe de END GAME la rotula «Margen Operacional Compañías Comparables» y el
+   de MONTACHEM «Margen Operacional Comparables». Los localizadores comparan por inclusión, así
+   que el nombre largo NO casa con el rótulo corto —«companias» queda en medio—: con una sola
+   clave, la tabla del segundo cliente no se encontraba y se radicaba con los comparables del
+   informe anterior. Se reportó con capturas el 2026-08-20; la cita al pie seguía diciendo
+   «Fecha de consulta: julio de 2024», que es la prueba de que el motor nunca la había tocado.
+
+   Las dos claves siguen siendo específicas —«Margen Operacional» delante y «Comparables»
+   detrás—, así que ninguna casa con la prosa «…el indicador financiero de rentabilidad más
+   apropiado es el Margen Operacional…», que es el falso candidato contra el que previene el
+   bloque de márgenes de `docxRelleno.js`. */
+export const NOMBRES_TABLA_MARGENES = [
+  'Margen Operacional Compañías Comparables',
+  'Margen Operacional Comparables',
+];
+
 /* ══════════════ Razones de rechazo ══════════════
    Cada fila es un criterio del motor. Se omiten las que no descartaron a nadie: un
    informe que declara «Pérdidas operativas: 0» cuando el criterio se puso en «incluir»

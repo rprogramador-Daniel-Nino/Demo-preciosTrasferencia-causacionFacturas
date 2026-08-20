@@ -56,6 +56,33 @@ test('la tabla se localiza por su nombre, con cualquier prefijo de rótulo', () 
   }
 });
 
+test('la tabla se localiza aunque la plantilla la rotule sin «Compañías»', () => {
+  /* El informe de MONTACHEM la titula «Margen Operacional Comparables». Los localizadores
+     comparan por inclusión, así que la clave larga NO casa con este rótulo —«companias» queda en
+     medio— y con una sola clave la tabla no se encontraba: se radicaba con los comparables del
+     informe anterior y con su cita al pie intacta. Reportado con capturas el 2026-08-20. */
+  for (const rotulo of [
+    'Tabla 22. Margen Operacional Comparables',
+    'Margen Operacional Comparables',
+    'TABLA N° 22: MARGEN OPERACIONAL COMPARABLES',
+  ]) {
+    const html = conRotulo(rotulo);
+    assert.ok(localizarTablaHtml(html, TABLA_MARGENES), `debe encontrarla con «${rotulo}»`);
+  }
+});
+
+test('con el rótulo corto las filas quedan con las comparables del estudio', () => {
+  const html = conRotulo('Tabla 22. Margen Operacional Comparables');
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO, []);
+
+  for (const c of ESTUDIO.comparables) {
+    assert.ok(salida.includes(c.name), `debe listar ${c.name}`);
+  }
+  for (const vieja of ['AKATSUKI INC.', 'COLOPL, INC.', 'IGG INC']) {
+    assert.ok(!salida.includes(vieja), `${vieja} es del informe anterior y no debe sobrevivir`);
+  }
+});
+
 test('los párrafos vacíos entre el rótulo y la tabla no rompen la búsqueda', () => {
   /* El extractor cuelga un párrafo vacío por fila: es la marca de párrafo que Word deja
      al exportar la tabla. */
@@ -1244,4 +1271,43 @@ test('las razones de rechazo NO se pasan a mayúscula', () => {
   const salida = actualizarTablasMotorHtml(html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, []);
   assert.match(salida, /Compañías holding o de grupo/, 'la razón de rechazo se pasó a mayúscula');
   assert.match(salida, /Filtro aplicado/, 'el encabezado de razones se pasó a mayúscula');
-});
+  });
+
+  /* ══════ Reescritura de fuentes (reescribirFuenteHtml) ══════ */
+
+  test('reescribirFuenteHtml reemplaza todo el contenido del párrafo previniendo fugas con runs partidos', () => {
+  const casos = [
+    {
+      entrada: '<p><strong>FUENTE:</strong> Información suministrada por CLIENTE ANTERIOR S.A.</p>',
+      esperado: '<p><strong>FUENTE: la Administración de la Compañía.</strong></p>',
+    },
+    {
+      entrada: '<p><strong>FUENTE: </strong><strong>Información de CLIENTE ANTERIOR S.A.</strong></p>',
+      esperado: '<p><strong>FUENTE: la Administración de la Compañía.</strong></p>',
+    },
+    {
+      entrada: '<p><strong>FUENTE:</strong><span style="font-size:9pt"> Información de CLIENTE ANTERIOR S.A.</span></p>',
+      esperado: '<p><strong>FUENTE: la Administración de la Compañía.</strong></p>',
+    },
+  ];
+
+  for (const { entrada, esperado } of casos) {
+    const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
+    assert.strictEqual(salida, esperado);
+    assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el cliente anterior');
+  }
+  });
+
+  test('reescribirFuenteHtml reconoce FUENTES en plural', () => {
+  const entrada = '<p><strong>FUENTES:</strong> Información de CLIENTE ANTERIOR S.A.</p>';
+  const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
+  assert.strictEqual(salida, '<p><strong>FUENTES: la Administración de la Compañía.</strong></p>');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el cliente anterior en plural');
+  });
+
+  test('reescribirFuenteHtml no modifica si no hay línea de fuente', () => {
+  const entrada = '<p>Prosa que sigue.</p>';
+  const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
+  assert.strictEqual(salida, entrada);
+  });
+

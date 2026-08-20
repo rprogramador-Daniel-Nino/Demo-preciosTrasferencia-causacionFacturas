@@ -35,9 +35,13 @@
 
 import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
-  filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme,
+  filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme, NOMBRES_TABLA_MARGENES,
 } from './tablasInforme.js';
 import { claveTitulo, numeroDeTabla, prefijoDeEncabezado } from './docxRelleno.js';
+/* La cita al pie de las tablas del motor sale de la misma constante que la prosa: dos sitios
+   distintos para el nombre de la base de datos es la forma de que el informe se contradiga a sí
+   mismo entre una tabla y el párrafo que la introduce. */
+import { BASE_DATOS_FUENTE } from './prosaBaseDatos.js';
 import { pctf } from '../utils/calculations.js';
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -199,6 +203,129 @@ export function localizarTablasHtml(html, nombres, opciones = {}) {
     .sort((x, y) => x.inicio - y.inicio);
 }
 
+/* El primer elemento que sigue a un bloque, para poder mirar si es su línea de fuente.
+   Regex local y no compartida: las de este módulo llevan `g` y arrastran `lastIndex`. */
+const RX_ELEMENTO_SIGUIENTE = /^\s*<p(?:\s[^>]*)?>[\s\S]*?<\/p\s*>/i;
+
+/**
+ * El elemento «FUENTE: …» que sigue a `desde`, si lo hay.
+ *
+ * Reconocer esa línea es la misma pregunta en `borrarTablaHtml` (para llevársela junto con
+ * la tabla), `reescribirFuenteHtml` (para reescribir solo su texto) e `insertarTablaHtml`
+ * (para insertar después de ella y no encima): el primer elemento tras el bloque, y solo
+ * cuenta si su texto empieza por «FUENTE:». Repetirla una tercera vez —al llegar
+ * `insertarTablaHtml` — es la señal de que ya es una noción del módulo, no un detalle de
+ * cada función, así que se extrae aquí.
+ *
+ * @param {string} html
+ * @param {number} desde
+ * @returns {{xml:string, inicio:number, fin:number}|null}
+ */
+function elementoFuenteSiguiente(html, desde) {
+  let cursor = desde;
+  for (;;) {
+    const resto = html.slice(cursor);
+    const hueco = /^\s*(?:<p(?:\s[^>]*)?>([\s\S]*?)<\/p\s*>|<br\s*\/?>)/i.exec(resto);
+    if (!hueco) break;
+    if (textoPlanoHtml(hueco[0])) break;
+    cursor += hueco[0].length;
+  }
+
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(html.slice(cursor));
+  if (!siguiente || !/^\s*fuentes?\s*:/i.test(textoPlanoHtml(siguiente[0]))) return null;
+  return { xml: siguiente[0], inicio: cursor, fin: cursor + siguiente[0].length };
+}
+
+/**
+ * Quita del informe una tabla completa: su rótulo, la tabla y la línea de fuente que la
+ * sigue.
+ *
+ * La fuente hay que llevársela a mano porque no está dentro del bloque que devuelve
+ * `localizarTablasHtml` —el bloque acaba en `</table>`—. Al sustituir da igual, porque la
+ * tabla nueva emite la suya; al borrar, una fuente huérfana queda bajo la tabla siguiente y
+ * le atribuye un origen que no es el suyo.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number, fin:number}|null}} bloque
+ * @returns {string}
+ */
+export function borrarTablaHtml(html, bloque) {
+  const texto = String(html || '');
+  if (!bloque) return texto;
+
+  let fin = bloque.fin;
+  const fuente = elementoFuenteSiguiente(texto, fin);
+  if (fuente) fin = fuente.fin;
+
+  /* El rótulo va ANTES que la tabla, así que se recorta el tramo entero en un solo corte:
+     borrar primero el rótulo desplazaría los offsets sobre los que se calculó el bloque.
+     `rotulo` es null cuando el título vive dentro de la propia tabla, y entonces ya está
+     dentro del tramo. */
+  const desde = (bloque.rotulo && bloque.rotulo.inicio < bloque.inicio)
+    ? bloque.rotulo.inicio
+    : bloque.inicio;
+  return texto.slice(0, desde) + texto.slice(fin);
+}
+
+/**
+ * Clona el rótulo del ancla con un texto YA COMPUESTO por quien llama.
+ *
+ * A diferencia de `reescribirRotuloHtml` —que conserva el número que el propio rótulo
+ * traía, porque su caso de uso es sustituir esa misma tabla sin renumerarla—, aquí el
+ * número final es DISTINTO: es el del ancla + 1. Si se reutilizara `reescribirRotuloHtml`
+ * pasándole un `titulo` que ya incluye «Tabla N+1.», volvería a anteponerle el número
+ * viejo del ancla («Tabla 3. Tabla 4. …»), duplicándolo. Por eso este clon no vuelve a
+ * mirar el número: se limita a reproducir la envoltura del rótulo del ancla —negrita,
+ * `<span style>`, la etiqueta `<p>` o `<h1>`…`<h6>`— con el texto que ya llegó compuesto.
+ */
+function clonarRotuloHtml(rotuloXml, titulo) {
+  const xml = String(rotuloXml || '');
+  const m = /^(<(p|h[1-6])(?:\s[^>]*)?>)([\s\S]*)(<\/\2\s*>)$/i.exec(xml);
+  if (!m) return '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+  const { abre, cierra } = envolturaDe(m[3]);
+  return m[1] + abre + escaparHtml(titulo) + cierra + m[4];
+}
+
+/**
+ * Inserta una tabla en el informe, después del bloque que sirve de ancla.
+ *
+ * El ancla se localiza por NOMBRE y nunca por número: la numeración cambia de un informe a
+ * otro —la ficha del vinculado viene como «Tabla 3» o como «Tabla 12» en la misma
+ * plantilla— y el resto del módulo ya trabaja así.
+ *
+ * La tabla insertada es un CLON del marcado del ancla con el rótulo y las filas reescritos,
+ * no marcado fabricado aquí. Es la premisa de este módulo: lo que se conserva es el
+ * maquetado del cliente, y una tabla inventada saldría con otra pinta en medio de su
+ * informe. Exige que el ancla tenga la misma forma que la tabla nueva —las dos son fichas
+ * de dos columnas—, que es el caso para el que existe esta función.
+ *
+ * Va después de la línea `FUENTE:` del ancla cuando la trae: colarse entre la tabla y su
+ * fuente se la atribuiría a la tabla nueva.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number,fin:number,xml:string}|null}} ancla
+ * @param {{nombre:string, filas:string[][]}} tabla  lo que va en la tabla nueva.
+ * @param {string} titulo  el rótulo ya compuesto, con su número si corresponde.
+ * @returns {string}
+ */
+export function insertarTablaHtml(html, ancla, tabla, titulo) {
+  const texto = String(html || '');
+  if (!ancla || !tabla) return texto;
+
+  /* Dónde acaba el ancla, contando su línea de fuente. */
+  let fin = ancla.fin;
+  const fuente = elementoFuenteSiguiente(texto, fin);
+  if (fuente) fin = fuente.fin;
+
+  /* El clon: el rótulo del ancla con el texto nuevo, y su tabla con las filas nuevas. */
+  const rotuloClon = ancla.rotulo
+    ? clonarRotuloHtml(ancla.rotulo.xml, titulo)
+    : '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+  const tablaClon = reescribirFilasHtml(texto.slice(ancla.inicio, ancla.fin), tabla.filas);
+
+  return texto.slice(0, fin) + rotuloClon + tablaClon + texto.slice(fin);
+}
+
 /** Las `<tr>` de una tabla, con sus posiciones. Sirve igual con `<thead>`/`<tbody>`. */
 export function filasDe(tablaHtml) {
   return [...String(tablaHtml || '').matchAll(/<tr(?:\s[^>]*)?>[\s\S]*?<\/tr\s*>/gi)]
@@ -336,6 +463,49 @@ export function reescribirFilasHtml(tablaHtml, filas, opciones = {}) {
 }
 
 /**
+ * Reescribe el texto de la línea «FUENTE: …» que sigue a un bloque, conservando su marcado.
+ *
+ * Esta ruta no emite líneas de fuente: conserva las de la plantilla y cambia el dato, igual
+ * que hace con las filas. Borrarla dejaría la tabla sin fuente, e inventarla donde el cliente
+ * no la puso cambiaría la maqueta de su informe.
+ *
+ * @param {string} html
+ * @param {number} desde  el offset donde acaba el bloque de la tabla.
+ * @param {string} fuente el texto nuevo, sin el prefijo «FUENTE: ».
+ * @returns {string} el html con la línea reescrita, o igual si no había ninguna.
+ */
+export function reescribirFuenteHtml(html, desde, fuente) {
+  const texto = String(html || '');
+  if (!fuente) return texto;
+
+  const elemento = elementoFuenteSiguiente(texto, desde);
+  if (!elemento) return texto;
+
+  const m = /^(<(p|h[1-6])(?:\s[^>]*)?>)([\s\S]*)(<\/\2\s*>)$/i.exec(elemento.xml);
+  if (!m) return texto;
+
+  const plano = textoPlanoHtml(m[3]);
+  const coincidenciaPrefijo = /^\s*(fuente\s*s?\s*:)/i.exec(plano);
+  if (!coincidenciaPrefijo) return texto;
+
+  const prefijoOriginal = coincidenciaPrefijo[1];
+  const nuevoTextoContenido = prefijoOriginal + ' ' + fuente;
+
+  let { abre, cierra } = envolturaDe(m[3]);
+  if (!abre && !cierra) {
+    const tagAlPrincipio = /^\s*<(strong|b|em|i|span|u)((?:\s[^>]*)?)>/i.exec(m[3]);
+    if (tagAlPrincipio) {
+      abre = '<' + tagAlPrincipio[1] + (tagAlPrincipio[2] || '') + '>';
+      cierra = '</' + tagAlPrincipio[1] + '>';
+    }
+  }
+
+  const reescrito = m[1] + abre + escaparTextoHtml(nuevoTextoContenido) + cierra + m[4];
+
+  return texto.slice(0, elemento.inicio) + reescrito + texto.slice(elemento.fin);
+}
+
+/**
  * Reescribe el texto de una celda concreta, conservando su envoltura.
  *
  * Se usa para el encabezado de la versión horizontal del rango, cuya primera celda es el
@@ -396,7 +566,9 @@ export function reescribirRotuloHtml(rotuloXml, titulo) {
 }
 
 /** Nombres con los que las tablas del motor se rotulan en las plantillas. */
-export const TABLA_MARGENES = 'Margen Operacional Compañías Comparables';
+/* Los dos rótulos con que las plantillas nombran esta tabla, definidos en `docxRelleno.js` para
+   que las dos rutas busquen exactamente lo mismo. */
+export const TABLA_MARGENES = NOMBRES_TABLA_MARGENES;
 export const TABLA_MUESTRA = 'Muestra Compañías comparables';
 export const TABLA_RANGO = 'Rango Intercuartil';
 export const TABLA_RANGOS_CONCLUSION = 'Tabla de rangos';
@@ -438,6 +610,13 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
     let nueva = reescribirFilasHtml(tabla, filas, opciones);
     if (opciones && opciones.mayusculas) nueva = mayusculasEnTablaHtml(nueva);
     salida = salida.slice(0, bloque.inicio) + nueva + salida.slice(bloque.fin);
+
+    if (opciones && opciones.fuente) {
+      const finBloque = finDeTabla(salida, bloque.inicio);
+      if (finBloque > bloque.inicio) {
+        salida = reescribirFuenteHtml(salida, finBloque, opciones.fuente);
+      }
+    }
     return true;
   };
 
@@ -451,7 +630,9 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
       study.embudoSeleccion ? String(study.embudoSeleccion.evaluadas) : '—',
     ]);
   }
-  sustituir(TABLA_RAZONES, filasRazones);
+  const dbFuente = study.database_source || `${BASE_DATOS_FUENTE} Publicado en septiembre de 2025`;
+  const fuenteRazones = `Información Base Datos ${dbFuente}.`;
+  sustituir(TABLA_RAZONES, filasRazones, { fuente: fuenteRazones });
 
   /* ── Criterios de búsqueda ── La plantilla trae «Códigos SIC utilizados» tres veces
      (Tablas 13, 14 y 15) correspondientes a las bases de datos de Ryan LLC, Capital IQ
@@ -494,13 +675,18 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   }
 
   /* ── Muestra de comparables ── */
+  const dbFuenteMuestra = study.database_source || BASE_DATOS_FUENTE;
+  const fuenteMuestra = `Información Base Datos ${dbFuenteMuestra}`;
   sustituir(TABLA_MUESTRA, filasMuestraComparables(study)
-    .map((f) => [String(f.numero), f.nombre, f.ambito]), { mayusculas: true });
+    .map((f) => [String(f.numero), f.nombre, f.ambito]), { mayusculas: true, fuente: fuenteMuestra });
 
   /* ── Márgenes de las comparables ── */
+  const dbFuenteMargenes = study.database_source || BASE_DATOS_FUENTE;
+  const year = Number(study.anio) || 2025;
+  const fuenteMargenes = `Información Base Datos ${dbFuenteMargenes} Fecha de consulta: septiembre de ${year}.`;
   const comparables = filasComparablesInforme(study);
   sustituir(TABLA_MARGENES, comparables
-    .map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]), { mayusculas: true });
+    .map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]), { mayusculas: true, fuente: fuenteMargenes });
 
   /* ── Rango intercuartil ── La plantilla lo trae hasta tres veces y con dos formas: la
      horizontal de los resultados (una fila de datos: el indicador del contribuyente y
@@ -579,6 +765,13 @@ export function actualizarTablasMacroHtml(html, datosMacro, year, avisos) {
     }
     const tabla = reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), t.filas);
     salida = salida.slice(0, bloque.inicio) + tabla + salida.slice(bloque.fin);
+
+    if (t.fuente) {
+      const finBloque = finDeTabla(salida, bloque.inicio);
+      if (finBloque > bloque.inicio) {
+        salida = reescribirFuenteHtml(salida, finBloque, t.fuente);
+      }
+    }
 
     /* El rótulo va después de la tabla en el orden de escritura porque está ANTES en el
        documento: reescribirlo primero movería el bloque que acabamos de localizar. */

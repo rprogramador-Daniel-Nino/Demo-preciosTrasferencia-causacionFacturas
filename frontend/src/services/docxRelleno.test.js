@@ -23,7 +23,7 @@ import {
 import { codificarPNG, aBase64, deBase64 } from './png.js';
 import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
-import { filasRazonesRechazo } from './tablasInforme.js';
+import { filasRazonesRechazo, NOMBRES_TABLA_MARGENES } from './tablasInforme.js';
 import { resolverSerie } from './analisisMercado.js';
 
 /** Donde vive el cuerpo del documento dentro del .docx. */
@@ -910,6 +910,62 @@ test('la tabla de márgenes se localiza por su nombre, sea cual sea el prefijo d
       .titulo.startsWith('Para el análisis') || /Tabla 19\./.test(rotulo),
       `con «${rotulo}» el nombre corto se queda con la prosa`);
   }
+});
+
+test('la tabla de márgenes se localiza aunque el rótulo no diga «Compañías»', () => {
+  /* El informe de MONTACHEM la titula «Margen Operacional Comparables». La comparación es por
+     inclusión, así que la clave larga no casa con este rótulo y con una sola clave la tabla se
+     quedaba con los comparables del informe anterior (reportado el 2026-08-20). */
+  for (const rotulo of [
+    'Tabla 22. Margen Operacional Comparables',
+    'Margen Operacional Comparables',
+    'TABLA N° 22: MARGEN OPERACIONAL COMPARABLES',
+  ]) {
+    const xml = `<w:p><w:t>${rotulo}</w:t></w:p>`
+      + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+    const b = localizarBloqueTabla(xml, NOMBRES_TABLA_MARGENES);
+    assert.ok(b, `debe encontrarla con el rótulo «${rotulo}»`);
+    assert.strictEqual(xml.slice(b.inicio, b.fin).includes('márgenes viejos'), true);
+  }
+});
+
+test('al regenerarla con el rótulo corto no se le añade «Compañías» al título', () => {
+  /* Corregir las cifras no autoriza a renombrarle la tabla al cliente: el rótulo que la plantilla
+     trae es el que tiene que quedar, con su número y su redacción. */
+  const estudio = {
+    anio: 2025, pli: 'MO', cmode: 'all',
+    t_s: 10000, t_c: 7000, t_op: 2000,
+    comparables: [
+      { name: 'ZETA COMPARABLE LTD', s: 5000, c: 3500, op: 900, amb: 'Int' },
+      { name: 'OMEGA COMPARABLE PLC', s: 8000, c: 5600, op: 1600, amb: 'Int' },
+    ],
+  };
+  const xml = '<w:p><w:t>Tabla 22. Margen Operacional Comparables</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>COMPARABLES</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>DOW INC.</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+  const texto = textoPlanoOoxml(salida);
+
+  assert.ok(texto.includes('Tabla 22. Margen Operacional Comparables'), 'conserva su rótulo');
+  assert.ok(!/Compa[ñn]ías\s+Comparables/i.test(texto), 'sin añadirle la palabra que no usa');
+  assert.ok(texto.includes('ZETA COMPARABLE LTD'), 'y trae las comparables del estudio');
+  assert.ok(!texto.includes('DOW INC.'), 'la del informe anterior no sobrevive');
+});
+
+test('la cita al pie de la tabla de márgenes nombra la base de datos actual', () => {
+  const estudio = {
+    anio: 2025, pli: 'MO', cmode: 'all',
+    t_s: 10000, t_c: 7000, t_op: 2000,
+    comparables: [{ name: 'ZETA COMPARABLE LTD', s: 5000, c: 3500, op: 900, amb: 'Int' }],
+  };
+  const xml = '<w:p><w:t>Tabla 22. Margen Operacional Comparables</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>COMPARABLES</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const texto = textoPlanoOoxml(actualizarTablasOperacionesOoxml(xml, estudio, []));
+
+  assert.ok(/CAPITAL IQ/i.test(texto), 'cita Capital IQ');
+  assert.ok(!/ONESOURCE|THOMSON/i.test(texto), 'y no la base del informe anterior');
 });
 
 test('un título dentro de una fila que no es la primera no se toma por título de la tabla', () => {
@@ -2628,29 +2684,37 @@ test('la operación adicional que supera el umbral llega al .docx', async () => 
   assert.ok(texto.includes('Tabla 13. Operación adicional'), 'se perdió el número del rótulo');
 });
 
-test('sin superar el umbral, la tabla del .docx se queda como estaba', async () => {
-  /* Es la condición que puso el usuario: si el formato no la trae o no supera el valor, el
-     informe sale como salía antes. */
+test('sin superar el umbral, la tabla del .docx se elimina en vez de quedarse como estaba', async () => {
+  /* Antes de esta tarea, si el formato no la traía o no superaba el valor, el informe salía
+     exactamente como salía antes: la tabla de la plantilla —el informe del año anterior— se
+     quedaba con SUS cifras. Esa afirmación es la que esta tarea corrige: dejarla quieta la
+     publica como si fuera de este contribuyente. ESTUDIO declara anio: '2024', cuyo umbral
+     de 45.000 UVT es 2.117.925.000: este monto queda justo debajo. */
   const buf = await plantillaConAdicional();
   const { salida } = rellenarDocx({
     binario: buf,
     estudio: {
       ...ESTUDIO,
-      operacionAdicional: { filas: ADICIONAL_DOCX.filas, monto: 2400000000 },
+      operacionAdicional: { filas: ADICIONAL_DOCX.filas, monto: 2100000000 },
     },
     tipoSalida: 'uint8array',
   });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
 
-  assert.ok(texto.includes('9.999.999.999'), 'se tocó una tabla que no correspondía');
+  assert.ok(!texto.includes('9.999.999.999'), 'sobrevivió una tabla que no correspondía');
+  assert.ok(!texto.includes('Operación adicional'), 'sobrevivió el rótulo de la tabla');
   assert.ok(!texto.includes('MONTACHEM'), 'se publicó una operación que no supera el umbral');
 });
 
-test('sin sección de información adicional, la tabla del .docx tampoco se toca', async () => {
+test('sin sección de información adicional, la tabla del .docx también se elimina', async () => {
+  /* Antes de esta tarea la tabla tampoco se tocaba. Corregido por el mismo motivo que el
+     caso de arriba: sin sección 4 en el formato, la plantilla no tiene nada propio que
+     publicar y su tabla es la del informe anterior. */
   const buf = await plantillaConAdicional();
   const { salida } = rellenarDocx({ binario: buf, estudio: ESTUDIO, tipoSalida: 'uint8array' });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
-  assert.ok(texto.includes('9.999.999.999'), 'se tocó la tabla sin tener datos');
+  assert.ok(!texto.includes('9.999.999.999'), 'sobrevivió la tabla sin tener datos');
+  assert.ok(!texto.includes('Operación adicional'), 'sobrevivió el rótulo de la tabla');
 });
 
 test('si la plantilla trae la tabla en ficha vertical, el .docx respeta su forma', async () => {
@@ -2681,6 +2745,188 @@ test('si la plantilla trae la tabla en ficha vertical, el .docx respeta su forma
   assert.ok(texto.includes('MONTACHEM INTERNATIONAL INC'), 'el vinculado no llegó');
   /* En ficha se publica el TOTAL: una fila de etiqueta y valor no admite dos montos. */
   assert.ok(texto.includes('2.700.000.000'), 'no se publicó el total: ' + texto);
+});
+
+test('sin operación adicional declarable, la tabla del .docx se elimina con su fuente', () => {
+  /* La plantilla es el informe del año anterior. Dejar su tabla quieta publica las
+     operaciones de ese informe como si fueran de este contribuyente. */
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 5. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 5</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME' }, avisos);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el vinculado anterior');
+  assert.ok(!salida.includes('Operación adicional'), 'sobrevivió el rótulo');
+  /* La numeración de lo que sigue NO se toca: la fija la plantilla. */
+  assert.ok(salida.includes('Tabla 5. Método de Precios de Transferencia'),
+    'se renumeró o se perdió la tabla siguiente');
+  assert.ok(!avisos.some((a) => String(a).toLowerCase().includes('adicional')),
+    'un borrado deliberado no es «no se encontró en la plantilla»');
+});
+
+test('por debajo del umbral la tabla del .docx también se elimina', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 500000000,
+      filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+        tipo: 'Préstamos con vinculados (61)', monto: 500000000 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+  assert.ok(!salida.includes('BETA GMBH'), 'se publicó una operación que no supera el umbral');
+});
+
+test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  assert.ok(salida.includes('Operación adicional'), 'se borró una tabla que sí había que publicar');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'));
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+});
+
+/* ── Inserción cuando la plantilla no trae la tabla ─────────────────────────── */
+
+test('sin la tabla en la plantilla y sobre el umbral, se inserta tras Transacciones Inter compañía', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de ACME COLOMBIA S.A.S.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S',
+    vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, avisos);
+
+  assert.ok(salida.includes('Operación adicional Transacciones Intercompañía'),
+    'no se insertó el rótulo');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'), 'no se insertaron los datos');
+  assert.ok(salida.includes('14.516.485.850'));
+
+  /* Después de la fuente del ancla y antes de la tabla siguiente. La Tabla 3 también se
+     sustituye (paso 3), y `reemplazar` absorbe su línea FUENTE y emite la suya con el
+     contribuyente del ESTUDIO (Task 6), no con el de la plantilla («ACME COLOMBIA», del
+     informe de referencia). */
+  const iFuente = salida.indexOf('FUENTE: Información de MONTACHEM COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuente > -1 && iFuente < iInsertada, 'quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'quedó después de la tabla siguiente');
+
+  /* La Tabla 3 sustituida con lo suyo, no pisada por la insertada. */
+  assert.ok(salida.includes('900111'), 'falta la identificación fiscal de la Tabla 3');
+  assert.ok(avisos.some((a) => /insert/i.test(String(a))), 'no se avisó de la inserción');
+});
+
+test('sin el ancla no se inserta nada y se mantiene el aviso de tabla ausente', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  }, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')));
+});
+
+test('con la tabla ya en la plantilla se sustituye una vez y no se duplica', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+});
+
+/* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
+
+test('la línea FUENTE de la plantilla no queda huérfana ni duplicada tras sustituir', () => {
+  /* El motor reemplazaba la tabla y dejaba debajo, en negrita, el nombre del contribuyente
+     anterior — y además añadía la suya, así que el informe salía con dos líneas FUENTE. */
+  const xml =
+    '<w:p><w:t>Tabla 1. Operaciones de Ingreso</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Prosa que sigue.</w:t></w:p>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', vinc_id: '900',
+    pais_vinc: 'MEXICO', vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió la fuente del cliente anterior');
+  assert.strictEqual((salida.match(/FUENTE:/g) || []).length, 1, 'la línea FUENTE quedó duplicada');
+  assert.ok(salida.includes('Prosa que sigue.'), 'se llevó prosa del informe');
+});
+
+test('sin fuente en la tabla nueva, la de la plantilla se conserva', () => {
+  /* Si el generador no emite fuente y borráramos la vieja, el informe perdería una línea que
+     sí era del cliente. Se borra solo cuando hay con qué reemplazarla. */
+  const xml =
+    '<w:p><w:t>Rango Intercuartil</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Una nota de la plantilla.</w:t></w:p>';
+
+  /* `generarTablaOoxml` con `fuente` vacía no emite la línea; la prueba comprueba la guarda
+     directamente sobre la primitiva para no depender de qué tabla del informe la tenga. */
+  const conFuente = generarTablaOoxml('T', ['a'], [['b']], 'Algo.');
+  const sinFuente = generarTablaOoxml('T', ['a'], [['b']], '');
+  assert.ok(conFuente.includes('FUENTE:'), 'con fuente debe emitirla');
+  assert.ok(!sinFuente.includes('FUENTE:'), 'sin fuente no debe emitirla');
+  assert.ok(xml.includes('FUENTE: Una nota de la plantilla.'));
 });
 
 /* ── Estilo de las tablas que esta ruta genera de cero ──

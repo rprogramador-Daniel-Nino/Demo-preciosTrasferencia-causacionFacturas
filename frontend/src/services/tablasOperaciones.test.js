@@ -3,7 +3,8 @@ import assert from 'node:assert';
 import {
   conceptoDeOperacion, filasOperacionesDeIngreso, filasOperacionAnalizar,
   filasTransaccionesIntercompania, filasMetodoAplicable, filasCompaniasVinculadas,
-  filasCriteriosVinculacion,
+  filasCriteriosVinculacion, UVT_UMBRAL_OPERACION_ADICIONAL, umbralOperacionAdicional,
+  tieneOperacionAdicional,
 } from './tablasOperaciones.js';
 
 /* ── conceptoDeOperacion ── */
@@ -185,4 +186,63 @@ test('los criterios de vinculación citan el artículo y el detalle', () => {
     'END GAME INTERACTIVE INC', 'ESTADOS UNIDOS',
     'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa',
   ]]);
+});
+
+/* ── El umbral de la operación adicional, en UVT del año gravable ───────────── */
+
+const conAdicional = (monto, anio) => ({
+  anio,
+  operacionAdicional: {
+    monto,
+    filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+      tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto }],
+  },
+});
+
+test('el umbral son 45.000 UVT del año gravable, no un número escrito a mano', () => {
+  assert.strictEqual(UVT_UMBRAL_OPERACION_ADICIONAL, 45000);
+  /* 2.240.955.000 es el umbral de 2025 y el único que la gente tiene en la cabeza. Escrito
+     como constante, el estudio de 2026 mediría contra él sin avisar. */
+  assert.strictEqual(umbralOperacionAdicional(2025), 2240955000);
+  assert.strictEqual(umbralOperacionAdicional(2024), 2117925000);
+  assert.strictEqual(umbralOperacionAdicional(2026), 2353500000);
+});
+
+test('el año llega como cadena desde el estudio y también resuelve', () => {
+  assert.strictEqual(umbralOperacionAdicional('2025'), 2240955000);
+});
+
+test('un año ausente o desconocido cae en el mismo respaldo que getUvtValue', () => {
+  assert.strictEqual(umbralOperacionAdicional(undefined), 45000 * 47065);
+  assert.strictEqual(umbralOperacionAdicional(1999), 45000 * 47065);
+});
+
+test('el mismo monto declara o no según el año gravable del estudio', () => {
+  /* Es el defecto que este cambio cierra: con la constante fija de 2.500.000.000 los tres
+     años daban el mismo veredicto, y el umbral de cada uno es distinto. */
+  const monto = 2300000000;
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(monto, 2025)), true,
+    '2.300 millones superan los 2.240.955.000 de 2025');
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(monto, 2026)), false,
+    '2.300 millones NO superan los 2.353.500.000 de 2026');
+});
+
+test('exactamente en el umbral no se declara', () => {
+  /* La norma habla de operaciones que SUPEREN 45.000 UVT. */
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(2240955000, 2025)), false);
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(2240955001, 2025)), true);
+});
+
+test('el umbral viejo de 2.500 millones ya no manda', () => {
+  /* Un monto entre el umbral nuevo y el viejo tiene que declararse: con la constante
+     anterior no lo hacía. */
+  assert.strictEqual(tieneOperacionAdicional(conAdicional(2400000000, 2025)), true);
+});
+
+test('sin sección 4 en el formato no hay nada que declarar, sea cual sea el umbral', () => {
+  assert.strictEqual(tieneOperacionAdicional({ anio: 2025 }), false);
+  assert.strictEqual(tieneOperacionAdicional({ anio: 2025, operacionAdicional: null }), false);
+  assert.strictEqual(
+    tieneOperacionAdicional({ anio: 2025, operacionAdicional: { monto: 9e9, filas: [] } }),
+    false, 'la sección sin filas no declara aunque traiga un monto');
 });
