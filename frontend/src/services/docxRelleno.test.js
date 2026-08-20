@@ -18,8 +18,10 @@ import {
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
   actualizarFormulasMatematicasOoxml,
   localizarAnexosOoxml, anexosDelDocumento, problemaDeIntegridadOoxml,
-  generarTablaOoxml,
+  generarTablaOoxml, medidaDeImagenAnexoB,
 } from './docxRelleno.js';
+import { codificarPNG, aBase64, deBase64 } from './png.js';
+import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo } from './tablasInforme.js';
 import { resolverSerie } from './analisisMercado.js';
@@ -1318,6 +1320,72 @@ test('en el ANEXO B del .docx salen también las comparables sin estado financie
   assert.ok(texto.includes('[PENDIENTE]') && texto.includes('SIN EEFF SA'),
     'con el hueco señalado y nombrando a cuál le falta');
   assert.ok(!texto.includes('BLOQUE VIEJO'), 'y nada del informe anterior sobrevive');
+});
+
+/* ─── tamaño de las imágenes del ANEXO B ───
+   El alto se calculaba con la proporción de un A4 pasara lo que pasara con la imagen,
+   así que el estado financiero de cada comparable ocupaba una página entera del informe
+   y no cabía debajo de su tabla de descripción. */
+
+/** El ancho de la caja de texto, los mismos 9405 twips de `generarTablaOoxml`. */
+const ANCHO_CAJA_CM_TEST = (9405 / 1440) * 2.54;
+
+/** Una data URL de PNG del tamaño pedido, para medir proporciones de verdad. */
+async function pngDe(ancho, alto) {
+  const png = await codificarPNG(new Uint8Array(ancho * alto * 3).fill(255), ancho, alto);
+  return 'data:image/png;base64,' + aBase64(png);
+}
+
+test('medidaDeImagenAnexoB lleva el cuadro al ancho de la caja conservando su proporción', async () => {
+  const bytes = deBase64((await pngDe(800, 400)).split(',')[1]);
+  const { anchoCm, altoCm } = medidaDeImagenAnexoB(bytes);
+  assert.ok(Math.abs(anchoCm - ANCHO_CAJA_CM_TEST) < 1e-9, 'va al ancho de la caja de texto');
+  assert.ok(Math.abs(altoCm / anchoCm - 0.5) < 1e-9, 'y con la proporción real, no la de un A4');
+  assert.ok(altoCm < 9, 'un cuadro apaisado no puede ocupar una página: ' + altoCm);
+});
+
+test('medidaDeImagenAnexoB limita el alto sin deformar la imagen', async () => {
+  const bytes = deBase64((await pngDe(100, 1000)).split(',')[1]);
+  const { anchoCm, altoCm } = medidaDeImagenAnexoB(bytes);
+  assert.ok(Math.abs(altoCm - 22) < 1e-9, 'el alto se topa en 22 cm, no en los 165 que pedía');
+  assert.ok(Math.abs(altoCm / anchoCm - 10) < 1e-9, 'y el ancho baja en la misma proporción');
+});
+
+test('medidaDeImagenAnexoB cae a la hoja vertical cuando no puede medir la imagen', () => {
+  const sinMedida = medidaDeImagenAnexoB(new Uint8Array([1, 2, 3, 4]));
+  assert.ok(Math.abs(sinMedida.altoCm / sinMedida.anchoCm - 297 / 210) < 1e-9,
+    'conserva la suposición de siempre');
+  /* Pero pasando por el tope: con el ancho de la caja real, un A4 sin topar daría
+     23,46 cm y no cabría ni solo en la hoja. */
+  assert.ok(sinMedida.altoCm <= 22, 'y no se sale de la hoja: ' + sinMedida.altoCm);
+  assert.deepStrictEqual(medidaDeImagenAnexoB(null), sinMedida, 'sin bytes, lo mismo');
+});
+
+test('el dibujo del ANEXO B sale con la proporción real de la imagen', async () => {
+  const buf = await plantilla([
+    parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
+    parrafo('BLOQUE VIEJO'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+  ]);
+  const zip = new PizZip(buf);
+  const { insertadas } = insertarImagenesAnexoB(zip, {
+    comparables: [{ name: 'ACME COMPARABLE SA', eeffArchivo: 'a.pdf', descActividad: 'Juegos.' }],
+    eeffImagenesComparables: { [nameKey('ACME COMPARABLE SA')]: [await pngDe(800, 400)] },
+  });
+  assert.strictEqual(insertadas, 1);
+
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  const m = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(xml);
+  assert.ok(m, 'tiene que haber un dibujo con su extensión');
+  const cx = Number(m[1]);
+  const cy = Number(m[2]);
+  assert.strictEqual(cx, Math.round(ANCHO_CAJA_CM_TEST * EMU_POR_CM), 'ancho de la caja de texto');
+  assert.ok(Math.abs(cy / cx - 0.5) < 1e-3, 'y el alto por la proporción real: ' + cy / cx);
+  /* La regresión que se está cerrando: con la proporción A4 forzada el alto salía en
+     22,63 cm y el cuadro se iba a una página propia. */
+  assert.ok(cy < 10 * EMU_POR_CM, 'el cuadro no puede seguir midiendo una página de alto');
+  /* `<a:ext>` de `spPr` tiene que ir a juego con `<wp:extent>`, o Word deforma el dibujo. */
+  assert.ok(xml.includes(`<a:ext cx="${cx}" cy="${cy}"/>`), 'las dos medidas del dibujo coinciden');
 });
 
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */

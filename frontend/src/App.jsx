@@ -20,9 +20,12 @@ import {
 } from './services/firestoreRepo';
 import { separarEstudio, SELLO_ESTUDIO } from './services/firestoreModelo';
 import {
-  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes, leerAnexoBImagenes,
+  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes,
   borrarRecursosDelEstudio,
 } from './services/plantillaStore';
+/* Lee las imágenes del ANEXO B y, de paso, recorta las que se guardaron como hoja
+   completa antes de que existiera el recorte. Ver `recorteEeff.js`. */
+import { recortarImagenesGuardadas } from './services/recorteEeff';
 import {
   leerSesionUi, guardarSesionUi, limpiarSesionUi, acumularVistaMontada, tabCanonica,
   accionSobreElRecuerdo,
@@ -247,13 +250,11 @@ export default function App() {
       } catch (err) {
         console.error('[anexo EEFF] no se pudieron leer las páginas guardadas', err);
       }
-      /* Mismo motivo, pero las imágenes del EEFF de cada comparable para el ANEXO B. */
-      let eeffImagenesComparables = {};
-      try {
-        eeffImagenesComparables = await leerAnexoBImagenes(id);
-      } catch (err) {
-        console.error('[anexo B] no se pudieron leer las imágenes guardadas', err);
-      }
+      /* Mismo motivo, pero las imágenes del EEFF de cada comparable para el ANEXO B.
+         La lectura recorta y vuelve a guardar las que quedaron como hoja completa: no
+         se deja al autoguardado porque abrir un estudio no lo dispara
+         (`cargando.current`), y el informe se generaría con la página en blanco. */
+      const eeffImagenesComparables = await recortarImagenesGuardadas(id);
       setStudy({
         ...(datos || {}),
         ...(iaMatch ? { iaMatch } : {}),

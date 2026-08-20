@@ -13,6 +13,10 @@ import {
 } from '../services/eeffSuficiencia';
 import { matrizDeRechazo } from '../services/anexoCHtml';
 import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
+/* El EEFF se adjunta al ANEXO B como imagen de la página, no como cifras transcritas
+   (spec 2026-08-06). Sin quitarle el papel en blanco de alrededor, el cuadro de cada
+   comparable se llevaba una página entera del informe. */
+import { recortarPaginas } from '../services/recorteImagen';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
@@ -955,9 +959,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
       setComparables(filas);
 
-      /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. */
+      /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. Recortada al
+         cuadro, para que quepa debajo de la tabla de descripción de su comparable. */
       const clave = nameKey(filas[compIndex].name || '');
-      const imagenes = await rasterizarConReintento(file);
+      const imagenes = await recortarPaginas(await rasterizarConReintento(file));
       guardarImagenesComparable(clave, imagenes);
       const avisoImagen = imagenes.length
         ? ''
@@ -1037,8 +1042,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             });
           } else {
             /* Una sola rasterización por archivo: el PDF de lote puede traer varias
-               empresas, y cada una se recorta de este mismo arreglo más abajo. */
-            const imagenesDelArchivo = await rasterizarConReintento(file);
+               empresas, y cada una se recorta de este mismo arreglo más abajo. El
+               recorte del papel en blanco va aquí, sobre el archivo completo, y no por
+               empresa: es el mismo trabajo una sola vez, y deja el reparto por página
+               de más abajo sincrónico. */
+            const imagenesDelArchivo = await recortarPaginas(await rasterizarConReintento(file));
             entradas.push(...leidas.map((l) => ({ ...l, _imagenesDelArchivo: imagenesDelArchivo })));
           }
         } catch (err) {
