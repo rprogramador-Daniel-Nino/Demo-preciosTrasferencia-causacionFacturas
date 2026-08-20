@@ -1510,6 +1510,287 @@ tablas de columnas (comparables, rangos, operaciones de ingreso) sin cambios.
 
 ---
 
+### Task 6: La línea FUENTE de la plantilla no puede sobrevivir a la sustitución
+
+**Files:**
+- Modify: `frontend/src/services/docxRelleno.js` — `sustituidorDeTablas.reemplazar`
+- Modify: `frontend/src/services/tablasHtmlInforme.js` — nueva primitiva
+  `reescribirFuenteHtml`
+- Modify: `frontend/src/services/tablasOperacionesHtml.js` — `sustituir()`
+- Test: `frontend/src/services/docxRelleno.test.js`,
+  `frontend/src/services/tablasOperacionesHtml.test.js`
+
+**Interfaces:**
+- Consumes: `parrafoHermanoSiguiente` y `textoPlanoOoxml` (`docxRelleno.js`, privadas del
+  módulo), `textoPlanoHtml` y `RX_ELEMENTO_SIGUIENTE` (`tablasHtmlInforme.js`, la segunda la
+  aporta la Task 2).
+- Produces: `reescribirFuenteHtml(html, desde, fuente) → string` en `tablasHtmlInforme.js`.
+  `reemplazar` y `sustituir` conservan sus firmas.
+
+**Hallazgo.** Lo levantó la revisión de la Task 2 como preexistente y fuera de alcance, y al
+medirlo resultó **general a todas las tablas**, no propio de la operación adicional. El bloque
+que devuelven los dos localizadores va del rótulo al cierre de la tabla; la línea `FUENTE: …`
+que la plantilla trae **detrás** queda fuera, y ninguna de las dos rutas la toca al sustituir.
+
+Medido con los motores reales sobre la Tabla 1 («Operaciones de Ingreso»), con un estudio cuyo
+vinculado es «NUEVO VINC» y una plantilla cuya fuente nombra a «CLIENTE ANTERIOR S.A.»:
+
+```
+HTML  FUENTE huérfana sobrevive: SI | líneas FUENTE en la salida: 1
+OOXML FUENTE huérfana sobrevive: SI | líneas FUENTE en la salida: 2
+```
+
+Y sobre la tabla de operación adicional, con la ficha correctamente reemplazada:
+
+```
+dentro de la tabla, «CLIENTE ANTERIOR» sobrevive: no
+el monto viejo 9.999.999.999 sobrevive:           no
+el vinculado nuevo se escribió:                   sí
+la línea FUENTE del cliente anterior sobrevive:   SI  <-- la fuga
+```
+
+O sea: el motor hace bien su trabajo con el contenido de la tabla y publica debajo, en negrita,
+el nombre del contribuyente anterior. En la ruta .docx además duplicado. Es una fuga de datos
+de un cliente a otro en un documento que se radica ante la DIAN, y es exactamente la clase de
+defecto que el encabezado de `tablasOperaciones.js:10-12` declara como razón de existir del
+módulo.
+
+Afecta a las ~22 tablas de los dos motores. Se arregla en las primitivas compartidas, así que
+un solo cambio por ruta cubre todas.
+
+**Las dos rutas necesitan arreglos distintos, y por qué:**
+
+- **`.docx`:** `generarTablaOoxml` ya emite su propia línea `FUENTE:` dentro del bloque nuevo
+  (`:212`). Así que `reemplazar` tiene que **absorber** la línea vieja en el tramo que recorta.
+  **Con una salvedud que no se puede saltar:** solo cuando la tabla nueva trae fuente. Si el
+  generador no emite ninguna y borramos la de la plantilla, el informe pierde una línea que sí
+  era del cliente. La señal es si el XML generado contiene `FUENTE:`.
+- **HTML:** esta ruta no emite líneas de fuente —conserva el maquetado del cliente y solo
+  reescribe filas—, así que borrar la vieja dejaría la tabla sin fuente. Lo correcto es
+  **reescribir su texto** con la fuente que declara la tabla, igual que se reescriben las
+  filas: se conserva el marcado del cliente y cambia el dato.
+
+- [ ] **Step 1: Escribir las pruebas que fallan**
+
+En `frontend/src/services/docxRelleno.test.js`:
+
+```js
+/* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
+
+test('la línea FUENTE de la plantilla no queda huérfana ni duplicada tras sustituir', () => {
+  /* El motor reemplazaba la tabla y dejaba debajo, en negrita, el nombre del contribuyente
+     anterior — y además añadía la suya, así que el informe salía con dos líneas FUENTE. */
+  const xml =
+    '<w:p><w:t>Tabla 1. Operaciones de Ingreso</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Prosa que sigue.</w:t></w:p>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', vinc_id: '900',
+    pais_vinc: 'MEXICO', vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió la fuente del cliente anterior');
+  assert.strictEqual((salida.match(/FUENTE:/g) || []).length, 1, 'la línea FUENTE quedó duplicada');
+  assert.ok(salida.includes('Prosa que sigue.'), 'se llevó prosa del informe');
+});
+
+test('sin fuente en la tabla nueva, la de la plantilla se conserva', () => {
+  /* Si el generador no emite fuente y borráramos la vieja, el informe perdería una línea que
+     sí era del cliente. Se borra solo cuando hay con qué reemplazarla. */
+  const xml =
+    '<w:p><w:t>Rango Intercuartil</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>viejo</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Una nota de la plantilla.</w:t></w:p>';
+
+  /* `generarTablaOoxml` con `fuente` vacía no emite la línea; la prueba comprueba la guarda
+     directamente sobre la primitiva para no depender de qué tabla del informe la tenga. */
+  const conFuente = generarTablaOoxml('T', ['a'], [['b']], 'Algo.');
+  const sinFuente = generarTablaOoxml('T', ['a'], [['b']], '');
+  assert.ok(conFuente.includes('FUENTE:'), 'con fuente debe emitirla');
+  assert.ok(!sinFuente.includes('FUENTE:'), 'sin fuente no debe emitirla');
+  assert.ok(xml.includes('FUENTE: Una nota de la plantilla.'));
+});
+```
+
+En `frontend/src/services/tablasOperacionesHtml.test.js`:
+
+```js
+test('la línea FUENTE de la plantilla se reescribe con la del estudio, no se borra', () => {
+  /* Esta ruta conserva el maquetado del cliente: la línea de fuente se queda donde está, con
+     su marcado, y cambia el dato — igual que las filas. Borrarla dejaría la tabla sin fuente. */
+  const html =
+    '<p><strong> Tabla 1. Operaciones de Ingreso</strong></p>' +
+    '<table>' +
+    '<tr><th><p><strong> Concepto de Operaciones a analizar</strong></p></th>' +
+    '<th><p><strong> Nombre vinculado</strong></p></th>' +
+    '<th><p><strong> País vinculado</strong></p></th>' +
+    '<th><p><strong> Monto de la Operación analizar</strong></p></th></tr>' +
+    '<tr><td><p> viejo</p></td><td><p> CLIENTE ANTERIOR</p></td>' +
+    '<td><p> ESPAÑA</p></td><td><p> 9.999.999.999</p></td></tr>' +
+    '</table>' +
+    '<p><strong>FUENTE: Información de CLIENTE ANTERIOR S.A.</strong></p>' +
+    '<p> Prosa que sigue.</p>';
+
+  const salida = actualizarTablasOperacionesHtml(html, {
+    anio: 2025, ent: 'ACME COLOMBIA S.A.S', vinc: 'NUEVO VINC', pais_vinc: 'MEXICO',
+    vinc_tipo: 'Otros servicios (07)', monto_operacion: 5000,
+  }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el cliente anterior');
+  assert.match(salida, /FUENTE:/, 'se borró la línea de fuente en vez de reescribirla');
+  assert.match(salida, /<p><strong>FUENTE:/, 'se perdió el marcado de la plantilla');
+  assert.match(salida, /Prosa que sigue/, 'se llevó prosa del informe');
+});
+
+test('sin línea FUENTE en la plantilla no se inventa una', () => {
+  /* Añadirla donde el cliente no la puso cambiaría la maqueta de su informe, que es lo que
+     esta ruta existe para no hacer. */
+  const html =
+    '<p><strong> Tabla 2. Operación analizar</strong></p>' +
+    '<table>' +
+    '<tr><th><p><strong> No. Operaciones de análisis</strong></p></th>' +
+    '<th><p><strong> Descripción</strong></p></th></tr>' +
+    '<tr><td><p> viejo</p></td><td><p> viejo</p></td></tr>' +
+    '</table>' +
+    '<p> Prosa que sigue.</p>';
+
+  const salida = actualizarTablasOperacionesHtml(html, {
+    anio: 2025, ent: 'ACME', vinc_tipo: 'Otros servicios (07)',
+  }, []);
+
+  assert.ok(!salida.includes('FUENTE:'), 'se inventó una línea de fuente');
+  assert.match(salida, /Prosa que sigue/);
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: FAIL — la primera por `CLIENTE ANTERIOR S.A.` presente y dos líneas `FUENTE:`; la de
+HTML por `CLIENTE ANTERIOR` presente.
+
+- [ ] **Step 3: Absorber la línea vieja en la ruta OOXML**
+
+En `sustituidorDeTablas.reemplazar`, tras localizar el bloque y generar el XML nuevo:
+
+```js
+    reemplazar(nombres, generar, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) {
+        if (Array.isArray(avisos)) {
+          avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+        }
+        return false;
+      }
+      /* El generador recibe también el XML de la tabla que va a sustituir. Casi ninguno lo
+         necesita, pero hay tablas que la plantilla trae en dos formas —en ficha vertical o
+         en columnas— y la única manera de no imponer una es mirar cuántas columnas tiene la
+         que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
+      const nuevo = generar(bloque, out.slice(bloque.inicio, bloque.fin));
+
+      /* La línea «FUENTE: …» de la plantilla vive DETRÁS del cierre de la tabla, fuera del
+         bloque. `generarTablaOoxml` emite la suya, así que dejar la vieja publicaba las dos
+         —y la vieja nombra al contribuyente del informe de referencia, debajo de la tabla y
+         en negrita—. Se absorbe en el tramo que se recorta.
+
+         Solo si la tabla nueva trae fuente: si el generador no emitió ninguna y borráramos la
+         de la plantilla, el informe perdería una línea que sí era del cliente. */
+      let fin = bloque.fin;
+      if (/FUENTE:/.test(nuevo)) {
+        const hermano = parrafoHermanoSiguiente(out, fin);
+        if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+          fin = hermano.fin;
+        }
+      }
+
+      out = out.slice(0, bloque.inicio) + nuevo + out.slice(fin);
+      return true;
+    },
+```
+
+- [ ] **Step 4: Reescribir la línea vieja en la ruta HTML**
+
+En `tablasHtmlInforme.js`, junto a `reescribirFilasHtml`:
+
+```js
+/**
+ * Reescribe el texto de la línea «FUENTE: …» que sigue a un bloque, conservando su marcado.
+ *
+ * Esta ruta no emite líneas de fuente: conserva las de la plantilla y cambia el dato, igual
+ * que hace con las filas. Borrarla dejaría la tabla sin fuente, e inventarla donde el cliente
+ * no la puso cambiaría la maqueta de su informe.
+ *
+ * @param {string} html
+ * @param {number} desde  el offset donde acaba el bloque de la tabla.
+ * @param {string} fuente el texto nuevo, sin el prefijo «FUENTE: ».
+ * @returns {string} el html con la línea reescrita, o igual si no había ninguna.
+ */
+export function reescribirFuenteHtml(html, desde, fuente) {
+  const texto = String(html || '');
+  if (!fuente) return texto;
+
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(desde));
+  if (!siguiente) return texto;
+  const plano = textoPlanoHtml(siguiente[0]);
+  if (!/^\s*fuente\s*:/i.test(plano)) return texto;
+
+  /* Se sustituye SOLO el texto que sigue a «FUENTE:», dentro del marcado que trae la
+     plantilla: el prefijo, la negrita y las etiquetas son suyos. */
+  const reescrito = siguiente[0].replace(
+    /(fuente\s*:)([^<]*)/i,
+    (todo, prefijo) => prefijo + ' ' + escaparTextoHtml(fuente)
+  );
+  const inicio = desde + siguiente.index;
+  return texto.slice(0, inicio) + reescrito + texto.slice(inicio + siguiente[0].length);
+}
+```
+
+En `tablasOperacionesHtml.js`, dentro de `sustituir()`, después de reescribir las filas y el
+año del encabezado y **antes** de reescribir el rótulo (el rótulo va antes en el documento y
+reescribirlo movería los offsets):
+
+```js
+  /* La línea de fuente que la plantilla trae detrás de la tabla: nombra al contribuyente del
+     informe de referencia y hasta ahora no se tocaba, así que el informe salía publicándolo
+     debajo de la tabla y en negrita. Se relocaliza el final del bloque porque reescribir las
+     filas pudo cambiar su largo. */
+  if (tabla.fuente) {
+    const finBloque = finDeBloqueReescrito(out, bloque.inicio);
+    if (finBloque > bloque.inicio) out = reescribirFuenteHtml(out, finBloque, tabla.fuente);
+  }
+```
+
+Añadir `reescribirFuenteHtml` a los imports que este módulo toma de `./tablasHtmlInforme.js`.
+
+Nota: `finDeBloqueReescrito` ya existe en `tablasOperacionesHtml.js` y es lo que usa la rama
+del año en el encabezado por la misma razón.
+
+- [ ] **Step 5: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: PASS — las 4 nuevas y todas las anteriores.
+
+**Atención:** este cambio toca la sustitución de TODAS las tablas, así que pruebas de otros
+módulos pueden moverse. Si alguna esperaba dos líneas `FUENTE:` o la fuente de la plantilla
+intacta, era la afirmación del defecto: actualizala. Si falla por otro motivo, es regresión.
+
+- [ ] **Step 6: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos. Presta atención a `tablasHtmlInforme.test.js`,
+`docxPlantilla.test.js` y `anexoBHtml.test.js`, que ejercitan las mismas primitivas.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js frontend/src/services/tablasHtmlInforme.js frontend/src/services/tablasOperacionesHtml.js frontend/src/services/tablasOperacionesHtml.test.js
+git commit -m "fix: la linea FUENTE de la plantilla no sobrevive a la sustitucion de una tabla"
+```
+
+---
+
 ## Verificación final
 
 - [ ] `npm test` — 100 % en verde, con ~15 pruebas más que al empezar (1607 → ~1622).
