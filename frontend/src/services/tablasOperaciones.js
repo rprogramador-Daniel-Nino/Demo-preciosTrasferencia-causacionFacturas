@@ -173,7 +173,10 @@ export const NOMBRES_TABLA_ADICIONAL = [
 /* Y lo que NO es esta tabla aunque su nombre la contenga. «Operación adicional Transacciones
    Inter compañía» contiene «Transacciones Inter compañía», que es la Tabla 3: sin este veto
    las dos se reclamarían y la ficha del vinculado acabaría escrita sobre la otra. */
-export const NOMBRES_TABLA_TRANSACCIONES = 'Transacciones Inter compañía';
+export const NOMBRES_TABLA_TRANSACCIONES = [
+  'Transacciones Inter compañía',
+  'Transacciones Intercompañía',
+];
 
 /**
  * ¿El estudio tiene información adicional que haya que declarar?
