@@ -42,6 +42,7 @@ import {
    informe el correcto. Dos procedencias para el mismo dato, que es el defecto que el
    diseño de 2026-08-11 retira. */
 import { num } from '../utils/calculations.js';
+import { traducirCriterio } from './criteriosScreeningEs.js';
 
 /* Métodos y su configuración de fórmulas. `base` indica sobre qué se calcula el
    indicador y se escalan las partidas; `num` el numerador; `dep` si usa el
@@ -191,7 +192,9 @@ const HOLDING_FORMULA = (ref) => 'IF(OR('
  *                 dejan pasar las filas que entran. Quien llama no tiene que filtrar
  *                 nada antes ni después: pasar la muestra completa es lo correcto.
  * @param seleccion  (opcional) trazabilidad de la selección de comparables:
- *                 { criterios:[{etiqueta,valor,conector}], umbralControl?:number,
+ *                 { criterios:[{etiqueta,valor,conector,etiquetaEs?,valorEs?}] —el texto
+ *                   crudo de Capital IQ, que se traduce al escribir la hoja—,
+ *                   umbralControl?:number,
  *                   candidatas:[{name,ticker,sic,country,s,op,c,holderPct,holdersText,
  *                   sospechaHolding,motivoClave,perfilFuncional,seleccionada}] }.
  *                 Si se entrega, se anteponen las hojas «Selección comparables»
@@ -823,11 +826,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     sel.push([cTxt('Cada estado y cada conteo del embudo es una fórmula sobre la base de datos de abajo. Nada está quemado.')]);
     sel.push([]);
 
-    // Criterios de screening de Capital IQ
+    /* Criterios de screening de Capital IQ, traducidos con el mismo módulo que la Tabla 14
+       del informe (`criteriosScreeningEs.js`): este libro es un anexo que se entrega, así
+       que dejarlo en el inglés crudo de la hoja «Screen Criteria» reproduce aquí el mismo
+       defecto que se corrigió allá. */
     sel.push([cTxt('CRITERIOS DE CRIBADO (Capital IQ)')]);
     (seleccion.criterios || []).forEach((cr) => {
-      const con = cr.conector ? `${cr.conector}) ` : '';
-      sel.push([cTxt(`${con}${cr.etiqueta}`), cTxt(cr.valor)]);
+      if (!cr) return;
+      const es = traducirCriterio(cr);
+      const con = es.conector ? `${es.conector}) ` : '';
+      sel.push([cTxt(`${con}${es.etiqueta}`), cTxt(es.valor)]);
     });
     sel.push([]);
 

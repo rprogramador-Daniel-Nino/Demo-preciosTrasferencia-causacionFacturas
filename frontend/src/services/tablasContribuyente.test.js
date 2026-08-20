@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  verticalSobreActivos, filasComposicionAccionaria, filasActivos,
+  verticalSobreActivos, filasComposicionAccionaria, filasActivos, resolverComposicionAccionaria,
 } from './tablasContribuyente.js';
 import { pctf } from '../utils/calculations.js';
 
@@ -52,6 +52,45 @@ test('un accionista sin cifras no inventa ceros', () => {
     filasComposicionAccionaria({ accionistas: [{ nombre: 'ACME' }] }).filas[0],
     ['ACME', '—', '—', '—', '—']
   );
+});
+
+test('resolverComposicionAccionaria prioriza el certificado de la sección 1', () => {
+  const estudio = {
+    accionistas: [{ nombre: 'CERTIFICADO INC', participacion_pct: 100 }],
+    estudioAnterior: { accionistas: [{ nombre: 'ANTERIOR INC' }] },
+    plantillaAccionistas: { accionistas: [{ nombre: 'PLANTILLA INC' }] },
+  };
+  const res = resolverComposicionAccionaria(estudio);
+  assert.strictEqual(res.fuente, 'certificado');
+  assert.strictEqual(res.accionistas[0].nombre, 'CERTIFICADO INC');
+});
+
+test('resolverComposicionAccionaria cae a estudioAnterior si no hay certificado', () => {
+  const estudio = {
+    accionistas: [],
+    estudioAnterior: { accionistas: [{ nombre: 'ANTERIOR INC', participacion_pct: 100 }] },
+    plantillaAccionistas: { accionistas: [{ nombre: 'PLANTILLA INC' }] },
+  };
+  const res = resolverComposicionAccionaria(estudio);
+  assert.strictEqual(res.fuente, 'estudioAnterior');
+  assert.strictEqual(res.accionistas[0].nombre, 'ANTERIOR INC');
+});
+
+test('resolverComposicionAccionaria cae a plantillaAccionistas si no hay certificado ni estudioAnterior', () => {
+  const estudio = {
+    accionistas: [],
+    estudioAnterior: { accionistas: [] },
+    plantillaAccionistas: { accionistas: [{ nombre: 'PLANTILLA INC', participacion_pct: 100 }] },
+  };
+  const res = resolverComposicionAccionaria(estudio);
+  assert.strictEqual(res.fuente, 'plantilla');
+  assert.strictEqual(res.accionistas[0].nombre, 'PLANTILLA INC');
+});
+
+test('resolverComposicionAccionaria devuelve vacíos si ningún origen tiene accionistas', () => {
+  const res = resolverComposicionAccionaria({});
+  assert.strictEqual(res.fuente, null);
+  assert.deepStrictEqual(res.accionistas, []);
 });
 
 /* ── Tabla 10. Activos ── */

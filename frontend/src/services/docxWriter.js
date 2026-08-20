@@ -18,8 +18,13 @@ import {
 } from 'docx';
 import {
   HOJA_TWIPS, cmAPixeles, cmATwips, medidaEnCm, PUNTOS_TABLA, FUENTE_TABLA,
+  FUENTE_MACRO, PUNTOS_MACRO,
   arribaConLogoCm, altoMaximoDeEncabezado,
 } from './estiloDocumento.js';
+/* La frontera de la Sección III sale de la misma función que la usa para decidir dónde no se
+   marca ningún campo del contribuyente, y que la ruta de plantilla .docx usa para lo mismo que
+   aquí. Tres copias de esos regex se desincronizarían en el primer informe con otro título. */
+import { zonaQueAbre } from './plantillaMarcador.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
 import {
@@ -412,6 +417,22 @@ function traductor({
      único que las distingue. `bloquesDe` recorre en orden de documento, así que basta con
      anotarlo al pasar. */
   let ultimoAjuste = null;
+  /* ¿Vamos por dentro de la Sección III? Va en el cierre y no como parámetro por lo mismo que
+     `ultimoAjuste`: `bloquesDe` recorre en orden de documento —una llamada por página, y el
+     cierre sobrevive entre ellas—, así que basta con anotar el encabezado al pasar.
+
+     La sección se lee en Arial 12 y sus títulos en negrita (`FUENTE_MACRO`/`PUNTOS_MACRO`,
+     decisión del usuario del 2026-08-20). Antes no tenía trato propio: salía en la letra que el
+     extractor hubiera leído del PDF del cliente, como el resto del cuerpo. */
+  let zonaMacro = false;
+  /* Puesta mientras se emiten las celdas de una tabla. Las celdas se traducen con `bloquesDe`
+     igual que el cuerpo, así que sin esto una tabla de la Sección III se llevaría la letra de la
+     sección y sus ocho tablas dejarían de estar en `PUNTOS_TABLA` — que es justo lo contrario de
+     lo acordado: las tablas del informe se ven iguales en todas las secciones. */
+  let enTabla = false;
+
+  /* Cuerpo de la Sección III: dentro de la sección y fuera de sus tablas. */
+  const enZonaMacro = () => zonaMacro && !enTabla;
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -481,11 +502,17 @@ function traductor({
     if (h.etiqueta === 'em' || h.etiqueta === 'i') propio.italics = true;
     const estilo = h.atributos && h.atributos.style;
     const familia = familiaDeEstilo(estilo);
-    if (familia) propio.font = familia;
+    /* Dentro de la Sección III la familia NO se hereda del PDF: ahí manda Arial. Fuera, un
+       `<span>` que declare la suya sigue ganando, que es como el informe lleva su énfasis. */
+    if (familia && !enZonaMacro()) propio.font = familia;
     /* El tamaño se hereda igual que la familia: un `<span style="font-size:9pt">` con un
-       `<strong>` dentro tiene que conservar los 9 puntos. */
+       `<strong>` dentro tiene que conservar los 9 puntos.
+
+       En la Sección III sólo se acepta si es MENOR que el cuerpo de la sección: así las líneas
+       «FUENTE: …» y las citas al pie siguen pequeñas, y un encabezado que el extractor haya
+       leído más grande no se salta los 12 pt acordados. */
     const tamano = tamanoDeEstilo(estilo);
-    if (tamano) propio.size = tamano;
+    if (tamano && (!enZonaMacro() || tamano < PUNTOS_MACRO * 2)) propio.size = tamano;
     return runsDe(h, propio);
   };
 
@@ -613,6 +640,16 @@ function traductor({
 
   function tablaDe(nodo) {
     const filas = [];
+    const enTablaAntes = enTabla;
+    enTabla = true;
+    try {
+      return tablaDeInterna(nodo, filas);
+    } finally {
+      enTabla = enTablaAntes;
+    }
+  }
+
+  function tablaDeInterna(nodo, filas) {
     /* Las filas pueden venir envueltas en `<thead>`/`<tbody>` si el HTML pasó por el
        navegador. */
     const recogerFilas = (n) => {
@@ -742,6 +779,12 @@ function traductor({
      ella. */
   function bloquesDe(nodo, salida = [], heredado = {}, alineacion = AlignmentType.JUSTIFIED) {
     let sueltos = [];
+    /* El heredado de este punto del documento: dentro de la Sección III y fuera de una tabla,
+       con su letra. Lo usan el texto y los fragmentos en línea que cuelgan de un `div` sin `<p>`
+       de por medio, que también son cuerpo de la sección. */
+    const conLetraDeZona = () => (enZonaMacro()
+      ? { ...heredado, font: FUENTE_MACRO, size: PUNTOS_MACRO * 2 }
+      : heredado);
     const volcar = () => {
       if (!sueltos.length) return;
       salida.push(new Paragraph({ alignment: alineacion, children: sueltos, spacing: { before: 0, after: 0, line: 276 } }));
@@ -749,14 +792,14 @@ function traductor({
     };
     for (const h of nodo.hijos || []) {
       if (h.texto !== undefined) {
-        if (h.texto.trim()) sueltos.push(new TextRun({ text: h.texto, ...heredado }));
+        if (h.texto.trim()) sueltos.push(new TextRun({ text: h.texto, ...conLetraDeZona() }));
         continue;
       }
       /* `runsDeHijo`, no `runsDe`: `h` es el propio fragmento suelto —una imagen, un
          `<strong>`— y `runsDe` traduciría a sus HIJOS, perdiendo `h`. Es el fallo que hacía
          desaparecer en silencio una imagen o una negrita colgadas directamente de un `<td>`
          o un `<div>`, sin `<p>` de por medio. */
-      if (!esBloque(h)) { sueltos.push(...runsDeHijo(h, heredado)); continue; }
+      if (!esBloque(h)) { sueltos.push(...runsDeHijo(h, conLetraDeZona())); continue; }
       volcar();
       /* Un bloque que pertenece a una nota al pie sale al pie de la hoja por su referencia: no
          se repite en el cuerpo. Si no tiene llamada se queda donde estaba y se avisa, porque en
@@ -793,13 +836,31 @@ function traductor({
         continue;
       }
       if (h.etiqueta === 'p' || NIVELES[h.etiqueta]) {
-        const runs = runsDe(h, heredado);
+        /* La frontera de la Sección III. `zonaQueAbre` descarta las entradas del índice —que
+           repiten todos los encabezados con el número de página pegado— y devuelve al cuerpo en
+           el capítulo romano o el anexo siguiente, así que basta con preguntar por cada bloque. */
+        /* Dentro de una tabla no se pregunta: una celda cuyo texto empiece por «IV. » o por
+           «ANEXO B» no es un encabezado del informe y no puede mover la frontera de la sección. */
+        const abreZona = enTabla ? null : zonaQueAbre(textoDe(h));
+        if (abreZona) zonaMacro = abreZona === 'macro';
+        /* Los títulos de III van en negrita: al quedar del tamaño del cuerpo es lo único que los
+           distingue. Se conserva `heading:` en `parrafoDe`, así que el índice y sus
+           hipervínculos internos siguen funcionando; lo explícito del run le gana al estilo. */
+        const heredadoAqui = enZonaMacro()
+          ? {
+            ...heredado,
+            font: FUENTE_MACRO,
+            size: PUNTOS_MACRO * 2,
+            ...(NIVELES[h.etiqueta] ? { bold: true } : {}),
+          }
+          : heredado;
+        const runs = runsDe(h, heredadoAqui);
         const dentro = (h.hijos || []).filter(esBloque);
         /* Un párrafo vacío sigue siendo un párrafo: la portada del informe se centra con 35
            seguidos. Se emite también sin runs, salvo que sea sólo un envoltorio de otros
            bloques —ahí el párrafo vacío no existía en el original—. */
         if (runs.length || !dentro.length) salida.push(parrafoDe(h, runs, alineacion));
-        for (const b of dentro) bloquesDe({ hijos: [b] }, salida, heredado, alineacion);
+        for (const b of dentro) bloquesDe({ hijos: [b] }, salida, heredadoAqui, alineacion);
         continue;
       }
       bloquesDe(h, salida, heredado, alineacion);

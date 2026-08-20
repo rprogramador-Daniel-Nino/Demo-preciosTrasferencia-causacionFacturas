@@ -588,7 +588,7 @@ export default function App() {
               {tab === 'informe' && (
                 /* `usuario` hace falta para guardar la plantilla del informe en la nube:
                    la ruta de Storage cuelga de su uid. */
-                <ReporteGenerador study={study} estudioId={activeStudyId} usuario={usuario} />
+                <ReporteGenerador study={study} updateStudy={updateStudy} estudioId={activeStudyId} usuario={usuario} />
               )}
             </div>
           ))}

@@ -109,7 +109,7 @@ export async function parsePriorStudyFile(file) {
 
   // Si hay texto plano disponible (DOCX, TXT, JSON), enviamos el texto directamente
   if (fileText && fileText.length > 50) {
-    const payloadText = PRIOR_STUDY_PROMPT + `\n\nCONTENIDO DEL ESTUDIO ANTERIOR:\n` + fileText.slice(0, 45000);
+    const payloadText = PRIOR_STUDY_PROMPT + `\n\nCONTENIDO DEL ESTUDIO ANTERIOR:\n` + fileText.slice(0, 150000);
     const payload = {
       model: 'gemini-3.5-flash',
       contents: [{ parts: [{ text: payloadText }] }]

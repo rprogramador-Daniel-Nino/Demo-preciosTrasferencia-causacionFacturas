@@ -13,8 +13,8 @@ export default function DatosContribuyente({ study, updateStudy }) {
   const [accionistasMsg, setAccionistasMsg] = useState('');
 
   /* El certificado cargado en este estudio tiene prioridad; sin él, se hereda la
-     composición accionaria del informe del año anterior (ver resolverComposicionAccionaria). */
-  const { accionistas: accionistasEfectivos } = resolverComposicionAccionaria(study);
+     composición accionaria del informe del año anterior o de la plantilla del cliente (ver resolverComposicionAccionaria). */
+  const { accionistas: accionistasEfectivos, fuente: fuenteAccionistas } = resolverComposicionAccionaria(study);
 
   const handleFieldChange = (key, value) => {
     updateStudy({ [key]: value });
@@ -167,10 +167,27 @@ export default function DatosContribuyente({ study, updateStudy }) {
         {/* Tabla de Composición Accionaria Extraída */}
         {accionistasEfectivos.length > 0 && (
           <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
-            <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-2">
-              <Users className="w-5 h-5 text-[#0FA3A1]" />
-              Tabla 6. Composición Accionaria Extraída
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-2 gap-2">
+              <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+                <Users className="w-5 h-5 text-[#0FA3A1]" />
+                Tabla 6. Composición Accionaria Extraída
+              </h3>
+              {fuenteAccionistas === 'certificado' && (
+                <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full">
+                  ✓ Certificado actual (Sección 1)
+                </span>
+              )}
+              {fuenteAccionistas === 'estudioAnterior' && (
+                <span className="text-[11px] font-semibold text-sky-700 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 px-2 py-0.5 rounded-full">
+                  ✓ Informe del año anterior (Comparables)
+                </span>
+              )}
+              {fuenteAccionistas === 'plantilla' && (
+                <span className="text-[11px] font-semibold text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 px-2 py-0.5 rounded-full">
+                  ✓ Plantilla del cliente (Generador)
+                </span>
+              )}
+            </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left">
@@ -187,13 +204,10 @@ export default function DatosContribuyente({ study, updateStudy }) {
                   {accionistasEfectivos.map((acc, idx) => (
                     <tr key={idx} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30">
                       <td className="py-2.5 px-3 font-semibold text-zinc-900 dark:text-zinc-100 font-sans">{acc.nombre}</td>
-                      {/* Hueco visible, no un país por defecto: «ESTADOS UNIDOS» era el
-                          del accionista del informe de referencia, y verlo en la tabla
-                          hacía pasar por dato la falta de dato. */}
                       <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 font-sans">{acc.pais || '—'}</td>
-                      <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">{acc.acciones ? fmt(acc.acciones) : '200.000'}</td>
-                      <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">$ {acc.valor_capital ? fmt(acc.valor_capital) : '200.000.000'}</td>
-                      <td className="py-2.5 px-3 text-right font-bold text-[#0FA3A1]">{acc.participacion_pct || 100}%</td>
+                      <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">{acc.acciones ? fmt(acc.acciones) : '—'}</td>
+                      <td className="py-2.5 px-3 text-right text-zinc-900 dark:text-zinc-100">{acc.valor_capital ? ('$ ' + fmt(acc.valor_capital)) : '—'}</td>
+                      <td className="py-2.5 px-3 text-right font-bold text-[#0FA3A1]">{acc.participacion_pct ? `${acc.participacion_pct}%` : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

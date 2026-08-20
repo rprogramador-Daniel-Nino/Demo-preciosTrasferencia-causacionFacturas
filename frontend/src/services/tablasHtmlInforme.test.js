@@ -535,6 +535,37 @@ test('los criterios de búsqueda eliminan las tablas 13 y 15 redundantes y conse
   assert.match(salida, /<p> Medio\.<\/p>/, 'el texto entre ellas sobrevive');
 });
 
+test('los criterios de búsqueda conservan y actualizan la del medio aunque la numeración no sea 13/14/15', () => {
+  /* Caso real reportado 2026-08-20: un informe de BEUMER trae las tres copias renumeradas
+     18/19/20. A diferencia de la ruta .docx (que necesitó el fix de 2026-08-20 porque
+     distinguía «conservar» de «no tocar»), esta ruta ya lo resolvía bien: aquí no hay una
+     rama de «conservar» aparte, todo lo que no cae en «eliminar» se reescribe — así que la
+     del medio, sea el número que sea mientras no sea 13 o 15, siempre se actualiza. Esta
+     prueba deja eso comprobado en vez de asumido. */
+  const tabla = (n) =>
+    '<p><strong> Tabla ' + n + '. Códigos SIC utilizados</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr>' +
+    '<tr><th><p> Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave:</p></th><td><p> Contiene viejo</p></td></tr></table>';
+  const html = tabla(18) + tabla(19) + tabla(20);
+  const estudio = {
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' },
+      { conector: 'O', etiqueta: 'Palabra clave:', valor: 'Contiene juegos' },
+    ],
+  };
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, estudio, avisos);
+
+  assert.ok(!salida.includes('Tabla 18. Códigos SIC utilizados'), 'se eliminó la tabla 18');
+  assert.ok(!salida.includes('Tabla 20. Códigos SIC utilizados'), 'se eliminó la tabla 20');
+  assert.ok(salida.includes('Tabla 19. Códigos SIC utilizados'), 'se conservó la tabla 19 (la del medio)');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla 19 se actualizó con los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no debe sobrevivir el criterio del año anterior');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
+});
+
 test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () => {
   const html =
     '<p><strong> Tabla 13. Códigos SIC utilizados</strong></p>' +

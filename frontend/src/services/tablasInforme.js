@@ -20,6 +20,7 @@ import {
   DATOS_MACRO, resolverSerie, cifraODisponible, marcadorPendiente,
 } from './analisisMercado.js';
 import { num, pliOf } from '../utils/calculations.js';
+import { traducirCriterio } from './criteriosScreeningEs.js';
 
 /* ══════════════ Nombres de tabla compartidos por las dos rutas ══════════════
 
@@ -551,6 +552,12 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
  * que el cribado de este año no dejó criterios— y es el mismo contrato que siguen las
  * demás tablas del motor.
  *
+ * El texto se traduce aquí, en el render, y no al importar el Excel: la hoja «Screen
+ * Criteria» de Capital IQ viene en inglés, y traducir en este punto hace que los estudios
+ * ya guardados —que tienen el inglés almacenado en Firestore— salgan en español sin
+ * reimportar nada. `traducirCriterio` es puro e idempotente, así que un criterio que ya
+ * esté en español pasa sin cambio (ver `criteriosScreeningEs.js`).
+ *
  * @param {object} study
  * @returns {string[][]}
  */
@@ -563,7 +570,8 @@ export function filasCriteriosScreening(study) {
        el conector vacío en medio, la fila que une los dos criterios no puede faltar: se cae
        a «Y», que es la combinación por defecto de la hoja de origen. */
     if (i > 0) filas.push([c.conector || 'Y']);
-    filas.push([String(c.etiqueta || ''), String(c.valor || '')]);
+    const es = traducirCriterio(c);
+    filas.push([es.etiqueta, es.valor]);
   });
   return filas;
 }
