@@ -38,7 +38,7 @@ import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
   filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
-  NOMBRES_TABLA_ADICIONAL,
+  NOMBRES_TABLA_ADICIONAL, NOMBRES_TABLA_TRANSACCIONES,
 } from './tablasOperaciones.js';
 /* `verticalSobreActivos` se reexporta al final: vivía aquí y hay quien la importa de
    este módulo. Su definición se mudó con la Tabla 10, que es quien la usa. */
@@ -1473,6 +1473,25 @@ function sustituidorDeTablas(xmlInicial, avisos) {
       out = out.slice(0, bloque.inicio) + out.slice(fin);
       return true;
     },
+    /** Inserta una tabla después del bloque que sirve de ancla, localizada por NOMBRE.
+     *
+     *  `generar` recibe el bloque del ancla, para poder componer el rótulo a partir del
+     *  número que ese bloque traiga. Devuelve `false` —sin anotar nada en `avisos`— cuando el
+     *  ancla no está: quien llama decide qué decir, porque el aviso útil ahí no es «no
+     *  encontré el ancla» sino «no pude poner la tabla que hay que declarar». */
+    insertar(nombresAncla, generar, opciones) {
+      const ancla = localizarBloqueTabla(out, nombresAncla, opciones);
+      if (!ancla) return false;
+      /* Después de la línea FUENTE del ancla: colarse entre la tabla y su fuente se la
+         atribuiría a la tabla nueva. */
+      let fin = ancla.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, fin) + generar(ancla) + out.slice(fin);
+      return true;
+    },
     /* Para lo que no es sustituir una tabla entera —la prosa que la describe, por ejemplo—.
        Existe porque `out` es privado y solo había getter: un `xml = transformar(xml)` en el
        generador modificaba una variable local que nadie volvía a leer, ya que al final se
@@ -1661,15 +1680,50 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      La plantilla puede traerla en columnas o en ficha vertical, como pasa con el rango: se
      mira cuántas columnas declara la que ya está ahí en vez de imponer una forma. */
   if (tieneOperacionAdicional(estudio)) {
-    reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => {
+    /* `ficha`: cuando se sustituye una tabla que ya está, la forma la decide ella misma —se
+       cuentan sus `<w:gridCol>`—; cuando se inserta no hay tabla previa que mirar y el
+       conteo daría 0, así que la decide quien llama. En la inserción la forma la elegimos
+       nosotros: ficha, como el ancla («Transacciones Inter compañía»). */
+    const emitirAdicional = (b, xmlBloque, titulo, ficha) => {
       const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
-      const t = columnas > 0 && columnas <= 2
-        ? filasOperacionAdicionalFicha(estudio)
-        : filasOperacionAdicional(estudio);
+      const t = ficha != null
+        ? (ficha ? filasOperacionAdicionalFicha(estudio) : filasOperacionAdicional(estudio))
+        : (columnas > 0 && columnas <= 2
+          ? filasOperacionAdicionalFicha(estudio)
+          : filasOperacionAdicional(estudio));
       return generarTablaOoxml(
-        tituloDe(b, t.nombre), t.encabezados, t.filas, escaparXml(t.fuente)
+        titulo != null ? titulo : tituloDe(b, t.nombre),
+        t.encabezados, t.filas, escaparXml(t.fuente)
       );
-    });
+    };
+
+    if (localizarBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL)) {
+      reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque));
+    } else {
+      /* La plantilla no la trae y hay que declararla: se inserta tras «Transacciones Inter
+         compañía», que es donde el informe de referencia la lleva. El ancla se busca por
+         nombre —la numeración no es fiable— y con el veto de los nombres de esta tabla, para
+         no anclar sobre ella. La tabla insertada es una ficha, como el ancla. */
+      const t = filasOperacionAdicionalFicha(estudio);
+      const insertada = doc.insertar(
+        NOMBRES_TABLA_TRANSACCIONES,
+        (ancla) => {
+          /* El número del ancla + 1, sin número si no lo trae. No se renumera lo que sigue,
+             así que esto puede repetir un número existente: el aviso lo nombra. */
+          const titulo = ancla.numero != null
+            ? 'Tabla ' + (ancla.numero + 1) + '. ' + t.nombre
+            : t.nombre;
+          return emitirAdicional(ancla, '', titulo, true);
+        },
+        { excluir: NOMBRES_TABLA_ADICIONAL }
+      );
+      if (Array.isArray(avisos)) {
+        avisos.push(insertada
+          ? 'se insertó la tabla «' + t.nombre + '» después de «Transacciones Inter compañía»'
+            + ' porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          : NOMBRES_TABLA_ADICIONAL[0]);
+      }
+    }
   } else {
     doc.borrar(NOMBRES_TABLA_ADICIONAL);
   }

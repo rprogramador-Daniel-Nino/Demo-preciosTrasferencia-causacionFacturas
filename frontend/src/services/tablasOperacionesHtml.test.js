@@ -605,6 +605,121 @@ test('borrarTablaHtml no se lleva un párrafo que no sea la fuente', () => {
   assert.match(salida, /Las anteriores operaciones/, 'se llevó prosa del informe');
 });
 
+/* ── Inserción cuando la plantilla no trae la tabla ─────────────────────────── */
+
+/* Ancla = «Transacciones Inter compañía», ficha de dos columnas, con su línea de fuente.
+   Detrás va otra tabla, para comprobar que la inserción cae ENTRE las dos y no encima. */
+const PLANTILLA_SIN_ADICIONAL =
+  '<p><strong> Tabla 3. Transacciones Inter compañía</strong></p>' +
+  '<table>' +
+  '<tr><th colspan="2"><p><strong> Compañía vinculada</strong></p></th></tr>' +
+  '<tr><th><p><strong> Razón social</strong></p></th><td><p> ACME LLC</p></td></tr>' +
+  '<tr><th><p><strong> Monto en pesos</strong></p></th><td><p> 1.000.000</p></td></tr>' +
+  '</table>' +
+  '<p><strong>FUENTE: Información de ACME COLOMBIA S.A.S.</strong></p>' +
+  '<p><strong> Tabla 4. Método de Precios de Transferencia</strong></p>' +
+  '<table><tr><th><p><strong> Código de Operación</strong></p></th></tr></table>';
+
+const ESTUDIO_DECLARABLE = {
+  anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S', vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+  operacionAdicional: {
+    monto: 14516485850,
+    filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+  },
+};
+
+test('sobre el umbral y sin la tabla en la plantilla, la tabla se inserta tras la Tabla 3', () => {
+  /* Antes de esto el informe salía sin la tabla y solo quedaba un aviso entre otros seis:
+     la operación hay que declararla y el documento se radicaba sin ella. */
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, avisos);
+
+  assert.match(salida, /Operación adicional Transacciones Intercompañía/, 'no se insertó el rótulo');
+  assert.match(salida, /MONTACHEM INTERNATIONAL INC/, 'no se insertaron los datos');
+  assert.match(salida, /14\.516\.485\.850/);
+
+  /* La inserción va DESPUÉS de la fuente del ancla y ANTES de la tabla siguiente. La Tabla 3
+     es también un objetivo del motor (`OBJETIVOS`), así que se sustituye antes de llegar
+     aquí y su línea FUENTE queda reescrita con el contribuyente del ESTUDIO (Task 6) y no
+     con el de la plantilla («ACME COLOMBIA», que era del informe de referencia). */
+  const iFuenteAncla = salida.indexOf('FUENTE: Información de MONTACHEM COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuenteAncla > -1, 'se perdió la fuente del ancla');
+  assert.ok(iFuenteAncla < iInsertada, 'la inserción quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'la inserción quedó después de la tabla siguiente');
+
+  /* El ancla intacta: se inserta al lado, no encima. */
+  assert.match(salida, /Tabla 3\. Transacciones Inter compañía/);
+  assert.match(salida, /ACME LLC/);
+});
+
+test('la inserción hereda el marcado del ancla y no inventa una tabla con otra pinta', () => {
+  /* Este módulo existe para conservar el maquetado del cliente. La tabla insertada es un
+     clon del ancla con las filas reescritas, así que sus etiquetas de marcado son las
+     mismas. */
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, []);
+  const desde = salida.indexOf('Operación adicional');
+  const trozo = salida.slice(desde);
+  assert.match(trozo, /<th colspan="2">/, 'no heredó la cabecera combinada del ancla');
+});
+
+test('la inserción avisa de la numeración duplicada', () => {
+  /* La plantilla ya trae una «Tabla 4», así que el rótulo insertado la repite. No se
+     renumera —lo prohíbe el criterio del repo— pero callarlo sería dejar el informe con dos
+     tablas del mismo número sin que nadie lo sepa. */
+  const avisos = [];
+  actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, avisos);
+  assert.ok(avisos.some((a) => /insert/i.test(String(a)) && /numeraci/i.test(String(a))),
+    'no se avisó de la inserción ni de la numeración');
+});
+
+test('sin el ancla en la plantilla no se inserta nada y el aviso se mantiene', () => {
+  /* Sin sitio donde ponerla, pegarla al final sería peor que no ponerla. */
+  const avisos = [];
+  const sinAncla = '<p><strong> Tabla 4. Método de Precios de Transferencia</strong></p>' +
+    '<table><tr><th><p><strong> Código de Operación</strong></p></th></tr></table>';
+
+  const salida = actualizarTablasOperacionesHtml(sinAncla, ESTUDIO_DECLARABLE, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')),
+    'se perdió el aviso de tabla ausente');
+});
+
+test('bajo el umbral y sin la tabla en la plantilla, no se inserta nada ni se avisa', () => {
+  const avisos = [];
+  const estudio = {
+    ...ESTUDIO_DECLARABLE,
+    operacionAdicional: { monto: 500000000, filas: [{ vinculado: 'BETA GMBH', monto: 500000000 }] },
+  };
+
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, estudio, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó una tabla que no hay que declarar');
+  assert.ok(!salida.includes('BETA GMBH'));
+  assert.ok(!avisos.some((a) => String(a).toLowerCase().includes('adicional')));
+});
+
+test('con la tabla YA en la plantilla se sustituye y no se duplica', () => {
+  /* La regresión que esta tarea podría causar: insertar además de sustituir. La ficha
+     necesita su fila de encabezado combinado («Compañía vinculada») además de la fila de
+     datos: `reescribirFilasHtml` trata la primera fila como encabezado y solo reemplaza las
+     que le siguen — la misma forma que ya usa `PLANTILLA_SIN_ADICIONAL` para la Tabla 3 y
+     que el test de «ficha vertical» de este archivo usa para esta misma tabla. */
+  const conTabla = PLANTILLA_SIN_ADICIONAL +
+    '<p><strong> Tabla 5. Operación adicional Transacciones Intercompañía</strong></p>' +
+    '<table><tr><th colspan="2"><p><strong> Compañía vinculada</strong></p></th></tr>' +
+    '<tr><th><p><strong> Razón social</strong></p></th><td><p> CLIENTE ANTERIOR S.A.</p></td></tr></table>';
+
+  const salida = actualizarTablasOperacionesHtml(conTabla, ESTUDIO_DECLARABLE, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el vinculado anterior');
+});
+
 /* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
 
 test('la línea FUENTE de la plantilla se reescribe con la del estudio, no se borra', () => {

@@ -21,13 +21,14 @@
 
 import {
   localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml, filasDe,
-  borrarTablaHtml, reescribirFuenteHtml,
+  borrarTablaHtml, reescribirFuenteHtml, insertarTablaHtml,
 } from './tablasHtmlInforme.js';
+import { numeroDeTabla } from './docxRelleno.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
   filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
-  NOMBRES_TABLA_ADICIONAL,
+  NOMBRES_TABLA_ADICIONAL, NOMBRES_TABLA_TRANSACCIONES,
 } from './tablasOperaciones.js';
 import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 
@@ -227,8 +228,34 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
         ? filasOperacionAdicionalFicha(estudio)
         : filasOperacionAdicional(estudio);
       out = sustituir(out, bloque, tabla, false, 0);
-    } else if (Array.isArray(avisos)) {
-      avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+    } else {
+      /* La plantilla no trae la tabla y la operación hay que declararla: se INSERTA después
+         del bloque de «Transacciones Inter compañía», que es donde el informe de referencia
+         la lleva. El ancla se busca por nombre y con el veto de los nombres de esta misma
+         tabla, para no anclar sobre ella. Sin ancla no hay sitio: se mantiene el aviso y no
+         se pega nada al final del documento, que sería peor que no ponerla. */
+      const ancla = localizarTablaHtml(out, NOMBRES_TABLA_TRANSACCIONES, {
+        excluir: NOMBRES_TABLA_ADICIONAL,
+      });
+      const t = filasOperacionAdicionalFicha(estudio);
+      if (ancla && t) {
+        /* El número del ancla + 1, y sin número si el ancla no lo trae. No se renumera lo que
+           sigue —lo prohíbe el criterio del repo—, así que esto puede repetir un número que
+           ya existe: por eso el aviso lo nombra. */
+        const numeroAncla = numeroDeTabla(ancla.titulo);
+        const titulo = numeroAncla != null
+          ? 'Tabla ' + (numeroAncla + 1) + '. ' + t.nombre
+          : t.nombre;
+        out = insertarTablaHtml(out, ancla, t, titulo);
+        if (Array.isArray(avisos)) {
+          avisos.push(
+            'se insertó la tabla «' + t.nombre + '» después de «' + ancla.titulo
+            + '» porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          );
+        }
+      } else if (Array.isArray(avisos)) {
+        avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+      }
     }
   } else {
     const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);

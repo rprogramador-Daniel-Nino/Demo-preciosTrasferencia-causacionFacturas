@@ -204,6 +204,26 @@ export function localizarTablasHtml(html, nombres, opciones = {}) {
 const RX_ELEMENTO_SIGUIENTE = /^\s*<p(?:\s[^>]*)?>[\s\S]*?<\/p\s*>/i;
 
 /**
+ * El elemento «FUENTE: …» que sigue a `desde`, si lo hay.
+ *
+ * Reconocer esa línea es la misma pregunta en `borrarTablaHtml` (para llevársela junto con
+ * la tabla), `reescribirFuenteHtml` (para reescribir solo su texto) e `insertarTablaHtml`
+ * (para insertar después de ella y no encima): el primer elemento tras el bloque, y solo
+ * cuenta si su texto empieza por «FUENTE:». Repetirla una tercera vez —al llegar
+ * `insertarTablaHtml`— es la señal de que ya es una noción del módulo, no un detalle de
+ * cada función, así que se extrae aquí.
+ *
+ * @param {string} html
+ * @param {number} desde
+ * @returns {{xml:string, inicio:number, fin:number}|null}
+ */
+function elementoFuenteSiguiente(html, desde) {
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(html.slice(desde));
+  if (!siguiente || !/^\s*fuente\s*:/i.test(textoPlanoHtml(siguiente[0]))) return null;
+  return { xml: siguiente[0], inicio: desde, fin: desde + siguiente[0].length };
+}
+
+/**
  * Quita del informe una tabla completa: su rótulo, la tabla y la línea de fuente que la
  * sigue.
  *
@@ -221,10 +241,8 @@ export function borrarTablaHtml(html, bloque) {
   if (!bloque) return texto;
 
   let fin = bloque.fin;
-  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(fin));
-  if (siguiente && /^\s*fuente\s*:/i.test(textoPlanoHtml(siguiente[0]))) {
-    fin += siguiente[0].length;
-  }
+  const fuente = elementoFuenteSiguiente(texto, fin);
+  if (fuente) fin = fuente.fin;
 
   /* El rótulo va ANTES que la tabla, así que se recorta el tramo entero en un solo corte:
      borrar primero el rótulo desplazaría los offsets sobre los que se calculó el bloque.
@@ -234,6 +252,65 @@ export function borrarTablaHtml(html, bloque) {
     ? bloque.rotulo.inicio
     : bloque.inicio;
   return texto.slice(0, desde) + texto.slice(fin);
+}
+
+/**
+ * Clona el rótulo del ancla con un texto YA COMPUESTO por quien llama.
+ *
+ * A diferencia de `reescribirRotuloHtml` —que conserva el número que el propio rótulo
+ * traía, porque su caso de uso es sustituir esa misma tabla sin renumerarla—, aquí el
+ * número final es DISTINTO: es el del ancla + 1. Si se reutilizara `reescribirRotuloHtml`
+ * pasándole un `titulo` que ya incluye «Tabla N+1.», volvería a anteponerle el número
+ * viejo del ancla («Tabla 3. Tabla 4. …»), duplicándolo. Por eso este clon no vuelve a
+ * mirar el número: se limita a reproducir la envoltura del rótulo del ancla —negrita,
+ * `<span style>`, la etiqueta `<p>` o `<h1>`…`<h6>`— con el texto que ya llegó compuesto.
+ */
+function clonarRotuloHtml(rotuloXml, titulo) {
+  const xml = String(rotuloXml || '');
+  const m = /^(<(p|h[1-6])(?:\s[^>]*)?>)([\s\S]*)(<\/\2\s*>)$/i.exec(xml);
+  if (!m) return '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+  const { abre, cierra } = envolturaDe(m[3]);
+  return m[1] + abre + escaparHtml(titulo) + cierra + m[4];
+}
+
+/**
+ * Inserta una tabla en el informe, después del bloque que sirve de ancla.
+ *
+ * El ancla se localiza por NOMBRE y nunca por número: la numeración cambia de un informe a
+ * otro —la ficha del vinculado viene como «Tabla 3» o como «Tabla 12» en la misma
+ * plantilla— y el resto del módulo ya trabaja así.
+ *
+ * La tabla insertada es un CLON del marcado del ancla con el rótulo y las filas reescritos,
+ * no marcado fabricado aquí. Es la premisa de este módulo: lo que se conserva es el
+ * maquetado del cliente, y una tabla inventada saldría con otra pinta en medio de su
+ * informe. Exige que el ancla tenga la misma forma que la tabla nueva —las dos son fichas
+ * de dos columnas—, que es el caso para el que existe esta función.
+ *
+ * Va después de la línea `FUENTE:` del ancla cuando la trae: colarse entre la tabla y su
+ * fuente se la atribuiría a la tabla nueva.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number,fin:number,xml:string}|null}} ancla
+ * @param {{nombre:string, filas:string[][]}} tabla  lo que va en la tabla nueva.
+ * @param {string} titulo  el rótulo ya compuesto, con su número si corresponde.
+ * @returns {string}
+ */
+export function insertarTablaHtml(html, ancla, tabla, titulo) {
+  const texto = String(html || '');
+  if (!ancla || !tabla) return texto;
+
+  /* Dónde acaba el ancla, contando su línea de fuente. */
+  let fin = ancla.fin;
+  const fuente = elementoFuenteSiguiente(texto, fin);
+  if (fuente) fin = fuente.fin;
+
+  /* El clon: el rótulo del ancla con el texto nuevo, y su tabla con las filas nuevas. */
+  const rotuloClon = ancla.rotulo
+    ? clonarRotuloHtml(ancla.rotulo.xml, titulo)
+    : '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+  const tablaClon = reescribirFilasHtml(texto.slice(ancla.inicio, ancla.fin), tabla.filas);
+
+  return texto.slice(0, fin) + rotuloClon + tablaClon + texto.slice(fin);
 }
 
 /** Las `<tr>` de una tabla, con sus posiciones. Sirve igual con `<thead>`/`<tbody>`. */
@@ -388,19 +465,16 @@ export function reescribirFuenteHtml(html, desde, fuente) {
   const texto = String(html || '');
   if (!fuente) return texto;
 
-  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(desde));
-  if (!siguiente) return texto;
-  const plano = textoPlanoHtml(siguiente[0]);
-  if (!/^\s*fuente\s*:/i.test(plano)) return texto;
+  const elemento = elementoFuenteSiguiente(texto, desde);
+  if (!elemento) return texto;
 
   /* Se sustituye SOLO el texto que sigue a «FUENTE:», dentro del marcado que trae la
      plantilla: el prefijo, la negrita y las etiquetas son suyos. */
-  const reescrito = siguiente[0].replace(
+  const reescrito = elemento.xml.replace(
     /(fuente\s*:)([^<]*)/i,
     (todo, prefijo) => prefijo + ' ' + escaparTextoHtml(fuente)
   );
-  const inicio = desde + siguiente.index;
-  return texto.slice(0, inicio) + reescrito + texto.slice(inicio + siguiente[0].length);
+  return texto.slice(0, elemento.inicio) + reescrito + texto.slice(elemento.fin);
 }
 
 /**

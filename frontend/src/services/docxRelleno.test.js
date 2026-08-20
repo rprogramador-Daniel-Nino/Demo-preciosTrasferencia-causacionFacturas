@@ -2686,6 +2686,87 @@ test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
   assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
 });
 
+/* ── Inserción cuando la plantilla no trae la tabla ─────────────────────────── */
+
+test('sin la tabla en la plantilla y sobre el umbral, se inserta tras Transacciones Inter compañía', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de ACME COLOMBIA S.A.S.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S',
+    vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, avisos);
+
+  assert.ok(salida.includes('Operación adicional Transacciones Intercompañía'),
+    'no se insertó el rótulo');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'), 'no se insertaron los datos');
+  assert.ok(salida.includes('14.516.485.850'));
+
+  /* Después de la fuente del ancla y antes de la tabla siguiente. La Tabla 3 también se
+     sustituye (paso 3), y `reemplazar` absorbe su línea FUENTE y emite la suya con el
+     contribuyente del ESTUDIO (Task 6), no con el de la plantilla («ACME COLOMBIA», del
+     informe de referencia). */
+  const iFuente = salida.indexOf('FUENTE: Información de MONTACHEM COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuente > -1 && iFuente < iInsertada, 'quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'quedó después de la tabla siguiente');
+
+  /* La Tabla 3 sustituida con lo suyo, no pisada por la insertada. */
+  assert.ok(salida.includes('900111'), 'falta la identificación fiscal de la Tabla 3');
+  assert.ok(avisos.some((a) => /insert/i.test(String(a))), 'no se avisó de la inserción');
+});
+
+test('sin el ancla no se inserta nada y se mantiene el aviso de tabla ausente', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  }, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')));
+});
+
+test('con la tabla ya en la plantilla se sustituye una vez y no se duplica', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+});
+
 /* ── La línea FUENTE de la plantilla no sobrevive a la sustitución ──────────── */
 
 test('la línea FUENTE de la plantilla no queda huérfana ni duplicada tras sustituir', () => {
