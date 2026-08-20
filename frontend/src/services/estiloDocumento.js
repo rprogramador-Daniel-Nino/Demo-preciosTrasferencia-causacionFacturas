@@ -56,6 +56,23 @@ export const PUNTOS_TABLA = 10;
 export const FUENTE_TABLA = 'Arial';
 export const FUENTE_TABLA_CSS = FUENTE_TABLA + ',Helvetica,sans-serif';
 
+/* Tipografía de la Sección III («III. TENDENCIAS DE LA ECONOMÍA»), en el mismo sitio que la de
+   las tablas y por la misma razón: la fijan las dos rutas del .docx —`docxWriter.js` para la
+   que reconstruye el informe desde HTML y `aplicarLetraMacroOoxml` en `docxRelleno.js` para la
+   que rellena la plantilla del cliente— y si cada una la escribiera por su lado la sección
+   saldría en una letra distinta según por dónde se hubiera generado el archivo.
+
+   Es FIJA y no heredada, por decisión del usuario (2026-08-20): la Sección III se lee en Arial
+   12 aunque la plantilla del cliente traiga otra letra en ese tramo. Antes no se declaraba
+   ninguna, así que la prosa que redacta la IA tomaba el estilo que hubiera en ese punto del
+   documento del cliente y la sección salía en una letra distinta en cada informe.
+
+   NO alcanza a las tablas: las ocho tablas macro siguen en `PUNTOS_TABLA`/`FUENTE_TABLA` como
+   todas las del informe. Tampoco a las líneas «FUENTE:» ni a las citas al pie, que conservan
+   su tamaño reducido y solo cambian de familia. */
+export const FUENTE_MACRO = 'Arial';
+export const PUNTOS_MACRO = 12;
+
 export const cmATwips = (cm) => Math.round((Number(cm) || 0) * TWIPS_POR_CM);
 export const cmAPixeles = (cm) => Math.round((Number(cm) || 0) * PIXELES_POR_CM);
 

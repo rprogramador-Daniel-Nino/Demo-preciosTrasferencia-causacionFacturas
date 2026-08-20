@@ -32,7 +32,11 @@ import Docxtemplater from 'docxtemplater';
 import { valorDeCampo } from './plantillaVocabulario.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
-import { PUNTOS_TABLA, FUENTE_TABLA } from './estiloDocumento.js';
+import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
+/* La frontera de la Sección III sale de la MISMA función que la usa para decidir dónde no se
+   marca ningún campo del contribuyente. Copiar aquí sus dos regex dejaría dos definiciones de
+   «dónde empieza y acaba III» que se desincronizarían en el primer informe con otro título. */
+import { zonaQueAbre } from './plantillaMarcador.js';
 import { FORMULAS, ROTULOS_FORMULA, ooxmlDeFormula } from './formulasOmml.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -434,6 +438,165 @@ export function prefijoDeEncabezado(texto) {
      es un rótulo. */
   if (!/[.)]/.test(m[0]) && !/^\s*(?:[IVXLC]{1,5}|\d)/.test(m[0])) return '';
   return m[0];
+}
+
+/* ══════════════ La letra de la Sección III ══════════════
+
+   La Sección III se lee en Arial 12 (`FUENTE_MACRO`/`PUNTOS_MACRO`) y hasta ahora no se lo decía
+   nadie. En esta ruta el documento es el .docx del cliente, así que su letra la ponía el estilo
+   de SU plantilla en ese punto — y la prosa que inserta `parrafosOoxmlDesdeHtml` sale sin `rPr`
+   de fuente, o sea con lo que hubiera ahí. La misma sección salía en una letra distinta en cada
+   informe.
+
+   Va en UNA pasada al final y no repartida por cada emisor, porque tiene que alcanzar por igual
+   lo que genera el código (prosa de III.A/III.B/III.C, marcadores de pendiente, rótulos de tabla)
+   y lo que viene de la plantilla del cliente (sus encabezados, y cualquier párrafo de III que el
+   motor no haya reemplazado). Repartirla dejaría fuera justo el segundo grupo. */
+
+/* Un párrafo de OOXML. Mismo patrón que usa `localizarHitos`. Un `<w:p/>` vacío y autocerrado no
+   encaja a propósito: no tiene runs que tocar. */
+const RX_PARRAFO_LETRA = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+
+/* En `rPr` el orden de los hijos lo fija el esquema y Word pide reparar el documento si no se
+   respeta: `rFonts` va al principio —sólo `rStyle` la precede— y `sz` después del color y antes
+   del subrayado, así que se inserta delante del primero de estos que aparezca. */
+const ANTES_DE_SZ = ['<w:highlight', '<w:u ', '<w:u/', '<w:u>', '<w:effect', '<w:bdr',
+  '<w:shd', '<w:fitText', '<w:vertAlign', '<w:rtl', '<w:cs', '<w:em', '<w:lang',
+  '<w:eastAsianLayout', '<w:specVanish', '<w:oMath'];
+
+/** El `w:sz` que declara un `rPr`, en medios puntos, o null si no declara ninguno. */
+function szDeRpr(rPr) {
+  const m = /<w:sz\s+w:val="(\d+)"/.exec(rPr || '');
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * El `rPr` de un run con la letra de la Sección III puesta.
+ *
+ * La familia se impone siempre. El tamaño sólo si el run no declara ya uno MENOR: las líneas
+ * «FUENTE: …» van a 9 pt y las citas al pie a 8, y subirlas a 12 las convertiría en cuerpo
+ * (decisión del usuario, 2026-08-20). Un tamaño MAYOR sí se baja: eso es un encabezado de la
+ * plantilla del cliente, y el acuerdo es que los títulos de III van a 12.
+ *
+ * El resto del `rPr` se conserva intacto: la negrita del rótulo de una tabla, la cursiva, y el
+ * rojo del marcador de pendiente, que es un hueco que hay que ver antes de radicar.
+ */
+function rPrConLetraMacro(rPrInterior, negrita) {
+  let dentro = String(rPrInterior || '');
+  const szPropio = szDeRpr(dentro);
+  const sz = szPropio !== null && szPropio < PUNTOS_MACRO * 2 ? szPropio : PUNTOS_MACRO * 2;
+
+  dentro = dentro
+    .replace(/<w:rFonts\b[^>]*\/>/g, '')
+    .replace(/<w:rFonts\b[^>]*>[\s\S]*?<\/w:rFonts>/g, '')
+    .replace(/<w:sz\b[^>]*\/>/g, '')
+    .replace(/<w:szCs\b[^>]*\/>/g, '');
+
+  /* `rStyle` es el único hijo que precede a `rFonts`. */
+  const rStyle = /<w:rStyle\b[^>]*\/>/.exec(dentro);
+  if (rStyle) dentro = dentro.replace(rStyle[0], '');
+
+  const letra = '<w:rFonts w:ascii="' + FUENTE_MACRO + '" w:hAnsi="' + FUENTE_MACRO +
+    '" w:cs="' + FUENTE_MACRO + '"/>';
+  const negritaXml = negrita && !/<w:b(?:\s[^>]*)?\/?>/.test(dentro) ? '<w:b/>' : '';
+  const tamano = '<w:sz w:val="' + sz + '"/><w:szCs w:val="' + sz + '"/>';
+
+  let corte = dentro.length;
+  for (const etiqueta of ANTES_DE_SZ) {
+    const i = dentro.indexOf(etiqueta);
+    if (i >= 0 && i < corte) corte = i;
+  }
+  const cuerpo = dentro.slice(0, corte) + tamano + dentro.slice(corte);
+  return '<w:rPr>' + (rStyle ? rStyle[0] : '') + letra + negritaXml + cuerpo + '</w:rPr>';
+}
+
+/** Los runs de un párrafo, con la letra de la Sección III. */
+function parrafoConLetraMacro(parrafo, negrita) {
+  /* Sólo los `<w:r>`: el `rPr` del `pPr` —el formato de la marca de párrafo— se deja como está.
+     Tocarlo cambiaría el alto de los párrafos vacíos con que el informe separa sus bloques. */
+  return parrafo.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
+    const abre = /^<w:r(?:\s[^>]*)?>/.exec(run);
+    if (!abre) return run;
+    const resto = run.slice(abre[0].length);
+    const conRpr = /^<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(resto);
+    if (conRpr) {
+      return abre[0] + rPrConLetraMacro(conRpr[1], negrita) + resto.slice(conRpr[0].length);
+    }
+    return abre[0] + rPrConLetraMacro('', negrita) + resto;
+  });
+}
+
+/** Los tramos `<w:tbl>…</w:tbl>` del documento, contando el anidamiento. Un párrafo que caiga
+ *  dentro de uno es una celda y no se toca: las ocho tablas de III siguen en `PUNTOS_TABLA`. */
+function tramosDeTabla(xml) {
+  const tramos = [];
+  const rx = /<w:tbl(?:\s[^>]*)?>|<\/w:tbl>/g;
+  let profundidad = 0;
+  let inicio = 0;
+  let m;
+  while ((m = rx.exec(xml)) !== null) {
+    if (m[0] === '</w:tbl>') {
+      profundidad -= 1;
+      if (profundidad === 0) tramos.push([inicio, m.index + m[0].length]);
+      if (profundidad < 0) profundidad = 0;
+      continue;
+    }
+    if (profundidad === 0) inicio = m.index;
+    profundidad += 1;
+  }
+  return tramos;
+}
+
+/* ¿Es este párrafo un encabezado? Los títulos de III van a 12 EN NEGRITA (decisión del usuario,
+   2026-08-20): al quedar del tamaño del cuerpo, la negrita es lo único que los distingue.
+
+   Tres señales, y basta una. El estilo de párrafo y el nivel de esquema son lo que declara la
+   plantilla del cliente; el prefijo de numeración («III. », «A. », «1.4 ») cubre al encabezado
+   que llega sin estilo, con el mismo umbral de longitud que usa `localizarHitos` para no
+   confundir un título con un párrafo de prosa que lo mencione de pasada. */
+function esEncabezadoOoxml(parrafo, texto) {
+  const estilo = /<w:pStyle\s+w:val="([^"]*)"/.exec(parrafo);
+  if (estilo && /^(?:heading|t[íi]tulo|titulo)/i.test(estilo[1])) return true;
+  const nivel = /<w:outlineLvl\s+w:val="(\d+)"/.exec(parrafo);
+  if (nivel && Number(nivel[1]) < 9) return true;
+  return texto.length <= 160 && prefijoDeEncabezado(texto) !== '';
+}
+
+/**
+ * Pone la Sección III entera en Arial 12 —negrita en sus títulos— dejando fuera las tablas.
+ *
+ * La zona la delimita `zonaQueAbre`: abre en «III. TENDENCIAS DE LA ECONOMÍA», la cierra
+ * cualquier capítulo romano o anexo posterior, y las entradas del índice no cuentan (terminan en
+ * el número de página). Es la misma frontera que ya gobierna dónde no se marcan campos del
+ * contribuyente, así que las dos no pueden discrepar sobre dónde está la sección.
+ *
+ * @param {string} xml  el `word/document.xml` completo.
+ * @returns {string}
+ */
+export function aplicarLetraMacroOoxml(xml) {
+  const texto = String(xml || '');
+  const tablas = tramosDeTabla(texto);
+  const enTabla = (pos) => tablas.some(([a, b]) => pos >= a && pos < b);
+
+  let enMacro = false;
+  let tocados = 0;
+  const salida = texto.replace(RX_PARRAFO_LETRA, (parrafo, pos) => {
+    if (enTabla(pos)) return parrafo;
+    /* Las entradas del índice llevan el campo PAGEREF y repiten todos los encabezados del
+       informe: si abrieran zona, la Sección III empezaría en la tabla de contenido. Mismo filtro
+       que aplican `localizarHitos` y `localizarBloqueProsa`. */
+    if (parrafo.includes('PAGEREF')) return parrafo;
+    const plano = textoPlanoOoxml(parrafo);
+    const abre = zonaQueAbre(plano);
+    if (abre) enMacro = abre === 'macro';
+    if (!enMacro) return parrafo;
+    tocados += 1;
+    return parrafoConLetraMacro(parrafo, esEncabezadoOoxml(parrafo, plano.trim()));
+  });
+
+  console.log('[docxRelleno] Sección III en ' + FUENTE_MACRO + ' ' + PUNTOS_MACRO + ': ' +
+    tocados + ' párrafo(s) fuera de tabla');
+  return salida;
 }
 
 /**
@@ -2233,6 +2396,11 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
+  /* La letra de la Sección III, DESPUÉS de que sus apartados, su análisis sectorial y sus ocho
+     tablas estén ya puestos: la pasada tiene que ver el contenido definitivo, no el de la
+     plantilla. Y antes de docxtemplater, que no se entera: insertar un `rPr` no parte ni funde
+     ningún `<w:t>`, así que los marcadores `{campo}` siguen enteros. */
+  xml = aplicarLetraMacroOoxml(xml);
   Object.keys(colecciones).forEach((nombre) => {
     xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
   });

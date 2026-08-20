@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
@@ -18,6 +18,8 @@ import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRender
    comparable se llevaba una página entera del informe. */
 import { recortarPaginas } from '../services/recorteImagen';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
+import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
+import { residuoDeCriterios } from '../services/criteriosScreeningEs';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
@@ -508,6 +510,49 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
        propio efecto y volverlo reactivo lo relanzaría contra sí mismo. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* Traducción al español de los criterios de búsqueda (Tabla 14 del informe, «Códigos SIC
+     utilizados»). El diccionario de `criteriosScreeningEs.js` cubre el vocabulario cerrado
+     de Capital IQ en el propio render, sin pagar nada; esto solo paga IA por el residuo
+     —una etiqueta de campo nueva, un título SIC fuera del catálogo sembrado— y lo cachea
+     en el estudio como `etiquetaEs` / `valorEs`.
+
+     Un solo efecto cubre los tres caminos por los que llegan criterios: importar el Excel,
+     restaurar el cribado guardado y abrir un estudio viejo que tiene el inglés almacenado.
+
+     El ref no es un lujo: `traducirCriteriosScreening` devuelve un array nuevo también
+     cuando la IA falla, así que sin memoria de lo ya intentado el efecto se relanzaría
+     contra sí mismo y pagaría una llamada por render. La firma es el texto CRUDO, que no
+     cambia al añadir la traducción. */
+  const criteriosIntentados = useRef(new Set());
+  useEffect(() => {
+    const pendientes = residuoDeCriterios(criteriosScreening);
+    if (!pendientes.length) return undefined;
+    const firma = JSON.stringify((criteriosScreening || []).map((c) => [c && c.etiqueta, c && c.valor]));
+    if (criteriosIntentados.current.has(firma)) return undefined;
+    criteriosIntentados.current.add(firma);
+
+    let cancelado = false;
+    (async () => {
+      const sinCatalogar = pendientes.flatMap((p) => p.residuo);
+      anotar(`Traduciendo al español ${pendientes.length} criterio(s) de búsqueda que el diccionario no cubre: ` +
+        sinCatalogar.join('; '));
+      const traducidos = await traducirCriteriosScreening(criteriosScreening);
+      if (cancelado) return;
+      const siguenPendientes = residuoDeCriterios(traducidos).length;
+      if (siguenPendientes >= pendientes.length) {
+        anotar('No se pudo traducir ese residuo: la Tabla 14 saldrá con esos trozos en inglés. ' +
+          'El resto de la tabla sí sale en español.', 'aviso');
+        return;
+      }
+      setCriteriosScreening(traducidos);
+      anotar(`${pendientes.length - siguenPendientes} criterio(s) de búsqueda traducidos con IA y guardados en el estudio.`, 'ok');
+    })();
+    return () => { cancelado = true; };
+    /* `anotar` se redefine en cada render y volvería reactivo un efecto que solo depende
+       de los criterios. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [criteriosScreening]);
 
   // Handle Capital IQ File Upload
   const handleImportExcel = async (file) => {

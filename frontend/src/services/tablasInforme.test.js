@@ -369,6 +369,39 @@ test('sin criterios ingeridos no se emite ninguna fila', () => {
   assert.deepStrictEqual(filasCriteriosScreening({ criteriosScreening: [] }), []);
 });
 
+test('los criterios crudos de Capital IQ salen traducidos al español', () => {
+  /* La hoja «Screen Criteria» viene en inglés y hasta ahora entraba tal cual al informe
+     que se radica ante la DIAN. Se traduce aquí, en el render, para que los estudios ya
+     guardados salgan en español sin reimportar el Excel (`criteriosScreeningEs.js`). */
+  const filas = filasCriteriosScreening({
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Company Type', valor: 'Public Company OR Private Company' },
+      { conector: 'O', etiqueta: 'SIC Codes', valor: '7371 Computer Programming Services OR 7372 Prepackaged Software' },
+      { conector: 'Y', etiqueta: 'Total Revenue [FY 2025] ($USDmm, Historical rate)', valor: 'is greater than 0 (Unreported data set to 0)' },
+    ],
+  });
+  assert.deepStrictEqual(filas, [
+    ['Tipo de compañía', 'Compañía pública O compañía privada'],
+    ['O'],
+    ['Códigos SIC', '7371 Servicios de programación de computadores O 7372 Software preempaquetado'],
+    ['Y'],
+    ['Ingresos totales [año fiscal 2025] (millones de USD, tasa histórica)',
+      'es mayor que 0 (los datos no reportados se toman como 0)'],
+  ]);
+});
+
+test('la traducción que cacheó la IA gana sobre el diccionario', () => {
+  assert.deepStrictEqual(
+    filasCriteriosScreening({
+      criteriosScreening: [{
+        conector: null, etiqueta: 'Implied Enterprise Value', valor: 'is greater than 100',
+        etiquetaEs: 'Valor implícito de la empresa', valorEs: 'es mayor que 100',
+      }],
+    }),
+    [['Valor implícito de la empresa', 'es mayor que 100']]
+  );
+});
+
 test('el conector se emite como Y cuando el criterio no lo trae', () => {
   const filas = filasCriteriosScreening({
     criteriosScreening: [
