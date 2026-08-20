@@ -458,6 +458,46 @@ export function reescribirTextoParrafoOoxml(parrafoXml, textoNuevo) {
 }
 
 /**
+ * El `<w:tcW>`/`<w:gridSpan>` de una celda OOXML, tal cual —para preservar el ancho y la
+ * fusión de columnas de un molde sin heredar también su sombreado ni su negrita.
+ *
+ * @param {string} celdaXml  el `<w:tc>` completo del molde.
+ * @returns {string}
+ */
+function gridSpanYAnchoDe(celdaXml) {
+  const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(String(celdaXml || ''));
+  if (!tcPr) return '';
+  const tcW = /<w:tcW\s[^/]*\/>/.exec(tcPr[0]);
+  const gridSpan = /<w:gridSpan\s[^/]*\/>/.exec(tcPr[0]);
+  return (tcW ? tcW[0] : '') + (gridSpan ? gridSpan[0] : '');
+}
+
+/**
+ * Fila del conector «Y»/«O» de «Códigos SIC utilizados», como divisor discreto en vez de
+ * clon de la franja de sección de la plantilla (`«Criterio de búsqueda»`, `«Criterios de
+ * inclusión»`): las dos comparten el mismo `tcPr` en la plantilla —sombreado gris oscuro,
+ * negrita— porque son visualmente la misma franja, pero el conector no es un título de
+ * sección. Clonarlo tal cual hace que una búsqueda con varios criterios (lo habitual en un
+ * export de Capital IQ) salga como una fila de franjas grises opacas, una por cada «Y»/«O»,
+ * en vez de leerse como una lista de criterios con un conector menor entre cada uno.
+ *
+ * Solo se conserva el ancho/fusión de columnas del molde —para no desalinear la tabla—; el
+ * sombreado y la negrita se sueltan a propósito.
+ *
+ * @param {string} texto  «Y» u «O».
+ * @param {string} celdaMoldeXml  el `<w:tc>` del que se toma el ancho/fusión de columnas.
+ * @returns {string} el `<w:tr>` completo.
+ */
+function filaConectorDiscreta(texto, celdaMoldeXml) {
+  const props = gridSpanYAnchoDe(celdaMoldeXml);
+  return '<w:tr><w:tc><w:tcPr>' + props + '<w:vAlign w:val="center"/></w:tcPr>'
+    + '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="20" w:after="20"/></w:pPr>'
+    + '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:iCs/>'
+    + '<w:color w:val="808080"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
+    + '<w:t xml:space="preserve">' + escaparXml(texto) + '</w:t></w:r></w:p></w:tc></w:tr>';
+}
+
+/**
  * Escribe los encabezados de III.C con la industria y los años del estudio.
  *
  * Los `hitos` vienen de `localizarHitos`, que ya los localizó en orden y saltándose las
@@ -755,6 +795,14 @@ function celdasDeOoxml(filaXml) {
  * que arma `generarTablaOoxml`: alterna una fila de 2 celdas (etiqueta/valor) con una fila de
  * 1 celda fusionada (el conector «Y»/«O»), y generarla desde cero perdería esa fusión.
  *
+ * La fila de una sola celda es la ÚNICA que no clona el molde tal cual: en la plantilla real
+ * comparte `tcPr` con las franjas de sección («Criterios de inclusión», etc.) —mismo
+ * sombreado gris oscuro, misma negrita—, y un cribado con varios criterios (lo normal en un
+ * export de Capital IQ) sale como una franja opaca repetida por cada «Y»/«O» en vez de un
+ * conector menor entre criterios. Se reemplaza por `filaConectorDiscreta`, que conserva solo
+ * el ancho/fusión de columnas del molde. Reportado por el usuario 2026-08-20 con un informe
+ * real (BEUMER 2025) como tabla «rara».
+ *
  * @param {string} tablaXml  el bloque «título + `<w:tbl>`» (o solo la tabla); basta con que
  *        contenga la tabla en algún punto, porque el parseo busca `<w:tr>` directamente y el
  *        párrafo de título, si lo hay, no tiene ninguno.
@@ -796,6 +844,13 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
 
   const nuevas = (filas || []).map((valores) => {
     const vals = valores || [];
+    /* La fila de un solo valor es el conector «Y»/«O»: sale como divisor discreto y no
+       como clon de la franja de sección de la plantilla —ver `filaConectorDiscreta`—, salvo
+       que la tabla no tenga ninguna fila fusionada de la que tomar el ancho de columnas, en
+       cuyo caso se mantiene el comportamiento anterior antes que perder la fila entera. */
+    if (vals.length === 1 && moldeUno) {
+      return filaConectorDiscreta(String(vals[0] ?? ''), moldeUno[0].xml);
+    }
     const molde = vals.length === 1 ? (moldeUno || moldeDos) : (moldeDos || moldeUno);
     if (!molde) return '';
     const celdas = molde.map((c, i) => reescribirTextoParrafoOoxml(
@@ -1895,7 +1950,24 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      Sin `numeros` claros y con un número de ocurrencias distinto de 3, no hay forma de saber
      con certeza cuál copia es la real: se deja tal cual y se avisa, en vez de arriesgar borrar
      o mezclar la copia equivocada — mismo criterio que ya sigue este módulo ante ambigüedad
-     (ver «Rango Intercuartil»/«Tabla de rangos» más abajo). */
+     (ver «Rango Intercuartil»/«Tabla de rangos» más abajo).
+
+     Con exactamente 3 copias, «la del medio es Capital IQ» vale por POSICIÓN y no solo
+     cuando la plantilla la numeró 14 (o no la numeró): un informe real de BEUMER las traía
+     numeradas 18/19/20 —la plantilla se renumeró con los años— y, como ninguna es 14 ni es
+     `null`, la tabla 19 no encajaba en ninguna de las dos ramas: no se borraba, pero tampoco
+     se actualizaba, y el informe quedaba con el cribado del año anterior sin avisar. Solo se
+     excluye por posición la que trae 13 o 15 explícito — un número inequívoco pesa más que la
+     posición —, reportado por el usuario 2026-08-20.
+
+     Con exactamente 2 copias y ninguna numerada 13/14/15, no hay una «del medio»: la posición
+     no alcanza para distinguirlas. Ahí se decide por la línea de fuente de cada una —«Fuente:
+     Búsqueda de Capital IQ…»—: la que la cite se conserva y se actualiza, la otra se borra. Si
+     ninguna la cita, o la citan las dos, no hay con qué distinguir con certeza y se borran
+     las dos —una tabla ausente y avisada es preferible a una desactualizada sin aviso—.
+     También pedido por el usuario 2026-08-20. Con una sola copia ambigua (sin número y sin
+     ninguna otra con la que distinguirla) no aplica esta regla: no hay nada que desambiguar,
+     así que se deja como antes (sin tocar, con aviso). */
   doc.aplicar((actual) => {
     const criterios = filasCriteriosScreening(estudio);
     if (!criterios.length) {
@@ -1908,28 +1980,51 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       return actual;
     }
 
+    const veredictos = bloques.map((bloque, idx) => {
+      const esNumeroDescartable = bloque.numero === 13 || bloque.numero === 15;
+      return {
+        eliminar: esNumeroDescartable
+          || (bloque.numero !== 14 && bloques.length === 3 && (idx === 0 || idx === 2)),
+        conservar: bloque.numero === 14
+          || (!esNumeroDescartable && bloques.length === 3 && idx === 1),
+      };
+    });
+
+    /* Los que ni el número ni la posición resolvieron se deciden por la fuente — pero solo
+       cuando hay al menos dos copias entre las que elegir: con una sola no hay nada que
+       desambiguar. */
+    const indecisos = veredictos
+      .map((v, i) => (!v.eliminar && !v.conservar ? i : -1))
+      .filter((i) => i >= 0);
+    if (indecisos.length >= 2) {
+      const citaCapitalIQ = (i) => /capital\s*iq/i.test(
+        textoPlanoOoxml(actual.slice(bloques[i].inicio, bloques[i].fin))
+      );
+      const conCita = indecisos.filter(citaCapitalIQ);
+      const aConservar = conCita.length === 1 ? conCita[0] : -1;
+      indecisos.forEach((i) => {
+        if (i === aConservar) veredictos[i].conservar = true;
+        else veredictos[i].eliminar = true;
+      });
+    }
+
     let salida = actual;
-    let tocada = false;
+    let algunaConservada = false;
     /* De atrás hacia adelante, como en Transacciones Inter compañía y en Rango Intercuartil:
        borrar o reescribir mueve los índices de lo que va después en el documento. */
-    for (const bloque of [...bloques].reverse()) {
-      const idx = bloques.indexOf(bloque);
-      const esParaEliminar = bloque.numero === 13 || bloque.numero === 15
-        || (bloque.numero !== 14 && bloques.length === 3 && (idx === 0 || idx === 2));
-      const esParaConservar = bloque.numero === 14
-        || (bloque.numero == null && bloques.length === 3 && idx === 1);
-
-      if (esParaEliminar) {
+    for (let idx = bloques.length - 1; idx >= 0; idx -= 1) {
+      const bloque = bloques[idx];
+      const { eliminar, conservar } = veredictos[idx];
+      if (eliminar) {
         salida = salida.slice(0, bloque.inicio) + salida.slice(bloque.fin);
-        tocada = true;
-      } else if (esParaConservar) {
+      } else if (conservar) {
         salida = salida.slice(0, bloque.inicio)
           + reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios)
           + salida.slice(bloque.fin);
-        tocada = true;
+        algunaConservada = true;
       }
     }
-    if (!tocada && Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+    if (!algunaConservada && Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
     return salida;
   });
 

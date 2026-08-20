@@ -715,16 +715,46 @@ test('Códigos SIC: sin criteriosScreening no se toca nada y se avisa', () => {
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
-test('Códigos SIC: dos ocurrencias sin numerar (ni 13/14/15) no se tocan y se avisa', () => {
+test('Códigos SIC: dos ocurrencias sin numerar, una cita Capital IQ en su fuente — se conserva esa y se borra la otra', () => {
   /* El caso real reportado: la plantilla trae la tabla dos veces, ninguna numerada 13/14/15.
-     Sin forma de saber cuál es la copia vigente, se prefiere no arriesgar borrar o mezclar la
-     equivocada antes que adivinar — mismo criterio que el resto del módulo ante ambigüedad. */
+     Sin número ni posición («la del medio») con que distinguirlas, se decide por la línea de
+     fuente: la que cite «Capital IQ» es la vigente. Pedido por el usuario 2026-08-20 — antes
+     esto se dejaba sin tocar (ver el test de más abajo para el caso en que de verdad no se
+     puede distinguir). */
   const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
     + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de fundamentos de Refinitiv, publicado en octubre de 2024.');
   const avisos = [];
   const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
 
-  assert.strictEqual(salida, xml, 'ninguna de las dos copias debe alterarse');
+  assert.ok(!salida.includes('Tabla 19. Códigos SIC utilizados'), 'se eliminó la de Refinitiv');
+  assert.ok(salida.includes('Tabla 18. Códigos SIC utilizados'), 'se conservó la que cita Capital IQ');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la que sobrevive se actualiza con los criterios nuevos');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'se pudo distinguir cuál conservar, no hay que avisar');
+});
+
+test('Códigos SIC: dos ocurrencias sin numerar y sin que ninguna cite Capital IQ — se borran las dos y se avisa', () => {
+  /* Sin número, sin posición y sin fuente que lo diga, no hay con qué distinguir cuál de las
+     dos es la vigente. Pedido explícito del usuario 2026-08-20: ante esa ambigüedad se
+     prefiere borrar las dos —dejar el hueco visible y avisado— a arriesgar conservar la
+     copia equivocada con datos del año anterior sin que nadie se entere. */
+  const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Códigos SIC utilizados'), 'ninguna de las dos copias sobrevive');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('Códigos SIC: una sola copia ambigua (sin número) se deja intacta — no hay con qué desambiguar', () => {
+  /* La regla de la fuente es para elegir ENTRE copias. Con una sola no hay nada que
+     desambiguar, así que no debe borrarse solo porque su fuente no diga «Capital IQ» con
+     esas palabras: eso sería más arriesgado que el problema que se está resolviendo. */
+  const xml = tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual(salida, xml, 'la única copia no debe alterarse');
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
@@ -744,6 +774,56 @@ test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, gridSpan) en l
   assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'se perdió el gridSpan del molde del conector');
   assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los valores nuevos');
   assert.ok(salida.includes('Fuente: Capital IQ.'), 'el pie de fuente no debe tocarse');
+});
+
+test('Códigos SIC: tres ocurrencias numeradas 18/19/20 (renumeración real de BEUMER) conservan y actualizan la del medio', () => {
+  /* Caso real reportado 2026-08-20: la plantilla renumeró las tres copias con los años y
+     ninguna quedó en 13/14/15. Antes, la del medio (Capital IQ) no encajaba en «esParaEliminar»
+     (no es 13 ni 15) NI en «esParaConservar» (no es 14 y sí tiene número, así que tampoco
+     entraba por la rama de «sin numerar») y se quedaba con el cribado del año anterior sin
+     ningún aviso. */
+  const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + tablaSicOoxml(20, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Tabla 18. Códigos SIC utilizados'), 'se eliminó la tabla 18');
+  assert.ok(!salida.includes('Tabla 20. Códigos SIC utilizados'), 'se eliminó la tabla 20');
+  assert.ok(salida.includes('Tabla 19. Códigos SIC utilizados'), 'se conservó la tabla 19 (la del medio)');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla 19 se actualizó con los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no debe sobrevivir el criterio del año anterior');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
+});
+
+test('reescribirFilasOoxml: el conector "Y"/"O" sale como divisor discreto, no como clon de la franja de sección', () => {
+  /* Molde real: la plantilla comparte el mismo tcPr (sombreado gris oscuro, negrita) entre
+     las franjas de sección («Criterios de inclusión») y el conector («Y»), porque las dos
+     son visualmente la misma franja fusionada. Clonarlo tal cual para cada «Y»/«O» de un
+     cribado con varios criterios deja la tabla como una fila de franjas grises opacas. */
+  const filaSeccionOFranjaConector = (texto) =>
+    '<w:tr><w:tc><w:tcPr><w:tcW w:w="9000" w:type="dxa"/><w:gridSpan w:val="2"/>'
+    + '<w:shd w:val="clear" w:color="auto" w:fill="808080"/><w:vAlign w:val="center"/></w:tcPr>'
+    + '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="000000"/></w:rPr>'
+    + '<w:t>' + texto + '</w:t></w:r></w:p></w:tc></w:tr>';
+  const cuerpo = filaDosCeldasOoxml('Código SIC primario:', 'Entre 1111 y 2222')
+    + filaSeccionOFranjaConector('Criterios de inclusión')
+    + filaDosCeldasOoxml('Palabra clave:', 'Contiene viejo')
+    + filaSeccionOFranjaConector('Y')
+    + filaDosCeldasOoxml('Nivel de propiedad', 'No propiedad mayoritaria');
+  const tabla = tablaSicOoxml(null, cuerpo, 'Fuente: Capital IQ.');
+
+  const salida = reescribirFilasOoxml(tabla, [
+    ['Código SIC primario:', 'Entre 7371 y 7375'],
+    ['O'],
+    ['SIC Codes', '3535 Conveyors OR 3545 Cutting Tools'],
+  ]);
+
+  assert.ok(!/w:fill="808080"/.test(salida), 'el conector nuevo no debe heredar el sombreado gris oscuro de la franja de sección');
+  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'el conector conserva la fusión de columnas para no desalinear la tabla');
+  assert.match(salida, /<w:i\/>/, 'el conector sale en cursiva, como divisor discreto');
+  assert.ok(salida.includes('>O<'), 'falta el conector nuevo');
+  assert.ok(salida.includes('3535 Conveyors OR 3545 Cutting Tools'), 'faltan los criterios nuevos');
 });
 
 test('localizarBloquesTabla devuelve todas las ocurrencias homónimas en orden de documento', () => {
