@@ -66,6 +66,9 @@ import {
 } from './anexosPlantilla.js';
 import { pctf, fmt, num } from '../utils/calculations.js';
 import { nameKey } from './comparablesEngine.js';
+/* Para insertar una imagen con SU proporción y no con la de una hoja supuesta: ver
+   `medidaDeImagenAnexoB`. */
+import { deBase64, dimensionesDeImagen } from './png.js';
 /* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
@@ -88,6 +91,50 @@ export const EMU_POR_CM = 360000;
 
 /** Ancho útil por defecto, en cm: A4 (21) menos 2,5 de margen a cada lado. */
 const ANCHO_UTIL_CM = 16;
+
+/* Ancho de la caja de texto de VERDAD, en cm: los 9405 twips con los que
+   `generarTablaOoxml` fija el ancho de todas las tablas del informe, que son los que
+   deja la hoja carta (21,59 cm) con 2,5 de margen a cada lado. `ANCHO_UTIL_CM` se
+   calculó sobre A4 y por eso se queda 6 mm corto; no se corrige ahí porque lo comparten
+   `insertarImagenes` e `insertarAnexoA`, y moverlo cambiaría el alto de las páginas del
+   ANEXO A —que se deriva de él— sin que nadie lo haya pedido. */
+const ANCHO_CAJA_CM = (9405 / 1440) * 2.54;
+
+/* Alto máximo de una imagen del ANEXO B, en cm. La hoja carta deja 23,44 cm útiles
+   (27,94 menos 2,5 arriba y 2 abajo); se deja algo de holgura para que la imagen no
+   empuje sola un salto de página. */
+const ALTO_MAX_ANEXO_B_CM = 22;
+
+/**
+ * A qué tamaño va una imagen del ANEXO B: al ancho de la caja de texto, con SU
+ * proporción real.
+ *
+ * Antes el alto se calculaba con la proporción de un A4 (`ancho * 297/210` = 22,63 cm)
+ * pasara lo que pasara con la imagen. Eso hacía dos cosas mal a la vez: estiraba
+ * cualquier imagen que no fuera un A4 vertical, y con 22,63 cm de alto ya no cabía
+ * debajo de la tabla de descripción de su comparable, así que cada estado financiero se
+ * llevaba una página entera del informe.
+ *
+ * @param {Uint8Array|null} bytes  la imagen ya decodificada de base64.
+ * @returns {{anchoCm:number, altoCm:number}}
+ */
+export function medidaDeImagenAnexoB(bytes) {
+  const dim = bytes ? dimensionesDeImagen(bytes) : null;
+  /* Sin dimensiones legibles se conserva la suposición de siempre —una hoja vertical—,
+     pero pasando por el mismo tope de alto: es peor que medirla, y no hay por qué
+     dejarla además más alta que la hoja. */
+  const proporcion = dim && dim.ancho ? dim.alto / dim.ancho : 297 / 210;
+
+  let anchoCm = ANCHO_CAJA_CM;
+  let altoCm = anchoCm * proporcion;
+  /* Una página completa sigue siendo más alta que el tope: se limita por el alto y el
+     ancho se reduce en la misma proporción, para no deformarla. */
+  if (altoCm > ALTO_MAX_ANEXO_B_CM) {
+    altoCm = ALTO_MAX_ANEXO_B_CM;
+    anchoCm = altoCm / proporcion;
+  }
+  return { anchoCm, altoCm };
+}
 
 /* Dónde va el anexo de estados financieros. Es un párrafo con este texto, que el
    marcado deja en la plantilla y aquí se sustituye por las imágenes. */
@@ -2678,9 +2725,10 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
         rels = reg.rels;
         ct = reg.ct;
 
-        // Generar párrafo de dibujo con proporción A4 estándar
-        const anchoCm = ANCHO_UTIL_CM;
-        const altoCm = (anchoCm * 297) / 210;
+        /* Al ancho de la caja de texto y con la proporción real de la imagen: así el
+           cuadro recortado del estado financiero queda debajo de la tabla de
+           descripción de su comparable en vez de saltar a la página siguiente. */
+        const { anchoCm, altoCm } = medidaDeImagenAnexoB(deBase64(desde.base64));
         nuevoXmlB += '\n' + parrafoConImagen({
           rId: reg.idRel, id: idDibujo++, nombre: nombreImg,
           cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
