@@ -1439,6 +1439,25 @@ function sustituidorDeTablas(xmlInicial, avisos) {
         + out.slice(bloque.fin);
       return true;
     },
+    /** Quita la tabla, su rótulo y la línea FUENTE que la sigue. `true` si estaba.
+     *
+     *  NO anota en `avisos` cuando no la encuentra: ese arreglo se publica como «No se
+     *  encontró en la plantilla: X» y alimenta el semáforo de radicación. Una tabla que se
+     *  quiere borrar y no está es el resultado buscado, no un hallazgo. */
+    borrar(nombres, opciones) {
+      const bloque = localizarBloqueTabla(out, nombres, opciones);
+      if (!bloque) return false;
+      /* La fuente vive detrás del cierre de la tabla, fuera del bloque. Al sustituir no
+         importa —el generador emite la suya—, pero al borrar quedaría huérfana bajo la tabla
+         siguiente, atribuyéndole un origen que no es el suyo. */
+      let fin = bloque.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, bloque.inicio) + out.slice(fin);
+      return true;
+    },
     /* Para lo que no es sustituir una tabla entera —la prosa que la describe, por ejemplo—.
        Existe porque `out` es privado y solo había getter: un `xml = transformar(xml)` en el
        generador modificaba una variable local que nadie volvía a leer, ya que al final se
@@ -1618,10 +1637,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      adicional» del formato (códigos DIAN 61 a 63: préstamos, reintegros y operaciones a
      nombre de vinculados que no se reflejan en el Estado de Resultados).
 
-     SOLO si el formato la trajo y su total supera el umbral. Si no, no se toca nada: la
-     plantilla se queda como estaba, sin tabla vacía y sin rótulo huérfano. Por eso va dentro
-     del `if` y no dentro del generador — pedir la sustitución y devolver la tabla vieja
-     dejaría además un aviso de tabla ausente que no significa nada.
+     Se publica SOLO si el formato la trajo y su total supera el umbral del año gravable. Si
+     no, la tabla que la plantilla trae hay que ELIMINARLA: la plantilla es el informe del
+     año anterior, así que sus filas son las operaciones de ese informe y dejarlas quietas
+     las declara como de este contribuyente. Se va con su rótulo y su línea de fuente, y sin
+     aviso —un borrado intencionado no es una tabla que no se encontró—.
 
      La plantilla puede traerla en columnas o en ficha vertical, como pasa con el rango: se
      mira cuántas columnas declara la que ya está ahí en vez de imponer una forma. */
@@ -1635,6 +1655,8 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         tituloDe(b, t.nombre), t.encabezados, t.filas, escaparXml(t.fuente)
       );
     });
+  } else {
+    doc.borrar(NOMBRES_TABLA_ADICIONAL);
   }
 
   // 4. Método de Precios de Transferencia Aplicable

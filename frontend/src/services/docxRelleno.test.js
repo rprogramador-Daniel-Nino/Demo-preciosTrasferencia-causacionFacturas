@@ -2560,10 +2560,12 @@ test('la operación adicional que supera el umbral llega al .docx', async () => 
   assert.ok(texto.includes('Tabla 13. Operación adicional'), 'se perdió el número del rótulo');
 });
 
-test('sin superar el umbral, la tabla del .docx se queda como estaba', async () => {
-  /* Es la condición que puso el usuario: si el formato no la trae o no supera el valor, el
-     informe sale como salía antes. ESTUDIO declara anio: '2024', cuyo umbral de 45.000 UVT
-     es 2.117.925.000: este monto queda justo debajo. */
+test('sin superar el umbral, la tabla del .docx se elimina en vez de quedarse como estaba', async () => {
+  /* Antes de esta tarea, si el formato no la traía o no superaba el valor, el informe salía
+     exactamente como salía antes: la tabla de la plantilla —el informe del año anterior— se
+     quedaba con SUS cifras. Esa afirmación es la que esta tarea corrige: dejarla quieta la
+     publica como si fuera de este contribuyente. ESTUDIO declara anio: '2024', cuyo umbral
+     de 45.000 UVT es 2.117.925.000: este monto queda justo debajo. */
   const buf = await plantillaConAdicional();
   const { salida } = rellenarDocx({
     binario: buf,
@@ -2575,15 +2577,20 @@ test('sin superar el umbral, la tabla del .docx se queda como estaba', async () 
   });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
 
-  assert.ok(texto.includes('9.999.999.999'), 'se tocó una tabla que no correspondía');
+  assert.ok(!texto.includes('9.999.999.999'), 'sobrevivió una tabla que no correspondía');
+  assert.ok(!texto.includes('Operación adicional'), 'sobrevivió el rótulo de la tabla');
   assert.ok(!texto.includes('MONTACHEM'), 'se publicó una operación que no supera el umbral');
 });
 
-test('sin sección de información adicional, la tabla del .docx tampoco se toca', async () => {
+test('sin sección de información adicional, la tabla del .docx también se elimina', async () => {
+  /* Antes de esta tarea la tabla tampoco se tocaba. Corregido por el mismo motivo que el
+     caso de arriba: sin sección 4 en el formato, la plantilla no tiene nada propio que
+     publicar y su tabla es la del informe anterior. */
   const buf = await plantillaConAdicional();
   const { salida } = rellenarDocx({ binario: buf, estudio: ESTUDIO, tipoSalida: 'uint8array' });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
-  assert.ok(texto.includes('9.999.999.999'), 'se tocó la tabla sin tener datos');
+  assert.ok(!texto.includes('9.999.999.999'), 'sobrevivió la tabla sin tener datos');
+  assert.ok(!texto.includes('Operación adicional'), 'sobrevivió el rótulo de la tabla');
 });
 
 test('si la plantilla trae la tabla en ficha vertical, el .docx respeta su forma', async () => {
@@ -2614,6 +2621,69 @@ test('si la plantilla trae la tabla en ficha vertical, el .docx respeta su forma
   assert.ok(texto.includes('MONTACHEM INTERNATIONAL INC'), 'el vinculado no llegó');
   /* En ficha se publica el TOTAL: una fila de etiqueta y valor no admite dos montos. */
   assert.ok(texto.includes('2.700.000.000'), 'no se publicó el total: ' + texto);
+});
+
+test('sin operación adicional declarable, la tabla del .docx se elimina con su fuente', () => {
+  /* La plantilla es el informe del año anterior. Dejar su tabla quieta publica las
+     operaciones de ese informe como si fueran de este contribuyente. */
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 5. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 5</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME' }, avisos);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el vinculado anterior');
+  assert.ok(!salida.includes('Operación adicional'), 'sobrevivió el rótulo');
+  /* La numeración de lo que sigue NO se toca: la fija la plantilla. */
+  assert.ok(salida.includes('Tabla 5. Método de Precios de Transferencia'),
+    'se renumeró o se perdió la tabla siguiente');
+  assert.ok(!avisos.some((a) => String(a).toLowerCase().includes('adicional')),
+    'un borrado deliberado no es «no se encontró en la plantilla»');
+});
+
+test('por debajo del umbral la tabla del .docx también se elimina', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 500000000,
+      filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+        tipo: 'Préstamos con vinculados (61)', monto: 500000000 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+  assert.ok(!salida.includes('BETA GMBH'), 'se publicó una operación que no supera el umbral');
+});
+
+test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  assert.ok(salida.includes('Operación adicional'), 'se borró una tabla que sí había que publicar');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'));
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
 });
 
 /* ── Estilo de las tablas que esta ruta genera de cero ──

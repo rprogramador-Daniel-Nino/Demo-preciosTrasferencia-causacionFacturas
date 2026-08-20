@@ -21,6 +21,7 @@
 
 import {
   localizarTablaHtml, localizarTablasHtml, reescribirFilasHtml, reescribirRotuloHtml, filasDe,
+  borrarTablaHtml,
 } from './tablasHtmlInforme.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -198,8 +199,14 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
 
   /* «Operación adicional Transacciones Intercompañía» va fuera del bucle porque es la única
      tabla que puede NO corresponder: se publica solo si el formato trajo la sección «4.
-     Información adicional» y su total supera el umbral. Si no, la plantilla se queda como
-     está —sin tabla vacía y sin un aviso de tabla ausente, que ahí no significaría nada—.
+     Información adicional» y su total supera el umbral del año gravable.
+
+     Y cuando NO corresponde no basta con dejarla quieta. La plantilla es el informe del año
+     anterior, así que la tabla que ya está ahí trae las operaciones de ese informe: no
+     tocarla las publica como si fueran de este contribuyente. Se elimina con su rótulo y su
+     línea de fuente. Sin aviso: `avisos` se publica como «no se encontró en la plantilla» y
+     alimenta el semáforo de radicación, y un borrado intencionado no es eso. Que la tabla no
+     va a salir se dice en el paso 2 de la ingesta, donde el usuario puede actuar.
 
      La plantilla puede traerla en ficha vertical o en columnas, igual que el rango, así que
      se mira la forma de la que ya está en vez de imponer una. */
@@ -213,6 +220,9 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
     } else if (Array.isArray(avisos)) {
       avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
     }
+  } else {
+    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
+    if (bloque) out = borrarTablaHtml(out, bloque);
   }
 
   /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un

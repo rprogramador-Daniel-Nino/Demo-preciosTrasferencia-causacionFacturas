@@ -199,6 +199,43 @@ export function localizarTablasHtml(html, nombres, opciones = {}) {
     .sort((x, y) => x.inicio - y.inicio);
 }
 
+/* El primer elemento que sigue a un bloque, para poder mirar si es su línea de fuente.
+   Regex local y no compartida: las de este módulo llevan `g` y arrastran `lastIndex`. */
+const RX_ELEMENTO_SIGUIENTE = /^\s*<p(?:\s[^>]*)?>[\s\S]*?<\/p\s*>/i;
+
+/**
+ * Quita del informe una tabla completa: su rótulo, la tabla y la línea de fuente que la
+ * sigue.
+ *
+ * La fuente hay que llevársela a mano porque no está dentro del bloque que devuelve
+ * `localizarTablasHtml` —el bloque acaba en `</table>`—. Al sustituir da igual, porque la
+ * tabla nueva emite la suya; al borrar, una fuente huérfana queda bajo la tabla siguiente y
+ * le atribuye un origen que no es el suyo.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number, fin:number}|null}} bloque
+ * @returns {string}
+ */
+export function borrarTablaHtml(html, bloque) {
+  const texto = String(html || '');
+  if (!bloque) return texto;
+
+  let fin = bloque.fin;
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(fin));
+  if (siguiente && /^\s*fuente\s*:/i.test(textoPlanoHtml(siguiente[0]))) {
+    fin += siguiente[0].length;
+  }
+
+  /* El rótulo va ANTES que la tabla, así que se recorta el tramo entero en un solo corte:
+     borrar primero el rótulo desplazaría los offsets sobre los que se calculó el bloque.
+     `rotulo` es null cuando el título vive dentro de la propia tabla, y entonces ya está
+     dentro del tramo. */
+  const desde = (bloque.rotulo && bloque.rotulo.inicio < bloque.inicio)
+    ? bloque.rotulo.inicio
+    : bloque.inicio;
+  return texto.slice(0, desde) + texto.slice(fin);
+}
+
 /** Las `<tr>` de una tabla, con sus posiciones. Sirve igual con `<thead>`/`<tbody>`. */
 export function filasDe(tablaHtml) {
   return [...String(tablaHtml || '').matchAll(/<tr(?:\s[^>]*)?>[\s\S]*?<\/tr\s*>/gi)]
