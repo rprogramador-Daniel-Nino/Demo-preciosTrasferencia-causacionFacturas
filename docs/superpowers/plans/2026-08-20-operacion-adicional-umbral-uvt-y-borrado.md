@@ -864,6 +864,488 @@ git commit -m "chore: regenerar public/gestor-reportes"
 
 ---
 
+### Task 4: Insertar la tabla cuando la plantilla no la trae
+
+**Files:**
+- Modify: `frontend/src/services/tablasHtmlInforme.js` — nueva primitiva `insertarTablaHtml`
+- Modify: `frontend/src/services/docxRelleno.js` — método `insertar` en `sustituidorDeTablas`
+  y la rama de la tabla adicional en `actualizarTablasOperacionesOoxml`
+- Modify: `frontend/src/services/tablasOperacionesHtml.js` — la rama equivalente
+- Test: `frontend/src/services/tablasOperacionesHtml.test.js`,
+  `frontend/src/services/docxRelleno.test.js`
+
+**Interfaces:**
+- Consumes: `localizarTablaHtml` / `localizarBloqueTabla` con `opciones.excluir`,
+  `reescribirFilasHtml` y `reescribirRotuloHtml` (`tablasHtmlInforme.js:338, :425`),
+  `generarTablaOoxml` (`docxRelleno.js:163`), `filasOperacionAdicionalFicha(estudio)`,
+  `tieneOperacionAdicional(estudio)`, `NOMBRES_TABLA_ADICIONAL`,
+  `NOMBRES_TABLA_TRANSACCIONES` (`tablasOperaciones.js:158`).
+- Produces:
+  - `insertarTablaHtml(html, bloqueAncla, tabla) → string` en `tablasHtmlInforme.js`.
+  - `sustituidorDeTablas(...).insertar(nombresAncla, generar, opciones) → boolean` en
+    `docxRelleno.js`.
+
+**El problema, con evidencia.** Con la Task 2, la matriz queda así:
+
+| Plantilla trae la tabla | Supera el umbral | Qué hace |
+|---|---|---|
+| sí | sí | la reemplaza ✅ |
+| sí | no | la elimina ✅ |
+| **no** | **sí** | **nada — solo un aviso en el banner** ⚠️ |
+| no | no | nada ✅ |
+
+Medido corriendo `actualizarTablasOperacionesHtml` con un estudio de 14.516.485.850 (por
+encima del umbral de 2025) contra una plantilla sin la tabla:
+
+```
+¿aparece en el informe generado?:  NO
+¿se insertó el rótulo?:            NO
+avisos emitidos: [..., "Operación adicional Transacciones Intercompañía"]
+```
+
+La operación hay que declararla, el sistema lo sabe, y el documento sale sin ella. El aviso
+queda entre otros seis de la misma corrida. Confiar en que alguien lea ese banner y escriba la
+tabla a mano en Word no es una garantía.
+
+**El ancla es el NOMBRE, nunca el número.** Requisito del usuario, y coincide con cómo está
+construido el resto: los localizadores casan por nombre y el número «solo desempata»
+(`docxRelleno.js:960-962`), porque la numeración cambia de un informe a otro —la ficha del
+vinculado viene como «Tabla 3» o como «Tabla 12» en la misma plantilla—. La tabla se inserta
+**después del bloque de «Transacciones Inter compañía»**, localizado por nombre y con el veto
+`excluir: NOMBRES_TABLA_ADICIONAL` para no anclar sobre la tabla adicional misma. Es donde el
+informe de referencia la lleva.
+
+Si el ancla tampoco está, no se inserta nada y el aviso se mantiene: sin ancla no hay sitio, y
+pegar la tabla al final del documento sería peor que no ponerla.
+
+**Se inserta DESPUÉS de la línea `FUENTE:` del ancla**, si la trae. Insertar entre la tabla y
+su fuente dejaría la fuente del ancla debajo de la tabla nueva, atribuyéndosela.
+
+**Asimetría entre las dos rutas, y por qué cada una hace lo que hace:**
+
+- **`.docx`:** `generarTablaOoxml(titulo, cabeceras, filas, fuente)` (`:163`) ya fabrica la
+  tabla con la tipografía y los bordes que usa todo el informe, y es lo que emite cada
+  sustitución. Insertar es generar y empalmar.
+- **HTML:** este módulo **no tiene generador de tablas** y no hay que escribirle uno. Su
+  premisa es reescribir lo que la plantilla trae para conservar el maquetado del cliente
+  (`tablasOperacionesHtml.js:4-8`). Así que la tabla insertada es un **clon del marcado del
+  ancla** con las filas y el rótulo reescritos: la Tabla 3 es también una ficha de dos
+  columnas, la misma forma que `filasOperacionAdicionalFicha`, y clonarla hereda el estilo del
+  cliente exactamente. Inventar HTML propio metería una tabla con otra pinta en medio del
+  informe.
+
+**La numeración del rótulo.** No se renumera nada (restricción global). El rótulo insertado
+lleva el número del ancla + 1 cuando el ancla trae número, y va sin número cuando no. Con una
+plantilla que ya tenga una «Tabla 4», eso deja **dos tablas con el mismo número**, y es
+deliberado: la alternativa —renumerar lo que sigue— va contra `docxRelleno.js:1548` y
+`:563-567`. Se emite un aviso propio nombrándolo para que se corrija en Word.
+
+- [ ] **Step 1: Escribir las pruebas que fallan (ruta HTML)**
+
+Añadir a `frontend/src/services/tablasOperacionesHtml.test.js`:
+
+```js
+/* ── Inserción cuando la plantilla no trae la tabla ─────────────────────────── */
+
+/* Ancla = «Transacciones Inter compañía», ficha de dos columnas, con su línea de fuente.
+   Detrás va otra tabla, para comprobar que la inserción cae ENTRE las dos y no encima. */
+const PLANTILLA_SIN_ADICIONAL =
+  '<p><strong> Tabla 3. Transacciones Inter compañía</strong></p>' +
+  '<table>' +
+  '<tr><th colspan="2"><p><strong> Compañía vinculada</strong></p></th></tr>' +
+  '<tr><th><p><strong> Razón social</strong></p></th><td><p> ACME LLC</p></td></tr>' +
+  '<tr><th><p><strong> Monto en pesos</strong></p></th><td><p> 1.000.000</p></td></tr>' +
+  '</table>' +
+  '<p><strong>FUENTE: Información de ACME COLOMBIA S.A.S.</strong></p>' +
+  '<p><strong> Tabla 4. Método de Precios de Transferencia</strong></p>' +
+  '<table><tr><th><p><strong> Código de Operación</strong></p></th></tr></table>';
+
+const ESTUDIO_DECLARABLE = {
+  anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S',
+  vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+  operacionAdicional: {
+    monto: 14516485850,
+    filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+  },
+};
+
+test('sobre el umbral y sin la tabla en la plantilla, la tabla se inserta tras la Tabla 3', () => {
+  /* Antes de esto el informe salía sin la tabla y solo quedaba un aviso entre otros seis:
+     la operación hay que declararla y el documento se radicaba sin ella. */
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, avisos);
+
+  assert.match(salida, /Operación adicional Transacciones Intercompañía/, 'no se insertó el rótulo');
+  assert.match(salida, /MONTACHEM INTERNATIONAL INC/, 'no se insertaron los datos');
+  assert.match(salida, /14\.516\.485\.850/);
+
+  /* La inserción va DESPUÉS de la fuente del ancla y ANTES de la tabla siguiente. */
+  const iFuenteAncla = salida.indexOf('FUENTE: Información de ACME COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuenteAncla > -1, 'se perdió la fuente del ancla');
+  assert.ok(iFuenteAncla < iInsertada, 'la inserción quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'la inserción quedó después de la tabla siguiente');
+
+  /* El ancla intacta: se inserta al lado, no encima. */
+  assert.match(salida, /Tabla 3\. Transacciones Inter compañía/);
+  assert.match(salida, /ACME LLC/);
+});
+
+test('la inserción hereda el marcado del ancla y no inventa una tabla con otra pinta', () => {
+  /* Este módulo existe para conservar el maquetado del cliente. La tabla insertada es un
+     clon del ancla con las filas reescritas, así que sus etiquetas de marcado son las
+     mismas. */
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, []);
+  const desde = salida.indexOf('Operación adicional');
+  const trozo = salida.slice(desde);
+  assert.match(trozo, /<th colspan="2">/, 'no heredó la cabecera combinada del ancla');
+});
+
+test('la inserción avisa de la numeración duplicada', () => {
+  /* La plantilla ya trae una «Tabla 4», así que el rótulo insertado la repite. No se
+     renumera —lo prohíbe el criterio del repo— pero callarlo sería dejar el informe con dos
+     tablas del mismo número sin que nadie lo sepa. */
+  const avisos = [];
+  actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, ESTUDIO_DECLARABLE, avisos);
+  assert.ok(avisos.some((a) => /insert/i.test(String(a)) && /numeraci/i.test(String(a))),
+    'no se avisó de la inserción ni de la numeración');
+});
+
+test('sin el ancla en la plantilla no se inserta nada y el aviso se mantiene', () => {
+  /* Sin sitio donde ponerla, pegarla al final sería peor que no ponerla. */
+  const avisos = [];
+  const sinAncla = '<p><strong> Tabla 4. Método de Precios de Transferencia</strong></p>' +
+    '<table><tr><th><p><strong> Código de Operación</strong></p></th></tr></table>';
+
+  const salida = actualizarTablasOperacionesHtml(sinAncla, ESTUDIO_DECLARABLE, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')),
+    'se perdió el aviso de tabla ausente');
+});
+
+test('bajo el umbral y sin la tabla en la plantilla, no se inserta nada ni se avisa', () => {
+  const avisos = [];
+  const estudio = {
+    ...ESTUDIO_DECLARABLE,
+    operacionAdicional: { monto: 500000000, filas: [{ vinculado: 'BETA GMBH', monto: 500000000 }] },
+  };
+
+  const salida = actualizarTablasOperacionesHtml(PLANTILLA_SIN_ADICIONAL, estudio, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó una tabla que no hay que declarar');
+  assert.ok(!salida.includes('BETA GMBH'));
+  assert.ok(!avisos.some((a) => String(a).toLowerCase().includes('adicional')));
+});
+
+test('con la tabla YA en la plantilla se sustituye y no se duplica', () => {
+  /* La regresión que esta tarea podría causar: insertar además de sustituir. */
+  const conTabla = PLANTILLA_SIN_ADICIONAL +
+    '<p><strong> Tabla 5. Operación adicional Transacciones Intercompañía</strong></p>' +
+    '<table><tr><th><p><strong> Razón social</strong></p></th><td><p> CLIENTE ANTERIOR S.A.</p></td></tr></table>';
+
+  const salida = actualizarTablasOperacionesHtml(conTabla, ESTUDIO_DECLARABLE, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR'), 'sobrevivió el vinculado anterior');
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/tablasOperacionesHtml.test.js`
+Expected: FAIL — la primera falla en `assert.match(salida, /Operación adicional/)`: hoy no se
+inserta nada.
+
+- [ ] **Step 3: La primitiva de inserción en `tablasHtmlInforme.js`**
+
+Junto a `borrarTablaHtml` (`:219`):
+
+```js
+/**
+ * Inserta una tabla en el informe, después del bloque que sirve de ancla.
+ *
+ * El ancla se localiza por NOMBRE y nunca por número: la numeración cambia de un informe a
+ * otro —la ficha del vinculado viene como «Tabla 3» o como «Tabla 12» en la misma
+ * plantilla— y el resto del módulo ya trabaja así.
+ *
+ * La tabla insertada es un CLON del marcado del ancla con el rótulo y las filas reescritos,
+ * no marcado fabricado aquí. Es la premisa de este módulo: lo que se conserva es el
+ * maquetado del cliente, y una tabla inventada saldría con otra pinta en medio de su
+ * informe. Exige que el ancla tenga la misma forma que la tabla nueva —las dos son fichas
+ * de dos columnas—, que es el caso para el que existe esta función.
+ *
+ * Va después de la línea `FUENTE:` del ancla cuando la trae: colarse entre la tabla y su
+ * fuente se la atribuiría a la tabla nueva.
+ *
+ * @param {string} html
+ * @param {{inicio:number, fin:number, rotulo:{inicio:number,fin:number,xml:string}|null}} ancla
+ * @param {{nombre:string, filas:string[][]}} tabla  lo que va en la tabla nueva.
+ * @param {string} titulo  el rótulo ya compuesto, con su número si corresponde.
+ * @returns {string}
+ */
+export function insertarTablaHtml(html, ancla, tabla, titulo) {
+  const texto = String(html || '');
+  if (!ancla || !tabla) return texto;
+
+  /* Dónde acaba el ancla, contando su línea de fuente. */
+  let fin = ancla.fin;
+  const siguiente = RX_ELEMENTO_SIGUIENTE.exec(texto.slice(fin));
+  if (siguiente && /^\s*fuente\s*:/i.test(textoPlanoHtml(siguiente[0]))) {
+    fin += siguiente[0].length;
+  }
+
+  /* El clon: el rótulo del ancla con el texto nuevo, y su tabla con las filas nuevas. */
+  const rotuloClon = ancla.rotulo
+    ? reescribirRotuloHtml(ancla.rotulo.xml, titulo)
+    : '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+  const tablaClon = reescribirFilasHtml(texto.slice(ancla.inicio, ancla.fin), tabla.filas);
+
+  return texto.slice(0, fin) + rotuloClon + tablaClon + texto.slice(fin);
+}
+```
+
+Nota: `RX_ELEMENTO_SIGUIENTE` y `textoPlanoHtml` los aporta la Task 2 y ya están en el módulo;
+`reescribirRotuloHtml`, `reescribirFilasHtml` y `escaparTextoHtml` ya existían.
+
+- [ ] **Step 4: Insertar en la ruta HTML**
+
+En `tablasOperacionesHtml.js`, la rama de la tabla adicional (que la Task 2 dejó como
+`if (tieneOperacionAdicional) { … } else { … }`) gana el caso de la tabla ausente. Reemplazar
+el `else if (Array.isArray(avisos)) avisos.push(...)` de la rama de publicación por:
+
+```js
+    } else {
+      /* La plantilla no trae la tabla y la operación hay que declararla: se INSERTA después
+         del bloque de «Transacciones Inter compañía», que es donde el informe de referencia
+         la lleva. El ancla se busca por nombre y con el veto de los nombres de esta misma
+         tabla, para no anclar sobre ella. Sin ancla no hay sitio: se mantiene el aviso y no
+         se pega nada al final del documento, que sería peor que no ponerla. */
+      const ancla = localizarTablaHtml(out, NOMBRES_TABLA_TRANSACCIONES, {
+        excluir: NOMBRES_TABLA_ADICIONAL,
+      });
+      const t = filasOperacionAdicionalFicha(estudio);
+      if (ancla && t) {
+        /* El número del ancla + 1, y sin número si el ancla no lo trae. No se renumera lo que
+           sigue —lo prohíbe el criterio del repo—, así que esto puede repetir un número que
+           ya existe: por eso el aviso lo nombra. */
+        const numeroAncla = numeroDeTabla(ancla.titulo);
+        const titulo = numeroAncla != null
+          ? 'Tabla ' + (numeroAncla + 1) + '. ' + t.nombre
+          : t.nombre;
+        out = insertarTablaHtml(out, ancla, t, titulo);
+        if (Array.isArray(avisos)) {
+          avisos.push(
+            'se insertó la tabla «' + t.nombre + '» después de «' + ancla.titulo
+            + '» porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          );
+        }
+      } else if (Array.isArray(avisos)) {
+        avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+      }
+    }
+```
+
+Añadir a los imports lo que falte: `insertarTablaHtml` y `numeroDeTabla` de
+`./tablasHtmlInforme.js` (`numeroDeTabla` se exporta de `docxRelleno.js:621` — importarla de
+donde ya la tome este módulo, sin duplicarla), `filasOperacionAdicionalFicha` y
+`NOMBRES_TABLA_TRANSACCIONES` de `./tablasOperaciones.js`.
+
+- [ ] **Step 5: Escribir las pruebas que fallan (ruta OOXML)**
+
+Añadir a `frontend/src/services/docxRelleno.test.js`:
+
+```js
+test('sin la tabla en la plantilla y sobre el umbral, se inserta tras Transacciones Inter compañía', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>FUENTE: Información de ACME COLOMBIA S.A.S.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'MONTACHEM COLOMBIA S.A.S',
+    vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+    },
+  };
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, avisos);
+
+  assert.ok(salida.includes('Operación adicional Transacciones Intercompañía'),
+    'no se insertó el rótulo');
+  assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'), 'no se insertaron los datos');
+  assert.ok(salida.includes('14.516.485.850'));
+
+  /* Después de la fuente del ancla y antes de la tabla siguiente. */
+  const iFuente = salida.indexOf('FUENTE: Información de ACME COLOMBIA');
+  const iInsertada = salida.indexOf('Operación adicional');
+  const iSiguiente = salida.indexOf('Método de Precios de Transferencia');
+  assert.ok(iFuente > -1 && iFuente < iInsertada, 'quedó entre el ancla y su fuente');
+  assert.ok(iInsertada < iSiguiente, 'quedó después de la tabla siguiente');
+
+  /* La Tabla 3 sustituida con lo suyo, no pisada por la insertada. */
+  assert.ok(salida.includes('900111'), 'falta la identificación fiscal de la Tabla 3');
+  assert.ok(avisos.some((a) => /insert/i.test(String(a))), 'no se avisó de la inserción');
+});
+
+test('sin el ancla no se inserta nada y se mantiene el aviso de tabla ausente', () => {
+  const xml =
+    '<w:p><w:t>Tabla 4. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 4</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const avisos = [];
+
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  }, avisos);
+
+  assert.ok(!salida.includes('Operación adicional'), 'se insertó sin ancla');
+  assert.ok(avisos.some((a) => String(a).includes('Operación adicional')));
+});
+
+test('con la tabla ya en la plantilla se sustituye una vez y no se duplica', () => {
+  const xml =
+    '<w:p><w:t>Tabla 3. Transacciones Inter compañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 3</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME',
+    operacionAdicional: {
+      monto: 14516485850,
+      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', monto: 14516485850 }],
+    },
+  };
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+
+  const ocurrencias = (salida.match(/Operación adicional Transacciones Intercompañía/g) || []).length;
+  assert.strictEqual(ocurrencias, 1, 'la tabla quedó duplicada');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'));
+});
+```
+
+- [ ] **Step 6: Insertar en la ruta OOXML**
+
+En `sustituidorDeTablas`, junto a `reemplazar` y `borrar`:
+
+```js
+    /** Inserta una tabla después del bloque que sirve de ancla, localizada por NOMBRE.
+     *
+     *  `generar` recibe el bloque del ancla, para poder componer el rótulo a partir del
+     *  número que ese bloque traiga. Devuelve `false` —sin anotar nada en `avisos`— cuando el
+     *  ancla no está: quien llama decide qué decir, porque el aviso útil ahí no es «no
+     *  encontré el ancla» sino «no pude poner la tabla que hay que declarar». */
+    insertar(nombresAncla, generar, opciones) {
+      const ancla = localizarBloqueTabla(out, nombresAncla, opciones);
+      if (!ancla) return false;
+      /* Después de la línea FUENTE del ancla: colarse entre la tabla y su fuente se la
+         atribuiría a la tabla nueva. */
+      let fin = ancla.fin;
+      const hermano = parrafoHermanoSiguiente(out, fin);
+      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
+        fin = hermano.fin;
+      }
+      out = out.slice(0, fin) + generar(ancla) + out.slice(fin);
+      return true;
+    },
+```
+
+En `actualizarTablasOperacionesOoxml`, la rama de la tabla adicional que la Task 2 dejó pasa a
+distinguir tres casos. `reemplazar` ya devuelve `false` y anota en `avisos` cuando no
+encuentra la tabla, así que hay que evitar ese anotado y decidir aquí — usar `doc.reemplazar`
+no sirve para eso: hay que preguntar primero si la tabla está.
+
+```js
+  if (tieneOperacionAdicional(estudio)) {
+    const emitirAdicional = (b, xmlBloque, titulo) => {
+      const columnas = (String(xmlBloque || '').match(/<w:gridCol\b/g) || []).length;
+      const t = columnas > 0 && columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      return generarTablaOoxml(
+        titulo != null ? titulo : tituloDe(b, t.nombre),
+        t.encabezados, t.filas, escaparXml(t.fuente)
+      );
+    };
+
+    if (localizarBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL)) {
+      reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque));
+    } else {
+      /* La plantilla no la trae y hay que declararla: se inserta tras «Transacciones Inter
+         compañía», que es donde el informe de referencia la lleva. El ancla se busca por
+         nombre —la numeración no es fiable— y con el veto de los nombres de esta tabla, para
+         no anclar sobre ella. La tabla insertada es una ficha, como el ancla. */
+      const t = filasOperacionAdicionalFicha(estudio);
+      const insertada = doc.insertar(
+        NOMBRES_TABLA_TRANSACCIONES,
+        (ancla) => {
+          /* El número del ancla + 1, sin número si no lo trae. No se renumera lo que sigue,
+             así que esto puede repetir un número existente: el aviso lo nombra. */
+          const titulo = ancla.numero != null
+            ? 'Tabla ' + (ancla.numero + 1) + '. ' + t.nombre
+            : t.nombre;
+          return emitirAdicional(ancla, '', titulo);
+        },
+        { excluir: NOMBRES_TABLA_ADICIONAL }
+      );
+      if (Array.isArray(avisos)) {
+        avisos.push(insertada
+          ? 'se insertó la tabla «' + t.nombre + '» después de «Transacciones Inter compañía»'
+            + ' porque la plantilla no la traía: revise la numeración de las tablas siguientes'
+          : NOMBRES_TABLA_ADICIONAL[0]);
+      }
+    }
+  } else {
+    doc.borrar(NOMBRES_TABLA_ADICIONAL);
+  }
+```
+
+Ojo: `emitirAdicional` recibe `''` como `xmlBloque` en la inserción, así que `columnas` sale 0
+y caería en la rama de columnas. Por eso se le pasa la ficha explícitamente: en la inserción
+la forma la elegimos nosotros —ficha, como el ancla— y no hay tabla previa que mirar.
+Verificar que la implementación efectivamente emite la ficha en ese camino.
+
+- [ ] **Step 7: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.test.js`
+Expected: PASS — las 9 nuevas y todas las anteriores. Cualquier prueba previa que asegure que
+«sin la tabla en la plantilla no se inserta nada» cambia de veredicto a propósito: actualizala
+describiendo el comportamiento nuevo. Si una falla por otro motivo, es una regresión.
+
+- [ ] **Step 8: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add frontend/src/services/tablasHtmlInforme.js frontend/src/services/tablasOperacionesHtml.js frontend/src/services/tablasOperacionesHtml.test.js frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js
+git commit -m "feat: la tabla de operacion adicional se inserta si la plantilla no la trae"
+```
+
+- [ ] **Step 10: Verificación en un .docx real**
+
+Las pruebas usan XML sintético. Antes de cerrar, generar un informe contra la plantilla real y
+abrirlo en Word para confirmar que la tabla insertada no rompe el documento:
+`frontend/Archivos Prueba/Informe Local End Game _ 2024_v2.docx`. Confirmar que Word lo abre
+sin avisos de reparación, que la tabla insertada aparece tras «Transacciones Inter compañía» y
+que se ve con el mismo formato que las demás.
+
+---
+
 ## Verificación final
 
 - [ ] `npm test` — 100 % en verde, con ~15 pruebas más que al empezar (1607 → ~1622).
@@ -882,3 +1364,9 @@ git commit -m "chore: regenerar public/gestor-reportes"
       visible al salir del paso 2 y volver, tanto por encima como por debajo del umbral.
 - [ ] La tarjeta de detalle fila por fila de `72a3163` sigue intacta, con su tabla y su nota
       de que el monto no se suma al analizado.
+- [ ] Con una plantilla SIN la tabla y un monto sobre el umbral, la tabla se inserta tras
+      «Transacciones Inter compañía» en las dos rutas, anclada por NOMBRE y nunca por número.
+- [ ] La inserción cae después de la línea FUENTE del ancla, no entre la tabla y su fuente.
+- [ ] Con la tabla YA en la plantilla no se duplica: se sustituye una sola vez.
+- [ ] El .docx generado contra `frontend/Archivos Prueba/Informe Local End Game _ 2024_v2.docx`
+      abre en Word sin avisos de reparación.
