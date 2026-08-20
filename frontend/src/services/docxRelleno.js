@@ -796,6 +796,25 @@ function inicioDeParrafo(xml, posicion) {
   return inicio;
 }
 
+/* Hueco de maquetación entre dos bloques de contenido: un párrafo vacío (o autocerrado), una
+   marca de libro o un aviso del corrector. Word los deja tanto ANTES de una tabla —entre su
+   rótulo y el `<w:tbl>`— como DESPUÉS —entre el cierre de la tabla y su línea «FUENTE:»—, así
+   que el mismo bucle de salto sirve en los dos sentidos: lo usan `candidatosBloqueTabla` y
+   `finDeTablaInmediata` por delante, y `finDeFuenteSiguienteOoxml` por detrás. Un párrafo que
+   solo lleva una ecuación no cuenta como vacío: `textoPlanoOoxml` no le ve texto, pero es
+   contenido, y tragárselo dentro del tramo que se recorta lo borraría. */
+function saltarHuecosOoxml(texto, cursor) {
+  let c = cursor;
+  for (; ;) {
+    const resto = texto.slice(c);
+    const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
+    if (!hueco) break;
+    if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
+    c += hueco[0].length;
+  }
+  return c;
+}
+
 /**
  * Tablas cuyo título no las precede, sino que es su PRIMERA FILA.
  *
@@ -873,17 +892,7 @@ function candidatosBloqueTabla(xml, nombres) {
     /* Entre el título y la tabla la plantilla suele dejar párrafos vacíos. Se saltan
        los que no tienen texto; en cuanto aparece uno con contenido, el título ya no
        era el de esta tabla y se descarta. */
-    let cursor = p.index + p[0].length;
-    for (; ;) {
-      const resto = texto.slice(cursor);
-      const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
-      if (!hueco) break;
-      /* Un párrafo que sólo lleva una ecuación no tiene ningún `<w:t>` y a `textoPlanoOoxml` le
-         parece vacío. No es un hueco de maquetación: es contenido, y tragárselo dentro del bloque
-         de la tabla lo borraría al sustituirla. */
-      if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
-      cursor += hueco[0].length;
-    }
+    const cursor = saltarHuecosOoxml(texto, p.index + p[0].length);
     const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(cursor));
     if (!tras) continue;
 
@@ -967,15 +976,7 @@ export function localizarBloquesTabla(xml, nombres) {
    libro y avisos del corrector, igual que `localizarBloqueTabla`—, el índice donde
    termina esa tabla; si no, -1. */
 function finDeTablaInmediata(texto, cursor) {
-  let c = cursor;
-  for (; ;) {
-    const resto = texto.slice(c);
-    const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
-    if (!hueco) break;
-    /* Igual que en `localizarBloqueTabla`: una ecuación no es un hueco vacío. */
-    if (textoPlanoOoxml(hueco[0]).trim() || /<m:oMath[ >]/.test(hueco[0])) break;
-    c += hueco[0].length;
-  }
+  const c = saltarHuecosOoxml(texto, cursor);
   const tras = /^\s*<w:tbl(?:\s[^>]*)?>/.exec(texto.slice(c));
   if (!tras) return -1;
   const inicioTabla = c + tras[0].indexOf('<w:tbl');
@@ -1017,6 +1018,32 @@ function parrafoHermanoSiguiente(xml, cursor) {
   const fin = finDeParrafo(xml, desde);
   if (fin < 0) return { bloqueado: 'fin', desde };
   return { inicio: desde, fin, xml: xml.slice(desde, fin) };
+}
+
+/** Si el texto de un párrafo empieza por «FUENTE:» o «FUENTES:» —una tabla que cita varias
+ *  fuentes se rotula así con toda naturalidad, y antes solo se reconocía el singular. */
+const esLineaFuenteOoxml = (texto) => /^\s*fuentes?\s*:/i.test(texto);
+
+/**
+ * Si tras `desde` —saltando los mismos huecos de maquetación que delante de una tabla
+ * (`saltarHuecosOoxml`): párrafos vacíos, marcas de libro, avisos del corrector— viene un
+ * párrafo «FUENTE: …», su final; si no, `desde` sin tocar.
+ *
+ * Reconocer esa línea es la misma pregunta en `reemplazar` (para absorberla), `borrar` (para
+ * llevársela con la tabla) e `insertar` (para no colarse entre la tabla y su fuente):
+ * equivalente en OOXML de `elementoFuenteSiguiente` (`tablasHtmlInforme.js`).
+ *
+ * @param {string} xml
+ * @param {number} desde  el offset donde acaba el bloque de la tabla.
+ * @returns {number}
+ */
+function finDeFuenteSiguienteOoxml(xml, desde) {
+  const cursor = saltarHuecosOoxml(xml, desde);
+  const hermano = parrafoHermanoSiguiente(xml, cursor);
+  if (hermano && hermano.xml && esLineaFuenteOoxml(textoPlanoOoxml(hermano.xml))) {
+    return hermano.fin;
+  }
+  return desde;
 }
 
 /**
@@ -1444,11 +1471,8 @@ function sustituidorDeTablas(xmlInicial, avisos) {
          Solo si la tabla nueva trae fuente: si el generador no emitió ninguna y borráramos la
          de la plantilla, el informe perdería una línea que sí era del cliente. */
       let fin = bloque.fin;
-      if (/FUENTE:/.test(nuevo)) {
-        const hermano = parrafoHermanoSiguiente(out, fin);
-        if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
-          fin = hermano.fin;
-        }
+      if (/FUENTE/i.test(nuevo)) {
+        fin = finDeFuenteSiguienteOoxml(out, fin);
       }
 
       out = out.slice(0, bloque.inicio) + nuevo + out.slice(fin);
