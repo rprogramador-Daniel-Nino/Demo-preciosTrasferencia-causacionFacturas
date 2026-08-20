@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { crearNumeradorDeNotasHtml } from './notasAlPieHtml.js';
 import {
   localizarTablaHtml, reescribirFilasHtml, envolturaDe, textoPlanoHtml,
   actualizarTablasMotorHtml, reescribirCeldaHtml, TABLA_MARGENES,
@@ -608,6 +609,63 @@ test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () =>
   const salida = actualizarTablasMotorHtml(html, {}, avisos);
   assert.strictEqual(salida, html, 'la tabla no debe alterarse');
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('en la ruta del PDF la fuente va como nota numerada, no como línea «FUENTE:»', () => {
+  /* El equivalente de la nota al pie del .docx: el número al final de la frase y la referencia
+     debajo, porque en HTML no hay pie de página. La cita la redacta el mismo módulo en las dos
+     rutas, así que el informe dice lo mismo venga la plantilla de un .docx o de un PDF. */
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Texto viejo del mundo.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<h3>Tasas de Inflación Global (2024-2026)</h3>',
+    '<p>Texto viejo de la inflación mundial, con prosa suficiente para superar el umbral.</p>',
+    '<h3>Proyecciones de Crecimiento del PIB por Región/País (2026)</h3>',
+    '<h2>B. Análisis del panorama de la economía colombiana</h2>',
+  ].join('');
+
+  const datosMacro = {
+    narrativa: { inflacionMundial: '<p>La inflación global cedió en 2026.</p>' },
+    series: {
+      inflacion_global: {
+        valores: { 2026: '3.1' },
+        fuente: 'Fondo Monetario Internacional',
+        fuenteUrl: 'https://www.imf.org/weo',
+        fuenteTitulo: 'World Economic Outlook, octubre de 2026',
+        fuenteFecha: '2026-10-15',
+        fechaConsulta: '2026-08-19T10:00:00.000Z',
+      },
+    },
+  };
+
+  const notas = crearNumeradorDeNotasHtml();
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, [], notas);
+
+  assert.match(salida, /La inflación global cedió en 2026\.<sup>1<\/sup><\/p>/,
+    'el número va al final de la frase');
+  assert.match(salida, /<sup>1<\/sup> Fondo Monetario Internacional\. \(2026, octubre 15\)\./);
+  assert.match(salida, /<a href="https:\/\/www\.imf\.org\/weo">/, 'con el enlace clicable');
+  assert.doesNotMatch(salida, /FUENTE:/, 'y sin la línea de URL crudas en el cuerpo');
+});
+
+test('sin numerador la ruta del PDF sigue emitiendo la línea «FUENTE:»', () => {
+  const html = [
+    '<h2>A. Análisis del Panorama de la Economía Mundial</h2>',
+    '<p>Texto viejo.</p>',
+    '<h3>Crecimiento del PIB Mundial (2024-2026)</h3>',
+    '<h3>Tasas de Inflación Global (2024-2026)</h3>',
+    '<p>Texto viejo de la inflación mundial con prosa suficiente para el umbral del hueco.</p>',
+    '<h3>Proyecciones de Crecimiento del PIB por Región/País (2026)</h3>',
+  ].join('');
+  const datosMacro = {
+    narrativa: { inflacionMundial: '<p>La inflación cedió.</p>' },
+    series: { inflacion_global: { valores: { 2026: '3.1' }, fuente: 'FMI', fuenteUrl: 'https://imf.org' } },
+  };
+
+  const salida = actualizarApartadosMacroHtml(html, datosMacro, 2026, []);
+  assert.match(salida, /FUENTE:/);
+  assert.doesNotMatch(salida, /<sup>1<\/sup>/);
 });
 
 test('actualizarApartadosMacroHtml reemplaza la prosa localizándola por encabezado', () => {

@@ -26,6 +26,10 @@
    marcador visible (ver marcadorPendiente) en lugar de una cifra de otro año.
    ───────────────────────────────────────────────────────────────────────────── */
 
+/* Para citar las fuentes al pie hay que separar a quién se cita de qué se cita, y esa regla vive
+   en un solo sitio: la usan igual las series macro de aquí y el apartado sectorial. */
+import { partirMedioYTitulo } from './citasApa.js';
+
 export const DATOS_MACRO = {
   pib_mundial: {
     2022: '3.5',
@@ -361,6 +365,95 @@ export function resolverSerie(datosMacro, clave) {
     return { valores: remota.valores, fuente: fuenteTexto };
   }
   return { valores: DATOS_MACRO[clave], fuente: FUENTES_MACRO[clave] };
+}
+
+/* Cómo se llama cada serie, para citarla al pie cuando la fuente no trae título propio. Son los
+   mismos nombres con que el informe rotula su tabla, sin los años —que en el rótulo cambian y en
+   una referencia bibliográfica no aportan—. Es un dato del sistema: no se le pregunta al modelo
+   cómo se llama lo que nosotros publicamos. */
+export const NOMBRES_SERIE = Object.freeze({
+  pib_mundial: 'Crecimiento del PIB Mundial',
+  pib_colombia: 'Crecimiento del PIB en Colombia',
+  inflacion_global: 'Tasas de Inflación Global',
+  inflacion_colombia: 'Inflación en Colombia',
+  tasa_intervencion: 'Tasa de Intervención del Banco de la República',
+  trm_promedio: 'Tasa Representativa del Mercado (TRM) Promedio',
+  desempleo_colombia: 'Tasa de Desempleo en Colombia',
+  crecimiento_por_region: 'Proyecciones de Crecimiento del PIB por Región/País',
+});
+
+/**
+ * Los datos de la fuente de una serie, sueltos, para citarla al pie.
+ *
+ * `resolverSerie` devuelve la fuente ya redactada en una sola cadena —«DANE (https://…),
+ * consultado el 19 de agosto de 2026»—, que es lo que necesita la línea «FUENTE:» de una tabla.
+ * Una referencia bibliográfica necesita lo contrario: las partes por separado, para poder poner
+ * el autor delante, la fecha entre paréntesis y el enlace al final.
+ *
+ * @param {object} datosMacro
+ * @param {string} clave
+ * @returns {{medio:string, titulo:string, fecha:string, url:string, fechaConsulta:string,
+ *          tituloRespaldo:string}} listo para `citaApa`.
+ */
+export function citaDeSerie(datosMacro, clave) {
+  const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
+  const tituloRespaldo = NOMBRES_SERIE[clave] || '';
+
+  if (remota && remota.valores) {
+    const { medio, titulo } = partirMedioYTitulo(remota.fuente || FUENTES_MACRO[clave]);
+    return {
+      medio,
+      /* El título que dio el modelo manda; si no lo trajo, el de la propia cadena de la fuente
+         («DANE, GEIH» → «GEIH»); y si tampoco, el nombre de la serie. Ninguno es inventado. */
+      titulo: String(remota.fuenteTitulo || '').trim() || titulo,
+      fecha: String(remota.fuenteFecha || '').trim(),
+      url: String(remota.fuenteUrl || '').trim(),
+      fechaConsulta: formatearFechaConsulta(remota.fechaConsulta),
+      tituloRespaldo,
+    };
+  }
+
+  /* Respaldo local: se cita la entidad y la publicación que ya tenemos, sin fecha ni enlace. Que
+     la cita diga «(s.f.)» es correcto —esa fuente no se consultó en esta corrida—, y es
+     preferible a no citar nada. */
+  const { medio, titulo } = partirMedioYTitulo(FUENTES_MACRO[clave]);
+  return { medio, titulo, fecha: '', url: '', fechaConsulta: '', tituloRespaldo };
+}
+
+/**
+ * Las fuentes del apartado sectorial, para citarlas al pie.
+ *
+ * Recoge las de la tabla de datos clave y las de los tres bloques de narrativa, que es de donde
+ * salen las cifras del apartado. La deduplicación la hace `citasApa`.
+ *
+ * @param {object} entrada  una corrida del análisis del sector.
+ * @param {string} [tituloRespaldo]  qué respaldan estas fuentes, si no traen título propio.
+ * @returns {Array<object>} listas para `citasApa`.
+ */
+export function fuentesDelSector(entrada, tituloRespaldo = 'Datos clave del sector') {
+  const e = entrada || {};
+  const consulta = formatearFechaConsulta(e.actualizadoEn);
+  const listas = [
+    e.datosClaveTabla, e.datosComportamiento, e.datosComercioExterior, e.datosProyeccion,
+  ];
+
+  const fuentes = [];
+  for (const lista of listas) {
+    for (const f of lista || []) {
+      const nombre = String((f && f.fuente) || '').trim();
+      if (!nombre) continue;
+      const { medio, titulo } = partirMedioYTitulo(nombre);
+      fuentes.push({
+        medio,
+        titulo: String((f && f.fuenteTitulo) || '').trim() || titulo,
+        fecha: String((f && f.fuenteFecha) || '').trim(),
+        url: String((f && f.fuenteUrl) || '').trim(),
+        fechaConsulta: consulta,
+        tituloRespaldo,
+      });
+    }
+  }
+  return fuentes;
 }
 
 export function generarTablaPibMundial(datosMacro, year, wrap) {
