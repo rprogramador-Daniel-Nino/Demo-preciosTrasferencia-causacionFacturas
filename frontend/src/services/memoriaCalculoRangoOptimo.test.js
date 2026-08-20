@@ -124,6 +124,29 @@ test('válida es solo la que integra la muestra', () => {
   assert.match(filaCand[17].f, /"Diferencias funcionales"/);
 });
 
+test('la columna de comparabilidad marca lo mismo que cuenta la fila de la matriz', () => {
+  /* Es lo que permite auditar el libro contra el informe con un solo filtro. Antes esta columna
+     solo decía «Diferencias funcionales» cuando la celda del motivo estaba vacía, así que
+     filtrar por ella devolvía una parte de la cifra que declara la tabla y no había forma de
+     cuadrarla sin saberse la fórmula de memoria. */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
+  const filaCand = sel.celdas[sel.celdas.length - 1];
+  const comparabilidad = filaCand[17].f;
+
+  /* Los mismos tres motivos que suma la fila «(−) Diferencias funcionales», más las sin motivo. */
+  ['rigorFuncional', 'actividadDistinta', 'sinDescripcion'].forEach((m) =>
+    assert.match(comparabilidad, new RegExp(`N\\d+="${m}"`), `la columna debe agrupar ${m}`));
+  assert.match(comparabilidad, /N\d+=""/, 'y las que no llevan motivo, por los estudios viejos');
+  assert.match(comparabilidad, /^IF\(Q\d+="Sí","Comparable de la muestra"/,
+    'la muestra sigue teniendo su propia etiqueta');
+
+  /* Y los términos de la columna coinciden con los de la fila de la matriz: si alguien añade un
+     motivo a una y no a la otra, el libro vuelve a contradecirse. */
+  const f = fila(sel.celdas, '(−) Diferencias funcionales');
+  ['rigorFuncional', 'actividadDistinta', 'sinDescripcion'].forEach((m) =>
+    assert.match(f[1].f, new RegExp(`"${m}"`), `la fila de la matriz también cuenta ${m}`));
+});
+
 test('los criterios de cribado se escriben en español, no en el inglés de Capital IQ', () => {
   /* Este libro es un anexo que se entrega: dejar aquí el texto crudo de la hoja «Screen
      Criteria» reproducía el mismo defecto que se corrigió en la Tabla 14 del informe.

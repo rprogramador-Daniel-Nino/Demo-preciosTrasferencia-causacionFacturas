@@ -237,6 +237,93 @@ test('sin continuidad el cupo se comporta igual que antes', () => {
   assert.strictEqual(r.reserva.length, 6);
 });
 
+test('la reserva lleva motivo escrito, para poder identificarla en el libro de soporte', () => {
+  /* Sin motivo, la columna «Motivo de rechazo» de la hoja «Selección comparables» queda vacía y
+     esas compañías solo se localizan combinando dos filtros. Al cotejar a mano el informe de End
+     Game contra el Excel, la Tabla 16 declaraba 1.389 diferencias funcionales y por motivo solo
+     se podían encontrar 1.304: 85 sin etiqueta. */
+  const candidatas = Array.from({ length: 10 }, (_, i) => ({
+    id: 'C' + i, name: 'Comp ' + i, nameKey: nameKey('Comp ' + i), s: 100, op: 10,
+  }));
+  const r = scoreCandidates(candidatas, { nTarget: 4, minimo: 0 }, '', []);
+
+  assert.strictEqual(r.reserva.length, 6);
+  r.reserva.forEach((c) => {
+    assert.strictEqual(c.motivoClave, 'actividadDistinta',
+      'la clave con la que el informe y el Excel agrupan las diferencias funcionales');
+    assert.strictEqual(c.categoriaRechazo, 'rigor');
+    /* La frase dice el hecho real: la curación NO las descartó por su actividad, y escribir lo
+       contrario dejaría el libro contradiciendo su propia columna de perfil funcional. */
+    assert.match(c.motivoRechazo, /no integra la muestra/);
+    assert.ok(!/curaci[óo]n/i.test(c.motivoRechazo), 'no se le atribuye un dictamen que no hubo');
+  });
+});
+
+test('la reserva con motivo NO se cuenta dos veces en el embudo', () => {
+  /* El informe suma la reserva aparte (`filasRazonesRechazo`). Si además entrara en el conteo por
+     motivo, la fila de diferencias funcionales pasaría de 1.389 a 1.474 y la tabla dejaría de
+     sumar el universo. Lo que lleva el motivo es la ficha de cada compañía —lo que lee el
+     Excel—, no los contadores. */
+  const candidatas = Array.from({ length: 10 }, (_, i) => ({
+    id: 'C' + i, name: 'Comp ' + i, nameKey: nameKey('Comp ' + i), s: 100, op: 10,
+  }));
+  const r = scoreCandidates(candidatas, { nTarget: 4, minimo: 0 }, '', []);
+
+  assert.strictEqual(r.rechazadas.length, 0, 'ninguna fue rechazada de verdad');
+  assert.strictEqual(r.rechazadasPorMotivo.actividadDistinta, 0,
+    'la reserva no engorda el conteo de rechazos por actividad');
+  assert.strictEqual(r.reserva.length, 6, 'y sigue estando toda en la reserva');
+  r.reserva.forEach((c) => assert.ok(!c.descartada, 'no se marcan como descartadas'));
+  assert.strictEqual(r.seleccionadas.length + r.reserva.length + r.rechazadas.length,
+    r.evaluadas, 'el embudo sigue sumando el universo evaluado');
+});
+
+test('el universo enriquecido publica el motivo de las de reserva', () => {
+  /* Es la columna que el auditor filtra en la hoja «Selección comparables». */
+  const candidatas = Array.from({ length: 5 }, (_, i) => ({
+    id: 'C' + i, name: 'Comp ' + i, nameKey: nameKey('Comp ' + i), s: 100, op: 10,
+  }));
+  const r = scoreCandidates(candidatas, { nTarget: 2, minimo: 0 }, '', []);
+  const enriquecido = enriquecerUniverso(candidatas, r.seleccionadas,
+    { rechazadas: r.rechazadas, reserva: r.reserva });
+
+  const fuera = enriquecido.filter((c) => !c.seleccionada);
+  assert.strictEqual(fuera.length, 3);
+  fuera.forEach((c) => {
+    assert.strictEqual(c.motivoClave, 'actividadDistinta',
+      'la celda del motivo ya no queda vacía');
+    assert.ok(c.motivoRechazo, 'y trae la frase que la explica');
+  });
+});
+
+test('un estudio guardado sin motivo en la reserva también sale etiquetado', () => {
+  /* El caso de End Game 2025: el motor se corrió antes de este cambio, así que su auditoría trae
+     la reserva sin motivo. El libro de soporte se genera al descargarlo, de modo que etiquetar
+     aquí permite auditar un informe ya radicado sin reejecutar el motor. */
+  const candidatas = Array.from({ length: 4 }, (_, i) => ({
+    id: 'C' + i, name: 'Comp ' + i, nameKey: nameKey('Comp ' + i), s: 100, op: 10,
+  }));
+  const muestra = [candidatas[0]];
+  /* Auditoría «vieja»: la reserva son fichas peladas, sin motivoClave. */
+  const auditoriaVieja = {
+    rechazadas: [],
+    reserva: candidatas.slice(1).map((c) => ({ id: c.id, name: c.name, nameKey: c.nameKey })),
+  };
+
+  const enriquecido = enriquecerUniverso(candidatas, muestra, auditoriaVieja);
+  const fuera = enriquecido.filter((c) => !c.seleccionada);
+
+  assert.strictEqual(fuera.length, 3);
+  fuera.forEach((c) => {
+    assert.strictEqual(c.motivoClave, 'actividadDistinta');
+    assert.match(c.motivoRechazo, /no integra la muestra/);
+  });
+  /* Y la de la muestra sigue sin motivo: es comparable, no rechazada. */
+  const dentro = enriquecido.filter((c) => c.seleccionada);
+  assert.strictEqual(dentro.length, 1);
+  assert.strictEqual(dentro[0].motivoClave, '');
+});
+
 test('una comparable no aparece a la vez en la muestra y en la reserva', () => {
   /* La reserva se corta en el cupo restante y no en nTarget: cortando en nTarget, las
      que la continuidad desplazó salían en las dos listas. */
@@ -1242,7 +1329,16 @@ test('enriquecerUniverso pega motivo y perfil a cada candidata del universo', ()
   assert.strictEqual(r[1].seleccionada, false);
   assert.strictEqual(r[1].motivoClave, 'holding');
   assert.strictEqual(r[1].categoriaRechazo, 'filtro');
-  assert.strictEqual(r[2].motivoClave, '', 'la reserva no está rechazada');
+  /* La reserva SÍ lleva motivo desde el 2026-08-20. Antes esta comprobación exigía lo contrario
+     —«la reserva no está rechazada»—, porque durante la corrida es una suplente: si la curación
+     descarta a una seleccionada, entra la primera de aquí. Pero cerrado el estudio esa condición
+     se acaba, no se vuelven a considerar hasta que alguien recure o reejecute, y el informe las
+     declara en «Diferencias funcionales». Sin motivo escrito no había forma de identificarlas en
+     el libro de soporte: en End Game 2025 la tabla decía 1.389 y por motivo solo se localizaban
+     1.304. Decisión del usuario, con el conteo intacto: el motivo va en la ficha, no en los
+     contadores del embudo. */
+  assert.strictEqual(r[2].motivoClave, 'actividadDistinta', 'la reserva queda identificable');
+  assert.match(r[2].motivoRechazo, /no integra la muestra/);
   assert.strictEqual(r[2].perfilFuncional, 'MIXTO');
   assert.strictEqual(r[0].s, 100, 'conserva las cifras del universo crudo');
 });

@@ -1834,14 +1834,11 @@ function sustituidorDeTablas(xmlInicial, avisos) {
     borrar(nombres, opciones) {
       const bloque = localizarBloqueTabla(out, nombres, opciones);
       if (!bloque) return false;
-      /* La fuente vive detrás del cierre de la tabla, fuera del bloque. Al sustituir no
-         importa —el generador emite la suya—, pero al borrar quedaría huérfana bajo la tabla
-         siguiente, atribuyéndole un origen que no es el suyo. */
-      let fin = bloque.fin;
-      const hermano = parrafoHermanoSiguiente(out, fin);
-      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
-        fin = hermano.fin;
-      }
+      /* La fuente vive detrás del cierre de la tabla, fuera del bloque, y puede venir tras un
+         párrafo vacío que Word deja al exportar. Al sustituir no importa —el generador emite
+         la suya—, pero al borrar quedaría huérfana bajo la tabla siguiente, atribuyéndole un
+         origen que no es el suyo. */
+      const fin = finDeFuenteSiguienteOoxml(out, bloque.fin);
       out = out.slice(0, bloque.inicio) + out.slice(fin);
       return true;
     },
@@ -1854,13 +1851,9 @@ function sustituidorDeTablas(xmlInicial, avisos) {
     insertar(nombresAncla, generar, opciones) {
       const ancla = localizarBloqueTabla(out, nombresAncla, opciones);
       if (!ancla) return false;
-      /* Después de la línea FUENTE del ancla: colarse entre la tabla y su fuente se la
-         atribuiría a la tabla nueva. */
-      let fin = ancla.fin;
-      const hermano = parrafoHermanoSiguiente(out, fin);
-      if (hermano && hermano.xml && /^\s*fuente\s*:/i.test(textoPlanoOoxml(hermano.xml))) {
-        fin = hermano.fin;
-      }
+      /* Después de la línea FUENTE del ancla —saltando un párrafo vacío intercalado, si lo
+         hay—: colarse entre la tabla y su fuente se la atribuiría a la tabla nueva. */
+      const fin = finDeFuenteSiguienteOoxml(out, ancla.fin);
       out = out.slice(0, fin) + generar(ancla) + out.slice(fin);
       return true;
     },
@@ -2078,8 +2071,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       );
     };
 
-    if (localizarBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL)) {
-      reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque));
+    const bloques = candidatosBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL);
+    if (bloques.length) {
+      /* Reemplazamos todas las ocurrencias de atrás hacia adelante para no alterar offsets de forma destructiva */
+      for (let idx = bloques.length - 1; idx >= 0; idx--) {
+        reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque), { ocurrencia: idx });
+      }
     } else {
       /* La plantilla no la trae y hay que declararla: se inserta tras «Transacciones Inter
          compañía», que es donde el informe de referencia la lleva. El ancla se busca por
@@ -2106,7 +2103,10 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       }
     }
   } else {
-    doc.borrar(NOMBRES_TABLA_ADICIONAL);
+    const bloques = candidatosBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL);
+    for (let idx = bloques.length - 1; idx >= 0; idx--) {
+      doc.borrar(NOMBRES_TABLA_ADICIONAL, { ocurrencia: idx });
+    }
   }
 
   // 4. Método de Precios de Transferencia Aplicable

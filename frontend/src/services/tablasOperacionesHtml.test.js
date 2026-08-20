@@ -169,6 +169,31 @@ test('la ficha del vinculado se sustituye en TODAS sus ocurrencias', () => {
   assert.match(salida, /<p> Texto intermedio\.<\/p>/, 'el texto entre las dos sobrevive');
 });
 
+test('la ficha del vinculado se sustituye aunque la segunda ocurrencia venga escrita sin el espacio interno («Intercompañía»)', () => {
+  /* La plantilla puede repetir esta ficha con dos redacciones del mismo nombre —«Transacciones
+     Inter compañía» y «Transacciones Intercompañía», sin espacio— y las dos tienen que quedar
+     con los datos del estudio. Si el registro de OBJETIVOS sigue buscando solo la forma con
+     espacio, la ocurrencia sin espacio se queda con el vinculado del informe anterior. */
+  const ficha = (n, nombre) =>
+    '<p><strong> Tabla ' + n + '. ' + nombre + '</strong></p>' +
+    '<table><tr><th><p><strong> Compañía vinculada</strong></p></th></tr>' +
+    '<tr><th><p><strong> Razón social</strong></p></th><td><p> END GAME INTERACTIVE INC</p></td></tr></table>';
+  const html = ficha(3, 'Transacciones Inter compañía') + '<p> Texto intermedio.</p>'
+    + ficha(16, 'Transacciones Intercompañía') + '<p> Más texto.</p>' + TABLA_ADICIONAL;
+  const salida = actualizarTablasOperacionesHtml(
+    html, { ...ESTUDIO_COMPLETO, operacionAdicional: ADICIONAL });
+
+  assert.ok(!salida.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
+  assert.strictEqual(
+    (salida.match(/ACME INTERACTIVE LLC/g) || []).length, 2,
+    'el vinculado del estudio tiene que quedar en las dos fichas, aunque la segunda venga sin el espacio'
+  );
+  /* Y la ampliación de la lista de nombres no hace que el veto `excluir` (con SU propia lista
+     ampliada, `NOMBRES_TABLA_ADICIONAL`) descarte la tabla adicional legítima: sigue publicando
+     sus propias operaciones y no las de la Tabla 3/16. */
+  assert.match(salida, /1\.800\.000\.000/, 'la tabla adicional no se vio afectada por el cambio');
+});
+
 test('el rótulo con el año se reescribe con el año gravable del estudio', () => {
   /* La plantilla rotula «Activos a 31 de diciembre de 2024». El año es un dato, no
      redacción: dejarlo publica el encabezado del año anterior. El número de la plantilla

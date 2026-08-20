@@ -938,8 +938,19 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         cForT(`IF(Q${r}="Sí","Válida","Rechazada")`),
         cTxt(c.seleccionada ? 'Sí' : ''),                            // Q ¿Seleccionada?
         /* R: el estado de comparabilidad dicho en palabras, en cada fila, para que
-           quien filtre la tabla no tenga que cruzar el motivo con la selección. */
-        cForT(`IF(Q${r}="Sí","Comparable de la muestra",IF(N${r}="","Diferencias funcionales","Rechazada (ver motivo)"))`),
+           quien filtre la tabla no tenga que cruzar el motivo con la selección.
+
+           DICE «Diferencias funcionales» EXACTAMENTE PARA LAS QUE LA MATRIZ CUENTA EN ESA FILA:
+           los tres motivos cualitativos y las que no llevan motivo. Antes solo lo decía cuando
+           la celda del motivo estaba vacía, así que filtrar por esta columna devolvía una parte
+           —en el informe de MONTACHEM, unos cientos de las 2.403— y el resto aparecía como
+           «Rechazada (ver motivo)». Quien auditaba el libro comparándolo con la tabla del informe
+           no podía cuadrar la cifra sin saberse la fórmula de memoria: reportado el 2026-08-20.
+           Con el motivo de la reserva ya escrito, además, la condición vieja no habría marcado
+           ninguna. Se conserva `N=""` para los estudios corridos antes de ese cambio. */
+        cForT(`IF(Q${r}="Sí","Comparable de la muestra",`
+          + `IF(OR(N${r}="rigorFuncional",N${r}="actividadDistinta",N${r}="sinDescripcion",N${r}=""),`
+          + `"Diferencias funcionales","Rechazada (ver motivo)"))`),
       ]);
     });
     const rN = r0 + cand.length - 1;
