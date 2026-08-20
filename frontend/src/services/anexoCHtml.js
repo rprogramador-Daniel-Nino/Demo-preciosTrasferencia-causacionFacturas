@@ -35,7 +35,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { filasRazonesRechazo, ETIQUETAS_MOTIVO, FUNDIDOS_EN_RIGOR } from './tablasInforme.js';
-import { textoPlanoHtml, filasDe, celdasDe } from './tablasHtmlInforme.js';
+import { textoPlanoHtml, filasDe, celdasDe, mayusculasEnTablaHtml } from './tablasHtmlInforme.js';
 import { localizarAnexo } from './anexoBHtml.js';
 import { nombreDeAnexo } from './anexosPlantilla.js';
 import { reescribirFilasHtml } from './tablasHtmlInforme.js';
@@ -255,7 +255,10 @@ export function actualizarAnexoCHtml(html, estudio, avisos) {
   /* De atrás hacia adelante: cada sustitución desplaza los offsets de lo anterior. El
      resumen va antes que los listados en el documento, así que se reescribe al final. */
   const moldeListado = listados[0].xml;
-  const nuevos = grupos.map((g) => reescribirListado(moldeListado, g));
+  /* Todo el anexo en mayúscula, encabezados de la plantilla incluidos: requisito del usuario
+     (2026-08-19). Se aplica tabla por tabla y no sobre la zona del anexo, para que lo que caiga
+     dentro de la zona sin ser una de estas tablas no se suba por accidente. */
+  const nuevos = grupos.map((g) => mayusculasEnTablaHtml(reescribirListado(moldeListado, g)));
   const separador = listados[1]
     ? zona.slice(listados[0].fin, listados[1].inicio)
     : '';
@@ -268,8 +271,8 @@ export function actualizarAnexoCHtml(html, estudio, avisos) {
      —está antes de los listados—, pero recalcularlo evita depender de ese orden. */
   const { resumen: resumen2 } = tablasAnexoC(zonaNueva);
   if (resumen2) {
-    const tabla = reescribirFilasHtml(
-      zonaNueva.slice(resumen2.inicio, resumen2.fin), filasResumen(grupos, universo), { pie: false });
+    const tabla = mayusculasEnTablaHtml(reescribirFilasHtml(
+      zonaNueva.slice(resumen2.inicio, resumen2.fin), filasResumen(grupos, universo), { pie: false }));
     zonaNueva = zonaNueva.slice(0, resumen2.inicio) + tabla + zonaNueva.slice(resumen2.fin);
   }
 

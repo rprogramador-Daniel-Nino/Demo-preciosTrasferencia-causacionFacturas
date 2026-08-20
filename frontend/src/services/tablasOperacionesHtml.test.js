@@ -329,3 +329,174 @@ test('las demás tablas no tocan su encabezado', () => {
   assert.ok(salida.includes('Concepto de Operaciones a analizar'), 'se tocó un encabezado ajeno');
   assert.ok(salida.includes('Monto de la Operación analizar'), 'se tocó un encabezado ajeno');
 });
+
+/* ════════ Operación adicional Transacciones Intercompañía (sección 4 del formato) ════════ */
+
+/* La tabla tal como la trae la plantilla, con los datos del informe de referencia. */
+const TABLA_ADICIONAL =
+  '<p><strong> Tabla 13. Operación adicional Transacciones Intercompañía</strong></p>' +
+  '<table>' +
+  '<tr><th><p><strong> Compañía vinculada</strong></p></th>' +
+  '<th><p><strong> Identificación fiscal</strong></p></th>' +
+  '<th><p><strong> País - Residencia fiscal</strong></p></th>' +
+  '<th><p><strong> Tipo de operación</strong></p></th>' +
+  '<th><p><strong> Monto en pesos</strong></p></th></tr>' +
+  '<tr><th><p> END GAME INTERACTIVE INC</p></th><td><p> 444444001</p></td>' +
+  '<td><p> ESTADOS UNIDOS</p></td><td><p> Préstamos (61)</p></td>' +
+  '<td><p> 9.999.999.999</p></td></tr>' +
+  '</table>';
+
+const INFORME_CON_ADICIONAL = INFORME + TABLA_ADICIONAL;
+
+const ADICIONAL = {
+  filas: [
+    { vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Préstamos con vinculados (61)', monto: 1800000000 },
+    { vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Reintegros o reembolsos (62)', monto: 900000000 },
+  ],
+  monto: 2700000000,
+};
+
+test('la operación adicional que supera el umbral se publica en su tabla', () => {
+  const texto = sinEtiquetas(actualizarTablasOperacionesHtml(
+    INFORME_CON_ADICIONAL, { ...ESTUDIO, operacionAdicional: ADICIONAL }));
+
+  assert.match(texto, /MONTACHEM INTERNATIONAL INC/);
+  assert.match(texto, /1\.800\.000\.000/);
+  assert.match(texto, /900\.000\.000/);
+  assert.ok(!texto.includes('9.999.999.999'),
+    'sobrevive el monto del informe de referencia: ' + texto);
+});
+
+test('sin superar el umbral, la tabla se queda exactamente como estaba', () => {
+  /* Lo pidió así el usuario: si el formato no trae la sección o no supera el valor, el
+     informe sale como salía antes de que esto existiera. */
+  const casi = { filas: ADICIONAL.filas, monto: 2400000000 };
+  const salida = actualizarTablasOperacionesHtml(
+    INFORME_CON_ADICIONAL, { ...ESTUDIO, operacionAdicional: casi });
+  assert.ok(salida.includes('9.999.999.999'), 'se tocó una tabla que no correspondía');
+  assert.ok(!salida.includes('MONTACHEM'), 'se publicó una operación que no supera el umbral');
+});
+
+test('sin sección de información adicional, la tabla tampoco se toca', () => {
+  const salida = actualizarTablasOperacionesHtml(INFORME_CON_ADICIONAL, ESTUDIO);
+  assert.ok(salida.includes('9.999.999.999'), 'se tocó la tabla sin tener datos');
+});
+
+test('justo en el umbral no se publica: tiene que superarlo', () => {
+  const justo = { filas: ADICIONAL.filas, monto: 2500000000 };
+  const salida = actualizarTablasOperacionesHtml(
+    INFORME_CON_ADICIONAL, { ...ESTUDIO, operacionAdicional: justo });
+  assert.ok(salida.includes('9.999.999.999'), 'se publicó estando justo en el umbral');
+});
+
+test('la operación adicional no se confunde con la Tabla 3 de transacciones', () => {
+  /* Las dos tablas se llaman parecido y la de transacciones se sustituye por ocurrencia. Si
+     el localizador las confundiera, la ficha del vinculado acabaría en la tabla de la
+     operación adicional o al revés, y las dos declaran cosas distintas ante la DIAN. */
+  const TABLA_3 =
+    '<p><strong> Tabla 3. Transacciones Inter compañía</strong></p>' +
+    '<table><tr><th><p><strong> Compañía vinculada</strong></p></th><th><p></p></th></tr>' +
+    '<tr><th><p> Razón social</p></th><td><p> END GAME INTERACTIVE INC</p></td></tr>' +
+    '</table>';
+  const salida = actualizarTablasOperacionesHtml(
+    INFORME + TABLA_3 + TABLA_ADICIONAL, { ...ESTUDIO, operacionAdicional: ADICIONAL });
+
+  const iTx = salida.indexOf('Transacciones Inter compañía');
+  const iAd = salida.indexOf('Operación adicional');
+  assert.ok(iTx > -1 && iAd > iTx, 'se perdió alguno de los dos rótulos');
+  /* La ficha del vinculado publica el vinculado del estudio; la adicional, sus operaciones. */
+  assert.match(salida.slice(iTx, iAd), /ACME INTERACTIVE LLC/);
+  assert.match(salida.slice(iAd), /1\.800\.000\.000/);
+});
+
+test('si la plantilla trae la tabla en ficha vertical, se respeta su forma', () => {
+  const FICHA =
+    '<p><strong> Tabla 13. Operación adicional Transacciones Intercompañía</strong></p>' +
+    '<table><tr><th><p><strong> Compañía vinculada</strong></p></th><th><p></p></th></tr>' +
+    '<tr><th><p> Razón social</p></th><td><p> END GAME INTERACTIVE INC</p></td></tr>' +
+    '</table>';
+  const salida = actualizarTablasOperacionesHtml(
+    INFORME + FICHA, { ...ESTUDIO, operacionAdicional: ADICIONAL });
+  const texto = sinEtiquetas(salida);
+
+  assert.match(texto, /Razón social MONTACHEM INTERNATIONAL INC/);
+  /* En ficha se publica el TOTAL, porque una fila de etiqueta y valor no admite dos montos. */
+  assert.match(texto, /2\.700\.000\.000/);
+});
+
+test('si el formato trae la operación pero la plantilla no tiene la tabla, se avisa', () => {
+  const avisos = [];
+  actualizarTablasOperacionesHtml(INFORME, { ...ESTUDIO, operacionAdicional: ADICIONAL }, avisos);
+  assert.ok(avisos.some((a) => /Operación adicional/.test(a)),
+    'no avisó de la tabla ausente: ' + JSON.stringify(avisos));
+});
+
+test('sin datos que publicar no se avisa de la tabla ausente', () => {
+  /* Un aviso por una tabla que no existe y que además no tocaría acusa de incompleta a una
+     plantilla que está bien. */
+  const avisos = [];
+  actualizarTablasOperacionesHtml(INFORME, ESTUDIO, avisos);
+  assert.ok(!avisos.some((a) => /Operación adicional/.test(a)),
+    'avisó de una tabla que no hacía falta: ' + JSON.stringify(avisos));
+});
+
+/* ════════ Multiempresa: el rótulo de la tabla adicional cambia con cada firma ════════ */
+
+const tablaAdicionalConRotulo = (rotulo) =>
+  '<p><strong> ' + rotulo + '</strong></p>' +
+  '<table>' +
+  '<tr><th><p><strong> Compañía vinculada</strong></p></th>' +
+  '<th><p><strong> Identificación fiscal</strong></p></th>' +
+  '<th><p><strong> País</strong></p></th>' +
+  '<th><p><strong> Tipo de operación</strong></p></th>' +
+  '<th><p><strong> Monto en pesos</strong></p></th></tr>' +
+  '<tr><th><p> END GAME INTERACTIVE INC</p></th><td><p> 444444001</p></td>' +
+  '<td><p> ESTADOS UNIDOS</p></td><td><p> Préstamos (61)</p></td>' +
+  '<td><p> 9.999.999.999</p></td></tr>' +
+  '</table>';
+
+const ROTULOS_ADICIONAL = [
+  'Tabla 13. Operación adicional Transacciones Intercompañía',
+  'Tabla 20. Operación adicional Transacciones Inter compañía',
+  'Tabla 5. Operaciones adicionales Transacciones Intercompañía',
+  'Tabla 9. Información adicional Transacciones Intercompañía',
+  'Tabla 4. Operación adicional',
+];
+
+for (const rotulo of ROTULOS_ADICIONAL) {
+  test('la tabla adicional se encuentra rotulada «' + rotulo + '»', () => {
+    /* El número del rótulo se ignora a propósito: se renumera al reordenar el informe y hay
+       plantillas que no lo traen. Lo que se busca es el nombre. */
+    const salida = actualizarTablasOperacionesHtml(
+      tablaAdicionalConRotulo(rotulo), { ...ESTUDIO, operacionAdicional: ADICIONAL }, []);
+    assert.ok(salida.includes('MONTACHEM INTERNATIONAL INC'),
+      'no se encontró la tabla con ese rótulo: ' + salida);
+    assert.ok(!salida.includes('9.999.999.999'), 'sobrevive la cifra del informe anterior');
+  });
+}
+
+test('la ficha del vinculado no se escribe sobre la tabla de operación adicional', () => {
+  /* «Operación adicional Transacciones Inter compañía» CONTIENE «Transacciones Inter
+     compañía», y el localizador casa por inclusión: sin el veto, la Tabla 3 reclamaría las
+     dos y la ficha del vinculado acabaría encima de la otra. Las dos declaran cosas distintas
+     ante la DIAN, así que confundirlas no se nota al revisar pero es un dato falso. */
+  const TABLA_3 =
+    '<p><strong> Tabla 3. Transacciones Inter compañía</strong></p>' +
+    '<table><tr><th><p><strong> Compañía vinculada</strong></p></th><th><p></p></th></tr>' +
+    '<tr><th><p> Razón social</p></th><td><p> END GAME INTERACTIVE INC</p></td></tr>' +
+    '</table>';
+  const juntas = TABLA_3
+    + tablaAdicionalConRotulo('Tabla 20. Operación adicional Transacciones Inter compañía');
+  const salida = actualizarTablasOperacionesHtml(
+    juntas, { ...ESTUDIO, operacionAdicional: ADICIONAL }, []);
+
+  const iTx = salida.indexOf('Transacciones Inter compañía');
+  const iAd = salida.indexOf('Operación adicional');
+  assert.ok(iTx > -1 && iAd > iTx, 'se perdió alguno de los dos rótulos');
+  assert.match(salida.slice(iTx, iAd), /ACME INTERACTIVE LLC/,
+    'la ficha del vinculado no se rellenó');
+  assert.match(salida.slice(iAd), /MONTACHEM INTERNATIONAL INC/,
+    'la tabla adicional se quedó sin sus datos');
+});

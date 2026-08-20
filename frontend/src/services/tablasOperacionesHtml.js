@@ -25,6 +25,8 @@ import {
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
   filasMetodoAplicable, filasCompaniasVinculadas, filasCriteriosVinculacion,
+  filasOperacionAdicional, filasOperacionAdicionalFicha, tieneOperacionAdicional,
+  NOMBRES_TABLA_ADICIONAL,
 } from './tablasOperaciones.js';
 import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 
@@ -47,7 +49,13 @@ export const TABLA_OPERACIONES = ['Operaciones de Ingreso', 'Operaciones de Egre
 const OBJETIVOS = [
   { nombres: TABLA_OPERACIONES, filas: filasOperacionesDeIngreso },
   { nombres: 'Operación analizar', filas: filasOperacionAnalizar },
-  { nombres: 'Transacciones Inter compañía', filas: filasTransaccionesIntercompania, todas: true },
+  /* `excluir`: hay plantillas que rotulan la tabla de la sección 4 del formato como «Operación
+     adicional Transacciones Inter compañía», y el rótulo casa por inclusión, así que sin el
+     veto la ficha del vinculado se escribiría encima de aquélla. */
+  {
+    nombres: 'Transacciones Inter compañía', filas: filasTransaccionesIntercompania,
+    todas: true, excluir: NOMBRES_TABLA_ADICIONAL,
+  },
   { nombres: 'Método de Precios de Transferencia', filas: filasMetodoAplicable },
   { nombres: 'Composición accionaria', filas: filasComposicionAccionaria },
   { nombres: 'Compañías vinculadas', filas: filasCompaniasVinculadas, rotulo: true },
@@ -167,7 +175,7 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
     if (objetivo.todas) {
       /* De atrás hacia adelante: sustituir una desplaza los offsets de las que van después.
          Es la misma razón por la que la ruta OOXML recorre sus dos ocurrencias al revés. */
-      const bloques = localizarTablasHtml(out, objetivo.nombres);
+      const bloques = localizarTablasHtml(out, objetivo.nombres, { excluir: objetivo.excluir });
       if (!bloques.length) {
         if (Array.isArray(avisos)) avisos.push(tabla.nombre);
         continue;
@@ -179,13 +187,32 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
       continue;
     }
 
-    const bloque = localizarTablaHtml(out, objetivo.nombres);
+    const bloque = localizarTablaHtml(out, objetivo.nombres, { excluir: objetivo.excluir });
     if (!bloque) {
       if (Array.isArray(avisos)) avisos.push(tabla.nombre);
       continue;
     }
     out = sustituir(out, bloque, tabla, objetivo.rotulo,
           objetivo.anioEnEncabezado ? (Number(estudio.anio) || 2025) : 0);
+  }
+
+  /* «Operación adicional Transacciones Intercompañía» va fuera del bucle porque es la única
+     tabla que puede NO corresponder: se publica solo si el formato trajo la sección «4.
+     Información adicional» y su total supera el umbral. Si no, la plantilla se queda como
+     está —sin tabla vacía y sin un aviso de tabla ausente, que ahí no significaría nada—.
+
+     La plantilla puede traerla en ficha vertical o en columnas, igual que el rango, así que
+     se mira la forma de la que ya está en vez de imponer una. */
+  if (tieneOperacionAdicional(estudio)) {
+    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
+    if (bloque) {
+      const tabla = bloque.columnas > 0 && bloque.columnas <= 2
+        ? filasOperacionAdicionalFicha(estudio)
+        : filasOperacionAdicional(estudio);
+      out = sustituir(out, bloque, tabla, false, 0);
+    } else if (Array.isArray(avisos)) {
+      avisos.push(NOMBRES_TABLA_ADICIONAL[0]);
+    }
   }
 
   /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un

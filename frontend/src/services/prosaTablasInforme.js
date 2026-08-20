@@ -41,6 +41,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { filasRazonesRechazo, filasMuestraComparables } from './tablasInforme.js';
+import { num } from '../utils/calculations.js';
 import { valorDeCampo } from './plantillaVocabulario.js';
 import { sincronizarCifrasDeProsa, HUECO, PARRAFO_HTML } from './prosaVecindad.js';
 
@@ -147,16 +148,24 @@ export function actualizarProsaMuestra(texto, estudio, avisos, opciones = {}) {
 /* ══════════════════ operaciones con el vinculado ══════════════════ */
 
 const RX_ES_PROSA_OPERACIONES = new RegExp(
-  '(?:por' + HUECO + 'un' + HUECO + 'valor)'
+  '(?:por' + HUECO + '(?:un' + HUECO + ')?(?:valor|monto|importe|suma))'
   + '|(?:operaciones\\s+de\\s+(?:ingreso|egreso))'
-  + '|(?:transacci[óo]n\\s+efectuada)', 'i');
+  + '|(?:transacci(?:[óo]n|ones)\\s+(?:efectuada|realizada))'
+  + '|(?:vinculados?\\s+econ[óo]micos?)', 'i');
+
+/* Cómo introduce cada plantilla el monto. Una firma escribe «por un valor total de $ X», otra
+   «por valor de $X», otra «por un monto de X» y otra «cuyo importe asciende a X». Lo estable
+   no es el giro sino la palabra que nombra la cifra —valor, monto, importe, suma— seguida de
+   un conector corto; lo demás cambia con cada cliente. */
+const INTRO_MONTO = '(?:valor|monto|importe|suma)'
+  + '(?:\\s+(?:total|neto|bruto|global))?'
+  + '(?:\\s+(?:de|por|a|que\\s+asciende\\s+a|asciende\\s+a|equivalente\\s+a))?';
 
 const ANCLAS_OPERACIONES = [
   {
     clave: 'monto',
     grupoCifra: 2,
-    rx: new RegExp('(por\\s+un\\s+valor(?:\\s+total)?\\s+de' + HUECO + '\\$?' + HUECO + ')('
-      + MONTO + ')', 'i'),
+    rx: new RegExp('(' + INTRO_MONTO + HUECO + '\\$?' + HUECO + ')(' + MONTO + ')', 'i'),
   },
 ];
 
@@ -181,8 +190,10 @@ export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}
        —el ejercicio gravable cierra el 31 de diciembre—, sólo el año. */
     {
       clave: 'anio',
-      rx: new RegExp('(finalizado\\s+el\\s+\\d{1,2}\\s+de\\s+[a-záéíóú]+\\s+de' + HUECO
-        + ')(20\\d{2})', 'gi'),
+      /* «finalizado», pero también «terminado» o «cerrado»: el ejercicio se cierra el 31 de
+         diciembre en todas las plantillas y lo único que cambia es el participio. */
+      rx: new RegExp('((?:finalizad|terminad|cerrad|concluid)o\\s+(?:el\\s+)?'
+        + '\\d{1,2}\\s+de\\s+[a-záéíóú]+\\s+de' + HUECO + ')(20\\d{2})', 'gi'),
       valor: anio,
     },
     /* «En el año 2024, END GAME […] tuvo operaciones de ingreso…». Sólo si en ESE párrafo se
@@ -215,9 +226,13 @@ export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}
 
 /* ══════════════════ márgenes de las comparables ══════════════════ */
 
+/* El párrafo que presenta la tabla de márgenes. Se reconoce por lo que anuncia —las utilidades
+   o los márgenes del conjunto de comparables, o sus estados financieros— y no por un giro
+   literal: cada firma lo redacta a su manera y el año que hay que corregir es el mismo. */
 const RX_ES_PROSA_MARGENES = new RegExp(
   '(?:utilidades' + HUECO + 'operacionales)'
-  + '|(?:correspondientes\\s+al\\s+a[ñn]o)', 'i');
+  + '|(?:m[áa]rgenes' + HUECO + '(?:de|del|obtenidos))'
+  + '|(?:estados\\s+financieros' + HUECO + '(?:correspondientes|de\\s+las|del\\s+a[ñn]o))', 'i');
 
 /* Cómo nombra el informe cada indicador. Sirve para avisar, no para sustituir. */
 const NOMBRES_PLI = {
@@ -249,7 +264,11 @@ export function actualizarProsaMargenes(texto, estudio, avisos, opciones = {}) {
     valores: {},
     sustituciones: anio ? [{
       clave: 'anio',
-      rx: new RegExp('(correspondientes\\s+al\\s+a[ñn]o' + HUECO + ')(20\\d{2})', 'gi'),
+      /* «correspondientes al año 2024», «relativos al año 2024», «del año 2024», «para el año
+         2024». Se exige la palabra «año» delante: sin ella, «de 2024» casaría cualquier fecha
+         suelta del párrafo. */
+      rx: new RegExp('((?:correspondiente|relativo|referid)?[so]?\\s*(?:al|del|para\\s+el|de)?'
+        + '\\s*a[ñn]o' + HUECO + ')(20\\d{2})', 'gi'),
       valor: anio,
     }] : [],
     avisos,
@@ -294,7 +313,79 @@ function nombraEnProsaDeMargenes(texto, rxParrafo, ajeno, propio) {
   return false;
 }
 
-/* ══════════════════ las tres, en el orden en que salen en el informe ══════════════════ */
+/* ══════════════════ ajustes a las comparables: la tasa de interés ══════════════════ */
+
+const RX_ES_PROSA_AJUSTES = new RegExp(
+  '(?:prime' + HUECO + 'rate)'
+  + '|(?:tasa' + HUECO + 'prime)'
+  /* La cita de la FED ocupa varias líneas y el extractor puede partirla en el salto de
+     página, dejando la frase de la tasa en un párrafo que ya no dice «prime». */
+  + '|(?:esta\\s+tasa\\s+durante)', 'i');
+
+/* La tasa, sin el «%»: el grupo es SOLO el número. Así el «% EA» que la plantilla escriba
+   —con espacio o sin él, con «EA» o con «E.A.»— se queda tal cual, y esta frase no cambia de
+   aspecto por haberle corregido la cifra. */
+const TASA = '\\d+(?:[.,]\\d+)?';
+
+const ANCLAS_AJUSTES = [
+  {
+    clave: 'prime',
+    grupoCifra: 2,
+    rx: new RegExp('((?:fue|es|asciende\\s+a)\\s+(?:de\\s+|del\\s+)?' + HUECO + ')('
+      + TASA + ')(?=' + HUECO + '%)', 'i'),
+  },
+];
+
+/**
+ * Pone en la prosa de los ajustes la tasa de interés que el estudio usa de verdad.
+ *
+ * «…"Average majority prime rate charged by banks on short-term loans to business". Esta tasa
+ * durante el 2025 fue de 8.31% EA.» El motor calcula el ajuste por capital de trabajo con
+ * `estudio.prime` —la que se escribe en la ingesta de cifras y la que publica el Excel de
+ * soporte—, pero esta frase se quedaba con la del informe del que salió la plantilla. El
+ * documento declaraba entonces una tasa que no es la que sustenta sus propios números.
+ *
+ * @param {string} texto
+ * @param {object} estudio
+ * @param {string[]} [avisos]
+ * @param {{rxParrafo?:RegExp, reporte?:object}} [opciones]
+ * @returns {string}
+ */
+export function actualizarProsaAjustes(texto, estudio, avisos, opciones = {}) {
+  const study = estudio || {};
+  const tasa = num(study.prime);
+  /* Sin tasa no hay nada que corregir, y escribir un «—» donde la plantilla tenía un número
+     es peor que el número viejo. Pasa cuando el estudio no aplica ajuste (`useadj` en falso):
+     la plantilla conserva su frase, que es lo que corresponde. */
+  const valor = tasa === null || !(tasa > 0)
+    ? null
+    : tasa.toLocaleString('es-CO', { maximumFractionDigits: 3 });
+
+  return sincronizarCifrasDeProsa(texto, {
+    rxParrafo: opciones.rxParrafo || PARRAFO_HTML,
+    reconocedor: RX_ES_PROSA_AJUSTES,
+    rotulos: [],
+    anclas: ANCLAS_AJUSTES,
+    valores: { prime: valor },
+    /* El año de esa misma frase, y sólo si la tasa se colocó ahí: «durante el 20XX» aparece en
+       todo el informe y lo que lo hace seguro no es la frase, es haber acertado la tasa en ese
+       mismo párrafo. */
+    sustituciones: anioDe(study) ? [{
+      clave: 'anio',
+      rx: new RegExp('(durante\\s+el\\s+(?:a[ñn]o\\s+)?' + HUECO + ')(20\\d{2})', 'gi'),
+      valor: anioDe(study),
+      soloConCifras: true,
+    }] : [],
+    avisos,
+    reporte: opciones.reporte,
+    mensajes: {
+      sinCifras: 'el informe cita la tasa de interés de los ajustes («Prime Rate»), pero no '
+        + 'está donde se esperaba: se queda la del informe de referencia',
+    },
+  });
+}
+
+/* ══════════════════ las cuatro, en el orden en que salen en el informe ══════════════════ */
 
 /**
  * Corre las tres familias sobre el mismo texto. Es el punto único de enganche, para que las dos
@@ -310,5 +401,6 @@ function nombraEnProsaDeMargenes(texto, rxParrafo, ajeno, propio) {
 export function actualizarProsaTablas(texto, estudio, avisos, opciones = {}) {
   let salida = actualizarProsaOperaciones(texto, estudio, avisos, opciones);
   salida = actualizarProsaMuestra(salida, estudio, avisos, opciones);
+  salida = actualizarProsaAjustes(salida, estudio, avisos, opciones);
   return actualizarProsaMargenes(salida, estudio, avisos, opciones);
 }

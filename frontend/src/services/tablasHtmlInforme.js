@@ -94,8 +94,8 @@ const RX_BLOQUE = /<(p|h[1-6])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi;
  * @returns {{inicio:number, fin:number, titulo:string}|null} `inicio` y `fin` delimitan
  *          la `<table>`; el párrafo del rótulo queda fuera, porque no hay que tocarlo.
  */
-export function localizarTablaHtml(html, nombres) {
-  return localizarTablasHtml(html, nombres)[0] || null;
+export function localizarTablaHtml(html, nombres, opciones = {}) {
+  return localizarTablasHtml(html, nombres, opciones)[0] || null;
 }
 
 /**
@@ -110,10 +110,14 @@ export function localizarTablaHtml(html, nombres) {
  * @returns {Array<{inicio:number, fin:number, titulo:string, columnas:number,
  *          filasDatos:number, embebido:boolean}>}
  */
-export function localizarTablasHtml(html, nombres) {
+export function localizarTablasHtml(html, nombres, opciones = {}) {
   const texto = String(html || '');
   const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
   if (!claves.length) return [];
+  /* Nombres que DESCARTAN una tabla. Mismo motivo y misma función que en la ruta .docx: el
+     rótulo casa por inclusión y hay tablas cuyo nombre contiene el de otra. */
+  const excluidos = (Array.isArray(opciones.excluir) ? opciones.excluir : [opciones.excluir])
+    .map(claveTitulo).filter(Boolean);
 
   const encontradas = [];
   const vistas = new Set();
@@ -186,7 +190,13 @@ export function localizarTablasHtml(html, nombres) {
     }
   }
 
-  return encontradas.sort((x, y) => x.inicio - y.inicio);
+  return encontradas
+    .filter((t) => {
+      if (!excluidos.length) return true;
+      const clave = claveTitulo(t.titulo);
+      return !clave || !excluidos.some((e) => clave.includes(e));
+    })
+    .sort((x, y) => x.inicio - y.inicio);
 }
 
 /** Las `<tr>` de una tabla, con sus posiciones. Sirve igual con `<thead>`/`<tbody>`. */
@@ -241,6 +251,41 @@ export function envolturaDe(contenido) {
     abre: abre.join(''),
     cierra: abre.map((a) => '</' + /^<(\w+)/.exec(a)[1] + '>').reverse().join(''),
   };
+}
+
+/**
+ * Sube a mayúsculas el texto visible de un fragmento de HTML.
+ *
+ * Requisito del usuario (2026-08-19) para la tabla de márgenes, la de la muestra y el ANEXO C
+ * entero. La tabla de RAZONES DE RECHAZO queda fuera a propósito, y por eso esto se aplica
+ * tabla por tabla y nunca sobre una zona del documento: una excepción que depende de dónde cae
+ * el límite de una zona es una excepción que se pierde sola.
+ *
+ * Sube el TEXTO, no el marcado. Los nombres de etiqueta y los atributos se quedan como están
+ * —un `style="font-size:9pt"` en mayúsculas dejaría de aplicar—, y las entidades con nombre
+ * también: `&nbsp;` en mayúsculas es `&NBSP;`, que no es una entidad, y Word la imprimiría en
+ * crudo en medio del informe. Las letras acentuadas llegan como UTF-8 y `toUpperCase` las
+ * resuelve sin ayuda.
+ *
+ * @param {string} fragmento
+ * @returns {string}
+ */
+export function mayusculasEnTablaHtml(fragmento) {
+  /* Una entidad que es una LETRA acentuada sí tiene forma en mayúscula, y es otra entidad:
+     `&oacute;` → `&Oacute;`. Sin esto la celda publicaba «INFORMACIóN», una minúscula en medio
+     de un texto en mayúsculas. La lista de sufijos es la de los diacríticos de HTML 4; se
+     comprueba el sufijo y no solo la forma para no tocar `&nbsp;`, `&amp;` ni `&ndash;`, que
+     no tienen variante mayúscula y se romperían. */
+  const RX_LETRA_ACENTUADA = /^&([a-z])(acute|grave|circ|uml|tilde|cedil|ring|slash|lig|caron);$/;
+  const subirEntidad = (entidad) => entidad.replace(RX_LETRA_ACENTUADA,
+    (todo, letra, diacritico) => '&' + letra.toUpperCase() + diacritico + ';');
+
+  /* El separador va capturado, así que las posiciones impares del array son las entidades. */
+  const subir = (texto) => texto
+    .split(/(&(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#[xX][0-9a-fA-F]+);)/)
+    .map((trozo, i) => (i % 2 ? subirEntidad(trozo) : trozo.toUpperCase()))
+    .join('');
+  return String(fragmento || '').replace(/>([^<]+)</g, (todo, texto) => '>' + subir(texto) + '<');
 }
 
 /**
@@ -380,14 +425,19 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   const study = estudio || {};
   const anotar = (nombre) => { if (Array.isArray(avisos)) avisos.push(nombre); };
 
-  /* Sustituye una tabla localizada por su nombre. Devuelve si se pudo. */
+  /* Sustituye una tabla localizada por su nombre. Devuelve si se pudo.
+     `opciones.mayusculas` sube la tabla entera —encabezado de la plantilla incluido— después de
+     reescribir las filas. Va DESPUÉS y sobre la tabla ya armada para que suban por igual las
+     filas nuevas y el encabezado que viene del cliente; del encabezado se cambia la caja y no
+     las palabras, así que su redacción se conserva. */
   const sustituir = (nombre, filas, opciones) => {
     if (!filas || !filas.length) { anotar(nombre); return false; }
     const bloque = localizarTablaHtml(salida, nombre);
     if (!bloque) { anotar(nombre); return false; }
     const tabla = salida.slice(bloque.inicio, bloque.fin);
-    salida = salida.slice(0, bloque.inicio) + reescribirFilasHtml(tabla, filas, opciones)
-      + salida.slice(bloque.fin);
+    let nueva = reescribirFilasHtml(tabla, filas, opciones);
+    if (opciones && opciones.mayusculas) nueva = mayusculasEnTablaHtml(nueva);
+    salida = salida.slice(0, bloque.inicio) + nueva + salida.slice(bloque.fin);
     return true;
   };
 
@@ -445,12 +495,12 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
 
   /* ── Muestra de comparables ── */
   sustituir(TABLA_MUESTRA, filasMuestraComparables(study)
-    .map((f) => [String(f.numero), f.nombre, f.ambito]));
+    .map((f) => [String(f.numero), f.nombre, f.ambito]), { mayusculas: true });
 
   /* ── Márgenes de las comparables ── */
   const comparables = filasComparablesInforme(study);
   sustituir(TABLA_MARGENES, comparables
-    .map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]));
+    .map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]), { mayusculas: true });
 
   /* ── Rango intercuartil ── La plantilla lo trae hasta tres veces y con dos formas: la
      horizontal de los resultados (una fila de datos: el indicador del contribuyente y

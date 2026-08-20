@@ -19,6 +19,49 @@ const tipoConCodigo = (tipo, cod) => {
 };
 
 /**
+ * Dónde está cada dato en una fila de encabezados del formato.
+ *
+ * Vive aparte porque el formato trae CUATRO secciones y no todas tienen las mismas
+ * columnas: las de ingreso y egreso llevan «Formato | Concepto | Monto operación», y las de
+ * «3. Otras operaciones» y «4. Información adicional» llevan «Movimiento Débito | Movimiento
+ * crédito | Saldo | Monto operación». Leer la sección 4 con los índices de la sección 1
+ * publicaría el saldo donde va el monto, que en un documento que se radica ante la DIAN es
+ * peor que no leerla. Cada sección calcula los suyos con su propio encabezado.
+ *
+ * @param {Array} enc  la fila de encabezados.
+ * @returns {{iNom:number, iNit:number, iPais:number, iTipo:number, iMonto:number, iCod:number}}
+ */
+function indicesDeEncabezado(enc) {
+  const fila = enc || [];
+  return {
+    iNom: fila.findIndex(x => String(x).toLowerCase().includes('vinculado') || String(x).toLowerCase().includes('razón social')),
+    iNit: fila.findIndex(x => String(x).toLowerCase().includes('identificaci')),
+    // Excluye la columna de identificación: su encabezado ("Número de
+    // Identificación fiscal del país de origen") también contiene 'país',
+    // y sin este filtro ganaba por estar antes que "País de origen".
+    iPais: fila.findIndex(x => {
+      const s = String(x).toLowerCase();
+      return (s.includes('país') || s.includes('pais')) && !s.includes('identificaci');
+    }),
+    iTipo: fila.findIndex(x => String(x).toLowerCase().includes('tipo de operaci')),
+    /* «Monto operación» y no «Movimiento débito/crédito» ni «Saldo»: ninguno de esos tres
+       contiene «monto», así que el mismo criterio sirve para las cuatro secciones. */
+    iMonto: fila.findIndex(x => String(x).toLowerCase().includes('monto')),
+    // Columna 'Cod' (código de operación DIAN). Cuando existe, solo cuentan
+    // como operación real las filas que la tengan diligenciada: filas sin
+    // código son renglones auxiliares del mismo formato/concepto (ej.
+    // retención, IVA) que no son la operación de ingreso en sí.
+    iCod: fila.findIndex(x => String(x).trim().toLowerCase() === 'cod'),
+  };
+}
+
+/** ¿Esta fila es un encabezado de columnas y no una fila de datos? */
+const esFilaDeEncabezado = (f) => {
+  const s = (f || []).join(' ').toLowerCase();
+  return s.includes('identificaci') && s.includes('tipo de operaci');
+};
+
+/**
  * Módulo de lectura e ingesta del Excel de Operaciones con Vinculados
  * (Basado en la lógica del método pt36AnalizarOperaciones de index.html)
  */
@@ -59,6 +102,10 @@ export async function parseExcelOperations(file) {
        operaciones y plata que el informe no está mirando. */
     let egresosFilas = 0;
     let egresosMonto = 0;
+    /* Las operaciones de «4. Información adicional» de todas las hojas. Se leen siempre; que
+       lleguen o no al informe lo decide el umbral, y eso es criterio del dominio, no del
+       lector del archivo. */
+    const filasAdicionales = [];
 
     hojasAEscanear.forEach(nombreHoja => {
       const sh = wb.Sheets[nombreHoja];
@@ -93,27 +140,17 @@ export async function parseExcelOperations(file) {
       }
 
       const enc = d[encIdx] || [];
-      const iNom = enc.findIndex(x => String(x).toLowerCase().includes('vinculado') || String(x).toLowerCase().includes('razón social'));
-      const iNit = enc.findIndex(x => String(x).toLowerCase().includes('identificaci'));
-      // Excluye la columna de identificación: su encabezado ("Número de
-      // Identificación fiscal del país de origen") también contiene 'país',
-      // y sin este filtro ganaba por estar antes que "País de origen".
-      const iPais = enc.findIndex(x => {
-        const s = String(x).toLowerCase();
-        return (s.includes('país') || s.includes('pais')) && !s.includes('identificaci');
-      });
-      const iTipo = enc.findIndex(x => String(x).toLowerCase().includes('tipo de operaci'));
-      const iMonto = enc.findIndex(x => String(x).toLowerCase().includes('monto'));
-      // Columna 'Cod' (código de operación DIAN). Cuando existe, solo cuentan
-      // como operación real las filas que la tengan diligenciada: filas sin
-      // código son renglones auxiliares del mismo formato/concepto (ej.
-      // retención, IVA) que no son la operación de ingreso en sí.
-      const iCod = enc.findIndex(x => String(x).trim().toLowerCase() === 'cod');
+      const { iNom, iNit, iPais, iTipo, iMonto, iCod } = indicesDeEncabezado(enc);
 
       /* Las operaciones de la hoja se acumulan aquí y no en `rowsParsed`, porque para
          decidir si la columna 'Cod' sirve de filtro hay que haberlas visto todas. */
       const candidatasIngreso = [];
       const candidatasEgreso = [];
+      /* Las de «4. Información adicional» van aparte y sin el filtro de 'Cod': ese filtro se
+         calibra con las filas de ingreso de la hoja y aplicarlo aquí escondería operaciones
+         que el contribuyente sí declaró. */
+      const candidatasAdicional = [];
+      let idxAdicional = null;
 
       let currentTipo = '';
       // Las hojas 'Op. Vinculados Economicos' y 'Op. Paraisos Fiscales' listan
@@ -136,6 +173,38 @@ export async function parseExcelOperations(file) {
         // anterior. No cambiaba el monto (solo se suma INGRESO), pero sí inflaría el aviso
         // de egresos descartados con filas que no son egresos.
         if (rowJoined.includes('OTRAS OPERACIONES')) { currentSeccion = 'OTRAS'; continue; }
+        /* «4. Información adicional»: préstamos, reintegros y operaciones a nombre de
+           vinculados (códigos DIAN 61 a 63). No afectan el estado de resultados, así que
+           no entran en el monto de la operación analizada ni en el rango — por eso se
+           acumulan aparte y no tocan `candidatasIngreso`. */
+        if (/INFORMACI[ÓO]N\s+ADICIONAL/.test(rowJoined)) { currentSeccion = 'ADICIONAL'; continue; }
+
+        /* Cada sección trae su propio encabezado y sus propias columnas. El de la primera
+           ya se resolvió arriba; los de las siguientes se recalculan al pasar por ellos. */
+        if (esFilaDeEncabezado(f)) {
+          if (currentSeccion === 'ADICIONAL') idxAdicional = indicesDeEncabezado(f);
+          continue;
+        }
+
+        if (currentSeccion === 'ADICIONAL') {
+          /* Sin el encabezado de la sección no se sabe qué columna es el monto, y adivinarlo
+             con el de otra sección publicaría el saldo en su lugar. */
+          if (!idxAdicional) continue;
+          const ad = idxAdicional;
+          const nomAd = String(ad.iNom > -1 ? f[ad.iNom] : '').trim();
+          if (!nomAd || nomAd.startsWith('*')) continue;
+          const montoAd = parseFloat(String(ad.iMonto > -1 ? f[ad.iMonto] : '').replace(/[^0-9.-]/g, '')) || 0;
+          if (montoAd <= 0) continue;
+          const codAd = String(ad.iCod > -1 ? f[ad.iCod] : '').trim();
+          candidatasAdicional.push({
+            vinculado: nomAd,
+            nit: String(ad.iNit > -1 ? f[ad.iNit] : '').replace(/[^0-9]/g, ''),
+            pais: String(ad.iPais > -1 ? f[ad.iPais] : '').trim(),
+            tipo: tipoConCodigo(String(ad.iTipo > -1 ? f[ad.iTipo] : '').trim(), codAd),
+            monto: montoAd,
+          });
+          continue;
+        }
 
         const nom = String(iNom > -1 ? f[iNom] : '').trim();
         // Las notas al pie ("* Ver lista de tipo de operaciones según DIAN")
@@ -211,6 +280,8 @@ export async function parseExcelOperations(file) {
       candidatasEgreso.forEach(({ cod, ...operacion }) => {
         if (!codEnUsoEgreso || cod !== '') rowsParsedEgreso.push(operacion);
       });
+
+      filasAdicionales.push(...candidatasAdicional);
     });
 
     let rowsParsed = [];
@@ -296,6 +367,15 @@ export async function parseExcelOperations(file) {
       contrapartes: contrapartes.size,
       idsDivergentes,
       egresosDescartados: { filas: egresosFilas, monto: egresosMonto },
+      /* `null` y no un objeto vacío cuando el formato no trae la sección: es lo que
+         distingue «este archivo no declaró información adicional» de «la declaró en cero», y
+         de eso depende que el informe publique o no una tabla más. */
+      operacionAdicional: filasAdicionales.length
+        ? {
+          filas: filasAdicionales,
+          monto: filasAdicionales.reduce((acc, r) => acc + r.monto, 0),
+        }
+        : null,
       rows: rowsParsed,
       egreso: esEgreso
     };

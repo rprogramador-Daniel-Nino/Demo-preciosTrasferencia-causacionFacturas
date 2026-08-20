@@ -62,6 +62,22 @@ const RAZONES_RECHAZO = [
    el anexo deja de sustentar la tabla. Una sola definición para los dos. */
 export const FUNDIDOS_EN_RIGOR = ['actividadDistinta', 'sinDescripcion'];
 
+/* Mayúsculas para las tablas que las llevan: la de márgenes, la de la muestra y el ANEXO C
+   entero (requisito del usuario, 2026-08-19). La «Tabla 16. Razones de rechazo» NO, y por eso
+   esto vive aquí como utilidad y no dentro de un generador de tablas: aplicado ahí subiría toda
+   tabla del informe y la excepción se perdería. Sube quien arma las filas, tabla por tabla.
+
+   Vive en este módulo porque es el que ya comparten las dos rutas —la de plantilla .docx
+   (`docxRelleno.js`) y la de PDF (`tablasHtmlInforme.js`)—, así que las dos suben igual. La
+   ruta de PDF tiene además `mayusculasEnTablaHtml`, que sube el texto de una tabla YA armada:
+   lo necesita porque ahí los encabezados vienen de la plantilla del cliente y no de un array
+   nuestro. */
+export const enMayusculas = (valor) => String(valor == null ? '' : valor).toUpperCase();
+
+/** Una matriz de filas, celda a celda. */
+export const filasEnMayusculas = (filas) =>
+  (filas || []).map((fila) => (fila || []).map(enMayusculas));
+
 /* La fila fundida se nombra en corto, como en el libro y como en los informes de años
    anteriores: la coletilla «perfil no comparable con la parte examinada» describía solo
    uno de los tres motivos que ahora recoge. */
