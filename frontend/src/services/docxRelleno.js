@@ -48,7 +48,7 @@ export { verticalSobreActivos };
 import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
-  enMayusculas, filasEnMayusculas,
+  enMayusculas, filasEnMayusculas, filasCriteriosScreening,
 } from './tablasInforme.js';
 /* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
    definición de la matriz para las dos salidas del informe. */
@@ -66,6 +66,7 @@ import { nameKey } from './comparablesEngine.js';
 /* La frase que comenta el rango se resuelve con la MISMA función que la ruta de plantilla PDF:
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
+import { actualizarProsaTablas } from './prosaTablasInforme.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -93,6 +94,12 @@ const RUTA_DOC = 'word/document.xml';
 
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
+
+/** Nombre con el que la plantilla del cliente rotula la tabla de criterios de búsqueda.
+ *  No se importa de `tablasHtmlInforme.js`: esa dirección de import ya existe al revés
+ *  (`tablasHtmlInforme.js` importa `claveTitulo`/`numeroDeTabla` de aquí), y traer la
+ *  constante desde allí crearía un ciclo. */
+const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 
 /**
@@ -337,7 +344,9 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
     doc,
     [
       tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
-      'Tasa Representativa del Mercado', 'Desempleo en Colombia', 'Análisis del Sector',
+      'Tasa Representativa del Mercado',
+      ['Desempleo en Colombia', 'Tasa de Desempleo', 'Mercado Laboral en Colombia'],
+      'Análisis del Sector',
     ],
     [
       primerHueco(narrativa.colombia, 'colombiana'),
@@ -639,6 +648,112 @@ function finDeFila(xml, desde) {
   return -1;
 }
 
+/** Fin del `<w:tc>` que empieza en `desde`, contando anidamiento (una celda puede traer
+ *  una tabla anidada con sus propios `<w:tc>`). Mismo patrón que `finDeTabla`/`finDeFila`. */
+function finDeCelda(xml, desde) {
+  const rx = /<w:tc(?:\s[^>]*)?>|<\/w:tc>/g;
+  rx.lastIndex = desde;
+  let nivel = 0, m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '</w:tc>' ? -1 : 1;
+    if (nivel === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/** Las `<w:tr>` de una tabla OOXML, con su XML y posición. Análogo a `filasDe`
+ *  (`tablasHtmlInforme.js`) pero apoyado en `finDeFila`, que ya cuenta anidamiento. */
+function filasDeOoxml(tablaXml) {
+  const texto = String(tablaXml || '');
+  const filas = [];
+  const rx = /<w:tr(?:\s[^>]*)?>/g;
+  let m;
+  while ((m = rx.exec(texto)) !== null) {
+    const fin = finDeFila(texto, m.index);
+    if (fin < 0) break;
+    filas.push({ xml: texto.slice(m.index, fin), inicio: m.index, fin });
+    rx.lastIndex = fin;
+  }
+  return filas;
+}
+
+/** Las `<w:tc>` de una fila OOXML, con su XML completo (`tcPr` —bordes, sombreado,
+ *  `gridSpan`, `vMerge`— incluida). Análogo a `celdasDe` (`tablasHtmlInforme.js`). */
+function celdasDeOoxml(filaXml) {
+  const texto = String(filaXml || '');
+  const celdas = [];
+  const rx = /<w:tc(?:\s[^>]*)?>/g;
+  let m;
+  while ((m = rx.exec(texto)) !== null) {
+    const fin = finDeCelda(texto, m.index);
+    if (fin < 0) break;
+    celdas.push({ xml: texto.slice(m.index, fin), inicio: m.index, fin });
+    rx.lastIndex = fin;
+  }
+  return celdas;
+}
+
+/**
+ * Reescribe las filas de datos de una tabla OOXML conservando su encabezado y el «molde»
+ * de sus celdas (bordes, sombreado, `gridSpan`/`vMerge`) — equivalente de `reescribirFilasHtml`
+ * (`tablasHtmlInforme.js`) para la ruta .docx.
+ *
+ * Hace falta porque «Códigos SIC utilizados» no es una tabla rectangular uniforme como las
+ * que arma `generarTablaOoxml`: alterna una fila de 2 celdas (etiqueta/valor) con una fila de
+ * 1 celda fusionada (el conector «Y»/«O»), y generarla desde cero perdería esa fusión.
+ *
+ * @param {string} tablaXml  el bloque «título + `<w:tbl>`» (o solo la tabla); basta con que
+ *        contenga la tabla en algún punto, porque el parseo busca `<w:tr>` directamente y el
+ *        párrafo de título, si lo hay, no tiene ninguno.
+ * @param {Array<string[]>} filas  una entrada `[conector]` o `[etiqueta, valor]` por fila —
+ *        la forma que ya produce `filasCriteriosScreening` (`tablasInforme.js`).
+ * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
+ *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
+ *        detección de la fila de fuente.
+ * @returns {string} el XML con las filas de cuerpo nuevas, o el original si no hay molde.
+ */
+export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
+  const tabla = String(tablaXml || '');
+  const encabezados = Math.max(1, Number(opciones.filasEncabezado) || 1);
+  const todas = filasDeOoxml(tabla);
+  if (todas.length <= encabezados) return tabla;
+
+  /* Misma heurística de pie de fuente que `reescribirFilasHtml`: la última fila se conserva
+     intacta cuando es de una sola celda y el resto de la tabla tiene más de una. No se
+     regenera aquí — es la misma decisión ya tomada en la ruta HTML, no algo que decidir de
+     nuevo: el pie «Fuente: ... publicado en ...» no se recalcula en ninguna de las dos rutas. */
+  const columnas = celdasDeOoxml(todas[encabezados - 1].xml).length;
+  const ultima = todas[todas.length - 1];
+  const esPie = opciones.pie !== false
+    && todas.length > encabezados + 1
+    && columnas > 1
+    && celdasDeOoxml(ultima.xml).length === 1;
+
+  const cuerpo = todas.slice(encabezados, esPie ? todas.length - 1 : todas.length);
+  if (!cuerpo.length) return tabla;
+
+  /* Moldes: una fila de dos celdas y una de una sola, representativas del cuerpo existente.
+     Se clona su XML COMPLETO —`tcPr` incluida, con el `gridSpan` de la fila del conector— y
+     solo se sustituye el texto con `reescribirTextoParrafoOoxml`; así no hace falta
+     reconstruir la fusión a mano. */
+  const filasCuerpo = cuerpo.map((f) => celdasDeOoxml(f.xml));
+  const moldeDos = filasCuerpo.find((cs) => cs.length === 2);
+  const moldeUno = filasCuerpo.find((cs) => cs.length === 1);
+  if (!moldeDos && !moldeUno) return tabla;
+
+  const nuevas = (filas || []).map((valores) => {
+    const vals = valores || [];
+    const molde = vals.length === 1 ? (moldeUno || moldeDos) : (moldeDos || moldeUno);
+    if (!molde) return '';
+    const celdas = molde.map((c, i) => reescribirTextoParrafoOoxml(
+      c.xml, String(vals[Math.min(i, vals.length - 1)] ?? '')
+    )).join('');
+    return '<w:tr>' + celdas + '</w:tr>';
+  }).join('');
+
+  return tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
+}
+
 /**
  * Fin del `<w:p>` que empieza en `desde`, contando anidamiento. -1 si no cierra.
  *
@@ -740,10 +855,10 @@ function candidatosPorFilaTitulo(texto, claves) {
  *                  `ocurrencia`: cuál tomar si quedan varias (0 = la primera).
  * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
  */
-export function localizarBloqueTabla(xml, nombres, opciones = {}) {
+function candidatosBloqueTabla(xml, nombres) {
   const texto = String(xml || '');
   const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
-  if (!claves.length) return null;
+  if (!claves.length) return [];
 
   const candidatos = [];
   const rxParrafo = /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
@@ -780,7 +895,21 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
      sobre lo que `ocurrencia` cuenta: «la primera» tiene que ser la primera que se lee. */
   candidatos.push(...candidatosPorFilaTitulo(texto, claves));
   candidatos.sort((a, b) => a.inicio - b.inicio);
+  return candidatos;
+}
 
+/**
+ * Bloque «párrafo del título + la tabla que le sigue» cuyo título coincide con
+ * alguno de los nombres dados.
+ *
+ * @param xml       el `document.xml` completo.
+ * @param nombres   nombre canónico de la tabla, o varios sinónimos.
+ * @param opciones  `numeros`: números con los que desambiguar dos tablas homónimas.
+ *                  `ocurrencia`: cuál tomar si quedan varias (0 = la primera).
+ * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}|null}
+ */
+export function localizarBloqueTabla(xml, nombres, opciones = {}) {
+  const candidatos = candidatosBloqueTabla(xml, nombres);
   if (!candidatos.length) return null;
 
   /* El número solo desempata. Si la plantilla renumeró y ninguno coincide, se sigue
@@ -790,6 +919,21 @@ export function localizarBloqueTabla(xml, nombres, opciones = {}) {
   const finalistas = porNumero.length ? porNumero : candidatos;
   const i = Number(opciones.ocurrencia) || 0;
   return finalistas[Math.min(i, finalistas.length - 1)] || null;
+}
+
+/**
+ * TODAS las tablas cuyo título coincide con alguno de los nombres dados, en orden de
+ * documento — equivalente OOXML de `localizarTablasHtml` (`tablasHtmlInforme.js`).
+ *
+ * Hace falta cuando la decisión de qué conservar y qué borrar depende de ver el conjunto
+ * completo de una vez (p. ej. «Códigos SIC utilizados», que puede venir hasta tres veces
+ * con el mismo nombre), y no de pedir una ocurrencia a la vez como hace
+ * `localizarBloqueTabla`.
+ *
+ * @returns {{inicio:number, fin:number, titulo:string, numero:number|null}[]}
+ */
+export function localizarBloquesTabla(xml, nombres) {
+  return candidatosBloqueTabla(xml, nombres);
 }
 
 /* Si justo después de `cursor` viene una tabla —saltando párrafos vacíos, marcas de
@@ -906,7 +1050,12 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
  */
 export function localizarHitos(xml, titulos) {
   const texto = String(xml || '');
-  const claves = (titulos || []).map(claveTitulo);
+  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
+     traer redacciones distintas según qué consultor escribió la plantilla de ese cliente
+     en su momento ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
+     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
+     Mismo mecanismo que ya usa `localizarBloqueTabla` para nombres de tabla. */
+  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
   const resultado = new Array(claves.length).fill(null);
   if (!claves.length) return resultado;
 
@@ -939,7 +1088,7 @@ export function localizarHitos(xml, titulos) {
   let desde = 0;
   for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !candidatos[k].clave.includes(claves[objetivo])) k += 1;
+    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
     if (k >= candidatos.length) continue;
     /* Si el hito es el título de una tabla —caso normal para los nombres de
        `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
@@ -969,11 +1118,37 @@ export function localizarHitos(xml, titulos) {
  * @param {string[]} [avisos]
  * @param {string} [nombreParaAvisos]
  */
+/** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
+ *  sinónimos si trae varios (`['Desempleo en Colombia', 'Tasa de Desempleo', ...]`) — para
+ *  avisos y logs, nunca la representación por defecto de un arreglo. */
+const etiquetaTitulo = (t) => (Array.isArray(t) ? t[0] : t);
+
 export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaAvisos) {
   doc.aplicar((actual) => {
     const hitos = localizarHitos(actual, titulos);
+    const etiquetas = titulos.map(etiquetaTitulo);
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
-      + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + titulos.join(' → ') + ')');
+      + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + etiquetas.join(' → ') + ')');
+    /* UN aviso por rótulo ausente, y no uno por cada par de rótulos consecutivos que no
+       se pudo delimitar. Cada rótulo delimita dos apartados —el que cierra y el que
+       abre—, así que el aviso por pares repetía la misma causa dos veces y una cadena de
+       siete rótulos rota por el primero producía seis líneas idénticas en el fondo. Lo
+       que quien radica necesita saber es qué rótulo escribe distinto su plantilla: eso se
+       arregla una vez y descuelga todos los apartados que dependían de él. */
+    titulos.forEach((titulo, i) => {
+      if (hitos[i]) return;
+      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+        + '», así que los apartados que delimita se quedan como están en la plantilla';
+      console.warn('[docxRelleno] ' + aviso);
+      if (!Array.isArray(avisos)) return;
+      /* Y ni siquiera una vez por sección: el rótulo que CIERRA una cadena es el que ABRE
+         la siguiente —«Análisis del Sector» cierra la economía colombiana y abre el
+         sector—, así que sin esto el mismo rótulo ausente se avisa dos veces, con dos
+         encabezados distintos y la misma causa detrás. Se compara por el rótulo
+         entrecomillado, que es lo único que el usuario tiene que ir a corregir. */
+      if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+      avisos.push(aviso);
+    });
     let salida = actual;
 
     /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
@@ -997,17 +1172,16 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       const hitoActual = hitos[i];
       const hitoSiguiente = hitos[i + 1];
       if (!hitoActual || !hitoSiguiente) {
-        const aviso = (nombreParaAvisos || '') + ': no se encontró "' + titulos[i] + '" o "' + titulos[i + 1] + '"';
-        console.warn('[docxRelleno] ' + aviso);
-        if (Array.isArray(avisos)) avisos.push(aviso);
+        /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando
+           el rótulo ausente que lo causa. Aquí solo queda el respaldo. */
         if (cursorRespaldo !== null) {
           const nuevo = contenidos[i]('');
           if (nuevo !== null) {
-            console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] +
+            console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
               '": sin ancla, insertado de respaldo al final de la sección');
             if (Array.isArray(avisos)) {
               avisos.push(
-                (nombreParaAvisos || '') + ': "' + titulos[i] + '" no está en la plantilla, así que ' +
+                (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
                 'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
                 'revisa el orden antes de radicar'
               );
@@ -1020,10 +1194,10 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
       const nuevo = contenidos[i](textoHueco);
       if (nuevo === null) {
-        console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": sin tocar');
+        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
         continue;
       }
-      console.log('[docxRelleno] hueco "' + titulos[i] + '" → "' + titulos[i + 1] + '": reemplazado ('
+      console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
         + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
       if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
         cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
@@ -1474,6 +1648,56 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     );
   }, { numeros: [16] });
 
+  /* 10.5. Códigos SIC utilizados (Criterios de búsqueda). La plantilla trae esta tabla hasta
+     tres veces —Ryan LLC, Capital IQ y Refinitiv— y el sistema hoy usa únicamente Capital IQ
+     como fuente del cribado. Mismo criterio, mismo motivo y misma fuente de datos
+     (`filasCriteriosScreening`, `tablasInforme.js`) que la ruta de plantilla PDF
+     (`actualizarTablasMotorHtml`, `tablasHtmlInforme.js:406-444`): sin este bloque, esta era
+     la única tabla del motor que la ruta .docx nunca tocaba, y se radicaba con el cribado del
+     año y la fuente (Capital IQ/Refinitiv) del informe del que salió la plantilla —
+     reportado con capturas de un informe real el 2026-08-18.
+
+     Sin `numeros` claros y con un número de ocurrencias distinto de 3, no hay forma de saber
+     con certeza cuál copia es la real: se deja tal cual y se avisa, en vez de arriesgar borrar
+     o mezclar la copia equivocada — mismo criterio que ya sigue este módulo ante ambigüedad
+     (ver «Rango Intercuartil»/«Tabla de rangos» más abajo). */
+  doc.aplicar((actual) => {
+    const criterios = filasCriteriosScreening(estudio);
+    if (!criterios.length) {
+      if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+      return actual;
+    }
+    const bloques = localizarBloquesTabla(actual, TABLA_CRITERIOS);
+    if (!bloques.length) {
+      if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+      return actual;
+    }
+
+    let salida = actual;
+    let tocada = false;
+    /* De atrás hacia adelante, como en Transacciones Inter compañía y en Rango Intercuartil:
+       borrar o reescribir mueve los índices de lo que va después en el documento. */
+    for (const bloque of [...bloques].reverse()) {
+      const idx = bloques.indexOf(bloque);
+      const esParaEliminar = bloque.numero === 13 || bloque.numero === 15
+        || (bloque.numero !== 14 && bloques.length === 3 && (idx === 0 || idx === 2));
+      const esParaConservar = bloque.numero === 14
+        || (bloque.numero == null && bloques.length === 3 && idx === 1);
+
+      if (esParaEliminar) {
+        salida = salida.slice(0, bloque.inicio) + salida.slice(bloque.fin);
+        tocada = true;
+      } else if (esParaConservar) {
+        salida = salida.slice(0, bloque.inicio)
+          + reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios)
+          + salida.slice(bloque.fin);
+        tocada = true;
+      }
+    }
+    if (!tocada && Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
+    return salida;
+  });
+
   // 11. Muestra Compañías comparables
   reemplazar('Muestra Compañías comparables', (b) => {
     const filas17 = filasMuestraComparables(estudio).map((f) => [
@@ -1538,16 +1762,33 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      plantilla de este cliente («…se ubica entre el percentil 25 (X) y (Y) percentil 75, la
      mediana con (Z)»). Se conserva como respaldo porque cubre redacciones donde la cifra no va
      detrás de su rótulo, y porque es la que está probada contra el .docx real. */
+  const reporteProsa = {};
   const antesDeProsa = doc.xml;
-  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
+  doc.aplicar((x) => actualizarProsaRango(x, estudio, avisos,
+    { rxParrafo: PARRAFO_OOXML, reporte: reporteProsa }));
   if (doc.xml === antesDeProsa) {
     doc.aplicar((x) => actualizarProsaTrasTabla(
       x, 'Rango Intercuartil',
       [pStr(p25Ajustado), pStr(p75Ajustado), pStr(medAjustado)],
       avisos,
     ));
+  }
+  /* El año va SIEMPRE, y no sólo cuando el respaldo posicional entra. Estaba dentro del `if`, y
+     eso funcionaba mientras las plantillas que necesitaban el año fueran justo las que la prosa
+     no sabía tocar. Al emparejar por cercanía, la frase de la plantilla que escribe las cifras
+     sin paréntesis ya se actualiza —el `if` deja de entrar— y con él se habría ido el «ajustado
+     durante el 20XX», que en esa plantilla vive en otro párrafo. Se salta si la prosa ya lo puso,
+     porque entonces el aviso sería el mismo recado dos veces en el panel. */
+  if (!reporteProsa.anioPuesto) {
     doc.aplicar((x) => actualizarAnioConclusionRango(x, year, avisos));
   }
+
+  /* Las otras frases que citan cifras de una tabla: cuántas comparables se identificaron y
+     cuántas quedaron, el monto de la operación con el vinculado y el año de los estados
+     financieros de las comparables. Van por la misma función que la ruta del PDF, con el
+     delimitador de párrafo de Word, para que las dos rutas no puedan quedarse una con menos
+     arreglos que la otra. */
+  doc.aplicar((x) => actualizarProsaTablas(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
 
   /* 13. Margen Operacional Compañías Comparables.
 
@@ -1617,6 +1858,28 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
  *          generar, qué campos salieron sin dato y qué tablas no se encontraron en la
  *          plantilla, para poder avisar de ambas cosas antes de radicar.
  */
+/**
+ * Si el marcado dejó un bucle de Docxtemplater desbalanceado —una celda sin `<w:t>`
+ * donde escribir `{#coleccion}` o `{/coleccion}` se lo tragó en silencio, ver
+ * `escribirEnCelda` en `docxPlantilla.js`—, Docxtemplater revienta el render COMPLETO
+ * con "Unopened/Unclosed loop" aunque el resto del documento esté perfecto. Se detecta
+ * contando aperturas y cierres de la colección y, si no cuadran, se retira el tag suelto
+ * en vez de tumbar la generación entera de un informe que se radica ante la DIAN: la
+ * fila que debía repetirse se queda como texto fijo de la plantilla.
+ */
+function quitarBucleSiDesbalanceado(xml, nombre, avisos) {
+  const apertura = '{#' + nombre + '}';
+  const cierre = '{/' + nombre + '}';
+  const nAbre = xml.split(apertura).length - 1;
+  const nCierra = xml.split(cierre).length - 1;
+  if (nAbre === nCierra) return xml;
+  if (Array.isArray(avisos)) {
+    avisos.push(`el bucle "${nombre}" de la plantilla quedó desbalanceado, se ignoró para no bloquear la generación`);
+  }
+  console.warn(`[relleno] bucle "${nombre}" desbalanceado (${nAbre} apertura(s), ${nCierra} cierre(s)); se retira`);
+  return xml.split(apertura).join('').split(cierre).join('');
+}
+
 export function renderizarDocx(binario, estudio, opciones = {}) {
   const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
   const camposVacios = new Set();
@@ -1635,6 +1898,9 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
+  Object.keys(colecciones).forEach((nombre) => {
+    xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
+  });
   zip.file(RUTA_DOC, xml);
 
   const doc = new Docxtemplater(zip, {

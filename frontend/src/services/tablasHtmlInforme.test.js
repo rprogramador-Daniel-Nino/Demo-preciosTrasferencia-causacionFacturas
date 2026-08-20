@@ -662,7 +662,7 @@ test('reemplazarHuecosHtml inserta de respaldo al final de la sección cuando fa
   );
   assert.match(salida, /Contenido de B, sin ancla propia\./);
   assert.ok(salida.indexOf('Contenido de B') < salida.indexOf('Encabezado C'));
-  assert.ok(avisos.some((a) => /no se encontró "Encabezado B" o "Encabezado C"/.test(a)));
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
   assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
 });
 
@@ -679,10 +679,79 @@ test('reemplazarHuecosHtml NO inserta de respaldo si ni siquiera el límite fina
   assert.doesNotMatch(salida, /Tampoco esto/);
 });
 
+test('reemplazarHuecosHtml avisa una vez por rótulo ausente, no una por par consecutivo', () => {
+  /* Cada rótulo delimita DOS apartados, así que el aviso por pares repetía la misma
+     causa: con «Dos» y «Tres» ausentes salían tres avisos de par para dos rótulos. Se
+     filtran los de respaldo, que son otra cosa y sí van uno por apartado insertado. */
+  const html = '<h2>Uno</h2><p>prosa</p><h2>Cuatro</h2>';
+  const avisos = [];
+  reemplazarHuecosHtml(html, ['Uno', 'Dos', 'Tres', 'Cuatro'],
+    [() => '<p>a</p>', () => '<p>b</p>', () => '<p>c</p>'], avisos, 'III.B');
+  const porRotulo = avisos.filter((a) => a.includes('no se encontró el rótulo'));
+  assert.equal(porRotulo.length, 2, 'uno por cada rótulo que falta, no tres por los pares');
+  assert.ok(porRotulo.some((a) => a.includes('«Dos»')), 'nombra el rótulo «Dos»');
+  assert.ok(porRotulo.some((a) => a.includes('«Tres»')), 'nombra el rótulo «Tres»');
+  assert.ok(porRotulo.every((a) => a.startsWith('III.B')), 'y cada aviso dice de qué sección habla');
+});
+
+test('reemplazarHuecosHtml no repite el aviso de un rótulo que cierra una cadena y abre la siguiente', () => {
+  /* «Análisis del Sector» cierra la cadena de la economía colombiana y abre la del
+     sector: sin deduplicar, un solo rótulo mal escrito se avisaba dos veces. */
+  const html = '<h2>Uno</h2><p>prosa</p><h2>Tres</h2>';
+  const avisos = [];
+  reemplazarHuecosHtml(html, ['Uno', 'Dos'], [() => null], avisos, 'III.B');
+  reemplazarHuecosHtml(html, ['Dos', 'Tres'], [() => null], avisos, 'III.C');
+  const porRotulo = avisos.filter((a) => a.includes('no se encontró el rótulo'));
+  assert.equal(porRotulo.length, 1, 'el rótulo ausente se avisa una sola vez, no una por cadena');
+  assert.ok(porRotulo[0].includes('«Dos»'));
+});
+
+/* El respaldo INSERTA en el cursor, no reemplaza el tramo: cuando el rótulo ausente solo
+   está escrito de otro modo, su subsección sigue en el documento y debe sobrevivir. */
+test('el respaldo no se lleva la subsección intermedia cuyo rótulo no se reconoció', () => {
+  const html = '<h2>Uno</h2><p>prosa uno</p><h3>Rotulo escrito de otro modo</h3>'
+    + '<p>prosa que hay que conservar</p><h2>Cuatro</h2>';
+  const salida = reemplazarHuecosHtml(html, ['Uno', 'Dos', 'Cuatro'],
+    [() => '<p>nuevo</p>', () => '<p>nuevo</p>'], [], 'III.B');
+  assert.match(salida, /prosa que hay que conservar/, 'no se borra el texto del cliente');
+  assert.match(salida, /Rotulo escrito de otro modo/, 'ni su encabezado');
+});
+
 test('reemplazarHuecosHtml protege una tabla que cae justo después de un hito', () => {
   const html = '<h2>Encabezado A</h2><table><tr><td>dato real</td></tr></table><h2>Encabezado B</h2>';
   const salida = reemplazarHuecosHtml(html, ['Encabezado A', 'Encabezado B'], [() => '<p>marcador</p>'], []);
   assert.match(salida, /<table><tr><td>dato real/, 'la tabla entera sigue intacta, sin texto insertado dentro');
+});
+
+test('localizarHitosHtml acepta un arreglo de sinónimos por posición', () => {
+  /* El contenido es universal (la sección de desempleo es la misma para todos los
+     informes), pero el documento de referencia de cada contribuyente es un archivo
+     distinto que un consultor distinto redactó en su momento — "Tasa de Desempleo" y
+     "Desempleo en Colombia" son el mismo apartado con otra redacción. */
+  const html = '<h3>Uno</h3><h3>Tasa de Desempleo</h3><h3>Tres</h3>';
+  const hitos = localizarHitosHtml(html, ['Uno', ['Desempleo en Colombia', 'Tasa de Desempleo'], 'Tres']);
+  assert.ok(hitos[1], 'debió reconocer el sinónimo "Tasa de Desempleo"');
+});
+
+test('reemplazarHuecosHtml encuentra el hito con un sinónimo, y el aviso muestra un nombre legible si falla', () => {
+  const htmlOk = '<h2>Encabezado A</h2><h2>Tasa de Desempleo</h2>';
+  const salidaOk = reemplazarHuecosHtml(
+    htmlOk,
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => '<p>Prosa nueva.</p>'],
+    []
+  );
+  assert.match(salidaOk, /Prosa nueva\./);
+
+  const avisos = [];
+  reemplazarHuecosHtml(
+    '<h2>Encabezado A</h2>',
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => 'nunca se usa'],
+    avisos
+  );
+  assert.ok(avisos.some((a) => a.includes('Desempleo en Colombia')));
+  assert.ok(!avisos.some((a) => a.includes('[object Object]')));
 });
 
 test('actualizarApartadoSectorialHtml reemplaza los cuatro bloques y deja intacta la tabla de datos clave', () => {

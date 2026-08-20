@@ -126,6 +126,36 @@ function redistribuir(bloque, textoNuevo) {
 }
 
 /**
+ * Como `redistribuir`, pero para una celda de tabla que puede no traer ningún `<w:t>`
+ * —vacía salvo por su formato/sombreado, algo frecuente en la columna que el cliente
+ * dejó en blanco de la fila que se usa de modelo—.
+ *
+ * `redistribuir` sobre una celda así no encuentra nada que reemplazar y devuelve el
+ * bloque intacto: el marcador se pierde EN SILENCIO. Para un `{campo}` cualquiera es un
+ * dato que no sale; para el `{#coleccion}`/`{/coleccion}` de `envolverTablaEnBucle` es
+ * un bucle que queda desbalanceado para siempre en la plantilla persistida, y
+ * Docxtemplater revienta el render completo en cuanto lo encuentra.
+ *
+ * Si no hay `<w:t>`, se inserta un run nuevo dentro del primer `<w:p>` de la celda en
+ * vez de no escribir nada.
+ */
+function escribirEnCelda(celda, textoNuevo) {
+  RX_TEXTO.lastIndex = 0;
+  if (RX_TEXTO.test(celda)) {
+    RX_TEXTO.lastIndex = 0;
+    return redistribuir(celda, textoNuevo);
+  }
+  const run = '<w:r><w:t xml:space="preserve">' + escaparXml(textoNuevo) + '</w:t></w:r>';
+  if (/<w:p(?:\s[^>]*)?\/>/.test(celda)) {
+    return celda.replace(/<w:p(?:\s[^>]*)?\/>/, (m) => m.slice(0, -2) + '>' + run + '</w:p>');
+  }
+  return celda.replace(
+    /(<w:p(?:\s[^>]*)?>)(\s*<w:pPr>[\s\S]*?<\/w:pPr>)?/,
+    (m, apertura, pPr) => apertura + (pPr || '') + run,
+  );
+}
+
+/**
  * Escribe los marcadores `{campo}` dentro del OOXML.
  *
  * Mismo contrato de entrada y de salida que `aplicarMarcas` de
@@ -277,7 +307,7 @@ export function envolverTablaEnBucle(xml, config) {
     let texto = campo ? '{' + campo + '}' : '';
     if (i === 0) texto = '{#' + coleccion + '}' + texto;
     if (i === ultima) texto += '{/' + coleccion + '}';
-    filaNueva = filaNueva.replace(celda[0], redistribuir(celda[0], texto));
+    filaNueva = filaNueva.replace(celda[0], escribirEnCelda(celda[0], texto));
   });
 
   const tablaNueva = tabla[0].slice(0, modelo.index) + filaNueva

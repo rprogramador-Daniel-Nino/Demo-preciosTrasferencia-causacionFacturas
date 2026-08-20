@@ -1,0 +1,314 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   prosaTablasInforme.js — las otras frases que citan cifras de una tabla: los conteos de la
+   muestra, el monto de la operación con el vinculado y el año de los márgenes.
+
+   La frase que comenta el rango intercuartil tiene su módulo (`prosaRangoInforme.js`) porque
+   necesita emparejar tres cuartiles con tres cifras. Estas tres familias no: cada cifra la
+   introduce un giro concreto y sin ambigüedad —«se identificó un total de N Compañías
+   comparables potenciales», «por un valor total de $ N»—, así que van SÓLO por anclas y con el
+   emparejamiento por cercanía DESACTIVADO (`rotulos: []`).
+
+   POR QUÉ NO SE EMPAREJA POR CERCANÍA AQUÍ. Estas cifras no llevan «%»: son conteos («442»,
+   «13») y montos («3.435.357.400»). Un entero suelto en prosa puede ser un año, el número de un
+   artículo del Estatuto Tributario, un código de operación DIAN o una página. La cercanía a una
+   palabra no basta para decidir que ese número es el que la tabla publica, y publicar un conteo
+   equivocado en un documento que se radica ante la DIAN es peor que dejar el del informe de
+   referencia.
+
+   Redacciones medidas sobre el informe de referencia (`brain_estudio_pasado.txt`):
+
+     «A partir del anterior criterio de búsqueda se identificó un total de 442 Compañías
+      comparables potenciales.»
+     «De esta manera, después de aplicar dichos criterios, quedaron 13 compañías comparables.»
+     «La muestra final de comparables a End Game Colombia SAS, quedó conformada por 13
+      compañías, los cuales se señalan a continuación:»
+     «En el año 2024, END GAME INTERACTIVE COLOMBIA S.A.S, tuvo operaciones de ingreso con sus
+      vinculados económicos por Otros servicios (07), por un valor total de $ 3.435.357.400»
+     «La transacción efectuada […] durante el ejercicio fiscal finalizado el 31 de diciembre de
+      2024. fue el Ingreso por Otros servicios (07), por un valor de $ 3.435.357.400, detalladas
+      a continuación:»
+     «El siguiente cuadro presenta las utilidades operacionales sobre ventas para el conjunto de
+      compañías comparables para los estados financieros correspondientes al año 2024:»
+
+   En la plantilla los conteos van resaltados —«quedaron <strong>13</strong> compañías»—, así que
+   entre el giro y la cifra hay una etiqueta: es lo que `HUECO` resuelve, igual que en el rango.
+
+   LO QUE NO SE TOCA. «…debían superar 3 razones de aceptación y solo tener hasta máximo 3
+   razones de rechazo» son los umbrales con que se configuró la búsqueda, no cifras que ninguna
+   tabla publique: el estudio no los guarda y ponerles un número sería inventarlo. Y el rótulo
+   del indicador («Margen Operacional») no se sustituye aunque el estudio use otro: cambiar esa
+   palabra es reescribir la redacción, no corregir una cifra. Se avisa.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+import { filasRazonesRechazo, filasMuestraComparables } from './tablasInforme.js';
+import { valorDeCampo } from './plantillaVocabulario.js';
+import { sincronizarCifrasDeProsa, HUECO, PARRAFO_HTML } from './prosaVecindad.js';
+
+/* Un conteo, como lo escriben las plantillas: «13», «442», «1.024». */
+const CONTEO = '\\d+(?:\\.\\d{3})*';
+
+/* Un monto en pesos. El «$» queda fuera del grupo a propósito: se sustituye el número y el
+   signo que la plantilla ponga delante se conserva, con su espacio y todo. */
+const MONTO = '\\d+(?:\\.\\d{3})*(?:,\\d+)?';
+
+const anioDe = (estudio) => {
+  const n = Number(estudio && estudio.anio);
+  return Number.isInteger(n) && n >= 2000 && n <= 2100 ? String(n) : null;
+};
+
+/* ══════════════════ muestra y razones de rechazo ══════════════════ */
+
+const RX_ES_PROSA_MUESTRA = new RegExp(
+  '(?:comparables' + HUECO + 'potenciales)'
+  + '|(?:(?:total|universo)\\s+de' + HUECO + '\\d)'
+  + '|(?:identificaron?' + HUECO + '\\d)'
+  + '|(?:(?:qued(?:aron|[óo])|conformad[ao]|integrad[ao]|compuest[ao]|seleccionaron|resultaron)'
+  + '(?:' + HUECO + 'por)?' + HUECO + '\\d)', 'i');
+
+/* Cómo llama el informe a lo que cuenta. El primer intento pedía un sustantivo de empresa
+   —«compañías», «empresas», «sociedades»— porque así lo escribe el informe de referencia
+   («quedó conformada por 13 compañías»). La plantilla del cliente siguiente escribe «quedó
+   conformada por 8 comparables», con el adjetivo sustantivado y sin el sustantivo delante, y el
+   conteo se radicaba con el del informe anterior mientras la tabla de debajo listaba doce.
+   Enumerar un sinónimo por plantilla es perder siempre por un cliente de diferencia, así que se
+   admite cualquiera de las formas y también que vayan combinadas. */
+const COSA_CONTADA = '(?:comparables?|compa[ñn][íi]as?|empresas?|sociedades|entidades)';
+
+/* Entre la cifra y esa palabra caben un par de palabras de relleno: «8 compañías o entidades
+   comparables», «442 posibles empresas». No pueden ser unidades de magnitud, o «un total de 442
+   millones de compañías» —una frase de estados financieros, no de la muestra— pasaría por un
+   conteo de comparables. */
+const RELLENO = '(?:(?!millones|miles|millardos|billones|pesos|d[óo]lares)[a-záéíóúñ]+'
+  + HUECO + '){0,2}';
+
+/* Lo que introduce cada conteo. Son dos grupos que no se pisan, y es el verbo —no la cifra ni
+   la palabra que la sigue— lo que distingue el universo de la muestra final: las dos frases
+   cuentan «compañías comparables» y sólo se diferencian en si las están buscando o ya las
+   eligieron. */
+const VERBO_UNIVERSO = '(?:(?:un|el)\\s+)?(?:total|universo)\\s+de|se\\s+identificaron?';
+const VERBO_ACEPTADAS = '(?:qued(?:aron|[óo])|conformad[ao]|integrad[ao]|compuest[ao]'
+  + '|seleccionaron|resultaron)(?:' + HUECO + 'por)?';
+
+/* El lookahead lleva lo que va DETRÁS de la cifra sin capturarlo: es lo que distingue «un total
+   de 442 Compañías comparables potenciales» de cualquier otro «total de» del informe —hay uno
+   por cada tabla de estados financieros—. */
+const ANCLAS_MUESTRA = [
+  {
+    clave: 'universo',
+    grupoCifra: 2,
+    rx: new RegExp('((?:' + VERBO_UNIVERSO + ')' + HUECO + ')(' + CONTEO + ')'
+      + '(?=' + HUECO + RELLENO + COSA_CONTADA + ')', 'i'),
+  },
+  {
+    clave: 'aceptadas',
+    grupoCifra: 2,
+    rx: new RegExp('((?:' + VERBO_ACEPTADAS + ')' + HUECO + ')(' + CONTEO + ')'
+      + '(?=' + HUECO + RELLENO + COSA_CONTADA + ')', 'i'),
+  },
+];
+
+/**
+ * Pone en la prosa de la muestra los conteos que publican las tablas de razones de rechazo y de
+ * muestra final.
+ *
+ * @param {string} texto
+ * @param {object} estudio
+ * @param {string[]} [avisos]
+ * @param {{rxParrafo?:RegExp, reporte?:object}} [opciones]
+ * @returns {string}
+ */
+export function actualizarProsaMuestra(texto, estudio, avisos, opciones = {}) {
+  const study = estudio || {};
+  const rechazo = filasRazonesRechazo(study.embudoSeleccion);
+  /* Las aceptadas se toman de la muestra final —las comparables que el informe LISTA y que
+     sostienen el rango— y no del contador del embudo. Si los dos no coinciden, el informe ya se
+     contradice entre sus propias tablas, y de eso avisa `razonesRechazoDescuadradas`; la frase
+     tiene que decir lo que el lector puede contar en la tabla que tiene delante. */
+  const aceptadas = filasMuestraComparables(study).length;
+
+  return sincronizarCifrasDeProsa(texto, {
+    rxParrafo: opciones.rxParrafo || PARRAFO_HTML,
+    reconocedor: RX_ES_PROSA_MUESTRA,
+    rotulos: [],
+    anclas: ANCLAS_MUESTRA,
+    valores: {
+      universo: rechazo.sinDatos || !rechazo.total ? null : String(rechazo.total),
+      aceptadas: aceptadas ? String(aceptadas) : null,
+    },
+    avisos,
+    reporte: opciones.reporte,
+    mensajes: {
+      sinCifras: 'el informe dice cuántas compañías comparables se identificaron o quedaron, '
+        + 'pero el conteo no está donde se esperaba: se queda el del informe de referencia',
+    },
+  });
+}
+
+/* ══════════════════ operaciones con el vinculado ══════════════════ */
+
+const RX_ES_PROSA_OPERACIONES = new RegExp(
+  '(?:por' + HUECO + 'un' + HUECO + 'valor)'
+  + '|(?:operaciones\\s+de\\s+(?:ingreso|egreso))'
+  + '|(?:transacci[óo]n\\s+efectuada)', 'i');
+
+const ANCLAS_OPERACIONES = [
+  {
+    clave: 'monto',
+    grupoCifra: 2,
+    rx: new RegExp('(por\\s+un\\s+valor(?:\\s+total)?\\s+de' + HUECO + '\\$?' + HUECO + ')('
+      + MONTO + ')', 'i'),
+  },
+];
+
+/**
+ * Pone en la prosa de la operación el monto que publican las Tablas 1, 2 y 12, y el año.
+ *
+ * @param {string} texto
+ * @param {object} estudio
+ * @param {string[]} [avisos]
+ * @param {{rxParrafo?:RegExp, reporte?:object}} [opciones]
+ * @returns {string}
+ */
+export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}) {
+  const study = estudio || {};
+  /* El mismo valor y el mismo formateador que las tablas de la operación: `valorDeCampo`
+     devuelve `monto_operacion` o `monto` pasado por `fmt`. */
+  const monto = valorDeCampo(study, 'monto_operacion');
+  const anio = anioDe(study);
+
+  const sustituciones = anio ? [
+    /* «…el ejercicio fiscal finalizado el 31 de diciembre de 2024». El día y el mes no cambian
+       —el ejercicio gravable cierra el 31 de diciembre—, sólo el año. */
+    {
+      clave: 'anio',
+      rx: new RegExp('(finalizado\\s+el\\s+\\d{1,2}\\s+de\\s+[a-záéíóú]+\\s+de' + HUECO
+        + ')(20\\d{2})', 'gi'),
+      valor: anio,
+    },
+    /* «En el año 2024, END GAME […] tuvo operaciones de ingreso…». Sólo si en ESE párrafo se
+       colocó el monto: «en el año 20XX» sale por todo el informe —la macro, las fuentes citadas,
+       el ANEXO B— y lo que lo hace seguro no es la frase, es haber acertado el monto ahí mismo. */
+    {
+      clave: 'anio',
+      rx: new RegExp('((?:^|[^a-záéíóúñ])(?:en|durante)\\s+el\\s+a[ñn]o' + HUECO
+        + ')(20\\d{2})', 'gi'),
+      valor: anio,
+      soloConCifras: true,
+    },
+  ] : [];
+
+  return sincronizarCifrasDeProsa(texto, {
+    rxParrafo: opciones.rxParrafo || PARRAFO_HTML,
+    reconocedor: RX_ES_PROSA_OPERACIONES,
+    rotulos: [],
+    anclas: ANCLAS_OPERACIONES,
+    valores: { monto },
+    sustituciones,
+    avisos,
+    reporte: opciones.reporte,
+    mensajes: {
+      sinCifras: 'el informe cita el monto de la operación con el vinculado, pero no está donde '
+        + 'se esperaba: se queda el del informe de referencia',
+    },
+  });
+}
+
+/* ══════════════════ márgenes de las comparables ══════════════════ */
+
+const RX_ES_PROSA_MARGENES = new RegExp(
+  '(?:utilidades' + HUECO + 'operacionales)'
+  + '|(?:correspondientes\\s+al\\s+a[ñn]o)', 'i');
+
+/* Cómo nombra el informe cada indicador. Sirve para avisar, no para sustituir. */
+const NOMBRES_PLI = {
+  MO: /margen\s+operacional|\bMO\b/i,
+  MB: /margen\s+bruto|\bMB\b/i,
+  Berry: /\bberry\b/i,
+};
+
+/**
+ * Pone en la prosa que introduce la tabla de márgenes el año de los estados financieros, y avisa
+ * si esa frase nombra un indicador que no es el del estudio.
+ *
+ * @param {string} texto
+ * @param {object} estudio
+ * @param {string[]} [avisos]
+ * @param {{rxParrafo?:RegExp, reporte?:object}} [opciones]
+ * @returns {string}
+ */
+export function actualizarProsaMargenes(texto, estudio, avisos, opciones = {}) {
+  const study = estudio || {};
+  const anio = anioDe(study);
+  const rxParrafo = opciones.rxParrafo || PARRAFO_HTML;
+
+  const salida = sincronizarCifrasDeProsa(texto, {
+    rxParrafo,
+    reconocedor: RX_ES_PROSA_MARGENES,
+    rotulos: [],
+    anclas: [],
+    valores: {},
+    sustituciones: anio ? [{
+      clave: 'anio',
+      rx: new RegExp('(correspondientes\\s+al\\s+a[ñn]o' + HUECO + ')(20\\d{2})', 'gi'),
+      valor: anio,
+    }] : [],
+    avisos,
+    reporte: opciones.reporte,
+  });
+
+  /* El indicador que la frase nombra tiene que ser el que el informe usa. Si no lo es, la tabla
+     de abajo publica márgenes de un indicador y la frase de arriba anuncia otro. No se sustituye
+     la palabra: cambiarla es reescribir la redacción, y el matiz que el cliente haya pactado con
+     su asesor se perdería sin avisar. */
+  const pli = String(study.pli || 'MO');
+  const mio = NOMBRES_PLI[pli];
+  if (mio && Array.isArray(avisos)) {
+    for (const otro of Object.keys(NOMBRES_PLI)) {
+      if (otro === pli) continue;
+      if (!nombraEnProsaDeMargenes(salida, rxParrafo, NOMBRES_PLI[otro], mio)) continue;
+      avisos.push('la frase que introduce la tabla de márgenes nombra el indicador «' + otro
+        + '» y el estudio usa «' + pli + '»: las cifras son las del estudio, la redacción hay '
+        + 'que ajustarla a mano');
+      break;
+    }
+  }
+
+  return salida;
+}
+
+/* ¿Algún párrafo de la prosa de márgenes nombra `ajeno` y no el indicador del estudio? Se pide
+   que no nombre el propio para no avisar de «Margen Operacional (MO) y Margen Bruto», donde los
+   dos aparecen porque la frase compara. */
+function nombraEnProsaDeMargenes(texto, rxParrafo, ajeno, propio) {
+  const rx = new RegExp(rxParrafo.source, rxParrafo.flags);
+  rx.lastIndex = 0;
+  let m = rx.exec(String(texto || ''));
+  while (m !== null) {
+    const parrafo = m[0];
+    if (RX_ES_PROSA_MARGENES.test(parrafo) && ajeno.test(parrafo) && !propio.test(parrafo)) {
+      return true;
+    }
+    if (m[0] === '') rx.lastIndex += 1;
+    m = rx.exec(String(texto || ''));
+  }
+  return false;
+}
+
+/* ══════════════════ las tres, en el orden en que salen en el informe ══════════════════ */
+
+/**
+ * Corre las tres familias sobre el mismo texto. Es el punto único de enganche, para que las dos
+ * rutas —la del PDF y la del .docx— no puedan quedarse una con menos arreglos que la otra, que
+ * es lo que pasó con la prosa del rango.
+ *
+ * @param {string} texto
+ * @param {object} estudio
+ * @param {string[]} [avisos]
+ * @param {{rxParrafo?:RegExp}} [opciones]
+ * @returns {string}
+ */
+export function actualizarProsaTablas(texto, estudio, avisos, opciones = {}) {
+  let salida = actualizarProsaOperaciones(texto, estudio, avisos, opciones);
+  salida = actualizarProsaMuestra(salida, estudio, avisos, opciones);
+  return actualizarProsaMargenes(salida, estudio, avisos, opciones);
+}

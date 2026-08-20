@@ -11,6 +11,7 @@ import {
   actualizarTablasOperacionesOoxml,
   coleccionesDelEstudio,
   textoPlanoOoxml, claveTitulo, numeroDeTabla, localizarBloqueTabla,
+  localizarBloquesTabla, reescribirFilasOoxml,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioConclusionRango,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
@@ -181,6 +182,19 @@ test('un bucle sin elementos no deja filas ni marcadores', async () => {
   const texto = textoDe(zip, 'word/document.xml');
   assert.ok(!texto.includes('{'), 'sin marcadores sueltos');
   assert.ok(!texto.includes('nombre'), 'y sin restos del bucle');
+});
+
+test('un bucle huérfano en la plantilla no tumba el render completo', async () => {
+  /* Si el marcado dejó `{/coleccion}` sin su `{#coleccion}` -algo que pasaba en
+     silencio cuando la celda de apertura no tenía `<w:t>`, ver `escribirEnCelda` en
+     `docxPlantilla.js`-, Docxtemplater revienta con "Unopened loop" y ningún informe se
+     genera, aunque el resto del documento esté perfecto. */
+  const buf = await plantilla([parrafo('Antes. {/razonesRechazo} Después.')]);
+  const { zip, avisosTablas } = renderizarDocx(buf, ESTUDIO, { colecciones: { razonesRechazo: [] } });
+  const texto = textoDe(zip, 'word/document.xml');
+  assert.ok(!texto.includes('{'), 'el tag suelto se retira en vez de reventar el render');
+  assert.ok(texto.includes('Antes.') && texto.includes('Después.'), 'el resto del párrafo no se toca');
+  assert.ok(avisosTablas.some((a) => a.includes('razonesRechazo')), 'se avisa del bucle desbalanceado');
 });
 
 test('dentro de un bucle manda el elemento, no el estudio', async () => {
@@ -605,6 +619,146 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
 
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   Códigos SIC utilizados (Criterios de búsqueda), ruta .docx.
+
+   Mismo defecto y mismo arreglo ya probado en `tablasHtmlInforme.test.js` para la ruta
+   HTML: la tabla se radicaba con el cribado del informe del que salió la plantilla. Estos
+   tests son el espejo OOXML de esos, con la forma real de la tabla (fila de 2 celdas por
+   criterio, fila de 1 celda fusionada para el conector «Y»/«O»).
+   ───────────────────────────────────────────────────────────────────────────── */
+
+const filaDosCeldasOoxml = (a, b) =>
+  '<w:tr><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p><w:t>' + a + '</w:t></w:p></w:tc>'
+  + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>' + b + '</w:t></w:p></w:tc></w:tr>';
+
+const filaUnaCeldaOoxml = (c) =>
+  '<w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:t>' + c + '</w:t></w:p></w:tc></w:tr>';
+
+const tablaSicOoxml = (numero, cuerpo, fuente) =>
+  '<w:p><w:t>' + (numero != null ? 'Tabla ' + numero + '. ' : '') + 'Códigos SIC utilizados</w:t></w:p><w:tbl>'
+  + filaDosCeldasOoxml('Criterio de búsqueda', '')
+  + cuerpo
+  + (fuente ? filaUnaCeldaOoxml(fuente) : '')
+  + '</w:tbl>';
+
+const CUERPO_SIC_VIEJO = filaDosCeldasOoxml('Código SIC primario:', 'Entre 1111 y 2222')
+  + filaUnaCeldaOoxml('Y')
+  + filaDosCeldasOoxml('Palabra clave:', 'Contiene viejo');
+
+const ESTUDIO_SIC = {
+  anio: 2025, ent: 'ACME', pli: 'MO',
+  criteriosScreening: [
+    { conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' },
+    { conector: 'O', etiqueta: 'Palabra clave:', valor: 'Contiene juegos' },
+  ],
+};
+
+test('Códigos SIC: tabla única (Tabla 14) se reescribe con los criterios del estudio', () => {
+  const xml = tablaSicOoxml(
+    14, CUERPO_SIC_VIEJO,
+    'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025 por Standard &amp; Poor&apos;s.'
+  );
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los criterios nuevos');
+  assert.ok(salida.includes('Contiene juegos'), 'falta la palabra clave nueva');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'sobrevivió el criterio anterior');
+  assert.ok(!salida.includes('Contiene viejo'), 'sobrevivió la palabra clave anterior');
+  assert.ok(salida.includes('Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025'),
+    'el pie de fuente no debe regenerarse');
+  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'la fila del conector conserva su fusión');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'la tabla sí estaba y sí se pudo reescribir');
+});
+
+test('Códigos SIC: tres ocurrencias numeradas 13/14/15 eliminan 13 y 15, conservan la 14', () => {
+  const xml = tablaSicOoxml(13, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + '<w:p><w:t>Medio.</w:t></w:p>'
+    + tablaSicOoxml(14, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + '<w:p><w:t>Medio.</w:t></w:p>'
+    + tablaSicOoxml(15, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Tabla 13. Códigos SIC utilizados'), 'se eliminó la tabla 13');
+  assert.ok(!salida.includes('Tabla 15. Códigos SIC utilizados'), 'se eliminó la tabla 15');
+  assert.ok(salida.includes('Tabla 14. Códigos SIC utilizados'), 'se conservó la tabla 14');
+  assert.strictEqual((salida.match(/Entre 7371 y 7375/g) || []).length, 1,
+    'solo la tabla 14 trae los criterios nuevos');
+  assert.ok(salida.includes('<w:t>Medio.</w:t>'), 'el texto intercalado entre las tres tablas sobrevive');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
+});
+
+test('Códigos SIC: tres ocurrencias SIN numerar eliminan la primera y la tercera por posición', () => {
+  const xml = tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.')
+    + tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual((salida.match(/Códigos SIC utilizados/g) || []).length, 1,
+    'solo debe sobrevivir una copia de la tabla');
+  assert.ok(salida.includes('Fuente: Capital IQ.'), 'sobrevivió la del medio');
+  assert.ok(!salida.includes('Fuente: Ryan LLC.'), 'se eliminó la primera');
+  assert.ok(!salida.includes('Fuente: Refinitiv.'), 'se eliminó la tercera');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la que sobrevive trae los criterios nuevos');
+});
+
+test('Códigos SIC: sin criteriosScreening no se toca nada y se avisa', () => {
+  const xml = tablaSicOoxml(14, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+
+  assert.ok(salida.includes('Entre 1111 y 2222'), 'la tabla debe quedar exactamente igual');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('Códigos SIC: dos ocurrencias sin numerar (ni 13/14/15) no se tocan y se avisa', () => {
+  /* El caso real reportado: la plantilla trae la tabla dos veces, ninguna numerada 13/14/15.
+     Sin forma de saber cuál es la copia vigente, se prefiere no arriesgar borrar o mezclar la
+     equivocada antes que adivinar — mismo criterio que el resto del módulo ante ambigüedad. */
+  const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de fundamentos de Refinitiv, publicado en octubre de 2024.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual(salida, xml, 'ninguna de las dos copias debe alterarse');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, gridSpan) en las filas nuevas', () => {
+  const cuerpoConSombreado = '<w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="FFF2CC"/></w:tcPr>'
+    + '<w:p><w:t>Código SIC primario:</w:t></w:p></w:tc>'
+    + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>'
+    + filaUnaCeldaOoxml('Y');
+  const tabla = tablaSicOoxml(null, cuerpoConSombreado, 'Fuente: Capital IQ.');
+
+  const salida = reescribirFilasOoxml(tabla, [
+    ['Código SIC primario:', 'Entre 7371 y 7375'],
+    ['O'],
+  ]);
+
+  assert.match(salida, /<w:shd w:val="clear" w:fill="FFF2CC"\/>/, 'se perdió el sombreado del molde');
+  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'se perdió el gridSpan del molde del conector');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los valores nuevos');
+  assert.ok(salida.includes('Fuente: Capital IQ.'), 'el pie de fuente no debe tocarse');
+});
+
+test('localizarBloquesTabla devuelve todas las ocurrencias homónimas en orden de documento', () => {
+  const xml = tablaSicOoxml(13, CUERPO_SIC_VIEJO, 'a')
+    + tablaSicOoxml(14, CUERPO_SIC_VIEJO, 'b')
+    + tablaSicOoxml(15, CUERPO_SIC_VIEJO, 'c');
+  const bloques = localizarBloquesTabla(xml, 'Códigos SIC utilizados');
+
+  assert.strictEqual(bloques.length, 3);
+  assert.deepStrictEqual(bloques.map((b) => b.numero), [13, 14, 15]);
+  assert.ok(bloques[0].inicio < bloques[1].inicio && bloques[1].inicio < bloques[2].inicio,
+    'deben venir en orden de documento');
+});
+
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
    Localización de tablas por nombre.
 
    La numeración de la plantilla no es fiable —cambia de un informe a otro— y el
@@ -1020,6 +1174,88 @@ test('si la descripción no trae las cifras esperadas se deja como estaba', asyn
   assert.match(avisos[0], /no trae las 2 cifras que se esperaban/);
 });
 
+test('una plantilla cuya frase sí se actualizó no se queda sin el año de la conclusión', async () => {
+  /* El año estaba dentro del `if` que dispara el respaldo posicional, y eso funcionaba mientras
+     las plantillas que necesitaban el año fueran justo las que la prosa no sabía tocar. Esta
+     escribe las cifras sin paréntesis —«…entre 10.925% percentil 25 y 17.258% percentil 75 y la
+     mediana con 15.356%»—, que ahora sí se actualizan por cercanía, así que el `if` ya no entra;
+     y su «ajustado durante el» vive en otro párrafo, donde la prosa del rango no llega. */
+  const buf = await plantilla([
+    new Paragraph('Tabla 6. Rango Intercuartil'),
+    tablaRango(),
+    parrafo('Como se observa en el cuadro anterior, el rango Intercuartil obtenido por las '
+      + 'compañías comparables se ubica entre 10.925% percentil 25 y 17.258% percentil 75 y la '
+      + 'mediana con 15.356%.'),
+    parrafo('El margen de las comparables ajustado durante el 2019 se calculó con la '
+      + 'metodología descrita en el apartado anterior.'),
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO, anio: 2025, pli: 'MO', cmode: 'all', useadj: false, prime: '7.37',
+      t_s: 1000, t_c: 600, t_op: 100,
+      comparables: [
+        { name: 'Uno', s: 1000, c: 600, op: 100 },
+        { name: 'Dos', s: 2000, c: 1600, op: 260 },
+        { name: 'Tres', s: 3000, c: 2400, op: 300 },
+        { name: 'Cuatro', s: 1500, c: 900, op: 200 },
+      ],
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('ajustado durante el 2025'),
+    'el año de la conclusión se quedó en el de la plantilla: ' + texto);
+  /* Y la frase, que es lo que dejaba de disparar el respaldo, sí trae las cifras del estudio. */
+  ['10.925%', '17.258%', '15.356%'].forEach((v) => assert.ok(!texto.includes(v),
+    'sobrevive la cifra ' + v + ' del informe de referencia'));
+});
+
+test('la prosa de la muestra y de la operación llega al documento que se descarga', async () => {
+  /* Por la ruta completa y no por la función suelta, por lo mismo que la del rango: el primer
+     enganche de aquélla se descartaba en silencio porque escribía sobre una variable local, la
+     prueba de la función pasaba y el informe salía igual. */
+  const buf = await plantilla([
+    parrafo('A partir del anterior criterio de búsqueda se identificó un total de 442 '
+      + 'Compañías comparables potenciales.'),
+    parrafo('De esta manera, después de aplicar dichos criterios, quedaron 13 compañías '
+      + 'comparables.'),
+    parrafo('En el año 2019, ACME tuvo operaciones de ingreso con sus vinculados económicos '
+      + 'por un valor total de $ 3.435.357.400'),
+    parrafo('El siguiente cuadro presenta las utilidades operacionales sobre ventas para el '
+      + 'conjunto de compañías comparables para los estados financieros correspondientes al '
+      + 'año 2019:'),
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO, anio: 2025, pli: 'MO', cmode: 'all', useadj: false, prime: '7.37',
+      monto_operacion: 5230114900,
+      t_s: 1000, t_c: 600, t_op: 100,
+      embudoSeleccion: {
+        evaluadas: 500, seleccionadas: 4, reserva: 0, porMotivo: { actividad: 496 },
+      },
+      comparables: [
+        { name: 'Uno', s: 1000, c: 600, op: 100 },
+        { name: 'Dos', s: 2000, c: 1600, op: 260 },
+        { name: 'Tres', s: 3000, c: 2400, op: 300 },
+        { name: 'Cuatro', s: 1500, c: 900, op: 200 },
+      ],
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('un total de 500 Compañías'), 'el universo no llegó al .docx');
+  assert.ok(texto.includes('quedaron 4 compañías comparables'), 'las aceptadas no llegaron');
+  assert.ok(texto.includes('$ 5.230.114.900'), 'el monto no llegó al .docx');
+  assert.ok(texto.includes('En el año 2025'), 'el año de la operación no llegó');
+  assert.ok(texto.includes('correspondientes al año 2025'), 'el año de los márgenes no llegó');
+  ['442', '3.435.357.400'].forEach((v) => assert.ok(!texto.includes(v),
+    'sobrevive ' + v + ' del informe de referencia'));
+});
+
 /* ══════════════════ ANEXO B — descripciones de comparables ══════════════════ */
 
 test('el ANEXO B se escribe en el cuerpo y no dentro del índice', async () => {
@@ -1328,11 +1564,52 @@ test('localizarHitos devuelve null en las posiciones que no encuentra, sin lanza
   assert.ok(hitos[2], 'un título ausente no debe bloquear los que vienen después');
 });
 
+/* Un rótulo que la plantilla escribe de otro modo no puede arrastrar a los que vienen
+   detrás. Antes el recorrido esperaba el rótulo `objetivo` sin avanzar, así que se comía
+   el resto del documento y toda la cadena salía null; medido sobre el informe de un
+   segundo cliente daba 0 de 7 hitos con dos de esos rótulos presentes en el texto. */
+test('localizarHitos no pierde los hitos que siguen a un rótulo ausente', () => {
+  const xml = parrafoXml('Uno') + parrafoXml('Tres') + parrafoXml('Cuatro');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos', 'Tres', 'Cuatro']);
+  assert.ok(hitos[0], 'el primero se encuentra');
+  assert.equal(hitos[1], null, '«Dos» no está en esta plantilla');
+  assert.ok(hitos[2], '«Tres» se encuentra aunque falte el rótulo anterior');
+  assert.ok(hitos[3], 'y «Cuatro» también');
+  assert.ok(hitos[2].inicio < hitos[3].inicio, 'en orden documental');
+});
+
+test('localizarHitos sigue prefiriendo el rótulo esperado cuando sí está', () => {
+  /* El look-ahead no puede adelantarse: con los dos rótulos presentes, cada uno tiene
+     que caer en su propio párrafo y en su propia posición de la lista. */
+  const xml = parrafoXml('Uno') + parrafoXml('Dos');
+  const hitos = localizarHitos(xml, ['Uno', 'Dos']);
+  assert.equal(hitos[0].inicio, xml.indexOf(parrafoXml('Uno')));
+  assert.equal(hitos[1].inicio, xml.indexOf(parrafoXml('Dos')));
+});
+
 test('localizarHitos ignora las entradas de la Tabla de Contenido (PAGEREF)', () => {
   const entradaToc = '<w:p><w:r><w:t>Uno</w:t></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc1 \\h </w:instrText></w:r></w:p>';
   const xml = entradaToc + parrafoXml('Uno') + parrafoXml('Dos');
   const hitos = localizarHitos(xml, ['Uno', 'Dos']);
   assert.ok(hitos[0].inicio > entradaToc.length - 1);
+});
+
+test('localizarHitos acepta un arreglo de sinónimos por posición', () => {
+  /* El contenido es universal (la sección de desempleo es la misma para todos los
+     informes), pero el .docx de cada contribuyente es un archivo distinto que un
+     consultor distinto redactó en su momento — "Tasa de Desempleo" y "Desempleo en
+     Colombia" son el mismo apartado con otra redacción, no dos secciones distintas. */
+  const xml = [parrafoXml('Uno'), parrafoXml('Tasa de Desempleo'), parrafoXml('Tres')].join('');
+  const hitos = localizarHitos(xml, ['Uno', ['Desempleo en Colombia', 'Tasa de Desempleo'], 'Tres']);
+  assert.ok(hitos[1], 'debió reconocer el sinónimo "Tasa de Desempleo"');
+  assert.ok(hitos[0].finPropio <= hitos[1].inicio);
+  assert.ok(hitos[1].finPropio <= hitos[2].inicio);
+});
+
+test('localizarHitos con sinónimos no encuentra nada si ninguno de los dos aparece', () => {
+  const xml = [parrafoXml('Uno'), parrafoXml('Otra cosa'), parrafoXml('Tres')].join('');
+  const hitos = localizarHitos(xml, ['Uno', ['Desempleo en Colombia', 'Tasa de Desempleo'], 'Tres']);
+  assert.equal(hitos[1], null);
 });
 
 test('reemplazarPorHitos reemplaza el hueco cuando la función de contenido devuelve texto', () => {
@@ -1369,6 +1646,34 @@ test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () =
   assert.match(avisos[0], /III\.A/);
 });
 
+test('reemplazarPorHitos encuentra el hito con un sinónimo, y el aviso muestra un nombre legible si falla', () => {
+  /* Camino positivo: la plantilla trae "Tasa de Desempleo" en vez de "Desempleo en
+     Colombia" y aun así debe localizar el hueco. */
+  const xmlOk = [parrafoXml('Encabezado A'), parrafoXml('Tasa de Desempleo')].join('');
+  const docOk = { xmlInterno: xmlOk, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(
+    docOk,
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => parrafoXml('Prosa nueva.')],
+    []
+  );
+  assert.match(docOk.xml, /Prosa nueva\./);
+
+  /* Camino negativo: sin ninguno de los dos sinónimos, el aviso debe leerse como texto —
+     "Desempleo en Colombia", el primero de la lista— y no como `[object Object]`. */
+  const xmlFalta = parrafoXml('Encabezado A');
+  const docFalta = { xmlInterno: xmlFalta, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(
+    docFalta,
+    ['Encabezado A', ['Desempleo en Colombia', 'Tasa de Desempleo']],
+    [() => 'nunca se usa'],
+    avisos
+  );
+  assert.ok(avisos.some((a) => a.includes('Desempleo en Colombia')));
+  assert.ok(!avisos.some((a) => a.includes('[object Object]')));
+});
+
 test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {
   /* Una plantilla más vieja que "Encabezado B" no puede impedir que el contenido de
      "Encabezado B" se inserte en algún lado: se apoya en "Encabezado C", que sí existe
@@ -1389,7 +1694,7 @@ test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falt
   assert.match(doc.xml, /Contenido de B, sin ancla propia\./);
   /* Antes del límite final, no después: se insertó DENTRO de la sección. */
   assert.ok(doc.xml.indexOf('Contenido de B') < doc.xml.indexOf('Encabezado C'));
-  assert.ok(avisos.some((a) => /no se encontró "Encabezado B" o "Encabezado C"/.test(a)));
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
   assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
 });
 
@@ -1407,6 +1712,35 @@ test('reemplazarPorHitos NO inserta de respaldo si ni siquiera el límite final 
   );
   assert.doesNotMatch(doc.xml, /No debería aparecer/);
   assert.doesNotMatch(doc.xml, /Tampoco esto/);
+});
+
+test('reemplazarPorHitos avisa una vez por rótulo ausente, no una por par consecutivo', () => {
+  /* Cada rótulo delimita DOS apartados, así que el aviso por pares contaba la misma
+     causa dos veces: con «Dos» y «Tres» ausentes salían tres avisos de par para dos
+     rótulos, y una cadena de siete rotos por el primero producía seis líneas. Se filtran
+     los avisos de respaldo, que son otra cosa y sí van uno por apartado insertado. */
+  const xml = parrafoXml('Uno') + parrafoXml('Prosa.') + parrafoXml('Cuatro');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(doc, ['Uno', 'Dos', 'Tres', 'Cuatro'],
+    [() => 'a', () => 'b', () => 'c'], avisos, 'III.B');
+  const porRotulo = avisos.filter((a) => a.includes('no se encontró el rótulo'));
+  assert.equal(porRotulo.length, 2, 'uno por cada rótulo que falta, no tres por los pares');
+  assert.ok(porRotulo.some((a) => a.includes('«Dos»')), 'nombra el rótulo «Dos»');
+  assert.ok(porRotulo.some((a) => a.includes('«Tres»')), 'nombra el rótulo «Tres»');
+});
+
+/* El respaldo INSERTA en el cursor, no reemplaza el tramo, y esa distinción es la que
+   permite recuperar el contenido sin arriesgar nada: cuando el rótulo ausente solo está
+   escrito de otro modo, su subsección sigue en el documento y debe sobrevivir. */
+test('el respaldo no se lleva la subsección intermedia cuyo rótulo no se reconoció', () => {
+  const xml = parrafoXml('Uno') + parrafoXml('Rotulo escrito de otro modo')
+    + parrafoXml('Prosa que hay que conservar.') + parrafoXml('Cuatro');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Uno', 'Dos', 'Cuatro'],
+    [() => parrafoXml('nuevo'), () => parrafoXml('nuevo')], [], 'III.B');
+  assert.match(doc.xml, /Prosa que hay que conservar\./, 'no se borra el texto del cliente');
+  assert.match(doc.xml, /Rotulo escrito de otro modo/, 'ni su encabezado');
 });
 
 test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {

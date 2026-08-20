@@ -9,6 +9,9 @@ const {
   parsearRespuestaRedaccion,
   armarDocumentoFirestore,
 } = require('./analisisMercadoPrompts');
+const { URLS_BLOQUEADAS } = require('./urlsBloqueadas');
+
+const URL_BLOQUEADA = [...URLS_BLOQUEADAS][0];
 
 /* Narrativas de prueba con largo realista. parsearRespuestaRedaccion exige un
    mínimo por apartado, así que «<p>A</p>» ya no pasa la validación — y no debe
@@ -43,8 +46,8 @@ test('construirPromptBusqueda nombra dónde buscar la PROYECCIÓN de las series 
   const prompt = construirPromptBusqueda(2026);
 
   assert.ok(/proyecci[oó]n/i.test(prompt), 'el prompt no menciona la proyección');
-  /* Que se diga explícitamente cuál es el año a proyectar, no solo la ventana. */
-  assert.ok(prompt.includes('2027'), 'no se nombra el año de proyección');
+  /* Que se diga explícitamente cuáles son los años a proyectar, no solo la ventana. */
+  assert.ok(prompt.includes('2027'), 'no se nombra el año de proyección del cron (anioActual+1)');
 
   const proyectables = SERIES_MACRO.filter((s) => s.fuenteProyeccion);
   assert.ok(proyectables.length >= 2, 'ninguna serie declara fuente de proyección');
@@ -56,6 +59,39 @@ test('construirPromptBusqueda nombra dónde buscar la PROYECCIÓN de las series 
   const claves = proyectables.map((s) => s.clave);
   assert.ok(claves.includes('desempleo_colombia'), 'desempleo_colombia sin fuente de proyección');
   assert.ok(claves.includes('trm_promedio'), 'trm_promedio sin fuente de proyección');
+});
+
+test('construirPromptBusqueda pide la proyección de DOS años, no solo anioActual+1', () => {
+  /* Un informe de año gravable 2025 (anioActual - 1, el caso más común: se radica el año
+     después del que declara) necesita 2026 como SU año de proyección — y para el cron
+     `anioActual` (2026) es "el año en curso", no "el año de proyección", así que la
+     pregunta genérica de DANE no encuentra nada (2026 no ha cerrado) y el informe sale con
+     «Desempleo Proyectado 2026: [Completar...]» aunque el fix de fuenteProyeccion ya exista
+     para el año que el cron SÍ trata como proyección (anioActual+1 = 2027). */
+  const prompt = construirPromptBusqueda(2026);
+
+  assert.ok(/2026 y 2027/.test(prompt),
+    'el prompt no pide fuente de proyección para los dos años (anioActual y anioActual+1)');
+
+  const proyectables = SERIES_MACRO.filter((s) => s.fuenteProyeccion);
+  proyectables.forEach((s) => {
+    /* La línea de instrucción de cada serie proyectable, sin depender de una regex con
+       caracteres especiales del texto de `fuenteProyeccion` (trae comas y paréntesis). */
+    const linea = prompt.split('\n').find((l) => l.includes('"' + s.clave + '"') && l.includes('consulta'));
+    assert.ok(linea, 'no hay línea de instrucción de proyección para ' + s.clave);
+    assert.ok(linea.includes('2026 y 2027'),
+      'la instrucción de fuente de proyección de ' + s.clave + ' no cubre 2026 y 2027 juntos');
+    assert.ok(linea.includes(s.fuenteProyeccion),
+      'la línea de ' + s.clave + ' no trae su fuenteProyeccion completa');
+  });
+
+  /* El ejemplo de JSON tiene que mostrar la forma {valor, fuente, fuenteUrl} para AMBOS años
+     de riesgo, no solo para uno — si el modelo solo ve el ejemplo con un año, tiende a
+     replicar nada más ese patrón para ese único año. */
+  const ejemplo = prompt.slice(prompt.indexOf('"desempleo_colombia": { "valores"'));
+  assert.ok(/"2025"\s*:\s*"8\.9"/.test(ejemplo), 'el ejemplo no muestra 2025 como valor simple');
+  assert.ok(/"2026"\s*:\s*\{\s*"valor"/.test(ejemplo), 'el ejemplo no muestra 2026 con fuente propia');
+  assert.ok(/"2027"\s*:\s*\{\s*"valor"/.test(ejemplo), 'el ejemplo no muestra 2027 con fuente propia');
 });
 
 test('el prompt manda insistir en otra fuente y devolver el enlace pegado a ese valor', () => {
@@ -92,12 +128,103 @@ test('parsearRespuestaBusqueda conserva la fuente propia de un valor de proyecci
   assert.strictEqual(series.desempleo_colombia.valores[2025], '8.9');
 });
 
+test('parsearRespuestaBusqueda descarta una URL que dos series distintas reclaman como propia', () => {
+  /* Caso real de producción (2026-08-19): la misma URL —un artículo sobre el
+     crecimiento del PIB— salió como fuenteUrl tanto de pib_colombia como de
+     desempleo_colombia, y encima daba 404. No hay forma de saber a cuál de las dos
+     pertenece de verdad, así que se descarta en ambas; la cifra y el nombre de la
+     fuente se conservan. */
+  const urlCompartida = 'https://www.swissinfo.ch/spa/el-fmi-reduce-la-prevision';
+  const texto = JSON.stringify({
+    pib_colombia: {
+      valores: { 2026: '2.3', 2027: { valor: '2.5', fuente: 'FMI, WEO', fuenteUrl: urlCompartida } },
+      fuente: 'DANE, Cuentas Nacionales',
+      fuenteUrl: 'https://www.dane.gov.co/cuentas-nacionales',
+    },
+    desempleo_colombia: {
+      valores: {
+        2025: '8.9',
+        2026: { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: urlCompartida },
+      },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+
+  assert.deepStrictEqual(series.pib_colombia.valores[2027],
+    { valor: '2.5', fuente: 'FMI, WEO', fuenteUrl: null });
+  assert.deepStrictEqual(series.desempleo_colombia.valores[2026],
+    { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: null });
+  /* Las fuentes de nivel de serie no se comparten entre estas dos, así que no se tocan. */
+  assert.strictEqual(series.pib_colombia.fuenteUrl, 'https://www.dane.gov.co/cuentas-nacionales');
+  assert.strictEqual(series.desempleo_colombia.fuenteUrl, 'https://www.dane.gov.co/geih');
+});
+
+test('parsearRespuestaBusqueda conserva una URL repetida DENTRO de la misma serie', () => {
+  /* Un solo informe del FMI puede cubrir varios años de la MISMA serie -eso no es el
+     caso sospechoso, es lo normal-, así que no se descarta. */
+  const urlDelInforme = 'https://www.imf.org/weo-abril-2026';
+  const texto = JSON.stringify({
+    desempleo_colombia: {
+      valores: {
+        2025: '8.9',
+        2026: { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: urlDelInforme },
+        2027: { valor: '10.0', fuente: 'FMI, WEO', fuenteUrl: urlDelInforme },
+      },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+
+  assert.strictEqual(series.desempleo_colombia.valores[2026].fuenteUrl, urlDelInforme);
+  assert.strictEqual(series.desempleo_colombia.valores[2027].fuenteUrl, urlDelInforme);
+});
+
+test('parsearRespuestaBusqueda no toca la URL de nivel de serie cuando es de esa serie sola', () => {
+  const texto = JSON.stringify({
+    pib_mundial: {
+      valores: { 2026: '3.2' },
+      fuente: 'FMI, WEO',
+      fuenteUrl: 'https://www.imf.org/weo-mundial',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.strictEqual(series.pib_mundial.fuenteUrl, 'https://www.imf.org/weo-mundial');
+});
+
+test('parsearRespuestaBusqueda descarta una URL de la lista negra a nivel de serie', () => {
+  /* La lista negra guarda URLs que un humano ya confirmó rotas a mano (ver
+     urlsBloqueadas.js) — una corrida nueva no puede volver a colarla, aunque no haya
+     ninguna otra serie reclamándola (ese es el caso que sí cubre urlSospechosa). */
+  const texto = JSON.stringify({
+    pib_mundial: { valores: { 2026: '3.2' }, fuente: 'FMI, WEO', fuenteUrl: URL_BLOQUEADA },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.strictEqual(series.pib_mundial.fuenteUrl, null);
+  assert.strictEqual(series.pib_mundial.valores[2026], '3.2', 'se perdió la cifra por una URL bloqueada');
+});
+
+test('parsearRespuestaBusqueda descarta una URL de la lista negra en un valor con fuente propia', () => {
+  const texto = JSON.stringify({
+    desempleo_colombia: {
+      valores: { 2026: { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: URL_BLOQUEADA } },
+      fuente: 'DANE, GEIH',
+      fuenteUrl: 'https://www.dane.gov.co/geih',
+    },
+  });
+  const series = parsearRespuestaBusqueda(texto, [{ web: { uri: 'https://x' } }]);
+  assert.deepStrictEqual(series.desempleo_colombia.valores[2026],
+    { valor: '9.0', fuente: 'FMI, WEO', fuenteUrl: null });
+});
+
 test('la regla de no inventar sobrevive a la instrucción de proyección', () => {
   /* Pedirle una proyección no puede convertirse en permiso para estimarla él mismo: la
      cifra sigue teniendo que salir de una página consultada. */
   const prompt = construirPromptBusqueda(2026);
   assert.ok(/no la rellenes con un valor inventado/i.test(prompt));
-  assert.ok(/no estimes|no la calcules|no inventes/i.test(prompt));
+  assert.ok(/no la[s]? estimes|no la[s]? calcules|no inventes/i.test(prompt));
 });
 
 test('el prompt manda buscar y NO exige que la respuesta sea solo el JSON', () => {
@@ -256,6 +383,18 @@ test('parsearRespuestaRedaccion degrada una fuentesCitadas malformada a [] sin l
     assert.deepStrictEqual(salida.fuentesCitadas, [], 'no se degradó a [] con: ' + JSON.stringify(caso));
     assert.strictEqual(salida.mundial, MUNDIAL_OK, 'se perdió la narrativa por un campo de apoyo');
   });
+});
+
+test('parsearRespuestaRedaccion descarta una fuenteCitada cuya URL está en la lista negra', () => {
+  const salida = parsearRespuestaRedaccion(JSON.stringify({
+    mundial: MUNDIAL_OK,
+    colombia: COLOMBIA_OK,
+    fuentesCitadas: [
+      { titulo: 'DANE', url: 'https://dane.gov.co' },
+      { titulo: 'Artículo roto', url: URL_BLOQUEADA },
+    ],
+  }));
+  assert.deepStrictEqual(salida.fuentesCitadas, [{ titulo: 'DANE', url: 'https://dane.gov.co' }]);
 });
 
 test('parsearRespuestaRedaccion conserva las fuentes válidas y descarta solo las incompletas', () => {

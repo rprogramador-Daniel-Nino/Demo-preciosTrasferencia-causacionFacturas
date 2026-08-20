@@ -243,7 +243,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
              detectar que el Tax ID de la contraparte cambió de un año a otro sin
              explicación. Sin guardarla aquí, ese cotejo no se puede hacer. */
           vinculado: result.vinculado || null,
-          comparables: result.comparables || []
+          comparables: result.comparables || [],
+          /* Composición accionaria del informe anterior: solo se usa en la Tabla 6
+             cuando el estudio actual no tiene certificado propio cargado (ver
+             resolverComposicionAccionaria en tablasContribuyente.js). */
+          capital_pagado: result.capital_pagado || null,
+          total_acciones: result.total_acciones || null,
+          accionistas: result.accionistas || []
         };
         setEstudioAnteriorInfo(info);
         setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad y ${result.comparables.length} comparables de la tabla anterior.`);

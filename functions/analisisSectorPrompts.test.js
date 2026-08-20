@@ -14,6 +14,9 @@ const {
   parsearRespuestaRedaccionSector,
   armarEntradaAnio,
 } = require('./analisisSectorPrompts');
+const { URLS_BLOQUEADAS } = require('./urlsBloqueadas');
+
+const URL_BLOQUEADA = [...URLS_BLOQUEADAS][0];
 
 test('normalizarActividad ignora tildes, mayúsculas y espacios de sobra', () => {
   assert.strictEqual(
@@ -110,6 +113,19 @@ test('parsearRespuestaBusquedaSector marca confiable según webSearchQueries, no
   assert.strictEqual(sinBusqueda.datosClaveTabla[0].fuenteUrl, null, 'sin búsqueda real no debe conservar fuenteUrl');
 });
 
+test('parsearRespuestaBusquedaSector descarta una fuenteUrl de la lista negra aunque hubo búsqueda real', () => {
+  const texto = JSON.stringify({
+    datosClaveTabla: [
+      { indicador: 'Empleo', valorAnterior: '100', valorActual: '120', fuente: 'FMI', fuenteUrl: URL_BLOQUEADA },
+    ],
+    datosComportamiento: [{ dato: 'El sector creció.', fuente: 'FMI', fuenteUrl: URL_BLOQUEADA }],
+  });
+  const r = parsearRespuestaBusquedaSector(texto, ['búsqueda real']);
+  assert.strictEqual(r.datosClaveTabla[0].fuenteUrl, null);
+  assert.strictEqual(r.datosClaveTabla[0].valorActual, '120', 'se perdió la cifra por una URL bloqueada');
+  assert.strictEqual(r.datosComportamiento[0].fuenteUrl, null);
+});
+
 test('parsearRespuestaBusquedaSector descarta filas de la tabla sin indicador o sin valorActual', () => {
   const texto = JSON.stringify({
     datosClaveTabla: [
@@ -188,6 +204,16 @@ test('parsearRespuestaRedaccionSector exige tituloSector y los 4 apartados con c
     tituloSector: 'x',
     comportamiento: 'N/A', comercioExterior: '<p>bien</p>', proyeccion: '<p>bien</p>', conclusiones: '<p>bien</p>',
   })), /comportamiento/);
+});
+
+test('parsearRespuestaRedaccionSector descarta una fuenteCitada cuya URL está en la lista negra', () => {
+  const largo = '<p>Texto suficientemente largo para pasar la validación mínima de contenido.</p>';
+  const r = parsearRespuestaRedaccionSector(JSON.stringify({
+    tituloSector: 'la industria del software',
+    comportamiento: largo, comercioExterior: largo, proyeccion: largo, conclusiones: largo,
+    fuentesCitadas: [{ titulo: 'DANE', url: 'https://dane.gov.co' }, { titulo: 'Artículo roto', url: URL_BLOQUEADA }],
+  }));
+  assert.deepStrictEqual(r.fuentesCitadas, [{ titulo: 'DANE', url: 'https://dane.gov.co' }]);
 });
 
 test('parsearRespuestaRedaccionSector conserva fuentesCitadas bien formadas y descarta las incompletas', () => {

@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {
   necesitaRedaccion, construirPromptRedaccionMacro, parsearRespuestaRedaccionMacro,
 } from './analisisMercadoRedaccion.js';
+import { URLS_BLOQUEADAS } from './urlsBloqueadas.js';
+
+const URL_BLOQUEADA = [...URLS_BLOQUEADAS][0];
 
 test('necesitaRedaccion es true si no hay cache para este estudio', () => {
   assert.equal(necesitaRedaccion({ actualizadoEn: { toMillis: () => 1000 } }, null), true);
@@ -47,4 +50,17 @@ test('parsearRespuestaRedaccionMacro exige mundial/colombia y admite temas parci
 
 test('parsearRespuestaRedaccionMacro lanza si falta mundial o colombia', () => {
   assert.throws(() => parsearRespuestaRedaccionMacro(JSON.stringify({ colombia: '<p>x</p>' })));
+});
+
+test('parsearRespuestaRedaccionMacro descarta una fuenteCitada cuya URL está en la lista negra', () => {
+  const texto = JSON.stringify({
+    mundial: '<p>La economía mundial mostró un crecimiento moderado en el período.</p>',
+    colombia: '<p>La economía colombiana registró una recuperación en el período.</p>',
+    fuentesCitadas: [
+      { titulo: 'DANE', url: 'https://dane.gov.co' },
+      { titulo: 'Artículo roto', url: URL_BLOQUEADA },
+    ],
+  });
+  const r = parsearRespuestaRedaccionMacro(texto);
+  assert.deepStrictEqual(r.fuentesCitadas, [{ titulo: 'DANE', url: 'https://dane.gov.co' }]);
 });

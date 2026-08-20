@@ -27,12 +27,19 @@ export async function parseExcelOperations(file) {
     const arrayBuffer = await file.arrayBuffer();
     const wb = XLSX.read(arrayBuffer, { type: 'array' });
 
-    const sheetsToScan = [
-      { n: 'Op. Vinculados Economicos', regimen: 'VINCULADOS' },
-      { n: 'Op. Prestamos Vinculados Econom', regimen: 'VINCULADOS' },
-      { n: 'Op. Paraisos Fiscales', regimen: 'PARAISOS' },
-      { n: 'Op. Prestamos Paraisos Fiscales', regimen: 'PARAISOS' }
-    ];
+    /* El nombre EXACTO de la hoja («Op. Vinculados Economicos») es el del formato de
+       referencia, pero cada contribuyente titula sus pestañas a su manera —«OPERACIONES
+       CON VINCULADOS»— aunque el contenido sea el mismo formato DIAN por dentro. Exigir
+       el literal dejaba la hoja entera sin leer, sin ningún aviso de por qué. Se reconoce
+       por palabra clave sobre el nombre sin tildes y en mayúsculas: 'VINC' cubre tanto
+       «VINCULADOS» como su truncado por el límite de 31 caracteres de Excel («...CON
+       VINC»), y 'PARAISO' las de paraísos fiscales, con o sin préstamos. */
+    const normalizarNombreHoja = (s) => String(s || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+    const hojasAEscanear = (wb.SheetNames || []).filter((nombre) => {
+      const n = normalizarNombreHoja(nombre);
+      return n.includes('VINC') || n.includes('PARAISO');
+    });
 
     const rowsParsedIngreso = [];
     const rowsParsedEgreso = [];
@@ -53,8 +60,8 @@ export async function parseExcelOperations(file) {
     let egresosFilas = 0;
     let egresosMonto = 0;
 
-    sheetsToScan.forEach(hj => {
-      const sh = wb.Sheets[hj.n];
+    hojasAEscanear.forEach(nombreHoja => {
+      const sh = wb.Sheets[nombreHoja];
       if (!sh) return;
 
       const d = XLSX.utils.sheet_to_json(sh, { header: 1, defval: '' });

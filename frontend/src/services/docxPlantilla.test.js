@@ -349,3 +349,27 @@ test('una configuración incompleta se rechaza sin tocar nada', async () => {
   assert.strictEqual(envolverTablaEnBucle(xml, {}).envuelta, false);
   assert.strictEqual(envolverTablaEnBucle(xml, { ancla: 'Tabla 15' }).xml, xml);
 });
+
+test('envolverTablaEnBucle escribe el bucle aunque la celda de apertura no tenga texto', async () => {
+  /* Una celda vacía —sin ningún `<w:t>`, solo su `<w:p>` en blanco— es el caso real que
+     dejaba `{#razonesRechazo}` sin escribir y el .docx marcado con un bucle
+     desbalanceado para siempre: "Unopened loop" en cuanto se intentaba rellenar. */
+  const filaMixta = (celdas) => new TableRow({
+    children: celdas.map((c) => new TableCell({
+      children: [c == null ? new Paragraph({}) : new Paragraph({ children: [new TextRun({ text: c })] })],
+    })),
+  });
+  const xml = await documentXml([
+    parrafo('Tabla 16. Razones de rechazo'),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [filaMixta(['Filtro', 'N°']), filaMixta([null, '5'])],
+    }),
+  ]);
+  const r = envolverTablaEnBucle(xml, {
+    ancla: 'Tabla 16', coleccion: 'razonesRechazo', campos: ['letra', 'cantidad'],
+  });
+  assert.strictEqual(r.envuelta, true);
+  assert.ok(r.xml.includes('{#razonesRechazo}'), 'la apertura se escribe aunque la celda estuviera vacía');
+  assert.ok(r.xml.includes('{/razonesRechazo}'), 'el cierre también se escribe');
+});
