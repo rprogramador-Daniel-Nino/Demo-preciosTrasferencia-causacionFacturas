@@ -23,7 +23,7 @@ import {
 import { codificarPNG, aBase64, deBase64 } from './png.js';
 import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
-import { filasRazonesRechazo } from './tablasInforme.js';
+import { filasRazonesRechazo, NOMBRES_TABLA_MARGENES } from './tablasInforme.js';
 import { resolverSerie } from './analisisMercado.js';
 
 /** Donde vive el cuerpo del documento dentro del .docx. */
@@ -910,6 +910,62 @@ test('la tabla de márgenes se localiza por su nombre, sea cual sea el prefijo d
       .titulo.startsWith('Para el análisis') || /Tabla 19\./.test(rotulo),
       `con «${rotulo}» el nombre corto se queda con la prosa`);
   }
+});
+
+test('la tabla de márgenes se localiza aunque el rótulo no diga «Compañías»', () => {
+  /* El informe de MONTACHEM la titula «Margen Operacional Comparables». La comparación es por
+     inclusión, así que la clave larga no casa con este rótulo y con una sola clave la tabla se
+     quedaba con los comparables del informe anterior (reportado el 2026-08-20). */
+  for (const rotulo of [
+    'Tabla 22. Margen Operacional Comparables',
+    'Margen Operacional Comparables',
+    'TABLA N° 22: MARGEN OPERACIONAL COMPARABLES',
+  ]) {
+    const xml = `<w:p><w:t>${rotulo}</w:t></w:p>`
+      + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+    const b = localizarBloqueTabla(xml, NOMBRES_TABLA_MARGENES);
+    assert.ok(b, `debe encontrarla con el rótulo «${rotulo}»`);
+    assert.strictEqual(xml.slice(b.inicio, b.fin).includes('márgenes viejos'), true);
+  }
+});
+
+test('al regenerarla con el rótulo corto no se le añade «Compañías» al título', () => {
+  /* Corregir las cifras no autoriza a renombrarle la tabla al cliente: el rótulo que la plantilla
+     trae es el que tiene que quedar, con su número y su redacción. */
+  const estudio = {
+    anio: 2025, pli: 'MO', cmode: 'all',
+    t_s: 10000, t_c: 7000, t_op: 2000,
+    comparables: [
+      { name: 'ZETA COMPARABLE LTD', s: 5000, c: 3500, op: 900, amb: 'Int' },
+      { name: 'OMEGA COMPARABLE PLC', s: 8000, c: 5600, op: 1600, amb: 'Int' },
+    ],
+  };
+  const xml = '<w:p><w:t>Tabla 22. Margen Operacional Comparables</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>COMPARABLES</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>DOW INC.</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+  const texto = textoPlanoOoxml(salida);
+
+  assert.ok(texto.includes('Tabla 22. Margen Operacional Comparables'), 'conserva su rótulo');
+  assert.ok(!/Compa[ñn]ías\s+Comparables/i.test(texto), 'sin añadirle la palabra que no usa');
+  assert.ok(texto.includes('ZETA COMPARABLE LTD'), 'y trae las comparables del estudio');
+  assert.ok(!texto.includes('DOW INC.'), 'la del informe anterior no sobrevive');
+});
+
+test('la cita al pie de la tabla de márgenes nombra la base de datos actual', () => {
+  const estudio = {
+    anio: 2025, pli: 'MO', cmode: 'all',
+    t_s: 10000, t_c: 7000, t_op: 2000,
+    comparables: [{ name: 'ZETA COMPARABLE LTD', s: 5000, c: 3500, op: 900, amb: 'Int' }],
+  };
+  const xml = '<w:p><w:t>Tabla 22. Margen Operacional Comparables</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>COMPARABLES</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const texto = textoPlanoOoxml(actualizarTablasOperacionesOoxml(xml, estudio, []));
+
+  assert.ok(/CAPITAL IQ/i.test(texto), 'cita Capital IQ');
+  assert.ok(!/ONESOURCE|THOMSON/i.test(texto), 'y no la base del informe anterior');
 });
 
 test('un título dentro de una fila que no es la primera no se toma por título de la tabla', () => {

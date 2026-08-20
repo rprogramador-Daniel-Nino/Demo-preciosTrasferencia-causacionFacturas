@@ -50,7 +50,7 @@ export { verticalSobreActivos };
 import {
   filasComparablesInforme, filasRazonesRechazo, filasMuestraComparables,
   filasRangoIntercuartil, tablasMacroInforme, ETIQUETAS_RANGO, AMBITO,
-  enMayusculas, filasEnMayusculas, filasCriteriosScreening,
+  enMayusculas, filasEnMayusculas, filasCriteriosScreening, NOMBRES_TABLA_MARGENES,
 } from './tablasInforme.js';
 /* El ANEXO C se arma con los mismos grupos, letras y conteos que la ruta HTML: una sola
    definición de la matriz para las dos salidas del informe. */
@@ -72,8 +72,10 @@ import { deBase64, dimensionesDeImagen } from './png.js';
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
 import { actualizarProsaTablas } from './prosaTablasInforme.js';
-/* El nombre de la base de datos de los comparables, por la misma función que la ruta del PDF. */
-import { actualizarProsaBaseDatos } from './prosaBaseDatos.js';
+/* El nombre de la base de datos de los comparables, por la misma función que la ruta del PDF.
+   `BASE_DATOS_FUENTE` es además el valor por defecto de la cita al pie de cada tabla del motor:
+   una sola definición para la prosa y para los pies, en las dos rutas. */
+import { actualizarProsaBaseDatos, BASE_DATOS_FUENTE } from './prosaBaseDatos.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -1674,6 +1676,15 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   const tituloDe = (bloque, nombre) => (
     bloque && bloque.numero != null ? `Tabla ${bloque.numero}. ${nombre}` : nombre
   );
+  /* El nombre TAL COMO LO ESCRIBE LA PLANTILLA, para las tablas que se buscan por varios
+     nombres. Sin esto, regenerar la tabla de un cliente que la rotula «Margen Operacional
+     Comparables» se la devolvía titulada «Margen Operacional Compañías Comparables»: corregirle
+     las cifras no autoriza a renombrarle la tabla. Si el rótulo no casa con ninguno de los
+     nombres —no debería, es como se encontró el bloque— se usa el canónico. */
+  const nombreSegunPlantilla = (bloque, nombres) => {
+    const clave = claveTitulo(bloque && bloque.titulo);
+    return nombres.find((n) => clave.includes(claveTitulo(n))) || nombres[0];
+  };
   const year = Number(estudio.anio) || 2025;
   const wrap = (v) => String(v == null || v === '' ? '—' : v);
 
@@ -1863,7 +1874,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       '',
       totalEvaluadas
     ]);
-    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
+    const dbFuente = estudio.database_source || `${BASE_DATOS_FUENTE} Publicado en septiembre de 2025`;
     return generarTablaOoxml(
       tituloDe(b, 'Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)'),
       ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
@@ -1927,7 +1938,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     const filas17 = filasMuestraComparables(estudio).map((f) => [
       String(f.numero), f.nombre, f.ambito,
     ]);
-    const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters)';
+    const dbFuente = estudio.database_source || BASE_DATOS_FUENTE;
     /* Todo en mayúscula menos el rótulo: en la ruta de PDF el rótulo vive FUERA de la tabla y
        no se sube, así que subirlo aquí separaría las dos salidas. La línea de fuente sí, porque
        allá va dentro de la tabla y sube con ella. */
@@ -2041,10 +2052,10 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         pStr(f.noAjustado),
         pStr(f.ajustado)
       ]);
-      const dbFuente = estudio.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+      const dbFuente = estudio.database_source || BASE_DATOS_FUENTE;
       /* En mayúscula, menos el rótulo: ver el comentario de la muestra. */
       return generarTablaOoxml(
-        tituloDe(b, 'Margen Operacional Compañías Comparables'),
+        tituloDe(b, nombreSegunPlantilla(b, NOMBRES_TABLA_MARGENES)),
         ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
         filasEnMayusculas(filas19),
         enMayusculas(`Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`)
@@ -2060,7 +2071,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
        tocar la de márgenes: dos tablas mal en vez de una. Si el rótulo no está, `reemplazar`
        anota la tabla en los avisos y el panel lo dice antes de radicar, que es lo que este
        mecanismo existe para hacer. */
-    reemplazar('Margen Operacional Compañías Comparables', generarTabla19);
+    reemplazar(NOMBRES_TABLA_MARGENES, generarTabla19);
   }
 
   return doc.xml;

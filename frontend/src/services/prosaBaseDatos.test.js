@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  actualizarProsaBaseDatos, BASE_DATOS_ACTUAL, AVISO_BASE_DATOS,
+  actualizarProsaBaseDatos, BASE_DATOS_ACTUAL, BASE_DATOS_FUENTE, AVISO_BASE_DATOS,
 } from './prosaBaseDatos.js';
 import { PARRAFO_OOXML, textoVisibleConMapa } from './prosaVecindad.js';
 
@@ -99,16 +99,44 @@ test('una plantilla que ya nombra Capital IQ se queda igual y sin avisos', () =>
   assert.deepStrictEqual(avisos, []);
 });
 
-test('la fuente al pie de una tabla no se toca ni genera aviso', () => {
-  /* La escribe el generador de la tabla desde `estudio.database_source`: es otro sitio y otra
-     decisión, así que avisar aquí sería un recado en cada corrida. */
+test('la cita al pie de una tabla queda con el proveedor entre paréntesis', () => {
+  /* Tal como salía en el informe que se reportó el 2026-08-20: una tabla con los comparables del
+     estudio y, debajo, la base de datos del informe del año anterior. */
   const avisos = [];
-  const html = '<p>Fuente: Información Base Datos ONESOURCE (Thomson Reuters) Publicado en'
-    + ' septiembre de 2025.</p>';
-  const salida = actualizarProsaBaseDatos(html, avisos);
+  const html = '<p>Información Base Datos ONESOURCE (Thomson Reuters). Fecha de consulta:'
+    + ' julio de 2024.</p>';
+  const texto = leido(actualizarProsaBaseDatos(html, avisos));
 
-  assert.strictEqual(salida, html, 'el pie de tabla queda como estaba');
-  assert.deepStrictEqual(avisos, [], 'y no ensucia el panel de avisos');
+  assert.match(texto, /Información Base Datos Capital IQ \(Standard & Poor's\)\./);
+  /* La fecha de consulta no la gobierna este módulo: se conserva tal cual. */
+  assert.match(texto, /Fecha de consulta: julio de 2024\./);
+  assert.deepStrictEqual(avisos, [], 'sustituida limpiamente, sin aviso');
+});
+
+test('en la cita al pie el proveedor va entre paréntesis y en la prosa con «de»', () => {
+  const html = `<p>la base de datos OneSource de Thomson Reuters, y</p>`
+    + `<p>Información Base Datos ONESOURCE (Thomson Reuters).</p>`;
+  const texto = leido(actualizarProsaBaseDatos(html, []));
+
+  assert.ok(texto.includes(`la base de datos ${BASE_DATOS_ACTUAL},`), 'la prosa lleva «de»');
+  assert.ok(texto.includes(`Información Base Datos ${BASE_DATOS_FUENTE}.`), 'el pie, paréntesis');
+});
+
+test('el pie sin proveedor también se corrige', () => {
+  const avisos = [];
+  const html = '<p><span style="font-size:9pt">Información Base Datos ONESOURCE.</span></p>';
+  const texto = leido(actualizarProsaBaseDatos(html, avisos));
+
+  assert.match(texto, /Información Base Datos Capital IQ \(Standard & Poor's\)\./);
+  assert.deepStrictEqual(avisos, []);
+});
+
+test('el pie con la cola de Refinitiv se resuelve como cita, no como prosa', () => {
+  const html = '<p>Información Base Datos ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)</p>';
+  const texto = leido(actualizarProsaBaseDatos(html, []));
+
+  assert.match(texto, /Información Base Datos Capital IQ \(Standard & Poor's\)/);
+  assert.ok(!/Refinitiv|Thomson/i.test(texto), 'no queda rastro del proveedor anterior');
 });
 
 test('avisa cuando la plantilla nombra la base anterior de otra manera', () => {
