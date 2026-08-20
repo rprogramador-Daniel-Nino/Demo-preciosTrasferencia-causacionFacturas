@@ -24,7 +24,7 @@ import {
 /* La frontera de la Sección III sale de la misma función que la usa para decidir dónde no se
    marca ningún campo del contribuyente, y que la ruta de plantilla .docx usa para lo mismo que
    aquí. Tres copias de esos regex se desincronizarían en el primer informe con otro título. */
-import { zonaQueAbre } from './plantillaMarcador.js';
+import { zonaQueAbre, cierraSeccionMacro } from './plantillaMarcador.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
 import {
@@ -433,6 +433,15 @@ function traductor({
 
   /* Cuerpo de la Sección III: dentro de la sección y fuera de sus tablas. */
   const enZonaMacro = () => zonaMacro && !enTabla;
+  /* Qué citas al pie se llaman desde dentro de la Sección III.
+
+     El contenido de una nota no se emite donde está su llamada, sino al final del documento y
+     en un recorrido aparte (`notasDeWord`), cuando la bandera de zona ya avanzó hasta los
+     anexos. Por eso las citas de la sección —que en el informe son casi una por apartado: Banco
+     Mundial, DANE, Banco de la República— salían en la letra del documento y no en la de la
+     sección. La zona de cada nota se anota aquí, al pasar por su llamada, que es el único punto
+     donde se sabe. */
+  const notasEnMacro = new Set();
   /* De data URL a bytes. Las imágenes van como binario en `word/media/`: en el .doc iban en
      base64 dentro del propio archivo y pesaba 3,3 MB. */
   function bytesDeDataUrl(dataUrl) {
@@ -493,7 +502,10 @@ function traductor({
     /* La llamada de la nota: el número deja de ser texto y pasa a ser la referencia de Word,
        que es la que arrastra la nota al pie de la hoja. */
     const nota = llamadaDeNodo.get(h);
-    if (nota !== undefined) return [new FootnoteReferenceRun(nota)];
+    if (nota !== undefined) {
+      if (enZonaMacro()) notasEnMacro.add(nota);
+      return [new FootnoteReferenceRun(nota)];
+    }
     /* Un bloque anidado no aporta runs a este párrafo: lo emite `bloquesDe` en el suyo. Sin
        esto el texto salía dos veces, una aquí y otra como párrafo espurio. */
     if (esBloque(h)) return [];
@@ -829,7 +841,10 @@ function traductor({
           salida.push(new Paragraph({
             numbering: { reference: 'vinetas', level: 0 },
             alignment: alineacion,
-            children: runsDe(li, heredado),
+            /* Con la letra de la zona: las listas se resuelven en esta rama, ANTES de la de
+               párrafos y encabezados, así que no basta con que aquella la aplique. Las viñetas de
+               la Sección III salían en la letra del PDF. */
+            children: runsDe(li, conLetraDeZona()),
             spacing: { before: 0, after: 0, line: 276 },
           }));
         }
@@ -839,10 +854,23 @@ function traductor({
         /* La frontera de la Sección III. `zonaQueAbre` descarta las entradas del índice —que
            repiten todos los encabezados con el número de página pegado— y devuelve al cuerpo en
            el capítulo romano o el anexo siguiente, así que basta con preguntar por cada bloque. */
-        /* Dentro de una tabla no se pregunta: una celda cuyo texto empiece por «IV. » o por
-           «ANEXO B» no es un encabezado del informe y no puede mover la frontera de la sección. */
-        const abreZona = enTabla ? null : zonaQueAbre(textoDe(h));
-        if (abreZona) zonaMacro = abreZona === 'macro';
+        /* La frontera de la sección. Dentro de una tabla no se pregunta: una celda cuyo texto
+           empiece por «IV. » o por «ANEXO B» no es un encabezado del informe y no puede moverla.
+
+           Abrir y cerrar no son simétricos: abrir pide reconocer «III. TENDENCIAS…»; cerrar pide
+           NO tomar un subapartado romano de la sección —«I. Producto Interno Bruto», «V. Tasa de
+           Cambio»— por el capítulo siguiente. Con la condición laxa en el cierre, el primero de
+           esos cortaba la sección y todo lo que venía después salía en la letra del PDF. */
+        if (!enTabla) {
+          const texto = textoDe(h);
+          if (zonaMacro) {
+            /* Sólo `h1`: un `h2`/`h3` es un subapartado de la propia sección. Con cualquier
+               encabezado valiendo como capítulo, «V. Tasa de Cambio» la cortaba por la mitad. */
+            if (cierraSeccionMacro(texto, h.etiqueta === 'h1')) zonaMacro = false;
+          } else if (zonaQueAbre(texto) === 'macro') {
+            zonaMacro = true;
+          }
+        }
         /* Los títulos de III van en negrita: al quedar del tamaño del cuerpo es lo único que los
            distingue. Se conserva `heading:` en `parrafoDe`, así que el índice y sus
            hipervínculos internos siguen funcionando; lo explícito del run le gana al estilo. */
@@ -880,8 +908,18 @@ function traductor({
     enNota = true;
     try {
       for (const numero of [...conLlamada].sort((a, b) => a - b)) {
-        const hijos = bloquesDe(notas.get(numero));
-        salida[numero] = { children: hijos.length ? hijos : [new Paragraph('')] };
+        /* La zona se restituye a la que tenía la nota en el cuerpo, no la que quedó al final del
+           documento. El tamaño no sube: el extractor declara los 8 pt de la cita en su `span` y
+           `runsDeHijo` sólo acepta un tamaño MENOR que el de la sección, así que la cita se
+           queda pequeña y solo cambia de familia — que es lo acordado. */
+        const zonaAntes = zonaMacro;
+        zonaMacro = notasEnMacro.has(numero);
+        try {
+          const hijos = bloquesDe(notas.get(numero));
+          salida[numero] = { children: hijos.length ? hijos : [new Paragraph('')] };
+        } finally {
+          zonaMacro = zonaAntes;
+        }
       }
     } finally {
       enNota = false;

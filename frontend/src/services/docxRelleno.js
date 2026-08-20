@@ -36,7 +36,7 @@ import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estilo
 /* La frontera de la Sección III sale de la MISMA función que la usa para decidir dónde no se
    marca ningún campo del contribuyente. Copiar aquí sus dos regex dejaría dos definiciones de
    «dónde empieza y acaba III» que se desincronizarían en el primer informe con otro título. */
-import { zonaQueAbre } from './plantillaMarcador.js';
+import { zonaQueAbre, cierraSeccionMacro } from './plantillaMarcador.js';
 import { FORMULAS, ROTULOS_FORMULA, ooxmlDeFormula } from './formulasOmml.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -481,10 +481,21 @@ function szDeRpr(rPr) {
  * El resto del `rPr` se conserva intacto: la negrita del rótulo de una tabla, la cursiva, y el
  * rojo del marcador de pendiente, que es un hueco que hay que ver antes de radicar.
  */
-function rPrConLetraMacro(rPrInterior, negrita) {
+function rPrConLetraMacro(rPrInterior, negrita, modo = 'cuerpo') {
   let dentro = String(rPrInterior || '');
   const szPropio = szDeRpr(dentro);
-  const sz = szPropio !== null && szPropio < PUNTOS_MACRO * 2 ? szPropio : PUNTOS_MACRO * 2;
+  /* Tres tamaños, uno por sitio del informe:
+     - `cuerpo`: 12 pt, salvo que el run declare uno menor (líneas «FUENTE:», citas al pie).
+     - `tabla`: los 10 pt de `PUNTOS_TABLA`, impuestos, igual que hace `generarTablaOoxml` con
+       las tablas que sí regenera. Es lo que deja todas las tablas del informe iguales.
+     - `marca`: el de la marca de párrafo NO se toca. Los párrafos vacíos con que el informe
+       separa sus bloques miden lo que mide su marca, y cambiarlo correría la paginación. */
+  const sz = modo === 'tabla'
+    ? PUNTOS_TABLA * 2
+    : (modo === 'marca'
+      ? szPropio
+      : (szPropio !== null && szPropio < PUNTOS_MACRO * 2 ? szPropio : PUNTOS_MACRO * 2));
+  const familia = modo === 'tabla' ? FUENTE_TABLA : FUENTE_MACRO;
 
   dentro = dentro
     .replace(/<w:rFonts\b[^>]*\/>/g, '')
@@ -496,10 +507,12 @@ function rPrConLetraMacro(rPrInterior, negrita) {
   const rStyle = /<w:rStyle\b[^>]*\/>/.exec(dentro);
   if (rStyle) dentro = dentro.replace(rStyle[0], '');
 
-  const letra = '<w:rFonts w:ascii="' + FUENTE_MACRO + '" w:hAnsi="' + FUENTE_MACRO +
-    '" w:cs="' + FUENTE_MACRO + '"/>';
+  const letra = '<w:rFonts w:ascii="' + familia + '" w:hAnsi="' + familia +
+    '" w:cs="' + familia + '"/>';
   const negritaXml = negrita && !/<w:b(?:\s[^>]*)?\/?>/.test(dentro) ? '<w:b/>' : '';
-  const tamano = '<w:sz w:val="' + sz + '"/><w:szCs w:val="' + sz + '"/>';
+  /* Sin tamaño declarado no se inventa uno: es el caso de la marca de párrafo. */
+  const tamano = sz === null ? ''
+    : '<w:sz w:val="' + sz + '"/><w:szCs w:val="' + sz + '"/>';
 
   let corte = dentro.length;
   for (const etiqueta of ANTES_DE_SZ) {
@@ -510,19 +523,39 @@ function rPrConLetraMacro(rPrInterior, negrita) {
   return '<w:rPr>' + (rStyle ? rStyle[0] : '') + letra + negritaXml + cuerpo + '</w:rPr>';
 }
 
+/* La marca de párrafo, en Arial y sin cambiar de tamaño.
+
+   De su `rPr` salen la viñeta y el número de una lista, así que sin esto el texto del renglón
+   iba en Arial y su bolita en la letra de la plantilla. El tamaño no se toca: ver `modo` en
+   `rPrConLetraMacro`.
+
+   Se crea un `rPr` que no existía sólo cuando el párrafo es de una lista (`numPr`): ahí hay una
+   viñeta que se ve. En los demás no se añade nada — serían miles de etiquetas por documento sin
+   cambiar un píxel. En `pPr` el `rPr` va al final, que es donde lo pide el esquema. */
+function marcaConLetraMacro(parrafo) {
+  return parrafo.replace(/<w:pPr>([\s\S]*?)<\/w:pPr>/, (todo, dentro) => {
+    const rPr = /<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(dentro);
+    if (rPr) {
+      return '<w:pPr>' + dentro.replace(rPr[0],
+        rPrConLetraMacro(rPr[1], false, 'marca')) + '</w:pPr>';
+    }
+    if (!/<w:numPr[\s>]/.test(dentro)) return todo;
+    return '<w:pPr>' + dentro + rPrConLetraMacro('', false, 'marca') + '</w:pPr>';
+  });
+}
+
 /** Los runs de un párrafo, con la letra de la Sección III. */
-function parrafoConLetraMacro(parrafo, negrita) {
-  /* Sólo los `<w:r>`: el `rPr` del `pPr` —el formato de la marca de párrafo— se deja como está.
-     Tocarlo cambiaría el alto de los párrafos vacíos con que el informe separa sus bloques. */
-  return parrafo.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
+function parrafoConLetraMacro(parrafo, negrita, modo = 'cuerpo') {
+  const conMarca = modo === 'cuerpo' ? marcaConLetraMacro(parrafo) : parrafo;
+  return conMarca.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
     const abre = /^<w:r(?:\s[^>]*)?>/.exec(run);
     if (!abre) return run;
     const resto = run.slice(abre[0].length);
     const conRpr = /^<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(resto);
     if (conRpr) {
-      return abre[0] + rPrConLetraMacro(conRpr[1], negrita) + resto.slice(conRpr[0].length);
+      return abre[0] + rPrConLetraMacro(conRpr[1], negrita, modo) + resto.slice(conRpr[0].length);
     }
-    return abre[0] + rPrConLetraMacro('', negrita) + resto;
+    return abre[0] + rPrConLetraMacro('', negrita, modo) + resto;
   });
 }
 
@@ -562,6 +595,19 @@ function esEncabezadoOoxml(parrafo, texto) {
   return texto.length <= 160 && prefijoDeEncabezado(texto) !== '';
 }
 
+/* ¿Es un encabezado de PRIMER nivel, es decir un capítulo del informe y no un subapartado?
+   Es la señal que `cierraSeccionMacro` necesita para no tomar «V. Tasa de Cambio Representativa
+   del Mercado» —subapartado de III.B, y encabezado legítimo— por el capítulo quinto.
+
+   Sólo lo que el documento declara de primer nivel: «Heading1»/«Título 1» o `outlineLvl` 0. El
+   prefijo de numeración NO cuenta aquí, que es justo lo que confundía los dos casos. */
+function esCapituloOoxml(parrafo) {
+  const estilo = /<w:pStyle\s+w:val="([^"]*)"/.exec(parrafo);
+  if (estilo && /^(?:heading|t[íi]tulo|titulo)\s*1$/i.test(estilo[1].trim())) return true;
+  const nivel = /<w:outlineLvl\s+w:val="(\d+)"/.exec(parrafo);
+  return !!nivel && Number(nivel[1]) === 0;
+}
+
 /**
  * Pone la Sección III entera en Arial 12 —negrita en sus títulos— dejando fuera las tablas.
  *
@@ -580,22 +626,55 @@ export function aplicarLetraMacroOoxml(xml) {
 
   let enMacro = false;
   let tocados = 0;
+  let enCeldas = 0;
   const salida = texto.replace(RX_PARRAFO_LETRA, (parrafo, pos) => {
-    if (enTabla(pos)) return parrafo;
+    /* Una celda de una tabla de la sección. No mueve la frontera —una celda que empiece por
+       «IV. » no es un capítulo— y lleva la letra de TABLA, no la del cuerpo: las que el motor
+       regenera ya salen así, y una que la plantilla traiga y el motor no reconozca se quedaba en
+       la letra del cliente, de modo que en la misma sección había tablas en Arial 10 y tablas en
+       la letra del informe anterior. */
+    if (enTabla(pos)) {
+      if (!enMacro) return parrafo;
+      enCeldas += 1;
+      return parrafoConLetraMacro(parrafo, false, 'tabla');
+    }
     /* Las entradas del índice llevan el campo PAGEREF y repiten todos los encabezados del
        informe: si abrieran zona, la Sección III empezaría en la tabla de contenido. Mismo filtro
        que aplican `localizarHitos` y `localizarBloqueProsa`. */
     if (parrafo.includes('PAGEREF')) return parrafo;
     const plano = textoPlanoOoxml(parrafo);
-    const abre = zonaQueAbre(plano);
-    if (abre) enMacro = abre === 'macro';
+    const encabezado = esEncabezadoOoxml(parrafo, plano.trim());
+    /* Abrir y cerrar no son simétricos, y no por descuido: abrir pide reconocer «III.
+       TENDENCIAS…», que es lo que hace `zonaQueAbre`; cerrar pide NO confundir un subapartado
+       romano de la sección con el capítulo siguiente, que es lo que hace `cierraSeccionMacro`.
+       Con la condición laxa en el cierre, «I. Producto Interno Bruto» cortaba la sección. */
+    if (enMacro) {
+      if (cierraSeccionMacro(plano, esCapituloOoxml(parrafo))) enMacro = false;
+    } else if (zonaQueAbre(plano) === 'macro') {
+      enMacro = true;
+    }
     if (!enMacro) return parrafo;
     tocados += 1;
-    return parrafoConLetraMacro(parrafo, esEncabezadoOoxml(parrafo, plano.trim()));
+    return parrafoConLetraMacro(parrafo, encabezado);
   });
 
-  console.log('[docxRelleno] Sección III en ' + FUENTE_MACRO + ' ' + PUNTOS_MACRO + ': ' +
-    tocados + ' párrafo(s) fuera de tabla');
+  /* Red propia: esta pasada corre sobre el `document.xml` antes de docxtemplater y no va por
+     `escribirDocSiEsValido`, así que se comprueba a sí misma. Si el documento entraba sano y la
+     salida no lo está, se devuelve lo que entró: radicar un Word que Word tiene que reparar es
+     peor que radicarlo con la letra sin cambiar. */
+  if (!problemaDeIntegridadOoxml(texto) && problemaDeIntegridadOoxml(salida)) {
+    console.warn('[docxRelleno] la letra de la Sección III no se aplicó: ' +
+      problemaDeIntegridadOoxml(salida));
+    return texto;
+  }
+
+  /* Solo si hubo algo que tocar: una plantilla sin la Sección III no tiene por qué llenar la
+     consola, y así el mensaje que sí aparece significa algo. */
+  if (tocados || enCeldas) {
+    console.log('[docxRelleno] Sección III en ' + FUENTE_MACRO + ' ' + PUNTOS_MACRO + ': ' +
+      tocados + ' párrafo(s), y ' + enCeldas + ' celda(s) en ' + FUENTE_TABLA + ' ' +
+      PUNTOS_TABLA);
+  }
   return salida;
 }
 
