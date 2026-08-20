@@ -49,13 +49,10 @@ export function verticalSobreActivos(estudio) {
 }
 
 /**
- * Composición accionaria efectiva: el certificado cargado en el estudio actual tiene
- * prioridad; si no hay accionistas cargados ahí, se usa la composición heredada de
- * `estudio.estudioAnterior` (el mismo informe del año anterior que alimenta el Motor de
- * Comparables). Excepción deliberada al criterio de «nunca heredar en silencio»: a
- * diferencia de una cifra que cambia cada año (UVT, resultados financieros), la
- * composición accionaria es un hecho estructural que normalmente no cambia de un año a
- * otro, y por eso se hereda sin marca visual cuando falta el certificado actual.
+ * Composición accionaria efectiva:
+ * 1. Certificado cargado en el estudio actual (Sección 1) tiene máxima prioridad.
+ * 2. Si no hay, se usa la composición heredada del informe del año anterior (estudio.estudioAnterior).
+ * 3. Si tampoco hay, se usa la composición extraída de la plantilla del cliente (estudio.plantillaAccionistas).
  */
 export function resolverComposicionAccionaria(estudio) {
   const actual = estudio && estudio.accionistas;
@@ -64,6 +61,7 @@ export function resolverComposicionAccionaria(estudio) {
       accionistas: actual,
       capital_pagado: estudio.capital_pagado,
       total_acciones: estudio.total_acciones,
+      fuente: 'certificado',
     };
   }
   const anterior = estudio && estudio.estudioAnterior;
@@ -73,9 +71,20 @@ export function resolverComposicionAccionaria(estudio) {
       accionistas: heredados,
       capital_pagado: anterior.capital_pagado,
       total_acciones: anterior.total_acciones,
+      fuente: 'estudioAnterior',
     };
   }
-  return { accionistas: [], capital_pagado: null, total_acciones: null };
+  const plantilla = estudio && (estudio.plantillaAccionistas || estudio.plantilla_accionistas);
+  const dePlantilla = plantilla && (Array.isArray(plantilla) ? plantilla : plantilla.accionistas);
+  if (Array.isArray(dePlantilla) && dePlantilla.length) {
+    return {
+      accionistas: dePlantilla,
+      capital_pagado: plantilla.capital_pagado || null,
+      total_acciones: plantilla.total_acciones || null,
+      fuente: 'plantilla',
+    };
+  }
+  return { accionistas: [], capital_pagado: null, total_acciones: null, fuente: null };
 }
 
 /**

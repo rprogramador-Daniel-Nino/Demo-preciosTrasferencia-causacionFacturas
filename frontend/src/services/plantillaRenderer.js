@@ -11,6 +11,7 @@ import {
 } from './tablasHtmlInforme.js';
 import { actualizarProsaRango } from './prosaRangoInforme.js';
 import { actualizarProsaTablas } from './prosaTablasInforme.js';
+import { actualizarProsaBaseDatos } from './prosaBaseDatos.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 import { actualizarAnexoCHtml } from './anexoCHtml.js';
@@ -89,6 +90,12 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      los estados financieros de las comparables. Ninguna de esas cifras es un campo que el
      marcado alcance de forma fiable, así que se radicaban con las del informe de referencia. */
   html = actualizarProsaTablas(html, estudio, avisosTablas);
+  /* Y el nombre de la base de datos de la que salieron los comparables: la plantilla es el
+     informe del año anterior y nombra OneSource de Thomson Reuters, pero el cribado sale de
+     Capital IQ —la ruta de tablas ya elimina por eso las copias de «Códigos SIC utilizados» de
+     Ryan LLC y Refinitiv—, así que la prosa atribuía los estados financieros a una base que no
+     se consultó. Misma función que la ruta .docx. */
+  html = actualizarProsaBaseDatos(html, avisosTablas);
 
   html = html.replace(RX_MARCA, (_, campo) => {
     const valor = valorDeCampo(estudio, campo);

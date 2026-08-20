@@ -35,9 +35,13 @@
 
 import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
-  filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme,
+  filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme, NOMBRES_TABLA_MARGENES,
 } from './tablasInforme.js';
 import { claveTitulo, numeroDeTabla, prefijoDeEncabezado } from './docxRelleno.js';
+/* La cita al pie de las tablas del motor sale de la misma constante que la prosa: dos sitios
+   distintos para el nombre de la base de datos es la forma de que el informe se contradiga a sí
+   mismo entre una tabla y el párrafo que la introduce. */
+import { BASE_DATOS_FUENTE } from './prosaBaseDatos.js';
 import { pctf } from '../utils/calculations.js';
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -591,7 +595,9 @@ export function reescribirRotuloHtml(rotuloXml, titulo) {
 }
 
 /** Nombres con los que las tablas del motor se rotulan en las plantillas. */
-export const TABLA_MARGENES = 'Margen Operacional Compañías Comparables';
+/* Los dos rótulos con que las plantillas nombran esta tabla, definidos en `docxRelleno.js` para
+   que las dos rutas busquen exactamente lo mismo. */
+export const TABLA_MARGENES = NOMBRES_TABLA_MARGENES;
 export const TABLA_MUESTRA = 'Muestra Compañías comparables';
 export const TABLA_RANGO = 'Rango Intercuartil';
 export const TABLA_RANGOS_CONCLUSION = 'Tabla de rangos';
@@ -653,7 +659,7 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
       study.embudoSeleccion ? String(study.embudoSeleccion.evaluadas) : '—',
     ]);
   }
-  const dbFuente = study.database_source || 'ONESOURCE (Thomson Reuters) Publicado en septiembre de 2025';
+  const dbFuente = study.database_source || `${BASE_DATOS_FUENTE} Publicado en septiembre de 2025`;
   const fuenteRazones = `Información Base Datos ${dbFuente}.`;
   sustituir(TABLA_RAZONES, filasRazones, { fuente: fuenteRazones });
 
@@ -703,13 +709,13 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   }
 
   /* ── Muestra de comparables ── */
-  const dbFuenteMuestra = study.database_source || 'ONESOURCE (Thomson Reuters)';
+  const dbFuenteMuestra = study.database_source || BASE_DATOS_FUENTE;
   const fuenteMuestra = `Información Base Datos ${dbFuenteMuestra}`;
   sustituir(TABLA_MUESTRA, filasMuestraComparables(study)
     .map((f) => [String(f.numero), f.nombre, f.ambito]), { mayusculas: true, fuente: fuenteMuestra });
 
   /* ── Márgenes de las comparables ── */
-  const dbFuenteMargenes = study.database_source || 'ONESOURCE (Thomson Reuters-Refinitiv Fundamentals)';
+  const dbFuenteMargenes = study.database_source || BASE_DATOS_FUENTE;
   const year = Number(study.anio) || 2025;
   const fuenteMargenes = `Información Base Datos ${dbFuenteMargenes} Fecha de consulta: septiembre de ${year}.`;
   const comparables = filasComparablesInforme(study);

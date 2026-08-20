@@ -20,6 +20,32 @@ import {
   DATOS_MACRO, resolverSerie, cifraODisponible, marcadorPendiente,
 } from './analisisMercado.js';
 import { num, pliOf } from '../utils/calculations.js';
+import { traducirCriterio } from './criteriosScreeningEs.js';
+
+/* ══════════════ Nombres de tabla compartidos por las dos rutas ══════════════
+
+   Vive aquí, y no en `docxRelleno.js` ni en `tablasHtmlInforme.js`, porque las dos rutas tienen
+   que buscar exactamente lo mismo y ese par de módulos no puede compartir una constante: hay un
+   ciclo de imports entre ellos (`tablasHtmlInforme` → `docxRelleno` → `anexoCHtml` →
+   `tablasHtmlInforme`), y la constante importada por ese camino llega sin inicializar. Este
+   módulo, que ya es la única fuente de las FILAS de ambas rutas, no participa del ciclo.
+
+   Los nombres de la tabla de márgenes son DOS porque la palabra «Compañías» no está en todas las
+   plantillas: el informe de END GAME la rotula «Margen Operacional Compañías Comparables» y el
+   de MONTACHEM «Margen Operacional Comparables». Los localizadores comparan por inclusión, así
+   que el nombre largo NO casa con el rótulo corto —«companias» queda en medio—: con una sola
+   clave, la tabla del segundo cliente no se encontraba y se radicaba con los comparables del
+   informe anterior. Se reportó con capturas el 2026-08-20; la cita al pie seguía diciendo
+   «Fecha de consulta: julio de 2024», que es la prueba de que el motor nunca la había tocado.
+
+   Las dos claves siguen siendo específicas —«Margen Operacional» delante y «Comparables»
+   detrás—, así que ninguna casa con la prosa «…el indicador financiero de rentabilidad más
+   apropiado es el Margen Operacional…», que es el falso candidato contra el que previene el
+   bloque de márgenes de `docxRelleno.js`. */
+export const NOMBRES_TABLA_MARGENES = [
+  'Margen Operacional Compañías Comparables',
+  'Margen Operacional Comparables',
+];
 
 /* ══════════════ Razones de rechazo ══════════════
    Cada fila es un criterio del motor. Se omiten las que no descartaron a nadie: un
@@ -526,6 +552,12 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
  * que el cribado de este año no dejó criterios— y es el mismo contrato que siguen las
  * demás tablas del motor.
  *
+ * El texto se traduce aquí, en el render, y no al importar el Excel: la hoja «Screen
+ * Criteria» de Capital IQ viene en inglés, y traducir en este punto hace que los estudios
+ * ya guardados —que tienen el inglés almacenado en Firestore— salgan en español sin
+ * reimportar nada. `traducirCriterio` es puro e idempotente, así que un criterio que ya
+ * esté en español pasa sin cambio (ver `criteriosScreeningEs.js`).
+ *
  * @param {object} study
  * @returns {string[][]}
  */
@@ -538,7 +570,8 @@ export function filasCriteriosScreening(study) {
        el conector vacío en medio, la fila que une los dos criterios no puede faltar: se cae
        a «Y», que es la combinación por defecto de la hoja de origen. */
     if (i > 0) filas.push([c.conector || 'Y']);
-    filas.push([String(c.etiqueta || ''), String(c.valor || '')]);
+    const es = traducirCriterio(c);
+    filas.push([es.etiqueta, es.valor]);
   });
   return filas;
 }

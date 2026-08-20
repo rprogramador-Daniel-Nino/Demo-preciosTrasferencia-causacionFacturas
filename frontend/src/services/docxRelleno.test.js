@@ -18,10 +18,12 @@ import {
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
   actualizarFormulasMatematicasOoxml,
   localizarAnexosOoxml, anexosDelDocumento, problemaDeIntegridadOoxml,
-  generarTablaOoxml,
+  generarTablaOoxml, medidaDeImagenAnexoB,
 } from './docxRelleno.js';
+import { codificarPNG, aBase64, deBase64 } from './png.js';
+import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
-import { filasRazonesRechazo } from './tablasInforme.js';
+import { filasRazonesRechazo, NOMBRES_TABLA_MARGENES } from './tablasInforme.js';
 import { resolverSerie } from './analisisMercado.js';
 
 /** Donde vive el cuerpo del documento dentro del .docx. */
@@ -713,16 +715,46 @@ test('Códigos SIC: sin criteriosScreening no se toca nada y se avisa', () => {
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
-test('Códigos SIC: dos ocurrencias sin numerar (ni 13/14/15) no se tocan y se avisa', () => {
+test('Códigos SIC: dos ocurrencias sin numerar, una cita Capital IQ en su fuente — se conserva esa y se borra la otra', () => {
   /* El caso real reportado: la plantilla trae la tabla dos veces, ninguna numerada 13/14/15.
-     Sin forma de saber cuál es la copia vigente, se prefiere no arriesgar borrar o mezclar la
-     equivocada antes que adivinar — mismo criterio que el resto del módulo ante ambigüedad. */
+     Sin número ni posición («la del medio») con que distinguirlas, se decide por la línea de
+     fuente: la que cite «Capital IQ» es la vigente. Pedido por el usuario 2026-08-20 — antes
+     esto se dejaba sin tocar (ver el test de más abajo para el caso en que de verdad no se
+     puede distinguir). */
   const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
     + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de fundamentos de Refinitiv, publicado en octubre de 2024.');
   const avisos = [];
   const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
 
-  assert.strictEqual(salida, xml, 'ninguna de las dos copias debe alterarse');
+  assert.ok(!salida.includes('Tabla 19. Códigos SIC utilizados'), 'se eliminó la de Refinitiv');
+  assert.ok(salida.includes('Tabla 18. Códigos SIC utilizados'), 'se conservó la que cita Capital IQ');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la que sobrevive se actualiza con los criterios nuevos');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'se pudo distinguir cuál conservar, no hay que avisar');
+});
+
+test('Códigos SIC: dos ocurrencias sin numerar y sin que ninguna cite Capital IQ — se borran las dos y se avisa', () => {
+  /* Sin número, sin posición y sin fuente que lo diga, no hay con qué distinguir cuál de las
+     dos es la vigente. Pedido explícito del usuario 2026-08-20: ante esa ambigüedad se
+     prefiere borrar las dos —dejar el hueco visible y avisado— a arriesgar conservar la
+     copia equivocada con datos del año anterior sin que nadie se entere. */
+  const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Códigos SIC utilizados'), 'ninguna de las dos copias sobrevive');
+  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+});
+
+test('Códigos SIC: una sola copia ambigua (sin número) se deja intacta — no hay con qué desambiguar', () => {
+  /* La regla de la fuente es para elegir ENTRE copias. Con una sola no hay nada que
+     desambiguar, así que no debe borrarse solo porque su fuente no diga «Capital IQ» con
+     esas palabras: eso sería más arriesgado que el problema que se está resolviendo. */
+  const xml = tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual(salida, xml, 'la única copia no debe alterarse');
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
@@ -742,6 +774,56 @@ test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, gridSpan) en l
   assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'se perdió el gridSpan del molde del conector');
   assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los valores nuevos');
   assert.ok(salida.includes('Fuente: Capital IQ.'), 'el pie de fuente no debe tocarse');
+});
+
+test('Códigos SIC: tres ocurrencias numeradas 18/19/20 (renumeración real de BEUMER) conservan y actualizan la del medio', () => {
+  /* Caso real reportado 2026-08-20: la plantilla renumeró las tres copias con los años y
+     ninguna quedó en 13/14/15. Antes, la del medio (Capital IQ) no encajaba en «esParaEliminar»
+     (no es 13 ni 15) NI en «esParaConservar» (no es 14 y sí tiene número, así que tampoco
+     entraba por la rama de «sin numerar») y se quedaba con el cribado del año anterior sin
+     ningún aviso. */
+  const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + tablaSicOoxml(20, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Tabla 18. Códigos SIC utilizados'), 'se eliminó la tabla 18');
+  assert.ok(!salida.includes('Tabla 20. Códigos SIC utilizados'), 'se eliminó la tabla 20');
+  assert.ok(salida.includes('Tabla 19. Códigos SIC utilizados'), 'se conservó la tabla 19 (la del medio)');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla 19 se actualizó con los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no debe sobrevivir el criterio del año anterior');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
+});
+
+test('reescribirFilasOoxml: el conector "Y"/"O" sale como divisor discreto, no como clon de la franja de sección', () => {
+  /* Molde real: la plantilla comparte el mismo tcPr (sombreado gris oscuro, negrita) entre
+     las franjas de sección («Criterios de inclusión») y el conector («Y»), porque las dos
+     son visualmente la misma franja fusionada. Clonarlo tal cual para cada «Y»/«O» de un
+     cribado con varios criterios deja la tabla como una fila de franjas grises opacas. */
+  const filaSeccionOFranjaConector = (texto) =>
+    '<w:tr><w:tc><w:tcPr><w:tcW w:w="9000" w:type="dxa"/><w:gridSpan w:val="2"/>'
+    + '<w:shd w:val="clear" w:color="auto" w:fill="808080"/><w:vAlign w:val="center"/></w:tcPr>'
+    + '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="000000"/></w:rPr>'
+    + '<w:t>' + texto + '</w:t></w:r></w:p></w:tc></w:tr>';
+  const cuerpo = filaDosCeldasOoxml('Código SIC primario:', 'Entre 1111 y 2222')
+    + filaSeccionOFranjaConector('Criterios de inclusión')
+    + filaDosCeldasOoxml('Palabra clave:', 'Contiene viejo')
+    + filaSeccionOFranjaConector('Y')
+    + filaDosCeldasOoxml('Nivel de propiedad', 'No propiedad mayoritaria');
+  const tabla = tablaSicOoxml(null, cuerpo, 'Fuente: Capital IQ.');
+
+  const salida = reescribirFilasOoxml(tabla, [
+    ['Código SIC primario:', 'Entre 7371 y 7375'],
+    ['O'],
+    ['SIC Codes', '3535 Conveyors OR 3545 Cutting Tools'],
+  ]);
+
+  assert.ok(!/w:fill="808080"/.test(salida), 'el conector nuevo no debe heredar el sombreado gris oscuro de la franja de sección');
+  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'el conector conserva la fusión de columnas para no desalinear la tabla');
+  assert.match(salida, /<w:i\/>/, 'el conector sale en cursiva, como divisor discreto');
+  assert.ok(salida.includes('>O<'), 'falta el conector nuevo');
+  assert.ok(salida.includes('3535 Conveyors OR 3545 Cutting Tools'), 'faltan los criterios nuevos');
 });
 
 test('localizarBloquesTabla devuelve todas las ocurrencias homónimas en orden de documento', () => {
@@ -908,6 +990,62 @@ test('la tabla de márgenes se localiza por su nombre, sea cual sea el prefijo d
       .titulo.startsWith('Para el análisis') || /Tabla 19\./.test(rotulo),
       `con «${rotulo}» el nombre corto se queda con la prosa`);
   }
+});
+
+test('la tabla de márgenes se localiza aunque el rótulo no diga «Compañías»', () => {
+  /* El informe de MONTACHEM la titula «Margen Operacional Comparables». La comparación es por
+     inclusión, así que la clave larga no casa con este rótulo y con una sola clave la tabla se
+     quedaba con los comparables del informe anterior (reportado el 2026-08-20). */
+  for (const rotulo of [
+    'Tabla 22. Margen Operacional Comparables',
+    'Margen Operacional Comparables',
+    'TABLA N° 22: MARGEN OPERACIONAL COMPARABLES',
+  ]) {
+    const xml = `<w:p><w:t>${rotulo}</w:t></w:p>`
+      + '<w:tbl><w:tr><w:tc><w:p><w:t>márgenes viejos</w:t></w:p></w:tc></w:tr></w:tbl>';
+    const b = localizarBloqueTabla(xml, NOMBRES_TABLA_MARGENES);
+    assert.ok(b, `debe encontrarla con el rótulo «${rotulo}»`);
+    assert.strictEqual(xml.slice(b.inicio, b.fin).includes('márgenes viejos'), true);
+  }
+});
+
+test('al regenerarla con el rótulo corto no se le añade «Compañías» al título', () => {
+  /* Corregir las cifras no autoriza a renombrarle la tabla al cliente: el rótulo que la plantilla
+     trae es el que tiene que quedar, con su número y su redacción. */
+  const estudio = {
+    anio: 2025, pli: 'MO', cmode: 'all',
+    t_s: 10000, t_c: 7000, t_op: 2000,
+    comparables: [
+      { name: 'ZETA COMPARABLE LTD', s: 5000, c: 3500, op: 900, amb: 'Int' },
+      { name: 'OMEGA COMPARABLE PLC', s: 8000, c: 5600, op: 1600, amb: 'Int' },
+    ],
+  };
+  const xml = '<w:p><w:t>Tabla 22. Margen Operacional Comparables</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>COMPARABLES</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:p><w:t>DOW INC.</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+  const texto = textoPlanoOoxml(salida);
+
+  assert.ok(texto.includes('Tabla 22. Margen Operacional Comparables'), 'conserva su rótulo');
+  assert.ok(!/Compa[ñn]ías\s+Comparables/i.test(texto), 'sin añadirle la palabra que no usa');
+  assert.ok(texto.includes('ZETA COMPARABLE LTD'), 'y trae las comparables del estudio');
+  assert.ok(!texto.includes('DOW INC.'), 'la del informe anterior no sobrevive');
+});
+
+test('la cita al pie de la tabla de márgenes nombra la base de datos actual', () => {
+  const estudio = {
+    anio: 2025, pli: 'MO', cmode: 'all',
+    t_s: 10000, t_c: 7000, t_op: 2000,
+    comparables: [{ name: 'ZETA COMPARABLE LTD', s: 5000, c: 3500, op: 900, amb: 'Int' }],
+  };
+  const xml = '<w:p><w:t>Tabla 22. Margen Operacional Comparables</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>COMPARABLES</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const texto = textoPlanoOoxml(actualizarTablasOperacionesOoxml(xml, estudio, []));
+
+  assert.ok(/CAPITAL IQ/i.test(texto), 'cita Capital IQ');
+  assert.ok(!/ONESOURCE|THOMSON/i.test(texto), 'y no la base del informe anterior');
 });
 
 test('un título dentro de una fila que no es la primera no se toma por título de la tabla', () => {
@@ -1318,6 +1456,72 @@ test('en el ANEXO B del .docx salen también las comparables sin estado financie
   assert.ok(texto.includes('[PENDIENTE]') && texto.includes('SIN EEFF SA'),
     'con el hueco señalado y nombrando a cuál le falta');
   assert.ok(!texto.includes('BLOQUE VIEJO'), 'y nada del informe anterior sobrevive');
+});
+
+/* ─── tamaño de las imágenes del ANEXO B ───
+   El alto se calculaba con la proporción de un A4 pasara lo que pasara con la imagen,
+   así que el estado financiero de cada comparable ocupaba una página entera del informe
+   y no cabía debajo de su tabla de descripción. */
+
+/** El ancho de la caja de texto, los mismos 9405 twips de `generarTablaOoxml`. */
+const ANCHO_CAJA_CM_TEST = (9405 / 1440) * 2.54;
+
+/** Una data URL de PNG del tamaño pedido, para medir proporciones de verdad. */
+async function pngDe(ancho, alto) {
+  const png = await codificarPNG(new Uint8Array(ancho * alto * 3).fill(255), ancho, alto);
+  return 'data:image/png;base64,' + aBase64(png);
+}
+
+test('medidaDeImagenAnexoB lleva el cuadro al ancho de la caja conservando su proporción', async () => {
+  const bytes = deBase64((await pngDe(800, 400)).split(',')[1]);
+  const { anchoCm, altoCm } = medidaDeImagenAnexoB(bytes);
+  assert.ok(Math.abs(anchoCm - ANCHO_CAJA_CM_TEST) < 1e-9, 'va al ancho de la caja de texto');
+  assert.ok(Math.abs(altoCm / anchoCm - 0.5) < 1e-9, 'y con la proporción real, no la de un A4');
+  assert.ok(altoCm < 9, 'un cuadro apaisado no puede ocupar una página: ' + altoCm);
+});
+
+test('medidaDeImagenAnexoB limita el alto sin deformar la imagen', async () => {
+  const bytes = deBase64((await pngDe(100, 1000)).split(',')[1]);
+  const { anchoCm, altoCm } = medidaDeImagenAnexoB(bytes);
+  assert.ok(Math.abs(altoCm - 22) < 1e-9, 'el alto se topa en 22 cm, no en los 165 que pedía');
+  assert.ok(Math.abs(altoCm / anchoCm - 10) < 1e-9, 'y el ancho baja en la misma proporción');
+});
+
+test('medidaDeImagenAnexoB cae a la hoja vertical cuando no puede medir la imagen', () => {
+  const sinMedida = medidaDeImagenAnexoB(new Uint8Array([1, 2, 3, 4]));
+  assert.ok(Math.abs(sinMedida.altoCm / sinMedida.anchoCm - 297 / 210) < 1e-9,
+    'conserva la suposición de siempre');
+  /* Pero pasando por el tope: con el ancho de la caja real, un A4 sin topar daría
+     23,46 cm y no cabría ni solo en la hoja. */
+  assert.ok(sinMedida.altoCm <= 22, 'y no se sale de la hoja: ' + sinMedida.altoCm);
+  assert.deepStrictEqual(medidaDeImagenAnexoB(null), sinMedida, 'sin bytes, lo mismo');
+});
+
+test('el dibujo del ANEXO B sale con la proporción real de la imagen', async () => {
+  const buf = await plantilla([
+    parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
+    parrafo('BLOQUE VIEJO'),
+    parrafo('ANEXO C. Matriz de Rechazo'),
+  ]);
+  const zip = new PizZip(buf);
+  const { insertadas } = insertarImagenesAnexoB(zip, {
+    comparables: [{ name: 'ACME COMPARABLE SA', eeffArchivo: 'a.pdf', descActividad: 'Juegos.' }],
+    eeffImagenesComparables: { [nameKey('ACME COMPARABLE SA')]: [await pngDe(800, 400)] },
+  });
+  assert.strictEqual(insertadas, 1);
+
+  const xml = zip.file(RUTA_DOC_TEST).asText();
+  const m = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(xml);
+  assert.ok(m, 'tiene que haber un dibujo con su extensión');
+  const cx = Number(m[1]);
+  const cy = Number(m[2]);
+  assert.strictEqual(cx, Math.round(ANCHO_CAJA_CM_TEST * EMU_POR_CM), 'ancho de la caja de texto');
+  assert.ok(Math.abs(cy / cx - 0.5) < 1e-3, 'y el alto por la proporción real: ' + cy / cx);
+  /* La regresión que se está cerrando: con la proporción A4 forzada el alto salía en
+     22,63 cm y el cuadro se iba a una página propia. */
+  assert.ok(cy < 10 * EMU_POR_CM, 'el cuadro no puede seguir midiendo una página de alto');
+  /* `<a:ext>` de `spPr` tiene que ir a juego con `<wp:extent>`, o Word deforma el dibujo. */
+  assert.ok(xml.includes(`<a:ext cx="${cx}" cy="${cy}"/>`), 'las dos medidas del dibujo coinciden');
 });
 
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */

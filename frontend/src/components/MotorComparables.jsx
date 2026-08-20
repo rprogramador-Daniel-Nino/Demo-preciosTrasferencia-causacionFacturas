@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
@@ -13,7 +13,13 @@ import {
 } from '../services/eeffSuficiencia';
 import { matrizDeRechazo } from '../services/anexoCHtml';
 import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
+/* El EEFF se adjunta al ANEXO B como imagen de la página, no como cifras transcritas
+   (spec 2026-08-06). Sin quitarle el papel en blanco de alrededor, el cuadro de cada
+   comparable se llevaba una página entera del informe. */
+import { recortarPaginas } from '../services/recorteImagen';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
+import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
+import { residuoDeCriterios } from '../services/criteriosScreeningEs';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
@@ -252,7 +258,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           accionistas: result.accionistas || []
         };
         setEstudioAnteriorInfo(info);
-        setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad y ${result.comparables.length} comparables de la tabla anterior.`);
+        updateStudy({
+          estudioAnterior: info,
+          ...(result.actividad_especifica ? { actividad_especifica: result.actividad_especifica } : {})
+        });
+        const msgAcc = result.accionistas && result.accionistas.length > 0
+          ? ` · ${result.accionistas.length} accionista(s)`
+          : '';
+        setPriorStudyMsg(`✅ Informe leído con éxito. Extraída actividad, ${result.comparables.length} comparables${msgAcc}.`);
 
         /* Las empresas del informe se llevan al catálogo compartido del equipo. Antes
            se quedaban dentro de este estudio y solo servían para reconocer
@@ -497,6 +510,49 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
        propio efecto y volverlo reactivo lo relanzaría contra sí mismo. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* Traducción al español de los criterios de búsqueda (Tabla 14 del informe, «Códigos SIC
+     utilizados»). El diccionario de `criteriosScreeningEs.js` cubre el vocabulario cerrado
+     de Capital IQ en el propio render, sin pagar nada; esto solo paga IA por el residuo
+     —una etiqueta de campo nueva, un título SIC fuera del catálogo sembrado— y lo cachea
+     en el estudio como `etiquetaEs` / `valorEs`.
+
+     Un solo efecto cubre los tres caminos por los que llegan criterios: importar el Excel,
+     restaurar el cribado guardado y abrir un estudio viejo que tiene el inglés almacenado.
+
+     El ref no es un lujo: `traducirCriteriosScreening` devuelve un array nuevo también
+     cuando la IA falla, así que sin memoria de lo ya intentado el efecto se relanzaría
+     contra sí mismo y pagaría una llamada por render. La firma es el texto CRUDO, que no
+     cambia al añadir la traducción. */
+  const criteriosIntentados = useRef(new Set());
+  useEffect(() => {
+    const pendientes = residuoDeCriterios(criteriosScreening);
+    if (!pendientes.length) return undefined;
+    const firma = JSON.stringify((criteriosScreening || []).map((c) => [c && c.etiqueta, c && c.valor]));
+    if (criteriosIntentados.current.has(firma)) return undefined;
+    criteriosIntentados.current.add(firma);
+
+    let cancelado = false;
+    (async () => {
+      const sinCatalogar = pendientes.flatMap((p) => p.residuo);
+      anotar(`Traduciendo al español ${pendientes.length} criterio(s) de búsqueda que el diccionario no cubre: ` +
+        sinCatalogar.join('; '));
+      const traducidos = await traducirCriteriosScreening(criteriosScreening);
+      if (cancelado) return;
+      const siguenPendientes = residuoDeCriterios(traducidos).length;
+      if (siguenPendientes >= pendientes.length) {
+        anotar('No se pudo traducir ese residuo: la Tabla 14 saldrá con esos trozos en inglés. ' +
+          'El resto de la tabla sí sale en español.', 'aviso');
+        return;
+      }
+      setCriteriosScreening(traducidos);
+      anotar(`${pendientes.length - siguenPendientes} criterio(s) de búsqueda traducidos con IA y guardados en el estudio.`, 'ok');
+    })();
+    return () => { cancelado = true; };
+    /* `anotar` se redefine en cada render y volvería reactivo un efecto que solo depende
+       de los criterios. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [criteriosScreening]);
 
   // Handle Capital IQ File Upload
   const handleImportExcel = async (file) => {
@@ -955,9 +1011,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
       setComparables(filas);
 
-      /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. */
+      /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. Recortada al
+         cuadro, para que quepa debajo de la tabla de descripción de su comparable. */
       const clave = nameKey(filas[compIndex].name || '');
-      const imagenes = await rasterizarConReintento(file);
+      const imagenes = await recortarPaginas(await rasterizarConReintento(file));
       guardarImagenesComparable(clave, imagenes);
       const avisoImagen = imagenes.length
         ? ''
@@ -1037,8 +1094,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             });
           } else {
             /* Una sola rasterización por archivo: el PDF de lote puede traer varias
-               empresas, y cada una se recorta de este mismo arreglo más abajo. */
-            const imagenesDelArchivo = await rasterizarConReintento(file);
+               empresas, y cada una se recorta de este mismo arreglo más abajo. El
+               recorte del papel en blanco va aquí, sobre el archivo completo, y no por
+               empresa: es el mismo trabajo una sola vez, y deja el reparto por página
+               de más abajo sincrónico. */
+            const imagenesDelArchivo = await recortarPaginas(await rasterizarConReintento(file));
             entradas.push(...leidas.map((l) => ({ ...l, _imagenesDelArchivo: imagenesDelArchivo })));
           }
         } catch (err) {

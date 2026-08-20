@@ -3,6 +3,8 @@
     "origin": [
       "https://precios-trasnferencia.web.app",
       "https://precios-trasnferencia.firebaseapp.com",
+      "https://precios-trasnferencia-pruebas.web.app",
+      "https://precios-trasnferencia-pruebas.firebaseapp.com",
       "http://localhost:5173",
       "http://localhost:3000"
     ],

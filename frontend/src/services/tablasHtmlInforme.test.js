@@ -56,6 +56,33 @@ test('la tabla se localiza por su nombre, con cualquier prefijo de rótulo', () 
   }
 });
 
+test('la tabla se localiza aunque la plantilla la rotule sin «Compañías»', () => {
+  /* El informe de MONTACHEM la titula «Margen Operacional Comparables». Los localizadores
+     comparan por inclusión, así que la clave larga NO casa con este rótulo —«companias» queda en
+     medio— y con una sola clave la tabla no se encontraba: se radicaba con los comparables del
+     informe anterior y con su cita al pie intacta. Reportado con capturas el 2026-08-20. */
+  for (const rotulo of [
+    'Tabla 22. Margen Operacional Comparables',
+    'Margen Operacional Comparables',
+    'TABLA N° 22: MARGEN OPERACIONAL COMPARABLES',
+  ]) {
+    const html = conRotulo(rotulo);
+    assert.ok(localizarTablaHtml(html, TABLA_MARGENES), `debe encontrarla con «${rotulo}»`);
+  }
+});
+
+test('con el rótulo corto las filas quedan con las comparables del estudio', () => {
+  const html = conRotulo('Tabla 22. Margen Operacional Comparables');
+  const salida = actualizarTablasMotorHtml(html, ESTUDIO, []);
+
+  for (const c of ESTUDIO.comparables) {
+    assert.ok(salida.includes(c.name), `debe listar ${c.name}`);
+  }
+  for (const vieja of ['AKATSUKI INC.', 'COLOPL, INC.', 'IGG INC']) {
+    assert.ok(!salida.includes(vieja), `${vieja} es del informe anterior y no debe sobrevivir`);
+  }
+});
+
 test('los párrafos vacíos entre el rótulo y la tabla no rompen la búsqueda', () => {
   /* El extractor cuelga un párrafo vacío por fila: es la marca de párrafo que Word deja
      al exportar la tabla. */
@@ -539,6 +566,37 @@ test('los criterios de búsqueda eliminan las tablas 13 y 15 redundantes y conse
   assert.ok(!salida.includes('Contiene viejo'), 'sobrevivió la palabra clave anterior');
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tablas sí estaban');
   assert.match(salida, /<p> Medio\.<\/p>/, 'el texto entre ellas sobrevive');
+});
+
+test('los criterios de búsqueda conservan y actualizan la del medio aunque la numeración no sea 13/14/15', () => {
+  /* Caso real reportado 2026-08-20: un informe de BEUMER trae las tres copias renumeradas
+     18/19/20. A diferencia de la ruta .docx (que necesitó el fix de 2026-08-20 porque
+     distinguía «conservar» de «no tocar»), esta ruta ya lo resolvía bien: aquí no hay una
+     rama de «conservar» aparte, todo lo que no cae en «eliminar» se reescribe — así que la
+     del medio, sea el número que sea mientras no sea 13 o 15, siempre se actualiza. Esta
+     prueba deja eso comprobado en vez de asumido. */
+  const tabla = (n) =>
+    '<p><strong> Tabla ' + n + '. Códigos SIC utilizados</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr>' +
+    '<tr><th><p> Y</p></th></tr>' +
+    '<tr><th><p> Palabra clave:</p></th><td><p> Contiene viejo</p></td></tr></table>';
+  const html = tabla(18) + tabla(19) + tabla(20);
+  const estudio = {
+    criteriosScreening: [
+      { conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' },
+      { conector: 'O', etiqueta: 'Palabra clave:', valor: 'Contiene juegos' },
+    ],
+  };
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, estudio, avisos);
+
+  assert.ok(!salida.includes('Tabla 18. Códigos SIC utilizados'), 'se eliminó la tabla 18');
+  assert.ok(!salida.includes('Tabla 20. Códigos SIC utilizados'), 'se eliminó la tabla 20');
+  assert.ok(salida.includes('Tabla 19. Códigos SIC utilizados'), 'se conservó la tabla 19 (la del medio)');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla 19 se actualizó con los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no debe sobrevivir el criterio del año anterior');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
 });
 
 test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () => {

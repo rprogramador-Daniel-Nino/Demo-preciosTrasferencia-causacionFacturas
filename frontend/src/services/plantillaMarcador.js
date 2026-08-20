@@ -201,8 +201,15 @@ export const ZONAS_PROHIBIDAS = new Set([
   'macro', 'anexoA', 'anexoB', 'anexoC', 'anexoD', 'anexoE', 'cita',
 ]);
 
-/* La zona que abre este párrafo, o null si no es un encabezado de zona. */
-function zonaQueAbre(texto) {
+/** La zona que abre este párrafo, o null si no es un encabezado de zona.
+ *
+ *  Se exporta porque las dos rutas del `.docx` la necesitan para saber dónde empieza y dónde
+ *  acaba la Sección III y ponerla en Arial 12 (`docxWriter.js`, `aplicarLetraMacroOoxml` en
+ *  `docxRelleno.js`). Reconoce esa frontera con las mismas dos condiciones que hacen falta
+ *  allí —abre en «III. TENDENCIAS…», cierra en el capítulo romano siguiente y descarta las
+ *  entradas del índice, que terminan en el número de página—, así que copiar los regex a cada
+ *  ruta sería exactamente la clase de duplicado que este proyecto ya ha pagado antes. */
+export function zonaQueAbre(texto) {
   const t = String(texto || '').trim();
   if (!t || RX_ENTRADA_INDICE.test(t)) return null;
   const anexo = RX_ANEXO.exec(t);

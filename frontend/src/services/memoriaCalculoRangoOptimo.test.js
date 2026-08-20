@@ -124,6 +124,27 @@ test('válida es solo la que integra la muestra', () => {
   assert.match(filaCand[17].f, /"Diferencias funcionales"/);
 });
 
+test('los criterios de cribado se escriben en español, no en el inglés de Capital IQ', () => {
+  /* Este libro es un anexo que se entrega: dejar aquí el texto crudo de la hoja «Screen
+     Criteria» reproducía el mismo defecto que se corrigió en la Tabla 14 del informe.
+     Mismo traductor para los dos (`criteriosScreeningEs.js`). */
+  const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, {
+    criterios: [
+      { conector: null, etiqueta: 'Company Type', valor: 'Public Company OR Private Company' },
+      { conector: 'O', etiqueta: 'SIC Codes', valor: '7371 Computer Programming Services OR 7372 Prepackaged Software' },
+    ],
+    candidatas: universoDePrueba(),
+  });
+  const tipo = fila(sel.celdas, 'Tipo de compañía');
+  assert.ok(tipo, 'la etiqueta salió traducida');
+  assert.strictEqual(tipo[1].v, 'Compañía pública O compañía privada');
+
+  const sic = fila(sel.celdas, 'O) Códigos SIC');
+  assert.ok(sic, 'el conector se conserva delante de la etiqueta traducida');
+  assert.strictEqual(sic[1].v, '7371 Servicios de programación de computadores O 7372 Software preempaquetado');
+  assert.deepStrictEqual(sic[1].v.match(/\d+/g), ['7371', '7372'], 'los códigos SIC no se tocan');
+});
+
 test('la suma de control compara rechazadas + válidas contra el universo', () => {
   const [sel] = hojasMemoriaRangoOptimo(ESTUDIO, seleccionDePrueba());
   const check = fila(sel.celdas, '¿CUADRA?');
