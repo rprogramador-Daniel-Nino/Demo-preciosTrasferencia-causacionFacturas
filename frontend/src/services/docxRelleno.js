@@ -1992,8 +1992,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       );
     };
 
-    if (localizarBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL)) {
-      reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque));
+    const bloques = candidatosBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL);
+    if (bloques.length) {
+      /* Reemplazamos todas las ocurrencias de atrás hacia adelante para no alterar offsets de forma destructiva */
+      for (let idx = bloques.length - 1; idx >= 0; idx--) {
+        reemplazar(NOMBRES_TABLA_ADICIONAL, (b, xmlBloque) => emitirAdicional(b, xmlBloque), { ocurrencia: idx });
+      }
     } else {
       /* La plantilla no la trae y hay que declararla: se inserta tras «Transacciones Inter
          compañía», que es donde el informe de referencia la lleva. El ancla se busca por
@@ -2020,7 +2024,10 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       }
     }
   } else {
-    doc.borrar(NOMBRES_TABLA_ADICIONAL);
+    const bloques = candidatosBloqueTabla(doc.xml, NOMBRES_TABLA_ADICIONAL);
+    for (let idx = bloques.length - 1; idx >= 0; idx--) {
+      doc.borrar(NOMBRES_TABLA_ADICIONAL, { ocurrencia: idx });
+    }
   }
 
   // 4. Método de Precios de Transferencia Aplicable

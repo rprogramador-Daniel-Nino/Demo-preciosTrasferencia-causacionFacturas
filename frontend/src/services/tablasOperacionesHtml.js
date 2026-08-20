@@ -222,12 +222,15 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
      La plantilla puede traerla en ficha vertical o en columnas, igual que el rango, así que
      se mira la forma de la que ya está en vez de imponer una. */
   if (tieneOperacionAdicional(estudio)) {
-    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
-    if (bloque) {
-      const tabla = bloque.columnas > 0 && bloque.columnas <= 2
-        ? filasOperacionAdicionalFicha(estudio)
-        : filasOperacionAdicional(estudio);
-      out = sustituir(out, bloque, tabla, false, 0);
+    const bloques = localizarTablasHtml(out, NOMBRES_TABLA_ADICIONAL);
+    if (bloques.length) {
+      /* Reemplazamos todas las ocurrencias de atrás hacia adelante para no alterar offsets */
+      for (const bloque of [...bloques].reverse()) {
+        const tabla = bloque.columnas > 0 && bloque.columnas <= 2
+          ? filasOperacionAdicionalFicha(estudio)
+          : filasOperacionAdicional(estudio);
+        out = sustituir(out, bloque, tabla, false, 0);
+      }
     } else {
       /* La plantilla no trae la tabla y la operación hay que declararla: se INSERTA después
          del bloque de «Transacciones Inter compañía», que es donde el informe de referencia
@@ -258,8 +261,10 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
       }
     }
   } else {
-    const bloque = localizarTablaHtml(out, NOMBRES_TABLA_ADICIONAL);
-    if (bloque) out = borrarTablaHtml(out, bloque);
+    const bloques = localizarTablasHtml(out, NOMBRES_TABLA_ADICIONAL);
+    for (const bloque of [...bloques].reverse()) {
+      out = borrarTablaHtml(out, bloque);
+    }
   }
 
   /* Lo que no se puede arreglar, al menos se dice. Solo si la plantilla trae la tabla: un
