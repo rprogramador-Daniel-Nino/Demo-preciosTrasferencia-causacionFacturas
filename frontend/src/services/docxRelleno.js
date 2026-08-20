@@ -2116,19 +2116,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     { numeros: [4] }
   );
 
-  /* 5. Rango Intercuartil, versión horizontal. El nombre no la distingue de la
-     vertical del análisis —las dos se llaman igual—, así que la primera ocurrencia
-     es la horizontal, que va antes en el documento. */
-  reemplazar('Rango Intercuartil', (b) => {
-    const col1 = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
-    return generarTablaOoxml(
-      tituloDe(b, 'Rango Intercuartil'),
-      [col1, 'Percentil 25', 'Mediana', 'Percentil 75'],
-      [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
-      'Información suministrada por la Administración de la Compañía.'
-    );
-  }, { numeros: [5], ocurrencia: 0 });
-
   // 6. Composición accionaria
   reemplazar(
     'Composición accionaria',
@@ -2287,40 +2274,84 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     );
   }, { numeros: [17] });
 
-  /* 12. Rango intercuartil en vertical. La plantilla lo trae DOS VECES —la «Tabla 18. Rango
-     Intercuartil» de los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones,
-     esta última con el rótulo dentro de su primera fila— y las dos tienen que quedar con
-     los mismos percentiles. Antes se elegía una con un if/else y la otra se radicaba con
-     los datos del informe anterior.
+  /* 5/12. Rango Intercuartil —horizontal Y vertical— más «Tabla de rangos».
+   *
+   * La plantilla trae el rango vertical con el MISMO rótulo «Rango Intercuartil» una,
+   * dos o más veces —o con el nombre alterno «Tabla de rangos», el rótulo dentro de su
+   * primera fila—, además de la versión horizontal de los resultados. Antes se asumía un
+   * número fijo de ocurrencias (horizontal = ocurrencia 0, vertical = ocurrencia 1), que
+   * es justo lo que se rompe en cuanto la plantilla trae una copia vertical de más: en un
+   * informe real de MONTACHEM (reportado el 2026-08-20) la segunda tabla vertical se
+   * quedaba con los percentiles del informe de referencia, sin aviso —exactamente lo que
+   * ya no le pasa a la ruta de plantilla PDF (`actualizarTablasMotorHtml`,
+   * `tablasHtmlInforme.js`), que es de donde sale este mismo criterio: tomar TODAS las
+   * ocurrencias que declare el documento y distinguirlas por FORMA —la horizontal tiene 4
+   * columnas (contribuyente + 3 percentiles), la vertical 3 (etiqueta + no ajustado +
+   * ajustado)—, no por número ni por posición fija. */
+  doc.aplicar((xmlActual) => {
+    /* Una misma tabla puede calzar por las DOS vías de `candidatosBloqueTabla`: el
+       párrafo que la precede («Tabla 21. Rango Intercuartil») Y su propia primera fila
+       («RANGO INTERCUARTIL» como encabezado de columna). La segunda es un candidato
+       anidado dentro del primero —mismo `fin`, `inicio` posterior—; sin descartarlo se
+       sustituiría la misma tabla dos veces con offsets que la segunda vuelta ya no tiene
+       vigentes. Se recorren de menor a mayor `inicio` y se descarta el que empiece dentro
+       del bloque ya aceptado, quedándose con el más ancho de cada grupo. */
+    const bloques = [
+      ...localizarBloquesTabla(xmlActual, 'Rango Intercuartil'),
+      ...localizarBloquesTabla(xmlActual, 'Tabla de rangos'),
+    ].sort((a, b) => a.inicio - b.inicio);
+    const sinSolape = [];
+    for (const b of bloques) {
+      const anterior = sinSolape[sinSolape.length - 1];
+      if (anterior && b.inicio < anterior.fin) continue;
+      sinSolape.push(b);
+    }
 
-     Qué tablas existen se decide sobre el `xml` de ENTRADA, antes de que los bloques
-     anteriores hayan escrito nada: las tablas que este módulo emite llevan «RANGO
-     INTERCUARTIL» en su cabecera, así que preguntar después las haría pasar por tablas de
-     la plantilla y una sustitución acabaría pisando a la otra.
+    if (!sinSolape.length) {
+      if (Array.isArray(avisos)) avisos.push('Rango Intercuartil');
+      return xmlActual;
+    }
 
-     De atrás hacia adelante, como en Transacciones Inter compañía. */
-  {
-    const filas18_20 = rango.filas.map((f) => [
+    const filasVertical = rango.filas.map((f) => [
       wrap(f.etiqueta), pStr(f.noAjustado), pStr(f.ajustado),
     ]);
-    const tablaRangos = (b) => generarTablaOoxml(
-      tituloDe(b, /tabla de rangos/i.test(b.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
-      ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
-      filas18_20
-    );
-    const OPC_TABLA_RANGOS = { numeros: [20] };
-    /* Sin «Tabla de rangos» en la plantilla, el vertical es el segundo «Rango
-       Intercuartil»: el primero ya lo consumió el bloque 5. */
-    const OPC_RANGO_VERTICAL = { numeros: [18], ocurrencia: 1 };
-    const traeTablaRangos = !!localizarBloqueTabla(xml, 'Tabla de rangos', OPC_TABLA_RANGOS);
-    const traeRangoVertical = !!localizarBloqueTabla(xml, 'Rango Intercuartil', OPC_RANGO_VERTICAL);
+    const col1Horizontal = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+    const columnasDe = (bloque) => {
+      const iFila = xmlActual.indexOf('<w:tr', bloque.inicio);
+      if (iFila === -1 || iFila > bloque.fin) return 0;
+      const finFila = finDeFila(xmlActual, iFila);
+      if (finFila < 0 || finFila > bloque.fin) return 0;
+      return (xmlActual.slice(iFila, finFila).match(/<w:tc\b/g) || []).length;
+    };
 
-    if (traeTablaRangos) reemplazar('Tabla de rangos', tablaRangos, OPC_TABLA_RANGOS);
-    if (traeRangoVertical) reemplazar('Rango Intercuartil', tablaRangos, OPC_RANGO_VERTICAL);
-    if (!traeTablaRangos && !traeRangoVertical && Array.isArray(avisos)) {
-      avisos.push('Tabla de rangos');
+    let salida = xmlActual;
+    let verticalesHechas = 0;
+    /* De atrás hacia adelante, como en Transacciones Inter compañía: sustituir uno mueve
+       los offsets de los que van después. */
+    for (const bloque of [...sinSolape].sort((a, b) => b.inicio - a.inicio)) {
+      const esHorizontal = columnasDe(bloque) >= 4;
+      const nuevo = esHorizontal
+        ? generarTablaOoxml(
+          tituloDe(bloque, 'Rango Intercuartil'),
+          [col1Horizontal, 'Percentil 25', 'Mediana', 'Percentil 75'],
+          [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
+          'Información suministrada por la Administración de la Compañía.'
+        )
+        : generarTablaOoxml(
+          tituloDe(bloque, /tabla de rangos/i.test(bloque.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
+          ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
+          filasVertical
+        );
+
+      let fin = bloque.fin;
+      if (/FUENTE/i.test(nuevo)) fin = finDeFuenteSiguienteOoxml(salida, fin);
+      salida = salida.slice(0, bloque.inicio) + nuevo + salida.slice(fin);
+      if (!esHorizontal) verticalesHechas += 1;
     }
-  }
+
+    if (!verticalesHechas && Array.isArray(avisos)) avisos.push('Tabla de rangos');
+    return salida;
+  });
 
   /* La frase que comenta el rango, debajo de la tabla, y el año que menciona.
 

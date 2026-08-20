@@ -1102,22 +1102,62 @@ test('rellenarDocx propaga los avisos de tablas hasta quien genera el informe', 
   assert.ok(avisosTablas && avisosTablas.length > 0, 'el aviso tiene que llegar a la UI');
 });
 
+/* Fila con N celdas, para que `columnasDe` (docxRelleno.js) pueda distinguir la
+   horizontal (4 columnas: contribuyente + 3 percentiles) de la vertical (3: etiqueta +
+   no ajustado + ajustado) igual que en un `.docx` real —el criterio es la FORMA, no el
+   texto de la celda ni el número del rótulo. */
+const filaOoxml = (textos) => '<w:tr>' + textos.map(
+  (t) => `<w:tc><w:p><w:t>${t}</w:t></w:p></w:tc>`
+).join('') + '</w:tr>';
+
 test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
   /* La plantilla trae el rango vertical dos veces: la «Tabla 18. Rango Intercuartil» de
      los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones, esta última con
      el rótulo dentro de su primera fila. El código elegía una de las dos con un if/else,
      así que la otra se radicaba con los percentiles del informe anterior. */
   const xml = '<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>horizontal vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:tbl>' + filaOoxml(['ACME', 'x', 'y', 'horizontal vieja']) + '</w:tbl>'
     + '<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>vertical vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
-    + '<w:tr><w:tc><w:p><w:t>conclusiones vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+    + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'vertical vieja']) + '</w:tbl>'
+    + '<w:tbl>' + filaOoxml(['Tabla 20. Tabla de rangos', 'x', 'y'])
+    + filaOoxml(['Mínimo', 'x', 'conclusiones vieja']) + '</w:tbl>';
   const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' });
+  assert.ok(!salida.includes('horizontal vieja'), 'la Tabla 5 (horizontal) debe actualizarse');
   assert.ok(!salida.includes('vertical vieja'), 'la Tabla 18 debe actualizarse');
   assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
   assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
     'deben quedar las dos tablas verticales regeneradas');
+  assert.match(salida, /Percentil 25.*Mediana.*Percentil 75/s, 'y la horizontal con sus columnas');
+});
+
+test('con TRES ocurrencias de «Rango Intercuartil» —sin «Tabla de rangos»— las DOS verticales se actualizan', () => {
+  /* El informe real de MONTACHEM (reportado el 2026-08-20): una horizontal y DOS
+     verticales, las tres rotuladas igual, ninguna como «Tabla de rangos». Antes el
+     código sólo cubría la ocurrencia 1 de «Rango Intercuartil» como vertical —la
+     segunda copia quedaba con los percentiles del informe de referencia, sin aviso. */
+  const xml = '<w:p><w:t>Tabla 6. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['ACME', 'x', 'y', 'horizontal vieja']) + '</w:tbl>'
+    + '<w:p><w:t>Tabla 21. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'primera vertical vieja']) + '</w:tbl>'
+    + '<w:p><w:t>Información Base Datos Capital IQ. Fecha de consulta: julio de 2024.</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['RANGO INTERCUARTIL', 'CUARTIL RANGE MO NO FIXED', 'CUARTIL RANGE MO FIXED'])
+    + filaOoxml(['Mínimo', 'x', 'segunda vertical vieja']) + '</w:tbl>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+  assert.ok(!salida.includes('horizontal vieja'), 'la horizontal debe actualizarse');
+  assert.ok(!salida.includes('primera vertical vieja'), 'la primera vertical debe actualizarse');
+  assert.ok(!salida.includes('segunda vertical vieja'),
+    'la segunda vertical (el caso MONTACHEM) también debe actualizarse');
+  /* El párrafo «Fecha de consulta: julio de 2024» vive ANTES de la tabla, no dentro de
+     ella —esta ocurrencia se localiza por su primera fila, y el bloque que se sustituye
+     empieza en la tabla, no en lo que la precede—. No es parte de esta tabla y ninguna
+     tabla vertical del motor cita fuente/fecha (la única que lo hace es la horizontal);
+     es un párrafo suelto de la plantilla que este arreglo no toca. */
+  assert.ok(salida.includes('julio de 2024'),
+    'el párrafo que precede a la tabla, fuera de su bloque, no se toca');
+  assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
+    'deben quedar las DOS tablas verticales regeneradas');
+  assert.ok(!avisos.includes('Tabla de rangos'), 'ninguna vertical quedó sin encontrar');
 });
 
 test('la tabla de márgenes se actualiza con cualquier prefijo, sin tocar las definiciones', () => {
