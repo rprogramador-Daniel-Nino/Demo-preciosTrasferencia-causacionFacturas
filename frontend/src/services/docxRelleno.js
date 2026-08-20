@@ -70,6 +70,8 @@ import { nameKey } from './comparablesEngine.js';
    así el informe dice lo mismo venga la plantilla base de un .docx o de un PDF. */
 import { actualizarProsaRango, PARRAFO_OOXML } from './prosaRangoInforme.js';
 import { actualizarProsaTablas } from './prosaTablasInforme.js';
+/* El nombre de la base de datos de los comparables, por la misma función que la ruta del PDF. */
+import { actualizarProsaBaseDatos } from './prosaBaseDatos.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -1850,6 +1852,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      delimitador de párrafo de Word, para que las dos rutas no puedan quedarse una con menos
      arreglos que la otra. */
   doc.aplicar((x) => actualizarProsaTablas(x, estudio, avisos, { rxParrafo: PARRAFO_OOXML }));
+
+  /* El nombre de la base de datos de la que salieron los comparables, por lo mismo: la plantilla
+     es el informe del año anterior y nombra OneSource de Thomson Reuters, mientras el cribado sale
+     de Capital IQ. Va por la misma función que la ruta del PDF, con el delimitador de Word. */
+  doc.aplicar((x) => actualizarProsaBaseDatos(x, avisos, { rxParrafo: PARRAFO_OOXML }));
 
   /* 13. Margen Operacional Compañías Comparables.
 
