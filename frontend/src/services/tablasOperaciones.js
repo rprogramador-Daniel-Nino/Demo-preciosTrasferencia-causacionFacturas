@@ -12,7 +12,7 @@
    queda con el dato del cliente anterior.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { fmt, num } from '../utils/calculations.js';
+import { fmt, num, getUvtValue } from '../utils/calculations.js';
 import { codigoDeTipoOperacion } from './tiposOperacionDian.js';
 
 const FUENTE = 'Información suministrada por la Administración de la Compañía.';
@@ -130,10 +130,28 @@ export function filasTransaccionesIntercompania(estudio) {
 /* Desde cuánto la información adicional del formato entra al informe.
    Son operaciones que NO se reflejan en el Estado de Resultados —préstamos con vinculados,
    reintegros de gastos, operaciones a nombre de vinculados—, así que no sustentan el rango
-   ni el monto de la operación analizada; se declaran aparte y solo cuando pesan. Criterio
-   del usuario (2026-08-19): dos mil quinientos millones de pesos, medidos sobre la SUMA de
-   todas las filas de la sección y no fila a fila. */
-export const UMBRAL_OPERACION_ADICIONAL = 2500000000;
+   ni el monto de la operación analizada; se declaran aparte y solo cuando pesan.
+
+   El umbral son los 45.000 UVT del art. 260-5 E.T. y del art. 1.2.2.3.2 del Decreto 2120 de
+   2017, medidos sobre la SUMA de todas las filas de la sección y no fila a fila.
+
+   SE DERIVA del UVT del año gravable y no se escribe. Antes era la constante 2.500.000.000
+   —2.240.955.000 es el valor de 2025, que es el número que la gente tiene en la cabeza y el
+   que pediría escribir—, pero en 2026 el UVT es 52.300 y el umbral 2.353.500.000: un número
+   fijo hace que el estudio de cada año nuevo mida contra el umbral del anterior sin que
+   nadie lo note. */
+export const UVT_UMBRAL_OPERACION_ADICIONAL = 45000;
+
+/**
+ * El umbral en pesos del año gravable.
+ *
+ * @param {number|string} [anio] año gravable del estudio. Lo que `getUvtValue` no conozca
+ *        cae en su propio respaldo, que es el UVT de 2024.
+ * @returns {number} pesos colombianos.
+ */
+export function umbralOperacionAdicional(anio) {
+  return UVT_UMBRAL_OPERACION_ADICIONAL * getUvtValue(anio);
+}
 
 /* Cómo rotula cada plantilla esta tabla. Se busca por NOMBRE y no por número, y con varias
    redacciones porque ninguna firma titula igual: unas escriben «Intercompañía» junto y otras
@@ -161,9 +179,9 @@ export const NOMBRES_TABLA_TRANSACCIONES = 'Transacciones Inter compañía';
  * ¿El estudio tiene información adicional que haya que declarar?
  *
  * Las dos condiciones son necesarias y las pidió el usuario en ese orden: que el formato
- * TRAIGA la sección, y que su total SUPERE el umbral. Si falta cualquiera de las dos, el
- * informe sale exactamente como salía antes de que esto existiera — sin la tabla, sin un
- * hueco y sin un rótulo huérfano.
+ * TRAIGA la sección, y que su total SUPERE el umbral del año gravable (45.000 UVT). Si falta
+ * cualquiera de las dos, el informe sale exactamente como salía antes de que esto existiera
+ * — sin la tabla, sin un hueco y sin un rótulo huérfano.
  *
  * @param {object} estudio
  * @returns {boolean}
@@ -171,7 +189,7 @@ export const NOMBRES_TABLA_TRANSACCIONES = 'Transacciones Inter compañía';
 export function tieneOperacionAdicional(estudio) {
   const ad = estudio && estudio.operacionAdicional;
   if (!ad || !Array.isArray(ad.filas) || !ad.filas.length) return false;
-  return montoOperacionAdicional(estudio) > UMBRAL_OPERACION_ADICIONAL;
+  return montoOperacionAdicional(estudio) > umbralOperacionAdicional(estudio.anio);
 }
 
 /** El total de la información adicional, sumado de sus filas si no viene ya calculado. */

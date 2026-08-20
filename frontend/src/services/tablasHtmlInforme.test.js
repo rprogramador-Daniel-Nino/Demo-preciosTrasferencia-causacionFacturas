@@ -1244,4 +1244,43 @@ test('las razones de rechazo NO se pasan a mayúscula', () => {
   const salida = actualizarTablasMotorHtml(html, { ...ESTUDIO, embudoSeleccion: EMBUDO }, []);
   assert.match(salida, /Compañías holding o de grupo/, 'la razón de rechazo se pasó a mayúscula');
   assert.match(salida, /Filtro aplicado/, 'el encabezado de razones se pasó a mayúscula');
-});
+  });
+
+  /* ══════ Reescritura de fuentes (reescribirFuenteHtml) ══════ */
+
+  test('reescribirFuenteHtml reemplaza todo el contenido del párrafo previniendo fugas con runs partidos', () => {
+  const casos = [
+    {
+      entrada: '<p><strong>FUENTE:</strong> Información suministrada por CLIENTE ANTERIOR S.A.</p>',
+      esperado: '<p><strong>FUENTE: la Administración de la Compañía.</strong></p>',
+    },
+    {
+      entrada: '<p><strong>FUENTE: </strong><strong>Información de CLIENTE ANTERIOR S.A.</strong></p>',
+      esperado: '<p><strong>FUENTE: la Administración de la Compañía.</strong></p>',
+    },
+    {
+      entrada: '<p><strong>FUENTE:</strong><span style="font-size:9pt"> Información de CLIENTE ANTERIOR S.A.</span></p>',
+      esperado: '<p><strong>FUENTE: la Administración de la Compañía.</strong></p>',
+    },
+  ];
+
+  for (const { entrada, esperado } of casos) {
+    const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
+    assert.strictEqual(salida, esperado);
+    assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el cliente anterior');
+  }
+  });
+
+  test('reescribirFuenteHtml reconoce FUENTES en plural', () => {
+  const entrada = '<p><strong>FUENTES:</strong> Información de CLIENTE ANTERIOR S.A.</p>';
+  const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
+  assert.strictEqual(salida, '<p><strong>FUENTES: la Administración de la Compañía.</strong></p>');
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'), 'sobrevivió el cliente anterior en plural');
+  });
+
+  test('reescribirFuenteHtml no modifica si no hay línea de fuente', () => {
+  const entrada = '<p>Prosa que sigue.</p>';
+  const salida = tablas.reescribirFuenteHtml(entrada, 0, 'la Administración de la Compañía.');
+  assert.strictEqual(salida, entrada);
+  });
+
