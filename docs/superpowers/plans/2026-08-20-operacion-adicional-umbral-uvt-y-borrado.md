@@ -1346,6 +1346,170 @@ que se ve con el mismo formato que las demás.
 
 ---
 
+### Task 5: La columna de etiquetas de las fichas verticales va en gris
+
+**Files:**
+- Modify: `frontend/src/services/docxRelleno.js:163-210` (`generarTablaOoxml`)
+- Test: `frontend/src/services/docxRelleno.test.js`
+
+**Interfaces:**
+- Consumes: nada de las tareas anteriores.
+- Produces: `generarTablaOoxml(titulo, cabeceras, filas, fuente)` conserva su firma. Cambia
+  solo el sombreado de la primera celda de cada fila **cuando la tabla es una ficha vertical**.
+
+**El estilo que hay que respetar,** dado por el usuario como modelo y ya vigente en el repo
+desde `3d5a03c`: bordes negros de 1px, relleno `#999999` con texto negro y en negrita en las
+celdas de rótulo, celdas de valor en blanco, todo centrado, dos columnas al 45 % / 55 %. Vive
+en tres sitios que deben seguir coincidiendo: `docxRelleno.js:177` (ruta .docx),
+`docxWriter.js:693` (calco del PDF) y `estiloDocumento.js:123` (ruta HTML).
+
+**El defecto, con evidencia.** `generarTablaOoxml` sombrea solo la fila de cabecera: las filas
+de datos se emiten con `celda(c, false)` (`:204`), así que **ninguna** celda de dato lleva
+gris. En una tabla de columnas eso es correcto. En una ficha vertical —etiqueta a la izquierda,
+valor a la derecha— deja la columna de etiquetas en blanco. Salida real del generador para la
+ficha de «Transacciones Intercompañía»:
+
+```
+fila 0: GRIS  "Compañía vinculada"  |  GRIS  ""
+fila 1: blanca "Razón social"  |  blanca "MONTACHEM INTERNATIONAL INC"
+fila 2: blanca "Monto en pesos"  |  blanca "16.410.708.521"
+```
+
+El modelo del usuario tiene «Razón social» y «Monto en pesos» en gris. Afecta a todas las
+fichas del informe en la ruta .docx: Tabla 3, Tabla 12 y la de operación adicional.
+
+La ruta HTML **no** tiene este defecto y no hay que tocarla: `reescribirFilasHtml` conserva los
+`<th>` que trae la plantilla del cliente y el gris lo aporta `estiloDocumento.js:123`.
+
+**Cómo se decide que una tabla es ficha.** Por su forma, no por su nombre: dos columnas y el
+segundo encabezado vacío. Es la misma señal que ya usan las dos rutas para elegir entre
+`filasOperacionAdicionalFicha` y `filasOperacionAdicional` (`docxRelleno.js:1630`,
+`tablasOperacionesHtml.js:208`), así que no se introduce un criterio nuevo. Una tabla de datos
+de dos columnas con los dos encabezados rotulados —no hay ninguna hoy, pero podría haberla—
+no se vería afectada.
+
+- [ ] **Step 1: Escribir las pruebas que fallan**
+
+Añadir a `frontend/src/services/docxRelleno.test.js`. Importar `generarTablaOoxml` si no está.
+
+```js
+/* ── El gris de las fichas verticales ───────────────────────────────────────── */
+
+/* Por fila, qué celdas llevan el relleno #999999. Mira el `w:shd` de cada `<w:tc>`, que es
+   donde el generador escribe el sombreado. */
+const grisPorFila = (xml) => xml.split('<w:tr>').slice(1).map(
+  (fila) => fila.split('<w:tc>').slice(1).map((c) => /w:fill="999999"/.test(c))
+);
+
+test('en una ficha vertical la columna de etiquetas va en gris', () => {
+  /* El estilo del informe pinta en gris los rótulos y en blanco los valores. El generador
+     sombreaba solo la fila de cabecera, así que «Razón social» y «Monto en pesos» salían en
+     blanco: la ficha del vinculado se veía sin su columna de etiquetas. */
+  const xml = generarTablaOoxml(
+    'Tabla 3. Transacciones Intercompañía',
+    ['Compañía vinculada', ''],
+    [['Razón social', 'MONTACHEM INTERNATIONAL INC'], ['Monto en pesos', '16.410.708.521']],
+    'Información de MONTACHEM COLOMBIA S.A.S.'
+  );
+
+  assert.deepStrictEqual(grisPorFila(xml), [
+    [true, true],    // cabecera
+    [true, false],   // etiqueta gris, valor blanco
+    [true, false],
+  ]);
+});
+
+test('en una tabla de columnas las filas de datos siguen en blanco', () => {
+  /* La regresión que este cambio podría causar: pintar de gris la primera columna de las
+     tablas que no son fichas —comparables, rangos, la de operaciones de ingreso—. */
+  const xml = generarTablaOoxml(
+    'Tabla 1. Operaciones de Ingreso',
+    ['Concepto de Operaciones a analizar', 'Nombre vinculado', 'País vinculado', 'Monto'],
+    [['Otros servicios (07)', 'ACME LLC', 'MEXICO', '3.433.542.684']],
+    'Información suministrada por la Administración de la Compañía.'
+  );
+
+  assert.deepStrictEqual(grisPorFila(xml), [
+    [true, true, true, true],
+    [false, false, false, false],
+  ]);
+});
+
+test('una tabla de dos columnas con los dos encabezados rotulados no es una ficha', () => {
+  /* La señal de ficha es el segundo encabezado VACÍO, que es la misma que ya usan las dos
+     rutas para elegir entre la ficha y las columnas. */
+  const xml = generarTablaOoxml(
+    'Tabla 2. Operación analizar',
+    ['No. Operaciones de análisis', 'Descripción'],
+    [['Ingreso (07)', 'Otros servicios']],
+    'Información suministrada por la Administración de la Compañía.'
+  );
+
+  assert.deepStrictEqual(grisPorFila(xml), [[true, true], [false, false]]);
+});
+```
+
+- [ ] **Step 2: Correr las pruebas y verificar que fallan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js`
+Expected: FAIL — la primera espera `[true, false]` en las filas de datos y hoy da
+`[false, false]`.
+
+- [ ] **Step 3: Sombrear la columna de etiquetas**
+
+En `generarTablaOoxml`, antes de emitir las filas, decidir si la tabla es una ficha, y pasar
+`cabecera: true` a la primera celda de cada fila cuando lo es. Reemplazar el bloque
+`// Rows` (`:202-206`) por:
+
+```js
+  /* Una FICHA VERTICAL —dos columnas y el segundo encabezado vacío— lleva su columna de
+     etiquetas en gris, igual que la fila de cabecera: en el estilo del informe el gris marca
+     los rótulos y el blanco los valores, y aquí los rótulos van a la izquierda y no arriba.
+     Sombrear solo la cabecera dejaba «Razón social» y «Monto en pesos» en blanco.
+
+     Se decide por la FORMA y no por el nombre de la tabla, con la misma señal que ya usan las
+     dos rutas para elegir entre la ficha y las columnas: así una tabla nueva no depende de que
+     alguien la añada a una lista. */
+  const esFicha = cabeceras.length === 2 && !String(cabeceras[1] || '').trim();
+
+  // Rows
+  filas.forEach((f) => {
+    xml += `<w:tr>`;
+    f.forEach((c, i) => { xml += celda(c, esFicha && i === 0); });
+```
+
+Nota para el implementador: `celda(texto, cabecera)` (`:174`) ya aplica el relleno `999999`, el
+color negro y la negrita cuando `cabecera` es cierto, y centra siempre. No hace falta un
+tercer estado ni tocar `celda`.
+
+- [ ] **Step 4: Correr las pruebas y verificar que pasan**
+
+Run: `node --test frontend/src/services/docxRelleno.test.js`
+Expected: PASS — las 3 nuevas y todas las anteriores. Si falla alguna prueba previa que
+comprueba el XML de una ficha carácter a carácter, actualizá el esperado: el cambio de
+sombreado es el objetivo.
+
+- [ ] **Step 5: Correr la suite completa y el lint**
+
+Run: `npm test` && `npm run lint --prefix frontend`
+Expected: 100 % en verde y sin hallazgos.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/services/docxRelleno.js frontend/src/services/docxRelleno.test.js
+git commit -m "fix: la columna de etiquetas de las fichas verticales va en gris en el .docx"
+```
+
+- [ ] **Step 7: Verificación en Word**
+
+Generar un informe contra `frontend/Archivos Prueba/Informe Local End Game _ 2024_v2.docx` y
+abrirlo: la Tabla 3 y la Tabla 12 tienen que verse con la columna izquierda en gris `#999999`,
+texto negro en negrita, valores en blanco y todo centrado — como el modelo del usuario. Las
+tablas de columnas (comparables, rangos, operaciones de ingreso) sin cambios.
+
+---
+
 ## Verificación final
 
 - [ ] `npm test` — 100 % en verde, con ~15 pruebas más que al empezar (1607 → ~1622).
