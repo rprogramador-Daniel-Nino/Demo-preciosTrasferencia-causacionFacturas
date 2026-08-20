@@ -3036,11 +3036,16 @@ export function insertarAnexoC(zip, estudio) {
   return { reescrito: true, grupos: grupos.length, aviso: null };
 }
 
+const celdaCifraAnexoB = (v) => {
+  const n = num(v);
+  return n === null || n === undefined ? '' : fmt(n);
+};
+
 /**
  * Inserta de manera dinámica el Anexo B en el OOXML de la plantilla .docx.
  * Identifica la sección de Anexo B, genera la tabla de Nombre y Descripción de comparables
- * utilizando la función nativa generarTablaOoxml, e inyecta las imágenes correspondientes
- * del EEFF de cada comparable conservando el flujo OOXML estándar.
+ * utilizando la función nativa generarTablaOoxml, e inyecta las tablas del Estado de
+ * Resultados (P&L) y Balance General como tablas editables en lugar de imágenes.
  *
  * @param {PizZip} zip
  * @param {object} estudio
@@ -3050,9 +3055,9 @@ export function insertarAnexoC(zip, estudio) {
 export function insertarImagenesAnexoB(zip, estudio, avisos) {
   /* TODAS las comparables de la muestra, tengan o no estado financiero cargado. El filtro
      por `eeffArchivo` dejaba fuera del anexo a las que faltaban, y el anexo se radicaba con
-     los bloques del contribuyente anterior en su lugar. Las que no traen documento salen con
-     su descripción y un párrafo que dice qué falta: un hueco señalado se completa, unas
-     cifras del año pasado se radican sin que nadie lo note. */
+     los bloques del contribuyente anterior en su lugar. Las que no traen cifras salen con
+     su descripción y las tablas de cifras vacías para que el usuario pueda completarlas: un
+     hueco señalado se completa, unas cifras del año pasado se radican sin que nadie lo note. */
   const comparables = ((estudio && estudio.comparables) || []).filter((c) => c && c.name);
   if (!comparables.length) return { insertadas: 0 };
 
@@ -3063,7 +3068,7 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
      para saltarse el índice. Eso dejaba dos agujeros: en una plantilla que numere sus anexos
      de otro modo —MC Internacional los lleva A, C, D, E, F y ahí las descripciones son el
      ANEXO C— no encontraba nada y el anexo se radicaba con las comparables del cliente
-     anterior; y si el de descripciones era el último, `finB` se iba a `xml.length` y la
+     anterior; y si el de descripciones era el ULTIMO, `finB` se iba a `xml.length` y la
      reescritura se llevaba `</w:body></w:document>`. */
   const anexo = anexosDelDocumento(xml).descripciones;
   if (!anexo) {
@@ -3072,73 +3077,89 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
   }
   const rotulo = rotuloAnexo('descripciones', anexo.letra);
 
-  let rels = zip.file(RUTA_RELS).asText();
-  let ct = zip.file(RUTA_CT).asText();
-  let rId = siguienteRId(rels);
-  let idDibujo = siguienteIdDibujo(xml);
-
-  const imagenesPorComparable = (estudio && estudio.eeffImagenesComparables) || {};
   /* El encabezado de la plantilla, con su texto reescrito y su letra: la del informe de
      referencia trae el nombre correcto, pero en otra plantilla este anexo puede ser el C. */
   let nuevoXmlB = reescribirTextoParrafoOoxml(
     xml.slice(anexo.inicio, anexo.finEncabezado), rotulo);
 
+  const year = Number(estudio && estudio.anio) || 2025;
   let totalInsertadas = 0;
+
+  const sinCifras = comparables.filter((c) => !c.eeffDatos);
+  if (sinCifras.length && Array.isArray(avisos)) {
+    avisos.push('ANEXO B: ' + sinCifras.length + ' de ' + comparables.length
+      + ' comparable(s) sin estado financiero leído (' + sinCifras.map((c) => c.name).join(', ')
+      + '). Salen en el anexo con las cifras en blanco: carga sus EEFF en el paso 4 del motor '
+      + 'de comparables y vuelve a generar.');
+  }
 
   comparables.forEach((c) => {
     const desc = c.descActividad || c.desc || 'Descripción de actividad no disponible.';
-    // Generar la tabla de nombre y descripción
-    const tablaXml = generarTablaOoxml(
+    const anioCol = (c.eeffDatos && c.eeffDatos.periodo) || year;
+
+    // 1. Tabla de Nombre y Descripción
+    const tablaNombreXml = generarTablaOoxml(
       'Descripción de la Compañía Comparable',
       ['NOMBRE DE LA COMPAÑÍA COMPARABLE', 'DESCRIPCIÓN ACTIVIDAD'],
       [[c.name, desc]]
     );
-    nuevoXmlB += '\n' + tablaXml;
+    nuevoXmlB += '\n' + tablaNombreXml;
 
-    // Obtener imágenes de esta comparable
-    const key = nameKey(c.name);
-    const listaImg = (imagenesPorComparable[key] || []).filter(Boolean);
+    if (c.eeffDatos) {
+      // 2. Tabla de Pérdidas y Ganancias (P&L)
+      const filasPL = [
+        ['Ventas netas', celdaCifraAnexoB(c.s)],
+        ['Costo de los bienes vendidos', celdaCifraAnexoB(c.c)],
+        ['Beneficio bruto', celdaCifraAnexoB(c.eeffDatos.utilidad_bruta)],
+        ['Gastos operativos', celdaCifraAnexoB(c.eeffDatos.gastos_operacionales)],
+        ['Utilidad de operación', celdaCifraAnexoB(c.op)],
+      ];
+      // Gastos de I+D y Publicidad son opcionales (solo si vienen cargados y no son nulos/vacíos)
+      const rd = c.eeffDatos.gastos_investigacion_desarrollo;
+      const adv = c.eeffDatos.gastos_publicidad;
+      if (rd !== null && rd !== undefined && rd !== '') {
+        filasPL.push(['Gastos de investigación y desarrollo', celdaCifraAnexoB(rd)]);
+      }
+      if (adv !== null && adv !== undefined && adv !== '') {
+        filasPL.push(['Gastos de publicidad', celdaCifraAnexoB(adv)]);
+      }
 
-    if (listaImg.length > 0) {
-      listaImg.forEach((imgUrl, idx) => {
-        const desde = desdeDataUrl(imgUrl);
-        if (!desde) return;
-        const ext = desde.ext || 'png';
-        const nombreImg = `anexo_b_${key}_${idx + 1}.${ext}`;
+      const tablaPlXml = generarTablaOoxml(
+        'Estado de Resultados',
+        ['Descripción', String(anioCol)],
+        filasPL,
+        'Información de ' + (c.name || 'la Compañía') + '.'
+      );
+      nuevoXmlB += '\n' + tablaPlXml;
 
-        // Binario, content-type y relación van juntos: olvidar uno corrompe el .docx.
-        const reg = registrarImagen({
-          zip, rels, ct, rId: rId++, nombre: nombreImg, ext, base64: desde.base64,
-        });
-        rels = reg.rels;
-        ct = reg.ct;
+      // 3. Tabla de Balance
+      const filasBalance = [
+        ['Activos totales promedio', celdaCifraAnexoB(c.eeffDatos.total_activos)],
+        ['Promedio de cuentas por pagar netas', celdaCifraAnexoB(c.ap)],
+        ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
+        ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
+        ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
+        ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
+      ];
 
-        /* Al ancho de la caja de texto y con la proporción real de la imagen: así el
-           cuadro recortado del estado financiero queda debajo de la tabla de
-           descripción de su comparable en vez de saltar a la página siguiente. */
-        const { anchoCm, altoCm } = medidaDeImagenAnexoB(deBase64(desde.base64));
-        nuevoXmlB += '\n' + parrafoConImagen({
-          rId: reg.idRel, id: idDibujo++, nombre: nombreImg,
-          cx: Math.round(anchoCm * EMU_POR_CM), cy: Math.round(altoCm * EMU_POR_CM),
-        });
-
-        totalInsertadas++;
-      });
+      const tablaBalanceXml = generarTablaOoxml(
+        'Balance General',
+        ['Descripción', String(anioCol)],
+        filasBalance,
+        'Información de ' + (c.name || 'la Compañía') + '.'
+      );
+      nuevoXmlB += '\n' + tablaBalanceXml;
     } else {
-      // Párrafo de pendiente si no tiene imágenes
+      // Párrafo de pendiente si no tiene estado financiero leído
       /* En rojo y con el nombre: es un hueco que hay que ver antes de radicar, no una nota
-         al pie. Sustituye a lo que había antes en su lugar —el bloque de esta comparable en
-         el informe del contribuyente anterior—. */
+         al pie. Sustituye a lo que había antes en su lugar. */
       nuevoXmlB += `\n<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:color w:val="991B1B"/><w:b/></w:rPr>`
         + `<w:t>${escaparXml('[PENDIENTE] Falta el estado financiero de ' + c.name
           + '. Cárgalo en el paso 4 del motor de comparables y vuelve a generar el informe.')}</w:t></w:r></w:p>`;
     }
-  });
 
-  /* Igual que en el anexo de estados financieros: relaciones y content-types se escriben
-     aunque el cuerpo se descarte, porque las imágenes ya están en el paquete. */
-  zip.file(RUTA_RELS, rels);
-  zip.file(RUTA_CT, ct);
+    totalInsertadas++;
+  });
 
   const candidato = asegurarNamespaceWp(
     xml.slice(0, anexo.inicio) + nuevoXmlB + xml.slice(anexo.fin));
