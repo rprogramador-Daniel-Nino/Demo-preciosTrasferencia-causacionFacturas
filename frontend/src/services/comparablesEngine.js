@@ -479,6 +479,16 @@ function medianaDe(valores) {
  * funcional incompatible)—, para que el embudo pueda contar cada etapa sin
  * adivinar el motivo con expresiones regulares sobre el texto.
  */
+/* El motivo con el que se identifica la reserva: las válidas que no entraron en la muestra.
+   Se usa en dos sitios —al armar la reserva de una corrida nueva y al enriquecer el universo de
+   un estudio ya guardado— y por eso vive aquí y no dentro de `scoreCandidates`: los estudios
+   corridos antes de este cambio tienen la reserva sin motivo, y su libro de soporte se genera en
+   el momento de descargarlo, así que etiquetarla también al enriquecer es lo que permite
+   auditar un informe ya radicado sin volver a ejecutar el motor. */
+export const CLAVE_RESERVA = 'actividadDistinta';
+export const MOTIVO_RESERVA = 'Supera los filtros objetivos pero no integra la muestra: '
+  + 'menor grado de comparabilidad funcional frente a la parte examinada (Art. 260-4 E.T.).';
+
 export function scoreCandidates(candidates, config, companyActivity = '', priorComps = [], contexto = {}) {
   const {
     nTarget = 12,
@@ -701,9 +711,43 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const deAmpliacion = afines.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
 
   const seleccionadas = [...continuidadIncluidas, ...deMisma, ...deAmpliacion];
+
+  /* MOTIVO ESCRITO PARA LA RESERVA (2026-08-20, a pedido del usuario).
+
+     La reserva es «suplente» solo mientras dura la corrida: si la curación descarta a una
+     seleccionada, entra la primera de aquí. Cerrado el estudio, esa condición se acaba —no se
+     vuelven a considerar hasta que alguien recure o reejecute el motor—, así que a efectos del
+     informe son rechazadas y tienen que poder identificarse como tales. Sin motivo escrito, la
+     columna «Motivo de rechazo» de la hoja «Selección comparables» queda vacía y quien audita
+     el libro solo las encuentra combinando dos filtros («motivo vacío» + «no seleccionada»);
+     al cotejar el informe a mano contra el Excel, esa parte no aparecía por ningún lado: la
+     Tabla 16 declaraba 1.389 diferencias funcionales y por motivo solo se podían localizar
+     1.304, con 85 sin etiqueta. Reportado sobre el informe de End Game 2025.
+
+     Se marca `actividadDistinta` porque es la clave con la que el informe y el Excel ya agrupan
+     las diferencias funcionales (`FUNDIDOS_EN_RIGOR` en `tablasInforme.js`, categoría `rigor`
+     en `memoriaCalculoRangoOptimo.js`), de modo que el filtro por motivo devuelve el total
+     completo. La frase, en cambio, dice el hecho real y no lo que dictaminó la curación: estas
+     compañías NO fueron descartadas por su actividad —la curación las dio por buenas—, y
+     escribir lo contrario dejaría el libro contradiciendo su propia columna de perfil funcional.
+
+     NO se marcan `descartada` ni pasan a `rechazadas`: `rechazadasPorMotivo` cuenta sobre esa
+     lista y el informe ya las suma aparte, por `reserva`. Contarlas en los dos sitios subiría la
+     fila de diferencias funcionales a 1.474 y la tabla dejaría de sumar el universo. Lo que
+     cambia es la ficha de cada compañía —que es lo que lee el Excel—, no los contadores. */
+  const enReserva = (c) => ({
+    ...c,
+    motivoClave: c.motivoClave || CLAVE_RESERVA,
+    motivoRechazo: c.motivoRechazo || MOTIVO_RESERVA,
+    categoriaRechazo: c.categoriaRechazo || 'rigor',
+  });
+
   /* Las afines que no hicieron falta vuelven a la reserva, detrás de las de misma actividad:
      si el analista sube el N objetivo, se echa mano primero de las idénticas. */
-  const reserva = [...mismas.slice(deMisma.length), ...afines.slice(deAmpliacion.length)];
+  const reserva = [
+    ...mismas.slice(deMisma.length).map(enReserva),
+    ...afines.slice(deAmpliacion.length).map(enReserva),
+  ];
 
   return {
     evaluadas: evaluated.length,
@@ -824,14 +868,22 @@ export function enriquecerUniverso(universo, comparables = [], auditoria = null)
     ...(comparables || []),
   ]);
 
+  /* La reserva, aparte: los estudios corridos antes de que se le escribiera el motivo la traen
+     sin él, y su libro de soporte se genera al descargarlo. Sin esto, auditar un informe ya
+     radicado obligaba a reejecutar el motor para que esas compañías dejaran de salir con la
+     celda del motivo vacía. */
+  const idxReserva = indexar((auditoria && auditoria.reserva) || []);
+
   return universo.map(cand => {
     const ev = buscar(idxEvaluadas, cand);
+    const seleccionada = Boolean(buscar(idxSeleccionadas, cand));
+    const esReserva = !seleccionada && Boolean(buscar(idxReserva, cand));
     return {
       ...cand,
-      seleccionada: Boolean(buscar(idxSeleccionadas, cand)),
-      motivoClave: (ev && ev.motivoClave) || '',
-      motivoRechazo: (ev && ev.motivoRechazo) || '',
-      categoriaRechazo: (ev && ev.categoriaRechazo) || '',
+      seleccionada,
+      motivoClave: (ev && ev.motivoClave) || (esReserva ? CLAVE_RESERVA : ''),
+      motivoRechazo: (ev && ev.motivoRechazo) || (esReserva ? MOTIVO_RESERVA : ''),
+      categoriaRechazo: (ev && ev.categoriaRechazo) || (esReserva ? 'rigor' : ''),
       perfilFuncional: (ev && ev.perfilFuncional) || cand.perfilFuncional || '',
     };
   });
