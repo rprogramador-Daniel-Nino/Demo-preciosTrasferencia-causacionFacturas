@@ -1539,7 +1539,7 @@ test('medidaDeImagenAnexoB cae a la hoja vertical cuando no puede medir la image
   assert.deepStrictEqual(medidaDeImagenAnexoB(null), sinMedida, 'sin bytes, lo mismo');
 });
 
-test('el dibujo del ANEXO B sale con la proporción real de la imagen', async () => {
+test('en el ANEXO B del .docx se generan las tablas de P&L y Balance de las comparables como tablas editables', async () => {
   const buf = await plantilla([
     parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
     parrafo('BLOQUE VIEJO'),
@@ -1547,23 +1547,23 @@ test('el dibujo del ANEXO B sale con la proporción real de la imagen', async ()
   ]);
   const zip = new PizZip(buf);
   const { insertadas } = insertarImagenesAnexoB(zip, {
-    comparables: [{ name: 'ACME COMPARABLE SA', eeffArchivo: 'a.pdf', descActividad: 'Juegos.' }],
-    eeffImagenesComparables: { [nameKey('ACME COMPARABLE SA')]: [await pngDe(800, 400)] },
+    comparables: [{
+      name: 'ACME COMPARABLE SA',
+      descActividad: 'Juegos.',
+      eeffDatos: {
+        periodo: 2025,
+        utilidad_bruta: 5000000,
+        total_activos: 10000000,
+      }
+    }],
   });
   assert.strictEqual(insertadas, 1);
 
   const xml = zip.file(RUTA_DOC_TEST).asText();
-  const m = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(xml);
-  assert.ok(m, 'tiene que haber un dibujo con su extensión');
-  const cx = Number(m[1]);
-  const cy = Number(m[2]);
-  assert.strictEqual(cx, Math.round(ANCHO_CAJA_CM_TEST * EMU_POR_CM), 'ancho de la caja de texto');
-  assert.ok(Math.abs(cy / cx - 0.5) < 1e-3, 'y el alto por la proporción real: ' + cy / cx);
-  /* La regresión que se está cerrando: con la proporción A4 forzada el alto salía en
-     22,63 cm y el cuadro se iba a una página propia. */
-  assert.ok(cy < 10 * EMU_POR_CM, 'el cuadro no puede seguir midiendo una página de alto');
-  /* `<a:ext>` de `spPr` tiene que ir a juego con `<wp:extent>`, o Word deforma el dibujo. */
-  assert.ok(xml.includes(`<a:ext cx="${cx}" cy="${cy}"/>`), 'las dos medidas del dibujo coinciden');
+  assert.ok(xml.includes('Estado de Resultados'), 'contiene la tabla de P&L');
+  assert.ok(xml.includes('Balance General'), 'contiene la tabla de Balance');
+  assert.ok(xml.includes('5.000.000'), 'contiene la cifra de utilidad bruta formateada');
+  assert.ok(xml.includes('10.000.000'), 'contiene la cifra de activos totales formateada');
 });
 
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */
