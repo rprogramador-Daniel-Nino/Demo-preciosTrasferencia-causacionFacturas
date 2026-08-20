@@ -3,6 +3,9 @@ import { Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, ArrowRight, 
 import { fmt, montoOperacion } from '../utils/calculations';
 import { parseExcelOperations } from '../services/excelOperationsParser';
 import { avisoIdentificacionVinculado } from '../services/cotejoVinculado';
+import {
+  UMBRAL_OPERACION_ADICIONAL, tieneOperacionAdicional, montoOperacionAdicional,
+} from '../services/tablasOperaciones';
 
 export default function IngestaOperaciones({ study, updateStudy }) {
   const [loadingExcel, setLoadingExcel] = useState(false);
@@ -26,7 +29,14 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           vinc_tipo: res.vinc_tipo,
           monto: valMonto,
           monto_operacion: valMonto,
-          egreso: res.egreso || false
+          egreso: res.egreso || false,
+          /* La sección «4. Información adicional» del formato (códigos DIAN 61 a 63). Se
+             guarda tal como vino, supere o no el umbral: el dato está en el archivo del
+             contribuyente y quien revise el estudio tiene que poder verlo. Quién decide si
+             llega al informe es `tieneOperacionAdicional`, no esta pantalla.
+             Se escribe siempre —también cuando es `null`— para que cargar un archivo sin la
+             sección borre la del archivo anterior en vez de dejarla pegada al estudio. */
+          operacionAdicional: res.operacionAdicional || null,
         });
         const avisos = [];
         /* Con varias contrapartes el total es la suma de todas y el estudio se queda
@@ -63,6 +73,25 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           avisos.push(
             '⚠ el archivo no trae el tipo de operación (columna «Tipo de operación»): ' +
             'el concepto de la Tabla 1 saldrá en blanco, complételo antes de radicar'
+          );
+        }
+        /* «4. Información adicional»: préstamos, reintegros y operaciones a nombre de
+           vinculados que no se reflejan en el Estado de Resultados. No entran en el monto
+           analizado ni sustentan el rango, pero por encima del umbral hay que declararlas en
+           su propia tabla. Se avisa en los dos sentidos: cuando entra, para que se revise; y
+           cuando se leyó pero no llega al umbral, para que nadie la busque en el informe. */
+        const ad = res.operacionAdicional;
+        if (ad && ad.monto > UMBRAL_OPERACION_ADICIONAL) {
+          avisos.push(
+            `ℹ el archivo trae información adicional (códigos 61 a 63) por COP $ ${fmt(ad.monto)} ` +
+            `en ${ad.filas.length} ${ad.filas.length === 1 ? 'operación' : 'operaciones'}: ` +
+            'supera el umbral, así que se publicará en la tabla «Operación adicional ' +
+            'Transacciones Intercompañía»'
+          );
+        } else if (ad) {
+          avisos.push(
+            `ℹ el archivo trae información adicional por COP $ ${fmt(ad.monto)}, que no supera ` +
+            `los COP $ ${fmt(UMBRAL_OPERACION_ADICIONAL)}: no se publica en el informe`
           );
         }
         const aviso = avisos.length ? ' · ' + avisos.join(' · ') : '';
@@ -187,6 +216,65 @@ export default function IngestaOperaciones({ study, updateStudy }) {
               <span className="text-base font-bold text-zinc-900 dark:text-zinc-100">{study.pais_vinc || '—'} ({study.vinc_id || '—'})</span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Operación adicional — sección «4. Información adicional» del formato (códigos DIAN
+          61 a 63: préstamos, reintegros y operaciones a nombre de vinculados que no se
+          reflejan en el Estado de Resultados).
+
+          Solo cuando el formato la trae Y su total supera el umbral, que es la condición que
+          decide también si el informe publica su tabla. Si no la supera, esta pantalla queda
+          exactamente como estaba: mostrar una tarjeta de algo que no va a salir en el informe
+          enseñaría a esperarlo ahí. Que se leyó pero no llegó al umbral se dice en la línea
+          de avisos de arriba, que es donde va lo informativo. */}
+      {tieneOperacionAdicional(study) && (
+        <div className="bg-white dark:bg-[#0c0c0f] border border-amber-200 dark:border-amber-900/40 rounded-xl p-6 shadow-sm space-y-4">
+          <div className="flex items-start gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50">
+                Operación Adicional Detectada
+              </h3>
+              <p className="text-xs text-zinc-500">
+                Información adicional del formato (códigos 61 a 63) por COP $ {fmt(montoOperacionAdicional(study))},
+                que supera los COP $ {fmt(UMBRAL_OPERACION_ADICIONAL)}. Se publicará en la tabla
+                «Operación adicional Transacciones Intercompañía».
+              </p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-zinc-500 uppercase tracking-wider text-left">
+                  <th className="py-2 pr-4 font-semibold">Compañía vinculada</th>
+                  <th className="py-2 pr-4 font-semibold">País</th>
+                  <th className="py-2 pr-4 font-semibold">Tipo de operación</th>
+                  <th className="py-2 font-semibold text-right">Monto en pesos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {study.operacionAdicional.filas.map((f, i) => (
+                  <tr key={i} className="border-t border-zinc-100 dark:border-zinc-800">
+                    <td className="py-2 pr-4 text-zinc-900 dark:text-zinc-100">{f.vinculado || '—'}</td>
+                    <td className="py-2 pr-4 text-zinc-600 dark:text-zinc-400">{f.pais || '—'}</td>
+                    <td className="py-2 pr-4 text-zinc-600 dark:text-zinc-400">{f.tipo || '—'}</td>
+                    <td className="py-2 text-right font-mono text-zinc-900 dark:text-zinc-100">
+                      {f.monto == null ? '—' : fmt(f.monto)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* No se suma al monto analizado y eso hay que decirlo aquí: si no, la diferencia
+              entre este total y el de arriba parece un error del lector del archivo. */}
+          <p className="text-xs text-zinc-500">
+            No se suma al monto total transaccionado: son operaciones que no afectan el Estado
+            de Resultados, así que no sustentan el rango ni la operación analizada.
+          </p>
         </div>
       )}
     </div>

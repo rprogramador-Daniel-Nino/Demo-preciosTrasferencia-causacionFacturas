@@ -94,8 +94,8 @@ const RX_BLOQUE = /<(p|h[1-6])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi;
  * @returns {{inicio:number, fin:number, titulo:string}|null} `inicio` y `fin` delimitan
  *          la `<table>`; el párrafo del rótulo queda fuera, porque no hay que tocarlo.
  */
-export function localizarTablaHtml(html, nombres) {
-  return localizarTablasHtml(html, nombres)[0] || null;
+export function localizarTablaHtml(html, nombres, opciones = {}) {
+  return localizarTablasHtml(html, nombres, opciones)[0] || null;
 }
 
 /**
@@ -110,10 +110,14 @@ export function localizarTablaHtml(html, nombres) {
  * @returns {Array<{inicio:number, fin:number, titulo:string, columnas:number,
  *          filasDatos:number, embebido:boolean}>}
  */
-export function localizarTablasHtml(html, nombres) {
+export function localizarTablasHtml(html, nombres, opciones = {}) {
   const texto = String(html || '');
   const claves = (Array.isArray(nombres) ? nombres : [nombres]).map(claveTitulo).filter(Boolean);
   if (!claves.length) return [];
+  /* Nombres que DESCARTAN una tabla. Mismo motivo y misma función que en la ruta .docx: el
+     rótulo casa por inclusión y hay tablas cuyo nombre contiene el de otra. */
+  const excluidos = (Array.isArray(opciones.excluir) ? opciones.excluir : [opciones.excluir])
+    .map(claveTitulo).filter(Boolean);
 
   const encontradas = [];
   const vistas = new Set();
@@ -186,7 +190,13 @@ export function localizarTablasHtml(html, nombres) {
     }
   }
 
-  return encontradas.sort((x, y) => x.inicio - y.inicio);
+  return encontradas
+    .filter((t) => {
+      if (!excluidos.length) return true;
+      const clave = claveTitulo(t.titulo);
+      return !clave || !excluidos.some((e) => clave.includes(e));
+    })
+    .sort((x, y) => x.inicio - y.inicio);
 }
 
 /** Las `<tr>` de una tabla, con sus posiciones. Sirve igual con `<thead>`/`<tbody>`. */

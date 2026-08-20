@@ -405,3 +405,94 @@ test('si el archivo tiene solo operaciones de egreso, se ingieren como primarias
   assert.strictEqual(res.vinc_tipo, 'COMPRA (31)');
   assert.deepStrictEqual(res.egresosDescartados, { filas: 0, monto: 0 }, 'los egresos no se descartan');
 });
+
+/* ══════════════ 4. Información adicional (códigos DIAN 61 a 63) ══════════════ */
+
+/* La sección tal como la trae el formato oficial: su propio encabezado, y las columnas de
+   movimiento y saldo DELANTE de la del monto. Es lo que obliga a recalcular los índices por
+   sección: con los de la sección de ingreso, la columna «Monto operación» de aquí cae donde
+   está «Saldo». */
+function hojaConSeccionAdicional(filasAdicionales) {
+  const filas = [];
+  for (let i = 0; i < 6; i++) filas.push(['(portada)']);
+  filas.push(['1.', 'OPERACIONES DE INGRESO']);
+  filas.push(['(encabezado abajo)']);
+  filas.push([
+    'Vinculado (razón social)', 'Número de Identificación fiscal del país de origen',
+    'País de origen', 'Ciudad', 'Tipo de operación*', 'Cod', 'Formato', 'Concepto',
+    'Monto operación',
+  ]);
+  filas.push(['ACME INC', '900123456', 'MEXICO', 'CDMX', 'Otros servicios', '07', '1007', '4001', 50000000]);
+  filas.push(['']);
+  filas.push(['4.', 'INFORMACIÓN ADICIONAL']);
+  filas.push(['(SON LAS OPERACIONES REALIZADAS DURANTE EL AÑO)']);
+  filas.push([
+    'Vinculado (razón social)', 'Número de Identificación fiscal del país de origen',
+    'País de origen', 'Ciudad', 'Tipo de operación*', 'Cod',
+    'Movimiento Débito 2025', 'Movimiento crédito 2025', 'Saldo 2025', 'Monto operación 2025',
+  ]);
+  for (const f of filasAdicionales) filas.push(f);
+  filas.push(['Tipos de Operacion según DIAN']);
+  return workbookConHoja('Op. Vinculados Economicos', filas);
+}
+
+const PRESTAMO = ['ACME INC', '900123456', 'MEXICO', 'CDMX',
+  'Préstamos con vinculados que no fueron reflejados en el Estado de Resultados', '61',
+  0, 0, 999999999, 1800000000];
+const REINTEGRO = ['ACME INC', '900123456', 'MEXICO', 'CDMX',
+  'Reintegros o reembolsos de gastos con vinculados que no fueron reflejados en el Estado de Resultados', '62',
+  0, 0, 111111111, 900000000];
+
+test('se lee la sección «4. Información adicional» del formato', async () => {
+  const res = await parseExcelOperations(workbookToFakeFile(hojaConSeccionAdicional([PRESTAMO])));
+
+  assert.ok(res.operacionAdicional, 'no se leyó la sección de información adicional');
+  assert.strictEqual(res.operacionAdicional.filas.length, 1);
+  assert.strictEqual(res.operacionAdicional.filas[0].vinculado, 'ACME INC');
+  assert.strictEqual(res.operacionAdicional.filas[0].monto, 1800000000);
+  assert.ok(res.operacionAdicional.filas[0].tipo.includes('(61)'),
+    'el código DIAN no se pegó al tipo: ' + res.operacionAdicional.filas[0].tipo);
+});
+
+test('el monto adicional sale de «Monto operación» y no de «Saldo»', async () => {
+  /* Es la razón de que cada sección calcule sus propios índices: la de información adicional
+     lleva «Movimiento Débito | Movimiento crédito | Saldo | Monto operación», y con los
+     índices de la sección de ingreso el monto caía en la columna del saldo. Publicar el
+     saldo donde va el monto en un documento que se radica ante la DIAN es peor que no leer
+     la sección. */
+  const res = await parseExcelOperations(workbookToFakeFile(hojaConSeccionAdicional([PRESTAMO])));
+  assert.strictEqual(res.operacionAdicional.monto, 1800000000);
+  assert.notStrictEqual(res.operacionAdicional.monto, 999999999, 'se leyó el saldo por el monto');
+});
+
+test('el total de la información adicional es la suma de sus filas', async () => {
+  const res = await parseExcelOperations(
+    workbookToFakeFile(hojaConSeccionAdicional([PRESTAMO, REINTEGRO])));
+  assert.strictEqual(res.operacionAdicional.filas.length, 2);
+  assert.strictEqual(res.operacionAdicional.monto, 2700000000);
+});
+
+test('la información adicional no se suma al monto de la operación analizada', async () => {
+  /* Los códigos 61 a 63 son operaciones que NO se reflejan en el Estado de Resultados, así
+     que no entran en el monto que sustenta el rango ni en el que declara la Tabla 3. */
+  const res = await parseExcelOperations(
+    workbookToFakeFile(hojaConSeccionAdicional([PRESTAMO, REINTEGRO])));
+  assert.strictEqual(res.t_s, 50000000, 'la información adicional se coló en el monto analizado');
+  assert.strictEqual(res.monto_operacion, 50000000);
+  assert.strictEqual(res.rows.length, 1, 'una fila adicional se contó como operación del estudio');
+});
+
+test('un formato sin información adicional la deja en null, no en cero', async () => {
+  /* Es lo que distingue «este archivo no declaró información adicional» de «la declaró en
+     cero», y de eso depende que el informe publique o no una tabla más. */
+  const res = await parseExcelOperations(workbookToFakeFile(hojaConSeccionAdicional([])));
+  assert.strictEqual(res.operacionAdicional, null);
+});
+
+test('las filas de la sección adicional sin monto no cuentan', async () => {
+  const vacia = ['ACME INC', '900123456', 'MEXICO', 'CDMX', 'Préstamos', '61', 0, 0, 5000, ''];
+  const res = await parseExcelOperations(
+    workbookToFakeFile(hojaConSeccionAdicional([PRESTAMO, vacia])));
+  assert.strictEqual(res.operacionAdicional.filas.length, 1);
+  assert.strictEqual(res.operacionAdicional.monto, 1800000000);
+});

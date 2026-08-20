@@ -2509,6 +2509,112 @@ test('una cirugía que rompería el documento no se aplica y se avisa', async ()
   assert.match(avisos.join(' '), /no se pudo reescribir sin romper el documento/);
 });
 
+/* ════════ Operación adicional Transacciones Intercompañía (sección 4 del formato) ════════ */
+
+const ADICIONAL_DOCX = {
+  filas: [
+    { vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Préstamos con vinculados (61)', monto: 1800000000 },
+    { vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Reintegros o reembolsos (62)', monto: 900000000 },
+  ],
+  monto: 2700000000,
+};
+
+/* La tabla tal como la trae la plantilla, con las cifras del informe de referencia. */
+const tablaAdicionalPlantilla = () => new Table({
+  rows: [
+    new TableRow({
+      children: ['Compañía vinculada', 'Identificación fiscal', 'País - Residencia fiscal',
+        'Tipo de operación', 'Monto en pesos'].map(
+        (t) => new TableCell({ children: [new Paragraph(t)] })),
+    }),
+    new TableRow({
+      children: ['END GAME INTERACTIVE INC', '444444001', 'ESTADOS UNIDOS', 'Préstamos (61)',
+        '9.999.999.999'].map((t) => new TableCell({ children: [new Paragraph(t)] })),
+    }),
+  ],
+});
+
+async function plantillaConAdicional() {
+  return plantilla([
+    new Paragraph('Tabla 13. Operación adicional Transacciones Intercompañía'),
+    tablaAdicionalPlantilla(),
+  ]);
+}
+
+test('la operación adicional que supera el umbral llega al .docx', async () => {
+  const buf = await plantillaConAdicional();
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: { ...ESTUDIO, operacionAdicional: ADICIONAL_DOCX },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('MONTACHEM INTERNATIONAL INC'), 'el vinculado no llegó: ' + texto);
+  assert.ok(texto.includes('1.800.000.000'), 'el monto no llegó');
+  assert.ok(texto.includes('900.000.000'), 'la segunda operación no llegó');
+  assert.ok(!texto.includes('9.999.999.999'), 'sobrevive la cifra del informe de referencia');
+  /* El número del rótulo es el de la plantilla y no se renumera. */
+  assert.ok(texto.includes('Tabla 13. Operación adicional'), 'se perdió el número del rótulo');
+});
+
+test('sin superar el umbral, la tabla del .docx se queda como estaba', async () => {
+  /* Es la condición que puso el usuario: si el formato no la trae o no supera el valor, el
+     informe sale como salía antes. */
+  const buf = await plantillaConAdicional();
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: {
+      ...ESTUDIO,
+      operacionAdicional: { filas: ADICIONAL_DOCX.filas, monto: 2400000000 },
+    },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('9.999.999.999'), 'se tocó una tabla que no correspondía');
+  assert.ok(!texto.includes('MONTACHEM'), 'se publicó una operación que no supera el umbral');
+});
+
+test('sin sección de información adicional, la tabla del .docx tampoco se toca', async () => {
+  const buf = await plantillaConAdicional();
+  const { salida } = rellenarDocx({ binario: buf, estudio: ESTUDIO, tipoSalida: 'uint8array' });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+  assert.ok(texto.includes('9.999.999.999'), 'se tocó la tabla sin tener datos');
+});
+
+test('si la plantilla trae la tabla en ficha vertical, el .docx respeta su forma', async () => {
+  const ficha = new Table({
+    rows: [
+      new TableRow({
+        children: ['Compañía vinculada', ''].map(
+          (t) => new TableCell({ children: [new Paragraph(t)] })),
+      }),
+      new TableRow({
+        children: ['Razón social', 'END GAME INTERACTIVE INC'].map(
+          (t) => new TableCell({ children: [new Paragraph(t)] })),
+      }),
+    ],
+  });
+  const buf = await plantilla([
+    new Paragraph('Tabla 13. Operación adicional Transacciones Intercompañía'),
+    ficha,
+  ]);
+  const { salida } = rellenarDocx({
+    binario: buf,
+    estudio: { ...ESTUDIO, operacionAdicional: ADICIONAL_DOCX },
+    tipoSalida: 'uint8array',
+  });
+  const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('Razón social'), 'no se respetó la ficha vertical: ' + texto);
+  assert.ok(texto.includes('MONTACHEM INTERNATIONAL INC'), 'el vinculado no llegó');
+  /* En ficha se publica el TOTAL: una fila de etiqueta y valor no admite dos montos. */
+  assert.ok(texto.includes('2.700.000.000'), 'no se publicó el total: ' + texto);
+});
+
 /* ── Estilo de las tablas que esta ruta genera de cero ──
    `generarTablaOoxml` arma las tablas del .docx cuando la plantilla es un .docx (Tablas 3/12,
    15, 16, 19, 20, rango, anexos B y C, datos macro). Es el tercer emisor del informe, junto al
