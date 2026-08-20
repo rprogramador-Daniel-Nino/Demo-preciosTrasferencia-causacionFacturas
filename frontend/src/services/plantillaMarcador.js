@@ -188,6 +188,15 @@ const RX_ANEXO = /^\s*anexo\s+([a-e])\b/i;
 /* «III. TENDENCIAS DE LA ECONOMÍA»: sus ocho tablas las regenera actualizarTablasMacroOoxml
    y su prosa viene de los campos `ia.economia_*`. */
 const RX_MACRO = /^\s*(?:iii|3)\s*\.?\s*tendencias\b/i;
+/* El mismo encabezado cuando el numeral NO está en el texto, porque la plantilla usa la
+   numeración automática de Word: el «III.» lo pinta Word desde `numbering.xml` y el párrafo dice
+   sólo «TENDENCIAS DE LA ECONOMÍA». Es la forma en que estaba maquetado el informe que salió
+   entero en la letra del cliente: sin el numeral, la sección no se reconocía en absoluto.
+
+   Aquí hace falta el título COMPLETO y no basta «tendencias», que es lo que pide la variante con
+   numeral: sin numeral que lo respalde, una frase de prosa que empiece por «Tendencias recientes
+   del sector…» abriría la sección en mitad del informe. */
+const RX_MACRO_SIN_NUMERAL = /^\s*tendencias\s+de\s+la\s+econom/i;
 /* Cualquier capítulo romano posterior devuelve al cuerpo. */
 const RX_CAPITULO = /^\s*(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\s*\.\s*\S/i;
 /* Una nota o referencia: número de llamada, espacio y el texto. Las listas numeradas del
@@ -195,6 +204,58 @@ const RX_CAPITULO = /^\s*(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\s*\.\s*\S/i;
 const RX_CITA = /^\s*\d{1,3}\s+["'«¿A-ZÁÉÍÓÚÑ]/;
 /* Entrada del índice: el número de página queda pegado al final del título. */
 const RX_ENTRADA_INDICE = /\d\s*$/;
+
+/* Valor de los numerales romanos que numeran los capítulos del informe. */
+const VALOR_ROMANO = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10 };
+const RX_CAPITULO_NUMERADO = /^\s*(i|ii|iii|iv|v|vi|vii|viii|ix|x)\s*\.\s*(\S[\s\S]*)$/i;
+
+/**
+ * ¿Cierra este párrafo la Sección III? Condición ESTRICTA, para la tipografía.
+ *
+ * `zonaQueAbre` devuelve «cuerpo» ante cualquier romano seguido de punto, y para lo que ella
+ * gobierna —dónde NO se marcan campos del contribuyente— equivocarse por exceso es inofensivo:
+ * cerrar antes de tiempo solo hace que se marquen más campos, que es el comportamiento normal.
+ * Para la letra de la sección es lo contrario y se midió: «I. Producto Interno Bruto» y «V. Tasa
+ * de Cambio» son subapartados DE la Sección III, no capítulos, y con la regla laxa el primero de
+ * ellos cortaba la sección — desde ahí todo el resto, III.C incluido, salía en la letra de la
+ * plantilla del cliente. De ahí que la tipografía tenga su propia condición de cierre en vez de
+ * reusar la de marcado: son la misma frontera con dos tolerancias, y cada una dice cuál es.
+ *
+ * Cierra un ANEXO, y cierra un capítulo cuyo romano sea POSTERIOR a III y que además se
+ * comporte como CAPÍTULO, no como subapartado: título en mayúsculas —así van los siete del
+ * informe de referencia, verificado contra su índice, mientras sus subapartados no— o declarado
+ * de primer nivel por el documento.
+ *
+ * El nivel importa y no vale «es un encabezado» a secas: «V. Tasa de Cambio Representativa del
+ * Mercado» es un encabezado de verdad y es un subapartado de III.B, así que con esa señal más
+ * laxa la sección se seguía cortando ahí. Un capítulo del informe es de primer nivel; un
+ * subapartado, no.
+ *
+ * @param {string} texto  el texto plano del párrafo.
+ * @param {boolean} [esCapitulo]  si el documento lo declara de primer nivel (`<h1>`,
+ *        `pStyle Heading1`, `outlineLvl 0`).
+ * @returns {boolean}
+ */
+export function cierraSeccionMacro(texto, esCapitulo = false) {
+  const t = String(texto || '').trim();
+  /* La entrada del índice no cierra nada: lleva el número de página pegado al título. */
+  if (!t || RX_ENTRADA_INDICE.test(t)) return false;
+  if (RX_ANEXO.test(t)) return true;
+  /* El encabezado de la propia sección no la cierra: al releerlo —o al encontrarlo repetido en
+     un encabezado de página— se cerraría justo donde acaba de abrirse. */
+  if (RX_MACRO.test(t) || RX_MACRO_SIN_NUMERAL.test(t)) return false;
+  const m = RX_CAPITULO_NUMERADO.exec(t);
+  if (m) {
+    if ((VALOR_ROMANO[m[1].toLowerCase()] || 0) <= VALOR_ROMANO.iii) return false;
+    const titulo = m[2].trim();
+    return esCapitulo || titulo === titulo.toLocaleUpperCase('es');
+  }
+  /* Sin numeral en el texto —numeración automática de Word— la única señal que queda es la
+     estructura: un encabezado de PRIMER nivel escrito en mayúsculas es un capítulo del informe
+     («ANÁLISIS ECONÓMICO», «CONCLUSIONES», «ANEXOS»). Los apartados de la Sección III son de
+     segundo nivel y no van en mayúsculas, así que no la cortan. */
+  return esCapitulo && t === t.toLocaleUpperCase('es');
+}
 
 /** Zonas en las que no se marca ningún campo del contribuyente. */
 export const ZONAS_PROHIBIDAS = new Set([
@@ -214,7 +275,7 @@ export function zonaQueAbre(texto) {
   if (!t || RX_ENTRADA_INDICE.test(t)) return null;
   const anexo = RX_ANEXO.exec(t);
   if (anexo) return 'anexo' + anexo[1].toUpperCase();
-  if (RX_MACRO.test(t)) return 'macro';
+  if (RX_MACRO.test(t) || RX_MACRO_SIN_NUMERAL.test(t)) return 'macro';
   /* Un capítulo posterior cierra la macro y devuelve al cuerpo. Los anexos no se cierran
      así: el último llega hasta el final del documento. */
   if (RX_CAPITULO.test(t)) return 'cuerpo';

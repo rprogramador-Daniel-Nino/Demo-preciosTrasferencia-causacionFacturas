@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import PizZip from 'pizzip';
 import { aDocxBuffer } from './docxWriter.js';
 import { extraerReferencia } from './pdfReferenceExtractor.js';
-import { HOJA_TWIPS } from './estiloDocumento.js';
+import { HOJA_TWIPS, PUNTOS_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
 
 /* Relee el .docx generado. Es lo que hace que todo esto se pueda probar sin Word. */
 const abrir = async (html, recursos = [], anexo = []) => {
@@ -923,4 +923,152 @@ test('un párrafo normal no se convierte en ecuación', async () => {
   const { doc } = await abrir(
     '<p>El ajuste de las cuentas por pagar se calcula sobre el promedio del año</p>');
   assert.ok(!doc.includes('<m:oMath>'), 'se emitió una ecuación donde sólo había prosa');
+});
+
+/* ══════ La letra de la Sección III ══════ */
+
+/* Un informe con la forma del real: el índice, un capítulo, la Sección III con su encabezado, un
+   subapartado, prosa, una tabla y el capítulo siguiente. La entrada del índice lleva el número de
+   página pegado, que es lo que la distingue del encabezado de verdad. */
+const HTML_CON_SECCION_III =
+  '<div class="pagina" data-pagina="1">' +
+  '<p>III. TENDENCIAS DE LA ECONOMÍA 13</p>' +
+  '<h1>II. ANÁLISIS FUNCIONAL</h1>' +
+  '<p>Prosa del análisis funcional.</p>' +
+  '<h1>III. TENDENCIAS DE LA ECONOMÍA</h1>' +
+  '<h2>A. Análisis del Panorama de la Economía Mundial</h2>' +
+  '<p>La economía mundial creció un 3,2 %.</p>' +
+  '<p><span style="font-size:9pt">FUENTE: Banco Mundial</span></p>' +
+  '<table><tr><td>2024</td></tr></table>' +
+  '<h1>IV. ANÁLISIS DE COMPARABILIDAD</h1>' +
+  '<p>Prosa de la sección cuarta.</p>' +
+  '</div>';
+
+/* El párrafo que contiene este texto, del `document.xml`. El ÚLTIMO, no el primero: la tabla de
+   contenido repite cada encabezado del informe, y el que interesa es el de verdad — la entrada del
+   índice se queda a propósito sin la letra de la sección. */
+const parrafoCon = (doc, texto) =>
+  (doc.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
+    .filter((p) => p.replace(/<[^>]*>/g, '').includes(texto)).at(-1);
+
+test('la prosa de la Sección III sale en Arial 12', async () => {
+  /* Antes no tenía trato propio: salía en la letra que el extractor hubiera leído del PDF del
+     cliente. Se declara una base DISTINTA a propósito —Times New Roman 10— para que el test no
+     pueda pasar por casualidad si la sección siguiera heredando del cuerpo. */
+  const { doc } = await abrir(
+    '<div data-extractor="7" data-estilo-base="Times New Roman|10"></div>' + HTML_CON_SECCION_III);
+  const prosa = parrafoCon(doc, 'La economía mundial creció');
+  assert.ok(prosa, 'no se encontró el párrafo de prosa');
+  assert.match(prosa, new RegExp('w:ascii="' + FUENTE_MACRO + '"'));
+  assert.match(prosa, new RegExp('<w:sz w:val="' + PUNTOS_MACRO * 2 + '"'));
+});
+
+test('los títulos de la Sección III salen en Arial 12 negrita', async () => {
+  /* Al quedar del tamaño del cuerpo, la negrita es lo único que los distingue. */
+  const { doc } = await abrir(HTML_CON_SECCION_III);
+  for (const titulo of ['III. TENDENCIAS DE LA ECONOMÍA', 'A. Análisis del Panorama']) {
+    const parrafo = parrafoCon(doc, titulo);
+    assert.ok(parrafo, 'no se encontró «' + titulo + '»');
+    assert.match(parrafo, new RegExp('w:ascii="' + FUENTE_MACRO + '"'), titulo);
+    assert.match(parrafo, new RegExp('<w:sz w:val="' + PUNTOS_MACRO * 2 + '"'), titulo);
+    assert.match(parrafo, /<w:b\/>/, titulo + ': los títulos van en negrita');
+  }
+});
+
+test('la letra de la Sección III no se sale de la sección', async () => {
+  /* La entrada del índice —que repite el encabezado con el número de página— no abre la zona, y el
+     capítulo siguiente la cierra. Si alguna de las dos cosas fallara, el informe entero saldría en
+     la letra de la sección. */
+  const { doc } = await abrir(
+    '<div data-extractor="7" data-estilo-base="Times New Roman|10"></div>' + HTML_CON_SECCION_III);
+  for (const fuera of ['Prosa del análisis funcional', 'Prosa de la sección cuarta']) {
+    const parrafo = parrafoCon(doc, fuera);
+    assert.ok(parrafo, 'no se encontró «' + fuera + '»');
+    assert.doesNotMatch(parrafo, new RegExp('w:ascii="' + FUENTE_MACRO + '"'), fuera);
+  }
+});
+
+test('las tablas de la Sección III siguen en la tipografía de tabla', async () => {
+  /* Las tablas del informe se ven iguales en todas las secciones (decisión del usuario,
+     2026-08-19): la letra de la sección no puede alcanzarlas. */
+  const { doc } = await abrir(HTML_CON_SECCION_III);
+  const tabla = /<w:tbl>[\s\S]*?<\/w:tbl>/.exec(doc)[0];
+  assert.match(tabla, new RegExp('<w:sz w:val="' + PUNTOS_TABLA * 2 + '"'));
+  assert.doesNotMatch(tabla, new RegExp('<w:sz w:val="' + PUNTOS_MACRO * 2 + '"'));
+});
+
+test('la línea «FUENTE:» de la Sección III conserva su tamaño', async () => {
+  /* Sube de familia pero no de tamaño: a 12 dejaría de leerse como la fuente de una tabla. */
+  const { doc } = await abrir(HTML_CON_SECCION_III);
+  const fuente = parrafoCon(doc, 'FUENTE: Banco Mundial');
+  assert.ok(fuente, 'no se encontró la línea FUENTE');
+  assert.match(fuente, new RegExp('w:ascii="' + FUENTE_MACRO + '"'));
+  assert.match(fuente, /<w:sz w:val="18"/);
+  assert.doesNotMatch(fuente, new RegExp('<w:sz w:val="' + PUNTOS_MACRO * 2 + '"'));
+});
+
+test('las viñetas de la Sección III salen en Arial 12', async () => {
+  /* Regresión: la letra de la sección se aplicaba en la rama de párrafos y encabezados, y las
+     listas se resuelven en una rama anterior que no la consultaba. Las viñetas de III salían en
+     la letra que el extractor hubiera leído del PDF. */
+  const { doc } = await abrir(
+    '<div data-extractor="7" data-estilo-base="Times New Roman|12"></div>' +
+    '<h1>III. TENDENCIAS DE LA ECONOMÍA</h1>' +
+    '<ul><li>Primera viñeta del apartado.</li></ul>' +
+    '<h1>IV. ANÁLISIS DE COMPARABILIDAD</h1><ul><li>Viñeta de la cuarta.</li></ul>');
+  const dentro = parrafoCon(doc, 'Primera viñeta del apartado');
+  assert.match(dentro, new RegExp('w:ascii="' + FUENTE_MACRO + '"'));
+  assert.match(dentro, new RegExp('<w:sz w:val="' + PUNTOS_MACRO * 2 + '"'));
+  /* Y la viñeta del capítulo siguiente no se contagia. */
+  assert.doesNotMatch(parrafoCon(doc, 'Viñeta de la cuarta'),
+    new RegExp('w:ascii="' + FUENTE_MACRO + '"'));
+});
+
+test('las citas al pie de la Sección III salen en Arial y siguen pequeñas', async () => {
+  /* Regresión: las notas se emiten fuera del recorrido del cuerpo, cuando la bandera de zona ya
+     no vale, así que las citas de la Sección III salían en la letra del documento. La sección
+     cita el Banco Mundial, el DANE y el Banco de la República en casi cada apartado. */
+  const { leer } = await abrir(
+    '<div data-extractor="7" data-estilo-base="Times New Roman|12"></div>' +
+    '<h1>III. TENDENCIAS DE LA ECONOMÍA</h1>' +
+    '<p>El PIB mundial creció<sup data-ref-nota="1">1</sup>.</p>' +
+    '<div data-nota-pie="1"><span style="font-size:8pt">1 Banco Mundial, Global Economic Prospects.</span></div>' +
+    /* El capítulo siguiente es imprescindible en este montaje: las notas se emiten al FINAL del
+       documento, así que si la Sección III fuera lo último la bandera de zona seguiría puesta y el
+       test pasaría sin demostrar nada. El informe real tiene IV a VIII y los anexos detrás. */
+    '<h1>IV. ANÁLISIS DE COMPARABILIDAD</h1><p>Prosa de la cuarta.</p>');
+  const notas = leer('word/footnotes.xml');
+  assert.ok(notas, 'el .docx no trae notas al pie');
+  /* Sobre el PÁRRAFO de la cita, no sobre el archivo entero: `footnotes.xml` trae además el
+     separador y la continuación que Word exige, y un `w:ascii` suelto ahí haría pasar el test
+     sin que la cita hubiera cambiado de letra. */
+  const cita = parrafoCon(notas, 'Banco Mundial, Global Economic Prospects');
+  assert.ok(cita, 'no se encontró el párrafo de la cita');
+  assert.match(cita, new RegExp('w:ascii="' + FUENTE_MACRO + '"'));
+  /* El tamaño reducido se conserva: 8 pt son 16 medios puntos. */
+  assert.match(cita, /<w:sz w:val="16"/);
+  assert.doesNotMatch(cita, new RegExp('<w:sz w:val="' + PUNTOS_MACRO * 2 + '"'));
+});
+
+test('un numeral romano dentro de la Sección III no la corta', async () => {
+  /* Regresión y la peor de las tres: cualquier párrafo que empezara por un romano y punto
+     —«I. Producto Interno Bruto», «V. Tasa de Cambio», o el numeral de una lista— se tomaba por
+     el capítulo siguiente y cerraba la sección. Desde ahí, TODO el resto de la Sección III
+     —incluido III.C— salía en la letra de la plantilla. */
+  const { doc } = await abrir(
+    '<div data-extractor="7" data-estilo-base="Times New Roman|12"></div>' +
+    '<h1>III. TENDENCIAS DE LA ECONOMÍA</h1>' +
+    '<p>I. Producto Interno Bruto</p>' +
+    '<p>Prosa que sigue al numeral romano.</p>' +
+    '<h2>C. Análisis del Sector</h2>' +
+    '<p>Prosa del análisis sectorial.</p>' +
+    '<h1>IV. ANÁLISIS DE COMPARABILIDAD</h1>' +
+    '<p>Prosa de la cuarta, que sí queda fuera.</p>');
+  for (const dentro of ['I. Producto Interno Bruto', 'Prosa que sigue al numeral romano',
+    'C. Análisis del Sector', 'Prosa del análisis sectorial']) {
+    assert.match(parrafoCon(doc, dentro),
+      new RegExp('w:ascii="' + FUENTE_MACRO + '"'), dentro);
+  }
+  assert.doesNotMatch(parrafoCon(doc, 'Prosa de la cuarta'),
+    new RegExp('w:ascii="' + FUENTE_MACRO + '"'), 'la sección no se cerró en IV');
 });

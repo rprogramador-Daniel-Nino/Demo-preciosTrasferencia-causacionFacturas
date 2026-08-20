@@ -16,11 +16,13 @@ import {
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
+  aplicarLetraMacroOoxml,
   actualizarFormulasMatematicasOoxml,
   localizarAnexosOoxml, anexosDelDocumento, problemaDeIntegridadOoxml,
   generarTablaOoxml, medidaDeImagenAnexoB,
 } from './docxRelleno.js';
 import { codificarPNG, aBase64, deBase64 } from './png.js';
+import { FUENTE_TABLA, PUNTOS_TABLA } from './estiloDocumento.js';
 import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo, NOMBRES_TABLA_MARGENES } from './tablasInforme.js';
@@ -1161,22 +1163,62 @@ test('rellenarDocx propaga los avisos de tablas hasta quien genera el informe', 
   assert.ok(avisosTablas && avisosTablas.length > 0, 'el aviso tiene que llegar a la UI');
 });
 
+/* Fila con N celdas, para que `columnasDe` (docxRelleno.js) pueda distinguir la
+   horizontal (4 columnas: contribuyente + 3 percentiles) de la vertical (3: etiqueta +
+   no ajustado + ajustado) igual que en un `.docx` real —el criterio es la FORMA, no el
+   texto de la celda ni el número del rótulo. */
+const filaOoxml = (textos) => '<w:tr>' + textos.map(
+  (t) => `<w:tc><w:p><w:t>${t}</w:t></w:p></w:tc>`
+).join('') + '</w:tr>';
+
 test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
   /* La plantilla trae el rango vertical dos veces: la «Tabla 18. Rango Intercuartil» de
      los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones, esta última con
      el rótulo dentro de su primera fila. El código elegía una de las dos con un if/else,
      así que la otra se radicaba con los percentiles del informe anterior. */
   const xml = '<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>horizontal vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:tbl>' + filaOoxml(['ACME', 'x', 'y', 'horizontal vieja']) + '</w:tbl>'
     + '<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>vertical vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
-    + '<w:tr><w:tc><w:p><w:t>conclusiones vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+    + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'vertical vieja']) + '</w:tbl>'
+    + '<w:tbl>' + filaOoxml(['Tabla 20. Tabla de rangos', 'x', 'y'])
+    + filaOoxml(['Mínimo', 'x', 'conclusiones vieja']) + '</w:tbl>';
   const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' });
+  assert.ok(!salida.includes('horizontal vieja'), 'la Tabla 5 (horizontal) debe actualizarse');
   assert.ok(!salida.includes('vertical vieja'), 'la Tabla 18 debe actualizarse');
   assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
   assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
     'deben quedar las dos tablas verticales regeneradas');
+  assert.match(salida, /Percentil 25.*Mediana.*Percentil 75/s, 'y la horizontal con sus columnas');
+});
+
+test('con TRES ocurrencias de «Rango Intercuartil» —sin «Tabla de rangos»— las DOS verticales se actualizan', () => {
+  /* El informe real de MONTACHEM (reportado el 2026-08-20): una horizontal y DOS
+     verticales, las tres rotuladas igual, ninguna como «Tabla de rangos». Antes el
+     código sólo cubría la ocurrencia 1 de «Rango Intercuartil» como vertical —la
+     segunda copia quedaba con los percentiles del informe de referencia, sin aviso. */
+  const xml = '<w:p><w:t>Tabla 6. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['ACME', 'x', 'y', 'horizontal vieja']) + '</w:tbl>'
+    + '<w:p><w:t>Tabla 21. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'primera vertical vieja']) + '</w:tbl>'
+    + '<w:p><w:t>Información Base Datos Capital IQ. Fecha de consulta: julio de 2024.</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['RANGO INTERCUARTIL', 'CUARTIL RANGE MO NO FIXED', 'CUARTIL RANGE MO FIXED'])
+    + filaOoxml(['Mínimo', 'x', 'segunda vertical vieja']) + '</w:tbl>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+  assert.ok(!salida.includes('horizontal vieja'), 'la horizontal debe actualizarse');
+  assert.ok(!salida.includes('primera vertical vieja'), 'la primera vertical debe actualizarse');
+  assert.ok(!salida.includes('segunda vertical vieja'),
+    'la segunda vertical (el caso MONTACHEM) también debe actualizarse');
+  /* El párrafo «Fecha de consulta: julio de 2024» vive ANTES de la tabla, no dentro de
+     ella —esta ocurrencia se localiza por su primera fila, y el bloque que se sustituye
+     empieza en la tabla, no en lo que la precede—. No es parte de esta tabla y ninguna
+     tabla vertical del motor cita fuente/fecha (la única que lo hace es la horizontal);
+     es un párrafo suelto de la plantilla que este arreglo no toca. */
+  assert.ok(salida.includes('julio de 2024'),
+    'el párrafo que precede a la tabla, fuera de su bloque, no se toca');
+  assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
+    'deben quedar las DOS tablas verticales regeneradas');
+  assert.ok(!avisos.includes('Tabla de rangos'), 'ninguna vertical quedó sin encontrar');
 });
 
 test('la tabla de márgenes se actualiza con cualquier prefijo, sin tocar las definiciones', () => {
@@ -1558,7 +1600,7 @@ test('medidaDeImagenAnexoB cae a la hoja vertical cuando no puede medir la image
   assert.deepStrictEqual(medidaDeImagenAnexoB(null), sinMedida, 'sin bytes, lo mismo');
 });
 
-test('el dibujo del ANEXO B sale con la proporción real de la imagen', async () => {
+test('en el ANEXO B del .docx se generan las tablas de P&L y Balance de las comparables como tablas editables', async () => {
   const buf = await plantilla([
     parrafo('ANEXO B. Descripciones de comparables y Estados Financieros'),
     parrafo('BLOQUE VIEJO'),
@@ -1566,23 +1608,23 @@ test('el dibujo del ANEXO B sale con la proporción real de la imagen', async ()
   ]);
   const zip = new PizZip(buf);
   const { insertadas } = insertarImagenesAnexoB(zip, {
-    comparables: [{ name: 'ACME COMPARABLE SA', eeffArchivo: 'a.pdf', descActividad: 'Juegos.' }],
-    eeffImagenesComparables: { [nameKey('ACME COMPARABLE SA')]: [await pngDe(800, 400)] },
+    comparables: [{
+      name: 'ACME COMPARABLE SA',
+      descActividad: 'Juegos.',
+      eeffDatos: {
+        periodo: 2025,
+        utilidad_bruta: 5000000,
+        total_activos: 10000000,
+      }
+    }],
   });
   assert.strictEqual(insertadas, 1);
 
   const xml = zip.file(RUTA_DOC_TEST).asText();
-  const m = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(xml);
-  assert.ok(m, 'tiene que haber un dibujo con su extensión');
-  const cx = Number(m[1]);
-  const cy = Number(m[2]);
-  assert.strictEqual(cx, Math.round(ANCHO_CAJA_CM_TEST * EMU_POR_CM), 'ancho de la caja de texto');
-  assert.ok(Math.abs(cy / cx - 0.5) < 1e-3, 'y el alto por la proporción real: ' + cy / cx);
-  /* La regresión que se está cerrando: con la proporción A4 forzada el alto salía en
-     22,63 cm y el cuadro se iba a una página propia. */
-  assert.ok(cy < 10 * EMU_POR_CM, 'el cuadro no puede seguir midiendo una página de alto');
-  /* `<a:ext>` de `spPr` tiene que ir a juego con `<wp:extent>`, o Word deforma el dibujo. */
-  assert.ok(xml.includes(`<a:ext cx="${cx}" cy="${cy}"/>`), 'las dos medidas del dibujo coinciden');
+  assert.ok(xml.includes('Estado de Resultados'), 'contiene la tabla de P&L');
+  assert.ok(xml.includes('Balance General'), 'contiene la tabla de Balance');
+  assert.ok(xml.includes('5.000.000'), 'contiene la cifra de utilidad bruta formateada');
+  assert.ok(xml.includes('10.000.000'), 'contiene la cifra de activos totales formateada');
 });
 
 /* ══════════════════ ANEXO C — matriz de rechazo ══════════════════ */
@@ -3288,4 +3330,291 @@ test('el ANEXO C del .docx se emite entero en mayúscula', async () => {
   assert.ok(texto.includes('ZETA COMPARABLE LTD'));
   /* Y el encabezado del listado, que esta ruta emite como `['Nº', 'NOMBRE DE LA COMPAÑÍA', …]`. */
   assert.ok(texto.includes('NOMBRE DE LA COMPAÑÍA'));
+});
+
+/* ══════ La letra de la Sección III ══════ */
+
+/* Un documento con la forma del informe: un capítulo antes, la Sección III con su encabezado,
+   un subapartado, prosa, una tabla con su línea «FUENTE:» y el capítulo siguiente. */
+const docConSeccionIii = () => [
+  '<w:body>',
+  '<w:p><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA' + '\u0009' + '13</w:t></w:r></w:p>',
+  '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGEREF _Toc1</w:instrText></w:r><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>II. ANÁLISIS FUNCIONAL</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Prosa del análisis funcional que no se toca.</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>A. Análisis del Panorama de la Economía Mundial</w:t></w:r></w:p>',
+  '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>La economía mundial</w:t></w:r><w:r><w:t> creció un 3,2 %.</w:t></w:r></w:p>',
+  '<w:tbl><w:tr><w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/></w:rPr><w:t>2024</w:t></w:r></w:p></w:tc></w:tr></w:tbl>',
+  '<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:b/></w:rPr><w:t>FUENTE: Banco Mundial</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>IV. ANÁLISIS DE COMPARABILIDAD</w:t></w:r></w:p>',
+  '<w:p><w:r><w:t>Prosa de la sección cuarta, que tampoco se toca.</w:t></w:r></w:p>',
+  '</w:body>',
+].join('');
+
+/* Los párrafos del documento, para poder afirmar sobre uno concreto por su texto. */
+const parrafosPorTexto = (xml) => {
+  const mapa = new Map();
+  for (const p of xml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []) {
+    mapa.set(textoPlanoOoxml(p).trim(), p);
+  }
+  return mapa;
+};
+
+test('aplicarLetraMacroOoxml pone la prosa de la Sección III en Arial 12', () => {
+  const p = parrafosPorTexto(aplicarLetraMacroOoxml(docConSeccionIii()));
+  const prosa = p.get('La economía mundial creció un 3,2 %.');
+  assert.ok(prosa, 'no se encontró el párrafo de prosa');
+  assert.strictEqual((prosa.match(/w:ascii="Arial"/g) || []).length, 2, 'los dos runs llevan Arial');
+  assert.strictEqual((prosa.match(/<w:sz w:val="24"\/>/g) || []).length, 2, 'los dos runs van a 12 pt');
+  /* La negrita del primer run se conserva y NO se le añade al segundo: la prosa no es un título. */
+  assert.strictEqual((prosa.match(/<w:b\/>/g) || []).length, 1);
+});
+
+test('aplicarLetraMacroOoxml pone los títulos de la Sección III en Arial 12 negrita', () => {
+  const p = parrafosPorTexto(aplicarLetraMacroOoxml(docConSeccionIii()));
+  for (const titulo of ['III. TENDENCIAS DE LA ECONOMÍA',
+    'A. Análisis del Panorama de la Economía Mundial']) {
+    const parrafo = p.get(titulo);
+    assert.ok(parrafo, 'no se encontró «' + titulo + '»');
+    assert.match(parrafo, /w:ascii="Arial"/, titulo);
+    assert.match(parrafo, /<w:sz w:val="24"\/>/, titulo);
+    assert.match(parrafo, /<w:b\/>/, titulo + ': los títulos van en negrita');
+  }
+});
+
+test('aplicarLetraMacroOoxml no toca las tablas de la Sección III', () => {
+  /* Las ocho tablas macro siguen en la tipografía de tabla del informe, como las demás. */
+  const salida = aplicarLetraMacroOoxml(docConSeccionIii());
+  const celda = /<w:tbl>[\s\S]*?<\/w:tbl>/.exec(salida)[0];
+  assert.match(celda, /<w:sz w:val="20"\/>/, 'la celda cambió de tamaño');
+  assert.doesNotMatch(celda, /<w:sz w:val="24"\/>/);
+});
+
+test('aplicarLetraMacroOoxml deja pequeña la línea «FUENTE:» de la Sección III', () => {
+  /* Solo la familia cambia: subirla a 12 la convertiría en un párrafo de cuerpo. */
+  const p = parrafosPorTexto(aplicarLetraMacroOoxml(docConSeccionIii()));
+  const fuente = p.get('FUENTE: Banco Mundial');
+  assert.ok(fuente, 'no se encontró la línea FUENTE');
+  assert.match(fuente, /w:ascii="Arial"/);
+  assert.match(fuente, /<w:sz w:val="18"\/>/);
+  assert.doesNotMatch(fuente, /<w:sz w:val="24"\/>/);
+});
+
+test('aplicarLetraMacroOoxml no sale de la Sección III', () => {
+  const p = parrafosPorTexto(aplicarLetraMacroOoxml(docConSeccionIii()));
+  for (const fuera of ['II. ANÁLISIS FUNCIONAL',
+    'Prosa del análisis funcional que no se toca.',
+    'IV. ANÁLISIS DE COMPARABILIDAD',
+    'Prosa de la sección cuarta, que tampoco se toca.']) {
+    assert.doesNotMatch(p.get(fuera), /w:rPr/, fuera + ': se le puso letra y no debía');
+  }
+});
+
+test('aplicarLetraMacroOoxml no abre la sección en la tabla de contenido', () => {
+  /* El índice repite todos los encabezados. Si abriera zona, la sección empezaría ahí y el
+     documento entero saldría en Arial 12 hasta el capítulo siguiente — incluido el capítulo II,
+     que en este documento va DESPUÉS de las dos entradas del índice a propósito. */
+  const p = parrafosPorTexto(aplicarLetraMacroOoxml(docConSeccionIii()));
+  assert.doesNotMatch(p.get('II. ANÁLISIS FUNCIONAL'), /w:rPr/);
+});
+
+test('aplicarLetraMacroOoxml conserva el rojo del marcador de pendiente', () => {
+  /* Es un hueco que hay que ver antes de radicar: perder el color lo esconde. */
+  const xml = [
+    '<w:p><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>',
+    '<w:p><w:r><w:rPr><w:color w:val="991B1B"/><w:b/></w:rPr><w:t>Pendiente: falta la corrida.</w:t></w:r></w:p>',
+  ].join('');
+  const salida = aplicarLetraMacroOoxml(xml);
+  assert.match(salida, /<w:color w:val="991B1B"\/>/);
+  assert.match(salida, /<w:sz w:val="24"\/>/);
+});
+
+test('aplicarLetraMacroOoxml pone rFonts antes que el resto del rPr', () => {
+  /* El orden de los hijos de `rPr` lo fija el esquema y Word pide reparar el documento si no se
+     respeta: `rFonts` va al principio y `sz` después del color, antes del subrayado. */
+  const xml = [
+    '<w:p><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>',
+    '<w:p><w:r><w:rPr><w:b/><w:color w:val="222222"/><w:u w:val="single"/></w:rPr><w:t>Prosa subrayada.</w:t></w:r></w:p>',
+  ].join('');
+  const parrafo = parrafosPorTexto(aplicarLetraMacroOoxml(xml)).get('Prosa subrayada.');
+  const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(parrafo)[0];
+  const hijos = [...rPr.matchAll(/<w:([a-zA-Z]+)/g)].map((m) => m[1]);
+  assert.deepStrictEqual(hijos, ['rPr', 'rFonts', 'b', 'color', 'sz', 'szCs', 'u']);
+});
+
+test('un numeral romano dentro de la Sección III no la corta (ruta de plantilla)', () => {
+  /* Misma regresión que en `docxWriter`: «I. Producto Interno Bruto» es un subapartado de III.B,
+     no el capítulo primero. Cerrar ahí dejaba el resto de la sección con la letra del cliente. */
+  const p = (texto) => '<w:p><w:r><w:rPr><w:rFonts w:ascii="Times New Roman"/></w:rPr>' +
+    '<w:t>' + texto + '</w:t></w:r></w:p>';
+  const salida = aplicarLetraMacroOoxml(
+    p('III. TENDENCIAS DE LA ECONOMÍA') +
+    p('I. Producto Interno Bruto') +
+    p('Prosa que sigue al numeral romano.') +
+    p('C. Análisis del Sector') +
+    p('IV. ANÁLISIS DE COMPARABILIDAD') +
+    p('Prosa de la cuarta, que sí queda fuera.'));
+  const porTexto = parrafosPorTexto(salida);
+  for (const dentro of ['I. Producto Interno Bruto', 'Prosa que sigue al numeral romano.',
+    'C. Análisis del Sector']) {
+    assert.match(porTexto.get(dentro), /w:ascii="Arial"/, dentro);
+  }
+  assert.match(porTexto.get('Prosa de la cuarta, que sí queda fuera.'),
+    /w:ascii="Times New Roman"/, 'la sección no se cerró en IV');
+});
+
+test('un subapartado con numeral romano no cierra la Sección III aunque parezca encabezado', () => {
+  /* Segunda vuelta de la misma regresión. «V. Tasa de Cambio Representativa del Mercado» es un
+     subapartado de III.B, y `esEncabezadoOoxml` lo da por encabezado —lo es—, así que aceptar
+     «encabezado» como señal de capítulo volvía a cortar la sección ahí. Lo que distingue un
+     capítulo del informe de un subapartado es el NIVEL (Heading1) y las mayúsculas: los siete
+     capítulos del informe de referencia van en mayúsculas, sus subapartados no. */
+  const p = (texto, estilo) => '<w:p>' + (estilo ? '<w:pPr><w:pStyle w:val="' + estilo + '"/></w:pPr>' : '')
+    + '<w:r><w:rPr><w:rFonts w:ascii="Times New Roman"/></w:rPr><w:t>' + texto + '</w:t></w:r></w:p>';
+  const salida = aplicarLetraMacroOoxml(
+    p('III. TENDENCIAS DE LA ECONOMÍA', 'Heading1') +
+    p('I. Producto Interno Bruto') +
+    p('V. Tasa de Cambio Representativa del Mercado') +
+    p('Prosa del subapartado de la tasa de cambio.') +
+    p('C. Análisis del Sector', 'Heading2') +
+    p('Prosa del análisis sectorial.') +
+    p('IV. ANÁLISIS ECONÓMICO', 'Heading1') +
+    p('Prosa de la cuarta, que sí queda fuera.'));
+  const porTexto = parrafosPorTexto(salida);
+  for (const dentro of ['V. Tasa de Cambio Representativa del Mercado',
+    'Prosa del subapartado de la tasa de cambio.', 'C. Análisis del Sector',
+    'Prosa del análisis sectorial.']) {
+    assert.match(porTexto.get(dentro), /w:ascii="Arial"/, dentro);
+  }
+  assert.match(porTexto.get('Prosa de la cuarta, que sí queda fuera.'),
+    /w:ascii="Times New Roman"/, 'la sección no se cerró en IV');
+});
+
+test('las tablas de la Sección III que la plantilla trae pasan a la letra de tabla', () => {
+  /* Las que el motor regenera ya salían en `FUENTE_TABLA`/`PUNTOS_TABLA`; una que no reconozca
+     —y avisa de ello— se quedaba con la letra del cliente, así que en la misma sección convivían
+     tablas en Arial 10 y tablas en Times New Roman 12. El acuerdo es que las tablas del informe
+     se ven iguales en todas partes. */
+  const celda = (t) => '<w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" ' +
+    'w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t>' + t + '</w:t></w:r></w:p></w:tc>';
+  const salida = aplicarLetraMacroOoxml(
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr>' + celda('Año') + celda('2024') + '</w:tr></w:tbl>'
+    + '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman"/></w:rPr><w:t>IV. ANÁLISIS ECONÓMICO</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr>' + celda('Fuera de la sección') + '</w:tr></w:tbl>');
+  const tablas = salida.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g);
+  assert.match(tablas[0], new RegExp('w:ascii="' + FUENTE_TABLA + '"'));
+  assert.match(tablas[0], new RegExp('<w:sz w:val="' + PUNTOS_TABLA * 2 + '"'));
+  assert.doesNotMatch(tablas[0], /Times New Roman/);
+  /* La tabla del capítulo siguiente no se toca: la pasada es de la Sección III. */
+  assert.match(tablas[1], /Times New Roman/);
+});
+
+test('la marca de párrafo de la Sección III también pasa a Arial, sin cambiar de tamaño', () => {
+  /* El `rPr` del `pPr` es la letra de la marca de párrafo, y de ella salen la viñeta y el número
+     de una lista: sin esto el texto de la viñeta iba en Arial y su bolita en Times New Roman. El
+     TAMAÑO no se toca — el informe separa sus bloques con párrafos vacíos y subirlos correría la
+     paginación entera. */
+  const salida = aplicarLetraMacroOoxml(
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>'
+    + '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr>'
+    + '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="28"/></w:rPr>'
+    + '</w:pPr><w:r><w:t>Renglón con viñeta.</w:t></w:r></w:p>');
+  const pPr = /<w:pPr>[\s\S]*?<\/w:pPr>/g.exec(
+    parrafosPorTexto(salida).get('Renglón con viñeta.'))[0];
+  assert.match(pPr, /w:ascii="Arial"/);
+  assert.doesNotMatch(pPr, /Times New Roman/);
+  /* Su tamaño sigue siendo el de la plantilla: 28 medios puntos. */
+  assert.match(pPr, /<w:sz w:val="28"\/>/);
+});
+
+test('aplicarLetraMacroOoxml no deja un documento que Word tenga que reparar', () => {
+  /* La garantía que la pasada da y se puede comprobar: si el documento entra sano, sale sano. Corre
+     sobre el `document.xml` antes de docxtemplater y no pasa por `escribirDocSiEsValido`, así que
+     lleva su propia red —si su salida no está bien formada devuelve la entrada—, y la manera de
+     verificarla es sobre las estructuras que de verdad le cuestan.
+
+     El cuadro de texto está aquí a propósito y documenta un LÍMITE conocido: sus párrafos van
+     anidados dentro de otro párrafo, y la delimitación por expresión regular —que es como todo este
+     módulo lee OOXML— no los separa bien, así que el texto de dentro de un cuadro puede quedarse
+     sin la letra de la sección. Lo que NO puede pasar, y es lo que se afirma, es que el documento
+     se corrompa. */
+  const casos = {
+    'cuadro de texto anidado':
+      '<w:p><w:r><w:mc:AlternateContent><w:txbxContent>'
+      + '<w:p><w:r><w:t>Texto del cuadro.</w:t></w:r></w:p>'
+      + '</w:txbxContent></w:mc:AlternateContent><w:t>Párrafo que lo contiene.</w:t></w:r></w:p>',
+    'tabla anidada':
+      '<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>2024</w:t></w:r></w:p>'
+      + '</w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>',
+    'control de cambios':
+      '<w:p><w:ins w:id="1"><w:r><w:t>Texto insertado.</w:t></w:r></w:ins>'
+      + '<w:del w:id="2"><w:r><w:delText>Texto borrado.</w:delText></w:r></w:del></w:p>',
+    'párrafo vacío autocerrado': '<w:p/><w:p><w:r><w:t>Tras el vacío.</w:t></w:r></w:p>',
+  };
+  for (const [nombre, cuerpo] of Object.entries(casos)) {
+    const xml = '<w:document><w:body>'
+      + '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>III. TENDENCIAS DE LA ECONOMÍA</w:t></w:r></w:p>'
+      + cuerpo
+      + '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>IV. ANÁLISIS ECONÓMICO</w:t></w:r></w:p>'
+      + '</w:body></w:document>';
+    assert.strictEqual(problemaDeIntegridadOoxml(xml), '', nombre + ': el fixture ya venía mal');
+    assert.strictEqual(problemaDeIntegridadOoxml(aplicarLetraMacroOoxml(xml)), '', nombre);
+  }
+});
+
+test('la Sección III se reconoce aunque Word numere los encabezados por su cuenta', () => {
+  /* La causa del informe que salió entero en Times New Roman. Cuando la plantilla numera sus
+     encabezados con la numeración automática de Word, el «III.» NO está en el texto del párrafo:
+     lo pinta Word desde `numbering.xml`. El texto plano es sólo «TENDENCIAS DE LA ECONOMÍA», que
+     no empieza por el numeral, así que la zona no se abría nunca y la sección completa —prosa,
+     rótulos y tablas— conservaba la letra del cliente. Lo mismo al cerrar: el capítulo siguiente
+     llega como «ANÁLISIS ECONÓMICO», sin el «IV.». */
+  const p = (texto, estilo, sz) => '<w:p>'
+    + (estilo ? '<w:pPr><w:pStyle w:val="' + estilo + '"/><w:numPr><w:ilvl w:val="0"/>'
+      + '<w:numId w:val="5"/></w:numPr></w:pPr>' : '')
+    + '<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+    + '<w:sz w:val="' + (sz || 24) + '"/></w:rPr><w:t>' + texto + '</w:t></w:r></w:p>';
+  const salida = aplicarLetraMacroOoxml(
+    '<w:document><w:body>'
+    + p('INFORMACIÓN ESPECÍFICA', 'Heading1')
+    + p('Prosa de la segunda.')
+    + p('TENDENCIAS DE LA ECONOMÍA', 'Heading1')
+    + p('Análisis del Panorama de la Economía Mundial', 'Heading2')
+    + p('El panorama de la economía mundial muestra estabilidad relativa.')
+    + p('FUENTE: Fondo Monetario Internacional, WEO Update', null, 18)
+    + p('Análisis del panorama de la economía colombiana.', 'Heading2')
+    + p('En el ámbito nacional, la economía colombiana se recupera.')
+    + p('ANÁLISIS ECONÓMICO', 'Heading1')
+    + p('Prosa de la cuarta, que no se toca.')
+    + '</w:body></w:document>');
+  const porTexto = parrafosPorTexto(salida);
+  for (const dentro of ['TENDENCIAS DE LA ECONOMÍA',
+    'Análisis del Panorama de la Economía Mundial',
+    'El panorama de la economía mundial muestra estabilidad relativa.',
+    'Análisis del panorama de la economía colombiana.',
+    'En el ámbito nacional, la economía colombiana se recupera.']) {
+    assert.match(porTexto.get(dentro), /w:ascii="Arial"/, dentro);
+    assert.doesNotMatch(porTexto.get(dentro), /Times New Roman/, dentro);
+  }
+  /* La línea FUENTE conserva sus 9 pt y sólo cambia de familia. */
+  assert.match(porTexto.get('FUENTE: Fondo Monetario Internacional, WEO Update'),
+    /<w:sz w:val="18"\/>/);
+  /* Y el capítulo siguiente cierra la sección aunque tampoco traiga su numeral. */
+  for (const fuera of ['ANÁLISIS ECONÓMICO', 'Prosa de la cuarta, que no se toca.',
+    'INFORMACIÓN ESPECÍFICA', 'Prosa de la segunda.']) {
+    assert.match(porTexto.get(fuera), /Times New Roman/, fuera);
+  }
+});
+
+test('un párrafo que empieza por «Tendencias» no abre la Sección III', () => {
+  /* El título sin numeral se reconoce entero —«TENDENCIAS DE LA ECONOMÍA»— y no por su primera
+     palabra: si bastara «Tendencias», una frase de prosa abriría la sección donde no está. */
+  const p = (texto) => '<w:p><w:r><w:rPr><w:rFonts w:ascii="Times New Roman"/></w:rPr>'
+    + '<w:t>' + texto + '</w:t></w:r></w:p>';
+  const salida = aplicarLetraMacroOoxml(
+    p('Tendencias recientes del mercado de videojuegos muestran un alza.') +
+    p('Prosa que sigue a esa frase.'));
+  assert.doesNotMatch(salida, /w:ascii="Arial"/);
 });

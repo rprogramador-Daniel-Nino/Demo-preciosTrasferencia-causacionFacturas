@@ -9,6 +9,7 @@ import {
   cifraODisponible,
   corridaSectorIncompleta,
   fuenteDatosClaveSector,
+  filasDatosClaveSector,
   generarApartadoMundial,
   generarApartadoColombia,
   generarTablaPibMundial,
@@ -585,6 +586,53 @@ test('fuenteDatosClaveSector cita cada fuente una vez, con su URL y la fecha de 
      la nota al pie de la plantilla o la deja como estaba. */
   assert.strictEqual(fuenteDatosClaveSector({ datosClaveTabla: [] }), '');
   assert.strictEqual(fuenteDatosClaveSector(null), '');
+});
+
+/* ══════ `datosClaveTabla` guardado con una forma que no es lista ══════
+
+   Caso real de producción: `analisisSector/act_rr2fz1`, año 2025, tiene guardado
+   `datosClaveTabla: { "4": { fuenteUrl: "https://…" } }` —un mapa con un solo índice y un
+   solo subcampo, residuo de una versión anterior del pipeline del sector que quedó fijo
+   porque esa actividad nunca se volvió a correr—.
+
+   El `|| []` de los lectores solo protege de null/undefined, así que ese objeto reventaba
+   la generación COMPLETA del informe: `for...of` lanzaba «object is not iterable» en la
+   ruta .docx y `.map is not a function` en la ruta PDF/HTML. Un documento mal guardado no
+   puede tumbar el informe entero.
+
+   No se rescatan las filas del mapa: la que hay no trae `indicador` ni `valorActual`, y
+   publicar una fila vacía en un informe que se radica ante la DIAN es peor que no publicar
+   la tabla. Se trata como «sin datos verificados», que es el camino que ya existe y que sí
+   avisa. */
+
+const TABLA_MALFORMADA = { '4': { fuenteUrl: 'https://www.fortunebusinessinsights.com/x' } };
+
+test('fuenteDatosClaveSector no revienta si datosClaveTabla no es una lista', () => {
+  assert.strictEqual(fuenteDatosClaveSector({ datosClaveTabla: TABLA_MALFORMADA }), '');
+  assert.strictEqual(fuenteDatosClaveSector({ datosClaveTabla: {} }), '');
+  assert.strictEqual(fuenteDatosClaveSector({ datosClaveTabla: 'DANE' }), '',
+    'una cadena es iterable pero sus caracteres no son filas');
+  assert.strictEqual(fuenteDatosClaveSector({ datosClaveTabla: 7 }), '');
+});
+
+test('filasDatosClaveSector no revienta si datosClaveTabla no es una lista', () => {
+  assert.deepStrictEqual(filasDatosClaveSector(TABLA_MALFORMADA), []);
+  assert.deepStrictEqual(filasDatosClaveSector({}), []);
+  assert.deepStrictEqual(filasDatosClaveSector('DANE'), []);
+  assert.deepStrictEqual(filasDatosClaveSector(null), []);
+  assert.deepStrictEqual(filasDatosClaveSector(undefined), []);
+});
+
+test('generarApartadoSectorial sobrevive a un datosClaveTabla malformado y avisa como sin datos', () => {
+  const malformado = {
+    ...analisisSectorEjemplo,
+    porAnio: { 2025: { ...analisisSectorEjemplo.porAnio[2025], datosClaveTabla: TABLA_MALFORMADA } },
+  };
+  const salida = generarApartadoSectorial({ anio: 2025 }, 2025, (v) => String(v), malformado);
+  assert.ok(salida && salida.length, 'el apartado se genera igual, no revienta');
+  assert.ok(!salida.includes('<table>'), 'no se fabrica una tabla con la fila malformada');
+  assert.ok(!salida.includes('fortunebusinessinsights'),
+    'no se cuela la URL de la fila malformada en el informe');
 });
 
 test('generarApartadoSectorial sin datosClaveTabla no deja una tabla vacía', () => {
