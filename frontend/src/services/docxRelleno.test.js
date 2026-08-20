@@ -2870,6 +2870,36 @@ test('por debajo del umbral la tabla del .docx también se elimina', () => {
   assert.ok(!salida.includes('BETA GMBH'), 'se publicó una operación que no supera el umbral');
 });
 
+test('con un párrafo vacío entre la tabla adicional y su fuente, el borrado se la lleva igual', () => {
+  /* `borrar` usaba `parrafoHermanoSiguiente` en crudo, que no salta un párrafo vacío antes de
+     mirar si lo que sigue es la línea de fuente. Con el hueco de por medio, la fuente del
+     cliente anterior quedaba huérfana bajo la tabla siguiente. También cubre el plural
+     «FUENTES:», que el predicado en singular no reconocía. */
+  const xml =
+    '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>CLIENTE ANTERIOR S.A.</w:t></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p/>' +
+    '<w:p><w:t>FUENTES: Información de CLIENTE ANTERIOR S.A.</w:t></w:p>' +
+    '<w:p><w:t>Tabla 5. Método de Precios de Transferencia</w:t></w:p>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:t>Old 5</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME' }, []);
+
+  assert.ok(!salida.includes('CLIENTE ANTERIOR S.A.'),
+    'la fuente en plural quedó huérfana tras el párrafo vacío');
+  assert.ok(salida.includes('Tabla 5. Método de Precios de Transferencia'),
+    'se renumeró o se perdió la tabla siguiente');
+});
+
+/* No hay una prueba equivalente para `insertar` con el hueco vacío: su único punto de entrada
+   público (`actualizarTablasOperacionesOoxml`) reemplaza SIEMPRE el ancla («Transacciones Inter
+   compañía») antes de intentar insertar sobre ella, con el mismo nombre y las mismas exclusiones
+   —y ese `reemplazar` ya absorbe el hueco al recortar—. Para cuando `insertar` mira el documento,
+   el hueco ya no existe: cualquier prueba contra esa función pública sale en verde con el código
+   viejo Y con el nuevo, y no discrimina nada. La corrección en `insertar` (comparte
+   `finDeFuenteSiguienteOoxml` con `reemplazar` y `borrar`, verificado leyendo el código) queda
+   sin una prueba de caja negra propia por esa razón, no porque se haya omitido a propósito. */
+
 test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
   const xml =
     '<w:p><w:t>Tabla 4. Operación adicional Transacciones Intercompañía</w:t></w:p>' +
