@@ -1747,8 +1747,8 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
        Transacciones Inter compañía», y el localizador casa por inclusión, así que sin el veto
        la ficha del vinculado se escribiría encima de aquélla. */
     const soloTx = { excluir: NOMBRES_TABLA_ADICIONAL };
-    reemplazar('Transacciones Inter compañía', tablaTx, { ...soloTx, ocurrencia: 1 });
-    reemplazar('Transacciones Inter compañía', tablaTx, { ...soloTx, ocurrencia: 0 });
+    reemplazar(NOMBRES_TABLA_TRANSACCIONES, tablaTx, { ...soloTx, ocurrencia: 1 });
+    reemplazar(NOMBRES_TABLA_TRANSACCIONES, tablaTx, { ...soloTx, ocurrencia: 0 });
   }
 
   /* 3-bis. Operación adicional Transacciones Intercompañía — la sección «4. Información
