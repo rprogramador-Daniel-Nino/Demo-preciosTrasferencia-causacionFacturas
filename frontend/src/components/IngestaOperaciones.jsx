@@ -183,7 +183,7 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           `study.vinc_tipo`: desde que el parser dejó de inventarlo, un archivo sin la
           columna «Tipo de operación» escondía la tarjeta entera —vinculado, país y monto
           incluidos— justo cuando hay más que revisar. */}
-      {(study.vinc_tipo || study.vinc || montoOperacion(study) !== null) && (
+      {(study.vinc_tipo || study.vinc || montoOperacion(study) !== null || study.operacionAdicional) && (
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
           <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2">
             Resumen de Operación Extraída
@@ -215,6 +215,32 @@ export default function IngestaOperaciones({ study, updateStudy }) {
               <span className="text-xs text-zinc-500 font-semibold uppercase tracking-wider block">País e ID Fiscal</span>
               <span className="text-base font-bold text-zinc-900 dark:text-zinc-100">{study.pais_vinc || '—'} ({study.vinc_id || '—'})</span>
             </div>
+
+            {/* El monto de la sección «4. Información adicional» del formato, en el resumen y
+                no solo en la tarjeta de detalle de abajo. Va aquí porque este recuadro lee del
+                ESTUDIO y sobrevive a salir del paso y volver, mientras el mensaje de carga es
+                estado del componente y se pierde. Sin esto, el caso en que más falta saber la
+                cifra —la sección existe, no llega al umbral y por eso la tabla se borra del
+                informe— era justo el que no la mostraba.
+
+                Ámbar y no verde: no es el monto analizado. La leyenda dice cuál de las dos
+                cosas va a pasar en el informe, que es lo que el usuario necesita antes de
+                generar. */}
+            {study.operacionAdicional && (
+              <div className="md:col-span-2 p-4 rounded-xl bg-amber-50/50 dark:bg-amber-950/10 border border-amber-200 dark:border-amber-900/30 space-y-1">
+                <span className="text-xs text-amber-700 dark:text-amber-500 font-semibold uppercase tracking-wider block">
+                  Monto de Operación · Información Adicional (códigos 61 a 63)
+                </span>
+                <span className="text-xl font-bold text-amber-700 dark:text-amber-500 font-mono block">
+                  COP $ {fmt(montoOperacionAdicional(study))}
+                </span>
+                <span className="text-xs text-zinc-500 block">
+                  {tieneOperacionAdicional(study)
+                    ? `Supera el umbral de 45.000 UVT (COP $ ${fmt(umbralOperacionAdicional(study.anio))}): se declara en la tabla «Operación adicional Transacciones Intercompañía» del informe.`
+                    : `No supera el umbral de 45.000 UVT (COP $ ${fmt(umbralOperacionAdicional(study.anio))}): esa tabla se elimina del informe.`}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -223,12 +249,15 @@ export default function IngestaOperaciones({ study, updateStudy }) {
           61 a 63: préstamos, reintegros y operaciones a nombre de vinculados que no se
           reflejan en el Estado de Resultados).
 
-          Solo cuando el formato la trae Y su total supera el umbral, que es la condición que
-          decide también si el informe publica su tabla. Si no la supera, esta pantalla queda
-          exactamente como estaba: mostrar una tarjeta de algo que no va a salir en el informe
-          enseñaría a esperarlo ahí. Que se leyó pero no llegó al umbral se dice en la línea
-          de avisos de arriba, que es donde va lo informativo. */}
-      {tieneOperacionAdicional(study) && (
+          Se dibuja siempre que el formato TRAIGA la sección, supere o no el umbral. Antes
+          solo aparecía por encima, con el criterio de que enseñar una tarjeta de algo que no
+          va a salir en el informe hace esperarlo ahí. Pero el monto se leyó del archivo y es
+          un dato del estudio: esconderlo dejaba la cifra viva solo en el mensaje de carga,
+          que es estado del componente y se pierde al salir del paso y volver. Y desde que la
+          tabla se ELIMINA del informe cuando no llega al umbral, saber por qué desapareció
+          importa más, no menos. Lo que hace el trabajo de no crear expectativa es la
+          leyenda, que dice explícitamente cuál de las dos cosas va a pasar. */}
+      {study.operacionAdicional && (
         <div className="bg-white dark:bg-[#0c0c0f] border border-amber-200 dark:border-amber-900/40 rounded-xl p-6 shadow-sm space-y-4">
           <div className="flex items-start gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
             <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
@@ -237,9 +266,10 @@ export default function IngestaOperaciones({ study, updateStudy }) {
                 Operación Adicional Detectada
               </h3>
               <p className="text-xs text-zinc-500">
-                Información adicional del formato (códigos 61 a 63) por COP $ {fmt(montoOperacionAdicional(study))},
-                que supera los COP $ {fmt(umbralOperacionAdicional(study.anio))}. Se publicará en la tabla
-                «Operación adicional Transacciones Intercompañía».
+                Información adicional del formato (códigos 61 a 63) por COP $ {fmt(montoOperacionAdicional(study))}
+                {tieneOperacionAdicional(study)
+                  ? `, que supera los COP $ ${fmt(umbralOperacionAdicional(study.anio))}. Se publicará en la tabla «Operación adicional Transacciones Intercompañía».`
+                  : `, que no supera los COP $ ${fmt(umbralOperacionAdicional(study.anio))}. No se publica en el informe, y la tabla que traiga la plantilla se elimina.`}
               </p>
             </div>
           </div>
@@ -255,7 +285,7 @@ export default function IngestaOperaciones({ study, updateStudy }) {
                 </tr>
               </thead>
               <tbody>
-                {study.operacionAdicional.filas.map((f, i) => (
+                {(study.operacionAdicional.filas || []).map((f, i) => (
                   <tr key={i} className="border-t border-zinc-100 dark:border-zinc-800">
                     <td className="py-2 pr-4 text-zinc-900 dark:text-zinc-100">{f.vinculado || '—'}</td>
                     <td className="py-2 pr-4 text-zinc-600 dark:text-zinc-400">{f.pais || '—'}</td>
