@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "precios-trasnferencia"
+    "default": "precios-trasnferencia",
+    "pruebas": "precios-trasnferencia-pruebas"
   }
 }
