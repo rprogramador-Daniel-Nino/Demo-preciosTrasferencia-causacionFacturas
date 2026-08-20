@@ -609,8 +609,35 @@ export function tituloSectorial(study, analisisSector, year) {
 /** Las filas de la tabla, en el orden de columnas que fija `cabecerasDatosClaveSector`.
  *  Un `valorAnterior` ausente sale como hueco visible y NUNCA como el valor de al lado:
  *  el año anterior sin dato es un dato en sí en un informe que se radica. */
+/** Las filas de «Datos Clave del Sector» de una corrida, SIEMPRE como lista.
+ *
+ *  El `|| []` que había antes solo cubría null y undefined. Un caso real de producción
+ *  —`analisisSector/act_rr2fz1`, año 2025— tiene guardado
+ *  `datosClaveTabla: { "4": { fuenteUrl: "https://…" } }`: un mapa con un solo índice y un
+ *  solo subcampo, residuo de una versión anterior del pipeline del sector que quedó fijo
+ *  porque esa actividad nunca se volvió a correr (el escritor de hoy no puede producir esa
+ *  forma: normaliza con `Array.isArray` y escribe las seis claves de cada fila).
+ *
+ *  Con ese objeto, `for...of` lanzaba «object is not iterable» en la ruta .docx y `.map`
+ *  «is not a function» en la ruta PDF/HTML: un documento mal guardado costaba la generación
+ *  COMPLETA del informe, no solo su tabla.
+ *
+ *  Lo que no es lista se descarta en vez de rescatarse. Las filas de ese mapa no traen
+ *  `indicador` ni `valorActual`, y publicar una fila vacía en un informe que se radica ante
+ *  la DIAN es peor que no publicar la tabla. Sin filas, los llamadores siguen el camino de
+ *  «sin datos verificados» que ya existe y que sí avisa. */
+function filasClaveDe(datosClaveTabla) {
+  if (Array.isArray(datosClaveTabla)) return datosClaveTabla;
+  if (datosClaveTabla != null) {
+    console.warn('[analisisMercado] «Datos Clave del Sector» viene guardado con una forma que no '
+      + 'es lista (' + typeof datosClaveTabla + '): se trata como sin datos verificados. '
+      + 'Vuelva a correr el análisis del sector de esta actividad para regenerarlo.');
+  }
+  return [];
+}
+
 export function filasDatosClaveSector(datosClaveTabla) {
-  return (datosClaveTabla || []).map((f) => [
+  return filasClaveDe(datosClaveTabla).map((f) => [
     String(f.indicador || ''),
     f.valorAnterior ? String(f.valorAnterior) : '—',
     String(f.valorActual || ''),
@@ -646,7 +673,7 @@ export function tituloDatosClaveSector(tituloSector, year) {
 export function fuenteDatosClaveSector(entrada) {
   const vistas = new Set();
   const partes = [];
-  for (const f of (entrada && entrada.datosClaveTabla) || []) {
+  for (const f of filasClaveDe(entrada && entrada.datosClaveTabla)) {
     const nombre = String((f && f.fuente) || '').trim();
     if (!nombre || vistas.has(nombre)) continue;
     vistas.add(nombre);
