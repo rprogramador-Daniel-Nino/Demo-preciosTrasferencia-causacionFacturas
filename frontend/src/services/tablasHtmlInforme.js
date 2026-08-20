@@ -263,6 +263,28 @@ export function borrarTablaHtml(html, bloque) {
   return texto.slice(0, desde) + texto.slice(fin);
 }
 
+/** El rótulo genérico cuando no hay ancla de la que copiar la envoltura —párrafo llano,
+ *  negrita—. Es el mismo respaldo que usa `clonarRotuloHtml` cuando el rótulo del ancla no
+ *  tiene la forma esperada e `insertarTablaHtml` cuando el ancla no trae rótulo separado, así
+ *  que se extrae en vez de repetir el literal dos veces. */
+function rotuloGenericoHtml(titulo) {
+  return '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
+}
+
+/* El núcleo que comparten `reescribirRotuloHtml` y `clonarRotuloHtml`: partir el rótulo en
+   apertura/contenido/cierre y reproducir su envoltura de énfasis alrededor de un texto nuevo.
+   `calcularTexto` recibe el contenido VIEJO (para que `reescribirRotuloHtml` pueda mirar su
+   número antes de decidir el texto) y devuelve el texto final. `null` si `rotuloXml` no tiene
+   la forma `<p>`/`<h1..h6>` esperada, para que cada llamador decida su propio respaldo. */
+function conTextoDeRotuloHtml(rotuloXml, calcularTexto) {
+  const xml = String(rotuloXml || '');
+  const m = /^(<(p|h[1-6])(?:\s[^>]*)?>)([\s\S]*)(<\/\2\s*>)$/i.exec(xml);
+  if (!m) return null;
+  const texto = calcularTexto(m[3]);
+  const { abre, cierra } = envolturaDe(m[3]);
+  return m[1] + abre + escaparHtml(texto) + cierra + m[4];
+}
+
 /**
  * Clona el rótulo del ancla con un texto YA COMPUESTO por quien llama.
  *
@@ -275,11 +297,8 @@ export function borrarTablaHtml(html, bloque) {
  * `<span style>`, la etiqueta `<p>` o `<h1>`…`<h6>`— con el texto que ya llegó compuesto.
  */
 function clonarRotuloHtml(rotuloXml, titulo) {
-  const xml = String(rotuloXml || '');
-  const m = /^(<(p|h[1-6])(?:\s[^>]*)?>)([\s\S]*)(<\/\2\s*>)$/i.exec(xml);
-  if (!m) return '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
-  const { abre, cierra } = envolturaDe(m[3]);
-  return m[1] + abre + escaparHtml(titulo) + cierra + m[4];
+  const resultado = conTextoDeRotuloHtml(rotuloXml, () => titulo);
+  return resultado != null ? resultado : rotuloGenericoHtml(titulo);
 }
 
 /**
@@ -298,6 +317,13 @@ function clonarRotuloHtml(rotuloXml, titulo) {
  * Va después de la línea `FUENTE:` del ancla cuando la trae: colarse entre la tabla y su
  * fuente se la atribuiría a la tabla nueva.
  *
+ * NO inserta —devuelve `html` sin tocar— cuando el clon de la tabla sale IDÉNTICO al ancla:
+ * eso pasa cuando el ancla no tiene ninguna fila de CUERPO que `reescribirFilasHtml` pueda
+ * reemplazar (por ejemplo, una sola fila, que esta ruta trata siempre como encabezado). En
+ * ese caso lo que se insertaría bajo el rótulo de la tabla nueva serían los datos del ancla
+ * —de OTRA tabla—, una fuga silenciosa. Quien llama tiene que revisar si el html cambió
+ * (`resultado !== html`) para saber si la inserción ocurrió.
+ *
  * @param {string} html
  * @param {{inicio:number, fin:number, rotulo:{inicio:number,fin:number,xml:string}|null}} ancla
  * @param {{nombre:string, filas:string[][]}} tabla  lo que va en la tabla nueva.
@@ -308,16 +334,19 @@ export function insertarTablaHtml(html, ancla, tabla, titulo) {
   const texto = String(html || '');
   if (!ancla || !tabla) return texto;
 
+  const tablaAncla = texto.slice(ancla.inicio, ancla.fin);
+  const tablaClon = reescribirFilasHtml(tablaAncla, tabla.filas);
+  if (tablaClon === tablaAncla) return texto;
+
   /* Dónde acaba el ancla, contando su línea de fuente. */
   let fin = ancla.fin;
   const fuente = elementoFuenteSiguiente(texto, fin);
   if (fuente) fin = fuente.fin;
 
-  /* El clon: el rótulo del ancla con el texto nuevo, y su tabla con las filas nuevas. */
+  /* El clon: el rótulo del ancla con el texto nuevo, y su tabla ya reescrita arriba. */
   const rotuloClon = ancla.rotulo
     ? clonarRotuloHtml(ancla.rotulo.xml, titulo)
-    : '<p><strong>' + escaparTextoHtml(titulo) + '</strong></p>';
-  const tablaClon = reescribirFilasHtml(texto.slice(ancla.inicio, ancla.fin), tabla.filas);
+    : rotuloGenericoHtml(titulo);
 
   return texto.slice(0, fin) + rotuloClon + tablaClon + texto.slice(fin);
 }
