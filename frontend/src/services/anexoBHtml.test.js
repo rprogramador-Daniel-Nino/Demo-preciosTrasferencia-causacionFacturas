@@ -291,8 +291,8 @@ test('formatearCifra respeta el separador y marca el hueco', () => {
 });
 
 test('los rubros cubren las dos tablas del anexo', () => {
-  assert.strictEqual(RUBROS_RESULTADOS.length, 7, '5 fijos + I+D + publicidad');
-  assert.strictEqual(RUBROS_BALANCE.length, 8, '6 + otras inversiones + total de pasivos');
+  assert.strictEqual(RUBROS_RESULTADOS.length, 9, 'las 7 filas de la ficha + I+D + publicidad');
+  assert.strictEqual(RUBROS_BALANCE.length, 9, 'las 9 filas de la ficha');
   /* Cada rubro reconoce su propia etiqueta: si un patrón dejara de casar, la fila saldría
      con la etiqueta por defecto y nadie lo notaría. */
   [...RUBROS_RESULTADOS, ...RUBROS_BALANCE].forEach((r) => {
@@ -322,6 +322,7 @@ test('el balance del Anexo B va en el orden en que la ficha lo imprime', () => {
     'inventarios',
     'propiedad_planta_equipo',
     'total_activos',
+    'activos_operativos',
     'total_pasivos',
     'cuentas_por_pagar',
   ]);

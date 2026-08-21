@@ -149,11 +149,14 @@ Devuelve SOLO un JSON estricto con esta estructura:
   "costo_ventas": null,
   "utilidad_bruta": null,
   "gastos_operacionales": null,
+  "gastos_generales_administrativos": null,
+  "depreciacion": null,
   "utilidad_operacional": null,
   "cuentas_por_cobrar": null,
   "inventarios": null,
   "cuentas_por_pagar": null,
   "total_activos": null,
+  "activos_operativos": null,
   "total_pasivos": null,
   "patrimonio": null,
   "propiedad_planta_equipo": null,
@@ -168,6 +171,8 @@ Regla general: si un rubro numérico no aparece en el documento, devuelve null �
 Reglas para "gastos_investigacion_desarrollo" y "gastos_publicidad": son rubros OPCIONALES. Úsalos solo si la empresa los desglosa como línea propia en su estado de resultados. Si no aparecen desglosados, devuelve null — NO los deduzcas restando de gastos_operacionales, NO estimes.
 
 Regla para "otras_inversiones": las inversiones DISTINTAS del efectivo y sus equivalentes —inversiones a corto o largo plazo, instrumentos financieros, participaciones en otras sociedades—, cuando el documento las presenta como línea propia. Si no figuran, null: no las sumes al efectivo ni las deduzcas de ningún total.
+
+Reglas para "gastos_generales_administrativos", "depreciacion" y "activos_operativos": son las tres filas que la ficha imprime y que antes no se pedian. "gastos_generales_administrativos" son los gastos generales y administrativos (SG&A) cuando la empresa los desglosa como linea propia. "depreciacion" es la depreciacion —y la amortizacion si van en la misma linea— cuando figura como linea propia del estado de resultados. "activos_operativos" es el subtotal de activos operativos cuando el documento lo imprime. Las tres van en null si no figuran: NO las deduzcas restando ni las repartas desde otro rubro.
 
 Regla de escala, obligatoria y sin excepción: cada cifra numérica va EXACTAMENTE como aparece impresa en el documento, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así el documento diga "en miles" o "en millones" en el encabezado. Si el documento imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa para que otra parte del sistema decida qué hacer con ella; no es una instrucción para que tú calcules nada.`;
 
@@ -377,11 +382,14 @@ Devuelve SOLO un JSON estricto con esta estructura:
       "costo_ventas": null,
       "utilidad_bruta": null,
       "gastos_operacionales": null,
+      "gastos_generales_administrativos": null,
+      "depreciacion": null,
       "utilidad_operacional": null,
       "cuentas_por_cobrar": null,
       "inventarios": null,
       "cuentas_por_pagar": null,
       "total_activos": null,
+      "activos_operativos": null,
       "total_pasivos": null,
       "patrimonio": null,
       "propiedad_planta_equipo": null,
@@ -396,6 +404,8 @@ Devuelve SOLO un JSON estricto con esta estructura:
 Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, devuélvelo en null — NUNCA en 0, porque 0 se lee como "la empresa reportó cero" y ese no es el caso cuando el concepto simplemente no aparece. Esto aplica a TODOS los rubros numéricos, incluyendo "gastos_investigacion_desarrollo" y "gastos_publicidad" (que además son OPCIONALES: van en null salvo que la empresa los desglose como línea propia). No estimes ni deduzcas ningún rubro por diferencia. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento. "pagina_inicio" y "pagina_fin" son la primera y la última página (1-indexadas) del PDF COMPLETO tal como se envió donde aparecen los estados financieros de esa empresa — no un conteo relativo a la empresa. Si el documento no permite determinarlas con certeza, devuelve null en ambas: no estimes.
 
 Regla para "otras_inversiones": las inversiones DISTINTAS del efectivo y sus equivalentes —inversiones a corto o largo plazo, instrumentos financieros, participaciones en otras sociedades—, cuando el documento las presenta como línea propia. Si no figuran, null: no las sumes al efectivo ni las deduzcas de ningún total.
+
+Reglas para "gastos_generales_administrativos", "depreciacion" y "activos_operativos": son las tres filas que la ficha imprime y que antes no se pedian. "gastos_generales_administrativos" son los gastos generales y administrativos (SG&A) cuando la empresa los desglosa como linea propia. "depreciacion" es la depreciacion —y la amortizacion si van en la misma linea— cuando figura como linea propia del estado de resultados. "activos_operativos" es el subtotal de activos operativos cuando el documento lo imprime. Las tres van en null si no figuran: NO las deduzcas restando ni las repartas desde otro rubro.
 
 Regla de escala, obligatoria y sin excepción, para cada empresa: cada cifra numérica va EXACTAMENTE como aparece impresa para esa empresa, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así su tabla diga "en miles" o "en millones" en el encabezado. Si su tabla imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa; no es una instrucción para que tú calcules nada.`;
 

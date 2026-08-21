@@ -41,6 +41,7 @@ import {
 import {
   interpretarEncabezadoAnexo, resolverAnexos, nombreDeAnexo,
 } from './anexosPlantilla.js';
+import { RUBROS_RESULTADOS as RUBROS_PL, RUBROS_BALANCE as RUBROS_BAL, cifraDeRubro, rubrosConDato } from './anexoBRubros.js';
 
 /* Una entrada del índice lleva el número de página pegado al final y NO abre sección: el
    índice repite «ANEXO B. Descripciones de comparables…55». Sin esta condición la búsqueda
@@ -56,39 +57,12 @@ const RX_CABECERA_BLOQUE = /nombre de la compa/i;
    nombrarlo en un aviso es porque no se encontró, y entonces no hay letra que citar. */
 export const NOMBRE_ANEXO_B = nombreDeAnexo('descripciones');
 
-/**
- * Los rubros del ANEXO B, en el orden en que van en el informe.
- *
- * `patron` reconoce la etiqueta en la plantilla —para reutilizar SU redacción— y
- * `etiqueta` es la que se escribe cuando la plantilla no trae esa fila, que pasa con I+D
- * y publicidad. `campo` es el rubro del parser (`eeffDatos`).
- */
-export const RUBROS_RESULTADOS = [
-  { campo: 'ingresos_operacionales', etiqueta: 'Ventas netas', patron: /ventas netas|ingresos operacionales/i },
-  { campo: 'costo_ventas', etiqueta: 'Costo de los bienes vendidos', patron: /costo de los bienes|costo de ventas/i },
-  { campo: 'utilidad_bruta', etiqueta: 'Beneficio bruto', patron: /beneficio bruto|utilidad bruta/i },
-  { campo: 'gastos_operacionales', etiqueta: 'Gastos operativos', patron: /gastos operativos|gastos de operaci/i },
-  { campo: 'utilidad_operacional', etiqueta: 'Utilidad de operación', patron: /utilidad de operaci|utilidad operacional/i },
-  { campo: 'gastos_investigacion_desarrollo', etiqueta: 'Gastos de investigación y desarrollo', patron: /investigaci/i },
-  { campo: 'gastos_publicidad', etiqueta: 'Gastos de publicidad', patron: /publicidad/i },
-];
+/* Las filas del anexo viven en anexoBRubros.js, compartidas con la ruta de OOXML: eran dos
+   listas que debían decir lo mismo y una se quedó atrás. Se re-exportan porque son parte de
+   la interfaz que ya usaban las pruebas de este módulo. */
+export { RUBROS_RESULTADOS, RUBROS_BALANCE } from './anexoBRubros.js';
 
-/* En el orden en que la ficha de la macro imprime el balance: es el documento que el
-   analista revisa al lado del anexo, y con las filas cruzadas hay que buscar cada rubro en
-   vez de leer las dos en paralelo. «Otras inversiones» y «Total de pasivos» estaban de más
-   en la ficha y de menos aquí: la primera ni se pedía al parser —no existía el campo—, la
-   segunda se leía desde siempre y solo faltaba escribirla. Las dos se omiten cuando la
-   comparable no las reporta, como I+D y publicidad arriba. */
-export const RUBROS_BALANCE = [
-  { campo: 'efectivo_y_equivalentes', etiqueta: 'Efectivo promedio y equivalentes de efectivo', patron: /efectivo/i },
-  { campo: 'otras_inversiones', etiqueta: 'Otras inversiones promedio', patron: /otras inversiones|inversiones/i },
-  { campo: 'cuentas_por_cobrar', etiqueta: 'Promedio de cuentas por cobrar netas', patron: /cuentas por cobrar/i },
-  { campo: 'inventarios', etiqueta: 'Inventario neto promedio', patron: /inventario/i },
-  { campo: 'propiedad_planta_equipo', etiqueta: 'EPP neto promedio', patron: /epp|propiedad, planta|planta y equipo/i },
-  { campo: 'total_activos', etiqueta: 'Activos totales promedio', patron: /activos totales/i },
-  { campo: 'total_pasivos', etiqueta: 'Total de pasivos promedio', patron: /total de pasivos|pasivos totales|total pasivo/i },
-  { campo: 'cuentas_por_pagar', etiqueta: 'Promedio de cuentas por pagar netas', patron: /cuentas por pagar/i },
-];
+
 
 /**
  * Los encabezados de anexo del CUERPO del informe, en orden de aparición.
@@ -272,7 +246,6 @@ function etiquetasDeTabla(tablaHtml) {
  */
 export function generarBloqueAnexoB(molde, moldeHtml, comparable, year) {
   const c = comparable || {};
-  const datos = c.eeffDatos || {};
   const sep = separadorDeMiles(moldeHtml);
 
   const tablaNombre = reescribirDosColumnas(molde.tablas[0].xml, [[
@@ -282,21 +255,20 @@ export function generarBloqueAnexoB(molde, moldeHtml, comparable, year) {
 
   /* Una fila por rubro QUE LA COMPARABLE TIENE. Los que no reporta no se inventan: es lo
      que hace la plantilla original, donde unas traen I+D y publicidad y otras no. */
-  const filasDeRubros = (rubros, etiquetas) => rubros
-    .filter((r) => datos[r.campo] !== null && datos[r.campo] !== undefined && datos[r.campo] !== '')
-    .map((r) => [etiquetaDe(r, etiquetas), formatearCifra(datos[r.campo], sep)]);
+  const filasDeRubros = (rubros, etiquetas) => rubrosConDato(rubros, c)
+    .map((r) => [etiquetaDe(r, etiquetas), formatearCifra(cifraDeRubro(r, c), sep)]);
 
   const tablaResultados = molde.tablas[1]
     ? conAnioEnCabecera(
       reescribirDosColumnas(molde.tablas[1].xml,
-        filasDeRubros(RUBROS_RESULTADOS, etiquetasDeTabla(molde.tablas[1].xml))),
+        filasDeRubros(RUBROS_PL, etiquetasDeTabla(molde.tablas[1].xml))),
       year)
     : '';
 
   const tablaBalance = molde.tablas[2]
     ? conAnioEnCabecera(
       reescribirDosColumnas(molde.tablas[2].xml,
-        filasDeRubros(RUBROS_BALANCE, etiquetasDeTabla(molde.tablas[2].xml))),
+        filasDeRubros(RUBROS_BAL, etiquetasDeTabla(molde.tablas[2].xml))),
       year)
     : '';
 
