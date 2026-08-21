@@ -3276,19 +3276,31 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
       nuevoXmlB += '\n' + tablaPlXml;
 
       // 3. Tabla de Balance
-      /* En el orden en que la ficha imprime el balance —efectivo, cuentas por cobrar,
-         inventarios, propiedad planta y equipo, total de activos, cuentas por pagar—, y
-         no en el que estaban. Es el documento que el analista revisa al lado del anexo:
-         con las filas cruzadas hay que buscar cada rubro en vez de leer las dos en
-         paralelo. El estado de resultados de arriba ya seguía ese orden. */
+      /* En el orden en que la ficha imprime el balance: efectivo, otras inversiones,
+         cuentas por cobrar, inventarios, propiedad planta y equipo, total de activos,
+         total de pasivos y cuentas por pagar. Es el documento que el analista revisa al
+         lado del anexo, y con las filas cruzadas hay que buscar cada rubro en vez de leer
+         las dos en paralelo. El estado de resultados de arriba ya seguía ese orden.
+
+         «Otras inversiones» y «Total de pasivos» se omiten cuando la ficha no las trae,
+         como los dos gastos opcionales del estado de resultados: hay fichas que imprimen
+         «-» en esa fila y escribir un cero diría que la comparable reportó cero. */
       const filasBalance = [
         ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
+      ];
+      if (num(c.eeffDatos.otras_inversiones) !== null) {
+        filasBalance.push(['Otras inversiones promedio', celdaCifraAnexoB(c.eeffDatos.otras_inversiones)]);
+      }
+      filasBalance.push(
         ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
         ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
         ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
         ['Activos totales promedio', celdaCifraAnexoB(c.eeffDatos.total_activos)],
-        ['Promedio de cuentas por pagar netas', celdaCifraAnexoB(c.ap)],
-      ];
+      );
+      if (num(c.eeffDatos.total_pasivos) !== null) {
+        filasBalance.push(['Total de pasivos promedio', celdaCifraAnexoB(c.eeffDatos.total_pasivos)]);
+      }
+      filasBalance.push(['Promedio de cuentas por pagar netas', celdaCifraAnexoB(c.ap)]);
 
       const tablaBalanceXml = generarTablaOoxml(
         'Balance General',

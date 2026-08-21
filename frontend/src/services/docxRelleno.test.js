@@ -3598,6 +3598,7 @@ const COMPARABLE_CON_EEFF = {
   eeffDatos: {
     periodo: 2025, utilidad_bruta: 400, gastos_operacionales: 250,
     total_activos: 2000, propiedad_planta_equipo: 300, efectivo_y_equivalentes: 500,
+    otras_inversiones: 250, total_pasivos: 900,
   },
 };
 
@@ -3697,7 +3698,7 @@ test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orde
   /* El orden y el formato son los de la ficha que produce la macro de Word, que es el
      documento que el analista tiene delante al revisar el anexo: dos decimales siempre
      —una cifra sin ellos parece redondeada a mano— y el balance en el orden en que la
-     ficha lo imprime, que empieza por el efectivo y no por el total de activos. */
+     ficha lo imprime, del efectivo a las cuentas por pagar. */
   const FILAS_ESPERADAS = [
     'Estado de Resultados', 'Descripción', '2025',
     'Ventas netas', '1.000,00',
@@ -3708,10 +3709,12 @@ test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orde
     'FUENTE:',
     'Balance General', 'Descripción', '2025',
     'Efectivo promedio y equivalentes de efectivo', '500,00',
+    'Otras inversiones promedio', '250,00',
     'Promedio de cuentas por cobrar netas', '120,00',
     'Inventario neto promedio', '40,00',
     'EPP neto promedio', '300,00',
     'Activos totales promedio', '2.000,00',
+    'Total de pasivos promedio', '900,00',
     'Promedio de cuentas por pagar netas', '80,00',
     'FUENTE:',
   ];
@@ -3780,4 +3783,21 @@ test('una comparable sin estado financiero leído deja el hueco señalado, no ci
      suyo, y «EEFF DEL CLIENTE ANTERIOR» seguiría ahí con razón porque vive en el ANEXO A. */
   assert.ok(!texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'no se conserva lo del informe anterior');
   assert.match(avisos.join(' | '), /1 de 1 comparable\(s\) sin estado financiero/);
+});
+
+
+test('otras inversiones y total de pasivos se omiten cuando la ficha no los trae', async () => {
+  /* Hay fichas que imprimen «-» en «Otras inversiones» —LYONDELLBASELL, frente a ASIA
+     POLYMER que sí la trae— y escribir un cero ahí diría que la comparable reportó cero.
+     Las demás filas no se mueven de sitio por eso. */
+  const sinEllas = { ...COMPARABLE_CON_EEFF, eeffDatos: {
+    ...COMPARABLE_CON_EEFF.eeffDatos, otras_inversiones: null, total_pasivos: null } };
+  const zip = await zipSinAnexoB();
+  insertarImagenesAnexoB(zip, { anio: 2025, comparables: [sinEllas] });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.ok(!texto.includes('Otras inversiones'), 'sin dato no se imprime la fila');
+  assert.ok(!texto.includes('Total de pasivos'), 'ni la de pasivos');
+  assert.match(texto, /Efectivo promedio y equivalentes de efectivo500,00Promedio de cuentas por cobrar netas120,00/,
+    'y las que quedan siguen contiguas y en orden');
 });
