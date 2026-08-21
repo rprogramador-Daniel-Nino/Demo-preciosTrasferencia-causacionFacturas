@@ -47,6 +47,18 @@ Si el documento no contiene información de composición accionaria o la tabla e
    `eeffParser.js`. */
 const ESTADOS_REINTENTABLES = [408, 425, 429, 500, 502, 503, 504];
 
+/* Mensaje corto y estable para el usuario cuando la extracción FALLÓ (red, cuota, error del
+   servicio) — para distinguirlo de cuando Gemini sí respondió y limpiamente no encontró
+   accionistas. Sin este campo, quien llama no puede saber cuál de los dos pasó: ambos casos
+   volvían como `{ accionistas: [] }` y punto. Exportado para poder probarlo sin mockear
+   FileReader/mammoth/axios. */
+export function mensajeErrorGemini(err) {
+  const status = err && err.response && err.response.status;
+  if (status) return `el servicio de IA respondió con error ${status}`;
+  if (err && err.message) return err.message;
+  return 'fallo de red o del servicio de IA';
+}
+
 async function postGeminiWithRetry(payload, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -114,22 +126,35 @@ export async function parseAccionistasWithGeminiOCR(file) {
 /**
  * Extrae la composición accionaria de cualquier documento (DOCX, PDF, imagen),
  * típicamente usado como fallback cuando se carga la plantilla del cliente en el Generador de Informe.
+ *
+ * Nunca rechaza. El llamador distingue "vacío limpio" (Gemini respondió y no encontró
+ * accionistas: `accionistas: []` sin `error`) de "falló" (red, cuota, servicio caído:
+ * `accionistas: []` CON `error`, el mensaje de `mensajeErrorGemini`).
  */
 export async function parseAccionistasFromDocument(file) {
   const isDocx = file.name && file.name.match(/\.(docx)$/i);
-  let fileText = '';
 
   if (isDocx) {
+    let fileText = '';
     try {
       const arrayBuffer = await file.arrayBuffer();
       const result = await mammoth.extractRawText({ arrayBuffer });
       fileText = result.value || '';
     } catch (e) {
       console.warn("Mammoth text extraction error al leer plantilla para accionistas:", e);
+      return {
+        accionistas: [], capital_pagado: null, total_acciones: null,
+        error: 'no se pudo leer el contenido del Word (' + (e && e.message || 'error de mammoth') + ')',
+      };
     }
-  }
 
-  if (fileText && fileText.length > 50) {
+    if (!(fileText && fileText.length > 50)) {
+      return {
+        accionistas: [], capital_pagado: null, total_acciones: null,
+        error: 'el Word no trajo texto legible',
+      };
+    }
+
     const payloadText = PLANTILLA_ACCIONISTAS_PROMPT + '\n\nCONTENIDO DEL DOCUMENTO:\n' + fileText.slice(0, 150000);
     const payload = {
       model: 'gemini-3.5-flash',
@@ -147,10 +172,17 @@ export async function parseAccionistasFromDocument(file) {
           total_acciones: parsed.total_acciones || null,
         };
       }
+      return {
+        accionistas: [], capital_pagado: null, total_acciones: null,
+        error: 'la IA no devolvió una respuesta utilizable',
+      };
     } catch (err) {
       console.warn("Error extrayendo accionistas desde texto DOCX:", err);
+      return {
+        accionistas: [], capital_pagado: null, total_acciones: null,
+        error: mensajeErrorGemini(err),
+      };
     }
-    return { accionistas: [], capital_pagado: null, total_acciones: null };
   }
 
   // Si es PDF o imagen
@@ -190,14 +222,23 @@ export async function parseAccionistasFromDocument(file) {
             total_acciones: parsed.total_acciones || null,
           });
         } else {
-          resolve({ accionistas: [], capital_pagado: null, total_acciones: null });
+          resolve({
+            accionistas: [], capital_pagado: null, total_acciones: null,
+            error: 'la IA no devolvió una respuesta utilizable',
+          });
         }
       } catch (err) {
         console.warn("Error en parseAccionistasFromDocument con Gemini OCR:", err);
-        resolve({ accionistas: [], capital_pagado: null, total_acciones: null });
+        resolve({
+          accionistas: [], capital_pagado: null, total_acciones: null,
+          error: mensajeErrorGemini(err),
+        });
       }
     };
-    reader.onerror = () => resolve({ accionistas: [], capital_pagado: null, total_acciones: null });
+    reader.onerror = () => resolve({
+      accionistas: [], capital_pagado: null, total_acciones: null,
+      error: 'no se pudo leer el archivo',
+    });
   });
 }
 
