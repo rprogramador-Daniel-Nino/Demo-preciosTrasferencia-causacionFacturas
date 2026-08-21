@@ -391,39 +391,12 @@ test('el ANEXO A se ancla en su encabezado, sin depender del centinela', async (
   assert.ok(zip.file('word/media/anexo_a_1.png'), 'la primera página quedó en el paquete');
 });
 
-test('el ANEXO A trae el ESF y el ERI como tablas nativas, no como imagen', async () => {
+test('el ANEXO A ya no trae el ESF ni el ERI como tabla', async () => {
   const zip = await zipConAnexoA();
   insertarAnexoA(zip, ESTUDIO_EEFF, {});
   const texto = textoDe(zip, RUTA_DOC_TEST);
-  assert.match(texto, /Estado de Situación Financiera/);
-  assert.match(texto, /Estado de Resultados/);
-  assert.match(texto, /2\.179\.479\.687/, 'el total de activos, formateado en pesos');
-  assert.match(texto, /5\.271\.105\.507/, 'los ingresos del ERI');
-});
-
-test('el A.V. del ANEXO A sale de la misma cuenta que la Tabla 10', async () => {
-  /* Si cada uno calculara su porcentaje, el anexo y el cuerpo del informe publicarían
-     verticales distintos para el mismo estado financiero. */
-  const zip = await zipConAnexoA();
-  insertarAnexoA(zip, ESTUDIO_EEFF, {});
-  const anexo = textoDe(zip, RUTA_DOC_TEST);
-
-  const tabla10 = actualizarTablasOperacionesOoxml(
-    conTabla('<w:p><w:t>Tabla 10. Activos a 31 de diciembre de 2025</w:t></w:p>'),
-    ESTUDIO_EEFF,
-  );
-  /* 12.417.756 sobre 2.179.479.687 es 0,570 %. */
-  assert.match(tabla10, /0,570 %/, 'la Tabla 10 calcula el vertical sobre el total de activos');
-  assert.match(anexo, /0,570 %/, 'y el anexo tiene que dar lo mismo');
-});
-
-test('el ERI del ANEXO A declara el ajuste excluido', async () => {
-  /* Los $983.180.000 del proyecto CoCrea son lo que sostiene el margen que el informe
-     declara. Un estado de resultados que no los nombre no cuadra con el rango. */
-  const zip = await zipConAnexoA();
-  insertarAnexoA(zip, ESTUDIO_EEFF, {});
-  const texto = textoDe(zip, RUTA_DOC_TEST);
-  assert.match(texto, /983\.180\.000/);
+  assert.ok(!texto.includes('Estado de Situación Financiera'));
+  assert.ok(!texto.includes('Estado de Resultados'));
 });
 
 test('sin cifras parseadas el ANEXO A avisa en vez de salir vacío', async () => {
@@ -459,7 +432,7 @@ test('rellenarDocx llena el ANEXO A con lo que trae el estudio', async () => {
     tipoSalida: 'nodebuffer',
   });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
-  assert.match(texto, /Estado de Situación Financiera/);
+  assert.ok(!texto.includes('Estado de Situación Financiera'));
   assert.ok(!texto.includes('páginas del informe anterior'));
 });
 
@@ -2776,7 +2749,7 @@ test('el anexo de estados financieros no se lleva el documento cuando no hay ANE
   assert.strictEqual(problemaDeIntegridadOoxml(xml), '', 'el documento tiene que seguir cerrando');
   assert.ok(xml.length > antes.length * 0.9, 'y no perder el cuerpo del informe');
   assert.ok(!texto.includes('EEFF DEL CLIENTE ANTERIOR'), 'el anexo se rehace');
-  assert.match(texto, /Estado de Situación Financiera/);
+  assert.match(texto, /ANEXO A\. Estados financieros ACME COLOMBIA S\.A\.S/, 'con el rótulo del estudio');
   assert.ok(texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'y el anexo siguiente no se toca');
   assert.ok(texto.includes('MATRIZ DEL CLIENTE ANTERIOR'), 'ni el de después');
   assert.ok(texto.includes('Cuerpo del informe que no se puede perder'), 'ni el cuerpo');

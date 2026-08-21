@@ -2799,58 +2799,6 @@ function traeCifrasEeff(estudio) {
   return claves.some((c) => num(estudio && estudio[c]) !== null);
 }
 
-/**
- * Filas del Estado de Situación Financiera para el ANEXO A.
- *
- * El A.V. sale de `verticalSobreActivos`, la misma función que usa la Tabla 10. Las
- * cuentas por pagar se publican porque la ingesta las lee y sostienen el ajuste de capital
- * de trabajo, pero sin vertical: un pasivo sobre el total de activos no significa nada, y
- * escribir ahí un porcentaje sería inventarlo.
- */
-export function filasEsfAnexoA(estudio) {
-  const av = verticalSobreActivos(estudio);
-  const monto = (clave) => {
-    const n = num(estudio && estudio[clave]);
-    return n === null ? SIN_DATO : fmt(n);
-  };
-
-  const filas = RUBROS_ESF.map(([etiqueta, clave]) => [etiqueta, monto(clave), av(estudio[clave])]);
-  filas.push(['PASIVOS', '', '']);
-  filas.push(['Cuentas por pagar comerciales', monto('t_ap'), SIN_DATO]);
-  return filas;
-}
-
-/**
- * Filas del Estado de Resultados Integral para el ANEXO A.
- *
- * La utilidad bruta y los gastos operativos se derivan y no se piden a la ingesta, con el
- * mismo despeje que documenta `pliOf`: `opex = ventas − costo − utilidad operacional`. Así
- * el anexo no puede contradecir al indicador de rentabilidad.
- *
- * Los costos y gastos excluidos se declaran como línea propia: son lo que sostiene el
- * margen que el informe publica, y un estado de resultados que no los nombre no cuadra con
- * el rango de unas páginas más adelante.
- */
-export function filasEriAnexoA(estudio) {
-  const e = estudio || {};
-  const s = num(e.t_s), c = num(e.t_c), op = num(e.t_op), excluido = num(e.seg_excluido);
-  const val = (n) => (n === null ? SIN_DATO : fmt(n));
-  const bruta = s !== null && c !== null ? s - c : null;
-  const opex = bruta !== null && op !== null ? bruta - op : null;
-
-  const filas = [
-    ['Ingresos de actividades ordinarias', val(s)],
-    ['Costo de ventas', val(c)],
-    ['Utilidad bruta', val(bruta)],
-    ['Gastos operativos', val(opex)],
-    ['Utilidad operacional', val(op)],
-  ];
-  if (excluido !== null && excluido !== 0) {
-    filas.push(['Costos y gastos excluidos de la operación analizada', val(excluido)]);
-  }
-  return filas;
-}
-
 /* ─────────────────────────────────────────────────────────────────────────────
    LOCALIZAR LOS ANEXOS.
 
@@ -3031,7 +2979,6 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
     return { insertadas: 0 };
   }
 
-  const year = Number(estudio && estudio.anio) || 2025;
   const entidad = (estudio && estudio.ent) || 'la Compañía';
   const rotulo = rotuloAnexo('eeff', anexo.letra, { entidad });
 
@@ -3054,19 +3001,6 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
       zip, xml.slice(0, anexo.inicio) + nuevo + xml.slice(anexo.fin), avisos, rotulo);
     return { insertadas: 0 };
   }
-
-  nuevo += generarTablaOoxml(
-    `Estado de Situación Financiera a 31 de diciembre de ${year}`,
-    ['Cifras expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-    filasEsfAnexoA(estudio),
-    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
-  );
-  nuevo += generarTablaOoxml(
-    `Estado de Resultados Integral ${year}`,
-    ['Cifras expresadas en pesos colombianos', String(year)],
-    filasEriAnexoA(estudio),
-    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
-  );
 
   let rels = zip.file(RUTA_RELS).asText();
   let ct = zip.file(RUTA_CT).asText();
