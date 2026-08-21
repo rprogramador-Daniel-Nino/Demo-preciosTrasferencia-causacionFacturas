@@ -141,6 +141,10 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
   /* Por qué la copia en la nube no está disponible. Se muestra junto a la plantilla: sin
      esto, el usuario creería que el formato viaja con el estudio cuando no lo hace. */
   const [avisoNube, setAvisoNube] = useState('');
+  /* Resultado (éxito, vacío o fallo) de heredar la composición accionaria de la plantilla
+     recién subida. Antes esto era un console.warn silencioso: quien la subía solo se
+     enteraba, si acaso, al abrir el Word final y ver la Tabla 6 vacía. */
+  const [avisoAccionistasPlantilla, setAvisoAccionistasPlantilla] = useState('');
   /* Plantilla vinculada al estudio: `{ id, html, huecos, marcada }`. Se guarda para
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
@@ -653,19 +657,45 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
   const handleTemplateUpload = (file) => {
     setLoading(true);
+    setAvisoAccionistasPlantilla('');
 
-    // Fallback de extracción de composición accionaria desde la plantilla del cliente
-    if (typeof updateStudy === 'function') {
-      parseAccionistasFromDocument(file).then((datosAccionistas) => {
-        if (datosAccionistas && datosAccionistas.accionistas && datosAccionistas.accionistas.length > 0) {
-          updateStudy({
-            plantillaAccionistas: datosAccionistas
-          });
-        }
-      }).catch((err) => {
-        console.warn('[plantilla] No se pudo extraer composición accionaria:', err);
-      });
-    }
+    /* Se dispara ya, en paralelo con la lectura de la plantilla más abajo, para no alargar el
+       tiempo total de la subida — pero SE ESPERA antes de soltar `loading` (ver el `await` en
+       el `finally`). Antes era fire-and-forget: `loading` volvía a false sin importar si esta
+       extracción seguía en vuelo o ya había fallado en silencio, y nada impedía darle clic a
+       "Descargar Word" —que no miraba `loading`— con `estudio.plantillaAccionistas` todavía sin
+       poblar. Por eso el botón de descarga, más abajo, ahora también se deshabilita con `loading`. */
+    const promesaAccionistas = (typeof updateStudy === 'function')
+      ? parseAccionistasFromDocument(file).then((resultado) => {
+          if (resultado && resultado.accionistas && resultado.accionistas.length > 0) {
+            updateStudy({ plantillaAccionistas: resultado });
+            setAvisoAccionistasPlantilla(
+              `✅ ${resultado.accionistas.length} accionista(s) tomados de la plantilla como respaldo ` +
+              'de la Tabla 6 (se usan solo si no hay certificado en «1. Contribuyente» ni informe del año anterior).'
+            );
+          } else if (resultado && resultado.error) {
+            setAvisoAccionistasPlantilla(
+              `⚠ No se pudo leer la composición accionaria de la plantilla (${resultado.error}). ` +
+              'Vuelve a intentarlo subiendo la plantilla otra vez, o carga el Certificado de ' +
+              'Composición Accionaria en «1. Contribuyente».'
+            );
+          } else {
+            setAvisoAccionistasPlantilla(
+              'ℹ La plantilla no trae una tabla de composición accionaria reconocible. Si tampoco ' +
+              'hay certificado ni informe anterior, la Tabla 6 del informe saldrá vacía (solo la fila «Total»).'
+            );
+          }
+          return resultado;
+        }).catch((err) => {
+          // Defensivo: parseAccionistasFromDocument ya no debería rechazar.
+          console.warn('[plantilla] No se pudo extraer composición accionaria:', err);
+          setAvisoAccionistasPlantilla(
+            '⚠ No se pudo leer la composición accionaria de la plantilla (fallo inesperado). ' +
+            'Vuelve a intentarlo subiendo la plantilla otra vez.'
+          );
+          return null;
+        })
+      : Promise.resolve(null);
 
     const reader = new FileReader();
     reader.readAsArrayBuffer(file);
@@ -787,6 +817,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
         console.error("Error al analizar la plantilla personalizada:", err);
         alert("No se pudo analizar la plantilla seleccionada.");
       } finally {
+        await promesaAccionistas;
         setLoading(false);
       }
     };
@@ -1640,6 +1671,19 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
               <AlertTriangle className="w-3 h-3" />{avisoNube}
             </p>
           )}
+          {avisoAccionistasPlantilla && (
+            <p className={
+              'text-[11px] mt-1 flex items-center gap-1 ' +
+              (avisoAccionistasPlantilla.startsWith('✅')
+                ? 'text-emerald-700 dark:text-emerald-400'
+                : 'text-amber-700 dark:text-amber-400')
+            }>
+              {avisoAccionistasPlantilla.startsWith('✅')
+                ? <Check className="w-3 h-3" />
+                : <AlertTriangle className="w-3 h-3" />}
+              {avisoAccionistasPlantilla.replace(/^(✅|⚠|ℹ)\s*/, '')}
+            </p>
+          )}
         </div>
         <div className="flex gap-3">
           <div className="relative">
@@ -1690,7 +1734,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           </button>
           <button
             onClick={descargarDocx}
-            disabled={generandoDocx || analisisMercado === undefined}
+            disabled={generandoDocx || analisisMercado === undefined || loading}
             title="Word real (OOXML): saltos de página, encabezado y tablas exactos"
             className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >

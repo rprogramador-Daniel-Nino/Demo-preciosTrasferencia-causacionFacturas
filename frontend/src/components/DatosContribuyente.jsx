@@ -165,7 +165,7 @@ export default function DatosContribuyente({ study, updateStudy }) {
         </div>
 
         {/* Tabla de Composición Accionaria Extraída */}
-        {accionistasEfectivos.length > 0 && (
+        {accionistasEfectivos.length > 0 ? (
           <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-2 gap-2">
               <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
@@ -213,6 +213,16 @@ export default function DatosContribuyente({ study, updateStudy }) {
                 </tbody>
               </table>
             </div>
+          </div>
+        ) : (
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-4 shadow-sm flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+            <p className="text-xs text-amber-800 dark:text-amber-300">
+              <strong>Falta la Composición Accionaria (Tabla 6).</strong> No hay certificado cargado en esta
+              sección, ni un informe del año anterior con accionistas, ni la plantilla del cliente subida en
+              el Generador trajo una tabla reconocible. El informe final saldrá con la Tabla 6 vacía (solo la
+              fila «Total» con guiones) hasta que subas el Certificado de Composición Accionaria abajo.
+            </p>
           </div>
         )}
 
