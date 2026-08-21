@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
   EEFF_PROMPT, EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT,
   promptEeffContribuyente, bloqueDeTexto, valorDeRubro, rotuloDeRubro,
-  CAMPO_POR_RUBRO, RUBROS_DE_COTEJO,
+  CAMPO_POR_RUBRO, RUBROS_DE_COTEJO, extraerTextoEstructuradoPdf,
 } from './eeffParser.js';
 import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 
@@ -191,4 +192,84 @@ test('el bloque de texto dice que los dígitos del texto mandan sobre la imagen'
   assert.match(b, /manda el texto/i);
   assert.match(b, /<texto_del_documento>/);
   assert.ok(b.includes('15.004.112.346'));
+});
+
+/* ══════ Lectura nativa del PDF: el orden de filas y columnas es el del documento ══════
+
+   Es la razón de ser del extractor: el Vision OCR devolvía las filas
+   desordenadas y los EEFF de las comparables salen de una macro de Word, así
+   que el PDF trae capa de texto —y, en las fichas individuales, el árbol de
+   estructura etiquetado— con el orden exacto. */
+
+const DIR_COMPARABLES = 'frontend/Archivos Prueba/EEFF Comparables';
+const PDF_LOTE = 'frontend/Archivos Prueba/EEFF Comparables 2025.pdf';
+
+function archivoFalso(ruta) {
+  return { name: ruta.split('/').pop(), arrayBuffer: async () => readFileSync(ruta) };
+}
+
+/* El orden en que la macro imprime los rubros, tal cual. */
+const RUBROS_EN_ORDEN = [
+  'Estado de resultados', 'Ventas netas', 'Costo de ventas', 'Utilidad bruta',
+  'Gastos generales y administrativos (SG&A)', 'Depreciación', 'Gastos operativos',
+  'Utilidad operativa', 'Balance general', 'Efectivo y equivalentes de efectivo',
+  'Otras inversiones', 'Cuentas por cobrar', 'Inventarios', 'Propiedad, planta y equipo',
+  'Total de activos', 'Activos operativos', 'Total de pasivos', 'Cuentas por pagar',
+];
+
+test('la ficha etiquetada de una comparable sale con las filas en el orden del documento', async () => {
+  const texto = await extraerTextoEstructuradoPdf(archivoFalso(`${DIR_COMPARABLES}/1 QUBICGAMES S.A..pdf`));
+  assert.ok(texto, 'el PDF trae capa de texto: no debería caer al OCR');
+
+  /* Rótulo y cifra en la misma línea, y las líneas en el orden impreso. */
+  const rotulos = texto.split('\n')
+    .map((l) => l.split('|')[1]?.trim())
+    .filter((r) => r && RUBROS_EN_ORDEN.includes(r));
+  assert.deepStrictEqual(rotulos, RUBROS_EN_ORDEN);
+
+  assert.match(texto, /Ventas netas \| 28,81/);
+  assert.match(texto, /Cuentas por pagar \| 5,88/);
+  assert.match(texto, /--- PÁGINA 1 ---/);
+});
+
+test('la etiqueta que Word parte en dos líneas de la misma celda no se separa de su cifra', async () => {
+  const texto = await extraerTextoEstructuradoPdf(archivoFalso(`${DIR_COMPARABLES}/1 QUBICGAMES S.A..pdf`));
+  /* El árbol de estructura devuelve la celda completa; el agrupado por
+     coordenadas dejaba el 24,51 en una línea suelta entre "Gastos generales y
+     administrativos" y "(SG&A)", que es justo lo que desordenaba la lectura. */
+  assert.match(texto, /Gastos generales y administrativos \(SG&A\) \| 24,51/);
+});
+
+test('las 19 fichas de comparables se leen sin caer al OCR y con su rótulo pegado a la cifra', async () => {
+  const fichas = readdirSync(DIR_COMPARABLES).filter((f) => f.toLowerCase().endsWith('.pdf'));
+  assert.ok(fichas.length >= 19, `se esperaban las fichas de prueba, hay ${fichas.length}`);
+  for (const ficha of fichas) {
+    const texto = await extraerTextoEstructuradoPdf(archivoFalso(`${DIR_COMPARABLES}/${ficha}`));
+    assert.ok(texto, `${ficha}: no se pudo leer la capa de texto`);
+    assert.match(texto, /Ventas netas \| /, `${ficha}: la cifra de ventas no quedó en la fila del rótulo`);
+    assert.match(texto, /Gastos generales y administrativos \(SG&A\) \| /, `${ficha}: la celda de dos líneas quedó partida`);
+  }
+});
+
+test('el PDF de lote, que no viene etiquetado, se agrupa por coordenadas sin perder filas ni páginas', async () => {
+  const texto = await extraerTextoEstructuradoPdf(archivoFalso(PDF_LOTE));
+  assert.ok(texto, 'el PDF de lote trae capa de texto: no debería caer al OCR');
+
+  /* El prompt del lote pide pagina_inicio y pagina_fin sobre el PDF completo:
+     sin el marcador por página el modelo no tiene de dónde sacarlas. */
+  const paginas = texto.match(/--- PÁGINA \d+ ---/g) || [];
+  assert.deepStrictEqual(paginas, [1, 2, 3, 4, 5].map((n) => `--- PÁGINA ${n} ---`));
+
+  /* Las razones sociales, en el orden del documento y sin pegarse al número de
+     orden: "1AKATSUKI INC." no cruza con ninguna comparable. */
+  const empresas = texto.split('\n').filter((l) => /^\d+ [A-Z]/.test(l));
+  assert.deepStrictEqual(empresas.slice(0, 3), ['1 AKATSUKI INC.', '2 COLOPL, INC.', '3 EXTREME CO.,LTD.']);
+  assert.strictEqual(empresas.length, 11);
+
+  assert.match(texto, /Ventas netas \| 23\.652,00/);
+});
+
+test('sin capa de texto que leer devuelve null, para que la lectura caiga al Vision OCR', async () => {
+  const noEsPdf = { name: 'escaneo.pdf', arrayBuffer: async () => Buffer.from('esto no es un PDF') };
+  assert.strictEqual(await extraerTextoEstructuradoPdf(noEsPdf), null);
 });

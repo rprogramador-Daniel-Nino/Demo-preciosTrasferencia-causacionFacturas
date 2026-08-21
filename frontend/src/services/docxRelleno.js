@@ -3180,6 +3180,16 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
   const year = Number(estudio && estudio.anio) || 2025;
   let totalInsertadas = 0;
 
+  /* La cita al pie de las tablas de cifras es la base de datos de donde salieron —Capital IQ—,
+     no la comparable. Decía «Información de <razón social>», que es la fórmula de las tablas
+     de operaciones del contribuyente, donde la información sí la entrega la parte examinada;
+     aquí atribuía a un tercero unas cifras que él nunca nos dio y dejaba sin citar la única
+     fuente que hay. El nombre de la comparable ya va en su tabla de descripción, justo arriba.
+     Misma forma que el resto de las tablas del motor: `estudio.database_source` con
+     `BASE_DATOS_FUENTE` por defecto, así una sola base cambia en todas a la vez. */
+  const citaBaseDatos = 'Información Base Datos '
+    + ((estudio && estudio.database_source) || BASE_DATOS_FUENTE) + '.';
+
   const sinCifras = comparables.filter((c) => !c.eeffDatos);
   if (sinCifras.length && Array.isArray(avisos)) {
     avisos.push('ANEXO B: ' + sinCifras.length + ' de ' + comparables.length
@@ -3223,7 +3233,7 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
         'Estado de Resultados',
         ['Descripción', String(anioCol)],
         filasPL,
-        'Información de ' + (c.name || 'la Compañía') + '.'
+        citaBaseDatos
       );
       nuevoXmlB += '\n' + tablaPlXml;
 
@@ -3241,7 +3251,7 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
         'Balance General',
         ['Descripción', String(anioCol)],
         filasBalance,
-        'Información de ' + (c.name || 'la Compañía') + '.'
+        citaBaseDatos
       );
       nuevoXmlB += '\n' + tablaBalanceXml;
     } else {
