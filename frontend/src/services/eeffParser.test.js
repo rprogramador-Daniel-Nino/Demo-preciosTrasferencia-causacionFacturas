@@ -77,14 +77,31 @@ test('la regla de escala aplica sin excepción, aunque el documento rotule la co
    se pareciera a una utilidad operacional. Estas pruebas fijan lo que no puede volver a
    perderse: los rubros de cotejo, el rótulo de origen y la columna del año. */
 
-test('el prompt del contribuyente pide los rubros que permiten cotejar', () => {
-  /* Sin ellos, un rótulo engañoso no tiene quién lo contradiga: es lo que dejó entrar
-     −2.986.236.031 como utilidad operacional de un estado cuya utilidad operacional es
-     −1.095.055.781. */
-  ['utilidad_bruta', 'gastos_operacionales', 'utilidad_antes_impuestos',
-    'resultado_financiero_neto', 'total_pasivos', 'patrimonio',
-  ].forEach((campo) => assert.ok(EEFF_PROMPT.includes(campo),
-    `falta "${campo}" en EEFF_PROMPT`));
+test('el prompt pide los dos gastos del giro por separado, no un total', () => {
+  /* De su suma sale la utilidad operacional, que ya no se lee de ninguna fila. Pedir un
+     «total de gastos operativos» volvería a depender de que el documento lo imprima y de
+     que la IA elija la fila correcta, que es justo lo que este cambio quita de en medio. */
+  ['gastos_ventas', 'gastos_administracion'].forEach((campo) => assert.ok(
+    EEFF_PROMPT.includes(campo), `falta "${campo}" en EEFF_PROMPT`));
+});
+
+test('el prompt NO pide ninguna utilidad operacional, y lo dice explícitamente', () => {
+  /* La fila «RESULTADO DE ACTIVIDADES DE LA OPERACIÓN» de Montachem 2025 trae el total de
+     los gastos, no la utilidad. Mientras se le pidiera al modelo «la utilidad operacional»
+     había una fila que podía engañarlo; ahora se le manda ignorarla. */
+  assert.ok(!EEFF_PROMPT.includes('"utilidad_operacional"'));
+  assert.match(EEFF_PROMPT, /IGN[OÓ]RALA/);
+  assert.match(EEFF_PROMPT, /el sistema la calcula/i);
+});
+
+test('el prompt exige las partidas de PARTES RELACIONADAS y descarta las comerciales', () => {
+  /* El criterio del estudio: la operación es con la vinculada, así que el capital de
+     trabajo que el ajuste neutraliza es el de esas partidas. Confundirlas metería los
+     6.032.337.879 de deudores comerciales donde van 2.926.256.259. */
+  assert.match(EEFF_PROMPT, /cuentas por cobrar A PARTES RELACIONADAS/i);
+  assert.match(EEFF_PROMPT, /cuentas por pagar A PARTES RELACIONADAS/i);
+  assert.match(EEFF_PROMPT, /NO uses aqu[ií] los deudores comerciales/i);
+  assert.match(EEFF_PROMPT, /NO uses aqu[ií] proveedores de terceros/i);
 });
 
 test('el prompt del contribuyente pide los quince rubros del estudio', () => {
@@ -114,9 +131,13 @@ test('el prompt ya no cita el plan de cuentas de un cliente concreto', () => {
   assert.doesNotMatch(EEFF_PROMPT, /fiducuenta/i);
 });
 
-test('el prompt admite la nomenclatura NIIF que usan otros estados', () => {
-  [/deudores comerciales/i, /gastos pagados por anticipado/i, /impuesto diferido/i,
-    /depreciaci[oó]n acumulada/i, /acreedores comerciales/i,
+test('el prompt admite los sinónimos que usan otros estados para lo que sí pide', () => {
+  /* Sin nombres de un cliente concreto: la versión anterior citaba «Fiducuenta» y
+     «Licencias», que eran los rótulos de UNA empresa. */
+  [/ingresos de actividades ordinarias/i, /ventas netas/i,
+    /costo de los servicios prestados/i, /existencias/i,
+    /gastos de ventas y distribuci[oó]n/i, /gastos administrativos/i,
+    /a vinculados/i, /compa[ñn][ií]as del grupo/i,
   ].forEach((patron) => assert.match(EEFF_PROMPT, patron));
 });
 
@@ -164,11 +185,17 @@ test('rotuloDeRubro devuelve el texto de la fila, y cadena vacía si no vino', (
   assert.strictEqual(rotuloDeRubro(null), '');
 });
 
-test('el mapeo cubre los quince rubros del libro, sin faltar ninguno', () => {
-  assert.deepStrictEqual(
-    [...CLAVES_RUBROS_EXAMINADA].sort(),
-    [...Object.values(CAMPO_POR_RUBRO), 't_op'].sort(),
-    'los campos que la lectura produce tienen que ser los que la hoja Datos publica');
+test('el mapeo produce exactamente los campos del alcance, y todos son del libro', () => {
+  /* Esta ingesta ya no llena las quince filas de la hoja Datos: toma tres partidas del
+     balance, el subtotal del activo corriente, los ingresos y el costo, y calcula la
+     utilidad operacional. Lo que sí tiene que cumplirse es que cada campo que produce sea
+     un rubro que el libro conoce — si no, escribiría en un campo que nadie publica. */
+  const producidos = [...Object.values(CAMPO_POR_RUBRO), 't_op'].sort();
+  assert.deepStrictEqual(producidos,
+    ['t_act_curr', 't_ap', 't_ar', 't_c', 't_inv', 't_op', 't_s'],
+    'el alcance de la ingesta cambió sin que esta prueba lo diga');
+  producidos.forEach((clave) => assert.ok(CLAVES_RUBROS_EXAMINADA.includes(clave),
+    `${clave} no es un rubro de la hoja Datos`));
 });
 
 test('los rubros de cotejo no son campos del estudio', () => {

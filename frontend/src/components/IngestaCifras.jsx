@@ -1,42 +1,37 @@
 import React, { useState } from 'react';
 import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2 } from 'lucide-react';
-import { pliOf, pctf, fmt, num } from '../utils/calculations';
+import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseEeffWithGeminiOCR } from '../services/eeffParser';
 import { verificarEeff, camposAplicables } from '../services/eeffVerificacion';
 import { convertPdfToImages } from '../services/pdfRenderer';
 
-/* Las casillas del balance, con las etiquetas EXACTAS de `RUBROS_EXAMINADA`
-   (services/memoriaCalculoRangoOptimo.js) y de `RUBROS_ESF` (services/docxRelleno.js).
-   Que el rótulo de la pantalla y el de la hoja del libro sean el mismo texto no es
-   cosmética: es lo que permite al analista cotejar una celda del Excel con la casilla
-   donde la corrige, sin tener que saber qué alias corresponde a qué.
+/* Las casillas del estado de situación financiera. Tres partidas y un subtotal, que es lo
+   que esta ingesta toma por decisión del usuario (2026-08-21).
 
-   Hasta agosto de 2026 solo existían las casillas de ventas, costo, utilidad operacional,
-   CxC, inventarios, CxP y PP&E. Los ocho restantes entraban únicamente si la lectura del
-   documento los acertaba, y si no, la única vía era editar el Excel: por eso un estado con
-   nomenclatura NIIF propia dejaba media hoja `DATOS DE ENTRADA` en ceros sin remedio. */
+   Las dos de capital de trabajo son las de PARTES RELACIONADAS, no las comerciales: la
+   operación bajo estudio es con la vinculada, y en este estado el propio flujo de efectivo
+   lo confirma —su línea «Aumento / disminución en proveedores» es exactamente la variación
+   de las cuentas por pagar a partes relacionadas—. El rótulo de la casilla dice «a partes
+   relacionadas» para que no haya duda de qué cifra va aquí; el de la fila del libro no
+   cambia, porque esa hoja y las tablas del informe son otra cosa.
+
+   Antes de este ajuste el formulario mostraba las doce filas del balance. Se redujo a
+   propósito: las que no alimentan el ajuste de capital de trabajo ni el subtotal no las
+   toca esta ingesta. */
 const RUBROS_BALANCE = [
-  { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo' },
-  { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas' },
-  { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras' },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar a partes relacionadas' },
   { clave: 't_inv', etiqueta: 'Inventarios' },
-  { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes' },
-  { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', subtotal: 'corriente' },
-  { clave: 't_ppe', etiqueta: 'Propiedades, planta y equipo' },
-  { clave: 't_intang', etiqueta: 'Intangibles' },
-  { clave: 't_dif', etiqueta: 'Diferidos' },
-  { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', subtotal: 'nocorriente' },
-  { clave: 't_act_tot', etiqueta: 'Total, Activos', subtotal: 'total' },
-  { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales' },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar a partes relacionadas' },
+  { clave: 't_act_curr', etiqueta: 'Total, Activo corriente' },
 ];
 
-/* Los mismos grupos que usa `eeffVerificacion.js` para cotejar los subtotales. Aquí solo
-   sirven para el aviso junto a la casilla, en vivo mientras el analista escribe. */
-const SUMANDOS = {
-  corriente: ['t_cash', 't_inv_assoc', 't_ar', 't_inv', 't_tax'],
-  nocorriente: ['t_ppe', 't_intang', 't_dif'],
-  total: ['t_act_curr', 't_act_nocurr'],
-};
+/* PP&E no lo lee esta ingesta, pero conserva su casilla: alimenta dos de los siete
+   escenarios de ajuste del motor y sin dato se calculan contra cero. Queda para
+   escribirlo a mano cuando el cliente tenga propiedad, planta y equipo relevante — en
+   Montachem el equipo está totalmente depreciado y el neto es cero. */
+const RUBROS_MANUALES = [
+  { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
+];
 
 const CLASE_CASILLA = 'bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono';
 
@@ -73,9 +68,10 @@ export default function IngestaCifras({ study, updateStudy }) {
         updates.eeffImages = eeffImages;
       }
 
-      /* La verificación decide qué entra: despeja la utilidad operacional de las
-         identidades del propio estado en vez de creerle a una fila rotulada, y descarta
-         las cifras que no están impresas en el documento. */
+      /* La verificación decide qué entra: calcula la utilidad operacional a partir de los
+         ingresos, el costo y los dos gastos del giro —en vez de creerle a una fila rotulada
+         «resultado de la operación»— y descarta las cifras que no están impresas en el
+         documento. */
       const verificacion = verificarEeff(res, { anioEstudio: study.anio });
       Object.assign(updates, camposAplicables(verificacion.campos));
       updates.t_correcciones = verificacion.correcciones;
@@ -107,20 +103,6 @@ export default function IngestaCifras({ study, updateStudy }) {
     op: study.t_op || 0
   }, study.pli || 'MO');
 
-  /* El cotejo en vivo de un subtotal contra sus partidas. Devuelve null cuando falta el
-     subtotal o cuando cuadra: solo se dibuja cuando hay algo que decir. */
-  const descuadre = (grupo) => {
-    if (!grupo) return null;
-    const impreso = num(study[{ corriente: 't_act_curr', nocorriente: 't_act_nocurr', total: 't_act_tot' }[grupo]]);
-    if (impreso === null || impreso === 0) return null;
-    const suma = SUMANDOS[grupo].reduce((acc, k) => acc + (num(study[k]) || 0), 0);
-    const dif = impreso - suma;
-    /* Una milésima de la escala del subtotal, el mismo criterio de `eeffVerificacion.js`:
-       los estados financieros redondean y no todo rubro tiene casilla propia. */
-    if (Math.abs(dif) <= Math.max(1, Math.abs(impreso) * 0.001)) return null;
-    return dif;
-  };
-
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Columna Izquierda: Formulario de Cifras e Ingesta */}
@@ -143,9 +125,11 @@ export default function IngestaCifras({ study, updateStudy }) {
 
           <p className="text-xs text-zinc-500 leading-relaxed">
             Adjunte el Estado de Situación Financiera y el Estado de Resultados de la compañía
-            (PDF o imagen). El sistema lee los quince rubros de la parte examinada, comprueba
-            que cada cifra esté impresa en el documento y coteja los subtotales y la utilidad
-            operacional contra las identidades contables del propio estado.
+            (PDF o imagen). Se leen los ingresos de actividades ordinarias, el costo de ventas,
+            los gastos de ventas y de administración, las cuentas por cobrar y por pagar a
+            partes relacionadas, los inventarios y el total del activo corriente. La utilidad
+            operacional no se lee: se calcula como ingresos − costo − gastos operativos. De cada
+            cifra se comprueba que esté impresa en el documento.
           </p>
 
           <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl p-4 flex flex-col items-center justify-center text-center hover:border-[#0FA3A1] transition-colors relative cursor-pointer bg-zinc-50/50 dark:bg-zinc-900/30">
@@ -234,8 +218,8 @@ export default function IngestaCifras({ study, updateStudy }) {
             <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-[11px] text-emerald-800 dark:text-emerald-300 flex gap-2 items-center">
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               <span>
-                Verificación contable superada: los subtotales, la ecuación patrimonial y la
-                utilidad operacional cuadran, y cada cifra está impresa en el documento.
+                Lectura verificada: cada cifra está impresa en el documento y la utilidad
+                operacional se calculó a partir de los ingresos, el costo y los gastos del giro.
               </span>
             </div>
           )}
@@ -287,8 +271,13 @@ export default function IngestaCifras({ study, updateStudy }) {
                 placeholder="COP Utilidad Op."
                 className={CLASE_CASILLA}
               />
+              {/* La ingesta la CALCULA y no la lee de ninguna fila: es lo que evita que un
+                  «resultado de actividades de la operación» que en realidad trae el total de
+                  los gastos decida el margen del estudio. Editable de todas formas, porque el
+                  analista manda sobre lo que el documento diga. */}
               <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
-                Utilidad, no gastos. Con pérdida operativa va en negativo.
+                La calcula la ingesta: ingresos − costo − gastos operativos (gastos de ventas +
+                administración). Utilidad, no gastos: con pérdida va en negativo.
               </p>
             </div>
           </div>
@@ -318,44 +307,48 @@ export default function IngestaCifras({ study, updateStudy }) {
           </div>
         </div>
 
-        {/* Balance General: los doce rubros del ESF, con las etiquetas del libro */}
+        {/* Cifras del Estado de Situación Financiera: las tres partidas y el subtotal */}
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
           <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-2">
             <BarChart className="w-5 h-5 text-[#0FA3A1]" />
             Cifras del Estado de Situación Financiera
           </h3>
           <p className="text-xs text-zinc-500 leading-relaxed">
-            Estos rubros alimentan el ajuste de capital de trabajo, el análisis vertical de la
-            Tabla 10 y el ANEXO A. Los subtotales avisan si no cuadran con sus partidas.
+            Las tres partidas de capital de trabajo sostienen el ajuste de comparabilidad. Son
+            las de <strong>partes relacionadas</strong>, no las comerciales con terceros: la
+            operación bajo estudio es con la vinculada.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {RUBROS_BALANCE.map(({ clave, etiqueta, subtotal }) => {
-              const dif = descuadre(subtotal);
-              return (
-                <div key={clave} className="flex flex-col">
-                  <label className={`text-xs font-semibold mb-1.5 ${subtotal ? 'text-zinc-700 dark:text-zinc-300' : 'text-zinc-500'}`}>
-                    {etiqueta}
-                  </label>
-                  <input
-                    type="number"
-                    value={study[clave] || ''}
-                    onChange={(e) => handleFieldChange(clave, e.target.value)}
-                    placeholder="COP"
-                    className={CLASE_CASILLA}
-                  />
-                  {dif !== null && (
-                    <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1 leading-snug flex gap-1 items-start">
-                      <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
-                      <span>
-                        No cuadra con sus partidas: {dif > 0 ? 'faltan' : 'sobran'}{' '}
-                        {fmt(Math.abs(dif))}.
-                      </span>
-                    </p>
-                  )}
-                </div>
-              );
-            })}
+            {RUBROS_BALANCE.map(({ clave, etiqueta }) => (
+              <div key={clave} className="flex flex-col">
+                <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
+                <input
+                  type="number"
+                  value={study[clave] || ''}
+                  onChange={(e) => handleFieldChange(clave, e.target.value)}
+                  placeholder="COP"
+                  className={CLASE_CASILLA}
+                />
+              </div>
+            ))}
+
+            {/* Los que la ingesta no lee pero el motor usa: se escriben a mano. */}
+            {RUBROS_MANUALES.map(({ clave, etiqueta }) => (
+              <div key={clave} className="flex flex-col">
+                <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
+                <input
+                  type="number"
+                  value={study[clave] || ''}
+                  onChange={(e) => handleFieldChange(clave, e.target.value)}
+                  placeholder="COP"
+                  className={CLASE_CASILLA}
+                />
+                <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
+                  No se lee del documento: escríbalo si la compañía tiene PP&amp;E relevante.
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </div>

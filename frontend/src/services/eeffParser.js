@@ -20,32 +20,33 @@ if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
 /**
  * Prompt para la lectura de Estados Financieros del Contribuyente.
  *
- * ── Por qué se reescribió (agosto de 2026) ──
- * La versión anterior fallaba en tres frentes, los tres medidos sobre el estado financiero
- * de Montachem 2025:
+ * ── Qué se lee, y por qué solo eso (alcance fijado por el usuario, 2026-08-21) ──
  *
- * 1. El vocabulario era el de UN cliente. Citaba «Fiducuenta», «Licencias» y «Anticipos de
- *    impuestos», y no contemplaba los rótulos NIIF que usa cualquier otro: «DEUDORES
- *    COMERCIALES Y OTRAS CUENTAS POR COBRAR», «ACTIVOS FINANCIEROS», «GASTOS PAGADOS POR
- *    ANTICIPADO», «ACTIVOS POR IMPUESTO DIFERIDO», «EQUIPO» menos «DEPRECIACION
- *    ACUMULADA». Lo que no reconocía salía en cero.
- * 2. Pedía la utilidad operacional como un dato aislado y creía la primera fila que se
- *    pareciera. En ese documento la fila rotulada «RESULTADO DE ACTIVIDADES DE LA
- *    OPERACIÓN» (−2.986.236.031) NO es la utilidad operacional: es el total de gastos
- *    operativos. La utilidad operacional real es −1.095.055.781, y se despeja de las otras
- *    cifras del propio estado. Sin pedir la utilidad bruta, los gastos, el resultado
- *    financiero y la utilidad antes de impuestos, nada podía desmentir el rótulo.
- * 3. No pedía la columna de un año concreto, con un «del ejercicio más reciente que
- *    aparezca» que ignora que el estudio puede ser de un año anterior al último impreso.
+ * Del ESTADO DE SITUACIÓN FINANCIERA se toman TRES partidas y un subtotal:
+ * cuentas por cobrar a partes relacionadas, inventarios, cuentas por pagar a partes
+ * relacionadas y el total del activo corriente. Las dos de capital de trabajo son las de
+ * PARTES RELACIONADAS y no las comerciales, porque la operación bajo estudio es con la
+ * vinculada — y el propio estado lo confirma: en su flujo de efectivo, la línea «Aumento /
+ * disminución en proveedores» es exactamente la variación de las cuentas por pagar a partes
+ * relacionadas. El proveedor es la vinculada.
  *
- * Ahora se piden también los rubros que permiten COTEJAR (`eeffVerificacion.js` los usa
- * para despejar por identidad contable), el rótulo literal con que cada cifra aparece
- * impresa, y la lista de lo que quedó sin asignar — que es la única forma honesta de
- * tratar un plan de cuentas que no se conoce de antemano: en vez de adivinar a qué campo
- * pertenece «CUENTAS POR COBRAR A PARTES RELACIONADAS», se le muestra al analista.
+ * Del ESTADO DE RESULTADOS se toman los ingresos de actividades ordinarias y el costo de
+ * ventas, y NADA MÁS que se parezca a una utilidad: la utilidad operacional se CALCULA
+ *
+ *     gastos operativos    = gastos de ventas + gastos de administración
+ *     utilidad operacional = ingresos − costo de ventas − gastos operativos
+ *
+ * y por eso se piden esos dos rubros de gasto por separado en vez de un total.
+ *
+ * Calcularla es lo que cierra el defecto que motivó todo esto: la versión anterior leía la
+ * fila que el documento rotulara «resultado de la operación», y en el estado de Montachem
+ * 2025 esa fila (−2.986.236.031) es en realidad el total de los gastos operativos. Se
+ * publicaban 4.877.416.281 de gastos y un margen operacional de tres dígitos. Con la
+ * utilidad derivada de cifras que no se pueden confundir —ingresos, costo y los dos gastos
+ * del giro— ningún rótulo engañoso puede volver a decidirla.
  */
 export const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
-Extrae las cifras del ESTADO DE SITUACIÓN FINANCIERA y del ESTADO DE RESULTADOS.
+Extrae ÚNICAMENTE los rubros que se piden abajo. No devuelvas ningún otro.
 
 REGLA CENTRAL: transcribe, no interpretes. Cada cifra que devuelvas debe estar impresa en el documento, dígito por dígito. Si un concepto no aparece, va en null. NO estimes, NO deduzcas por diferencia, NO inventes, NO sumes varias filas para armar un rubro.
 
@@ -53,33 +54,23 @@ Para CADA campo devuelve un objeto {"valor": <número o null>, "rotulo": "<el te
 El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila que elegiste es la correcta.
 
 ── ESTADO DE SITUACIÓN FINANCIERA ──
-· efectivo_y_equivalentes: efectivo y equivalentes de efectivo, caja, bancos, disponible.
-· inversiones_asociadas: inversiones en asociadas o subsidiarias, participaciones patrimoniales. Si el documento solo trae «activos financieros» o «inversiones» sin más, NO lo pongas aquí: va en rubros_no_asignados.
-· cuentas_por_cobrar: cuentas por cobrar COMERCIALES y otras cuentas por cobrar, deudores comerciales, clientes. NO incluyas las cuentas por cobrar a partes relacionadas o vinculadas si el documento las presenta en una fila aparte: esas van en rubros_no_asignados.
+· cuentas_por_cobrar_relacionadas: cuentas por cobrar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí los deudores comerciales, los clientes ni las «otras cuentas por cobrar» con terceros: si el documento solo trae esas, este campo va en null.
 · inventarios: inventarios, existencias, mercancías.
-· activos_impuestos: activos por impuestos CORRIENTES, anticipo de impuestos, saldo a favor, retenciones. El activo por impuesto DIFERIDO no es esto: si el documento lo presenta como no corriente, va en rubros_no_asignados.
+· cuentas_por_pagar_relacionadas: cuentas por pagar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí proveedores de terceros, acreedores comerciales ni «otras cuentas por pagar»: si el documento solo trae esas, este campo va en null.
 · total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
-· propiedad_planta_equipo: propiedades, planta y equipo. Si el documento presenta el costo y la depreciación acumulada en filas separadas y también su NETO, toma el NETO y pon su rótulo. Si no imprime el neto, toma la fila del costo y deja la depreciación en rubros_no_asignados.
-· intangibles: activos intangibles, licencias, software, marcas, crédito mercantil, plusvalía.
-· diferidos: cargos diferidos, gastos pagados por anticipado, anticipos a proveedores, activos por impuesto diferido.
-· total_activos_no_corrientes: el subtotal del activo no corriente, tal como el documento lo imprime.
-· total_activos: el total del activo.
-· cuentas_por_pagar: cuentas por pagar COMERCIALES, proveedores, acreedores comerciales. NO uses aquí las cuentas por pagar a partes relacionadas ni las «otras cuentas por pagar»: si el documento no desglosa una cuenta por pagar comercial o de proveedores, este campo va en null y esas filas van en rubros_no_asignados. Es preferible un null a una cifra que el analista no pueda rastrear.
-· total_pasivos: el total del pasivo.
-· patrimonio: el total del patrimonio.
 
 ── ESTADO DE RESULTADOS ──
-· ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos por servicios, ingresos operacionales.
+· ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos operacionales, ingresos por servicios.
 · costo_ventas: costo de ventas, costo de los servicios prestados, costo de mercancía vendida.
+· gastos_ventas: gastos de ventas, gastos de ventas y distribución, gastos comerciales.
+· gastos_administracion: gastos de administración, gastos administrativos.
 · utilidad_bruta: la utilidad o ganancia bruta, si el documento la imprime como fila propia.
-· gastos_operacionales: el TOTAL de los gastos de operación, si el documento lo imprime como una sola fila. Si los presenta separados (gastos de administración, gastos de ventas y distribución, otros gastos), devuelve null aquí y pon cada uno en rubros_no_asignados: el total lo calcula el sistema, no tú.
-· utilidad_operacional: la utilidad o pérdida OPERACIONAL, el resultado de la operación, el EBIT. Cuidado con esta fila: hay estados financieros donde el rótulo «resultado de actividades de la operación» acompaña en realidad al total de los gastos operativos. Devuelve la cifra de la fila que corresponda al rótulo y su texto exacto; el sistema verificará si cuadra con las demás y no te penaliza por transcribir lo que dice el documento.
-· resultado_financiero_neto: el neto de ingresos y gastos financieros y diferencia en cambio (costos financieros netos), si el documento lo imprime como fila propia. Con signo: negativo si es un egreso neto.
-· utilidad_antes_impuestos: la utilidad o pérdida antes del impuesto a las ganancias.
+
+NO se pide ninguna utilidad operacional ni resultado de la operación: el sistema la calcula como ingresos menos costo de ventas menos la suma de los dos rubros de gasto. Si el documento imprime una fila llamada «resultado de actividades de la operación» o parecida, IGNÓRALA — hay estados donde ese rótulo acompaña al total de los gastos y no a la utilidad, y esa confusión es la que este cambio evita.
+Tampoco se piden «otros gastos» ni «otros ingresos»: quedan fuera de los gastos operativos a propósito.
 
 ── RUBROS SIN ASIGNAR ──
-"rubros_no_asignados": toda fila del estado de situación financiera o del estado de resultados que traiga una cifra y NO hayas usado en ninguno de los campos anteriores, con su rótulo literal. Incluye aquí las cuentas por cobrar y por pagar con partes relacionadas o vinculadas, los activos y pasivos financieros, la depreciación acumulada, los gastos desglosados y cualquier concepto propio de esta empresa. NO incluyas los subtotales y totales que ya devolviste en un campo.
-Esta lista importa: es lo que permite ver que un subtotal no cuadra con las partidas que sí se reconocieron, y decidir qué hacer con lo que sobró. La "seccion" de cada rubro tiene que ser la del bloque del estado donde aparece impreso —activo corriente, activo no corriente, pasivo, patrimonio o resultados—, porque de ella depende contra qué subtotal se coteja.
+"rubros_no_asignados": las filas del estado de situación financiera con cifra que NO hayas usado en los campos de arriba y que sean partidas de capital de trabajo o de gasto — deudores comerciales, otras cuentas por cobrar, proveedores, otras cuentas por pagar, otros gastos—, con su rótulo literal. Sirve para que el analista vea qué quedó fuera y decida. NO incluyas los totales ni los subtotales.
 
 ── REGLAS DE TRANSCRIPCIÓN ──
 · Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo, tal como está impresa.
@@ -91,28 +82,16 @@ Devuelve SOLO este JSON, sin marcas markdown:
   "periodo": "el año o ejercicio de la columna que leíste",
   "moneda": "COP, USD, etc.",
   "unidad_origen": "unidades|miles|millones",
-  "efectivo_y_equivalentes": {"valor": null, "rotulo": ""},
-  "inversiones_asociadas": {"valor": null, "rotulo": ""},
-  "cuentas_por_cobrar": {"valor": null, "rotulo": ""},
+  "cuentas_por_cobrar_relacionadas": {"valor": null, "rotulo": ""},
   "inventarios": {"valor": null, "rotulo": ""},
-  "activos_impuestos": {"valor": null, "rotulo": ""},
+  "cuentas_por_pagar_relacionadas": {"valor": null, "rotulo": ""},
   "total_activo_corriente": {"valor": null, "rotulo": ""},
-  "propiedad_planta_equipo": {"valor": null, "rotulo": ""},
-  "intangibles": {"valor": null, "rotulo": ""},
-  "diferidos": {"valor": null, "rotulo": ""},
-  "total_activos_no_corrientes": {"valor": null, "rotulo": ""},
-  "total_activos": {"valor": null, "rotulo": ""},
-  "cuentas_por_pagar": {"valor": null, "rotulo": ""},
-  "total_pasivos": {"valor": null, "rotulo": ""},
-  "patrimonio": {"valor": null, "rotulo": ""},
   "ingresos_operacionales": {"valor": null, "rotulo": ""},
   "costo_ventas": {"valor": null, "rotulo": ""},
+  "gastos_ventas": {"valor": null, "rotulo": ""},
+  "gastos_administracion": {"valor": null, "rotulo": ""},
   "utilidad_bruta": {"valor": null, "rotulo": ""},
-  "gastos_operacionales": {"valor": null, "rotulo": ""},
-  "utilidad_operacional": {"valor": null, "rotulo": ""},
-  "resultado_financiero_neto": {"valor": null, "rotulo": ""},
-  "utilidad_antes_impuestos": {"valor": null, "rotulo": ""},
-  "rubros_no_asignados": [{"rotulo": "", "valor": null, "seccion": "activo_corriente|activo_no_corriente|pasivo|patrimonio|resultados"}]
+  "rubros_no_asignados": [{"rotulo": "", "valor": null}]
 }`;
 
 /**
@@ -225,39 +204,50 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
   throw ultimo;
 }
 
-/* Las cifras que la lectura devuelve y el campo del estudio al que van. Se escribe una
-   sola vez, aquí, y de ella salen el mapeo y la verificación: cuando esta correspondencia
-   vivía desplegada a mano en el `resolve`, en `IngestaCifras.jsx` y en `estudioBase`, los
-   tres se desincronizaron. */
+/* Las cifras que la lectura devuelve y el campo del estudio al que van.
+
+   El alcance lo fijó el usuario el 2026-08-21, después de una primera versión que leía los
+   quince rubros del balance: de la situación financiera se toman SOLO tres partidas más el
+   subtotal del activo corriente, y las dos partidas de capital de trabajo son las de PARTES
+   RELACIONADAS, no las comerciales.
+
+   Esa elección no es un detalle de nomenclatura. En este estudio la operación vinculada es
+   con la matriz, y el propio estado financiero lo confirma: en su flujo de efectivo, la
+   línea «Aumento / disminución en proveedores» (−135.245.675) es exactamente la variación de
+   CUENTAS POR PAGAR A PARTES RELACIONADAS (5.400.016.795 − 5.535.262.470). El proveedor es
+   la vinculada, así que el capital de trabajo que el ajuste debe neutralizar es el de esas
+   partidas y no el de los deudores comerciales con terceros.
+
+   Se escribe una sola vez, aquí, y de ella salen el mapeo y la verificación. */
 export const CAMPO_POR_RUBRO = {
   ingresos_operacionales: 't_s',
   costo_ventas: 't_c',
-  cuentas_por_cobrar: 't_ar',
+  cuentas_por_cobrar_relacionadas: 't_ar',
   inventarios: 't_inv',
-  cuentas_por_pagar: 't_ap',
-  efectivo_y_equivalentes: 't_cash',
-  inversiones_asociadas: 't_inv_assoc',
-  activos_impuestos: 't_tax',
+  cuentas_por_pagar_relacionadas: 't_ap',
   total_activo_corriente: 't_act_curr',
-  propiedad_planta_equipo: 't_ppe',
-  intangibles: 't_intang',
-  diferidos: 't_dif',
-  total_activos_no_corrientes: 't_act_nocurr',
-  total_activos: 't_act_tot',
 };
 
-/* Los rubros que NO son campos del estudio pero se leen para poder cotejar: con ellos
-   `eeffVerificacion.js` despeja la utilidad operacional y comprueba la ecuación
-   patrimonial. Sin ellos, un rótulo mal puesto en el documento no tenía quién lo
-   contradijera. */
+/* Los rubros que NO son campos del estudio pero se leen porque de ellos sale la utilidad
+   operacional. Ya no se «coteja» una utilidad leída contra las identidades del estado: por
+   decisión del usuario (2026-08-21) la utilidad operacional NO se lee de ninguna fila, se
+   CALCULA, y los gastos operativos son la suma de los dos rubros de gasto del giro:
+
+     gastos operativos   = gastos de ventas + gastos de administración
+     utilidad operacional = ventas netas − costo de ventas − gastos operativos
+
+   Con eso, la fila que el documento rotule «resultado de la operación» deja de importar —y
+   era justo la que en el estado de Montachem 2025 traía el total de los gastos en lugar de
+   la utilidad, y hacía que el libro publicara 4.877.416.281 de gastos operativos—. Quedan
+   fuera del cálculo «otros gastos» y «otros ingresos»: la definición del usuario son los
+   dos rubros del giro, y en ese estado esa diferencia es de 4.051.927 pesos.
+
+   `utilidad_bruta` se sigue leyendo, pero solo para poder advertir si el costo o las ventas
+   no cuadran con lo que el documento imprime. No entra en ningún campo del estudio. */
 export const RUBROS_DE_COTEJO = [
+  'gastos_ventas',
+  'gastos_administracion',
   'utilidad_bruta',
-  'gastos_operacionales',
-  'utilidad_operacional',
-  'resultado_financiero_neto',
-  'utilidad_antes_impuestos',
-  'total_pasivos',
-  'patrimonio',
 ];
 
 /**
