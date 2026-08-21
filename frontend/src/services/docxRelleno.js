@@ -700,46 +700,6 @@ export function reescribirTextoParrafoOoxml(parrafoXml, textoNuevo) {
 }
 
 /**
- * El `<w:tcW>`/`<w:gridSpan>` de una celda OOXML, tal cual —para preservar el ancho y la
- * fusión de columnas de un molde sin heredar también su sombreado ni su negrita.
- *
- * @param {string} celdaXml  el `<w:tc>` completo del molde.
- * @returns {string}
- */
-function gridSpanYAnchoDe(celdaXml) {
-  const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(String(celdaXml || ''));
-  if (!tcPr) return '';
-  const tcW = /<w:tcW\s[^/]*\/>/.exec(tcPr[0]);
-  const gridSpan = /<w:gridSpan\s[^/]*\/>/.exec(tcPr[0]);
-  return (tcW ? tcW[0] : '') + (gridSpan ? gridSpan[0] : '');
-}
-
-/**
- * Fila del conector «Y»/«O» de «Códigos SIC utilizados», como divisor discreto en vez de
- * clon de la franja de sección de la plantilla (`«Criterio de búsqueda»`, `«Criterios de
- * inclusión»`): las dos comparten el mismo `tcPr` en la plantilla —sombreado gris oscuro,
- * negrita— porque son visualmente la misma franja, pero el conector no es un título de
- * sección. Clonarlo tal cual hace que una búsqueda con varios criterios (lo habitual en un
- * export de Capital IQ) salga como una fila de franjas grises opacas, una por cada «Y»/«O»,
- * en vez de leerse como una lista de criterios con un conector menor entre cada uno.
- *
- * Solo se conserva el ancho/fusión de columnas del molde —para no desalinear la tabla—; el
- * sombreado y la negrita se sueltan a propósito.
- *
- * @param {string} texto  «Y» u «O».
- * @param {string} celdaMoldeXml  el `<w:tc>` del que se toma el ancho/fusión de columnas.
- * @returns {string} el `<w:tr>` completo.
- */
-function filaConectorDiscreta(texto, celdaMoldeXml) {
-  const props = gridSpanYAnchoDe(celdaMoldeXml);
-  return '<w:tr><w:tc><w:tcPr>' + props + '<w:vAlign w:val="center"/></w:tcPr>'
-    + '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="20" w:after="20"/></w:pPr>'
-    + '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:iCs/>'
-    + '<w:color w:val="808080"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
-    + '<w:t xml:space="preserve">' + escaparXml(texto) + '</w:t></w:r></w:p></w:tc></w:tr>';
-}
-
-/**
  * Escribe los encabezados de III.C con la industria y los años del estudio.
  *
  * Los `hitos` vienen de `localizarHitos`, que ya los localizó en orden y saltándose las
@@ -1033,23 +993,14 @@ function celdasDeOoxml(filaXml) {
  * de sus celdas (bordes, sombreado, `gridSpan`/`vMerge`) — equivalente de `reescribirFilasHtml`
  * (`tablasHtmlInforme.js`) para la ruta .docx.
  *
- * Hace falta porque «Códigos SIC utilizados» no es una tabla rectangular uniforme como las
- * que arma `generarTablaOoxml`: alterna una fila de 2 celdas (etiqueta/valor) con una fila de
- * 1 celda fusionada (el conector «Y»/«O»), y generarla desde cero perdería esa fusión.
- *
- * La fila de una sola celda es la ÚNICA que no clona el molde tal cual: en la plantilla real
- * comparte `tcPr` con las franjas de sección («Criterios de inclusión», etc.) —mismo
- * sombreado gris oscuro, misma negrita—, y un cribado con varios criterios (lo normal en un
- * export de Capital IQ) sale como una franja opaca repetida por cada «Y»/«O» en vez de un
- * conector menor entre criterios. Se reemplaza por `filaConectorDiscreta`, que conserva solo
- * el ancho/fusión de columnas del molde. Reportado por el usuario 2026-08-20 con un informe
- * real (BEUMER 2025) como tabla «rara».
+ * Uso exclusivo de «Códigos SIC utilizados»: una fila de 2 celdas (etiqueta/valor) por
+ * criterio de búsqueda, clonando el molde existente para no perder su fusión de columnas.
  *
  * @param {string} tablaXml  el bloque «título + `<w:tbl>`» (o solo la tabla); basta con que
  *        contenga la tabla en algún punto, porque el parseo busca `<w:tr>` directamente y el
  *        párrafo de título, si lo hay, no tiene ninguno.
- * @param {Array<string[]>} filas  una entrada `[conector]` o `[etiqueta, valor]` por fila —
- *        la forma que ya produce `filasCriteriosScreening` (`tablasInforme.js`).
+ * @param {Array<string[]>} filas  una entrada `[etiqueta, valor]` por fila — la forma que ya
+ *        produce `filasCriteriosScreening` (`tablasInforme.js`).
  * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
  *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
  *        detección de la fila de fuente.
@@ -1075,26 +1026,14 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
   const cuerpo = todas.slice(encabezados, esPie ? todas.length - 1 : todas.length);
   if (!cuerpo.length) return tabla;
 
-  /* Moldes: una fila de dos celdas y una de una sola, representativas del cuerpo existente.
-     Se clona su XML COMPLETO —`tcPr` incluida, con el `gridSpan` de la fila del conector— y
-     solo se sustituye el texto con `reescribirTextoParrafoOoxml`; así no hace falta
-     reconstruir la fusión a mano. */
-  const filasCuerpo = cuerpo.map((f) => celdasDeOoxml(f.xml));
-  const moldeDos = filasCuerpo.find((cs) => cs.length === 2);
-  const moldeUno = filasCuerpo.find((cs) => cs.length === 1);
-  if (!moldeDos && !moldeUno) return tabla;
+  /* Molde: la fila de dos celdas representativa del cuerpo existente. Se clona su XML
+     COMPLETO —`tcPr` incluida— y solo se sustituye el texto con `reescribirTextoParrafoOoxml`;
+     así no hace falta reconstruir la fusión de columnas a mano. */
+  const molde = cuerpo.map((f) => celdasDeOoxml(f.xml)).find((cs) => cs.length === 2);
+  if (!molde) return tabla;
 
   const nuevas = (filas || []).map((valores) => {
     const vals = valores || [];
-    /* La fila de un solo valor es el conector «Y»/«O»: sale como divisor discreto y no
-       como clon de la franja de sección de la plantilla —ver `filaConectorDiscreta`—, salvo
-       que la tabla no tenga ninguna fila fusionada de la que tomar el ancho de columnas, en
-       cuyo caso se mantiene el comportamiento anterior antes que perder la fila entera. */
-    if (vals.length === 1 && moldeUno) {
-      return filaConectorDiscreta(String(vals[0] ?? ''), moldeUno[0].xml);
-    }
-    const molde = vals.length === 1 ? (moldeUno || moldeDos) : (moldeDos || moldeUno);
-    if (!molde) return '';
     const celdas = molde.map((c, i) => reescribirTextoParrafoOoxml(
       c.xml, String(vals[Math.min(i, vals.length - 1)] ?? '')
     )).join('');
