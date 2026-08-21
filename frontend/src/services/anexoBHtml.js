@@ -73,13 +73,21 @@ export const RUBROS_RESULTADOS = [
   { campo: 'gastos_publicidad', etiqueta: 'Gastos de publicidad', patron: /publicidad/i },
 ];
 
+/* En el orden en que la ficha de la macro imprime el balance: es el documento que el
+   analista revisa al lado del anexo, y con las filas cruzadas hay que buscar cada rubro en
+   vez de leer las dos en paralelo. «Otras inversiones» y «Total de pasivos» estaban de más
+   en la ficha y de menos aquí: la primera ni se pedía al parser —no existía el campo—, la
+   segunda se leía desde siempre y solo faltaba escribirla. Las dos se omiten cuando la
+   comparable no las reporta, como I+D y publicidad arriba. */
 export const RUBROS_BALANCE = [
-  { campo: 'total_activos', etiqueta: 'Activos totales promedio', patron: /activos totales/i },
-  { campo: 'cuentas_por_pagar', etiqueta: 'Promedio de cuentas por pagar netas', patron: /cuentas por pagar/i },
-  { campo: 'cuentas_por_cobrar', etiqueta: 'Promedio de cuentas por cobrar netas', patron: /cuentas por cobrar/i },
-  { campo: 'propiedad_planta_equipo', etiqueta: 'EPP neto promedio', patron: /epp|propiedad, planta|planta y equipo/i },
-  { campo: 'inventarios', etiqueta: 'Inventario neto promedio', patron: /inventario/i },
   { campo: 'efectivo_y_equivalentes', etiqueta: 'Efectivo promedio y equivalentes de efectivo', patron: /efectivo/i },
+  { campo: 'otras_inversiones', etiqueta: 'Otras inversiones promedio', patron: /otras inversiones|inversiones/i },
+  { campo: 'cuentas_por_cobrar', etiqueta: 'Promedio de cuentas por cobrar netas', patron: /cuentas por cobrar/i },
+  { campo: 'inventarios', etiqueta: 'Inventario neto promedio', patron: /inventario/i },
+  { campo: 'propiedad_planta_equipo', etiqueta: 'EPP neto promedio', patron: /epp|propiedad, planta|planta y equipo/i },
+  { campo: 'total_activos', etiqueta: 'Activos totales promedio', patron: /activos totales/i },
+  { campo: 'total_pasivos', etiqueta: 'Total de pasivos promedio', patron: /total de pasivos|pasivos totales|total pasivo/i },
+  { campo: 'cuentas_por_pagar', etiqueta: 'Promedio de cuentas por pagar netas', patron: /cuentas por pagar/i },
 ];
 
 /**
@@ -177,23 +185,25 @@ function separadorDeMiles(bloqueHtml) {
 }
 
 /**
- * Formatea una cifra con el separador indicado, sin redondear: el anexo en tabla debe
- * mostrar el dato tal como lo leyó el parser, no una versión truncada al entero. «—»
- * cuando no hay dato.
+ * Formatea una cifra con el separador indicado, con DOS decimales.
+ *
+ * Dos decimales siempre, como los imprime la ficha de la macro que el analista revisa al
+ * lado del anexo. Antes se emitía lo que trajera el número —«862,6» con un decimal,
+ * «1.470» con ninguno—, así que dos filas de la misma tabla salían con formatos distintos
+ * y ninguna coincidía con su ficha. Sigue sin redondear al entero, que era el defecto
+ * original que esta función vino a cerrar.
+ *
+ * El separador se copia de la plantilla; cuando no se pudo detectar se cae al del informe
+ * (es-CO). Esa rama antes emitía «1.234.6» —miles con punto y decimal con punto—, ilegible.
+ *
+ * «—» cuando no hay dato.
  */
 export function formatearCifra(valor, separador) {
   if (valor === null || valor === undefined || valor === '') return '—';
   const n = Number(valor);
   if (!Number.isFinite(n)) return '—';
-  const negativo = n < 0;
-  const [enteroStr, decStr] = Math.abs(n).toString().split('.');
-  const conComas = Number(enteroStr).toLocaleString('en-US');
-  const parteEntera = separador === '.' ? conComas.replace(/,/g, '.')
-    : separador === ',' ? conComas
-      : Number(enteroStr).toLocaleString('es-CO');
-  const separadorDecimal = separador === '.' ? ',' : '.';
-  const cuerpo = decStr ? parteEntera + separadorDecimal + decStr : parteEntera;
-  return (negativo ? '-' : '') + cuerpo;
+  const locale = separador === ',' ? 'en-US' : 'es-CO';
+  return n.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /* La etiqueta con la que la plantilla nombra un rubro, si la trae; si no, la del informe. */
