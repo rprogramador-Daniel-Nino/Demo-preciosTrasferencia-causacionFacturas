@@ -1,4 +1,13 @@
 import axios from 'axios';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { extraerJSON } from './comparablesEngine.js';
+
+if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/legacy/build/pdf.worker.mjs',
+    import.meta.url
+  ).href;
+}
 
 /**
  * Prompt para la lectura de Estados Financieros del Contribuyente por Gemini Vision OCR.
@@ -241,40 +250,258 @@ Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no fig
 
 Regla de escala, obligatoria y sin excepción, para cada empresa: cada cifra numérica va EXACTAMENTE como aparece impresa para esa empresa, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así su tabla diga "en miles" o "en millones" en el encabezado. Si su tabla imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa; no es una instrucción para que tú calcules nada.`;
 
+/* ═══════════ Lectura nativa del PDF, antes de gastar un OCR ═══════════
+
+   Los EEFF de las comparables salen de una macro de Word, así que el PDF trae
+   capa de texto y no hay por qué pagarle un Vision OCR —que además devolvía las
+   filas desordenadas— para leer lo que ya está escrito.
+
+   Tres vías, de la más fiel a la más tolerante:
+     1. árbol de estructura (Table/TR/TD) que Word escribe al exportar: da las
+        celdas exactas, fila por fila y columna por columna, en el orden del
+        documento y sin heurística ninguna. Las fichas individuales lo traen;
+        el PDF de lote, no, así que hacen falta las dos vías;
+     2. agrupado por coordenadas, cuando hay capa de texto pero no etiquetas;
+     3. Vision OCR sobre el documento entero (lo de siempre), cuando no hay
+        capa de texto porque el PDF es un escaneo. */
+
+/* Puntos de desfase vertical que siguen siendo la misma fila. Word centra el
+   valor frente a una etiqueta de dos líneas, así que la tolerancia no puede ser
+   cero, y las filas de estas tablas van a ~16 pt, así que tampoco puede crecer. */
+const TOLERANCIA_FILA = 5;
+/* Separación horizontal, en múltiplos del alto de la fuente, a partir de la
+   cual dos trozos de texto son celdas distintas y no palabras de la misma. */
+const FACTOR_SALTO_CELDA = 0.6;
+/* Por debajo de esto no hay capa de texto que aprovechar: es un escaneo. */
+const MIN_TEXTO_DIGITAL = 100;
+/* Tope del texto nativo que se manda en el prompt. */
+const LIMITE_TEXTO_NATIVO = 150000;
+
+/* El árbol de estructura no lleva el texto: apunta a identificadores de
+   contenido marcado, que getTextContent solo emite con includeMarkedContent. */
+function textoPorContenidoMarcado(items) {
+  const mapa = new Map();
+  const pila = [];
+  for (const it of items || []) {
+    if (it.type === 'beginMarkedContent' || it.type === 'beginMarkedContentProps') {
+      pila.push(it.id || null);
+      continue;
+    }
+    if (it.type === 'endMarkedContent') { pila.pop(); continue; }
+    if (typeof it.str !== 'string') continue;
+    let id = null;
+    for (let i = pila.length - 1; i >= 0 && !id; i--) id = pila[i];
+    if (!id) continue;
+    /* El salto de línea dentro de una celda llega como un trozo aparte con
+       hasEOL: sin conservarlo, "Gastos generales y administrativos" y "(SG&A)"
+       —las dos líneas de una misma celda— quedan pegados en una sola palabra. */
+    mapa.set(id, (mapa.get(id) || '') + it.str + (it.hasEOL ? '\n' : ''));
+  }
+  return mapa;
+}
+
+/* Texto de un nodo del árbol, en el orden del documento. Cada P es una línea
+   dentro de la celda: sin separador, "Gastos generales y administrativos" y
+   "(SG&A)" —que Word parte en dos líneas de la misma celda— salen pegados. */
+function textoDeNodo(nodo, mapa) {
+  const trozos = [];
+  const recorrer = (n) => {
+    if (!n) return;
+    if (n.type === 'content') { if (n.id) trozos.push(mapa.get(n.id) || ''); return; }
+    if (n.role === 'P') trozos.push(' ');
+    for (const h of n.children || []) recorrer(h);
+  };
+  recorrer(nodo);
+  return trozos.join('').replace(/\s+/g, ' ').trim();
+}
+
+const BLOQUES_DE_TEXTO = new Set(['P', 'H', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'Caption', 'LI', 'LBody']);
+
+/* Una línea por fila de tabla (celdas separadas por " | ") y una por párrafo
+   suelto, todo en el orden del documento. Devuelve null si la página no trae
+   ninguna tabla etiquetada, para que decida el agrupado por coordenadas. */
+function lineasDeEstructura(raiz, mapa) {
+  const lineas = [];
+  let hayTabla = false;
+  const recorrer = (nodo, enTabla) => {
+    if (!nodo) return;
+    if (nodo.role === 'TR') {
+      const celdas = (nodo.children || [])
+        .filter((c) => c.role === 'TD' || c.role === 'TH')
+        .map((c) => textoDeNodo(c, mapa));
+      /* Word deja filas y columnas de relleno; una fila sin una sola celda con
+         texto solo alarga el prompt. */
+      if (celdas.some((t) => t)) lineas.push(celdas.join(' | '));
+      return;
+    }
+    if (!enTabla && BLOQUES_DE_TEXTO.has(nodo.role)) {
+      const texto = textoDeNodo(nodo, mapa);
+      if (texto) lineas.push(texto);
+      return;
+    }
+    if (nodo.role === 'Table') hayTabla = true;
+    for (const h of nodo.children || []) recorrer(h, enTabla || nodo.role === 'Table');
+  };
+  recorrer(raiz, false);
+  return hayTabla ? lineas : null;
+}
+
+/* Agrupa los trozos de texto por su coordenada vertical (filas, de arriba a
+   abajo) y los ordena por la horizontal (columnas, de izquierda a derecha).
+   Sin etiquetas no hay forma de saber dónde empieza cada celda, así que se
+   parte por el hueco: dos trozos separados por menos de FACTOR_SALTO_CELDA
+   veces el alto de la fuente son la misma celda —así "2025" no sale partido en
+   "202 | 5"— y por más, celdas distintas. */
+function lineasPorCoordenadas(items) {
+  const trozos = [];
+  for (const it of items || []) {
+    if (!it.str) continue;
+    trozos.push({
+      x: it.transform[4],
+      y: it.transform[5],
+      ancho: it.width || 0,
+      alto: it.height || Math.abs(it.transform[3]) || 10,
+      texto: it.str,
+      /* Los trozos de solo espacios no se imprimen, pero dicen que ahí había
+         una separación: sin ellos "1" y "AKATSUKI INC." salen pegados. Su ancho
+         sí se descarta, porque Word lo estira hasta la columna siguiente y
+         entonces el hueco medido saldría negativo. */
+      blanco: !it.str.trim(),
+    });
+  }
+  if (trozos.length === 0) return [];
+
+  trozos.sort((a, b) => (Math.abs(a.y - b.y) <= TOLERANCIA_FILA ? a.x - b.x : b.y - a.y));
+
+  const filas = [];
+  for (const t of trozos) {
+    const ultima = filas[filas.length - 1];
+    if (ultima && Math.abs(ultima.y - t.y) <= TOLERANCIA_FILA) ultima.trozos.push(t);
+    else filas.push({ y: t.y, trozos: [t] });
+  }
+
+  return filas
+    .map((fila) => {
+      fila.trozos.sort((a, b) => a.x - b.x);
+      let linea = '';
+      let finAnterior = null;
+      let altoAnterior = 0;
+      let huboBlanco = false;
+      for (const t of fila.trozos) {
+        if (t.blanco) { huboBlanco = true; continue; }
+        if (finAnterior !== null) {
+          const hueco = t.x - finAnterior;
+          if (hueco > FACTOR_SALTO_CELDA * Math.max(altoAnterior, t.alto)) linea += ' | ';
+          else if (huboBlanco) linea += ' ';
+        }
+        linea += t.texto;
+        finAnterior = t.x + t.ancho;
+        altoAnterior = t.alto;
+        huboBlanco = false;
+      }
+      return linea.replace(/\s+/g, ' ').trim();
+    })
+    .filter((l) => l);
+}
+
+/**
+ * Devuelve el contenido del PDF como texto: una línea por fila, las celdas
+ * separadas por " | " y un marcador por página (el prompt del lote pide
+ * pagina_inicio y pagina_fin sobre el PDF completo). Devuelve null si el
+ * documento no trae capa de texto aprovechable, para que la lectura caiga al
+ * Vision OCR.
+ */
+export async function extraerTextoEstructuradoPdf(file) {
+  let doc = null;
+  try {
+    const data = new Uint8Array(await file.arrayBuffer());
+    /* isOffscreenCanvasSupported: false por lo mismo que en pdfReferenceExtractor. */
+    doc = await pdfjs.getDocument({ data, isOffscreenCanvasSupported: false }).promise;
+
+    let documento = '';
+    let largoUtil = 0;
+
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const contenido = await page.getTextContent({ includeMarkedContent: true });
+
+      let lineas = null;
+      try {
+        const arbol = await page.getStructTree();
+        if (arbol) lineas = lineasDeEstructura(arbol, textoPorContenidoMarcado(contenido.items));
+      } catch {
+        /* PDF sin árbol de estructura utilizable: queda el agrupado por coordenadas. */
+      }
+      if (!lineas || lineas.length === 0) lineas = lineasPorCoordenadas(contenido.items);
+      if (lineas.length === 0) continue;
+
+      documento += `--- PÁGINA ${n} ---\n${lineas.join('\n')}\n\n`;
+      largoUtil += lineas.join('').length;
+    }
+
+    return largoUtil < MIN_TEXTO_DIGITAL ? null : documento;
+  } catch (err) {
+    console.warn('[eeffParser] Falló la lectura nativa del PDF; se usará Vision OCR.', err);
+    return null;
+  } finally {
+    /* Sin esto cada comparable de un lote deja su documento en memoria. */
+    if (doc) await doc.destroy().catch(() => {});
+  }
+}
+
+/* ═══════════ Lectura de los EEFF de las comparables ═══════════ */
+
+function esPdf(file) {
+  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+}
+
+/* Un solo lugar donde se arma la consulta y se lee la respuesta, para que la
+   vía nativa y la de OCR no puedan desincronizarse. */
+async function pedirJSONaGemini(parts, model, file) {
+  const response = await postGeminiWithRetry({ model, contents: [{ parts }] });
+  const text = response.data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text) throw new Error(`La IA no devolvió nada al leer ${file.name}.`);
+  /* extraerJSON escanea llaves balanceadas: quitar las vallas y hacer
+     JSON.parse falla en cuanto el modelo añade una frase después del objeto. */
+  return extraerJSON(text);
+}
+
+/* Dos intentos como máximo: el texto nativo del PDF y, si no cuaja por
+   cualquier motivo —incluido un JSON ilegible—, el Vision OCR sobre el
+   documento entero. */
+async function leerEeffConGemini(file, prompt, model, mapear) {
+  const nativo = esPdf(file) ? await extraerTextoEstructuradoPdf(file) : null;
+  if (nativo) {
+    const encabezado = `${prompt}\n\nCONTENIDO DEL DOCUMENTO, EXTRAÍDO DIRECTAMENTE DEL PDF (una línea por fila, celdas separadas por " | ", en el orden exacto del documento):\n`;
+    try {
+      return mapear(await pedirJSONaGemini([{ text: encabezado + nativo.slice(0, LIMITE_TEXTO_NATIVO) }], model, file));
+    } catch (err) {
+      console.warn(`[eeffParser] La lectura del texto nativo de ${file.name} no cuajó; se reintenta con Vision OCR.`, err);
+    }
+  }
+  const parts = [
+    { inline_data: { mime_type: mimeDe(file), data: await leerBase64(file) } },
+    { text: prompt },
+  ];
+  return mapear(await pedirJSONaGemini(parts, model, file));
+}
+
 /** Lee un PDF (o imagen) que contiene los EEFF de varias comparables y devuelve
  *  una entrada por empresa, cada una con su verificación contable.
  *  Devuelve [] si el documento no permite separar ninguna empresa. */
 export async function parseEEFFComparablesLote(file, studyYear) {
-  const base64Data = await leerBase64(file);
-  const mimeType = mimeDe(file);
-
-  const payload = {
-    model: 'gemini-3-flash-preview',
-    contents: [{
-      parts: [
-        { inline_data: { mime_type: mimeType, data: base64Data } },
-        { text: EEFF_COMPARABLES_LOTE_PROMPT },
-      ],
-    }],
-  };
-
-  const response = await postGeminiWithRetry(payload);
-  const text = response.data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-  if (!text) throw new Error('La IA no devolvió nada al leer el documento de comparables.');
-
-  const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-  const parsed = JSON.parse(cleanJson);
-  const empresas = Array.isArray(parsed.empresas) ? parsed.empresas : [];
-
-  return empresas
-    /* Sin razón social no hay forma de cruzar la entrada con una comparable, y
-       aplicarla a ciegas es justo lo que se quiere evitar. */
-    .filter((e) => e && (String(e.nombre || '').trim() || String(e.identificador_fuente || '').trim()))
-    .map((datos) => ({
-      datos,
-      verificacion: verifyAccountingEqualities(datos, studyYear),
-      archivo: file.name,
-    }));
+  return leerEeffConGemini(file, EEFF_COMPARABLES_LOTE_PROMPT, 'gemini-3-flash-preview', (parsed) => {
+    const empresas = Array.isArray(parsed.empresas) ? parsed.empresas : [];
+    return empresas
+      /* Sin razón social no hay forma de cruzar la entrada con una comparable, y
+         aplicarla a ciegas es justo lo que se quiere evitar. */
+      .filter((e) => e && (String(e.nombre || '').trim() || String(e.identificador_fuente || '').trim()))
+      .map((datos) => ({
+        datos,
+        verificacion: verifyAccountingEqualities(datos, studyYear),
+        archivo: file.name,
+      }));
+  });
 }
 
 /* Extraídos para que la lectura individual y la de lote no dupliquen el manejo
@@ -295,51 +522,13 @@ function mimeDe(file) {
   return 'application/pdf';
 }
 
+/** Lee los EEFF de una sola comparable. */
 export async function parseEEFFComparableOCR(file, studyYear) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result.split(',')[1];
-        let mimeType = 'application/pdf';
-        if (file.type.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
-          mimeType = file.type || 'image/jpeg';
-        }
-
-        const payload = {
-          model: 'gemini-3.5-flash',
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mimeType, data: base64Data } },
-              { text: EEFF_COMPARABLE_PROMPT }
-            ]
-          }]
-        };
-
-        const response = await postGeminiWithRetry(payload);
-        const text = response.data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
-
-        if (text) {
-          const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-          const data = JSON.parse(cleanJson);
-
-          const verificacion = verifyAccountingEqualities(data, studyYear);
-
-          resolve({
-            data,
-            verificacion,
-            filename: file.name
-          });
-        } else {
-          reject(new Error("No se pudo obtener el JSON de EEFF de la comparable."));
-        }
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = (e) => reject(e);
-  });
+  return leerEeffConGemini(file, EEFF_COMPARABLE_PROMPT, 'gemini-3.5-flash', (data) => ({
+    data,
+    verificacion: verifyAccountingEqualities(data, studyYear),
+    filename: file.name,
+  }));
 }
 
 /**
