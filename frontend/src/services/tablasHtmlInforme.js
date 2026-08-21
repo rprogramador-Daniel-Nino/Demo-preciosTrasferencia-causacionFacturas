@@ -51,6 +51,9 @@ import { pctf } from '../utils/calculations.js';
 import {
   resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
   fuenteDatosClaveSector, titulosSectorial,
+  /* Y los datos sueltos de cada fuente, para citarla al pie en formato bibliográfico: el número
+     al final de la frase y la referencia debajo, como en la ruta .docx. */
+  citaDeSerie, fuentesDelSector,
 } from './analisisMercado.js';
 
 /** Texto visible de un fragmento de HTML, con las entidades deshechas. */
@@ -1054,7 +1057,7 @@ function contenidoHuecoIntermedioHtml(textoHueco) {
  * `actualizarApartadosMacroOoxml` en `docxRelleno.js`. Sustituye a la función de
  * arriba: mismo nombre, mismo contrato, cuerpo reescrito.
  */
-export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
+export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos, notas = null) {
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
   const tituloColombia = 'Análisis del panorama de la economía colombiana';
   const narrativa = (datosMacro && datosMacro.narrativa) || {};
@@ -1077,8 +1080,12 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos) {
    *  párrafo y tabla en el mismo formato en cualquier escenario. */
   const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
     if (narrativaHtml) {
-      const fuenteTexto = serieClave ? resolverSerie(datosMacro, serieClave).fuente : '';
-      return narrativaHtml + parrafoFuenteHtml(fuenteTexto);
+      if (!serieClave) return narrativaHtml;
+      /* Con numerador, la fuente va como nota —número al final de la frase y la referencia
+         debajo—; sin él, la línea «FUENTE:» de siempre. Es el mismo reparto que en la ruta
+         .docx: quien no gestiona la numeración del documento no puede numerar una nota. */
+      if (notas) return notas.publicar(narrativaHtml, [citaDeSerie(datosMacro, serieClave)]);
+      return narrativaHtml + parrafoFuenteHtml(resolverSerie(datosMacro, serieClave).fuente);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
     return '<p>' + escaparHtml(marcadorTemaMacroPendienteHtml(tema, year)) + '</p>';
@@ -1217,7 +1224,7 @@ function regenerarTablaDatosClave(html, entrada, year, avisos) {
  *  tabla "Datos Clave del Sector", que se regenera después de los huecos (su propio hueco
  *  queda en `() => null` para no tocar lo que haya entre la tabla y el encabezado
  *  siguiente). */
-export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, year, avisos) {
+export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, year, avisos, notas = null) {
   const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
   console.log('[tablasHtmlInforme] actualizarApartadoSectorialHtml: año ' + year
     + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
@@ -1236,6 +1243,17 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
    *  "fabricar", así que se inserta siempre que esté disponible, sin importar cuánto
    *  medía el hueco viejo (mismo criterio asimétrico que `temaHueco`, y que
    *  `bloqueConUmbral` en docxRelleno.js). */
+  /** El bloque que precede a la tabla de datos clave, con las notas de TODAS las fuentes del
+   *  apartado. Van juntas aquí porque la corrida dice qué fuentes verificó para el apartado, no
+   *  qué fuente sostiene cada párrafo: anclarlas donde acaba el texto que introduce las cifras es
+   *  lo más cerca del dato que se puede estar sin inventar una correspondencia. */
+  const bloqueConFuentesDelSector = (narrativaHtml, tema) => (textoHueco) => {
+    const base = bloque(narrativaHtml, tema)(textoHueco);
+    if (!notas || !base) return base;
+    return notas.publicar(base, fuentesDelSector(entrada,
+      tituloDatosClaveSector(entrada && entrada.tituloSector, year)));
+  };
+
   const bloqueConUmbral = (narrativaHtml, tema) => (textoHueco) => {
     if (!narrativaHtml && textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA_HTML) return null;
     return bloque(narrativaHtml, tema)();
@@ -1252,7 +1270,7 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     titulos,
     [
       bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
-      bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
+      bloqueConFuentesDelSector(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
       /* El hueco que va entre la tabla de datos clave y el encabezado siguiente: en la
          plantilla lo ocupan las notas al pie de ESA tabla, que son las fuentes de las
          cifras del informe de referencia. Se sustituyen por las de la corrida de este año

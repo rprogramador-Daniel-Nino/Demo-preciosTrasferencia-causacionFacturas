@@ -26,6 +26,7 @@ import { FUENTE_TABLA, PUNTOS_TABLA } from './estiloDocumento.js';
 import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo, NOMBRES_TABLA_MARGENES } from './tablasInforme.js';
+import { crearRecolectorDeNotas } from './notasAlPieOoxml.js';
 import { resolverSerie } from './analisisMercado.js';
 
 /** Donde vive el cuerpo del documento dentro del .docx. */
@@ -460,6 +461,66 @@ test('rellenarDocx llena el ANEXO A con lo que trae el estudio', async () => {
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
   assert.match(texto, /Estado de Situación Financiera/);
   assert.ok(!texto.includes('páginas del informe anterior'));
+});
+
+test('rellenarDocx publica las fuentes de la Sección III como notas al pie del paquete', async () => {
+  /* La prueba que de verdad importa: que el .docx resultante sea un paquete VÁLIDO. Si el cuerpo
+     cita una nota que no está en `footnotes.xml`, o la parte no está declarada en
+     `[Content_Types].xml`, Word abre el documento diciendo que está dañado y ofrece repararlo. */
+  const buf = await plantilla([
+    parrafo('A. Análisis del Panorama de la Economía Mundial'),
+    parrafo('Texto viejo del mundo, del informe del año anterior.'),
+    parrafo('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafo('Tasas de Inflación Global (2024-2026)'),
+    parrafo('Texto viejo de la inflación mundial, con prosa suficiente para el umbral del hueco.'),
+    parrafo('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+    parrafo('B. Análisis del panorama de la economía colombiana'),
+  ]);
+
+  const datosMacro = {
+    narrativa: { inflacionMundial: '<p>La inflación global cedió en 2026.</p>' },
+    series: {
+      inflacion_global: {
+        valores: { 2026: '3.1' },
+        fuente: 'Fondo Monetario Internacional',
+        fuenteUrl: 'https://www.imf.org/weo',
+        fuenteTitulo: 'World Economic Outlook, octubre de 2026',
+        fuenteFecha: '2026-10-15',
+        fechaConsulta: '2026-08-19T10:00:00.000Z',
+      },
+    },
+  };
+
+  const { salida } = rellenarDocx({
+    binario: buf, estudio: ESTUDIO, datosMacro, tipoSalida: 'nodebuffer',
+  });
+  const z = new PizZip(salida);
+
+  /* 1. El cuerpo ancla la nota. */
+  const cuerpo = z.file(RUTA_DOC_TEST).asText();
+  const ref = /<w:footnoteReference w:id="(\d+)"\/>/.exec(cuerpo);
+  assert.ok(ref, 'el cuerpo debe anclar la nota donde estaba la línea «FUENTE:»');
+  assert.doesNotMatch(cuerpo, /FUENTE: Fondo Monetario/, 'y ya no la escribe en el cuerpo');
+
+  /* 2. La nota existe, con ese mismo id y con la cita en formato bibliográfico. */
+  const notas = z.file('word/footnotes.xml');
+  assert.ok(notas, 'sin footnotes.xml Word declara el documento dañado');
+  const xmlNotas = notas.asText();
+  assert.match(xmlNotas, new RegExp(`<w:footnote w:id="${ref[1]}">`));
+  assert.match(xmlNotas, /Fondo Monetario Internacional\. \(2026, octubre 15\)\. World Economic Outlook/);
+  assert.match(xmlNotas, /Recuperado el 19 de agosto de 2026, de /);
+
+  /* 3. El enlace es un enlace: relación externa, no solo texto azul. */
+  const rels = z.file('word/_rels/footnotes.xml.rels');
+  assert.ok(rels, 'sin las relaciones el enlace de la cita no sería clicable');
+  assert.match(rels.asText(), /Target="https:\/\/www\.imf\.org\/weo" TargetMode="External"/);
+  const idRel = /<w:hyperlink r:id="([^"]+)"/.exec(xmlNotas);
+  assert.ok(idRel, 'la nota usa el hipervínculo');
+  assert.match(rels.asText(), new RegExp(`Id="${idRel[1]}"`), 'y su r:id existe en las relaciones');
+
+  /* 4. La parte está declarada y relacionada: es lo que la hace legible para Word. */
+  assert.match(z.file('[Content_Types].xml').asText(), /footnotes\+xml/);
+  assert.match(z.file('word/_rels/document.xml.rels').asText(), /relationships\/footnotes/);
 });
 
 test('el .docx resultante conserva las partes obligatorias del paquete', async () => {
@@ -1765,6 +1826,73 @@ test('actualizarApartadosMacroOoxml reemplaza la prosa de mundial y colombia con
   assert.match(salida, /Narrativa real de Colombia para este cliente\./);
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.equal(avisos.length, 0);
+});
+
+test('con recolector, la fuente del apartado va como nota al pie y no como línea «FUENTE:»', () => {
+  /* Lo que pidió el usuario (2026-08-20): las URL crudas en el cuerpo ocupaban media página. */
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto viejo del mundo.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Texto viejo de la inflación mundial, con su FUENTE de 2024 debajo.'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa del mundo.</p>',
+      inflacionMundial: '<p>La inflación global cedió en 2026.</p>',
+    },
+    series: {
+      inflacion_global: {
+        valores: { 2026: '3.1' },
+        fuente: 'Fondo Monetario Internacional',
+        fuenteUrl: 'https://www.imf.org/weo',
+        fuenteTitulo: 'World Economic Outlook, octubre de 2026',
+        fuenteFecha: '2026-10-15',
+        fechaConsulta: '2026-08-19T10:00:00.000Z',
+      },
+    },
+  };
+
+  const notas = crearRecolectorDeNotas({ idInicial: 7, estilos: { refNota: 'Refdenotaalpie' } });
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, [], notas);
+
+  /* La referencia queda DENTRO del párrafo de la narrativa, al final de la frase. */
+  assert.match(salida, /La inflación global cedió en 2026\.<\/w:t><\/w:r>[\s\S]{0,200}?<w:footnoteReference w:id="7"\/>/);
+  assert.doesNotMatch(salida, /FUENTE: Fondo Monetario/, 'ya no se escribe la línea en el cuerpo');
+  assert.doesNotMatch(salida, /FUENTE: /, 'ninguna línea de fuente en el cuerpo');
+
+  /* Y la nota trae la cita en formato bibliográfico, con su enlace. */
+  assert.strictEqual(notas.cuantas(), 1);
+  const nota = notas.notasXml()[0];
+  assert.match(nota, /Fondo Monetario Internacional\. \(2026, octubre 15\)\. World Economic Outlook/);
+  assert.match(nota, /<w:hyperlink r:id="rIdNota1"/);
+  assert.deepStrictEqual(notas.enlaces(), [{ idRel: 'rIdNota1', url: 'https://www.imf.org/weo' }]);
+});
+
+test('sin recolector se sigue emitiendo la línea «FUENTE:»: sin paquete no hay nota al pie', () => {
+  /* Una nota al pie necesita `word/footnotes.xml`, y quien llama con un fragmento suelto de XML
+     no lo tiene. Perder la cita sería peor que publicarla en el cuerpo. */
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto viejo.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Texto viejo de la inflación mundial con prosa suficiente para el umbral.'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: { inflacionMundial: '<p>La inflación global cedió.</p>' },
+    series: { inflacion_global: { valores: { 2026: '3.1' }, fuente: 'FMI', fuenteUrl: 'https://imf.org' } },
+  };
+
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, []);
+  assert.match(salida, /FUENTE: FMI/);
+  assert.doesNotMatch(salida, /footnoteReference/);
 });
 
 test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narrativa, y avisa', () => {

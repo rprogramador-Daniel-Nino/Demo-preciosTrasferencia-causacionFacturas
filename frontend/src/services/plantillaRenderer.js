@@ -12,6 +12,7 @@ import {
 import { actualizarProsaRango } from './prosaRangoInforme.js';
 import { actualizarProsaTablas } from './prosaTablasInforme.js';
 import { actualizarProsaBaseDatos } from './prosaBaseDatos.js';
+import { crearNumeradorDeNotasHtml } from './notasAlPieHtml.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 import { actualizarAnexoCHtml } from './anexoCHtml.js';
@@ -65,10 +66,18 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      marcado no las alcanza y se radicaban con el concepto, el vinculado, el país y el
      monto del cliente anterior. */
   html = actualizarTablasOperacionesHtml(html, estudio, avisosTablas);
+  /* Las fuentes de la Sección III se citan como notas —número al final de la frase y referencia
+     debajo, en formato bibliográfico—, no como un párrafo «FUENTE:» con las URL crudas en el
+     cuerpo del informe (2026-08-20). El numerador es uno solo para toda la ruta: la numeración
+     tiene que seguir corrida entre los apartados macro y el sectorial, o el informe tendría dos
+     notas con el mismo número. */
+  const notasSeccionIII = crearNumeradorDeNotasHtml();
   html = actualizarApartadosMacroHtml(
-    html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
+    html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas,
+    notasSeccionIII);
   html = actualizarApartadoSectorialHtml(
-    html, opciones.analisisSector || null, estudio, Number(estudio && estudio.anio) || 2025, avisosTablas);
+    html, opciones.analisisSector || null, estudio, Number(estudio && estudio.anio) || 2025,
+    avisosTablas, notasSeccionIII);
   html = actualizarTablasMacroHtml(
     html, opciones.datosMacro || null, Number(estudio && estudio.anio) || 2025, avisosTablas);
   /* El ANEXO B va aparte porque no es una tabla sino un bloque de tres por comparable, y su

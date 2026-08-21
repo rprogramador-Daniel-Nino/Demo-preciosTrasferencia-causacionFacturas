@@ -88,8 +88,16 @@ import { actualizarProsaBaseDatos, BASE_DATOS_FUENTE } from './prosaBaseDatos.js
    importa de este módulo ni de `tablasHtmlInforme.js`. */
 import {
   resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
-  fuenteDatosClaveSector, titulosSectorial,
+  fuenteDatosClaveSector, titulosSectorial, citaDeSerie, fuentesDelSector,
 } from './analisisMercado.js';
+/* Las fuentes de la Sección III se publican como notas al pie, en formato bibliográfico y con el
+   enlace clicable, en vez de como una línea «FUENTE:» con las URL crudas en el cuerpo. */
+import { citaApa, citasApa } from './citasApa.js';
+import {
+  anclarEnUltimoParrafo, crearRecolectorDeNotas, siguienteIdDeNota, estilosDeNota,
+  agregarNotasAlPie, relsDeNotasAlPie, idsDeRelacionLibres, contentTypesConNotasAlPie,
+  relsDocumentoConNotasAlPie,
+} from './notasAlPieOoxml.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -147,6 +155,10 @@ export const CENTINELA_ANEXO = '@@ANEXO_EEFF@@';
 
 const RUTA_RELS = 'word/_rels/document.xml.rels';
 const RUTA_CT = '[Content_Types].xml';
+/* Donde viven las notas al pie y los enlaces de sus citas. El segundo no existe en una plantilla
+   cuyas notas son solo texto —el caso de END GAME—, así que se crea al publicar la primera. */
+const RUTA_FOOTNOTES = 'word/footnotes.xml';
+const RUTA_FOOTNOTES_RELS = 'word/_rels/footnotes.xml.rels';
 const RUTA_DOC = 'word/document.xml';
 
 /** El valor que se escribe cuando un campo no tiene dato. */
@@ -348,7 +360,33 @@ function contenidoHuecoIntermedio(textoHueco) {
   return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorContenidoRetirado())}</w:t></w:r></w:p>`;
 }
 
-export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
+/**
+ * Publica la fuente de un bloque de narrativa: nota al pie si se puede, línea «FUENTE:» si no.
+ *
+ * La nota al pie es lo que pidió el usuario (2026-08-20) y lo que hace el resto del informe: las
+ * URL crudas entre paréntesis ocupaban media página en el cuerpo del documento. Pero una nota al
+ * pie NO SE PUEDE CREAR SIN EL PAQUETE: necesita `word/footnotes.xml`, su relación y su content
+ * type, y esta función solo ve un trozo de `word/document.xml`. Quien tiene el .docx entero
+ * —`rellenarDocx`— pasa un recolector; quien llama con un fragmento suelto, no, y entonces la
+ * línea «FUENTE:» sigue siendo la única forma de citar sin perder el dato.
+ *
+ * @param {string} parrafos  la narrativa ya en OOXML.
+ * @param {object} datosCita  lo que `citaDeSerie`/`fuentesDelSector` devuelven.
+ * @param {Function} fuenteEnLinea  la cadena de la línea «FUENTE:», solo si hay que caer a ella.
+ * @param {object|null} notas  el recolector de notas al pie.
+ * @returns {string}
+ */
+function conFuenteCitada(parrafos, datosCita, fuenteEnLinea, notas) {
+  if (notas) {
+    const ref = notas.referencia(citaApa(datosCita), datosCita && datosCita.url);
+    if (ref) return anclarEnUltimoParrafo(parrafos, ref);
+    /* Sin cita que publicar no se ancla un número que no lleva a ninguna nota. */
+    return parrafos;
+  }
+  return parrafos + parrafoFuenteOoxml(fuenteEnLinea ? fuenteEnLinea() : '');
+}
+
+export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, notas = null) {
   const doc = sustituidorDeTablas(xml, null);
 
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
@@ -378,8 +416,10 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
    *  cualquier escenario. */
   const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
     if (narrativaHtml) {
-      const fuenteTexto = serieClave ? resolverSerie(datosMacro, serieClave).fuente : '';
-      return parrafosOoxmlDesdeHtml(narrativaHtml) + parrafoFuenteOoxml(fuenteTexto);
+      const parrafos = parrafosOoxmlDesdeHtml(narrativaHtml);
+      if (!serieClave) return parrafos;
+      return conFuenteCitada(parrafos, citaDeSerie(datosMacro, serieClave),
+        () => resolverSerie(datosMacro, serieClave).fuente, notas);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
     return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
@@ -753,7 +793,7 @@ function marcadorTemaSectorPendiente(tema, year) {
  * @param {string[]} [avisos]
  * @returns {string}
  */
-export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisos) {
+export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisos, notas = null) {
   const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
   console.log('[docxRelleno] actualizarApartadoSectorialOoxml: año ' + year
     + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
@@ -788,16 +828,35 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     return bloque(narrativaHtml, tema)();
   };
 
+  /** El bloque que precede a la tabla de datos clave, con las notas al pie de TODAS las fuentes
+   *  del apartado ancladas al final de su última frase.
+   *
+   *  Van todas juntas aquí y no repartidas por bloque porque la corrida no dice qué fuente
+   *  sostiene qué párrafo: dice qué fuentes verificó para el apartado. Anclarlas donde acaba el
+   *  texto que introduce las cifras es lo más cerca que se puede estar del dato sin inventar una
+   *  correspondencia que no existe. */
+  const bloqueConFuentesDelSector = (narrativaHtml, tema) => (textoHueco) => {
+    const base = bloque(narrativaHtml, tema)(textoHueco);
+    if (!notas || !base) return base;
+
+    const refs = citasApa(fuentesDelSector(entrada, tituloDatosClaveSector(entrada && entrada.tituloSector, year)))
+      .map(({ cita, url }) => notas.referencia(cita, url))
+      .join('');
+    return refs ? anclarEnUltimoParrafo(base, refs) : base;
+  };
+
   reemplazarPorHitos(
     doc,
     titulos,
     [
       bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
-      bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
-      /* Las notas al pie de la tabla de datos clave, que en la plantilla citan las fuentes
-         de las cifras del informe de referencia. Se cambian por las de esta corrida, y solo
-         si hay alguna — mismo criterio y mismo texto que la ruta HTML
-         (`actualizarApartadoSectorialHtml` en `tablasHtmlInforme.js`). */
+      bloqueConFuentesDelSector(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
+      /* La línea de fuente que va bajo la tabla de datos clave SE QUEDA, aunque las fuentes se
+         citen además al pie. No es la misma cosa: el numeral 4 del artículo 1.2.2.2.1.5 del
+         Decreto 1625 de 2016 exige que la información de la tabla indique su fuente y su fecha de
+         consulta, y una nota al pie anclada en el párrafo de arriba no es la fuente DE LA TABLA.
+         Lo que sí se sustituye es su contenido: la plantilla trae las fuentes del informe del año
+         anterior. */
       () => parrafoFuenteOoxml(fuenteDatosClaveSector(entrada)) || null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
       bloque(entrada && entrada.narrativa.proyeccion, 'proyección del sector'),
@@ -2441,8 +2500,27 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
-  xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas);
-  xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas);
+
+  /* Las fuentes de la Sección III van como notas al pie, en formato bibliográfico y con el enlace
+     clicable (2026-08-20). Aquí es el único sitio con el paquete entero, que es lo que una nota al
+     pie necesita: su texto vive en `word/footnotes.xml` y su enlace en las relaciones de ese
+     archivo. Los apartados solo piden el número y siguen. */
+  const leerParte = (ruta) => {
+    const parte = zip.file(ruta);
+    return parte ? parte.asText() : '';
+  };
+  const footnotesPrevio = leerParte(RUTA_FOOTNOTES);
+  const relsNotasPrevio = leerParte(RUTA_FOOTNOTES_RELS);
+  const primerRelLibre = idsDeRelacionLibres(relsNotasPrevio, 1)[0] || 'rIdNota1';
+  const notas = crearRecolectorDeNotas({
+    idInicial: siguienteIdDeNota(footnotesPrevio),
+    inicioRel: Number(String(primerRelLibre).replace(/\D+/g, '')) || 1,
+    /* Los de la plantilla, para que las notas nuevas se lean igual que las que ya trae. */
+    estilos: estilosDeNota(leerParte('word/styles.xml')),
+  });
+
+  xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas, notas);
+  xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas, notas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   /* La letra de la Sección III, DESPUÉS de que sus apartados, su análisis sectorial y sus ocho
@@ -2454,6 +2532,27 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
     xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
   });
   zip.file(RUTA_DOC, xml);
+
+  /* Las notas que pidieron los apartados, ahora que el cuerpo ya tiene sus referencias. Va DESPUÉS
+     de escribir el documento y ANTES de docxtemplater: si el cuerpo cita una nota que no existe en
+     `footnotes.xml`, Word declara el documento dañado al abrirlo. */
+  if (notas.cuantas()) {
+    zip.file(RUTA_FOOTNOTES, agregarNotasAlPie(footnotesPrevio, notas.notasXml()));
+
+    const enlaces = notas.enlaces();
+    if (enlaces.length) {
+      zip.file(RUTA_FOOTNOTES_RELS, relsDeNotasAlPie(relsNotasPrevio, enlaces));
+    }
+
+    /* Si la plantilla no traía notas, la parte hay que declararla y relacionarla; con ellas ya
+       está, y las dos funciones son idempotentes. */
+    if (!footnotesPrevio) {
+      zip.file(RUTA_CT, contentTypesConNotasAlPie(leerParte(RUTA_CT)));
+      zip.file(RUTA_RELS, relsDocumentoConNotasAlPie(leerParte(RUTA_RELS), 'rIdNotasAlPie'));
+    }
+    console.log(`[docxRelleno] Sección III: ${notas.cuantas()} fuente(s) citadas como nota al pie`
+      + `${enlaces.length ? `, ${enlaces.length} con enlace` : ''}.`);
+  }
 
   const doc = new Docxtemplater(zip, {
     paragraphLoop: true,
