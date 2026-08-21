@@ -30,6 +30,16 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
+
+/* El `pPr` de un párrafo de PROSA que este generador inserta.
+   `justificarCuerpoOoxml` normaliza la plantilla ANTES del relleno, así que no alcanza a los
+   párrafos que se crean después — y la prosa del análisis macro y del análisis sectorial
+   (Sección III) se crea aquí, de modo que salía sin justificar y heredaba lo que dijera el
+   estilo por defecto del cliente. Con END GAME, que no lo declara, salía a la izquierda en
+   medio de un informe justificado.
+   Los pies «FUENTE:», los títulos de tabla y las imágenes NO usan esto: su alineación es una
+   decisión propia (izquierda y centro) y por eso la declaran ellos mismos. */
+const PPR_PROSA = '<w:pPr><w:jc w:val="both"/></w:pPr>';
 import { valorDeCampo } from './plantillaVocabulario.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
@@ -358,7 +368,7 @@ function contenidoHuecoIntermedio(textoHueco) {
       + JSON.stringify(textoHueco.trim().slice(0, 40)));
     return null;
   }
-  return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorContenidoRetirado())}</w:t></w:r></w:p>`;
+  return `<w:p>${PPR_PROSA}<w:r><w:t xml:space="preserve">${escaparXml(marcadorContenidoRetirado())}</w:t></w:r></w:p>`;
 }
 
 /**
@@ -400,7 +410,7 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
   const primerHueco = (narrativaHtml, tema) => () => (
     narrativaHtml
       ? parrafosOoxmlDesdeHtml(narrativaHtml)
-      : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(tema, year))}</w:t></w:r></w:p>`
+      : `<w:p>${PPR_PROSA}<w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(tema, year))}</w:t></w:r></w:p>`
   );
 
   /** Hueco intermedio con tema propio: párrafo + FUENTE si hay narrativa para ese
@@ -423,7 +433,7 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
         () => resolverSerie(datosMacro, serieClave).fuente, notas);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
-    return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
+    return `<w:p>${PPR_PROSA}<w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
   };
 
   reemplazarPorHitos(
@@ -813,7 +823,7 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
   const bloque = (narrativaHtml, tema) => () => (
     narrativaHtml
       ? parrafosOoxmlDesdeHtml(narrativaHtml)
-      : `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaSectorPendiente(tema, year))}</w:t></w:r></w:p>`
+      : `<w:p>${PPR_PROSA}<w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaSectorPendiente(tema, year))}</w:t></w:r></w:p>`
   );
 
   /** Igual que `bloque`, pero cuando NO hay narrativa lista, el marcador de pendiente
@@ -1646,7 +1656,7 @@ export function parrafosOoxmlDesdeHtml(html) {
         if (texto) runs.push(`<w:r><w:t xml:space="preserve">${escaparXml(texto)}</w:t></w:r>`);
       }
     }
-    return `<w:p>${runs.join('')}</w:p>`;
+    return `<w:p>${PPR_PROSA}${runs.join('')}</w:p>`;
   }).join('');
 }
 

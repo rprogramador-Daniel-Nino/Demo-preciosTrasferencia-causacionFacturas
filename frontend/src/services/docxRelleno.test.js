@@ -3633,3 +3633,55 @@ test('si el estudio declara otra base de datos, las cifras del Anexo B la citan 
   assert.ok(texto.includes('FUENTE: Información Base Datos Orbis (Bureau van Dijk).'));
   assert.ok(!texto.includes('Capital IQ'), 'no se cita una base que no se consultó');
 });
+
+/* ══════ La prosa que este generador inserta también va justificada ══════
+   `justificarCuerpoOoxml` normaliza la PLANTILLA antes del relleno, así que no alcanza a los
+   párrafos que se crean después — y la prosa del análisis macro y del análisis sectorial se
+   crea aquí. Salía sin declarar alineación y heredaba el estilo por defecto del cliente: en
+   una plantilla que no lo declara (END GAME) el sector económico salía a la izquierda en
+   medio de un informe justificado. Reportado por el usuario el 2026-08-21. */
+
+test('la prosa del análisis sectorial y macro sale justificada', () => {
+  const xml = parrafosOoxmlDesdeHtml(
+    '<p>Las tendencias del sector muestran un alza sostenida en el periodo.</p>'
+    + '<p>La demanda <strong>industrial</strong> se recuperó durante el segundo semestre.</p>');
+  const parrafos = xml.match(/<w:p>[\s\S]*?<\/w:p>/g) || [];
+  assert.strictEqual(parrafos.length, 2);
+  parrafos.forEach((p, i) => assert.match(p, /<w:jc w:val="both"\/>/,
+    `el párrafo ${i + 1} de la prosa tiene que ir justificado`));
+});
+
+test('el w:jc va como primer hijo del w:pPr, y el pPr como primer hijo del párrafo', () => {
+  /* El esquema no admite propiedades de párrafo después del contenido: un `w:pPr` detrás del
+     primer `w:r` hace que Word abra el documento con el aviso de contenido ilegible. */
+  const xml = parrafosOoxmlDesdeHtml('<p>Prosa.</p>');
+  assert.match(xml, /^<w:p><w:pPr><w:jc w:val="both"\/><\/w:pPr><w:r>/);
+});
+
+test('la justificación de la prosa sobrevive a la pasada de tipografía de la Sección III', () => {
+  /* `aplicarLetraMacroOoxml` corre DESPUÉS del relleno y reescribe el `rPr` de los runs. Si
+     además tocara el `pPr`, un `w:jc` mal colocado invalidaría el documento. */
+  const titulo = (t) => '<w:p><w:pPr><w:pStyle w:val="Ttulo1"/><w:outlineLvl w:val="0"/></w:pPr>'
+    + `<w:r><w:t>${t}</w:t></w:r></w:p>`;
+  const doc = '<w:body>' + titulo('III. TENDENCIAS DE LA ECONOMÍA')
+    + parrafosOoxmlDesdeHtml('<p>Prosa del sector económico.</p>')
+    + titulo('IV. ANÁLISIS ECONÓMICO') + '</w:body>';
+
+  const salida = aplicarLetraMacroOoxml(doc);
+  const p = (salida.match(/<w:p>[\s\S]*?<\/w:p>/g) || []).find((x) => /sector económico/.test(x));
+  assert.ok(p, 'el párrafo de prosa sigue ahí');
+  assert.match(p, /<w:jc w:val="both"\/>/, 'sigue justificado');
+  assert.match(p, /w:ascii="Arial"/, 'y en Arial, que es lo que hace esa pasada');
+
+  /* Y si la tipografía llegara a meter un `rPr` en el `pPr`, el `jc` tiene que quedar antes. */
+  const pPr = (/<w:pPr>[\s\S]*?<\/w:pPr>/.exec(p) || [''])[0];
+  const iJc = pPr.indexOf('<w:jc');
+  const iRPr = pPr.indexOf('<w:rPr');
+  if (iRPr >= 0) {
+    assert.ok(iJc >= 0 && iJc < iRPr, `el w:jc debe ir antes del w:rPr en el pPr: ${pPr}`);
+  }
+});
+
+/* La contrapartida —que los pies «FUENTE:» sigan a la izquierda y los títulos de tabla
+   centrados, sin que la justificación de la prosa los arrastre— ya la afirma el test
+   «el bloque de prosa macro se sustituye entero y conserva su pie de FUENTE». */

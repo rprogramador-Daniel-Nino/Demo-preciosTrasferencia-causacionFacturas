@@ -117,7 +117,9 @@ test('los gastos operativos se derivan de la utilidad antes de llegar al generad
     examinada: { T: { s: 1000, c: 600, op: 150, ar: 100, inv: 50, ap: 80, ppe: 300 } },
   };
   const wb = construirLibroSoporte(otro);
-  assert.strictEqual(wb.Sheets.Datos.B6.v, 250, 'gastos = ventas − costo − utilidad operacional');
+  /* La magnitud es lo que esta prueba vigila —que el generador reciba GASTOS y no la
+     utilidad—; el signo es el convenio de egreso de la hoja (2026-08-21). */
+  assert.strictEqual(wb.Sheets.Datos.B6.v, -250, 'gastos = ventas − costo − utilidad operacional');
 });
 
 test('el libro recibe el ámbito, el segmento excluido y el amb de cada comparable', () => {

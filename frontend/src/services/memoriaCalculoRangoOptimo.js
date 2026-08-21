@@ -84,8 +84,15 @@ const METODOS = [
    saber cuáles son fieles y cuáles un alias histórico de la hoja. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas', av: false },
-  { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
-  { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
+  /* `egreso: true` — la hoja los publica con el signo del estado financiero, en negativo,
+     que es la convención que el usuario fijó el 2026-08-21 para que la hoja se lea igual que
+     el documento radicado. Antes el costo salía negativo y los gastos positivos: dos egresos
+     contiguos con convenios distintos.
+     Las FÓRMULAS que los usan van todas envueltas en ABS —las referencias del contribuyente
+     (`C_s`, `OP_s`), las columnas C y D de cada hoja de método y los chequeos del
+     diagnóstico—, así que las restas no se convierten en sumas. */
+  { clave: 't_c', etiqueta: 'Costo de ventas', av: false, egreso: true },
+  { clave: 't_op', etiqueta: 'Gastos operativos', av: false, egreso: true },
   { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
   { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
   { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras cuentas por cobrar', av: true },
@@ -242,9 +249,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
      completo y una fila en blanco rompería el análisis vertical—. Lo que cambia es que
      ahora una cifra en cadena formateada llega como la cifra y no como cero. */
   const segExcluido = num(study.seg_excluido) || 0;
-  const valorDeRubro = (clave) => (clave === 't_s'
-    ? (num(study.t_s) || 0) - segExcluido
-    : num(study[clave]) || 0);
+  const ES_EGRESO = new Set(RUBROS_EXAMINADA.filter((r) => r.egreso).map((r) => r.clave));
+  /* El signo de la celda, no el del cálculo: los egresos se publican en negativo venga el
+     dato como venga —la lectura del documento conserva su signo, pero un analista puede
+     escribirlo en positivo en el formulario, y Capital IQ da los costos de las comparables
+     en positivo—. Así la columna se lee homogénea en lugar de mezclar convenios. */
+  const valorDeRubro = (clave) => {
+    if (clave === 't_s') return (num(study.t_s) || 0) - segExcluido;
+    const v = num(study[clave]) || 0;
+    return ES_EGRESO.has(clave) ? -Math.abs(v) : v;
+  };
 
   /* El contribuyente con la forma que espera `desgloseAjuste`. Las ventas salen de
      `valorDeRubro('t_s')` —la misma función que escribe la celda de Datos— y no de
@@ -304,7 +318,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const filaComp0 = datos.length + 1; // 1-based fila de la primera comparable
   comps.forEach((c) => {
     datos.push([
-      cTxt(c.name), cNum(num(c.s) || 0), cNum(num(c.c) || 0), cNum(num(c.op) || 0),
+      /* Costo y gastos operativos en negativo, igual que los del contribuyente: es la misma
+         convención de egreso, y aquí importa doblemente porque Capital IQ los entrega en
+         positivo y el estado financiero de una comparable colombiana en negativo. Las hojas
+         de método los leen con ABS. */
+      cTxt(c.name), cNum(num(c.s) || 0),
+      cNum(-Math.abs(num(c.c) || 0)), cNum(-Math.abs(num(c.op) || 0)),
       cNum(num(c.ar) || 0), cNum(num(c.inv) || 0), cNum(num(c.ap) || 0),
       cNum(num(c.ppe) || 0),
       /* La tasa sigue siendo la REFERENCIA a la celda única —esa es la fuga que este
@@ -691,14 +710,22 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
     dg.push([cTxt('1) ¿ES UTILIZABLE CADA MÉTODO CON ESTOS DATOS?')]);
     dg.push([cTxt('Método'), cTxt('Comparables afectados'), cTxt('Veredicto'), cTxt('Criterio')]);
+    /* Los cinco chequeos leen los rangos de la hoja «Datos», donde el costo y los gastos van
+       con el signo del estado financiero. Se envuelven en ABS: sin él, `COS<0.05*VEN` es
+       cierto para toda comparable con el costo en negativo y la hoja publicaría «Revisar: N
+       de N» en los cuatro métodos de cualquier estudio, que es un diagnóstico que se deja de
+       leer por ruidoso. ABS es vectorizable dentro de SUMPRODUCT, así que la comprobación
+       sigue siendo una sola fórmula matricial y sigue recalculándose en Excel. */
+    const COS_ABS = `ABS(${COS})`;
+    const GAS_ABS = `ABS(${GAS})`;
     const CHEQUEOS = [
-      ['Margen Bruto', `SUMPRODUCT(--(${COS}<0.05*${VEN}))`,
+      ['Margen Bruto', `SUMPRODUCT(--(${COS_ABS}<0.05*${VEN}))`,
         'Costo de ventas por debajo del 5 % de las ventas: el margen bruto se pega al 100 % y deja de discriminar.'],
-      ['Cost Plus', `SUMPRODUCT(--((${COS}-${CXP})<=0))`,
+      ['Cost Plus', `SUMPRODUCT(--((${COS_ABS}-${CXP})<=0))`,
         'Denominador depurado (Costo − CxP) nulo o negativo: el indicador cambia de signo y no es interpretable.'],
-      ['Índice de Berry', `SUMPRODUCT(--(${GAS}<=0))`,
+      ['Índice de Berry', `SUMPRODUCT(--(${GAS_ABS}<=0))`,
         'Gastos operativos nulos o negativos: el índice se indefine.'],
-      ['Net Cost Plus', `SUMPRODUCT(--(((${COS}-${CXP})+${GAS})<=0))`,
+      ['Net Cost Plus', `SUMPRODUCT(--(((${COS_ABS}-${CXP})+${GAS_ABS})<=0))`,
         'Denominador depurado ((Costo − CxP) + Gastos) nulo o negativo.'],
       ['Margen Operacional', `SUMPRODUCT(--(${VEN}<=0))`,
         'Ventas nulas o negativas: no hay base sobre la que calcular el margen.'],
