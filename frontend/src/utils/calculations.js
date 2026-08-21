@@ -91,6 +91,28 @@ export function num(v) {
   return negativo ? -n : n;
 }
 
+/**
+ * Magnitud de un EGRESO: el valor absoluto de la cifra, o null si no hay cifra.
+ *
+ * Los estados financieros imprimen los egresos con signo negativo o entre paréntesis
+ * —«COSTO DE VENTAS (21.850.187.494)»— y el prompt de lectura conserva ese signo a
+ * propósito, para que la hoja del libro y el ANEXO A se lean igual que el documento
+ * radicado. Pero el cálculo usa el convenio contrario: la utilidad bruta es
+ * `ventas − costo` y el EBIT `ventas − costo − gastos`, así que un costo negativo
+ * SUMA en lugar de restar. Con las cifras de Montachem 2025 la utilidad bruta salía
+ * 45.591.555.238 en vez de 1.891.180.250 y el margen operacional 171 %, sin que nada
+ * lo advirtiera.
+ *
+ * Este helper es la frontera única entre los dos convenios. Se aplica SOLO a costo de
+ * ventas y gastos operativos, que son magnitudes de egreso: la utilidad operacional
+ * NO pasa por aquí, porque una pérdida es legítimamente negativa y volverla positiva
+ * convertiría un estudio en pérdidas en uno rentable.
+ */
+export function egreso(v) {
+  const n = num(v);
+  return n === null ? null : Math.abs(n);
+}
+
 /* Tres decimales y separador de es-CO. Es la convención del informe y la que `index.html` ya
    aplicaba: antes de unificarlo, un mismo estudio publicaba «4,985%» por la ruta del monolito y
    «4.98%» por la del gestor para la misma cifra.
@@ -165,7 +187,9 @@ export function pliOf(o, kind) {
   const s = num(o.s);
   if (!s || s === 0) return null;
   if (kind === 'MO') return num(o.op) / s;
-  if (kind === 'MB') return (s - num(o.c)) / s;
+  /* `egreso` y no `num`: el costo llega con el signo que traía el documento (ver
+     `egreso`), y con signo negativo la utilidad bruta salía por el doble. */
+  if (kind === 'MB') return (s - egreso(o.c)) / s;
   /* Berry = utilidad bruta ÷ gastos operativos, la definición del Anexo del Cap. III
      de las Guías OCDE y la que replica el modelo Excel validado por el consultor.
 
@@ -176,7 +200,7 @@ export function pliOf(o, kind) {
      `op` llega como UTILIDAD operacional (convenio del sistema), así que los gastos
      operativos se despejan: opex = ventas − costo − utilidad operacional. */
   if (kind === 'Berry') {
-    const c = num(o.c);
+    const c = egreso(o.c);
     const op = num(o.op);
     if (c === null || op === null) return null;
     const utilidadBruta = s - c;
@@ -189,7 +213,9 @@ export function pliOf(o, kind) {
 export function ratios(o) {
   if (!o) return null;
   const s = num(o.s);
-  const c = num(o.c);
+  /* `apC` divide por el costo; con el signo del documento el ratio salía negativo
+     y el ajuste de capital de trabajo se movía al revés (ver `egreso`). */
+  const c = egreso(o.c);
   if (s && o.ar !== null && o.inv !== null) {
     return {
       arS: num(o.ar) / s,
@@ -212,10 +238,13 @@ export function adjustInfo(T, tPLI, st, base, unitMult, egresoValue = null) {
   if (within) return { within: true, raw: 0, capped: 0, flag: false };
   
   let raw = (st.med - tPLI) * base * unitMult;
-  const egreso = num(egresoValue);
+  /* Renombrado desde `egreso` para no sombrear el helper del mismo nombre que
+     normaliza los egresos del estado de resultados: aquí es el monto del egreso de
+     la operación, que es el tope del ajuste, no una magnitud contable a normalizar. */
+  const montoEgreso = num(egresoValue);
   let capped = raw, flag = false;
-  if (egreso !== null && egreso > 0 && Math.abs(raw) > egreso) {
-    capped = Math.sign(raw) * egreso;
+  if (montoEgreso !== null && montoEgreso > 0 && Math.abs(raw) > montoEgreso) {
+    capped = Math.sign(raw) * montoEgreso;
     flag = true;
   }
   let improcedente = false;

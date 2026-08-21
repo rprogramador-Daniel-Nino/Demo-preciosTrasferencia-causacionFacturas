@@ -6,7 +6,7 @@ import {
 import { num, pliOf, ratios, pctf, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
-import { exportarSoporteMotor } from '../services/motorExcelExport';
+import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import {
   separarPorSuficiencia, partidasFaltantes, motivoSinInformacionFinanciera, retirarFilas,
@@ -1283,12 +1283,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       ? enriquecerUniverso(universo, calculatedRows || comparables, auditoria)
       : null;
 
-    const datos = {
-      /* `prime` va en porcentaje, tal como lo escribe el usuario: es lo que espera el
-         generador del libro. `interestRate` es el mismo número ya dividido entre 100,
-         que usa el cálculo de esta pantalla; se conserva porque otros consumidores del
-         payload lo leen, pero el Excel no debe tomarlo de ahí. */
-      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate, prime: study.prime },
+    /* El payload lo arma `construirPayloadSoporte` desde el estudio en bruto, y no este
+       componente a mano: la versión anterior enumeraba seis campos del estudio y las
+       siete cifras de `T`, de modo que los ocho rubros del ESF —efectivo, inversiones
+       asociadas, impuestos corrientes, los tres subtotales, intangibles y diferidos— y el
+       `cmode` del tablero nunca llegaban al libro, que los publicaba en cero.
+
+       `prime` va en porcentaje, tal como lo escribe el usuario: es lo que espera el
+       generador. `interestRate` es el mismo número ya dividido entre 100, que usa el
+       cálculo de esta pantalla; se conserva porque otros consumidores del payload lo leen,
+       pero el Excel no debe tomarlo de ahí. */
+    const datos = construirPayloadSoporte(study, {
+      pli: kind,
+      useAdj,
+      interestRate,
+      cmode,
       examinada: { T, tPLI, tR },
       rango: { stats, activeCount: activeSeries.length, adjustment },
       filtros: { engineConfig, selectionFunnel },
@@ -1305,7 +1314,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           candidatas: candidatasUniverso,
         }
       } : {}),
-    };
+    });
     const entidadSlug = String(datos.estudio.entidad || 'estudio')
       .trim().toLowerCase()
       .normalize('NFD').replace(/[̀-ͯ]/g, '')

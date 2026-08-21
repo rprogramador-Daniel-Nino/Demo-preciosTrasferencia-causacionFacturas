@@ -25,7 +25,7 @@
    comparable entre como "sin margen" en vez de con un margen falso.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { num } from '../utils/calculations.js';
+import { num, egreso } from '../utils/calculations.js';
 
 /* Gastos operativos de una lectura de EEFF, con trazabilidad de cómo se obtuvieron.
 
@@ -36,7 +36,12 @@ import { num } from '../utils/calculations.js';
         hay ingresos y costo.
    Devuelve { valor, fuente } o { valor: null, fuente: 'no disponible' }. */
 export function gastosOperativosDe(datos) {
-  const go = num(datos.gastos_operacionales);
+  /* `egreso`: el documento imprime los gastos con signo negativo o entre paréntesis
+     («GASTOS DE ADMINISTRACION (572.260.813)») y aquí interesa la magnitud. Las dos
+     ramas siguientes NO llevan valor absoluto a propósito: son identidades, y un
+     resultado negativo ahí significa que alguna de las cifras que las alimentan está
+     mal leída — eso lo reporta `eeffVerificacion.js`, no se tapa con un abs. */
+  const go = egreso(datos.gastos_operacionales);
   if (go !== null) return { valor: go, fuente: 'lectura directa' };
 
   const ub = num(datos.utilidad_bruta);
@@ -46,9 +51,9 @@ export function gastosOperativosDe(datos) {
   }
 
   const ing = num(datos.ingresos_operacionales);
-  const cos = num(datos.costo_ventas);
+  const cos = egreso(datos.costo_ventas);
   if (ing !== null && cos !== null && uop !== null) {
-    return { valor: (ing - Math.abs(cos)) - uop, fuente: 'derivado: (ingresos − costo) − utilidad operacional' };
+    return { valor: (ing - cos) - uop, fuente: 'derivado: (ingresos − costo) − utilidad operacional' };
   }
 
   return { valor: null, fuente: 'no disponible' };
@@ -63,6 +68,10 @@ export function normalizarEeff(datos) {
   const gastos = gastosOperativosDe(d);
   return {
     s: num(d.ingresos_operacionales),
+    /* El signo del documento se conserva: la hoja `Datos` del libro y el ANEXO A
+       muestran el costo igual que el estado financiero radicado. Quien lo normaliza
+       para calcular es `egreso()` dentro del motor (`ajusteRangoCapitalTrabajo.js`)
+       y de `pliOf`, que son los dos únicos sitios donde el signo cambia el resultado. */
     c: num(d.costo_ventas),
     op: gastos.valor,               // gastos operativos, no utilidad
     ar: num(d.cuentas_por_cobrar),

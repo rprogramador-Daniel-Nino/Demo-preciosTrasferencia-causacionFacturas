@@ -426,8 +426,13 @@ test('la fórmula de cada fila de estadística apunta a su propia columna y a su
   assert.ok(filaTasa > 0, 'la hoja Datos trae la fila de la tasa');
   const R = {
     S: refRubro('Ventas netas'),
-    C: refRubro('Costo de ventas'),
-    OP: refRubro('Gastos operativos'),
+    /* Costo y gastos operativos van envueltos en ABS. La hoja Datos los guarda con el
+       signo que el estado financiero les imprime —negativo o entre paréntesis, que es lo
+       habitual— y el cálculo necesita la magnitud: sin ABS, `(S−C)` suma el costo en vez
+       de restarlo. Es la misma frontera que `egreso()` en utils/calculations.js, del lado
+       de la fórmula. */
+    C: `ABS(${refRubro('Costo de ventas')})`,
+    OP: `ABS(${refRubro('Gastos operativos')})`,
     AP: refRubro('Cuentas por pagar comerciales'),
     INV: refRubro('Inventarios'),
     PPE: refRubro('Propiedades, planta y equipo'),
@@ -740,6 +745,12 @@ const indiceDeColumna = (letras) => [...letras].reduce(
 const REF = /^(?:(?:'([^']+)'|([A-Za-z][A-Za-z0-9]*))!)?\$?([A-Z]{1,3})\$?(\d+)/;
 const NUMERO = /^\d+(?:\.\d+)?/;
 
+/* Llamada a función al principio de la fórmula. Solo ABS entra en la aritmética que esta
+   prueba recalcula: es la que envuelve el costo y los gastos operativos, que la hoja
+   `Datos` guarda con el signo del documento y el cálculo necesita en magnitud. El resto
+   —QUARTILE, IF, ISNUMBER— sigue fuera de alcance, como antes. */
+const FUNCION = /^([A-Z]+)\(/;
+
 /* Fuera de alcance: la fórmula lleva una función, un rango o una comparación, o
    referencia una celda que no trae valor en caché. Se distingue de un fallo real. */
 const FUERA_DE_ALCANCE = Symbol('fuera de alcance');
@@ -776,12 +787,19 @@ function cotejarFormulaContraValor(hojas) {
         resto = resto.slice(numero[0].length);
         continue;
       }
+      const fn = FUNCION.exec(resto);
+      if (fn) {
+        if (fn[1] !== 'ABS') return null; // otra función: no es aritmética pura
+        tokens.push({ tipo: 'abs' }, { tipo: '(' });
+        resto = resto.slice(fn[0].length);
+        continue;
+      }
       if ('+-*/()'.includes(resto[0])) {
         tokens.push({ tipo: resto[0] });
         resto = resto.slice(1);
         continue;
       }
-      return null; // función, rango, texto o comparación: no es aritmética pura
+      return null; // rango, texto o comparación: no es aritmética pura
     }
     return tokens;
   };
@@ -797,6 +815,9 @@ function cotejarFormulaContraValor(hojas) {
       if (!t) throw FUERA_DE_ALCANCE;
       if (t.tipo === '-') { i += 1; return -factor(); }
       if (t.tipo === '+') { i += 1; return factor(); }
+      /* ABS: el token vino seguido de su propio '(' desde el tokenizador, así que se
+         resuelve como cualquier otro paréntesis y se le aplica el valor absoluto. */
+      if (t.tipo === 'abs') { i += 1; return Math.abs(factor()); }
       if (t.tipo === '(') {
         i += 1;
         const v = expresion();

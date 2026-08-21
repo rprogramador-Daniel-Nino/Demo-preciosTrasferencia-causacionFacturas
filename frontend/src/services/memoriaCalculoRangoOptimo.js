@@ -100,6 +100,12 @@ const RUBROS_EXAMINADA = [
   { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales', av: false },
 ];
 
+/* Las claves de los quince rubros, en el orden de la hoja. Se exporta para que quien
+   arme el payload del libro no vuelva a escribir la lista a mano: cuando esa lista vivía
+   duplicada en `MotorComparables.jsx`, los ocho rubros del ESF que se añadieron aquí
+   nunca llegaron allá y el libro los publicaba en cero sin que nada lo advirtiera. */
+export const CLAVES_RUBROS_EXAMINADA = RUBROS_EXAMINADA.map((r) => r.clave);
+
 /* 1-based: fila 1 título, 2 vacía, 3 «PARTE EXAMINADA», 4 el primer rubro. */
 const FILA_RUBRO_0 = 4;
 const filaDeRubro = (clave) => FILA_RUBRO_0
@@ -351,7 +357,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
   // Referencias del contribuyente, derivadas del orden de RUBROS_EXAMINADA
   const refDe = (clave) => D(`$B$${filaDeRubro(clave)}`);
-  const S_s = refDe('t_s'), C_s = refDe('t_c'), OP_s = refDe('t_op');
+  /* El costo y los gastos van envueltos en ABS, y no es cosmética: la hoja `Datos`
+     conserva el signo con que el estado financiero los imprime —negativo o entre
+     paréntesis— para que el libro se lea igual que el documento radicado, mientras el
+     cálculo necesita la magnitud (utilidad bruta = ventas − costo). Es la misma
+     frontera que `egreso()` en `utils/calculations.js`, del lado de la fórmula: sin
+     ella, un estudio con el costo en negativo publica en el libro una utilidad bruta
+     del doble y un margen operacional de tres dígitos, y el recálculo de Excel lo
+     confirmaría en lugar de delatarlo. */
+  const S_s = refDe('t_s');
+  const C_s = `ABS(${refDe('t_c')})`, OP_s = `ABS(${refDe('t_op')})`;
   const AR_s = refDe('t_ar'), INV_s = refDe('t_inv');
   const AP_s = refDe('t_ap'), PPE_s = refDe('t_ppe');
 
@@ -394,8 +409,19 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          `study`, en el mismo orden en que escribió la tabla de la hoja Datos. */
       const nombreRef = { t: 's', f: `${D(`A${src}`)}`, v: String(c.name || '') };
       const cifras = [c.s, c.c, c.op, c.ar, c.inv, c.ap, c.ppe];
-      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => cFor(
-        `${D(`${L}${src}`)}`, '#,##0.00', num(cifras[k]) || 0));
+      /* Igual que con el contribuyente: las columnas de costo (C) y gastos operativos
+         (D) traen la MAGNITUD, aunque la hoja `Datos` guarde el signo del documento.
+         Envolver aquí la referencia —y no cada una de las fórmulas J, K, M, R y S–Y que
+         la usan— deja un solo sitio donde el convenio cambia, y hace que la propia
+         columna del método muestre el número con el que se está calculando. */
+      const enMagnitud = new Set(['C', 'D']);
+      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => {
+        const ref = D(`${L}${src}`);
+        const v = num(cifras[k]) || 0;
+        return enMagnitud.has(L)
+          ? cFor(`ABS(${ref})`, '#,##0.00', Math.abs(v))
+          : cFor(`${ref}`, '#,##0.00', v);
+      });
       /* La tasa es la única del estudio y viaja en porcentaje: es el mismo doble que
          escribió la celda de la hoja Datos, porque es literalmente el mismo valor. */
       const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000', tasaDelEstudio);
@@ -755,6 +781,29 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       dg.push([]);
       dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
       dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+    }
+
+    /* Las correcciones que la verificación de la ingesta aplicó a las cifras leídas del
+       estado financiero. Van en el libro y no solo en la pantalla porque el libro es lo
+       que se radica como soporte: una cifra que el sistema cambió por su cuenta y que
+       nadie puede rastrear es peor que una cifra sin corregir, y quien audite tiene que
+       poder ver que la utilidad operacional que sustenta el margen no es la que el
+       documento rotula como tal, sino la que se despeja de sus otras cifras. */
+    const correcciones = Array.isArray(study.t_correcciones) ? study.t_correcciones : [];
+    if (correcciones.length) {
+      dg.push([cTxt('5) CIFRAS CORREGIDAS AL LEER EL ESTADO FINANCIERO')]);
+      dg.push([cTxt('Rubro'), cTxt('Leído del documento'), cTxt('Aplicado'),
+        cTxt('Rótulo de la fila leída'), cTxt('Por qué se cambió')]);
+      correcciones.forEach((c) => {
+        dg.push([
+          cTxt(String(c.etiqueta || c.campo || '')),
+          cNum(c.valorLeido),
+          cNum(c.valorAplicado),
+          cTxt(String(c.rotuloLeido || '—')),
+          cTxt(String(c.motivo || '')),
+        ]);
+      });
+      dg.push([]);
     }
 
     hojas.unshift({

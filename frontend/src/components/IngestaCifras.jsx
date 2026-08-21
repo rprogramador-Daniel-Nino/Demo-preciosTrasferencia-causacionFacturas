@@ -1,13 +1,53 @@
 import React, { useState } from 'react';
-import { Sparkles, BarChart, Settings, Calculator, Upload, FileSpreadsheet, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle } from 'lucide-react';
-import { pliOf, pctf } from '../utils/calculations';
+import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2 } from 'lucide-react';
+import { pliOf, pctf, fmt, num } from '../utils/calculations';
 import { parseEeffWithGeminiOCR } from '../services/eeffParser';
+import { verificarEeff, camposAplicables } from '../services/eeffVerificacion';
 import { convertPdfToImages } from '../services/pdfRenderer';
+
+/* Las casillas del balance, con las etiquetas EXACTAS de `RUBROS_EXAMINADA`
+   (services/memoriaCalculoRangoOptimo.js) y de `RUBROS_ESF` (services/docxRelleno.js).
+   Que el rótulo de la pantalla y el de la hoja del libro sean el mismo texto no es
+   cosmética: es lo que permite al analista cotejar una celda del Excel con la casilla
+   donde la corrige, sin tener que saber qué alias corresponde a qué.
+
+   Hasta agosto de 2026 solo existían las casillas de ventas, costo, utilidad operacional,
+   CxC, inventarios, CxP y PP&E. Los ocho restantes entraban únicamente si la lectura del
+   documento los acertaba, y si no, la única vía era editar el Excel: por eso un estado con
+   nomenclatura NIIF propia dejaba media hoja `DATOS DE ENTRADA` en ceros sin remedio. */
+const RUBROS_BALANCE = [
+  { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo' },
+  { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas' },
+  { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras' },
+  { clave: 't_inv', etiqueta: 'Inventarios' },
+  { clave: 't_tax', etiqueta: 'Activos por impuestos corrientes' },
+  { clave: 't_act_curr', etiqueta: 'Total, Activo corriente', subtotal: 'corriente' },
+  { clave: 't_ppe', etiqueta: 'Propiedades, planta y equipo' },
+  { clave: 't_intang', etiqueta: 'Intangibles' },
+  { clave: 't_dif', etiqueta: 'Diferidos' },
+  { clave: 't_act_nocurr', etiqueta: 'Total, Activos no corrientes', subtotal: 'nocorriente' },
+  { clave: 't_act_tot', etiqueta: 'Total, Activos', subtotal: 'total' },
+  { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales' },
+];
+
+/* Los mismos grupos que usa `eeffVerificacion.js` para cotejar los subtotales. Aquí solo
+   sirven para el aviso junto a la casilla, en vivo mientras el analista escribe. */
+const SUMANDOS = {
+  corriente: ['t_cash', 't_inv_assoc', 't_ar', 't_inv', 't_tax'],
+  nocorriente: ['t_ppe', 't_intang', 't_dif'],
+  total: ['t_act_curr', 't_act_nocurr'],
+};
+
+const CLASE_CASILLA = 'bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono';
 
 export default function IngestaCifras({ study, updateStudy }) {
   const [loadingEeff, setLoadingEeff] = useState(false);
   const [eeffMsg, setEeffMsg] = useState('');
   const [eeffFileName, setEeffFileName] = useState('');
+  /* Los hallazgos de la última lectura: qué se corrigió y qué necesita una decisión. Vive
+     en el componente y no en el estudio porque describe UNA lectura, no el estudio; lo que
+     sí se persiste son las correcciones (`t_correcciones`), que el libro publica. */
+  const [hallazgos, setHallazgos] = useState(null);
 
   const handleFieldChange = (key, value) => {
     updateStudy({ [key]: value });
@@ -18,36 +58,31 @@ export default function IngestaCifras({ study, updateStudy }) {
     if (!file) return;
     setLoadingEeff(true);
     setEeffFileName(file.name);
-    setEeffMsg('🤖 Leyendo Estados Financieros con Gemini Vision OCR…');
+    setHallazgos(null);
+    setEeffMsg('🤖 Leyendo Estados Financieros…');
 
     try {
       const eeffImages = await convertPdfToImages(file);
-      const res = await parseEeffWithGeminiOCR(file);
+      /* El año del estudio viaja al prompt: los estados financieros colombianos son
+         comparativos y sin decirle qué columna leer, el modelo elige la más reciente
+         —que no es la del estudio cuando se trabaja un año anterior—. */
+      const res = await parseEeffWithGeminiOCR(file, study.anio);
 
       const updates = {};
       if (eeffImages && eeffImages.length > 0) {
         updates.eeffImages = eeffImages;
       }
 
-      if (res) {
-        if (res.t_s !== null && res.t_s !== undefined) updates.t_s = res.t_s;
-        if (res.t_c !== null && res.t_c !== undefined) updates.t_c = res.t_c;
-        if (res.t_op !== null && res.t_op !== undefined) updates.t_op = res.t_op;
-        if (res.t_ar !== null && res.t_ar !== undefined) updates.t_ar = res.t_ar;
-        if (res.t_inv !== null && res.t_inv !== undefined) updates.t_inv = res.t_inv;
-        if (res.t_ap !== null && res.t_ap !== undefined) updates.t_ap = res.t_ap;
-        if (res.t_cash !== null && res.t_cash !== undefined) updates.t_cash = res.t_cash;
-        if (res.t_inv_assoc !== null && res.t_inv_assoc !== undefined) updates.t_inv_assoc = res.t_inv_assoc;
-        if (res.t_tax !== null && res.t_tax !== undefined) updates.t_tax = res.t_tax;
-        if (res.t_act_curr !== null && res.t_act_curr !== undefined) updates.t_act_curr = res.t_act_curr;
-        if (res.t_ppe !== null && res.t_ppe !== undefined) updates.t_ppe = res.t_ppe;
-        if (res.t_intang !== null && res.t_intang !== undefined) updates.t_intang = res.t_intang;
-        if (res.t_dif !== null && res.t_dif !== undefined) updates.t_dif = res.t_dif;
-        if (res.t_act_nocurr !== null && res.t_act_nocurr !== undefined) updates.t_act_nocurr = res.t_act_nocurr;
-        if (res.t_act_tot !== null && res.t_act_tot !== undefined) updates.t_act_tot = res.t_act_tot;
-      }
+      /* La verificación decide qué entra: despeja la utilidad operacional de las
+         identidades del propio estado en vez de creerle a una fila rotulada, y descarta
+         las cifras que no están impresas en el documento. */
+      const verificacion = verificarEeff(res, { anioEstudio: study.anio });
+      Object.assign(updates, camposAplicables(verificacion.campos));
+      updates.t_correcciones = verificacion.correcciones;
 
       updateStudy(updates);
+      setHallazgos(verificacion);
+
       /* El mensaje decía siempre "páginas adjuntadas" aunque convertPdfToImages
          hubiera devuelto un arreglo vacío (falla silenciosa, ver pdfRenderer.js): el
          analista veía "éxito" y solo se enteraba de que el ANEXO A quedó sin imágenes
@@ -72,11 +107,25 @@ export default function IngestaCifras({ study, updateStudy }) {
     op: study.t_op || 0
   }, study.pli || 'MO');
 
+  /* El cotejo en vivo de un subtotal contra sus partidas. Devuelve null cuando falta el
+     subtotal o cuando cuadra: solo se dibuja cuando hay algo que decir. */
+  const descuadre = (grupo) => {
+    if (!grupo) return null;
+    const impreso = num(study[{ corriente: 't_act_curr', nocorriente: 't_act_nocurr', total: 't_act_tot' }[grupo]]);
+    if (impreso === null || impreso === 0) return null;
+    const suma = SUMANDOS[grupo].reduce((acc, k) => acc + (num(study[k]) || 0), 0);
+    const dif = impreso - suma;
+    /* Una milésima de la escala del subtotal, el mismo criterio de `eeffVerificacion.js`:
+       los estados financieros redondean y no todo rubro tiene casilla propia. */
+    if (Math.abs(dif) <= Math.max(1, Math.abs(impreso) * 0.001)) return null;
+    return dif;
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Columna Izquierda: Formulario de Cifras e Ingesta */}
       <div className="lg:col-span-2 space-y-6">
-        
+
         {/* 1. Sección: Ingesta de Estados Financieros (EEFF) */}
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3">
@@ -93,7 +142,10 @@ export default function IngestaCifras({ study, updateStudy }) {
           </div>
 
           <p className="text-xs text-zinc-500 leading-relaxed">
-            Adjunte el Estado de Resultados o Balance General de la compañía (Excel, PDF o Imagen). El sistema leerá las cifras de Ventas, Costos, Utilidad Operacional, Cartera, Inventarios y Proveedores.
+            Adjunte el Estado de Situación Financiera y el Estado de Resultados de la compañía
+            (PDF o imagen). El sistema lee los quince rubros de la parte examinada, comprueba
+            que cada cifra esté impresa en el documento y coteja los subtotales y la utilidad
+            operacional contra las identidades contables del propio estado.
           </p>
 
           <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl p-4 flex flex-col items-center justify-center text-center hover:border-[#0FA3A1] transition-colors relative cursor-pointer bg-zinc-50/50 dark:bg-zinc-900/30">
@@ -119,7 +171,7 @@ export default function IngestaCifras({ study, updateStudy }) {
                 <span className="text-xs text-zinc-700 dark:text-zinc-300 font-semibold">
                   Seleccionar o arrastrar Estados Financieros (Excel, PDF o Imagen)
                 </span>
-                <span className="text-[11px] text-zinc-400">Lectura inteligente OCR + Algoritmo de balances</span>
+                <span className="text-[11px] text-zinc-400">Lectura del texto del PDF + OCR, con verificación contable</span>
               </div>
             )}
           </div>
@@ -132,6 +184,59 @@ export default function IngestaCifras({ study, updateStudy }) {
             }`}>
               <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
               <span>{eeffMsg}</span>
+            </div>
+          )}
+
+          {/* Correcciones aplicadas. Se publican porque una corrección automática sin
+              rastro es peor que no corregir: el analista firma cifras que no leyó. */}
+          {hallazgos && hallazgos.correcciones.length > 0 && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 space-y-2">
+              <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                <Wand2 className="w-4 h-4 flex-shrink-0" />
+                <span className="text-xs font-bold">
+                  Se corrigieron {hallazgos.correcciones.length} cifra(s) que no cuadraban con el estado
+                </span>
+              </div>
+              <ul className="space-y-1.5">
+                {hallazgos.correcciones.map((c, i) => (
+                  <li key={i} className="text-[11px] text-amber-900 dark:text-amber-200 leading-snug">
+                    <span className="font-semibold">{c.etiqueta}:</span>{' '}
+                    <span className="line-through opacity-70 font-mono">{fmt(c.valorLeido)}</span>{' → '}
+                    <span className="font-mono font-semibold">{fmt(c.valorAplicado)}</span>
+                    <br />
+                    <span className="opacity-80">{c.motivo}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Advertencias: lo que el sistema no corrige porque exige una decisión. */}
+          {hallazgos && hallazgos.advertencias.length > 0 && (
+            <div className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 space-y-2">
+              <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span className="text-xs font-bold">
+                  {hallazgos.advertencias.length} punto(s) que requieren su revisión
+                </span>
+              </div>
+              <ul className="list-disc pl-4 space-y-1">
+                {hallazgos.advertencias.map((a, i) => (
+                  <li key={i} className="text-[11px] text-rose-900 dark:text-rose-200 leading-snug">
+                    {a.mensaje}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {hallazgos && hallazgos.correcciones.length === 0 && hallazgos.advertencias.length === 0 && (
+            <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-[11px] text-emerald-800 dark:text-emerald-300 flex gap-2 items-center">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              <span>
+                Verificación contable superada: los subtotales, la ecuación patrimonial y la
+                utilidad operacional cuadran, y cada cifra está impresa en el documento.
+              </span>
             </div>
           )}
         </div>
@@ -151,7 +256,7 @@ export default function IngestaCifras({ study, updateStudy }) {
                 value={study.t_s || ''}
                 onChange={(e) => handleFieldChange('t_s', e.target.value)}
                 placeholder="COP Ventas"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+                className={CLASE_CASILLA}
               />
             </div>
 
@@ -162,8 +267,15 @@ export default function IngestaCifras({ study, updateStudy }) {
                 value={study.t_c || ''}
                 onChange={(e) => handleFieldChange('t_c', e.target.value)}
                 placeholder="COP Costos"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+                className={CLASE_CASILLA}
               />
+              {/* El signo del documento se conserva a propósito: la hoja del libro y el
+                  ANEXO A se leen igual que el estado radicado, y el cálculo toma la
+                  magnitud (ver `egreso` en utils/calculations.js). */}
+              <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
+                Puede dejarlo con el signo del estado financiero (negativo o entre
+                paréntesis): el cálculo usa la magnitud.
+              </p>
             </div>
 
             <div className="flex flex-col">
@@ -173,8 +285,11 @@ export default function IngestaCifras({ study, updateStudy }) {
                 value={study.t_op || ''}
                 onChange={(e) => handleFieldChange('t_op', e.target.value)}
                 placeholder="COP Utilidad Op."
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+                className={CLASE_CASILLA}
               />
+              <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
+                Utilidad, no gastos. Con pérdida operativa va en negativo.
+              </p>
             </div>
           </div>
 
@@ -186,7 +301,7 @@ export default function IngestaCifras({ study, updateStudy }) {
                 value={study.seg_excluido || ''}
                 onChange={(e) => handleFieldChange('seg_excluido', e.target.value)}
                 placeholder="COP a excluir del ingreso/gasto"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
+                className={CLASE_CASILLA}
               />
             </div>
 
@@ -203,60 +318,44 @@ export default function IngestaCifras({ study, updateStudy }) {
           </div>
         </div>
 
-        {/* Balance General */}
+        {/* Balance General: los doce rubros del ESF, con las etiquetas del libro */}
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
           <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-2">
             <BarChart className="w-5 h-5 text-[#0FA3A1]" />
-            Cifras del Balance General (Para Ajuste de Comparabilidad)
+            Cifras del Estado de Situación Financiera
           </h3>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            Estos rubros alimentan el ajuste de capital de trabajo, el análisis vertical de la
+            Tabla 10 y el ANEXO A. Los subtotales avisan si no cuadran con sus partidas.
+          </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col">
-              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Cuentas por Cobrar (Clientes)</label>
-              <input
-                type="number"
-                value={study.t_ar || ''}
-                onChange={(e) => handleFieldChange('t_ar', e.target.value)}
-                placeholder="COP CxC"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
-              />
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Inventarios</label>
-              <input
-                type="number"
-                value={study.t_inv || ''}
-                onChange={(e) => handleFieldChange('t_inv', e.target.value)}
-                placeholder="COP Inventarios"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
-              />
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Cuentas por Pagar (Proveedores)</label>
-              <input
-                type="number"
-                value={study.t_ap || ''}
-                onChange={(e) => handleFieldChange('t_ap', e.target.value)}
-                placeholder="COP CxP"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
-              />
-            </div>
-
-            {/* PP&E no tenía campo: solo entraba si el lector de documentos lo
-                encontraba, y sin él el ajuste de propiedad, planta y equipo se
-                calculaba contra cero sin que nada lo advirtiera. */}
-            <div className="flex flex-col">
-              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Propiedad, Planta y Equipo</label>
-              <input
-                type="number"
-                value={study.t_ppe || ''}
-                onChange={(e) => handleFieldChange('t_ppe', e.target.value)}
-                placeholder="COP PP&E"
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono"
-              />
-            </div>
+            {RUBROS_BALANCE.map(({ clave, etiqueta, subtotal }) => {
+              const dif = descuadre(subtotal);
+              return (
+                <div key={clave} className="flex flex-col">
+                  <label className={`text-xs font-semibold mb-1.5 ${subtotal ? 'text-zinc-700 dark:text-zinc-300' : 'text-zinc-500'}`}>
+                    {etiqueta}
+                  </label>
+                  <input
+                    type="number"
+                    value={study[clave] || ''}
+                    onChange={(e) => handleFieldChange(clave, e.target.value)}
+                    placeholder="COP"
+                    className={CLASE_CASILLA}
+                  />
+                  {dif !== null && (
+                    <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1 leading-snug flex gap-1 items-start">
+                      <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                      <span>
+                        No cuadra con sus partidas: {dif > 0 ? 'faltan' : 'sobran'}{' '}
+                        {fmt(Math.abs(dif))}.
+                      </span>
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

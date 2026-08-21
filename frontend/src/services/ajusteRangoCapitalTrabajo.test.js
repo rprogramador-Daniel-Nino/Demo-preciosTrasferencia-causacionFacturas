@@ -481,3 +481,58 @@ test('un método sin base definida no se ajusta en lugar de calcularse como marg
   const r = analizarRangoAjustado(estudio, 'ROA', 'ninguno');
   assert.strictEqual(r.stats, null, 'sin indicadores válidos no debería haber rango');
 });
+
+/* ══════ El signo del documento no cambia el rango ══════
+   Los estados financieros imprimen el costo y los gastos operativos con signo negativo o
+   entre paréntesis, y la lectura conserva ese signo para que el libro y el ANEXO A se lean
+   igual que el documento radicado. El motor calcula `EBIT = s − c − op`, así que un costo
+   negativo sumaba: con las cifras de Montachem 2025 el margen operacional salía en 171 %.
+   El convenio se normaliza en `cifras()` con `egreso()`, no en cada llamador. */
+
+test('el rango es idéntico con los egresos en el signo del documento y en magnitud', () => {
+  const enMagnitud = analizarRangoAjustado(
+    { ...SUJETO, comparables: COMP }, 'MO', 'ninguno');
+  const conSigno = analizarRangoAjustado({
+    ...SUJETO,
+    t_c: -SUJETO.t_c,
+    t_op: -SUJETO.t_op,
+    comparables: COMP.map((c) => ({ ...c, c: -c.c, op: -c.op })),
+  }, 'MO', 'ninguno');
+
+  assert.deepStrictEqual(conSigno.stats, enMagnitud.stats,
+    'los cuartiles no pueden depender de cómo el documento imprimió el egreso');
+  assert.strictEqual(conSigno.sujeto, enMagnitud.sujeto,
+    'ni el indicador del contribuyente');
+  assert.deepStrictEqual(
+    conSigno.filas.map((f) => f.valor), enMagnitud.filas.map((f) => f.valor),
+    'ni el indicador de cada comparable');
+});
+
+test('el ajuste de capital de trabajo tampoco cambia con el signo del egreso', () => {
+  /* El sabor completo, que es el que usa las cuatro partidas y los dos denominadores. */
+  const enMagnitud = analizarRangoAjustado(
+    { ...SUJETO, comparables: COMP }, 'NCP', 'aar_aap_inv_ppe');
+  const conSigno = analizarRangoAjustado({
+    ...SUJETO,
+    t_c: -SUJETO.t_c,
+    t_op: -SUJETO.t_op,
+    comparables: COMP.map((c) => ({ ...c, c: -c.c, op: -c.op })),
+  }, 'NCP', 'aar_aap_inv_ppe');
+  assert.deepStrictEqual(conSigno.stats, enMagnitud.stats);
+  assert.strictEqual(conSigno.sujeto, enMagnitud.sujeto);
+});
+
+test('una pérdida operativa sigue siendo pérdida: el EBIT conserva su signo', () => {
+  /* Montachem 2025, con los gastos operativos que sí cuadran con el documento
+     (2.986.236.031): el EBIT es −1.095.055.781 y el margen operacional negativo. Si
+     `egreso()` se aplicara al resultado y no solo a las partidas de egreso, un estudio
+     en pérdidas pasaría por rentable. */
+  const r = analizarRangoAjustado({
+    t_s: 23741367744, t_c: -21850187494, t_op: 2986236031,
+    t_ar: 6032337879, t_inv: 4734795891, t_ap: 0, t_ppe: 0,
+    prime: 7.37,
+    comparables: COMP,
+  }, 'MO', 'ninguno');
+  assert.ok(Math.abs(r.sujeto - (-1095055781 / 23741367744)) < 1e-12,
+    `el margen operacional debería ser −4,613 %, dio ${r.sujeto}`);
+});

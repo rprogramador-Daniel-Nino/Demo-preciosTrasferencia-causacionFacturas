@@ -1,56 +1,140 @@
 import axios from 'axios';
+import { num } from '../utils/calculations.js';
+import { extraerJSON } from './comparablesEngine.js';
+import { extraerTextoPdf } from './eeffTextoPdf.js';
 
 /**
- * Prompt para la lectura de Estados Financieros del Contribuyente por Gemini Vision OCR.
+ * Prompt para la lectura de Estados Financieros del Contribuyente.
+ *
+ * ── Por qué se reescribió (agosto de 2026) ──
+ * La versión anterior fallaba en tres frentes, los tres medidos sobre el estado financiero
+ * de Montachem 2025:
+ *
+ * 1. El vocabulario era el de UN cliente. Citaba «Fiducuenta», «Licencias» y «Anticipos de
+ *    impuestos», y no contemplaba los rótulos NIIF que usa cualquier otro: «DEUDORES
+ *    COMERCIALES Y OTRAS CUENTAS POR COBRAR», «ACTIVOS FINANCIEROS», «GASTOS PAGADOS POR
+ *    ANTICIPADO», «ACTIVOS POR IMPUESTO DIFERIDO», «EQUIPO» menos «DEPRECIACION
+ *    ACUMULADA». Lo que no reconocía salía en cero.
+ * 2. Pedía la utilidad operacional como un dato aislado y creía la primera fila que se
+ *    pareciera. En ese documento la fila rotulada «RESULTADO DE ACTIVIDADES DE LA
+ *    OPERACIÓN» (−2.986.236.031) NO es la utilidad operacional: es el total de gastos
+ *    operativos. La utilidad operacional real es −1.095.055.781, y se despeja de las otras
+ *    cifras del propio estado. Sin pedir la utilidad bruta, los gastos, el resultado
+ *    financiero y la utilidad antes de impuestos, nada podía desmentir el rótulo.
+ * 3. No pedía la columna de un año concreto, con un «del ejercicio más reciente que
+ *    aparezca» que ignora que el estudio puede ser de un año anterior al último impreso.
+ *
+ * Ahora se piden también los rubros que permiten COTEJAR (`eeffVerificacion.js` los usa
+ * para despejar por identidad contable), el rótulo literal con que cada cifra aparece
+ * impresa, y la lista de lo que quedó sin asignar — que es la única forma honesta de
+ * tratar un plan de cuentas que no se conoce de antemano: en vez de adivinar a qué campo
+ * pertenece «CUENTAS POR COBRAR A PARTES RELACIONADAS», se le muestra al analista.
  */
 export const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
-Extrae las cifras del ESTADO DE RESULTADOS y del ESTADO DE SITUACIÓN FINANCIERA del ejercicio más reciente que aparezca.
+Extrae las cifras del ESTADO DE SITUACIÓN FINANCIERA y del ESTADO DE RESULTADOS.
 
-Campos del Estado de Situación Financiera (Balance General) a extraer:
-- efectivo_y_equivalentes: Efectivo y equivalentes de efectivo / Bancos
-- inversiones_asociadas: Inversiones asociadas / Fiducuenta
-- cuentas_por_cobrar: Cuentas por cobrar comerciales y otras cuentas por cobrar
-- activos_impuestos: Activos por impuestos corrientes / Anticipos de impuestos
-- total_activo_corriente: Total Activo Corriente
-- propiedad_planta_equipo: Propiedades, planta y equipo
-- intangibles: Intangibles / Licencias
-- diferidos: Diferidos / Gastos pagados por anticipado
-- total_activos_no_corrientes: Total Activos no Corrientes
-- total_activos: Total Activos
+REGLA CENTRAL: transcribe, no interpretes. Cada cifra que devuelvas debe estar impresa en el documento, dígito por dígito. Si un concepto no aparece, va en null. NO estimes, NO deduzcas por diferencia, NO inventes, NO sumes varias filas para armar un rubro.
 
-Campos del Estado de Resultados (P&L):
-- ingresos_operacionales: Ventas / Ingresos por servicios
-- costo_ventas: Costo de ventas / Costo de servicios
-- utilidad_operacional: Utilidad operacional / EBIT
-- cuentas_por_pagar: Cuentas por pagar a proveedores
-- inventarios: Inventarios / Existencias
+Para CADA campo devuelve un objeto {"valor": <número o null>, "rotulo": "<el texto EXACTO de la fila del documento de donde tomaste la cifra, o cadena vacía si el campo va en null>"}.
+El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila que elegiste es la correcta.
 
-Reglas:
-· Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo.
+── ESTADO DE SITUACIÓN FINANCIERA ──
+· efectivo_y_equivalentes: efectivo y equivalentes de efectivo, caja, bancos, disponible.
+· inversiones_asociadas: inversiones en asociadas o subsidiarias, participaciones patrimoniales. Si el documento solo trae «activos financieros» o «inversiones» sin más, NO lo pongas aquí: va en rubros_no_asignados.
+· cuentas_por_cobrar: cuentas por cobrar COMERCIALES y otras cuentas por cobrar, deudores comerciales, clientes. NO incluyas las cuentas por cobrar a partes relacionadas o vinculadas si el documento las presenta en una fila aparte: esas van en rubros_no_asignados.
+· inventarios: inventarios, existencias, mercancías.
+· activos_impuestos: activos por impuestos CORRIENTES, anticipo de impuestos, saldo a favor, retenciones. El activo por impuesto DIFERIDO no es esto: si el documento lo presenta como no corriente, va en rubros_no_asignados.
+· total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
+· propiedad_planta_equipo: propiedades, planta y equipo. Si el documento presenta el costo y la depreciación acumulada en filas separadas y también su NETO, toma el NETO y pon su rótulo. Si no imprime el neto, toma la fila del costo y deja la depreciación en rubros_no_asignados.
+· intangibles: activos intangibles, licencias, software, marcas, crédito mercantil, plusvalía.
+· diferidos: cargos diferidos, gastos pagados por anticipado, anticipos a proveedores, activos por impuesto diferido.
+· total_activos_no_corrientes: el subtotal del activo no corriente, tal como el documento lo imprime.
+· total_activos: el total del activo.
+· cuentas_por_pagar: cuentas por pagar COMERCIALES, proveedores, acreedores comerciales. NO uses aquí las cuentas por pagar a partes relacionadas ni las «otras cuentas por pagar»: si el documento no desglosa una cuenta por pagar comercial o de proveedores, este campo va en null y esas filas van en rubros_no_asignados. Es preferible un null a una cifra que el analista no pueda rastrear.
+· total_pasivos: el total del pasivo.
+· patrimonio: el total del patrimonio.
+
+── ESTADO DE RESULTADOS ──
+· ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos por servicios, ingresos operacionales.
+· costo_ventas: costo de ventas, costo de los servicios prestados, costo de mercancía vendida.
+· utilidad_bruta: la utilidad o ganancia bruta, si el documento la imprime como fila propia.
+· gastos_operacionales: el TOTAL de los gastos de operación, si el documento lo imprime como una sola fila. Si los presenta separados (gastos de administración, gastos de ventas y distribución, otros gastos), devuelve null aquí y pon cada uno en rubros_no_asignados: el total lo calcula el sistema, no tú.
+· utilidad_operacional: la utilidad o pérdida OPERACIONAL, el resultado de la operación, el EBIT. Cuidado con esta fila: hay estados financieros donde el rótulo «resultado de actividades de la operación» acompaña en realidad al total de los gastos operativos. Devuelve la cifra de la fila que corresponda al rótulo y su texto exacto; el sistema verificará si cuadra con las demás y no te penaliza por transcribir lo que dice el documento.
+· resultado_financiero_neto: el neto de ingresos y gastos financieros y diferencia en cambio (costos financieros netos), si el documento lo imprime como fila propia. Con signo: negativo si es un egreso neto.
+· utilidad_antes_impuestos: la utilidad o pérdida antes del impuesto a las ganancias.
+
+── RUBROS SIN ASIGNAR ──
+"rubros_no_asignados": toda fila del estado de situación financiera o del estado de resultados que traiga una cifra y NO hayas usado en ninguno de los campos anteriores, con su rótulo literal. Incluye aquí las cuentas por cobrar y por pagar con partes relacionadas o vinculadas, los activos y pasivos financieros, la depreciación acumulada, los gastos desglosados y cualquier concepto propio de esta empresa. NO incluyas los subtotales y totales que ya devolviste en un campo.
+Esta lista importa: es lo que permite ver que un subtotal no cuadra con las partidas que sí se reconocieron, y decidir qué hacer con lo que sobró. La "seccion" de cada rubro tiene que ser la del bloque del estado donde aparece impreso —activo corriente, activo no corriente, pasivo, patrimonio o resultados—, porque de ella depende contra qué subtotal se coteja.
+
+── REGLAS DE TRANSCRIPCIÓN ──
+· Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo, tal como está impresa.
+· Una raya, un guion o una celda vacía significan que no hay cifra: eso es null, no cero. Un cero explícito impreso sí es 0.
 · Regla de escala, obligatoria y sin excepción: cada cifra numérica va EXACTAMENTE como aparece impresa en el documento, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así el documento diga "en miles" o "en millones" en el encabezado. Si el documento imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa para que otra parte del sistema decida qué hacer con ella; no es una instrucción para que tú calcules nada.
-· Si un concepto no aparece, usa null. NO estimes, NO deduzcas por diferencia, NO inventes.
 
-Devuelve SOLO este JSON estricto sin marcas markdown:
+Devuelve SOLO este JSON, sin marcas markdown:
 {
-  "periodo": "",
-  "moneda": "",
+  "periodo": "el año o ejercicio de la columna que leíste",
+  "moneda": "COP, USD, etc.",
   "unidad_origen": "unidades|miles|millones",
-  "ingresos_operacionales": {"valor": 0},
-  "costo_ventas": {"valor": 0},
-  "utilidad_operacional": {"valor": 0},
-  "cuentas_por_cobrar": {"valor": 0},
-  "inventarios": {"valor": 0},
-  "cuentas_por_pagar": {"valor": 0},
-  "efectivo_y_equivalentes": {"valor": 0},
-  "inversiones_asociadas": {"valor": 0},
-  "activos_impuestos": {"valor": 0},
-  "total_activo_corriente": {"valor": 0},
-  "propiedad_planta_equipo": {"valor": 0},
-  "intangibles": {"valor": 0},
-  "diferidos": {"valor": 0},
-  "total_activos_no_corrientes": {"valor": 0},
-  "total_activos": {"valor": 0}
+  "efectivo_y_equivalentes": {"valor": null, "rotulo": ""},
+  "inversiones_asociadas": {"valor": null, "rotulo": ""},
+  "cuentas_por_cobrar": {"valor": null, "rotulo": ""},
+  "inventarios": {"valor": null, "rotulo": ""},
+  "activos_impuestos": {"valor": null, "rotulo": ""},
+  "total_activo_corriente": {"valor": null, "rotulo": ""},
+  "propiedad_planta_equipo": {"valor": null, "rotulo": ""},
+  "intangibles": {"valor": null, "rotulo": ""},
+  "diferidos": {"valor": null, "rotulo": ""},
+  "total_activos_no_corrientes": {"valor": null, "rotulo": ""},
+  "total_activos": {"valor": null, "rotulo": ""},
+  "cuentas_por_pagar": {"valor": null, "rotulo": ""},
+  "total_pasivos": {"valor": null, "rotulo": ""},
+  "patrimonio": {"valor": null, "rotulo": ""},
+  "ingresos_operacionales": {"valor": null, "rotulo": ""},
+  "costo_ventas": {"valor": null, "rotulo": ""},
+  "utilidad_bruta": {"valor": null, "rotulo": ""},
+  "gastos_operacionales": {"valor": null, "rotulo": ""},
+  "utilidad_operacional": {"valor": null, "rotulo": ""},
+  "resultado_financiero_neto": {"valor": null, "rotulo": ""},
+  "utilidad_antes_impuestos": {"valor": null, "rotulo": ""},
+  "rubros_no_asignados": [{"rotulo": "", "valor": null, "seccion": "activo_corriente|activo_no_corriente|pasivo|patrimonio|resultados"}]
 }`;
+
+/**
+ * El prompt del contribuyente para un año gravable concreto.
+ *
+ * Los estados financieros colombianos son comparativos: imprimen el ejercicio y el
+ * anterior en dos columnas contiguas. El prompt anterior decía «del ejercicio más reciente
+ * que aparezca», que acierta solo cuando el estudio es del último año cerrado — y falla en
+ * silencio, con cifras internamente coherentes, cuando se está trabajando un año anterior.
+ * Nada las delataba después: cuadran entre sí, porque son las de otro ejercicio.
+ */
+export function promptEeffContribuyente(anio) {
+  const anioLimpio = String(anio || '').trim();
+  if (!anioLimpio) return EEFF_PROMPT;
+  return `${EEFF_PROMPT}
+
+── AÑO A EXTRAER: ${anioLimpio} ──
+El documento es comparativo y trae más de una columna de ejercicios. Extrae ÚNICAMENTE la columna del año ${anioLimpio} e ignora por completo las demás. Devuelve "${anioLimpio}" en "periodo" si esa columna existe; si el documento NO trae una columna del ${anioLimpio}, devuelve en "periodo" el año que sí leíste, para que el sistema pueda advertirlo. No mezcles cifras de dos columnas.`;
+}
+
+/**
+ * El texto del documento, si lo tiene, formateado para el prompt.
+ *
+ * Se manda ADEMÁS de la imagen, no en su lugar: la imagen conserva la disposición de las
+ * columnas —que es lo que permite saber qué cifra es de qué año— y el texto aporta los
+ * dígitos exactos. Un PDF escaneado no tiene capa de texto y entonces esto no aporta nada
+ * y se omite, quedando la lectura como era antes.
+ */
+export function bloqueDeTexto(texto) {
+  if (!texto || !String(texto).trim()) return null;
+  return `A continuación, la capa de texto del MISMO documento, extraída directamente del PDF. Los dígitos de aquí son exactos: úsalos para transcribir las cifras, y usa la imagen para entender la disposición de las columnas y a qué año pertenece cada una. Si el texto y la imagen discrepan, manda el texto.
+
+<texto_del_documento>
+${texto}
+</texto_del_documento>`;
+}
 
 /**
  * Prompt especializado para la Ingesta Asistida de EEFF de Empresas Comparables
@@ -127,74 +211,138 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
   throw ultimo;
 }
 
+/* Las cifras que la lectura devuelve y el campo del estudio al que van. Se escribe una
+   sola vez, aquí, y de ella salen el mapeo y la verificación: cuando esta correspondencia
+   vivía desplegada a mano en el `resolve`, en `IngestaCifras.jsx` y en `estudioBase`, los
+   tres se desincronizaron. */
+export const CAMPO_POR_RUBRO = {
+  ingresos_operacionales: 't_s',
+  costo_ventas: 't_c',
+  cuentas_por_cobrar: 't_ar',
+  inventarios: 't_inv',
+  cuentas_por_pagar: 't_ap',
+  efectivo_y_equivalentes: 't_cash',
+  inversiones_asociadas: 't_inv_assoc',
+  activos_impuestos: 't_tax',
+  total_activo_corriente: 't_act_curr',
+  propiedad_planta_equipo: 't_ppe',
+  intangibles: 't_intang',
+  diferidos: 't_dif',
+  total_activos_no_corrientes: 't_act_nocurr',
+  total_activos: 't_act_tot',
+};
+
+/* Los rubros que NO son campos del estudio pero se leen para poder cotejar: con ellos
+   `eeffVerificacion.js` despeja la utilidad operacional y comprueba la ecuación
+   patrimonial. Sin ellos, un rótulo mal puesto en el documento no tenía quién lo
+   contradijera. */
+export const RUBROS_DE_COTEJO = [
+  'utilidad_bruta',
+  'gastos_operacionales',
+  'utilidad_operacional',
+  'resultado_financiero_neto',
+  'utilidad_antes_impuestos',
+  'total_pasivos',
+  'patrimonio',
+];
+
 /**
- * Extrae Estados Financieros del Contribuyente con Gemini Vision OCR
+ * El valor de un rubro de la respuesta, sea la forma que sea.
+ *
+ * Sustituye a un `extractVal` que exigía `typeof obj.valor === 'number'` y devolvía null
+ * en cuanto el modelo respondía `{"valor": "337.546.138"}` o el número plano
+ * `337546138` — dos formas que da con frecuencia, y las dos se descartaban en silencio
+ * dejando la celda del libro en cero. La ruta de comparables no tenía el problema porque
+ * pasaba el valor crudo y `num()` lo rescataba después; esta era la única asimétrica.
  */
-export async function parseEeffWithGeminiOCR(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result.split(',')[1];
-        let mimeType = 'application/pdf';
+export function valorDeRubro(rubro) {
+  if (rubro === null || rubro === undefined) return null;
+  if (typeof rubro === 'object') return num(rubro.valor);
+  return num(rubro);
+}
 
-        if (file.type.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
-          mimeType = file.type || 'image/jpeg';
-        }
+/** El rótulo literal con que el documento imprimió ese rubro, si vino. */
+export function rotuloDeRubro(rubro) {
+  if (!rubro || typeof rubro !== 'object') return '';
+  return String(rubro.rotulo || '').trim();
+}
 
-        const payload = {
-          model: 'gemini-3.5-flash',
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mimeType, data: base64Data } },
-              { text: EEFF_PROMPT }
-            ]
-          }]
-        };
+/**
+ * Lee los estados financieros del contribuyente.
+ *
+ * Manda las páginas rasterizadas Y la capa de texto del PDF cuando la tiene: el texto da
+ * los dígitos exactos y la imagen la disposición de las columnas. Devuelve los campos
+ * `t_*` del estudio, los rubros de cotejo, los rótulos de origen y el texto extraído, que
+ * es lo que `eeffVerificacion.js` necesita para comprobar que cada cifra existe de verdad
+ * en el documento.
+ *
+ * `anioEstudio` no es opcional en la práctica: sin él, un documento comparativo se lee por
+ * la columna que el modelo elija.
+ */
+export async function parseEeffWithGeminiOCR(file, anioEstudio) {
+  const base64Data = await leerBase64(file);
+  const mimeType = mimeDe(file);
+  const textoPdf = await extraerTextoPdf(file);
 
-        const response = await postGeminiWithRetry(payload);
-        const cand = response.data?.candidates?.[0];
-        const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+  const partes = [
+    { inline_data: { mime_type: mimeType, data: base64Data } },
+    { text: promptEeffContribuyente(anioEstudio) },
+  ];
+  const conTexto = bloqueDeTexto(textoPdf);
+  if (conTexto) partes.push({ text: conTexto });
 
-        if (text) {
-          const cleanJsonStr = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-          const parsed = JSON.parse(cleanJsonStr);
-
-          const extractVal = (obj) => {
-            if (!obj || typeof obj.valor !== 'number') return null;
-            return obj.valor;
-          };
-
-          resolve({
-            t_s: extractVal(parsed.ingresos_operacionales),
-            t_c: extractVal(parsed.costo_ventas),
-            t_op: extractVal(parsed.utilidad_operacional),
-            t_ar: extractVal(parsed.cuentas_por_cobrar),
-            t_inv: extractVal(parsed.inventarios),
-            t_ap: extractVal(parsed.cuentas_por_pagar),
-            t_cash: extractVal(parsed.efectivo_y_equivalentes),
-            t_inv_assoc: extractVal(parsed.inversiones_asociadas),
-            t_tax: extractVal(parsed.activos_impuestos),
-            t_act_curr: extractVal(parsed.total_activo_corriente),
-            t_ppe: extractVal(parsed.propiedad_planta_equipo),
-            t_intang: extractVal(parsed.intangibles),
-            t_dif: extractVal(parsed.diferidos),
-            t_act_nocurr: extractVal(parsed.total_activos_no_corrientes),
-            t_act_tot: extractVal(parsed.total_activos),
-            periodo: parsed.periodo,
-            rawJson: parsed
-          });
-        } else {
-          reject(new Error("No se obtuvo respuesta en formato JSON de Gemini Vision OCR."));
-        }
-      } catch (err) {
-        console.error("Error en parseEeffWithGeminiOCR:", err);
-        reject(err);
-      }
-    };
-    reader.onerror = (e) => reject(e);
+  const response = await postGeminiWithRetry({
+    model: 'gemini-3.5-flash',
+    contents: [{ parts: partes }],
   });
+
+  const text = response.data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text) throw new Error('No se obtuvo respuesta en formato JSON de Gemini Vision OCR.');
+
+  /* `extraerJSON` y no un `replace` de fences: el modelo agrega prosa antes o después del
+     objeto con frecuencia, y entonces `JSON.parse` sobre el texto recortado a mano
+     revienta y se pierde la lectura completa del documento (ver comparablesEngine.js). */
+  const parsed = extraerJSON(text);
+  if (!parsed) throw new Error('La respuesta de la lectura de estados financieros no traía un JSON reconocible.');
+
+  const lectura = {};
+  Object.entries(CAMPO_POR_RUBRO).forEach(([rubro, campo]) => {
+    lectura[campo] = valorDeRubro(parsed[rubro]);
+  });
+
+  const cotejo = {};
+  RUBROS_DE_COTEJO.forEach((rubro) => { cotejo[rubro] = valorDeRubro(parsed[rubro]); });
+
+  const rotulos = {};
+  [...Object.keys(CAMPO_POR_RUBRO), ...RUBROS_DE_COTEJO].forEach((rubro) => {
+    const r = rotuloDeRubro(parsed[rubro]);
+    if (r) rotulos[rubro] = r;
+  });
+
+  return {
+    ...lectura,
+    /* `t_op` NO se llena aquí. El estudio lo guarda como utilidad operacional y el libro
+       lo necesita como gastos, y cuál de las dos cosas es la que cuadra con el resto del
+       estado lo decide `eeffVerificacion.js` a partir de los rubros de cotejo — no el
+       rótulo de una sola fila, que es justo lo que llevó a publicar 4.877.416.281 como
+       gastos operativos de un estado que dice 2.986.236.031. */
+    cotejo,
+    rotulos,
+    rubrosNoAsignados: Array.isArray(parsed.rubros_no_asignados)
+      ? parsed.rubros_no_asignados
+        .map((r) => ({
+          rotulo: String((r && r.rotulo) || '').trim(),
+          valor: valorDeRubro(r && r.valor !== undefined ? r.valor : null),
+          seccion: String((r && r.seccion) || '').trim(),
+        }))
+        .filter((r) => r.rotulo && r.valor !== null)
+      : [],
+    periodo: parsed.periodo,
+    unidadOrigen: String(parsed.unidad_origen || '').trim().toLowerCase(),
+    moneda: parsed.moneda,
+    textoPdf,
+    rawJson: parsed,
+  };
 }
 
 /**
