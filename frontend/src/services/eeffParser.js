@@ -702,8 +702,24 @@ export function verifyAccountingEqualities(data, studyYear) {
     esValido = false;
   }
 
-  // 3. Verificación Ecuación Patrimonial (Activos = Pasivos + Patrimonio)
-  if (at !== 0 && (pas !== 0 || pat !== 0)) {
+  /* 3. Ecuación patrimonial (Activos = Pasivos + Patrimonio), solo cuando los TRES
+     términos están impresos.
+
+     Se pide presencia y no verdad: los `|| 0` de arriba sirven para calcular, pero
+     borran la distinción entre «no aparece» y «la empresa reportó cero», que es
+     justo la que decide si esta identidad se puede comprobar. El prompt la garantiza
+     —null para lo ausente, 0 solo para el cero reportado—, así que aquí se lee del
+     dato crudo.
+
+     Las fichas que la macro de Word produce para el Anexo B imprimen «Total de
+     activos» y «Total de pasivos» y NINGUNA fila de patrimonio. Con la guarda
+     anterior, `(pas !== 0 || pat !== 0)` se cumplía por los pasivos y la identidad
+     fallaba siempre: un estudio de 12 comparables salía con 12 «Con Alertas» por una
+     ecuación que sin patrimonio no es comprobable, y el aviso de verdad quedaba
+     enterrado en ese ruido. */
+  const hayPasivos = num(data.total_pasivos) !== null;
+  const hayPatrimonio = num(data.patrimonio) !== null;
+  if (at !== 0 && hayPasivos && hayPatrimonio) {
     if (Math.abs(at - (pas + pat)) > 2) {
       hallazgos.push(`⚠️ Ecuación patrimonial no cuadra: Activos (${at}) ≠ Pasivos (${pas}) + Patrimonio (${pat})`);
       esValido = false;
