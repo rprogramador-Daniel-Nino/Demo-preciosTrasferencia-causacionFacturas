@@ -435,8 +435,11 @@ test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', 
   const mo = hojas.find((h) => h.nombre === 'MO');
   assert.strictEqual(mo.celdas[2][16].f, `((H3/M3)-(Datos!$B$${fPpe}/Datos!$B$${fVentas}))*(M3*I3)`);
   const ncp = hojas.find((h) => h.nombre === 'NCP');
+  /* El costo y los gastos del contribuyente van envueltos en ABS: la hoja Datos los
+     guarda con el signo del estado financiero y la base del método necesita la
+     magnitud. Ver `egreso()` en utils/calculations.js. */
   assert.strictEqual(ncp.celdas[2][16].f,
-    `((H3/((C3-G3)+D3))-(Datos!$B$${fPpe}/(Datos!$B$${fCosto}+Datos!$B$${fGastos})))*(M3*I3)`,
+    `((H3/((C3-G3)+D3))-(Datos!$B$${fPpe}/(ABS(Datos!$B$${fCosto})+ABS(Datos!$B$${fGastos}))))*(M3*I3)`,
     'NCP toma el ratio sobre el denominador depurado pero escala con la base del método');
 });
 
@@ -785,8 +788,44 @@ test('las columnas A–I traen el literal que el emisor ya tiene, sin dejar de s
     'B–H en el orden de la tabla de Datos: ventas, costo, gastos, CxC, inv, CxP, PP&E');
   assert.strictEqual(f[8].v, ESTUDIO_4.prime / 100,
     'la tasa viaja en porcentaje y el emisor la divide entre 100');
-  f.slice(0, 9).forEach((c, k) => assert.ok(c.f && c.f.startsWith('Datos!'),
+  /* Todas siguen siendo referencia a la hoja Datos, y no un literal suelto. Las de
+     costo (C, índice 2) y gastos operativos (D, índice 3) la envuelven en ABS: la hoja
+     Datos conserva el signo con que el documento imprime el egreso y el cálculo del
+     método necesita la magnitud. */
+  f.slice(0, 9).forEach((c, k) => assert.ok(
+    c.f && (c.f.startsWith('Datos!') || c.f.startsWith('ABS(Datos!')),
     `la columna ${k} sigue siendo referencia a la hoja Datos`));
+  assert.deepStrictEqual([2, 3].map((k) => f[k].f.startsWith('ABS(')), [true, true],
+    'el costo y los gastos operativos de la comparable entran en magnitud');
+});
+
+test('el costo negativo del documento se conserva en Datos y entra en magnitud al método', () => {
+  /* El caso de Montachem 2025: el estado de resultados imprime «COSTO DE VENTAS
+     (21.850.187.494)» y la lectura conserva ese signo a propósito, para que el libro se
+     lea igual que el documento radicado. Sin la envoltura ABS, la utilidad bruta de la
+     columna K salía por el doble —45.591.555.238 en vez de 1.891.180.250— y el margen
+     operacional en 171 %, y el recálculo de Excel lo confirmaba en vez de delatarlo. */
+  const conSigno = {
+    ...ESTUDIO_4,
+    t_s: 23741367744, t_c: -21850187494, t_op: 2986236031,
+    comparables: [{ ...ESTUDIO_4.comparables[0], s: 1000, c: -600, op: -250, amb: 'Nac' }],
+  };
+  const hojas = hojasMemoriaRangoOptimo(conSigno, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const valorDe = (etiqueta) => {
+    const fila = datos.celdas.find((f) => f && f[0] && f[0].v === etiqueta);
+    return fila[1].v;
+  };
+  assert.strictEqual(valorDe('Costo de ventas'), -21850187494,
+    'la hoja Datos muestra el costo como lo imprime el estado financiero');
+
+  const mo = hojas.find((h) => h.nombre === 'MO');
+  const fila = mo.celdas[2];
+  assert.strictEqual(fila[2].v, 600, 'la columna de costo del método va en magnitud');
+  assert.strictEqual(fila[3].v, 250, 'la de gastos operativos también');
+  assert.strictEqual(fila[10].v, 400,
+    'la utilidad bruta de la comparable es ventas − costo, no ventas + costo');
+  assert.strictEqual(fila[9].v, 150, 'y el EBIT es ventas − costo − gastos');
 });
 
 test('los intermedios del ajuste (J–R) traen el valor que expone el motor', () => {
@@ -871,7 +910,11 @@ test('una cifra en cadena formateada parte del mismo número en el libro y en el
 
   /* 2) Y las cifras de la comparable, que alimentan las columnas B–H. */
   const filaComp = datos.celdas.find((f) => f && f[0] && f[0].v === 'Con Cadenas SA');
-  assert.deepStrictEqual(filaComp.slice(1, 8).map((c) => c.v), [1500, 900, 300, 150, 60, 120, 300],
+  /* El costo y los gastos van en negativo: es el convenio de egreso de la hoja «Datos»
+     (2026-08-21), que la publica como el estado financiero. Lo que esta prueba vigila es la
+     MAGNITUD —con `Number('1.500')` las ventas darían 1,5— y la hoja de método, más abajo,
+     los recupera en positivo con ABS. */
+  assert.deepStrictEqual(filaComp.slice(1, 8).map((c) => c.v), [1500, -900, -300, 150, 60, 120, 300],
     'la tabla de comparables de Datos lee las cadenas con separador de miles');
   assert.deepStrictEqual(mo.celdas[2].slice(1, 8).map((c) => c.v), [1500, 900, 300, 150, 60, 120, 300],
     'y la hoja de método publica las mismas, no otras');
@@ -1035,4 +1078,129 @@ test('las celdas de porcentaje llevan tres decimales y las de razón se quedan e
   const datos = hojas.find((h) => h.nombre === 'Datos');
   assert.ok(datos.celdas.flat().some((c) => c && c.z === '0.000%'),
     'la hoja Datos también: el A.V. y la tasa son porcentajes');
+});
+
+test('el libro publica las cifras que la ingesta corrigió, con su motivo', () => {
+  /* Una corrección automática que solo vive en la pantalla no sirve de soporte: el libro
+     es lo que se radica, y quien lo audite tiene que poder ver que la utilidad operacional
+     que sustenta el margen no es la que el documento rotula como tal. */
+  const conCorrecciones = {
+    ...ESTUDIO3,
+    t_correcciones: [{
+      campo: 't_op',
+      etiqueta: 'Utilidad operacional',
+      valorLeido: -2986236031,
+      valorAplicado: -1095055781,
+      rotuloLeido: 'RESULTADO DE ACTIVIDADES DE LA OPERACIÓN',
+      motivo: 'La fila leída no cuadra con el resto del estado.',
+    }],
+  };
+  const hojas = hojasMemoriaRangoOptimo(conCorrecciones, null);
+  const diag = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  assert.ok(diag, 'el libro trae la hoja de diagnóstico');
+
+  const titulo = diag.celdas.findIndex(
+    (f) => f && f[0] && String(f[0].v || '').includes('CIFRAS CORREGIDAS'));
+  assert.ok(titulo >= 0, 'la sección de cifras corregidas tiene que estar');
+
+  const fila = diag.celdas.find((f) => f && f[0] && f[0].v === 'Utilidad operacional');
+  assert.ok(fila, 'con una fila por corrección');
+  assert.strictEqual(fila[1].v, -2986236031, 'lo que decía el documento');
+  assert.strictEqual(fila[2].v, -1095055781, 'lo que se aplicó');
+  assert.strictEqual(fila[3].v, 'RESULTADO DE ACTIVIDADES DE LA OPERACIÓN');
+  assert.match(String(fila[4].v), /no cuadra/);
+});
+
+test('sin correcciones, la hoja de diagnóstico no trae la sección vacía', () => {
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
+  const diag = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  const titulo = diag.celdas.findIndex(
+    (f) => f && f[0] && String(f[0].v || '').includes('CIFRAS CORREGIDAS'));
+  assert.strictEqual(titulo, -1, 'no se anuncia una sección que no tiene filas');
+});
+
+/* ══════ LEY DE SIGNOS EN EL LIBRO ══════
+   La hoja «Datos» publica los egresos con el signo del estado financiero —negativos— y las
+   fórmulas los leen en magnitud. Las dos mitades tienen que sostenerse a la vez: si la hoja
+   los publica en negativo y una fórmula los lee sin ABS, la resta se convierte en suma y el
+   libro publica un margen de tres dígitos. */
+
+test('la hoja Datos publica los egresos en negativo, venga el dato como venga', () => {
+  [1, -1].forEach((sg) => {
+    const hojas = hojasMemoriaRangoOptimo({
+      ...ESTUDIO_4,
+      t_s: 23741367744, t_c: sg * 21850187494, t_op: sg * 2982184104,
+      comparables: [{ ...ESTUDIO_4.comparables[0], s: 10000, c: sg * 8200, op: sg * 1500 }],
+    }, null);
+    const datos = hojas.find((h) => h.nombre === 'Datos');
+    const valor = (etq) => datos.celdas.find((f) => f && f[0] && f[0].v === etq)[1].v;
+    assert.strictEqual(valor('Ventas netas'), 23741367744, 'los ingresos NO se tocan');
+    assert.strictEqual(valor('Costo de ventas'), -21850187494);
+    assert.strictEqual(valor('Gastos operativos'), -2982184104);
+    const comp = datos.celdas.find((f) => f && f[0] && f[0].v === ESTUDIO_4.comparables[0].name);
+    assert.strictEqual(comp[2].v, -8200, 'el costo de la comparable también');
+    assert.strictEqual(comp[3].v, -1500, 'y sus gastos operativos');
+  });
+});
+
+test('el libro entero da lo mismo con los egresos en negativo que en positivo', () => {
+  /* La comprobación de fondo: 1.084 celdas numéricas, y las únicas que difieren son las de
+     la hoja «Datos» que muestran el dato de entrada. Aquí se afirma sobre las derivadas. */
+  const libro = (sg) => hojasMemoriaRangoOptimo({
+    ...ESTUDIO_4,
+    t_s: 23741367744, t_c: sg * 21850187494, t_op: sg * 2982184104,
+    comparables: ESTUDIO_4.comparables.map((c) => ({
+      ...c, c: sg * Math.abs(c.c), op: sg * Math.abs(c.op),
+    })),
+  }, null);
+  const neg = libro(-1);
+  const pos = libro(1);
+
+  let comparadas = 0;
+  neg.forEach((hN, i) => (hN.celdas || []).forEach((fila, r) => (fila || []).forEach((cN, c) => {
+    /* La hoja Datos publica el dato de entrada y por eso ahí SÍ cambia el signo; el resto
+       del libro son cifras derivadas y no pueden depender de cómo llegó el egreso. */
+    if (hN.nombre === 'Datos') return;
+    const cP = (pos[i].celdas[r] || [])[c];
+    assert.strictEqual(cN && cN.f, cP && cP.f, `${hN.nombre} fila ${r + 1} col ${c}: la fórmula cambió`);
+    if (typeof (cN && cN.v) === 'number' && typeof (cP && cP.v) === 'number') {
+      assert.ok(Math.abs(cN.v - cP.v) <= 1e-9 * Math.max(1, Math.abs(cN.v)),
+        `${hN.nombre} fila ${r + 1} col ${c}: ${cN.v} ≠ ${cP.v} (fórmula: ${cN.f})`);
+      comparadas += 1;
+    }
+  })));
+  assert.ok(comparadas > 400, `debería comparar cientos de celdas derivadas, comparó ${comparadas}`);
+});
+
+test('los chequeos del diagnóstico leen los egresos en magnitud', () => {
+  /* Sin ABS, `COS<0.05*VEN` es cierto para toda comparable con el costo en negativo y la
+     hoja publicaría «Revisar: N de N» en cuatro de los cinco métodos de cualquier estudio.
+     Un diagnóstico que siempre grita se deja de leer. */
+  const hojas = hojasMemoriaRangoOptimo({
+    ...ESTUDIO_4,
+    comparables: ESTUDIO_4.comparables.map((c) => ({
+      ...c, c: -Math.abs(c.c), op: -Math.abs(c.op),
+    })),
+  }, null);
+  const dg = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  assert.ok(dg, 'el libro trae la hoja de diagnóstico');
+
+  /* Los cuatro chequeos que tocan un egreso. El quinto (Margen Operacional) mira solo las
+     ventas y por eso no lleva ABS. Estas celdas son fórmula SIN valor en caché —el emisor no
+     evalúa SUMPRODUCT, lo deja para Excel—, así que lo que se afirma es la fórmula. */
+  ['Margen Bruto', 'Cost Plus', 'Índice de Berry', 'Net Cost Plus'].forEach((metodo) => {
+    const fila = dg.celdas.find((f) => f && f[0] && f[0].v === metodo);
+    assert.ok(fila, `falta el chequeo de ${metodo}`);
+    assert.match(fila[1].f, /ABS\(Datos!/,
+      `el chequeo de ${metodo} tiene que leer el egreso en magnitud: ${fila[1].f}`);
+  });
+
+  /* Y el criterio, evaluado a mano sobre las cifras del fixture: con los egresos en negativo
+     y ABS, ninguna comparable se marca; sin ABS, TODAS — que es el falso positivo que esto
+     evita. `ESTUDIO_4` trae costos que superan el 5 % de sus ventas. */
+  const comps = ESTUDIO_4.comparables.map((c) => ({ s: Number(c.s), c: -Math.abs(Number(c.c)) }));
+  assert.strictEqual(comps.filter((c) => Math.abs(c.c) < 0.05 * c.s).length, 0,
+    'con ABS ninguna comparable del fixture se marca');
+  assert.strictEqual(comps.filter((c) => c.c < 0.05 * c.s).length, comps.length,
+    'sin ABS se marcarían todas: ese es el falso positivo que el ABS evita');
 });

@@ -84,8 +84,15 @@ const METODOS = [
    saber cuáles son fieles y cuáles un alias histórico de la hoja. */
 const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas', av: false },
-  { clave: 't_c', etiqueta: 'Costo de ventas', av: false },
-  { clave: 't_op', etiqueta: 'Gastos operativos', av: false },
+  /* `egreso: true` — la hoja los publica con el signo del estado financiero, en negativo,
+     que es la convención que el usuario fijó el 2026-08-21 para que la hoja se lea igual que
+     el documento radicado. Antes el costo salía negativo y los gastos positivos: dos egresos
+     contiguos con convenios distintos.
+     Las FÓRMULAS que los usan van todas envueltas en ABS —las referencias del contribuyente
+     (`C_s`, `OP_s`), las columnas C y D de cada hoja de método y los chequeos del
+     diagnóstico—, así que las restas no se convierten en sumas. */
+  { clave: 't_c', etiqueta: 'Costo de ventas', av: false, egreso: true },
+  { clave: 't_op', etiqueta: 'Gastos operativos', av: false, egreso: true },
   { clave: 't_cash', etiqueta: 'Efectivo y equivalentes de efectivo', av: true },
   { clave: 't_inv_assoc', etiqueta: 'Inversiones asociadas', av: true },
   { clave: 't_ar', etiqueta: 'Cuentas por cobrar comerciales y otras cuentas por cobrar', av: true },
@@ -99,6 +106,12 @@ const RUBROS_EXAMINADA = [
   { clave: 't_act_tot', etiqueta: 'Total, Activos', av: false },
   { clave: 't_ap', etiqueta: 'Cuentas por pagar comerciales', av: false },
 ];
+
+/* Las claves de los quince rubros, en el orden de la hoja. Se exporta para que quien
+   arme el payload del libro no vuelva a escribir la lista a mano: cuando esa lista vivía
+   duplicada en `MotorComparables.jsx`, los ocho rubros del ESF que se añadieron aquí
+   nunca llegaron allá y el libro los publicaba en cero sin que nada lo advirtiera. */
+export const CLAVES_RUBROS_EXAMINADA = RUBROS_EXAMINADA.map((r) => r.clave);
 
 /* 1-based: fila 1 título, 2 vacía, 3 «PARTE EXAMINADA», 4 el primer rubro. */
 const FILA_RUBRO_0 = 4;
@@ -236,9 +249,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
      completo y una fila en blanco rompería el análisis vertical—. Lo que cambia es que
      ahora una cifra en cadena formateada llega como la cifra y no como cero. */
   const segExcluido = num(study.seg_excluido) || 0;
-  const valorDeRubro = (clave) => (clave === 't_s'
-    ? (num(study.t_s) || 0) - segExcluido
-    : num(study[clave]) || 0);
+  const ES_EGRESO = new Set(RUBROS_EXAMINADA.filter((r) => r.egreso).map((r) => r.clave));
+  /* El signo de la celda, no el del cálculo: los egresos se publican en negativo venga el
+     dato como venga —la lectura del documento conserva su signo, pero un analista puede
+     escribirlo en positivo en el formulario, y Capital IQ da los costos de las comparables
+     en positivo—. Así la columna se lee homogénea en lugar de mezclar convenios. */
+  const valorDeRubro = (clave) => {
+    if (clave === 't_s') return (num(study.t_s) || 0) - segExcluido;
+    const v = num(study[clave]) || 0;
+    return ES_EGRESO.has(clave) ? -Math.abs(v) : v;
+  };
 
   /* El contribuyente con la forma que espera `desgloseAjuste`. Las ventas salen de
      `valorDeRubro('t_s')` —la misma función que escribe la celda de Datos— y no de
@@ -298,7 +318,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
   const filaComp0 = datos.length + 1; // 1-based fila de la primera comparable
   comps.forEach((c) => {
     datos.push([
-      cTxt(c.name), cNum(num(c.s) || 0), cNum(num(c.c) || 0), cNum(num(c.op) || 0),
+      /* Costo y gastos operativos en negativo, igual que los del contribuyente: es la misma
+         convención de egreso, y aquí importa doblemente porque Capital IQ los entrega en
+         positivo y el estado financiero de una comparable colombiana en negativo. Las hojas
+         de método los leen con ABS. */
+      cTxt(c.name), cNum(num(c.s) || 0),
+      cNum(-Math.abs(num(c.c) || 0)), cNum(-Math.abs(num(c.op) || 0)),
       cNum(num(c.ar) || 0), cNum(num(c.inv) || 0), cNum(num(c.ap) || 0),
       cNum(num(c.ppe) || 0),
       /* La tasa sigue siendo la REFERENCIA a la celda única —esa es la fuga que este
@@ -351,7 +376,16 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
   // Referencias del contribuyente, derivadas del orden de RUBROS_EXAMINADA
   const refDe = (clave) => D(`$B$${filaDeRubro(clave)}`);
-  const S_s = refDe('t_s'), C_s = refDe('t_c'), OP_s = refDe('t_op');
+  /* El costo y los gastos van envueltos en ABS, y no es cosmética: la hoja `Datos`
+     conserva el signo con que el estado financiero los imprime —negativo o entre
+     paréntesis— para que el libro se lea igual que el documento radicado, mientras el
+     cálculo necesita la magnitud (utilidad bruta = ventas − costo). Es la misma
+     frontera que `egreso()` en `utils/calculations.js`, del lado de la fórmula: sin
+     ella, un estudio con el costo en negativo publica en el libro una utilidad bruta
+     del doble y un margen operacional de tres dígitos, y el recálculo de Excel lo
+     confirmaría en lugar de delatarlo. */
+  const S_s = refDe('t_s');
+  const C_s = `ABS(${refDe('t_c')})`, OP_s = `ABS(${refDe('t_op')})`;
   const AR_s = refDe('t_ar'), INV_s = refDe('t_inv');
   const AP_s = refDe('t_ap'), PPE_s = refDe('t_ppe');
 
@@ -394,8 +428,19 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          `study`, en el mismo orden en que escribió la tabla de la hoja Datos. */
       const nombreRef = { t: 's', f: `${D(`A${src}`)}`, v: String(c.name || '') };
       const cifras = [c.s, c.c, c.op, c.ar, c.inv, c.ap, c.ppe];
-      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => cFor(
-        `${D(`${L}${src}`)}`, '#,##0.00', num(cifras[k]) || 0));
+      /* Igual que con el contribuyente: las columnas de costo (C) y gastos operativos
+         (D) traen la MAGNITUD, aunque la hoja `Datos` guarde el signo del documento.
+         Envolver aquí la referencia —y no cada una de las fórmulas J, K, M, R y S–Y que
+         la usan— deja un solo sitio donde el convenio cambia, y hace que la propia
+         columna del método muestre el número con el que se está calculando. */
+      const enMagnitud = new Set(['C', 'D']);
+      const numRefs = ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((L, k) => {
+        const ref = D(`${L}${src}`);
+        const v = num(cifras[k]) || 0;
+        return enMagnitud.has(L)
+          ? cFor(`ABS(${ref})`, '#,##0.00', Math.abs(v))
+          : cFor(`${ref}`, '#,##0.00', v);
+      });
       /* La tasa es la única del estudio y viaja en porcentaje: es el mismo doble que
          escribió la celda de la hoja Datos, porque es literalmente el mismo valor. */
       const tasaRef = cFor(`${D(`I${src}`)}`, '0.0000', tasaDelEstudio);
@@ -665,14 +710,22 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
     dg.push([cTxt('1) ¿ES UTILIZABLE CADA MÉTODO CON ESTOS DATOS?')]);
     dg.push([cTxt('Método'), cTxt('Comparables afectados'), cTxt('Veredicto'), cTxt('Criterio')]);
+    /* Los cinco chequeos leen los rangos de la hoja «Datos», donde el costo y los gastos van
+       con el signo del estado financiero. Se envuelven en ABS: sin él, `COS<0.05*VEN` es
+       cierto para toda comparable con el costo en negativo y la hoja publicaría «Revisar: N
+       de N» en los cuatro métodos de cualquier estudio, que es un diagnóstico que se deja de
+       leer por ruidoso. ABS es vectorizable dentro de SUMPRODUCT, así que la comprobación
+       sigue siendo una sola fórmula matricial y sigue recalculándose en Excel. */
+    const COS_ABS = `ABS(${COS})`;
+    const GAS_ABS = `ABS(${GAS})`;
     const CHEQUEOS = [
-      ['Margen Bruto', `SUMPRODUCT(--(${COS}<0.05*${VEN}))`,
+      ['Margen Bruto', `SUMPRODUCT(--(${COS_ABS}<0.05*${VEN}))`,
         'Costo de ventas por debajo del 5 % de las ventas: el margen bruto se pega al 100 % y deja de discriminar.'],
-      ['Cost Plus', `SUMPRODUCT(--((${COS}-${CXP})<=0))`,
+      ['Cost Plus', `SUMPRODUCT(--((${COS_ABS}-${CXP})<=0))`,
         'Denominador depurado (Costo − CxP) nulo o negativo: el indicador cambia de signo y no es interpretable.'],
-      ['Índice de Berry', `SUMPRODUCT(--(${GAS}<=0))`,
+      ['Índice de Berry', `SUMPRODUCT(--(${GAS_ABS}<=0))`,
         'Gastos operativos nulos o negativos: el índice se indefine.'],
-      ['Net Cost Plus', `SUMPRODUCT(--(((${COS}-${CXP})+${GAS})<=0))`,
+      ['Net Cost Plus', `SUMPRODUCT(--(((${COS_ABS}-${CXP})+${GAS_ABS})<=0))`,
         'Denominador depurado ((Costo − CxP) + Gastos) nulo o negativo.'],
       ['Margen Operacional', `SUMPRODUCT(--(${VEN}<=0))`,
         'Ventas nulas o negativas: no hay base sobre la que calcular el margen.'],
@@ -755,6 +808,29 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       dg.push([]);
       dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
       dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+    }
+
+    /* Las correcciones que la verificación de la ingesta aplicó a las cifras leídas del
+       estado financiero. Van en el libro y no solo en la pantalla porque el libro es lo
+       que se radica como soporte: una cifra que el sistema cambió por su cuenta y que
+       nadie puede rastrear es peor que una cifra sin corregir, y quien audite tiene que
+       poder ver que la utilidad operacional que sustenta el margen no es la que el
+       documento rotula como tal, sino la que se despeja de sus otras cifras. */
+    const correcciones = Array.isArray(study.t_correcciones) ? study.t_correcciones : [];
+    if (correcciones.length) {
+      dg.push([cTxt('5) CIFRAS CORREGIDAS AL LEER EL ESTADO FINANCIERO')]);
+      dg.push([cTxt('Rubro'), cTxt('Leído del documento'), cTxt('Aplicado'),
+        cTxt('Rótulo de la fila leída'), cTxt('Por qué se cambió')]);
+      correcciones.forEach((c) => {
+        dg.push([
+          cTxt(String(c.etiqueta || c.campo || '')),
+          cNum(c.valorLeido),
+          cNum(c.valorAplicado),
+          cTxt(String(c.rotuloLeido || '—')),
+          cTxt(String(c.motivo || '')),
+        ]);
+      });
+      dg.push([]);
     }
 
     hojas.unshift({

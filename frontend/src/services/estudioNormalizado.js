@@ -14,6 +14,12 @@
 
 import { normalizarEeff } from './eeffParserNormalizador.js';
 
+/* El primero de los candidatos que trae una cifra de verdad, distinguiendo el 0 de la
+   ausencia — que es justo lo que el operador `||` no hace. */
+const primeroConValor = (...candidatos) => candidatos.find(
+  (v) => v !== null && v !== undefined && v !== '',
+);
+
 export function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
   if (!estudioOriginal) return {};
 
@@ -26,7 +32,13 @@ export function obtenerEstudioNormalizadoParaParche(estudioOriginal) {
     ingresos_operacionales: copia.t_s ?? copia.T?.s,
     costo_ventas: copia.t_c ?? copia.T?.c,
     utilidad_operacional: copia.t_op ?? copia.T?.op,
-    gastos_operacionales: copia.t_gastos || copia.t_opex,
+    /* Los gastos operativos totales cuando el documento los trae o la verificación los
+       despejó (eeffVerificacion.js los escribe en t_gastos). Con ellos, gastosOperativosDe
+       los toma por lectura directa en vez de reconstruirlos, que es la diferencia entre
+       publicar la cifra del estado financiero y una derivada.
+       El `||` se cambió por una comprobación explícita: un gasto operativo de 0 —posible
+       en una compañía cuyos gastos van todos al costo— caía al segundo operando. */
+    gastos_operacionales: primeroConValor(copia.t_gastos, copia.t_opex),
     cuentas_por_cobrar: copia.t_ar ?? copia.T?.ar,
     inventarios: copia.t_inv ?? copia.T?.inv,
     cuentas_por_pagar: copia.t_ap ?? copia.T?.ap,

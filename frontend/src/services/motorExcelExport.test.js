@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import XLSX from 'xlsx-js-style';
-import { construirLibroSoporte } from './motorExcelExport.js';
+import { construirLibroSoporte, construirPayloadSoporte } from './motorExcelExport.js';
 
 /** Fila 1-based de la hoja cuya columna A empieza por `etiqueta`, para no fijar a
     mano un número que se mueve cada vez que `RUBROS_EXAMINADA` cambia de tamaño. */
@@ -117,7 +117,9 @@ test('los gastos operativos se derivan de la utilidad antes de llegar al generad
     examinada: { T: { s: 1000, c: 600, op: 150, ar: 100, inv: 50, ap: 80, ppe: 300 } },
   };
   const wb = construirLibroSoporte(otro);
-  assert.strictEqual(wb.Sheets.Datos.B6.v, 250, 'gastos = ventas − costo − utilidad operacional');
+  /* La magnitud es lo que esta prueba vigila —que el generador reciba GASTOS y no la
+     utilidad—; el signo es el convenio de egreso de la hoja (2026-08-21). */
+  assert.strictEqual(wb.Sheets.Datos.B6.v, -250, 'gastos = ventas − costo − utilidad operacional');
 });
 
 test('el libro recibe el ámbito, el segmento excluido y el amb de cada comparable', () => {
@@ -159,18 +161,34 @@ test('el libro recibe el ámbito, el segmento excluido y el amb de cada comparab
    también en cero —#DIV/0! en las diez celdas—. Estos dos tests cubren el trayecto
    completo del payload a la celda, igual que el resto del archivo. */
 
+/* ESTUDIO en la forma que de verdad tiene en la aplicación: los quince `t_*` sobre el
+   objeto del estudio. La versión anterior de esta prueba pasaba `examinada.T.cash`,
+   `T.act_tot` y compañía —una forma que `MotorComparables.jsx` no producía nunca—, así
+   que estaba verde sobre una ruta inexistente mientras la real publicaba los ocho rubros
+   del ESF en cero. Ahora el payload se arma con `construirPayloadSoporte`, que es
+   exactamente lo que llama el componente. */
+const ESTUDIO_REAL = {
+  ent: 'Ejemplo SAS', anio: 2025, pli: 'MO', prime: '7.37', cmode: 'all',
+  t_s: 1000, t_c: 600, t_op: 200, t_ar: 100, t_inv: 50, t_ap: 80, t_ppe: 300,
+  t_cash: 10, t_inv_assoc: 20, t_tax: 30, t_act_curr: 200,
+  t_intang: 40, t_dif: 50, t_act_nocurr: 400, t_act_tot: 600,
+};
+
+const EXTRAS_REALES = {
+  pli: 'MO',
+  useAdj: true,
+  interestRate: 0.0737,
+  cmode: 'all',
+  examinada: { T: { s: 1000, c: 600, op: 200, ar: 100, inv: 50, ap: 80, ppe: 300 } },
+  comparables: [
+    { name: 'A SA', s: 500, c: 300, op: 100, ar: 50, inv: 20, ap: 40, ppe: 100 },
+    { name: 'B SA', s: 800, c: 500, op: 150, ar: 90, inv: 10, ap: 60, ppe: 40 },
+    { name: 'C SA', s: 300, c: 100, op: 120, ar: 30, inv: 5, ap: 20, ppe: 10 },
+  ],
+};
+
 test('construirLibroSoporte escribe los doce rubros del ESF y el A.V. como fórmula', () => {
-  const conEsf = {
-    ...PAYLOAD,
-    examinada: {
-      T: {
-        ...PAYLOAD.examinada.T,
-        cash: 10, inv_assoc: 20, tax: 30, act_curr: 200,
-        intang: 40, dif: 50, act_nocurr: 400, act_tot: 600,
-      },
-    },
-  };
-  const wb = construirLibroSoporte(conEsf);
+  const wb = construirLibroSoporte(construirPayloadSoporte(ESTUDIO_REAL, EXTRAS_REALES));
   const hoja = wb.Sheets.Datos;
   const filaTot = filaEnHoja(hoja, 'Total, Activos');
   assert.ok(filaTot > 0, 'existe la fila de Total, Activos');
@@ -201,11 +219,8 @@ test('construirLibroSoporte escribe los doce rubros del ESF y el A.V. como fórm
 });
 
 test('con t_act_tot ausente, el A.V. queda en blanco y no en #DIV/0!', () => {
-  const sinTotal = {
-    ...PAYLOAD,
-    examinada: { T: { ...PAYLOAD.examinada.T, cash: 10 } },
-  };
-  const wb = construirLibroSoporte(sinTotal);
+  const sinTotal = { ...ESTUDIO_REAL, t_act_tot: undefined, t_act_nocurr: undefined };
+  const wb = construirLibroSoporte(construirPayloadSoporte(sinTotal, EXTRAS_REALES));
   const hoja = wb.Sheets.Datos;
   const filaTot = filaEnHoja(hoja, 'Total, Activos');
   const filaCash = filaEnHoja(hoja, 'Efectivo y equivalentes de efectivo');
@@ -218,4 +233,70 @@ test('con t_act_tot ausente, el A.V. queda en blanco y no en #DIV/0!', () => {
     assert.ok(av.f.startsWith(`IF($B$${filaTot}=0,"",`), `la guarda evita el #DIV/0!: ${av.f}`);
     assert.strictEqual(av.v, undefined, 'sin un valor cacheado que finja un resultado');
   });
+});
+
+/* ══════ La ruta real del componente ══════
+   Estas dos pruebas afirman lo que la anterior daba por sabido sin comprobarlo: que el
+   payload que arma el componente lleva de verdad los quince rubros y el ámbito. */
+
+test('construirPayloadSoporte lleva los quince rubros del estudio, no una selección a mano', () => {
+  const payload = construirPayloadSoporte(ESTUDIO_REAL, EXTRAS_REALES);
+  [
+    't_s', 't_c', 't_op', 't_cash', 't_inv_assoc', 't_ar', 't_inv', 't_tax',
+    't_act_curr', 't_ppe', 't_intang', 't_dif', 't_act_nocurr', 't_act_tot', 't_ap',
+  ].forEach((clave) => assert.strictEqual(
+    payload.estudio[clave], ESTUDIO_REAL[clave],
+    `el payload debería llevar ${clave}; sin él la hoja Datos lo publica en cero`));
+});
+
+test('el ámbito del tablero viaja al libro, aunque el estudio guardado diga otra cosa', () => {
+  /* `cmode` vive en el estado del tablero y se sincroniza al estudio después; si el
+     payload lo tomara solo del estudio, el libro cuartilaría sobre otro universo que el
+     que el analista está viendo en pantalla. */
+  const payload = construirPayloadSoporte(
+    { ...ESTUDIO_REAL, cmode: 'all' }, { ...EXTRAS_REALES, cmode: 'nac' });
+  assert.strictEqual(payload.estudio.cmode, 'nac');
+  const wb = construirLibroSoporte(payload);
+  const filas = XLSX.utils.sheet_to_json(wb.Sheets.Datos, { header: 1, raw: true });
+  const filaAmbito = filas.find((f) => f && f[0] === 'Ámbito de la muestra');
+  assert.strictEqual(filaAmbito[1], 'nac');
+});
+
+test('el segmento excluido se descuenta una sola vez por la ruta del componente', () => {
+  /* `T.s` viene con el segmento ya descontado y el emisor lo descuenta otra vez: si el
+     adaptador prefiriera `T` sobre el estudio en bruto, el libro publicaría 760 en vez de
+     880 y el informe seguiría en 880. */
+  const payload = construirPayloadSoporte(
+    { ...ESTUDIO_REAL, seg_excluido: 120 },
+    { ...EXTRAS_REALES, examinada: { T: { ...EXTRAS_REALES.examinada.T, s: 880, op: 80 } } });
+  const wb = construirLibroSoporte(payload);
+  const filas = XLSX.utils.sheet_to_json(wb.Sheets.Datos, { header: 1, raw: true });
+  const filaVentas = filas.find((f) => f && f[0] === 'Ventas netas');
+  assert.strictEqual(filaVentas[1], 880, 'ventas = 1000 − 120, descontado una vez');
+});
+
+test('las correcciones de la ingesta llegan al libro también por la ruta del Motor', () => {
+  /* El modal de memoria recibe el estudio entero y las traía; esta ruta armaba el payload
+     campo a campo y las dejaba fuera, así que el mismo estudio producía dos libros: uno
+     que declaraba la cifra corregida y otro que la publicaba sin decir de dónde salió. */
+  const correcciones = [{
+    campo: 't_op', etiqueta: 'Utilidad operacional',
+    valorLeido: -2986236031, valorAplicado: -1095055781,
+    rotuloLeido: 'RESULTADO DE ACTIVIDADES DE LA OPERACIÓN',
+    motivo: 'No cuadra con el resto del estado.',
+  }];
+  const payload = construirPayloadSoporte(
+    { ...ESTUDIO_REAL, t_correcciones: correcciones }, EXTRAS_REALES);
+  assert.deepStrictEqual(payload.estudio.t_correcciones, correcciones);
+
+  const wb = construirLibroSoporte(payload);
+  const diag = wb.Sheets['Diagnóstico de datos'];
+  assert.ok(diag, 'el libro trae la hoja de diagnóstico');
+  const filas = XLSX.utils.sheet_to_json(diag, { header: 1, raw: true });
+  assert.ok(filas.some((f) => f && String(f[0] || '').includes('CIFRAS CORREGIDAS')),
+    'con su sección de cifras corregidas');
+  const fila = filas.find((f) => f && f[0] === 'Utilidad operacional');
+  assert.ok(fila, 'y la fila de la corrección');
+  assert.strictEqual(fila[1], -2986236031);
+  assert.strictEqual(fila[2], -1095055781);
 });
