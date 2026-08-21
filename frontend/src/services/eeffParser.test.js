@@ -12,6 +12,7 @@ import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 const CAMPOS_NUEVOS_ANEXO_B = [
   'propiedad_planta_equipo',
   'efectivo_y_equivalentes',
+  'otras_inversiones',
   'gastos_investigacion_desarrollo',
   'gastos_publicidad',
 ];
