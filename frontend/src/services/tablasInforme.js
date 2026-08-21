@@ -540,12 +540,14 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
    ahora nadie los publicaba: el informe se radicaba con los criterios de la corrida del año
    anterior, incluidos el rango de códigos SIC y la ventana de cierre fiscal.
 
-   La plantilla arma la tabla alternando una fila de dos celdas por criterio (etiqueta y
-   valor) con una fila de una sola celda que lleva el conector. El primer criterio no lleva
-   conector delante, igual que en la hoja de origen. */
+   La plantilla arma la tabla con una fila de dos celdas (etiqueta y valor) por criterio.
+   El conector lógico con el que Capital IQ combina un criterio con el anterior (`Y`/`O`)
+   no se muestra como fila propia: solo importa cuando une varias opciones dentro del
+   valor de un mismo criterio (p. ej. «Compañía pública O compañía privada»), y eso ya
+   queda resuelto en el propio `valor` traducido — ver `criteriosScreeningEs.js`. */
 
 /**
- * Filas de la tabla de criterios de búsqueda, con su conector intercalado.
+ * Filas de la tabla de criterios de búsqueda, una por criterio.
  *
  * Devuelve `[]` cuando el estudio no trae criterios: la tabla conserva entonces lo que
  * traía la plantilla y el motor lo avisa. Blanquearla sería peor —quien revisa no sabría
@@ -564,12 +566,8 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
 export function filasCriteriosScreening(study) {
   const criterios = (study && study.criteriosScreening) || [];
   const filas = [];
-  criterios.forEach((c, i) => {
+  criterios.forEach((c) => {
     if (!c) return;
-    /* `parsearCriteriosScreening` solo deja null en el primero. Si un estudio guardado trae
-       el conector vacío en medio, la fila que une los dos criterios no puede faltar: se cae
-       a «Y», que es la combinación por defecto de la hoja de origen. */
-    if (i > 0) filas.push([c.conector || 'Y']);
     const es = traducirCriterio(c);
     filas.push([es.etiqueta, es.valor]);
   });

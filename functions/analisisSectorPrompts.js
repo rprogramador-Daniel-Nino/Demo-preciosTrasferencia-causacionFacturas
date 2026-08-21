@@ -121,12 +121,12 @@ function construirPromptBusquedaSector(actividad, year) {
     'Responde ÚNICAMENTE con un objeto JSON (sin texto adicional, sin marcas markdown) con esta forma:\n' +
     '{\n' +
     '  "datosClaveTabla": [\n' +
-    '    { "indicador": "Empleo del sector", "valorAnterior": "...", "valorActual": "...", "fuente": "...", "fuenteUrl": "https://..." },\n' +
-    '    { "indicador": "Exportaciones del sector", "valorAnterior": "...", "valorActual": "...", "fuente": "...", "fuenteUrl": "https://..." }\n' +
+    '    { "indicador": "Empleo del sector", "valorAnterior": "...", "valorActual": "...", "fuente": "...", "fuenteUrl": "https://...", "fuenteTitulo": "...", "fuenteFecha": "AAAA-MM-DD" },\n' +
+    '    { "indicador": "Exportaciones del sector", "valorAnterior": "...", "valorActual": "...", "fuente": "...", "fuenteUrl": "https://...", "fuenteTitulo": "...", "fuenteFecha": "AAAA-MM-DD" }\n' +
     '  ],\n' +
-    '  "datosComportamiento": [ { "dato": "hecho o cifra concreta y comparada (ej. \'generó 250.000 empleos directos, un incremento del 13,7% frente a ' + y1 + '\') sobre el comportamiento del sector en ' + year + '", "fuente": "...", "fuenteUrl": "https://..." } ],\n' +
-    '  "datosComercioExterior": [ { "dato": "cifra concreta de importaciones o exportaciones del sector, con su variación % respecto a ' + y1 + '", "fuente": "...", "fuenteUrl": "https://..." } ],\n' +
-    '  "datosProyeccion": [ { "dato": "proyección o expectativa cuantificada para el sector en ' + (year + 1) + '", "fuente": "...", "fuenteUrl": "https://..." } ]\n' +
+    '  "datosComportamiento": [ { "dato": "hecho o cifra concreta y comparada (ej. \'generó 250.000 empleos directos, un incremento del 13,7% frente a ' + y1 + '\') sobre el comportamiento del sector en ' + year + '", "fuente": "...", "fuenteUrl": "https://...", "fuenteTitulo": "...", "fuenteFecha": "AAAA-MM-DD" } ],\n' +
+    '  "datosComercioExterior": [ { "dato": "cifra concreta de importaciones o exportaciones del sector, con su variación % respecto a ' + y1 + '", "fuente": "...", "fuenteUrl": "https://...", "fuenteTitulo": "...", "fuenteFecha": "AAAA-MM-DD" } ],\n' +
+    '  "datosProyeccion": [ { "dato": "proyección o expectativa cuantificada para el sector en ' + (year + 1) + '", "fuente": "...", "fuenteUrl": "https://...", "fuenteTitulo": "...", "fuenteFecha": "AAAA-MM-DD" } ]\n' +
     '}\n\n' +
     'Reglas estrictas:\n' +
     '1. Solo incluye datos que hayas verificado con la búsqueda. Si no encuentras nada confiable ' +
@@ -137,7 +137,16 @@ function construirPromptBusquedaSector(actividad, year) {
     '(empleo, exportaciones, tamaño del mercado, inversión, etc.) — máximo 6 filas, las más relevantes.\n' +
     '4. Prioriza cifras con comparación explícita entre años y con porcentaje de variación sobre datos ' +
     'sueltos de un solo año: son las que permiten redactar un análisis comparativo, no una lista de hechos.\n' +
-    '5. No agregues ninguna clave que no esté en la lista de arriba.'
+    '5. No agregues ninguna clave que no esté en la lista de arriba.\n' +
+    '6. "fuente" es QUIÉN publica (la entidad o el medio: "DANE", "La República", "Acoplásticos"), ' +
+    'sin el título del artículo dentro. "fuenteTitulo" es el titular o el nombre del documento tal ' +
+    'como aparece en la página que consultaste. El informe los cita por separado, en formato ' +
+    'bibliográfico, así que mezclarlos deja la cita mal formada.\n' +
+    '7. "fuenteFecha" es la fecha de publicación de esa página, en formato AAAA-MM-DD (o AAAA-MM, o ' +
+    'AAAA, si la página solo muestra el mes o el año). SI LA PÁGINA NO MUESTRA FECHA DE PUBLICACIÓN, ' +
+    'DEVUELVE "" — no la deduzcas, no la estimes y no uses la fecha de hoy: el informe escribe ' +
+    '"(s.f.)" cuando no consta, que es correcto, mientras una fecha inventada es una cita falsa ' +
+    'ante la DIAN. Lo mismo para "fuenteTitulo": si no puedes leer el titular, devuelve "".'
   );
 }
 
@@ -149,6 +158,16 @@ function construirPromptBusquedaSector(actividad, year) {
  *  lista de búsquedas que Gemini de verdad ejecutó en Google antes de responder.
  *  Ya no se verifica la URL puntual —esa garantía no la da la API en este modo—,
  *  solo que hubo una búsqueda real detrás de la respuesta. */
+/* El título y la fecha con que el informe cita la fuente al pie. Se copian como cadena y se
+   quedan vacíos si el modelo no los trajo: es la respuesta correcta cuando la página no muestra
+   fecha —el informe escribe «(s.f.)»—, y lo contrario sería una cita falsa ante la DIAN.
+
+   La fecha no se valida contra un calendario a propósito: el modelo puede devolver «2025-02»
+   cuando la página solo da el mes, y `citasApa.js` sabe leer esas formas. Lo que no se entienda
+   se acaba citando como «(s.f.)», que es exactamente lo que hay que decir cuando no consta. */
+const tituloDeFuente = (f) => (typeof f.fuenteTitulo === 'string' ? f.fuenteTitulo.trim() : '');
+const fechaDeFuente = (f) => (typeof f.fuenteFecha === 'string' ? f.fuenteFecha.trim() : '');
+
 function parsearRespuestaBusquedaSector(texto, webSearchQueries) {
   const bruto = extraerJSON(texto);
   const huboBusquedaReal = Array.isArray(webSearchQueries) && webSearchQueries.length > 0;
@@ -162,6 +181,8 @@ function parsearRespuestaBusquedaSector(texto, webSearchQueries) {
       valorActual: f.valorActual,
       fuente: f.fuente || 'Fuente sin especificar',
       fuenteUrl: huboBusquedaReal && !esUrlBloqueada(f.fuenteUrl) ? (f.fuenteUrl || null) : null,
+      fuenteTitulo: tituloDeFuente(f),
+      fuenteFecha: fechaDeFuente(f),
       confiable: huboBusquedaReal,
     }));
 
@@ -172,6 +193,8 @@ function parsearRespuestaBusquedaSector(texto, webSearchQueries) {
         dato: f.dato,
         fuente: f.fuente || 'Fuente sin especificar',
         fuenteUrl: huboBusquedaReal && !esUrlBloqueada(f.fuenteUrl) ? (f.fuenteUrl || null) : null,
+        fuenteTitulo: tituloDeFuente(f),
+        fuenteFecha: fechaDeFuente(f),
         confiable: huboBusquedaReal,
       }));
 

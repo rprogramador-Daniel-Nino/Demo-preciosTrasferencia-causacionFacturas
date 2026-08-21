@@ -16,14 +16,17 @@ import {
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
   localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
+  aplicarLetraMacroOoxml,
   actualizarFormulasMatematicasOoxml,
   localizarAnexosOoxml, anexosDelDocumento, problemaDeIntegridadOoxml,
   generarTablaOoxml, medidaDeImagenAnexoB,
 } from './docxRelleno.js';
 import { codificarPNG, aBase64, deBase64 } from './png.js';
+import { FUENTE_TABLA, PUNTOS_TABLA } from './estiloDocumento.js';
 import { nameKey } from './comparablesEngine.js';
 import { FORMULA_AR, ooxmlDeFormula } from './formulasOmml.js';
 import { filasRazonesRechazo, NOMBRES_TABLA_MARGENES } from './tablasInforme.js';
+import { crearRecolectorDeNotas } from './notasAlPieOoxml.js';
 import { resolverSerie } from './analisisMercado.js';
 
 /** Donde vive el cuerpo del documento dentro del .docx. */
@@ -388,39 +391,12 @@ test('el ANEXO A se ancla en su encabezado, sin depender del centinela', async (
   assert.ok(zip.file('word/media/anexo_a_1.png'), 'la primera página quedó en el paquete');
 });
 
-test('el ANEXO A trae el ESF y el ERI como tablas nativas, no como imagen', async () => {
+test('el ANEXO A ya no trae el ESF ni el ERI como tabla', async () => {
   const zip = await zipConAnexoA();
   insertarAnexoA(zip, ESTUDIO_EEFF, {});
   const texto = textoDe(zip, RUTA_DOC_TEST);
-  assert.match(texto, /Estado de Situación Financiera/);
-  assert.match(texto, /Estado de Resultados/);
-  assert.match(texto, /2\.179\.479\.687/, 'el total de activos, formateado en pesos');
-  assert.match(texto, /5\.271\.105\.507/, 'los ingresos del ERI');
-});
-
-test('el A.V. del ANEXO A sale de la misma cuenta que la Tabla 10', async () => {
-  /* Si cada uno calculara su porcentaje, el anexo y el cuerpo del informe publicarían
-     verticales distintos para el mismo estado financiero. */
-  const zip = await zipConAnexoA();
-  insertarAnexoA(zip, ESTUDIO_EEFF, {});
-  const anexo = textoDe(zip, RUTA_DOC_TEST);
-
-  const tabla10 = actualizarTablasOperacionesOoxml(
-    conTabla('<w:p><w:t>Tabla 10. Activos a 31 de diciembre de 2025</w:t></w:p>'),
-    ESTUDIO_EEFF,
-  );
-  /* 12.417.756 sobre 2.179.479.687 es 0,570 %. */
-  assert.match(tabla10, /0,570 %/, 'la Tabla 10 calcula el vertical sobre el total de activos');
-  assert.match(anexo, /0,570 %/, 'y el anexo tiene que dar lo mismo');
-});
-
-test('el ERI del ANEXO A declara el ajuste excluido', async () => {
-  /* Los $983.180.000 del proyecto CoCrea son lo que sostiene el margen que el informe
-     declara. Un estado de resultados que no los nombre no cuadra con el rango. */
-  const zip = await zipConAnexoA();
-  insertarAnexoA(zip, ESTUDIO_EEFF, {});
-  const texto = textoDe(zip, RUTA_DOC_TEST);
-  assert.match(texto, /983\.180\.000/);
+  assert.ok(!texto.includes('Estado de Situación Financiera'));
+  assert.ok(!texto.includes('Estado de Resultados'));
 });
 
 test('sin cifras parseadas el ANEXO A avisa en vez de salir vacío', async () => {
@@ -456,8 +432,68 @@ test('rellenarDocx llena el ANEXO A con lo que trae el estudio', async () => {
     tipoSalida: 'nodebuffer',
   });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
-  assert.match(texto, /Estado de Situación Financiera/);
+  assert.ok(!texto.includes('Estado de Situación Financiera'));
   assert.ok(!texto.includes('páginas del informe anterior'));
+});
+
+test('rellenarDocx publica las fuentes de la Sección III como notas al pie del paquete', async () => {
+  /* La prueba que de verdad importa: que el .docx resultante sea un paquete VÁLIDO. Si el cuerpo
+     cita una nota que no está en `footnotes.xml`, o la parte no está declarada en
+     `[Content_Types].xml`, Word abre el documento diciendo que está dañado y ofrece repararlo. */
+  const buf = await plantilla([
+    parrafo('A. Análisis del Panorama de la Economía Mundial'),
+    parrafo('Texto viejo del mundo, del informe del año anterior.'),
+    parrafo('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafo('Tasas de Inflación Global (2024-2026)'),
+    parrafo('Texto viejo de la inflación mundial, con prosa suficiente para el umbral del hueco.'),
+    parrafo('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+    parrafo('B. Análisis del panorama de la economía colombiana'),
+  ]);
+
+  const datosMacro = {
+    narrativa: { inflacionMundial: '<p>La inflación global cedió en 2026.</p>' },
+    series: {
+      inflacion_global: {
+        valores: { 2026: '3.1' },
+        fuente: 'Fondo Monetario Internacional',
+        fuenteUrl: 'https://www.imf.org/weo',
+        fuenteTitulo: 'World Economic Outlook, octubre de 2026',
+        fuenteFecha: '2026-10-15',
+        fechaConsulta: '2026-08-19T10:00:00.000Z',
+      },
+    },
+  };
+
+  const { salida } = rellenarDocx({
+    binario: buf, estudio: ESTUDIO, datosMacro, tipoSalida: 'nodebuffer',
+  });
+  const z = new PizZip(salida);
+
+  /* 1. El cuerpo ancla la nota. */
+  const cuerpo = z.file(RUTA_DOC_TEST).asText();
+  const ref = /<w:footnoteReference w:id="(\d+)"\/>/.exec(cuerpo);
+  assert.ok(ref, 'el cuerpo debe anclar la nota donde estaba la línea «FUENTE:»');
+  assert.doesNotMatch(cuerpo, /FUENTE: Fondo Monetario/, 'y ya no la escribe en el cuerpo');
+
+  /* 2. La nota existe, con ese mismo id y con la cita en formato bibliográfico. */
+  const notas = z.file('word/footnotes.xml');
+  assert.ok(notas, 'sin footnotes.xml Word declara el documento dañado');
+  const xmlNotas = notas.asText();
+  assert.match(xmlNotas, new RegExp(`<w:footnote w:id="${ref[1]}">`));
+  assert.match(xmlNotas, /Fondo Monetario Internacional\. \(2026, octubre 15\)\. World Economic Outlook/);
+  assert.match(xmlNotas, /Recuperado el 19 de agosto de 2026, de /);
+
+  /* 3. El enlace es un enlace: relación externa, no solo texto azul. */
+  const rels = z.file('word/_rels/footnotes.xml.rels');
+  assert.ok(rels, 'sin las relaciones el enlace de la cita no sería clicable');
+  assert.match(rels.asText(), /Target="https:\/\/www\.imf\.org\/weo" TargetMode="External"/);
+  const idRel = /<w:hyperlink r:id="([^"]+)"/.exec(xmlNotas);
+  assert.ok(idRel, 'la nota usa el hipervínculo');
+  assert.match(rels.asText(), new RegExp(`Id="${idRel[1]}"`), 'y su r:id existe en las relaciones');
+
+  /* 4. La parte está declarada y relacionada: es lo que la hace legible para Word. */
+  assert.match(z.file('[Content_Types].xml').asText(), /footnotes\+xml/);
+  assert.match(z.file('word/_rels/document.xml.rels').asText(), /relationships\/footnotes/);
 });
 
 test('el .docx resultante conserva las partes obligatorias del paquete', async () => {
@@ -625,8 +661,8 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
 
    Mismo defecto y mismo arreglo ya probado en `tablasHtmlInforme.test.js` para la ruta
    HTML: la tabla se radicaba con el cribado del informe del que salió la plantilla. Estos
-   tests son el espejo OOXML de esos, con la forma real de la tabla (fila de 2 celdas por
-   criterio, fila de 1 celda fusionada para el conector «Y»/«O»).
+   tests son el espejo OOXML de esos, con la forma real de la tabla (una fila de 2 celdas
+   por criterio; sin fila aparte para el conector «Y»/«O» entre criterios distintos).
    ───────────────────────────────────────────────────────────────────────────── */
 
 const filaDosCeldasOoxml = (a, b) =>
@@ -758,20 +794,19 @@ test('Códigos SIC: una sola copia ambigua (sin número) se deja intacta — no 
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
-test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, gridSpan) en las filas nuevas', () => {
+test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, tcW) en las filas nuevas', () => {
   const cuerpoConSombreado = '<w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="FFF2CC"/></w:tcPr>'
     + '<w:p><w:t>Código SIC primario:</w:t></w:p></w:tc>'
-    + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>'
-    + filaUnaCeldaOoxml('Y');
+    + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>';
   const tabla = tablaSicOoxml(null, cuerpoConSombreado, 'Fuente: Capital IQ.');
 
   const salida = reescribirFilasOoxml(tabla, [
     ['Código SIC primario:', 'Entre 7371 y 7375'],
-    ['O'],
+    ['Palabra clave:', 'Contiene juegos'],
   ]);
 
   assert.match(salida, /<w:shd w:val="clear" w:fill="FFF2CC"\/>/, 'se perdió el sombreado del molde');
-  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'se perdió el gridSpan del molde del conector');
+  assert.match(salida, /<w:tcW w:w="6000" w:type="dxa"\/>/, 'se perdió el tcW del molde');
   assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los valores nuevos');
   assert.ok(salida.includes('Fuente: Capital IQ.'), 'el pie de fuente no debe tocarse');
 });
@@ -796,11 +831,11 @@ test('Códigos SIC: tres ocurrencias numeradas 18/19/20 (renumeración real de B
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
 });
 
-test('reescribirFilasOoxml: el conector "Y"/"O" sale como divisor discreto, no como clon de la franja de sección', () => {
-  /* Molde real: la plantilla comparte el mismo tcPr (sombreado gris oscuro, negrita) entre
-     las franjas de sección («Criterios de inclusión») y el conector («Y»), porque las dos
-     son visualmente la misma franja fusionada. Clonarlo tal cual para cada «Y»/«O» de un
-     cribado con varios criterios deja la tabla como una fila de franjas grises opacas. */
+test('reescribirFilasOoxml ya no genera ninguna fila aparte para el conector "Y"/"O" entre criterios', () => {
+  /* La plantilla puede traer de un informe anterior una franja de sección fusionada
+     (sombreado gris oscuro, negrita) usada para el conector entre criterios — pero las
+     filas nuevas que llegan de `filasCriteriosScreening` ya no incluyen ese conector como
+     entrada aparte, así que no debe reaparecer ninguna franja de ese tipo en la salida. */
   const filaSeccionOFranjaConector = (texto) =>
     '<w:tr><w:tc><w:tcPr><w:tcW w:w="9000" w:type="dxa"/><w:gridSpan w:val="2"/>'
     + '<w:shd w:val="clear" w:color="auto" w:fill="808080"/><w:vAlign w:val="center"/></w:tcPr>'
@@ -815,15 +850,13 @@ test('reescribirFilasOoxml: el conector "Y"/"O" sale como divisor discreto, no c
 
   const salida = reescribirFilasOoxml(tabla, [
     ['Código SIC primario:', 'Entre 7371 y 7375'],
-    ['O'],
     ['SIC Codes', '3535 Conveyors OR 3545 Cutting Tools'],
   ]);
 
-  assert.ok(!/w:fill="808080"/.test(salida), 'el conector nuevo no debe heredar el sombreado gris oscuro de la franja de sección');
-  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'el conector conserva la fusión de columnas para no desalinear la tabla');
-  assert.match(salida, /<w:i\/>/, 'el conector sale en cursiva, como divisor discreto');
-  assert.ok(salida.includes('>O<'), 'falta el conector nuevo');
-  assert.ok(salida.includes('3535 Conveyors OR 3545 Cutting Tools'), 'faltan los criterios nuevos');
+  assert.ok(!/w:fill="808080"/.test(salida), 'no debe sobrevivir ninguna franja de conector/sección');
+  assert.ok(!salida.includes('>Y<') && !salida.includes('>O<'), 'no debe salir ninguna fila con solo "Y" u "O"');
+  assert.ok(salida.includes('3535 Conveyors OR 3545 Cutting Tools'),
+    'el "OR" dentro del valor de un mismo criterio sí se conserva');
 });
 
 test('localizarBloquesTabla devuelve todas las ocurrencias homónimas en orden de documento', () => {
@@ -1100,22 +1133,62 @@ test('rellenarDocx propaga los avisos de tablas hasta quien genera el informe', 
   assert.ok(avisosTablas && avisosTablas.length > 0, 'el aviso tiene que llegar a la UI');
 });
 
+/* Fila con N celdas, para que `columnasDe` (docxRelleno.js) pueda distinguir la
+   horizontal (4 columnas: contribuyente + 3 percentiles) de la vertical (3: etiqueta +
+   no ajustado + ajustado) igual que en un `.docx` real —el criterio es la FORMA, no el
+   texto de la celda ni el número del rótulo. */
+const filaOoxml = (textos) => '<w:tr>' + textos.map(
+  (t) => `<w:tc><w:p><w:t>${t}</w:t></w:p></w:tc>`
+).join('') + '</w:tr>';
+
 test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
   /* La plantilla trae el rango vertical dos veces: la «Tabla 18. Rango Intercuartil» de
      los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones, esta última con
      el rótulo dentro de su primera fila. El código elegía una de las dos con un if/else,
      así que la otra se radicaba con los percentiles del informe anterior. */
   const xml = '<w:p><w:t>Tabla 5. Rango Intercuartil</w:t></w:p>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>horizontal vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
+    + '<w:tbl>' + filaOoxml(['ACME', 'x', 'y', 'horizontal vieja']) + '</w:tbl>'
     + '<w:p><w:t>Tabla 18. Rango Intercuartil</w:t></w:p>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>vertical vieja</w:t></w:p></w:tc></w:tr></w:tbl>'
-    + '<w:tbl><w:tr><w:tc><w:p><w:t>Tabla 20. Tabla de rangos</w:t></w:p></w:tc></w:tr>'
-    + '<w:tr><w:tc><w:p><w:t>conclusiones vieja</w:t></w:p></w:tc></w:tr></w:tbl>';
+    + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'vertical vieja']) + '</w:tbl>'
+    + '<w:tbl>' + filaOoxml(['Tabla 20. Tabla de rangos', 'x', 'y'])
+    + filaOoxml(['Mínimo', 'x', 'conclusiones vieja']) + '</w:tbl>';
   const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' });
+  assert.ok(!salida.includes('horizontal vieja'), 'la Tabla 5 (horizontal) debe actualizarse');
   assert.ok(!salida.includes('vertical vieja'), 'la Tabla 18 debe actualizarse');
   assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
   assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
     'deben quedar las dos tablas verticales regeneradas');
+  assert.match(salida, /Percentil 25.*Mediana.*Percentil 75/s, 'y la horizontal con sus columnas');
+});
+
+test('con TRES ocurrencias de «Rango Intercuartil» —sin «Tabla de rangos»— las DOS verticales se actualizan', () => {
+  /* El informe real de MONTACHEM (reportado el 2026-08-20): una horizontal y DOS
+     verticales, las tres rotuladas igual, ninguna como «Tabla de rangos». Antes el
+     código sólo cubría la ocurrencia 1 de «Rango Intercuartil» como vertical —la
+     segunda copia quedaba con los percentiles del informe de referencia, sin aviso. */
+  const xml = '<w:p><w:t>Tabla 6. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['ACME', 'x', 'y', 'horizontal vieja']) + '</w:tbl>'
+    + '<w:p><w:t>Tabla 21. Rango Intercuartil</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'primera vertical vieja']) + '</w:tbl>'
+    + '<w:p><w:t>Información Base Datos Capital IQ. Fecha de consulta: julio de 2024.</w:t></w:p>'
+    + '<w:tbl>' + filaOoxml(['RANGO INTERCUARTIL', 'CUARTIL RANGE MO NO FIXED', 'CUARTIL RANGE MO FIXED'])
+    + filaOoxml(['Mínimo', 'x', 'segunda vertical vieja']) + '</w:tbl>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+  assert.ok(!salida.includes('horizontal vieja'), 'la horizontal debe actualizarse');
+  assert.ok(!salida.includes('primera vertical vieja'), 'la primera vertical debe actualizarse');
+  assert.ok(!salida.includes('segunda vertical vieja'),
+    'la segunda vertical (el caso MONTACHEM) también debe actualizarse');
+  /* El párrafo «Fecha de consulta: julio de 2024» vive ANTES de la tabla, no dentro de
+     ella —esta ocurrencia se localiza por su primera fila, y el bloque que se sustituye
+     empieza en la tabla, no en lo que la precede—. No es parte de esta tabla y ninguna
+     tabla vertical del motor cita fuente/fecha (la única que lo hace es la horizontal);
+     es un párrafo suelto de la plantilla que este arreglo no toca. */
+  assert.ok(salida.includes('julio de 2024'),
+    'el párrafo que precede a la tabla, fuera de su bloque, no se toca');
+  assert.strictEqual((salida.match(/RANGE MO NO AJUSTADO/g) || []).length, 2,
+    'deben quedar las DOS tablas verticales regeneradas');
+  assert.ok(!avisos.includes('Tabla de rangos'), 'ninguna vertical quedó sin encontrar');
 });
 
 test('la tabla de márgenes se actualiza con cualquier prefijo, sin tocar las definiciones', () => {
@@ -1726,6 +1799,73 @@ test('actualizarApartadosMacroOoxml reemplaza la prosa de mundial y colombia con
   assert.match(salida, /Narrativa real de Colombia para este cliente\./);
   assert.doesNotMatch(salida, /Texto de END GAME/);
   assert.equal(avisos.length, 0);
+});
+
+test('con recolector, la fuente del apartado va como nota al pie y no como línea «FUENTE:»', () => {
+  /* Lo que pidió el usuario (2026-08-20): las URL crudas en el cuerpo ocupaban media página. */
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto viejo del mundo.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Texto viejo de la inflación mundial, con su FUENTE de 2024 debajo.'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Narrativa del mundo.</p>',
+      inflacionMundial: '<p>La inflación global cedió en 2026.</p>',
+    },
+    series: {
+      inflacion_global: {
+        valores: { 2026: '3.1' },
+        fuente: 'Fondo Monetario Internacional',
+        fuenteUrl: 'https://www.imf.org/weo',
+        fuenteTitulo: 'World Economic Outlook, octubre de 2026',
+        fuenteFecha: '2026-10-15',
+        fechaConsulta: '2026-08-19T10:00:00.000Z',
+      },
+    },
+  };
+
+  const notas = crearRecolectorDeNotas({ idInicial: 7, estilos: { refNota: 'Refdenotaalpie' } });
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, [], notas);
+
+  /* La referencia queda DENTRO del párrafo de la narrativa, al final de la frase. */
+  assert.match(salida, /La inflación global cedió en 2026\.<\/w:t><\/w:r>[\s\S]{0,200}?<w:footnoteReference w:id="7"\/>/);
+  assert.doesNotMatch(salida, /FUENTE: Fondo Monetario/, 'ya no se escribe la línea en el cuerpo');
+  assert.doesNotMatch(salida, /FUENTE: /, 'ninguna línea de fuente en el cuerpo');
+
+  /* Y la nota trae la cita en formato bibliográfico, con su enlace. */
+  assert.strictEqual(notas.cuantas(), 1);
+  const nota = notas.notasXml()[0];
+  assert.match(nota, /Fondo Monetario Internacional\. \(2026, octubre 15\)\. World Economic Outlook/);
+  assert.match(nota, /<w:hyperlink r:id="rIdNota1"/);
+  assert.deepStrictEqual(notas.enlaces(), [{ idRel: 'rIdNota1', url: 'https://www.imf.org/weo' }]);
+});
+
+test('sin recolector se sigue emitiendo la línea «FUENTE:»: sin paquete no hay nota al pie', () => {
+  /* Una nota al pie necesita `word/footnotes.xml`, y quien llama con un fragmento suelto de XML
+     no lo tiene. Perder la cita sería peor que publicarla en el cuerpo. */
+  const xml = [
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Texto viejo.'),
+    parrafoXml('Crecimiento del PIB Mundial (2024-2026)'),
+    parrafoXml('Tasas de Inflación Global (2024-2026)'),
+    parrafoXml('Texto viejo de la inflación mundial con prosa suficiente para el umbral.'),
+    parrafoXml('Proyecciones de Crecimiento del PIB por Región/País (2026)'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: { inflacionMundial: '<p>La inflación global cedió.</p>' },
+    series: { inflacion_global: { valores: { 2026: '3.1' }, fuente: 'FMI', fuenteUrl: 'https://imf.org' } },
+  };
+
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, []);
+  assert.match(salida, /FUENTE: FMI/);
+  assert.doesNotMatch(salida, /footnoteReference/);
 });
 
 test('actualizarApartadosMacroOoxml usa el marcador de pendiente si no hay narrativa, y avisa', () => {
@@ -2609,7 +2749,7 @@ test('el anexo de estados financieros no se lleva el documento cuando no hay ANE
   assert.strictEqual(problemaDeIntegridadOoxml(xml), '', 'el documento tiene que seguir cerrando');
   assert.ok(xml.length > antes.length * 0.9, 'y no perder el cuerpo del informe');
   assert.ok(!texto.includes('EEFF DEL CLIENTE ANTERIOR'), 'el anexo se rehace');
-  assert.match(texto, /Estado de Situación Financiera/);
+  assert.match(texto, /ANEXO A\. Estados financieros ACME COLOMBIA S\.A\.S/, 'con el rótulo del estudio');
   assert.ok(texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'y el anexo siguiente no se toca');
   assert.ok(texto.includes('MATRIZ DEL CLIENTE ANTERIOR'), 'ni el de después');
   assert.ok(texto.includes('Cuerpo del informe que no se puede perder'), 'ni el cuerpo');

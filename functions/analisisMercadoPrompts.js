@@ -114,7 +114,7 @@ function construirPromptBusqueda(anioActual) {
     'ir acompañado del texto y las citas que necesites; lo que importa es que el JSON esté ' +
     'completo y bien formado):\n' +
     '{\n' +
-    '  "pib_mundial": { "valores": { "2025": "3.2", "2026": "3.2" }, "fuente": "Fondo Monetario Internacional, WEO", "fuenteUrl": "https://..." },\n' +
+    '  "pib_mundial": { "valores": { "2025": "3.2", "2026": "3.2" }, "fuente": "Fondo Monetario Internacional", "fuenteUrl": "https://...", "fuenteTitulo": "World Economic Outlook, octubre de 2025", "fuenteFecha": "2025-10-15" },\n' +
     '  "tasa_intervencion": { "valores": { "2026": { "etiqueta": "Agosto 2026", "valor": "12.00" } }, "fuente": "...", "fuenteUrl": "..." },\n' +
     '  "crecimiento_por_region": { "valores": { "2026": [{"region":"Mundial","valor":"3.0"},{"region":"Estados Unidos","valor":"2.0"}] }, "fuente": "...", "fuenteUrl": "..." }\n' +
     '}\n\n' +
@@ -124,7 +124,17 @@ function construirPromptBusqueda(anioActual) {
     'recuerdes de memoria.\n' +
     '3. Si no encuentras un dato confiable para una serie, omite esa clave del JSON por completo — no la ' +
     'rellenes con un valor inventado ni con un guion.\n' +
-    '4. No agregues ninguna clave que no esté en la lista de arriba.'
+    '4. No agregues ninguna clave que no esté en la lista de arriba.\n' +
+    '5. "fuente" es QUIÉN publica (la entidad: "DANE", "Banco de la República", "Fondo Monetario ' +
+    'Internacional"), sin el título de la publicación dentro. "fuenteTitulo" es el nombre del ' +
+    'documento o de la serie tal como aparece en la página ("World Economic Outlook, octubre de ' +
+    '2025", "Encuesta Mensual de Industria - EMIM"). El informe los cita al pie por separado y en ' +
+    'formato bibliográfico, así que mezclarlos deja la cita mal formada.\n' +
+    '6. "fuenteFecha" es la fecha de publicación de esa página, en formato AAAA-MM-DD (o AAAA-MM, o ' +
+    'AAAA, si solo consta el mes o el año). SI LA PÁGINA NO MUESTRA FECHA DE PUBLICACIÓN, DEVUELVE ' +
+    '"" — no la deduzcas, no la estimes y no uses la fecha de hoy: el informe cita "(s.f.)" cuando ' +
+    'no consta, que es correcto, mientras una fecha inventada es una cita falsa ante la DIAN. Lo ' +
+    'mismo para "fuenteTitulo": si no puedes leerlo, devuelve "".'
   );
 }
 
@@ -196,6 +206,11 @@ function parsearRespuestaBusqueda(texto, groundingChunks) {
       fuente: entrada.fuente || 'Fuente sin especificar',
       fuenteUrl: huboBusquedaReal && !urlSospechosa(entrada.fuenteUrl) && !esUrlBloqueada(entrada.fuenteUrl)
         ? (entrada.fuenteUrl || null) : null,
+      /* Con qué título y qué fecha se cita esta serie al pie del informe. Vacíos si el modelo no
+         los trajo: el informe escribe «(s.f.)» y usa el nombre de la serie, que es un dato
+         nuestro, en vez de inventar los del documento citado. */
+      fuenteTitulo: typeof entrada.fuenteTitulo === 'string' ? entrada.fuenteTitulo.trim() : '',
+      fuenteFecha: typeof entrada.fuenteFecha === 'string' ? entrada.fuenteFecha.trim() : '',
       confiable: huboBusquedaReal,
     };
   });

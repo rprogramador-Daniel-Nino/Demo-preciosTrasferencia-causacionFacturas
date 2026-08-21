@@ -36,7 +36,7 @@ import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estilo
 /* La frontera de la Sección III sale de la MISMA función que la usa para decidir dónde no se
    marca ningún campo del contribuyente. Copiar aquí sus dos regex dejaría dos definiciones de
    «dónde empieza y acaba III» que se desincronizarían en el primer informe con otro título. */
-import { zonaQueAbre } from './plantillaMarcador.js';
+import { zonaQueAbre, cierraSeccionMacro } from './plantillaMarcador.js';
 import { FORMULAS, ROTULOS_FORMULA, ooxmlDeFormula } from './formulasOmml.js';
 import {
   filasOperacionesDeIngreso, filasOperacionAnalizar, filasTransaccionesIntercompania,
@@ -88,8 +88,16 @@ import { actualizarProsaBaseDatos, BASE_DATOS_FUENTE } from './prosaBaseDatos.js
    importa de este módulo ni de `tablasHtmlInforme.js`. */
 import {
   resolverSerie, filasDatosClaveSector, cabecerasDatosClaveSector, tituloDatosClaveSector,
-  fuenteDatosClaveSector, titulosSectorial,
+  fuenteDatosClaveSector, titulosSectorial, citaDeSerie, fuentesDelSector,
 } from './analisisMercado.js';
+/* Las fuentes de la Sección III se publican como notas al pie, en formato bibliográfico y con el
+   enlace clicable, en vez de como una línea «FUENTE:» con las URL crudas en el cuerpo. */
+import { citaApa, citasApa } from './citasApa.js';
+import {
+  anclarEnUltimoParrafo, crearRecolectorDeNotas, siguienteIdDeNota, estilosDeNota,
+  agregarNotasAlPie, relsDeNotasAlPie, idsDeRelacionLibres, contentTypesConNotasAlPie,
+  relsDocumentoConNotasAlPie,
+} from './notasAlPieOoxml.js';
 
 /** EMU (English Metric Units) por centímetro: la unidad de medida de OOXML. */
 export const EMU_POR_CM = 360000;
@@ -147,6 +155,10 @@ export const CENTINELA_ANEXO = '@@ANEXO_EEFF@@';
 
 const RUTA_RELS = 'word/_rels/document.xml.rels';
 const RUTA_CT = '[Content_Types].xml';
+/* Donde viven las notas al pie y los enlaces de sus citas. El segundo no existe en una plantilla
+   cuyas notas son solo texto —el caso de END GAME—, así que se crea al publicar la primera. */
+const RUTA_FOOTNOTES = 'word/footnotes.xml';
+const RUTA_FOOTNOTES_RELS = 'word/_rels/footnotes.xml.rels';
 const RUTA_DOC = 'word/document.xml';
 
 /** El valor que se escribe cuando un campo no tiene dato. */
@@ -348,7 +360,33 @@ function contenidoHuecoIntermedio(textoHueco) {
   return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorContenidoRetirado())}</w:t></w:r></w:p>`;
 }
 
-export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
+/**
+ * Publica la fuente de un bloque de narrativa: nota al pie si se puede, línea «FUENTE:» si no.
+ *
+ * La nota al pie es lo que pidió el usuario (2026-08-20) y lo que hace el resto del informe: las
+ * URL crudas entre paréntesis ocupaban media página en el cuerpo del documento. Pero una nota al
+ * pie NO SE PUEDE CREAR SIN EL PAQUETE: necesita `word/footnotes.xml`, su relación y su content
+ * type, y esta función solo ve un trozo de `word/document.xml`. Quien tiene el .docx entero
+ * —`rellenarDocx`— pasa un recolector; quien llama con un fragmento suelto, no, y entonces la
+ * línea «FUENTE:» sigue siendo la única forma de citar sin perder el dato.
+ *
+ * @param {string} parrafos  la narrativa ya en OOXML.
+ * @param {object} datosCita  lo que `citaDeSerie`/`fuentesDelSector` devuelven.
+ * @param {Function} fuenteEnLinea  la cadena de la línea «FUENTE:», solo si hay que caer a ella.
+ * @param {object|null} notas  el recolector de notas al pie.
+ * @returns {string}
+ */
+function conFuenteCitada(parrafos, datosCita, fuenteEnLinea, notas) {
+  if (notas) {
+    const ref = notas.referencia(citaApa(datosCita), datosCita && datosCita.url);
+    if (ref) return anclarEnUltimoParrafo(parrafos, ref);
+    /* Sin cita que publicar no se ancla un número que no lleva a ninguna nota. */
+    return parrafos;
+  }
+  return parrafos + parrafoFuenteOoxml(fuenteEnLinea ? fuenteEnLinea() : '');
+}
+
+export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, notas = null) {
   const doc = sustituidorDeTablas(xml, null);
 
   const tituloMundial = 'Análisis del Panorama de la Economía Mundial';
@@ -378,8 +416,10 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos) {
    *  cualquier escenario. */
   const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
     if (narrativaHtml) {
-      const fuenteTexto = serieClave ? resolverSerie(datosMacro, serieClave).fuente : '';
-      return parrafosOoxmlDesdeHtml(narrativaHtml) + parrafoFuenteOoxml(fuenteTexto);
+      const parrafos = parrafosOoxmlDesdeHtml(narrativaHtml);
+      if (!serieClave) return parrafos;
+      return conFuenteCitada(parrafos, citaDeSerie(datosMacro, serieClave),
+        () => resolverSerie(datosMacro, serieClave).fuente, notas);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
     return `<w:p><w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
@@ -481,10 +521,21 @@ function szDeRpr(rPr) {
  * El resto del `rPr` se conserva intacto: la negrita del rótulo de una tabla, la cursiva, y el
  * rojo del marcador de pendiente, que es un hueco que hay que ver antes de radicar.
  */
-function rPrConLetraMacro(rPrInterior, negrita) {
+function rPrConLetraMacro(rPrInterior, negrita, modo = 'cuerpo') {
   let dentro = String(rPrInterior || '');
   const szPropio = szDeRpr(dentro);
-  const sz = szPropio !== null && szPropio < PUNTOS_MACRO * 2 ? szPropio : PUNTOS_MACRO * 2;
+  /* Tres tamaños, uno por sitio del informe:
+     - `cuerpo`: 12 pt, salvo que el run declare uno menor (líneas «FUENTE:», citas al pie).
+     - `tabla`: los 10 pt de `PUNTOS_TABLA`, impuestos, igual que hace `generarTablaOoxml` con
+       las tablas que sí regenera. Es lo que deja todas las tablas del informe iguales.
+     - `marca`: el de la marca de párrafo NO se toca. Los párrafos vacíos con que el informe
+       separa sus bloques miden lo que mide su marca, y cambiarlo correría la paginación. */
+  const sz = modo === 'tabla'
+    ? PUNTOS_TABLA * 2
+    : (modo === 'marca'
+      ? szPropio
+      : (szPropio !== null && szPropio < PUNTOS_MACRO * 2 ? szPropio : PUNTOS_MACRO * 2));
+  const familia = modo === 'tabla' ? FUENTE_TABLA : FUENTE_MACRO;
 
   dentro = dentro
     .replace(/<w:rFonts\b[^>]*\/>/g, '')
@@ -496,10 +547,12 @@ function rPrConLetraMacro(rPrInterior, negrita) {
   const rStyle = /<w:rStyle\b[^>]*\/>/.exec(dentro);
   if (rStyle) dentro = dentro.replace(rStyle[0], '');
 
-  const letra = '<w:rFonts w:ascii="' + FUENTE_MACRO + '" w:hAnsi="' + FUENTE_MACRO +
-    '" w:cs="' + FUENTE_MACRO + '"/>';
+  const letra = '<w:rFonts w:ascii="' + familia + '" w:hAnsi="' + familia +
+    '" w:cs="' + familia + '"/>';
   const negritaXml = negrita && !/<w:b(?:\s[^>]*)?\/?>/.test(dentro) ? '<w:b/>' : '';
-  const tamano = '<w:sz w:val="' + sz + '"/><w:szCs w:val="' + sz + '"/>';
+  /* Sin tamaño declarado no se inventa uno: es el caso de la marca de párrafo. */
+  const tamano = sz === null ? ''
+    : '<w:sz w:val="' + sz + '"/><w:szCs w:val="' + sz + '"/>';
 
   let corte = dentro.length;
   for (const etiqueta of ANTES_DE_SZ) {
@@ -510,19 +563,39 @@ function rPrConLetraMacro(rPrInterior, negrita) {
   return '<w:rPr>' + (rStyle ? rStyle[0] : '') + letra + negritaXml + cuerpo + '</w:rPr>';
 }
 
+/* La marca de párrafo, en Arial y sin cambiar de tamaño.
+
+   De su `rPr` salen la viñeta y el número de una lista, así que sin esto el texto del renglón
+   iba en Arial y su bolita en la letra de la plantilla. El tamaño no se toca: ver `modo` en
+   `rPrConLetraMacro`.
+
+   Se crea un `rPr` que no existía sólo cuando el párrafo es de una lista (`numPr`): ahí hay una
+   viñeta que se ve. En los demás no se añade nada — serían miles de etiquetas por documento sin
+   cambiar un píxel. En `pPr` el `rPr` va al final, que es donde lo pide el esquema. */
+function marcaConLetraMacro(parrafo) {
+  return parrafo.replace(/<w:pPr>([\s\S]*?)<\/w:pPr>/, (todo, dentro) => {
+    const rPr = /<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(dentro);
+    if (rPr) {
+      return '<w:pPr>' + dentro.replace(rPr[0],
+        rPrConLetraMacro(rPr[1], false, 'marca')) + '</w:pPr>';
+    }
+    if (!/<w:numPr[\s>]/.test(dentro)) return todo;
+    return '<w:pPr>' + dentro + rPrConLetraMacro('', false, 'marca') + '</w:pPr>';
+  });
+}
+
 /** Los runs de un párrafo, con la letra de la Sección III. */
-function parrafoConLetraMacro(parrafo, negrita) {
-  /* Sólo los `<w:r>`: el `rPr` del `pPr` —el formato de la marca de párrafo— se deja como está.
-     Tocarlo cambiaría el alto de los párrafos vacíos con que el informe separa sus bloques. */
-  return parrafo.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
+function parrafoConLetraMacro(parrafo, negrita, modo = 'cuerpo') {
+  const conMarca = modo === 'cuerpo' ? marcaConLetraMacro(parrafo) : parrafo;
+  return conMarca.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
     const abre = /^<w:r(?:\s[^>]*)?>/.exec(run);
     if (!abre) return run;
     const resto = run.slice(abre[0].length);
     const conRpr = /^<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(resto);
     if (conRpr) {
-      return abre[0] + rPrConLetraMacro(conRpr[1], negrita) + resto.slice(conRpr[0].length);
+      return abre[0] + rPrConLetraMacro(conRpr[1], negrita, modo) + resto.slice(conRpr[0].length);
     }
-    return abre[0] + rPrConLetraMacro('', negrita) + resto;
+    return abre[0] + rPrConLetraMacro('', negrita, modo) + resto;
   });
 }
 
@@ -562,6 +635,19 @@ function esEncabezadoOoxml(parrafo, texto) {
   return texto.length <= 160 && prefijoDeEncabezado(texto) !== '';
 }
 
+/* ¿Es un encabezado de PRIMER nivel, es decir un capítulo del informe y no un subapartado?
+   Es la señal que `cierraSeccionMacro` necesita para no tomar «V. Tasa de Cambio Representativa
+   del Mercado» —subapartado de III.B, y encabezado legítimo— por el capítulo quinto.
+
+   Sólo lo que el documento declara de primer nivel: «Heading1»/«Título 1» o `outlineLvl` 0. El
+   prefijo de numeración NO cuenta aquí, que es justo lo que confundía los dos casos. */
+function esCapituloOoxml(parrafo) {
+  const estilo = /<w:pStyle\s+w:val="([^"]*)"/.exec(parrafo);
+  if (estilo && /^(?:heading|t[íi]tulo|titulo)\s*1$/i.test(estilo[1].trim())) return true;
+  const nivel = /<w:outlineLvl\s+w:val="(\d+)"/.exec(parrafo);
+  return !!nivel && Number(nivel[1]) === 0;
+}
+
 /**
  * Pone la Sección III entera en Arial 12 —negrita en sus títulos— dejando fuera las tablas.
  *
@@ -580,22 +666,55 @@ export function aplicarLetraMacroOoxml(xml) {
 
   let enMacro = false;
   let tocados = 0;
+  let enCeldas = 0;
   const salida = texto.replace(RX_PARRAFO_LETRA, (parrafo, pos) => {
-    if (enTabla(pos)) return parrafo;
+    /* Una celda de una tabla de la sección. No mueve la frontera —una celda que empiece por
+       «IV. » no es un capítulo— y lleva la letra de TABLA, no la del cuerpo: las que el motor
+       regenera ya salen así, y una que la plantilla traiga y el motor no reconozca se quedaba en
+       la letra del cliente, de modo que en la misma sección había tablas en Arial 10 y tablas en
+       la letra del informe anterior. */
+    if (enTabla(pos)) {
+      if (!enMacro) return parrafo;
+      enCeldas += 1;
+      return parrafoConLetraMacro(parrafo, false, 'tabla');
+    }
     /* Las entradas del índice llevan el campo PAGEREF y repiten todos los encabezados del
        informe: si abrieran zona, la Sección III empezaría en la tabla de contenido. Mismo filtro
        que aplican `localizarHitos` y `localizarBloqueProsa`. */
     if (parrafo.includes('PAGEREF')) return parrafo;
     const plano = textoPlanoOoxml(parrafo);
-    const abre = zonaQueAbre(plano);
-    if (abre) enMacro = abre === 'macro';
+    const encabezado = esEncabezadoOoxml(parrafo, plano.trim());
+    /* Abrir y cerrar no son simétricos, y no por descuido: abrir pide reconocer «III.
+       TENDENCIAS…», que es lo que hace `zonaQueAbre`; cerrar pide NO confundir un subapartado
+       romano de la sección con el capítulo siguiente, que es lo que hace `cierraSeccionMacro`.
+       Con la condición laxa en el cierre, «I. Producto Interno Bruto» cortaba la sección. */
+    if (enMacro) {
+      if (cierraSeccionMacro(plano, esCapituloOoxml(parrafo))) enMacro = false;
+    } else if (zonaQueAbre(plano) === 'macro') {
+      enMacro = true;
+    }
     if (!enMacro) return parrafo;
     tocados += 1;
-    return parrafoConLetraMacro(parrafo, esEncabezadoOoxml(parrafo, plano.trim()));
+    return parrafoConLetraMacro(parrafo, encabezado);
   });
 
-  console.log('[docxRelleno] Sección III en ' + FUENTE_MACRO + ' ' + PUNTOS_MACRO + ': ' +
-    tocados + ' párrafo(s) fuera de tabla');
+  /* Red propia: esta pasada corre sobre el `document.xml` antes de docxtemplater y no va por
+     `escribirDocSiEsValido`, así que se comprueba a sí misma. Si el documento entraba sano y la
+     salida no lo está, se devuelve lo que entró: radicar un Word que Word tiene que reparar es
+     peor que radicarlo con la letra sin cambiar. */
+  if (!problemaDeIntegridadOoxml(texto) && problemaDeIntegridadOoxml(salida)) {
+    console.warn('[docxRelleno] la letra de la Sección III no se aplicó: ' +
+      problemaDeIntegridadOoxml(salida));
+    return texto;
+  }
+
+  /* Solo si hubo algo que tocar: una plantilla sin la Sección III no tiene por qué llenar la
+     consola, y así el mensaje que sí aparece significa algo. */
+  if (tocados || enCeldas) {
+    console.log('[docxRelleno] Sección III en ' + FUENTE_MACRO + ' ' + PUNTOS_MACRO + ': ' +
+      tocados + ' párrafo(s), y ' + enCeldas + ' celda(s) en ' + FUENTE_TABLA + ' ' +
+      PUNTOS_TABLA);
+  }
   return salida;
 }
 
@@ -618,46 +737,6 @@ export function reescribirTextoParrafoOoxml(parrafoXml, textoNuevo) {
     primero = false;
     return '<w:t xml:space="preserve">' + escaparXml(textoNuevo) + '</w:t>';
   });
-}
-
-/**
- * El `<w:tcW>`/`<w:gridSpan>` de una celda OOXML, tal cual —para preservar el ancho y la
- * fusión de columnas de un molde sin heredar también su sombreado ni su negrita.
- *
- * @param {string} celdaXml  el `<w:tc>` completo del molde.
- * @returns {string}
- */
-function gridSpanYAnchoDe(celdaXml) {
-  const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(String(celdaXml || ''));
-  if (!tcPr) return '';
-  const tcW = /<w:tcW\s[^/]*\/>/.exec(tcPr[0]);
-  const gridSpan = /<w:gridSpan\s[^/]*\/>/.exec(tcPr[0]);
-  return (tcW ? tcW[0] : '') + (gridSpan ? gridSpan[0] : '');
-}
-
-/**
- * Fila del conector «Y»/«O» de «Códigos SIC utilizados», como divisor discreto en vez de
- * clon de la franja de sección de la plantilla (`«Criterio de búsqueda»`, `«Criterios de
- * inclusión»`): las dos comparten el mismo `tcPr` en la plantilla —sombreado gris oscuro,
- * negrita— porque son visualmente la misma franja, pero el conector no es un título de
- * sección. Clonarlo tal cual hace que una búsqueda con varios criterios (lo habitual en un
- * export de Capital IQ) salga como una fila de franjas grises opacas, una por cada «Y»/«O»,
- * en vez de leerse como una lista de criterios con un conector menor entre cada uno.
- *
- * Solo se conserva el ancho/fusión de columnas del molde —para no desalinear la tabla—; el
- * sombreado y la negrita se sueltan a propósito.
- *
- * @param {string} texto  «Y» u «O».
- * @param {string} celdaMoldeXml  el `<w:tc>` del que se toma el ancho/fusión de columnas.
- * @returns {string} el `<w:tr>` completo.
- */
-function filaConectorDiscreta(texto, celdaMoldeXml) {
-  const props = gridSpanYAnchoDe(celdaMoldeXml);
-  return '<w:tr><w:tc><w:tcPr>' + props + '<w:vAlign w:val="center"/></w:tcPr>'
-    + '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="20" w:after="20"/></w:pPr>'
-    + '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:iCs/>'
-    + '<w:color w:val="808080"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
-    + '<w:t xml:space="preserve">' + escaparXml(texto) + '</w:t></w:r></w:p></w:tc></w:tr>';
 }
 
 /**
@@ -714,7 +793,7 @@ function marcadorTemaSectorPendiente(tema, year) {
  * @param {string[]} [avisos]
  * @returns {string}
  */
-export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisos) {
+export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisos, notas = null) {
   const entrada = analisisSector && analisisSector.porAnio && analisisSector.porAnio[String(year)];
   console.log('[docxRelleno] actualizarApartadoSectorialOoxml: año ' + year
     + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
@@ -749,16 +828,35 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     return bloque(narrativaHtml, tema)();
   };
 
+  /** El bloque que precede a la tabla de datos clave, con las notas al pie de TODAS las fuentes
+   *  del apartado ancladas al final de su última frase.
+   *
+   *  Van todas juntas aquí y no repartidas por bloque porque la corrida no dice qué fuente
+   *  sostiene qué párrafo: dice qué fuentes verificó para el apartado. Anclarlas donde acaba el
+   *  texto que introduce las cifras es lo más cerca que se puede estar del dato sin inventar una
+   *  correspondencia que no existe. */
+  const bloqueConFuentesDelSector = (narrativaHtml, tema) => (textoHueco) => {
+    const base = bloque(narrativaHtml, tema)(textoHueco);
+    if (!notas || !base) return base;
+
+    const refs = citasApa(fuentesDelSector(entrada, tituloDatosClaveSector(entrada && entrada.tituloSector, year)))
+      .map(({ cita, url }) => notas.referencia(cita, url))
+      .join('');
+    return refs ? anclarEnUltimoParrafo(base, refs) : base;
+  };
+
   reemplazarPorHitos(
     doc,
     titulos,
     [
       bloqueConUmbral(entrada && entrada.narrativa.introduccion, 'contexto introductorio'),
-      bloque(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
-      /* Las notas al pie de la tabla de datos clave, que en la plantilla citan las fuentes
-         de las cifras del informe de referencia. Se cambian por las de esta corrida, y solo
-         si hay alguna — mismo criterio y mismo texto que la ruta HTML
-         (`actualizarApartadoSectorialHtml` en `tablasHtmlInforme.js`). */
+      bloqueConFuentesDelSector(entrada && entrada.narrativa.comportamiento, 'comportamiento del sector'),
+      /* La línea de fuente que va bajo la tabla de datos clave SE QUEDA, aunque las fuentes se
+         citen además al pie. No es la misma cosa: el numeral 4 del artículo 1.2.2.2.1.5 del
+         Decreto 1625 de 2016 exige que la información de la tabla indique su fuente y su fecha de
+         consulta, y una nota al pie anclada en el párrafo de arriba no es la fuente DE LA TABLA.
+         Lo que sí se sustituye es su contenido: la plantilla trae las fuentes del informe del año
+         anterior. */
       () => parrafoFuenteOoxml(fuenteDatosClaveSector(entrada)) || null,
       bloque(entrada && entrada.narrativa.comercioExterior, 'comercio exterior del sector'),
       bloque(entrada && entrada.narrativa.proyeccion, 'proyección del sector'),
@@ -954,23 +1052,14 @@ function celdasDeOoxml(filaXml) {
  * de sus celdas (bordes, sombreado, `gridSpan`/`vMerge`) — equivalente de `reescribirFilasHtml`
  * (`tablasHtmlInforme.js`) para la ruta .docx.
  *
- * Hace falta porque «Códigos SIC utilizados» no es una tabla rectangular uniforme como las
- * que arma `generarTablaOoxml`: alterna una fila de 2 celdas (etiqueta/valor) con una fila de
- * 1 celda fusionada (el conector «Y»/«O»), y generarla desde cero perdería esa fusión.
- *
- * La fila de una sola celda es la ÚNICA que no clona el molde tal cual: en la plantilla real
- * comparte `tcPr` con las franjas de sección («Criterios de inclusión», etc.) —mismo
- * sombreado gris oscuro, misma negrita—, y un cribado con varios criterios (lo normal en un
- * export de Capital IQ) sale como una franja opaca repetida por cada «Y»/«O» en vez de un
- * conector menor entre criterios. Se reemplaza por `filaConectorDiscreta`, que conserva solo
- * el ancho/fusión de columnas del molde. Reportado por el usuario 2026-08-20 con un informe
- * real (BEUMER 2025) como tabla «rara».
+ * Uso exclusivo de «Códigos SIC utilizados»: una fila de 2 celdas (etiqueta/valor) por
+ * criterio de búsqueda, clonando el molde existente para no perder su fusión de columnas.
  *
  * @param {string} tablaXml  el bloque «título + `<w:tbl>`» (o solo la tabla); basta con que
  *        contenga la tabla en algún punto, porque el parseo busca `<w:tr>` directamente y el
  *        párrafo de título, si lo hay, no tiene ninguno.
- * @param {Array<string[]>} filas  una entrada `[conector]` o `[etiqueta, valor]` por fila —
- *        la forma que ya produce `filasCriteriosScreening` (`tablasInforme.js`).
+ * @param {Array<string[]>} filas  una entrada `[etiqueta, valor]` por fila — la forma que ya
+ *        produce `filasCriteriosScreening` (`tablasInforme.js`).
  * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
  *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
  *        detección de la fila de fuente.
@@ -996,26 +1085,14 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
   const cuerpo = todas.slice(encabezados, esPie ? todas.length - 1 : todas.length);
   if (!cuerpo.length) return tabla;
 
-  /* Moldes: una fila de dos celdas y una de una sola, representativas del cuerpo existente.
-     Se clona su XML COMPLETO —`tcPr` incluida, con el `gridSpan` de la fila del conector— y
-     solo se sustituye el texto con `reescribirTextoParrafoOoxml`; así no hace falta
-     reconstruir la fusión a mano. */
-  const filasCuerpo = cuerpo.map((f) => celdasDeOoxml(f.xml));
-  const moldeDos = filasCuerpo.find((cs) => cs.length === 2);
-  const moldeUno = filasCuerpo.find((cs) => cs.length === 1);
-  if (!moldeDos && !moldeUno) return tabla;
+  /* Molde: la fila de dos celdas representativa del cuerpo existente. Se clona su XML
+     COMPLETO —`tcPr` incluida— y solo se sustituye el texto con `reescribirTextoParrafoOoxml`;
+     así no hace falta reconstruir la fusión de columnas a mano. */
+  const molde = cuerpo.map((f) => celdasDeOoxml(f.xml)).find((cs) => cs.length === 2);
+  if (!molde) return tabla;
 
   const nuevas = (filas || []).map((valores) => {
     const vals = valores || [];
-    /* La fila de un solo valor es el conector «Y»/«O»: sale como divisor discreto y no
-       como clon de la franja de sección de la plantilla —ver `filaConectorDiscreta`—, salvo
-       que la tabla no tenga ninguna fila fusionada de la que tomar el ancho de columnas, en
-       cuyo caso se mantiene el comportamiento anterior antes que perder la fila entera. */
-    if (vals.length === 1 && moldeUno) {
-      return filaConectorDiscreta(String(vals[0] ?? ''), moldeUno[0].xml);
-    }
-    const molde = vals.length === 1 ? (moldeUno || moldeDos) : (moldeDos || moldeUno);
-    if (!molde) return '';
     const celdas = molde.map((c, i) => reescribirTextoParrafoOoxml(
       c.xml, String(vals[Math.min(i, vals.length - 1)] ?? '')
     )).join('');
@@ -2037,19 +2114,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     { numeros: [4] }
   );
 
-  /* 5. Rango Intercuartil, versión horizontal. El nombre no la distingue de la
-     vertical del análisis —las dos se llaman igual—, así que la primera ocurrencia
-     es la horizontal, que va antes en el documento. */
-  reemplazar('Rango Intercuartil', (b) => {
-    const col1 = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
-    return generarTablaOoxml(
-      tituloDe(b, 'Rango Intercuartil'),
-      [col1, 'Percentil 25', 'Mediana', 'Percentil 75'],
-      [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
-      'Información suministrada por la Administración de la Compañía.'
-    );
-  }, { numeros: [5], ocurrencia: 0 });
-
   // 6. Composición accionaria
   reemplazar(
     'Composición accionaria',
@@ -2208,40 +2272,84 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     );
   }, { numeros: [17] });
 
-  /* 12. Rango intercuartil en vertical. La plantilla lo trae DOS VECES —la «Tabla 18. Rango
-     Intercuartil» de los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones,
-     esta última con el rótulo dentro de su primera fila— y las dos tienen que quedar con
-     los mismos percentiles. Antes se elegía una con un if/else y la otra se radicaba con
-     los datos del informe anterior.
+  /* 5/12. Rango Intercuartil —horizontal Y vertical— más «Tabla de rangos».
+   *
+   * La plantilla trae el rango vertical con el MISMO rótulo «Rango Intercuartil» una,
+   * dos o más veces —o con el nombre alterno «Tabla de rangos», el rótulo dentro de su
+   * primera fila—, además de la versión horizontal de los resultados. Antes se asumía un
+   * número fijo de ocurrencias (horizontal = ocurrencia 0, vertical = ocurrencia 1), que
+   * es justo lo que se rompe en cuanto la plantilla trae una copia vertical de más: en un
+   * informe real de MONTACHEM (reportado el 2026-08-20) la segunda tabla vertical se
+   * quedaba con los percentiles del informe de referencia, sin aviso —exactamente lo que
+   * ya no le pasa a la ruta de plantilla PDF (`actualizarTablasMotorHtml`,
+   * `tablasHtmlInforme.js`), que es de donde sale este mismo criterio: tomar TODAS las
+   * ocurrencias que declare el documento y distinguirlas por FORMA —la horizontal tiene 4
+   * columnas (contribuyente + 3 percentiles), la vertical 3 (etiqueta + no ajustado +
+   * ajustado)—, no por número ni por posición fija. */
+  doc.aplicar((xmlActual) => {
+    /* Una misma tabla puede calzar por las DOS vías de `candidatosBloqueTabla`: el
+       párrafo que la precede («Tabla 21. Rango Intercuartil») Y su propia primera fila
+       («RANGO INTERCUARTIL» como encabezado de columna). La segunda es un candidato
+       anidado dentro del primero —mismo `fin`, `inicio` posterior—; sin descartarlo se
+       sustituiría la misma tabla dos veces con offsets que la segunda vuelta ya no tiene
+       vigentes. Se recorren de menor a mayor `inicio` y se descarta el que empiece dentro
+       del bloque ya aceptado, quedándose con el más ancho de cada grupo. */
+    const bloques = [
+      ...localizarBloquesTabla(xmlActual, 'Rango Intercuartil'),
+      ...localizarBloquesTabla(xmlActual, 'Tabla de rangos'),
+    ].sort((a, b) => a.inicio - b.inicio);
+    const sinSolape = [];
+    for (const b of bloques) {
+      const anterior = sinSolape[sinSolape.length - 1];
+      if (anterior && b.inicio < anterior.fin) continue;
+      sinSolape.push(b);
+    }
 
-     Qué tablas existen se decide sobre el `xml` de ENTRADA, antes de que los bloques
-     anteriores hayan escrito nada: las tablas que este módulo emite llevan «RANGO
-     INTERCUARTIL» en su cabecera, así que preguntar después las haría pasar por tablas de
-     la plantilla y una sustitución acabaría pisando a la otra.
+    if (!sinSolape.length) {
+      if (Array.isArray(avisos)) avisos.push('Rango Intercuartil');
+      return xmlActual;
+    }
 
-     De atrás hacia adelante, como en Transacciones Inter compañía. */
-  {
-    const filas18_20 = rango.filas.map((f) => [
+    const filasVertical = rango.filas.map((f) => [
       wrap(f.etiqueta), pStr(f.noAjustado), pStr(f.ajustado),
     ]);
-    const tablaRangos = (b) => generarTablaOoxml(
-      tituloDe(b, /tabla de rangos/i.test(b.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
-      ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
-      filas18_20
-    );
-    const OPC_TABLA_RANGOS = { numeros: [20] };
-    /* Sin «Tabla de rangos» en la plantilla, el vertical es el segundo «Rango
-       Intercuartil»: el primero ya lo consumió el bloque 5. */
-    const OPC_RANGO_VERTICAL = { numeros: [18], ocurrencia: 1 };
-    const traeTablaRangos = !!localizarBloqueTabla(xml, 'Tabla de rangos', OPC_TABLA_RANGOS);
-    const traeRangoVertical = !!localizarBloqueTabla(xml, 'Rango Intercuartil', OPC_RANGO_VERTICAL);
+    const col1Horizontal = estudio.ent ? String(estudio.ent).toUpperCase() : 'CONTRIBUYENTE';
+    const columnasDe = (bloque) => {
+      const iFila = xmlActual.indexOf('<w:tr', bloque.inicio);
+      if (iFila === -1 || iFila > bloque.fin) return 0;
+      const finFila = finDeFila(xmlActual, iFila);
+      if (finFila < 0 || finFila > bloque.fin) return 0;
+      return (xmlActual.slice(iFila, finFila).match(/<w:tc\b/g) || []).length;
+    };
 
-    if (traeTablaRangos) reemplazar('Tabla de rangos', tablaRangos, OPC_TABLA_RANGOS);
-    if (traeRangoVertical) reemplazar('Rango Intercuartil', tablaRangos, OPC_RANGO_VERTICAL);
-    if (!traeTablaRangos && !traeRangoVertical && Array.isArray(avisos)) {
-      avisos.push('Tabla de rangos');
+    let salida = xmlActual;
+    let verticalesHechas = 0;
+    /* De atrás hacia adelante, como en Transacciones Inter compañía: sustituir uno mueve
+       los offsets de los que van después. */
+    for (const bloque of [...sinSolape].sort((a, b) => b.inicio - a.inicio)) {
+      const esHorizontal = columnasDe(bloque) >= 4;
+      const nuevo = esHorizontal
+        ? generarTablaOoxml(
+          tituloDe(bloque, 'Rango Intercuartil'),
+          [col1Horizontal, 'Percentil 25', 'Mediana', 'Percentil 75'],
+          [[pStr(tPLI), pStr(p25Ajustado), pStr(medAjustado), pStr(p75Ajustado)]],
+          'Información suministrada por la Administración de la Compañía.'
+        )
+        : generarTablaOoxml(
+          tituloDe(bloque, /tabla de rangos/i.test(bloque.titulo) ? 'Tabla de rangos' : 'Rango Intercuartil'),
+          ['RANGO INTERCUARTIL', `RANGE ${estudio.pli || 'MO'} NO AJUSTADO`, `RANGE ${estudio.pli || 'MO'} AJUSTADO`],
+          filasVertical
+        );
+
+      let fin = bloque.fin;
+      if (/FUENTE/i.test(nuevo)) fin = finDeFuenteSiguienteOoxml(salida, fin);
+      salida = salida.slice(0, bloque.inicio) + nuevo + salida.slice(fin);
+      if (!esHorizontal) verticalesHechas += 1;
     }
-  }
+
+    if (!verticalesHechas && Array.isArray(avisos)) avisos.push('Tabla de rangos');
+    return salida;
+  });
 
   /* La frase que comenta el rango, debajo de la tabla, y el año que menciona.
 
@@ -2392,8 +2500,27 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
-  xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas);
-  xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas);
+
+  /* Las fuentes de la Sección III van como notas al pie, en formato bibliográfico y con el enlace
+     clicable (2026-08-20). Aquí es el único sitio con el paquete entero, que es lo que una nota al
+     pie necesita: su texto vive en `word/footnotes.xml` y su enlace en las relaciones de ese
+     archivo. Los apartados solo piden el número y siguen. */
+  const leerParte = (ruta) => {
+    const parte = zip.file(ruta);
+    return parte ? parte.asText() : '';
+  };
+  const footnotesPrevio = leerParte(RUTA_FOOTNOTES);
+  const relsNotasPrevio = leerParte(RUTA_FOOTNOTES_RELS);
+  const primerRelLibre = idsDeRelacionLibres(relsNotasPrevio, 1)[0] || 'rIdNota1';
+  const notas = crearRecolectorDeNotas({
+    idInicial: siguienteIdDeNota(footnotesPrevio),
+    inicioRel: Number(String(primerRelLibre).replace(/\D+/g, '')) || 1,
+    /* Los de la plantilla, para que las notas nuevas se lean igual que las que ya trae. */
+    estilos: estilosDeNota(leerParte('word/styles.xml')),
+  });
+
+  xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas, notas);
+  xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas, notas);
   xml = actualizarTablasMacroOoxml(xml, datosMacro, year, avisosTablas);
   xml = actualizarTablasOperacionesOoxml(xml, estudio, avisosTablas);
   /* La letra de la Sección III, DESPUÉS de que sus apartados, su análisis sectorial y sus ocho
@@ -2405,6 +2532,27 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
     xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
   });
   zip.file(RUTA_DOC, xml);
+
+  /* Las notas que pidieron los apartados, ahora que el cuerpo ya tiene sus referencias. Va DESPUÉS
+     de escribir el documento y ANTES de docxtemplater: si el cuerpo cita una nota que no existe en
+     `footnotes.xml`, Word declara el documento dañado al abrirlo. */
+  if (notas.cuantas()) {
+    zip.file(RUTA_FOOTNOTES, agregarNotasAlPie(footnotesPrevio, notas.notasXml()));
+
+    const enlaces = notas.enlaces();
+    if (enlaces.length) {
+      zip.file(RUTA_FOOTNOTES_RELS, relsDeNotasAlPie(relsNotasPrevio, enlaces));
+    }
+
+    /* Si la plantilla no traía notas, la parte hay que declararla y relacionarla; con ellas ya
+       está, y las dos funciones son idempotentes. */
+    if (!footnotesPrevio) {
+      zip.file(RUTA_CT, contentTypesConNotasAlPie(leerParte(RUTA_CT)));
+      zip.file(RUTA_RELS, relsDocumentoConNotasAlPie(leerParte(RUTA_RELS), 'rIdNotasAlPie'));
+    }
+    console.log(`[docxRelleno] Sección III: ${notas.cuantas()} fuente(s) citadas como nota al pie`
+      + `${enlaces.length ? `, ${enlaces.length} con enlace` : ''}.`);
+  }
 
   const doc = new Docxtemplater(zip, {
     paragraphLoop: true,
@@ -2651,58 +2799,6 @@ function traeCifrasEeff(estudio) {
   return claves.some((c) => num(estudio && estudio[c]) !== null);
 }
 
-/**
- * Filas del Estado de Situación Financiera para el ANEXO A.
- *
- * El A.V. sale de `verticalSobreActivos`, la misma función que usa la Tabla 10. Las
- * cuentas por pagar se publican porque la ingesta las lee y sostienen el ajuste de capital
- * de trabajo, pero sin vertical: un pasivo sobre el total de activos no significa nada, y
- * escribir ahí un porcentaje sería inventarlo.
- */
-export function filasEsfAnexoA(estudio) {
-  const av = verticalSobreActivos(estudio);
-  const monto = (clave) => {
-    const n = num(estudio && estudio[clave]);
-    return n === null ? SIN_DATO : fmt(n);
-  };
-
-  const filas = RUBROS_ESF.map(([etiqueta, clave]) => [etiqueta, monto(clave), av(estudio[clave])]);
-  filas.push(['PASIVOS', '', '']);
-  filas.push(['Cuentas por pagar comerciales', monto('t_ap'), SIN_DATO]);
-  return filas;
-}
-
-/**
- * Filas del Estado de Resultados Integral para el ANEXO A.
- *
- * La utilidad bruta y los gastos operativos se derivan y no se piden a la ingesta, con el
- * mismo despeje que documenta `pliOf`: `opex = ventas − costo − utilidad operacional`. Así
- * el anexo no puede contradecir al indicador de rentabilidad.
- *
- * Los costos y gastos excluidos se declaran como línea propia: son lo que sostiene el
- * margen que el informe publica, y un estado de resultados que no los nombre no cuadra con
- * el rango de unas páginas más adelante.
- */
-export function filasEriAnexoA(estudio) {
-  const e = estudio || {};
-  const s = num(e.t_s), c = num(e.t_c), op = num(e.t_op), excluido = num(e.seg_excluido);
-  const val = (n) => (n === null ? SIN_DATO : fmt(n));
-  const bruta = s !== null && c !== null ? s - c : null;
-  const opex = bruta !== null && op !== null ? bruta - op : null;
-
-  const filas = [
-    ['Ingresos de actividades ordinarias', val(s)],
-    ['Costo de ventas', val(c)],
-    ['Utilidad bruta', val(bruta)],
-    ['Gastos operativos', val(opex)],
-    ['Utilidad operacional', val(op)],
-  ];
-  if (excluido !== null && excluido !== 0) {
-    filas.push(['Costos y gastos excluidos de la operación analizada', val(excluido)]);
-  }
-  return filas;
-}
-
 /* ─────────────────────────────────────────────────────────────────────────────
    LOCALIZAR LOS ANEXOS.
 
@@ -2883,7 +2979,6 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
     return { insertadas: 0 };
   }
 
-  const year = Number(estudio && estudio.anio) || 2025;
   const entidad = (estudio && estudio.ent) || 'la Compañía';
   const rotulo = rotuloAnexo('eeff', anexo.letra, { entidad });
 
@@ -2906,19 +3001,6 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
       zip, xml.slice(0, anexo.inicio) + nuevo + xml.slice(anexo.fin), avisos, rotulo);
     return { insertadas: 0 };
   }
-
-  nuevo += generarTablaOoxml(
-    `Estado de Situación Financiera a 31 de diciembre de ${year}`,
-    ['Cifras expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-    filasEsfAnexoA(estudio),
-    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
-  );
-  nuevo += generarTablaOoxml(
-    `Estado de Resultados Integral ${year}`,
-    ['Cifras expresadas en pesos colombianos', String(year)],
-    filasEriAnexoA(estudio),
-    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
-  );
 
   let rels = zip.file(RUTA_RELS).asText();
   let ct = zip.file(RUTA_CT).asText();

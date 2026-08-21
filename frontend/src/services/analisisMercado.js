@@ -26,6 +26,10 @@
    marcador visible (ver marcadorPendiente) en lugar de una cifra de otro año.
    ───────────────────────────────────────────────────────────────────────────── */
 
+/* Para citar las fuentes al pie hay que separar a quién se cita de qué se cita, y esa regla vive
+   en un solo sitio: la usan igual las series macro de aquí y el apartado sectorial. */
+import { partirMedioYTitulo } from './citasApa.js';
+
 export const DATOS_MACRO = {
   pib_mundial: {
     2022: '3.5',
@@ -363,6 +367,95 @@ export function resolverSerie(datosMacro, clave) {
   return { valores: DATOS_MACRO[clave], fuente: FUENTES_MACRO[clave] };
 }
 
+/* Cómo se llama cada serie, para citarla al pie cuando la fuente no trae título propio. Son los
+   mismos nombres con que el informe rotula su tabla, sin los años —que en el rótulo cambian y en
+   una referencia bibliográfica no aportan—. Es un dato del sistema: no se le pregunta al modelo
+   cómo se llama lo que nosotros publicamos. */
+export const NOMBRES_SERIE = Object.freeze({
+  pib_mundial: 'Crecimiento del PIB Mundial',
+  pib_colombia: 'Crecimiento del PIB en Colombia',
+  inflacion_global: 'Tasas de Inflación Global',
+  inflacion_colombia: 'Inflación en Colombia',
+  tasa_intervencion: 'Tasa de Intervención del Banco de la República',
+  trm_promedio: 'Tasa Representativa del Mercado (TRM) Promedio',
+  desempleo_colombia: 'Tasa de Desempleo en Colombia',
+  crecimiento_por_region: 'Proyecciones de Crecimiento del PIB por Región/País',
+});
+
+/**
+ * Los datos de la fuente de una serie, sueltos, para citarla al pie.
+ *
+ * `resolverSerie` devuelve la fuente ya redactada en una sola cadena —«DANE (https://…),
+ * consultado el 19 de agosto de 2026»—, que es lo que necesita la línea «FUENTE:» de una tabla.
+ * Una referencia bibliográfica necesita lo contrario: las partes por separado, para poder poner
+ * el autor delante, la fecha entre paréntesis y el enlace al final.
+ *
+ * @param {object} datosMacro
+ * @param {string} clave
+ * @returns {{medio:string, titulo:string, fecha:string, url:string, fechaConsulta:string,
+ *          tituloRespaldo:string}} listo para `citaApa`.
+ */
+export function citaDeSerie(datosMacro, clave) {
+  const remota = datosMacro && datosMacro.series && datosMacro.series[clave];
+  const tituloRespaldo = NOMBRES_SERIE[clave] || '';
+
+  if (remota && remota.valores) {
+    const { medio, titulo } = partirMedioYTitulo(remota.fuente || FUENTES_MACRO[clave]);
+    return {
+      medio,
+      /* El título que dio el modelo manda; si no lo trajo, el de la propia cadena de la fuente
+         («DANE, GEIH» → «GEIH»); y si tampoco, el nombre de la serie. Ninguno es inventado. */
+      titulo: String(remota.fuenteTitulo || '').trim() || titulo,
+      fecha: String(remota.fuenteFecha || '').trim(),
+      url: String(remota.fuenteUrl || '').trim(),
+      fechaConsulta: formatearFechaConsulta(remota.fechaConsulta),
+      tituloRespaldo,
+    };
+  }
+
+  /* Respaldo local: se cita la entidad y la publicación que ya tenemos, sin fecha ni enlace. Que
+     la cita diga «(s.f.)» es correcto —esa fuente no se consultó en esta corrida—, y es
+     preferible a no citar nada. */
+  const { medio, titulo } = partirMedioYTitulo(FUENTES_MACRO[clave]);
+  return { medio, titulo, fecha: '', url: '', fechaConsulta: '', tituloRespaldo };
+}
+
+/**
+ * Las fuentes del apartado sectorial, para citarlas al pie.
+ *
+ * Recoge las de la tabla de datos clave y las de los tres bloques de narrativa, que es de donde
+ * salen las cifras del apartado. La deduplicación la hace `citasApa`.
+ *
+ * @param {object} entrada  una corrida del análisis del sector.
+ * @param {string} [tituloRespaldo]  qué respaldan estas fuentes, si no traen título propio.
+ * @returns {Array<object>} listas para `citasApa`.
+ */
+export function fuentesDelSector(entrada, tituloRespaldo = 'Datos clave del sector') {
+  const e = entrada || {};
+  const consulta = formatearFechaConsulta(e.actualizadoEn);
+  const listas = [
+    e.datosClaveTabla, e.datosComportamiento, e.datosComercioExterior, e.datosProyeccion,
+  ];
+
+  const fuentes = [];
+  for (const lista of listas) {
+    for (const f of lista || []) {
+      const nombre = String((f && f.fuente) || '').trim();
+      if (!nombre) continue;
+      const { medio, titulo } = partirMedioYTitulo(nombre);
+      fuentes.push({
+        medio,
+        titulo: String((f && f.fuenteTitulo) || '').trim() || titulo,
+        fecha: String((f && f.fuenteFecha) || '').trim(),
+        url: String((f && f.fuenteUrl) || '').trim(),
+        fechaConsulta: consulta,
+        tituloRespaldo,
+      });
+    }
+  }
+  return fuentes;
+}
+
 export function generarTablaPibMundial(datosMacro, year, wrap) {
   const y1 = year - 1, y2 = year, y3 = year + 1;
   const { valores: S, fuente } = resolverSerie(datosMacro, 'pib_mundial');
@@ -609,8 +702,35 @@ export function tituloSectorial(study, analisisSector, year) {
 /** Las filas de la tabla, en el orden de columnas que fija `cabecerasDatosClaveSector`.
  *  Un `valorAnterior` ausente sale como hueco visible y NUNCA como el valor de al lado:
  *  el año anterior sin dato es un dato en sí en un informe que se radica. */
+/** Las filas de «Datos Clave del Sector» de una corrida, SIEMPRE como lista.
+ *
+ *  El `|| []` que había antes solo cubría null y undefined. Un caso real de producción
+ *  —`analisisSector/act_rr2fz1`, año 2025— tiene guardado
+ *  `datosClaveTabla: { "4": { fuenteUrl: "https://…" } }`: un mapa con un solo índice y un
+ *  solo subcampo, residuo de una versión anterior del pipeline del sector que quedó fijo
+ *  porque esa actividad nunca se volvió a correr (el escritor de hoy no puede producir esa
+ *  forma: normaliza con `Array.isArray` y escribe las seis claves de cada fila).
+ *
+ *  Con ese objeto, `for...of` lanzaba «object is not iterable» en la ruta .docx y `.map`
+ *  «is not a function» en la ruta PDF/HTML: un documento mal guardado costaba la generación
+ *  COMPLETA del informe, no solo su tabla.
+ *
+ *  Lo que no es lista se descarta en vez de rescatarse. Las filas de ese mapa no traen
+ *  `indicador` ni `valorActual`, y publicar una fila vacía en un informe que se radica ante
+ *  la DIAN es peor que no publicar la tabla. Sin filas, los llamadores siguen el camino de
+ *  «sin datos verificados» que ya existe y que sí avisa. */
+function filasClaveDe(datosClaveTabla) {
+  if (Array.isArray(datosClaveTabla)) return datosClaveTabla;
+  if (datosClaveTabla != null) {
+    console.warn('[analisisMercado] «Datos Clave del Sector» viene guardado con una forma que no '
+      + 'es lista (' + typeof datosClaveTabla + '): se trata como sin datos verificados. '
+      + 'Vuelva a correr el análisis del sector de esta actividad para regenerarlo.');
+  }
+  return [];
+}
+
 export function filasDatosClaveSector(datosClaveTabla) {
-  return (datosClaveTabla || []).map((f) => [
+  return filasClaveDe(datosClaveTabla).map((f) => [
     String(f.indicador || ''),
     f.valorAnterior ? String(f.valorAnterior) : '—',
     String(f.valorActual || ''),
@@ -646,7 +766,7 @@ export function tituloDatosClaveSector(tituloSector, year) {
 export function fuenteDatosClaveSector(entrada) {
   const vistas = new Set();
   const partes = [];
-  for (const f of (entrada && entrada.datosClaveTabla) || []) {
+  for (const f of filasClaveDe(entrada && entrada.datosClaveTabla)) {
     const nombre = String((f && f.fuente) || '').trim();
     if (!nombre || vistas.has(nombre)) continue;
     vistas.add(nombre);
