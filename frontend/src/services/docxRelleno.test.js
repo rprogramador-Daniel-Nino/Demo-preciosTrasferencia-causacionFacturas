@@ -3161,3 +3161,48 @@ test('el ANEXO C del .docx se emite entero en mayúscula', async () => {
   /* Y el encabezado del listado, que esta ruta emite como `['Nº', 'NOMBRE DE LA COMPAÑÍA', …]`. */
   assert.ok(texto.includes('NOMBRE DE LA COMPAÑÍA'));
 });
+
+/* ══════ La cita al pie de las cifras del Anexo B es la base de datos, no la comparable ══════ */
+
+const COMPARABLE_CON_EEFF = {
+  name: 'ASIA POLYMER CORPORATION',
+  descActividad: 'Fabrica resinas.',
+  s: 1000, c: 600, op: 150, ap: 80, ar: 120, inv: 40,
+  eeffDatos: {
+    periodo: 2025, utilidad_bruta: 400, gastos_operacionales: 250,
+    total_activos: 2000, propiedad_planta_equipo: 300, efectivo_y_equivalentes: 500,
+  },
+};
+
+test('las tablas de cifras del Anexo B citan la base de datos, no a la comparable', async () => {
+  /* Decían «FUENTE: Información de Asia Polymer Corporation.», que es la fórmula de las tablas
+     de operaciones del contribuyente. Aquí las cifras salen de Capital IQ: atribuírselas al
+     tercero afirma que él las entregó y deja la única fuente real sin citar. */
+  const zip = await zipSinAnexoB();
+  insertarImagenesAnexoB(zip, { anio: 2025, comparables: [COMPARABLE_CON_EEFF] });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.ok(!texto.includes('Información de ASIA POLYMER CORPORATION'),
+    'la comparable no es la fuente de sus propias cifras');
+  /* `&` y `'` van escapados: `textoDe` entrega el texto del XML sin decodificar entidades, y
+     en el OOXML tienen que ir así o el documento no abre. */
+  const citas = texto.match(/FUENTE: Información Base Datos Capital IQ \(Standard &amp; Poor&apos;s\)\./g) || [];
+  assert.strictEqual(citas.length, 2, 'una cita por tabla: Estado de Resultados y Balance General');
+
+  /* El nombre sí sigue en su tabla de descripción, que es donde va. */
+  assert.ok(texto.includes('ASIA POLYMER CORPORATION'));
+  assert.strictEqual(problemaDeIntegridadOoxml(zip.file(RUTA_DOC_TEST).asText()), '');
+});
+
+test('si el estudio declara otra base de datos, las cifras del Anexo B la citan a ella', async () => {
+  const zip = await zipSinAnexoB();
+  insertarImagenesAnexoB(zip, {
+    anio: 2025,
+    database_source: 'Orbis (Bureau van Dijk)',
+    comparables: [COMPARABLE_CON_EEFF],
+  });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('FUENTE: Información Base Datos Orbis (Bureau van Dijk).'));
+  assert.ok(!texto.includes('Capital IQ'), 'no se cita una base que no se consultó');
+});
