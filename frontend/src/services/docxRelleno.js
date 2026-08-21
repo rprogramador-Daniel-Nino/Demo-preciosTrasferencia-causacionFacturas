@@ -30,6 +30,7 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
+import { compactarEspaciosOoxml } from './compactarEspaciosOoxml.js';
 
 /* El `pPr` de un párrafo de PROSA que este generador inserta.
    `justificarCuerpoOoxml` normaliza la plantilla ANTES del relleno, así que no alcanza a los
@@ -2554,6 +2555,22 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   Object.keys(colecciones).forEach((nombre) => {
     xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
   });
+
+  /* Los espacios en blanco, AL FINAL y no sobre la plantilla: la plantilla empuja cada
+     capítulo a la hoja siguiente con rachas de párrafos vacíos calibradas a la longitud del
+     contenido ORIGINAL, y aquí el contenido ya es el del estudio nuevo. Solo en este punto se
+     sabe cuántos vacíos sobran de verdad.
+
+     Sobre el informe de MONTACHEM 2025: 147 renglones en blanco en rachas, con una de 31, y
+     una hoja entera en blanco donde nueve vacíos precedían a un salto de página ya existente.
+     Quedan en 0 renglones sueltos, sin que cambie ni una letra del texto ni una tabla. */
+  const espacios = compactarEspaciosOoxml(xml, leerParte('word/styles.xml'));
+  xml = espacios.xml;
+  if (espacios.vaciosQuitados) {
+    console.log(`[docxRelleno] espacios: ${espacios.vaciosQuitados} renglón(es) en blanco de `
+      + `relleno retirados y ${espacios.saltos} salto(s) de página en su lugar.`);
+  }
+
   zip.file(RUTA_DOC, xml);
 
   /* Las notas que pidieron los apartados, ahora que el cuerpo ya tiene sus referencias. Va DESPUÉS
