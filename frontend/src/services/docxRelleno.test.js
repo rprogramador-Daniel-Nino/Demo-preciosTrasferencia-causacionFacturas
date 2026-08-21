@@ -391,39 +391,12 @@ test('el ANEXO A se ancla en su encabezado, sin depender del centinela', async (
   assert.ok(zip.file('word/media/anexo_a_1.png'), 'la primera página quedó en el paquete');
 });
 
-test('el ANEXO A trae el ESF y el ERI como tablas nativas, no como imagen', async () => {
+test('el ANEXO A ya no trae el ESF ni el ERI como tabla', async () => {
   const zip = await zipConAnexoA();
   insertarAnexoA(zip, ESTUDIO_EEFF, {});
   const texto = textoDe(zip, RUTA_DOC_TEST);
-  assert.match(texto, /Estado de Situación Financiera/);
-  assert.match(texto, /Estado de Resultados/);
-  assert.match(texto, /2\.179\.479\.687/, 'el total de activos, formateado en pesos');
-  assert.match(texto, /5\.271\.105\.507/, 'los ingresos del ERI');
-});
-
-test('el A.V. del ANEXO A sale de la misma cuenta que la Tabla 10', async () => {
-  /* Si cada uno calculara su porcentaje, el anexo y el cuerpo del informe publicarían
-     verticales distintos para el mismo estado financiero. */
-  const zip = await zipConAnexoA();
-  insertarAnexoA(zip, ESTUDIO_EEFF, {});
-  const anexo = textoDe(zip, RUTA_DOC_TEST);
-
-  const tabla10 = actualizarTablasOperacionesOoxml(
-    conTabla('<w:p><w:t>Tabla 10. Activos a 31 de diciembre de 2025</w:t></w:p>'),
-    ESTUDIO_EEFF,
-  );
-  /* 12.417.756 sobre 2.179.479.687 es 0,570 %. */
-  assert.match(tabla10, /0,570 %/, 'la Tabla 10 calcula el vertical sobre el total de activos');
-  assert.match(anexo, /0,570 %/, 'y el anexo tiene que dar lo mismo');
-});
-
-test('el ERI del ANEXO A declara el ajuste excluido', async () => {
-  /* Los $983.180.000 del proyecto CoCrea son lo que sostiene el margen que el informe
-     declara. Un estado de resultados que no los nombre no cuadra con el rango. */
-  const zip = await zipConAnexoA();
-  insertarAnexoA(zip, ESTUDIO_EEFF, {});
-  const texto = textoDe(zip, RUTA_DOC_TEST);
-  assert.match(texto, /983\.180\.000/);
+  assert.ok(!texto.includes('Estado de Situación Financiera'));
+  assert.ok(!texto.includes('Estado de Resultados'));
 });
 
 test('sin cifras parseadas el ANEXO A avisa en vez de salir vacío', async () => {
@@ -459,7 +432,7 @@ test('rellenarDocx llena el ANEXO A con lo que trae el estudio', async () => {
     tipoSalida: 'nodebuffer',
   });
   const texto = textoDe(new PizZip(salida), RUTA_DOC_TEST);
-  assert.match(texto, /Estado de Situación Financiera/);
+  assert.ok(!texto.includes('Estado de Situación Financiera'));
   assert.ok(!texto.includes('páginas del informe anterior'));
 });
 
@@ -688,8 +661,8 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
 
    Mismo defecto y mismo arreglo ya probado en `tablasHtmlInforme.test.js` para la ruta
    HTML: la tabla se radicaba con el cribado del informe del que salió la plantilla. Estos
-   tests son el espejo OOXML de esos, con la forma real de la tabla (fila de 2 celdas por
-   criterio, fila de 1 celda fusionada para el conector «Y»/«O»).
+   tests son el espejo OOXML de esos, con la forma real de la tabla (una fila de 2 celdas
+   por criterio; sin fila aparte para el conector «Y»/«O» entre criterios distintos).
    ───────────────────────────────────────────────────────────────────────────── */
 
 const filaDosCeldasOoxml = (a, b) =>
@@ -821,20 +794,19 @@ test('Códigos SIC: una sola copia ambigua (sin número) se deja intacta — no 
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
-test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, gridSpan) en las filas nuevas', () => {
+test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, tcW) en las filas nuevas', () => {
   const cuerpoConSombreado = '<w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="FFF2CC"/></w:tcPr>'
     + '<w:p><w:t>Código SIC primario:</w:t></w:p></w:tc>'
-    + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>'
-    + filaUnaCeldaOoxml('Y');
+    + '<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>';
   const tabla = tablaSicOoxml(null, cuerpoConSombreado, 'Fuente: Capital IQ.');
 
   const salida = reescribirFilasOoxml(tabla, [
     ['Código SIC primario:', 'Entre 7371 y 7375'],
-    ['O'],
+    ['Palabra clave:', 'Contiene juegos'],
   ]);
 
   assert.match(salida, /<w:shd w:val="clear" w:fill="FFF2CC"\/>/, 'se perdió el sombreado del molde');
-  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'se perdió el gridSpan del molde del conector');
+  assert.match(salida, /<w:tcW w:w="6000" w:type="dxa"\/>/, 'se perdió el tcW del molde');
   assert.ok(salida.includes('Entre 7371 y 7375'), 'faltan los valores nuevos');
   assert.ok(salida.includes('Fuente: Capital IQ.'), 'el pie de fuente no debe tocarse');
 });
@@ -859,11 +831,11 @@ test('Códigos SIC: tres ocurrencias numeradas 18/19/20 (renumeración real de B
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
 });
 
-test('reescribirFilasOoxml: el conector "Y"/"O" sale como divisor discreto, no como clon de la franja de sección', () => {
-  /* Molde real: la plantilla comparte el mismo tcPr (sombreado gris oscuro, negrita) entre
-     las franjas de sección («Criterios de inclusión») y el conector («Y»), porque las dos
-     son visualmente la misma franja fusionada. Clonarlo tal cual para cada «Y»/«O» de un
-     cribado con varios criterios deja la tabla como una fila de franjas grises opacas. */
+test('reescribirFilasOoxml ya no genera ninguna fila aparte para el conector "Y"/"O" entre criterios', () => {
+  /* La plantilla puede traer de un informe anterior una franja de sección fusionada
+     (sombreado gris oscuro, negrita) usada para el conector entre criterios — pero las
+     filas nuevas que llegan de `filasCriteriosScreening` ya no incluyen ese conector como
+     entrada aparte, así que no debe reaparecer ninguna franja de ese tipo en la salida. */
   const filaSeccionOFranjaConector = (texto) =>
     '<w:tr><w:tc><w:tcPr><w:tcW w:w="9000" w:type="dxa"/><w:gridSpan w:val="2"/>'
     + '<w:shd w:val="clear" w:color="auto" w:fill="808080"/><w:vAlign w:val="center"/></w:tcPr>'
@@ -878,15 +850,13 @@ test('reescribirFilasOoxml: el conector "Y"/"O" sale como divisor discreto, no c
 
   const salida = reescribirFilasOoxml(tabla, [
     ['Código SIC primario:', 'Entre 7371 y 7375'],
-    ['O'],
     ['SIC Codes', '3535 Conveyors OR 3545 Cutting Tools'],
   ]);
 
-  assert.ok(!/w:fill="808080"/.test(salida), 'el conector nuevo no debe heredar el sombreado gris oscuro de la franja de sección');
-  assert.match(salida, /<w:gridSpan w:val="2"\/>/, 'el conector conserva la fusión de columnas para no desalinear la tabla');
-  assert.match(salida, /<w:i\/>/, 'el conector sale en cursiva, como divisor discreto');
-  assert.ok(salida.includes('>O<'), 'falta el conector nuevo');
-  assert.ok(salida.includes('3535 Conveyors OR 3545 Cutting Tools'), 'faltan los criterios nuevos');
+  assert.ok(!/w:fill="808080"/.test(salida), 'no debe sobrevivir ninguna franja de conector/sección');
+  assert.ok(!salida.includes('>Y<') && !salida.includes('>O<'), 'no debe salir ninguna fila con solo "Y" u "O"');
+  assert.ok(salida.includes('3535 Conveyors OR 3545 Cutting Tools'),
+    'el "OR" dentro del valor de un mismo criterio sí se conserva');
 });
 
 test('localizarBloquesTabla devuelve todas las ocurrencias homónimas en orden de documento', () => {
@@ -2779,7 +2749,7 @@ test('el anexo de estados financieros no se lleva el documento cuando no hay ANE
   assert.strictEqual(problemaDeIntegridadOoxml(xml), '', 'el documento tiene que seguir cerrando');
   assert.ok(xml.length > antes.length * 0.9, 'y no perder el cuerpo del informe');
   assert.ok(!texto.includes('EEFF DEL CLIENTE ANTERIOR'), 'el anexo se rehace');
-  assert.match(texto, /Estado de Situación Financiera/);
+  assert.match(texto, /ANEXO A\. Estados financieros ACME COLOMBIA S\.A\.S/, 'con el rótulo del estudio');
   assert.ok(texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'y el anexo siguiente no se toca');
   assert.ok(texto.includes('MATRIZ DEL CLIENTE ANTERIOR'), 'ni el de después');
   assert.ok(texto.includes('Cuerpo del informe que no se puede perder'), 'ni el cuerpo');

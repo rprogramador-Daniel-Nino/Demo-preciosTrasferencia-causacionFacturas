@@ -335,10 +335,10 @@ test('el apartado sectorial se reconoce aunque el título venga partido en varia
 
 /* ══════════════ Criterios de búsqueda (Tablas 13 a 15) ══════════════ */
 
-test('los criterios de búsqueda alternan cada criterio con su conector', () => {
-  /* La plantilla arma esa tabla así: una fila de dos celdas por criterio (etiqueta y
-     valor) y entre ellas una fila de una sola celda con el conector. El primer criterio
-     no lleva conector delante. */
+test('los criterios de búsqueda salen uno por fila, sin fila de conector entre ellos', () => {
+  /* El conector lógico con el que Capital IQ combina un criterio con el anterior (Y/O) no
+     se muestra como fila propia — solo importa dentro del valor de un mismo criterio (ver
+     el test de traducción más abajo). */
   const filas = filasCriteriosScreening({
     criteriosScreening: [
       { conector: null, etiqueta: 'Código SIC primario', valor: 'Entre 7371 y 7375' },
@@ -348,14 +348,12 @@ test('los criterios de búsqueda alternan cada criterio con su conector', () => 
   });
   assert.deepStrictEqual(filas, [
     ['Código SIC primario', 'Entre 7371 y 7375'],
-    ['Y'],
     ['Nivel de propiedad', 'Menos del 50%'],
-    ['O'],
     ['Palabra clave', 'Contiene juegos'],
   ]);
 });
 
-test('un solo criterio no emite ninguna fila de conector', () => {
+test('un solo criterio sale igual que varios: una fila, sin conector', () => {
   assert.deepStrictEqual(
     filasCriteriosScreening({ criteriosScreening: [{ conector: null, etiqueta: 'SIC', valor: '7371' }] }),
     [['SIC', '7371']]
@@ -382,9 +380,7 @@ test('los criterios crudos de Capital IQ salen traducidos al español', () => {
   });
   assert.deepStrictEqual(filas, [
     ['Tipo de compañía', 'Compañía pública O compañía privada'],
-    ['O'],
     ['Códigos SIC', '7371 Servicios de programación de computadores O 7372 Software preempaquetado'],
-    ['Y'],
     ['Ingresos totales [año fiscal 2025] (millones de USD, tasa histórica)',
       'es mayor que 0 (los datos no reportados se toman como 0)'],
   ]);
@@ -402,12 +398,12 @@ test('la traducción que cacheó la IA gana sobre el diccionario', () => {
   );
 });
 
-test('el conector se emite como Y cuando el criterio no lo trae', () => {
+test('un criterio sin conector sale igual, sin fila de conector', () => {
   const filas = filasCriteriosScreening({
     criteriosScreening: [
       { conector: null, etiqueta: 'A', valor: '1' },
       { etiqueta: 'B', valor: '2' },
     ],
   });
-  assert.deepStrictEqual(filas, [['A', '1'], ['Y'], ['B', '2']]);
+  assert.deepStrictEqual(filas, [['A', '1'], ['B', '2']]);
 });

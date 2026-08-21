@@ -741,46 +741,6 @@ export function reescribirTextoParrafoOoxml(parrafoXml, textoNuevo) {
 }
 
 /**
- * El `<w:tcW>`/`<w:gridSpan>` de una celda OOXML, tal cual —para preservar el ancho y la
- * fusión de columnas de un molde sin heredar también su sombreado ni su negrita.
- *
- * @param {string} celdaXml  el `<w:tc>` completo del molde.
- * @returns {string}
- */
-function gridSpanYAnchoDe(celdaXml) {
-  const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(String(celdaXml || ''));
-  if (!tcPr) return '';
-  const tcW = /<w:tcW\s[^/]*\/>/.exec(tcPr[0]);
-  const gridSpan = /<w:gridSpan\s[^/]*\/>/.exec(tcPr[0]);
-  return (tcW ? tcW[0] : '') + (gridSpan ? gridSpan[0] : '');
-}
-
-/**
- * Fila del conector «Y»/«O» de «Códigos SIC utilizados», como divisor discreto en vez de
- * clon de la franja de sección de la plantilla (`«Criterio de búsqueda»`, `«Criterios de
- * inclusión»`): las dos comparten el mismo `tcPr` en la plantilla —sombreado gris oscuro,
- * negrita— porque son visualmente la misma franja, pero el conector no es un título de
- * sección. Clonarlo tal cual hace que una búsqueda con varios criterios (lo habitual en un
- * export de Capital IQ) salga como una fila de franjas grises opacas, una por cada «Y»/«O»,
- * en vez de leerse como una lista de criterios con un conector menor entre cada uno.
- *
- * Solo se conserva el ancho/fusión de columnas del molde —para no desalinear la tabla—; el
- * sombreado y la negrita se sueltan a propósito.
- *
- * @param {string} texto  «Y» u «O».
- * @param {string} celdaMoldeXml  el `<w:tc>` del que se toma el ancho/fusión de columnas.
- * @returns {string} el `<w:tr>` completo.
- */
-function filaConectorDiscreta(texto, celdaMoldeXml) {
-  const props = gridSpanYAnchoDe(celdaMoldeXml);
-  return '<w:tr><w:tc><w:tcPr>' + props + '<w:vAlign w:val="center"/></w:tcPr>'
-    + '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="20" w:after="20"/></w:pPr>'
-    + '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:i/><w:iCs/>'
-    + '<w:color w:val="808080"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
-    + '<w:t xml:space="preserve">' + escaparXml(texto) + '</w:t></w:r></w:p></w:tc></w:tr>';
-}
-
-/**
  * Escribe los encabezados de III.C con la industria y los años del estudio.
  *
  * Los `hitos` vienen de `localizarHitos`, que ya los localizó en orden y saltándose las
@@ -1093,23 +1053,14 @@ function celdasDeOoxml(filaXml) {
  * de sus celdas (bordes, sombreado, `gridSpan`/`vMerge`) — equivalente de `reescribirFilasHtml`
  * (`tablasHtmlInforme.js`) para la ruta .docx.
  *
- * Hace falta porque «Códigos SIC utilizados» no es una tabla rectangular uniforme como las
- * que arma `generarTablaOoxml`: alterna una fila de 2 celdas (etiqueta/valor) con una fila de
- * 1 celda fusionada (el conector «Y»/«O»), y generarla desde cero perdería esa fusión.
- *
- * La fila de una sola celda es la ÚNICA que no clona el molde tal cual: en la plantilla real
- * comparte `tcPr` con las franjas de sección («Criterios de inclusión», etc.) —mismo
- * sombreado gris oscuro, misma negrita—, y un cribado con varios criterios (lo normal en un
- * export de Capital IQ) sale como una franja opaca repetida por cada «Y»/«O» en vez de un
- * conector menor entre criterios. Se reemplaza por `filaConectorDiscreta`, que conserva solo
- * el ancho/fusión de columnas del molde. Reportado por el usuario 2026-08-20 con un informe
- * real (BEUMER 2025) como tabla «rara».
+ * Uso exclusivo de «Códigos SIC utilizados»: una fila de 2 celdas (etiqueta/valor) por
+ * criterio de búsqueda, clonando el molde existente para no perder su fusión de columnas.
  *
  * @param {string} tablaXml  el bloque «título + `<w:tbl>`» (o solo la tabla); basta con que
  *        contenga la tabla en algún punto, porque el parseo busca `<w:tr>` directamente y el
  *        párrafo de título, si lo hay, no tiene ninguno.
- * @param {Array<string[]>} filas  una entrada `[conector]` o `[etiqueta, valor]` por fila —
- *        la forma que ya produce `filasCriteriosScreening` (`tablasInforme.js`).
+ * @param {Array<string[]>} filas  una entrada `[etiqueta, valor]` por fila — la forma que ya
+ *        produce `filasCriteriosScreening` (`tablasInforme.js`).
  * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
  *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
  *        detección de la fila de fuente.
@@ -1135,26 +1086,14 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
   const cuerpo = todas.slice(encabezados, esPie ? todas.length - 1 : todas.length);
   if (!cuerpo.length) return tabla;
 
-  /* Moldes: una fila de dos celdas y una de una sola, representativas del cuerpo existente.
-     Se clona su XML COMPLETO —`tcPr` incluida, con el `gridSpan` de la fila del conector— y
-     solo se sustituye el texto con `reescribirTextoParrafoOoxml`; así no hace falta
-     reconstruir la fusión a mano. */
-  const filasCuerpo = cuerpo.map((f) => celdasDeOoxml(f.xml));
-  const moldeDos = filasCuerpo.find((cs) => cs.length === 2);
-  const moldeUno = filasCuerpo.find((cs) => cs.length === 1);
-  if (!moldeDos && !moldeUno) return tabla;
+  /* Molde: la fila de dos celdas representativa del cuerpo existente. Se clona su XML
+     COMPLETO —`tcPr` incluida— y solo se sustituye el texto con `reescribirTextoParrafoOoxml`;
+     así no hace falta reconstruir la fusión de columnas a mano. */
+  const molde = cuerpo.map((f) => celdasDeOoxml(f.xml)).find((cs) => cs.length === 2);
+  if (!molde) return tabla;
 
   const nuevas = (filas || []).map((valores) => {
     const vals = valores || [];
-    /* La fila de un solo valor es el conector «Y»/«O»: sale como divisor discreto y no
-       como clon de la franja de sección de la plantilla —ver `filaConectorDiscreta`—, salvo
-       que la tabla no tenga ninguna fila fusionada de la que tomar el ancho de columnas, en
-       cuyo caso se mantiene el comportamiento anterior antes que perder la fila entera. */
-    if (vals.length === 1 && moldeUno) {
-      return filaConectorDiscreta(String(vals[0] ?? ''), moldeUno[0].xml);
-    }
-    const molde = vals.length === 1 ? (moldeUno || moldeDos) : (moldeDos || moldeUno);
-    if (!molde) return '';
     const celdas = molde.map((c, i) => reescribirTextoParrafoOoxml(
       c.xml, String(vals[Math.min(i, vals.length - 1)] ?? '')
     )).join('');
@@ -2873,58 +2812,6 @@ function traeCifrasEeff(estudio) {
   return claves.some((c) => num(estudio && estudio[c]) !== null);
 }
 
-/**
- * Filas del Estado de Situación Financiera para el ANEXO A.
- *
- * El A.V. sale de `verticalSobreActivos`, la misma función que usa la Tabla 10. Las
- * cuentas por pagar se publican porque la ingesta las lee y sostienen el ajuste de capital
- * de trabajo, pero sin vertical: un pasivo sobre el total de activos no significa nada, y
- * escribir ahí un porcentaje sería inventarlo.
- */
-export function filasEsfAnexoA(estudio) {
-  const av = verticalSobreActivos(estudio);
-  const monto = (clave) => {
-    const n = num(estudio && estudio[clave]);
-    return n === null ? SIN_DATO : fmt(n);
-  };
-
-  const filas = RUBROS_ESF.map(([etiqueta, clave]) => [etiqueta, monto(clave), av(estudio[clave])]);
-  filas.push(['PASIVOS', '', '']);
-  filas.push(['Cuentas por pagar comerciales', monto('t_ap'), SIN_DATO]);
-  return filas;
-}
-
-/**
- * Filas del Estado de Resultados Integral para el ANEXO A.
- *
- * La utilidad bruta y los gastos operativos se derivan y no se piden a la ingesta, con el
- * mismo despeje que documenta `pliOf`: `opex = ventas − costo − utilidad operacional`. Así
- * el anexo no puede contradecir al indicador de rentabilidad.
- *
- * Los costos y gastos excluidos se declaran como línea propia: son lo que sostiene el
- * margen que el informe publica, y un estado de resultados que no los nombre no cuadra con
- * el rango de unas páginas más adelante.
- */
-export function filasEriAnexoA(estudio) {
-  const e = estudio || {};
-  const s = num(e.t_s), c = num(e.t_c), op = num(e.t_op), excluido = num(e.seg_excluido);
-  const val = (n) => (n === null ? SIN_DATO : fmt(n));
-  const bruta = s !== null && c !== null ? s - c : null;
-  const opex = bruta !== null && op !== null ? bruta - op : null;
-
-  const filas = [
-    ['Ingresos de actividades ordinarias', val(s)],
-    ['Costo de ventas', val(c)],
-    ['Utilidad bruta', val(bruta)],
-    ['Gastos operativos', val(opex)],
-    ['Utilidad operacional', val(op)],
-  ];
-  if (excluido !== null && excluido !== 0) {
-    filas.push(['Costos y gastos excluidos de la operación analizada', val(excluido)]);
-  }
-  return filas;
-}
-
 /* ─────────────────────────────────────────────────────────────────────────────
    LOCALIZAR LOS ANEXOS.
 
@@ -3105,7 +2992,6 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
     return { insertadas: 0 };
   }
 
-  const year = Number(estudio && estudio.anio) || 2025;
   const entidad = (estudio && estudio.ent) || 'la Compañía';
   const rotulo = rotuloAnexo('eeff', anexo.letra, { entidad });
 
@@ -3128,19 +3014,6 @@ export function insertarAnexoA(zip, estudio, opciones = {}) {
       zip, xml.slice(0, anexo.inicio) + nuevo + xml.slice(anexo.fin), avisos, rotulo);
     return { insertadas: 0 };
   }
-
-  nuevo += generarTablaOoxml(
-    `Estado de Situación Financiera a 31 de diciembre de ${year}`,
-    ['Cifras expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-    filasEsfAnexoA(estudio),
-    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
-  );
-  nuevo += generarTablaOoxml(
-    `Estado de Resultados Integral ${year}`,
-    ['Cifras expresadas en pesos colombianos', String(year)],
-    filasEriAnexoA(estudio),
-    `Estados financieros de ${entidad} a 31 de diciembre de ${year}.`
-  );
 
   let rels = zip.file(RUTA_RELS).asText();
   let ct = zip.file(RUTA_CT).asText();
