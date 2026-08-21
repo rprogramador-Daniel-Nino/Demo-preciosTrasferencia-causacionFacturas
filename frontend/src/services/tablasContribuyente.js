@@ -128,18 +128,22 @@ export function filasComposicionAccionaria(estudio) {
 
 /* Los diez rubros del activo, en el orden del balance y con el campo del estudio que los
    alimenta. Van en una lista y no repetidos a mano porque el orden importa: los subtotales
-   («Total, Activo corriente») cierran su grupo y moverlos descuadra la lectura. */
+   («Total, Activo corriente») cierran su grupo y moverlos descuadra la lectura.
+
+   El tercer elemento marca los subtotales: a diferencia de un rubro de línea, un subtotal
+   siempre se publica (con «—» si falta) porque es lo que cierra visualmente cada grupo del
+   balance — quitarlo deja la tabla sin el corte que separa corriente de no corriente. */
 const RUBROS_ACTIVO = [
   ['Efectivo y equivalentes de efectivo', 't_cash'],
   ['Inversiones asociadas', 't_inv_assoc'],
   ['Cuentas por cobrar comerciales y otras cuentas por cobrar', 't_ar'],
   ['Activos por impuestos corrientes', 't_tax'],
-  ['Total, Activo corriente', 't_act_curr'],
+  ['Total, Activo corriente', 't_act_curr', true],
   ['Propiedades, planta y equipo', 't_ppe'],
   ['Intangibles', 't_intang'],
   ['Diferidos', 't_dif'],
-  ['Total, Activos no corrientes', 't_act_nocurr'],
-  ['Total, Activos', 't_act_tot'],
+  ['Total, Activos no corrientes', 't_act_nocurr', true],
+  ['Total, Activos', 't_act_tot', true],
 ];
 
 /**
@@ -148,6 +152,10 @@ const RUBROS_ACTIVO = [
  * El título y los encabezados de columna llevan el año gravable, que es un DATO: la
  * plantilla de referencia rotula «Activos a 31 de diciembre de 2024», y dejarlo publica el
  * encabezado del año anterior en el informe nuevo.
+ *
+ * Un rubro de línea que el estudio no trae (o llega en cero) no publica su fila: la tabla solo
+ * pinta lo que la Compañía reportó. Los subtotales son la excepción — siempre se publican,
+ * con «—» si falta el dato, porque son el cierre de cada grupo del balance.
  *
  * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
  */
@@ -160,7 +168,9 @@ export function filasActivos(estudio) {
     nombre: 'Activos a 31 de diciembre',
     titulo: 'Activos a 31 de diciembre de ' + year,
     encabezados: ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-    filas: RUBROS_ACTIVO.map(([etiqueta, campo]) => [etiqueta, cifra(e[campo]), av(e[campo])]),
+    filas: RUBROS_ACTIVO
+      .filter(([, campo, esSubtotal]) => esSubtotal || num(e[campo]))
+      .map(([etiqueta, campo]) => [etiqueta, cifra(e[campo]), av(e[campo])]),
     fuente: 'Estados financieros de la Compañía a 31 de diciembre de ' + year + '.',
   };
 }
