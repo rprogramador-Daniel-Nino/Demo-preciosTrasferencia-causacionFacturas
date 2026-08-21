@@ -3599,6 +3599,7 @@ const COMPARABLE_CON_EEFF = {
     periodo: 2025, utilidad_bruta: 400, gastos_operacionales: 250,
     total_activos: 2000, propiedad_planta_equipo: 300, efectivo_y_equivalentes: 500,
     otras_inversiones: 250, total_pasivos: 900,
+    gastos_generales_administrativos: 200, depreciacion: 50, activos_operativos: 1500,
   },
 };
 
@@ -3695,15 +3696,16 @@ test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orde
   insertarImagenesAnexoB(zip, { anio: 2025, comparables: [COMPARABLE_CON_EEFF] });
   const texto = textoDe(zip, RUTA_DOC_TEST);
 
-  /* El orden y el formato son los de la ficha que produce la macro de Word, que es el
-     documento que el analista tiene delante al revisar el anexo: dos decimales siempre
-     —una cifra sin ellos parece redondeada a mano— y el balance en el orden en que la
-     ficha lo imprime, del efectivo a las cuentas por pagar. */
+  /* Las dieciséis filas de la ficha que produce la macro de Word —siete del estado de
+     resultados y nueve del balance—, en su orden y con dos decimales. El «&» del rótulo de
+     SG&A va escapado porque `textoDe` entrega el texto del XML sin decodificar entidades. */
   const FILAS_ESPERADAS = [
     'Estado de Resultados', 'Descripción', '2025',
     'Ventas netas', '1.000,00',
     'Costo de los bienes vendidos', '600,00',
     'Beneficio bruto', '400,00',
+    'Gastos generales y administrativos (SG&amp;A)', '200,00',
+    'Depreciación', '50,00',
     'Gastos operativos', '250,00',
     'Utilidad de operación', '150,00',
     'FUENTE:',
@@ -3714,6 +3716,7 @@ test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orde
     'Inventario neto promedio', '40,00',
     'EPP neto promedio', '300,00',
     'Activos totales promedio', '2.000,00',
+    'Activos operativos promedio', '1.500,00',
     'Total de pasivos promedio', '900,00',
     'Promedio de cuentas por pagar netas', '80,00',
     'FUENTE:',

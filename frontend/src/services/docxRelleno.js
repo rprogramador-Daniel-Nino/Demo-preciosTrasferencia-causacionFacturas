@@ -32,6 +32,7 @@ import Docxtemplater from 'docxtemplater';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
 import { compactarEspaciosOoxml } from './compactarEspaciosOoxml.js';
 import { actualizarAnioPeriodo } from './anioPeriodoOoxml.js';
+import { RUBROS_RESULTADOS, RUBROS_BALANCE, cifraDeRubro, rubrosConDato } from './anexoBRubros.js';
 
 /* El `pPr` de un párrafo de PROSA que este generador inserta.
    `justificarCuerpoOoxml` normaliza la plantilla ANTES del relleno, así que no alcanza a los
@@ -3263,66 +3264,19 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
     nuevoXmlB += '\n' + tablaNombreXml;
 
     if (c.eeffDatos) {
-      // 2. Tabla de Pérdidas y Ganancias (P&L)
-      const filasPL = [
-        ['Ventas netas', celdaCifraAnexoB(c.s)],
-        ['Costo de los bienes vendidos', celdaCifraAnexoB(c.c)],
-        ['Beneficio bruto', celdaCifraAnexoB(c.eeffDatos.utilidad_bruta)],
-        ['Gastos operativos', celdaCifraAnexoB(c.eeffDatos.gastos_operacionales)],
-        ['Utilidad de operación', celdaCifraAnexoB(c.op)],
-      ];
-      // Gastos de I+D y Publicidad son opcionales (solo si vienen cargados y no son nulos/vacíos)
-      const rd = c.eeffDatos.gastos_investigacion_desarrollo;
-      const adv = c.eeffDatos.gastos_publicidad;
-      if (rd !== null && rd !== undefined && rd !== '') {
-        filasPL.push(['Gastos de investigación y desarrollo', celdaCifraAnexoB(rd)]);
-      }
-      if (adv !== null && adv !== undefined && adv !== '') {
-        filasPL.push(['Gastos de publicidad', celdaCifraAnexoB(adv)]);
-      }
-
-      const tablaPlXml = generarTablaOoxml(
-        'Estado de Resultados',
+      /* Las dos tablas se arman de la lista compartida (`anexoBRubros.js`), la misma que
+         lee la ruta de plantilla: cuando había una lista por ruta, un cambio en una dejó
+         la otra con la tabla vieja e incompleta. El rótulo es el del informe; una fila se
+         omite solo si su dato está vacío. */
+      const tablaCifras = (titulo, rubros) => generarTablaOoxml(
+        titulo,
         ['Descripción', String(anioCol)],
-        filasPL,
-        citaBaseDatos
+        rubrosConDato(rubros, c).map((r) => [r.etiqueta, celdaCifraAnexoB(cifraDeRubro(r, c))]),
+        citaBaseDatos,
       );
-      nuevoXmlB += '\n' + tablaPlXml;
 
-      // 3. Tabla de Balance
-      /* En el orden en que la ficha imprime el balance: efectivo, otras inversiones,
-         cuentas por cobrar, inventarios, propiedad planta y equipo, total de activos,
-         total de pasivos y cuentas por pagar. Es el documento que el analista revisa al
-         lado del anexo, y con las filas cruzadas hay que buscar cada rubro en vez de leer
-         las dos en paralelo. El estado de resultados de arriba ya seguía ese orden.
-
-         «Otras inversiones» y «Total de pasivos» se omiten cuando la ficha no las trae,
-         como los dos gastos opcionales del estado de resultados: hay fichas que imprimen
-         «-» en esa fila y escribir un cero diría que la comparable reportó cero. */
-      const filasBalance = [
-        ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
-      ];
-      if (num(c.eeffDatos.otras_inversiones) !== null) {
-        filasBalance.push(['Otras inversiones promedio', celdaCifraAnexoB(c.eeffDatos.otras_inversiones)]);
-      }
-      filasBalance.push(
-        ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
-        ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
-        ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
-        ['Activos totales promedio', celdaCifraAnexoB(c.eeffDatos.total_activos)],
-      );
-      if (num(c.eeffDatos.total_pasivos) !== null) {
-        filasBalance.push(['Total de pasivos promedio', celdaCifraAnexoB(c.eeffDatos.total_pasivos)]);
-      }
-      filasBalance.push(['Promedio de cuentas por pagar netas', celdaCifraAnexoB(c.ap)]);
-
-      const tablaBalanceXml = generarTablaOoxml(
-        'Balance General',
-        ['Descripción', String(anioCol)],
-        filasBalance,
-        citaBaseDatos
-      );
-      nuevoXmlB += '\n' + tablaBalanceXml;
+      nuevoXmlB += '\n' + tablaCifras('Estado de Resultados', RUBROS_RESULTADOS);
+      nuevoXmlB += '\n' + tablaCifras('Balance General', RUBROS_BALANCE);
     } else {
       // Párrafo de pendiente si no tiene estado financiero leído
       /* En rojo y con el nombre: es un hueco que hay que ver antes de radicar, no una nota

@@ -274,22 +274,56 @@ test('un anexo sin bloque completo del que copiar se deja como está', () => {
 /* ══════ Formato de cifras ══════ */
 
 test('formatearCifra respeta el separador y marca el hueco', () => {
-  assert.strictEqual(formatearCifra(23652000000, ','), '23,652,000,000');
-  assert.strictEqual(formatearCifra(23652000000, '.'), '23.652.000.000');
-  assert.strictEqual(formatearCifra(-4500, ','), '-4,500');
+  /* Dos decimales siempre, como los imprime la ficha de la macro que el analista revisa al
+     lado del anexo. Antes salía lo que trajera el número —«862,6» con un decimal, «1.470»
+     con ninguno—, así que dos filas de la misma tabla llevaban formatos distintos. */
+  assert.strictEqual(formatearCifra(23652000000, ','), '23,652,000,000.00');
+  assert.strictEqual(formatearCifra(23652000000, '.'), '23.652.000.000,00');
+  assert.strictEqual(formatearCifra(-4500, ','), '-4,500.00');
   assert.strictEqual(formatearCifra(null, ','), '—');
   assert.strictEqual(formatearCifra('', ','), '—');
   assert.strictEqual(formatearCifra('no es número', ','), '—');
-  assert.strictEqual(formatearCifra(1234.6, ','), '1,234.6', 'no se redondea: conserva el decimal');
-  assert.strictEqual(formatearCifra(1234.6, '.'), '1.234,6', 'con separador de punto el decimal usa coma');
+  assert.strictEqual(formatearCifra(1234.6, ','), '1,234.60', 'el decimal se completa a dos');
+  assert.strictEqual(formatearCifra(1234.6, '.'), '1.234,60', 'con separador de punto el decimal usa coma');
+  /* Sin separador detectado en la plantilla se cae al del informe. Antes esta rama emitía
+     «1.234.6»: miles con punto y decimal con punto, ilegible. */
+  assert.strictEqual(formatearCifra(1234.6, null), '1.234,60');
 });
 
 test('los rubros cubren las dos tablas del anexo', () => {
-  assert.strictEqual(RUBROS_RESULTADOS.length, 7, '5 fijos + I+D + publicidad');
-  assert.strictEqual(RUBROS_BALANCE.length, 6);
+  assert.strictEqual(RUBROS_RESULTADOS.length, 9, 'las 7 filas de la ficha + I+D + publicidad');
+  assert.strictEqual(RUBROS_BALANCE.length, 9, 'las 9 filas de la ficha');
   /* Cada rubro reconoce su propia etiqueta: si un patrón dejara de casar, la fila saldría
      con la etiqueta por defecto y nadie lo notaría. */
   [...RUBROS_RESULTADOS, ...RUBROS_BALANCE].forEach((r) => {
     assert.ok(r.patron.test(r.etiqueta), `el patrón de ${r.campo} no reconoce su etiqueta`);
   });
+  /* Y no reconoce la de otro: dos patrones que casen la misma etiqueta de la plantilla
+     harían que dos filas distintas se rotularan igual. */
+  [RUBROS_RESULTADOS, RUBROS_BALANCE].forEach((tabla) => {
+    tabla.forEach((r) => {
+      const otros = tabla.filter((o) => o !== r && r.patron.test(o.etiqueta));
+      assert.deepStrictEqual(otros.map((o) => o.campo), [],
+        `el patrón de ${r.campo} también casa la etiqueta de ${otros.map((o) => o.campo)}`);
+    });
+  });
+});
+
+test('el balance del Anexo B va en el orden en que la ficha lo imprime', () => {
+  /* La ficha de la macro imprime efectivo, otras inversiones, cuentas por cobrar,
+     inventarios, propiedad planta y equipo, total de activos, total de pasivos y cuentas
+     por pagar. Es el documento que se revisa al lado del anexo: con las filas cruzadas hay
+     que buscar cada rubro en vez de leer las dos en paralelo. Esta ruta —la de plantilla—
+     se había quedado con el orden viejo cuando se corrigió la de OOXML. */
+  assert.deepStrictEqual(RUBROS_BALANCE.map((r) => r.campo), [
+    'efectivo_y_equivalentes',
+    'otras_inversiones',
+    'cuentas_por_cobrar',
+    'inventarios',
+    'propiedad_planta_equipo',
+    'total_activos',
+    'activos_operativos',
+    'total_pasivos',
+    'cuentas_por_pagar',
+  ]);
 });
