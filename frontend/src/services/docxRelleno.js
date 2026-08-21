@@ -3158,9 +3158,20 @@ export function insertarAnexoC(zip, estudio) {
   return { reescrito: true, grupos: grupos.length, aviso: null };
 }
 
+/* Con dos decimales, y no con `fmt`, que redondea a entero.
+
+   Las cifras de estas fichas vienen escaladas —Capital IQ las publica en millones, así
+   que «862,60» son 862,6 millones— y ahí el decimal es información: redondear a 863
+   pierde 600.000 unidades de la moneda de la comparable. Además la ficha que el analista
+   tiene delante al revisar el anexo los imprime, así que sin decimales las dos no se
+   pueden cotejar de un vistazo.
+
+   La convención es la del informe (`es-CO`: punto de miles, coma decimal), no la de la
+   ficha, que sale en formato inglés porque la produce Capital IQ. */
 const celdaCifraAnexoB = (v) => {
   const n = num(v);
-  return n === null || n === undefined ? '' : fmt(n);
+  if (n === null || n === undefined) return '';
+  return n.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 /**
@@ -3265,13 +3276,18 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
       nuevoXmlB += '\n' + tablaPlXml;
 
       // 3. Tabla de Balance
+      /* En el orden en que la ficha imprime el balance —efectivo, cuentas por cobrar,
+         inventarios, propiedad planta y equipo, total de activos, cuentas por pagar—, y
+         no en el que estaban. Es el documento que el analista revisa al lado del anexo:
+         con las filas cruzadas hay que buscar cada rubro en vez de leer las dos en
+         paralelo. El estado de resultados de arriba ya seguía ese orden. */
       const filasBalance = [
+        ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
+        ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
+        ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
+        ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
         ['Activos totales promedio', celdaCifraAnexoB(c.eeffDatos.total_activos)],
         ['Promedio de cuentas por pagar netas', celdaCifraAnexoB(c.ap)],
-        ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
-        ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
-        ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
-        ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
       ];
 
       const tablaBalanceXml = generarTablaOoxml(
