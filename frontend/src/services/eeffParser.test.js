@@ -5,6 +5,7 @@ import {
   EEFF_PROMPT, EEFF_COMPARABLE_PROMPT, EEFF_COMPARABLES_LOTE_PROMPT,
   promptEeffContribuyente, bloqueDeTexto, valorDeRubro, rotuloDeRubro,
   CAMPO_POR_RUBRO, RUBROS_DE_COTEJO, extraerTextoEstructuradoPdf,
+  verifyAccountingEqualities,
 } from './eeffParser.js';
 import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 
@@ -299,4 +300,80 @@ test('el PDF de lote, que no viene etiquetado, se agrupa por coordenadas sin per
 test('sin capa de texto que leer devuelve null, para que la lectura caiga al Vision OCR', async () => {
   const noEsPdf = { name: 'escaneo.pdf', arrayBuffer: async () => Buffer.from('esto no es un PDF') };
   assert.strictEqual(await extraerTextoEstructuradoPdf(noEsPdf), null);
+});
+
+/* ══════ La verificación contable de una ficha de comparable ══════ */
+
+const ecuacion = (r) => r.hallazgos.filter((h) => /Ecuaci[oó]n patrimonial/i.test(h));
+
+/* Huaxin Resources, tal como la ficha de la macro la imprime: total de activos y total
+   de pasivos, y NINGUNA fila de patrimonio, porque la macro no la produce. */
+const FICHA_SIN_PATRIMONIO = {
+  periodo: 2025,
+  ingresos_operacionales: 1000, costo_ventas: 600, utilidad_bruta: 400,
+  gastos_operacionales: 250, utilidad_operacional: 150,
+  total_activos: 2619.3, total_pasivos: 422.17, patrimonio: null,
+};
+
+test('sin patrimonio impreso, la ecuación patrimonial no se comprueba en vez de fallar', () => {
+  /* El defecto que esto cierra: las fichas de comparables no traen patrimonio, y con
+     `pat = data.patrimonio || 0` la guarda se cumplía por los pasivos y la identidad
+     fallaba SIEMPRE. En un estudio de 12 comparables salían 12 «Con Alertas» por una
+     identidad que sin patrimonio no se puede comprobar, y el aviso real quedaba
+     enterrado en el ruido. */
+  const r = verifyAccountingEqualities(FICHA_SIN_PATRIMONIO, 2025);
+  assert.deepStrictEqual(ecuacion(r), [], 'no hay identidad que comprobar sin patrimonio');
+  assert.strictEqual(r.esValido, true);
+});
+
+test('un patrimonio en cero SÍ es un dato y la ecuación se comprueba', () => {
+  /* La distinción que hace posible lo anterior: el prompt exige null para lo ausente y
+     0 solo cuando la empresa reportó cero. Con cero explícito la identidad es
+     comprobable, y aquí no cuadra. */
+  const r = verifyAccountingEqualities({ ...FICHA_SIN_PATRIMONIO, patrimonio: 0 }, 2025);
+  assert.strictEqual(ecuacion(r).length, 1);
+  assert.strictEqual(r.esValido, false);
+});
+
+test('con patrimonio impreso, la ecuación se comprueba y avisa cuando no cuadra', () => {
+  const cuadra = verifyAccountingEqualities(
+    { ...FICHA_SIN_PATRIMONIO, total_pasivos: 422.17, patrimonio: 2197.13 }, 2025);
+  assert.deepStrictEqual(ecuacion(cuadra), []);
+  assert.strictEqual(cuadra.esValido, true);
+
+  const noCuadra = verifyAccountingEqualities(
+    { ...FICHA_SIN_PATRIMONIO, total_pasivos: 422.17, patrimonio: 1000 }, 2025);
+  assert.strictEqual(ecuacion(noCuadra).length, 1);
+  assert.match(ecuacion(noCuadra)[0], /2619\.3/);
+  assert.strictEqual(noCuadra.esValido, false);
+});
+
+test('sin total de pasivos tampoco se comprueba, aunque haya patrimonio', () => {
+  const r = verifyAccountingEqualities(
+    { ...FICHA_SIN_PATRIMONIO, total_pasivos: null, patrimonio: 2197.13 }, 2025);
+  assert.deepStrictEqual(ecuacion(r), []);
+  assert.strictEqual(r.esValido, true);
+});
+
+test('las otras identidades siguen comprobándose', () => {
+  /* Se fijan aquí porque no tenían ninguna prueba y el cambio de arriba toca la misma
+     función: una utilidad bruta que no es ventas menos costo, y una operacional que no
+     es bruta menos gastos, tienen que seguir avisando. */
+  const brutaMal = verifyAccountingEqualities({ ...FICHA_SIN_PATRIMONIO, utilidad_bruta: 900 }, 2025);
+  assert.ok(brutaMal.hallazgos.some((h) => /U\. Bruta/i.test(h)));
+  assert.strictEqual(brutaMal.esValido, false);
+
+  const opMal = verifyAccountingEqualities({ ...FICHA_SIN_PATRIMONIO, utilidad_operacional: 900 }, 2025);
+  assert.ok(opMal.hallazgos.some((h) => /U\. Operacional/i.test(h)));
+  assert.strictEqual(opMal.esValido, false);
+
+  const otroAnio = verifyAccountingEqualities({ ...FICHA_SIN_PATRIMONIO, periodo: 2023 }, 2025);
+  assert.ok(otroAnio.hallazgos.some((h) => /per[ií]odo le[ií]do/i.test(h)));
+  assert.strictEqual(otroAnio.esValido, false);
+});
+
+test('una ficha limpia lo dice, para que el estado de la fila no quede en blanco', () => {
+  const r = verifyAccountingEqualities(FICHA_SIN_PATRIMONIO, 2025);
+  assert.strictEqual(r.hallazgos.length, 1);
+  assert.match(r.hallazgos[0], /✅/);
 });

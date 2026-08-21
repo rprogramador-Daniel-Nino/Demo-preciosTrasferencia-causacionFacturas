@@ -3694,21 +3694,25 @@ test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orde
   insertarImagenesAnexoB(zip, { anio: 2025, comparables: [COMPARABLE_CON_EEFF] });
   const texto = textoDe(zip, RUTA_DOC_TEST);
 
+  /* El orden y el formato son los de la ficha que produce la macro de Word, que es el
+     documento que el analista tiene delante al revisar el anexo: dos decimales siempre
+     —una cifra sin ellos parece redondeada a mano— y el balance en el orden en que la
+     ficha lo imprime, que empieza por el efectivo y no por el total de activos. */
   const FILAS_ESPERADAS = [
     'Estado de Resultados', 'Descripción', '2025',
-    'Ventas netas', '1.000',
-    'Costo de los bienes vendidos', '600',
-    'Beneficio bruto', '400',
-    'Gastos operativos', '250',
-    'Utilidad de operación', '150',
+    'Ventas netas', '1.000,00',
+    'Costo de los bienes vendidos', '600,00',
+    'Beneficio bruto', '400,00',
+    'Gastos operativos', '250,00',
+    'Utilidad de operación', '150,00',
     'FUENTE:',
     'Balance General', 'Descripción', '2025',
-    'Activos totales promedio', '2.000',
-    'Promedio de cuentas por pagar netas', '80',
-    'Promedio de cuentas por cobrar netas', '120',
-    'EPP neto promedio', '300',
-    'Inventario neto promedio', '40',
-    'Efectivo promedio y equivalentes de efectivo', '500',
+    'Efectivo promedio y equivalentes de efectivo', '500,00',
+    'Promedio de cuentas por cobrar netas', '120,00',
+    'Inventario neto promedio', '40,00',
+    'EPP neto promedio', '300,00',
+    'Activos totales promedio', '2.000,00',
+    'Promedio de cuentas por pagar netas', '80,00',
     'FUENTE:',
   ];
 
@@ -3754,8 +3758,8 @@ test('los rubros opcionales de gasto solo aparecen cuando la ficha los trae', as
       },
     }],
   });
-  assert.match(textoDe(conDesglose, RUTA_DOC_TEST), /Gastos de investigación y desarrollo70/);
-  assert.match(textoDe(conDesglose, RUTA_DOC_TEST), /Gastos de publicidad30/);
+  assert.match(textoDe(conDesglose, RUTA_DOC_TEST), /Gastos de investigación y desarrollo70,00/);
+  assert.match(textoDe(conDesglose, RUTA_DOC_TEST), /Gastos de publicidad30,00/);
 });
 
 test('una comparable sin estado financiero leído deja el hueco señalado, no cifras viejas', async () => {

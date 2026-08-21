@@ -30,6 +30,7 @@
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
+import { compactarEspaciosOoxml } from './compactarEspaciosOoxml.js';
 
 /* El `pPr` de un párrafo de PROSA que este generador inserta.
    `justificarCuerpoOoxml` normaliza la plantilla ANTES del relleno, así que no alcanza a los
@@ -2554,6 +2555,22 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   Object.keys(colecciones).forEach((nombre) => {
     xml = quitarBucleSiDesbalanceado(xml, nombre, avisosTablas);
   });
+
+  /* Los espacios en blanco, AL FINAL y no sobre la plantilla: la plantilla empuja cada
+     capítulo a la hoja siguiente con rachas de párrafos vacíos calibradas a la longitud del
+     contenido ORIGINAL, y aquí el contenido ya es el del estudio nuevo. Solo en este punto se
+     sabe cuántos vacíos sobran de verdad.
+
+     Sobre el informe de MONTACHEM 2025: 147 renglones en blanco en rachas, con una de 31, y
+     una hoja entera en blanco donde nueve vacíos precedían a un salto de página ya existente.
+     Quedan en 0 renglones sueltos, sin que cambie ni una letra del texto ni una tabla. */
+  const espacios = compactarEspaciosOoxml(xml, leerParte('word/styles.xml'));
+  xml = espacios.xml;
+  if (espacios.vaciosQuitados) {
+    console.log(`[docxRelleno] espacios: ${espacios.vaciosQuitados} renglón(es) en blanco de `
+      + `relleno retirados y ${espacios.saltos} salto(s) de página en su lugar.`);
+  }
+
   zip.file(RUTA_DOC, xml);
 
   /* Las notas que pidieron los apartados, ahora que el cuerpo ya tiene sus referencias. Va DESPUÉS
@@ -3141,9 +3158,20 @@ export function insertarAnexoC(zip, estudio) {
   return { reescrito: true, grupos: grupos.length, aviso: null };
 }
 
+/* Con dos decimales, y no con `fmt`, que redondea a entero.
+
+   Las cifras de estas fichas vienen escaladas —Capital IQ las publica en millones, así
+   que «862,60» son 862,6 millones— y ahí el decimal es información: redondear a 863
+   pierde 600.000 unidades de la moneda de la comparable. Además la ficha que el analista
+   tiene delante al revisar el anexo los imprime, así que sin decimales las dos no se
+   pueden cotejar de un vistazo.
+
+   La convención es la del informe (`es-CO`: punto de miles, coma decimal), no la de la
+   ficha, que sale en formato inglés porque la produce Capital IQ. */
 const celdaCifraAnexoB = (v) => {
   const n = num(v);
-  return n === null || n === undefined ? '' : fmt(n);
+  if (n === null || n === undefined) return '';
+  return n.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 /**
@@ -3248,13 +3276,18 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
       nuevoXmlB += '\n' + tablaPlXml;
 
       // 3. Tabla de Balance
+      /* En el orden en que la ficha imprime el balance —efectivo, cuentas por cobrar,
+         inventarios, propiedad planta y equipo, total de activos, cuentas por pagar—, y
+         no en el que estaban. Es el documento que el analista revisa al lado del anexo:
+         con las filas cruzadas hay que buscar cada rubro en vez de leer las dos en
+         paralelo. El estado de resultados de arriba ya seguía ese orden. */
       const filasBalance = [
+        ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
+        ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
+        ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
+        ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
         ['Activos totales promedio', celdaCifraAnexoB(c.eeffDatos.total_activos)],
         ['Promedio de cuentas por pagar netas', celdaCifraAnexoB(c.ap)],
-        ['Promedio de cuentas por cobrar netas', celdaCifraAnexoB(c.ar)],
-        ['EPP neto promedio', celdaCifraAnexoB(c.eeffDatos.propiedad_planta_equipo)],
-        ['Inventario neto promedio', celdaCifraAnexoB(c.inv)],
-        ['Efectivo promedio y equivalentes de efectivo', celdaCifraAnexoB(c.eeffDatos.efectivo_y_equivalentes)],
       ];
 
       const tablaBalanceXml = generarTablaOoxml(
