@@ -126,6 +126,99 @@ function redistribuir(bloque, textoNuevo) {
 }
 
 /**
+ * Sustituye TRAMOS del texto de un párrafo, sin aplanarlo.
+ *
+ * Recibe el bloque `<w:p>…</w:p>` y los rangos a cambiar, en coordenadas del texto UNIDO
+ * del párrafo —el mismo que devuelve `textoPorParrafo`—, y devuelve el bloque con solo esos
+ * tramos cambiados.
+ *
+ * ── Por qué existe, y qué arregla ──
+ *
+ * `redistribuir` mete todo el texto del párrafo en su primer `<w:t>` y vacía los demás. Eso
+ * tiene una consecuencia que se ve en la portada de cualquier informe: el `<w:br/>` que
+ * separa el nombre de la compañía del título del informe NO contiene texto, así que al
+ * aplanar el párrafo todo el texto queda antes del salto y la portada sale con
+ * «MONTACHEM INTERNATIONAL SAINFORME LOCAL DE PRECIOS DE TRANSFERENCIA», pegado. Medido
+ * sobre el informe de MONTACHEM 2025 que reportó el usuario.
+ *
+ * Aquí, en cambio, lo que está fuera del rango no se toca: ni su texto, ni su formato, ni
+ * los `<w:br/>` que haya entre medias.
+ *
+ * ── Lo que sí se conserva del comportamiento anterior, a propósito ──
+ *
+ * El texto nuevo entra COMPLETO en el primer `<w:t>` que toca el rango, y de los demás se
+ * quita solo la parte cubierta. No es un detalle estético: si un `{campo}` quedara partido
+ * entre dos `<w:t>`, Docxtemplater no lo reconocería y el dato no se sustituiría nunca —el
+ * marcador tiene que viajar contiguo—. Y un valor que cruzaba runs con formatos distintos
+ * sale con el del primero, que para un dato sustituido es lo deseable: un NIT medio en
+ * negrita sería un defecto.
+ *
+ * @param {string} bloque  el `<w:p>…</w:p>` completo.
+ * @param {Array<{pos:number, largo:number, texto:string}>} rangos  en coordenadas del texto
+ *        unido. Se aplican de derecha a izquierda, así que el orden de entrada no importa.
+ * @returns {string} el bloque con los tramos sustituidos.
+ */
+export function sustituirRangosEnParrafo(bloque, rangos) {
+  const fuente = String(bloque || '');
+  const pendientes = (rangos || []).filter((r) => r && r.largo >= 0 && r.pos >= 0);
+  if (!pendientes.length) return fuente;
+
+  /* Los `<w:t>` con su sitio en el XML y su tramo dentro del texto unido. */
+  const tes = [];
+  let acumulado = 0;
+  let m;
+  RX_TEXTO.lastIndex = 0;
+  while ((m = RX_TEXTO.exec(fuente)) !== null) {
+    const contenido = desescaparXml(m[2]);
+    tes.push({
+      xmlInicio: m.index,
+      xmlFin: m.index + m[0].length,
+      apertura: m[1],
+      cierre: m[3],
+      contenido,
+      desde: acumulado,
+      hasta: acumulado + contenido.length,
+    });
+    acumulado += contenido.length;
+  }
+  if (!tes.length) return fuente;
+
+  /* De derecha a izquierda: así un rango no invalida la posición del anterior. */
+  [...pendientes].sort((a, b) => b.pos - a.pos).forEach((r) => {
+    const fin = r.pos + r.largo;
+    /* Los `<w:t>` que el rango toca. Un rango de largo cero —una inserción— toca aquel en
+       cuyo interior cae. */
+    const tocados = tes.filter((t) => (t.desde < fin && r.pos < t.hasta)
+      || (r.largo === 0 && r.pos >= t.desde && r.pos <= t.hasta));
+    if (!tocados.length) return;
+
+    tocados.forEach((t, i) => {
+      const desdeLocal = Math.max(0, r.pos - t.desde);
+      const hastaLocal = Math.min(t.contenido.length, fin - t.desde);
+      const prefijo = t.contenido.slice(0, desdeLocal);
+      const sufijo = t.contenido.slice(Math.max(desdeLocal, hastaLocal));
+      /* El texto nuevo, entero, en el primero que toca; en los demás solo se quita lo
+         cubierto. */
+      t.contenido = i === 0 ? prefijo + String(r.texto ?? '') + sufijo : prefijo + sufijo;
+    });
+  });
+
+  /* Se reconstruye de atrás hacia delante, por la misma razón. */
+  let salida = fuente;
+  [...tes].sort((a, b) => b.xmlInicio - a.xmlInicio).forEach((t) => {
+    /* `xml:space="preserve"` o Word recorta los espacios de los extremos y las palabras se
+       pegan justo donde estaba el marcador. */
+    const apertura = /xml:space=/.test(t.apertura)
+      ? t.apertura
+      : t.apertura.replace(/^<w:t/, '<w:t xml:space="preserve"');
+    salida = salida.slice(0, t.xmlInicio)
+      + apertura + escaparXml(t.contenido) + t.cierre
+      + salida.slice(t.xmlFin);
+  });
+  return salida;
+}
+
+/**
  * Como `redistribuir`, pero para una celda de tabla que puede no traer ningún `<w:t>`
  * —vacía salvo por su formato/sombreado, algo frecuente en la columna que el cliente
  * dejó en blanco de la fila que se usa de modelo—.
@@ -237,13 +330,15 @@ export function aplicarMarcasOoxml(xml, marcas, delimitadores = {}) {
   let salida = String(xml || '');
   [...porParrafo.keys()].sort((a, b) => b - a).forEach((idx) => {
     const p = parrafos[idx];
-    let texto = p.texto;
-    porParrafo.get(idx).sort((a, b) => b.pos - a.pos).forEach((s) => {
-      texto = texto.slice(0, s.pos) + abrir + s.campo + cerrar + texto.slice(s.pos + s.largo);
-      aplicadas++;
-    });
+    porParrafo.get(idx).forEach(() => { aplicadas++; });
+    /* Quirúrgico y no aplanando el párrafo: `redistribuir` metía todo el texto en el
+       primer `<w:t>` y con ello el `<w:br/>` de la portada perdía su sitio, de modo que el
+       nombre de la compañía salía pegado al título del informe. */
     const bloque = salida.slice(p.inicio, p.fin);
-    salida = salida.slice(0, p.inicio) + redistribuir(bloque, texto) + salida.slice(p.fin);
+    const rangos = porParrafo.get(idx).map((s) => ({
+      pos: s.pos, largo: s.largo, texto: abrir + s.campo + cerrar,
+    }));
+    salida = salida.slice(0, p.inicio) + sustituirRangosEnParrafo(bloque, rangos) + salida.slice(p.fin);
   });
 
   return { xml: salida, aplicadas, descartadas };

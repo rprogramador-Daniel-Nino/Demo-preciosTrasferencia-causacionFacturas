@@ -31,6 +31,7 @@ import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
 import { compactarEspaciosOoxml } from './compactarEspaciosOoxml.js';
+import { actualizarAnioPeriodo } from './anioPeriodoOoxml.js';
 
 /* El `pPr` de un párrafo de PROSA que este generador inserta.
    `justificarCuerpoOoxml` normaliza la plantilla ANTES del relleno, así que no alcanza a los
@@ -2564,6 +2565,19 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
      Sobre el informe de MONTACHEM 2025: 147 renglones en blanco en rachas, con una de 31, y
      una hoja entera en blanco donde nueve vacíos precedían a un salto de página ya existente.
      Quedan en 0 renglones sueltos, sin que cambie ni una letra del texto ni una tabla. */
+  /* El año del período fiscal, ANTES de compactar y de escribir: la portada de la plantilla
+     lo trae del informe anterior y nada lo actualizaba. No basta con buscar «2024» dentro de
+     cada `<w:t>` porque Word parte el texto en runs arbitrarios —en la plantilla de MC
+     INTERNACIONAL el año viaja como «20»+«2»+«4»—, así que se trabaja sobre el texto unido
+     del párrafo. Alcance: la portada y la prosa del período fiscal; los años del ANEXO B y
+     de las fuentes citadas se quedan como están, porque son de otro ejercicio a propósito. */
+  const periodo = actualizarAnioPeriodo(xml, year, avisosTablas);
+  xml = periodo.xml;
+  if (periodo.cambiados) {
+    console.log(`[docxRelleno] año del período fiscal: ${periodo.cambiados} actualizado(s) a `
+      + `${year} en ${periodo.frases.join(', ')}.`);
+  }
+
   const espacios = compactarEspaciosOoxml(xml, leerParte('word/styles.xml'));
   xml = espacios.xml;
   if (espacios.vaciosQuitados) {
