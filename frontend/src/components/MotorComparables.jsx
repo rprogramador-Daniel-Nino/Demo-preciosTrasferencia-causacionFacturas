@@ -11,6 +11,7 @@ import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/ee
 import {
   separarPorSuficiencia, partidasFaltantes, motivoSinInformacionFinanciera, retirarFilas,
 } from '../services/eeffSuficiencia';
+import { cotejarConFuente } from '../services/eeffCotejoFuente';
 import { matrizDeRechazo } from '../services/anexoCHtml';
 import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRenderer';
 /* El EEFF se adjunta al ANEXO B como imagen de la página, no como cifras transcritas
@@ -751,8 +752,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      nuevo; no toca el estado, para poder aplicar varias de una sola vez. */
   const aplicarEeffEnFila = (filas, indice, datos, verificacion, archivo, cruce) => {
     const copia = [...filas];
+
+    /* Las cifras de la base de datos, tal como llegaron del export de Capital IQ, antes
+       de que las líneas de abajo las sobrescriban con las de la ficha. Se guardan la
+       primera vez y no se vuelven a tocar: sin esto, recargar una ficha sobre una fila
+       que ya tenía otra cotejaría ficha contra ficha —siempre cuadra— justo cuando el
+       analista está corrigiendo una lectura mala, que es cuando el cotejo importa. */
+    const previa = copia[indice] || {};
+    const fuenteCifras = previa.fuenteCifras || { s: previa.s, c: previa.c, op: previa.op };
+
+    /* Testigo externo de la lectura: el margen de la ficha contra el que la base de datos
+       publica para esa misma compañía. `verificacion` solo mira la aritmética interna del
+       documento, y una cifra tomada de la fila equivocada puede cuadrar consigo misma. */
+    const cotejo = cotejarConFuente(datos, fuenteCifras);
+
     copia[indice] = {
       ...copia[indice],
+      fuenteCifras,
       s: datos.ingresos_operacionales || copia[indice].s,
       c: datos.costo_ventas || copia[indice].c,
       op: datos.utilidad_operacional || copia[indice].op,
@@ -764,8 +780,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          ajuste y al Excel de soporte por más que el documento lo trajera. */
       ppe: datos.propiedad_planta_equipo || copia[indice].ppe,
       eeffDatos: datos,
-      eeffVerificado: verificacion.esValido,
-      eeffHallazgos: verificacion.hallazgos,
+      eeffVerificado: verificacion.esValido && cotejo.hallazgos.length === 0,
+      eeffHallazgos: [...verificacion.hallazgos, ...cotejo.hallazgos],
+      /* Que el cotejo no se pudo hacer —comparable cargada a mano, sin cifras de la base
+         de datos en su fila— no es lo mismo que haberlo hecho y estar bien. Se deja dicho
+         para que la pantalla del paso 4 pueda distinguirlo de un visto bueno. */
+      eeffCotejado: cotejo.cotejado,
       eeffArchivo: archivo,
       /* Se guarda cómo cruzó: un cruce por solapamiento de palabras hay que
          confirmarlo a ojo, y sin dejar rastro nadie lo haría. */
@@ -2117,8 +2137,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   <tr key={idx} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30">
                     <td className="py-2.5 px-3 font-semibold text-zinc-900 dark:text-zinc-100">{comp.name}</td>
                     <td className="py-2.5 px-3">
-                      {comp.eeffVerificado ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">
+                      {/* Tres estados y no dos: «Verificado OK» significa que la
+                          aritmética del documento cuadra Y que su margen coincide con el
+                          que publica la base de datos. Cuando no hubo cifras de la fuente
+                          con las que cotejar se dice, en vez de dar por bueno lo que no se
+                          comprobó. Se exige `=== false` a propósito: los estudios guardados
+                          antes de que existiera el cotejo no traen el campo, y marcarlos
+                          «sin cotejo» sería afirmar algo que no se midió. */}
+                      {comp.eeffVerificado && comp.eeffCotejado === false ? (
+                        <span
+                          title="Las cifras del documento cuadran entre sí, pero esta fila no traía cifras de la base de datos con las que comparar el margen."
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-sky-50 text-sky-700 dark:bg-sky-950/30 dark:text-sky-400">
+                          <CheckCircle className="w-3 h-3" /> Verificado, sin cotejo
+                        </span>
+                      ) : comp.eeffVerificado ? (
+                        <span
+                          title="La aritmética del documento cuadra y su margen coincide con el que publica la base de datos."
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">
                           <CheckCircle className="w-3 h-3" /> Verificado OK
                         </span>
                       ) : comp.eeffArchivo ? (

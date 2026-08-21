@@ -3685,3 +3685,95 @@ test('la justificación de la prosa sobrevive a la pasada de tipografía de la S
 /* La contrapartida —que los pies «FUENTE:» sigan a la izquierda y los títulos de tabla
    centrados, sin que la justificación de la prosa los arrastre— ya la afirma el test
    «el bloque de prosa macro se sustituye entero y conserva su pie de FUENTE». */
+
+test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orden impreso', async () => {
+  /* Lo que verificaban las dos pruebas de arriba era la cita al pie. Que la tabla se
+     REGENERE con las cifras de la comparable —y no se radique con las del informe
+     anterior— no lo comprobaba nada, y es el punto del anexo entero. */
+  const zip = await zipSinAnexoB();
+  insertarImagenesAnexoB(zip, { anio: 2025, comparables: [COMPARABLE_CON_EEFF] });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  const FILAS_ESPERADAS = [
+    'Estado de Resultados', 'Descripción', '2025',
+    'Ventas netas', '1.000',
+    'Costo de los bienes vendidos', '600',
+    'Beneficio bruto', '400',
+    'Gastos operativos', '250',
+    'Utilidad de operación', '150',
+    'FUENTE:',
+    'Balance General', 'Descripción', '2025',
+    'Activos totales promedio', '2.000',
+    'Promedio de cuentas por pagar netas', '80',
+    'Promedio de cuentas por cobrar netas', '120',
+    'EPP neto promedio', '300',
+    'Inventario neto promedio', '40',
+    'Efectivo promedio y equivalentes de efectivo', '500',
+    'FUENTE:',
+  ];
+
+  /* Se recorre avanzando el cursor: así se comprueba a la vez que cada rótulo con su
+     cifra está presente y que el orden es el del documento, que es lo que el usuario
+     pidió que no se moviera. */
+  let cursor = 0;
+  FILAS_ESPERADAS.forEach((trozo) => {
+    const donde = texto.indexOf(trozo, cursor);
+    assert.notStrictEqual(donde, -1,
+      `falta «${trozo}» después de la posición ${cursor} — o no se escribió, o salió fuera de orden`);
+    cursor = donde + trozo.length;
+  });
+
+  /* El año de la columna sale del periodo de la ficha, no del año del estudio: una
+     comparable con cierre en otro ejercicio tiene que rotularse con el suyo. */
+  const conOtroPeriodo = await zipSinAnexoB();
+  insertarImagenesAnexoB(conOtroPeriodo, {
+    anio: 2025,
+    comparables: [{ ...COMPARABLE_CON_EEFF, eeffDatos: { ...COMPARABLE_CON_EEFF.eeffDatos, periodo: 2024 } }],
+  });
+  assert.match(textoDe(conOtroPeriodo, RUTA_DOC_TEST), /Estado de ResultadosDescripción2024/);
+});
+
+test('los rubros opcionales de gasto solo aparecen cuando la ficha los trae', async () => {
+  /* Van al final del estado de resultados y son opcionales por norma: inventarlos con un
+     cero diría que la comparable reportó cero, que es distinto de no desglosarlos. */
+  const sinDesglose = await zipSinAnexoB();
+  insertarImagenesAnexoB(sinDesglose, { anio: 2025, comparables: [COMPARABLE_CON_EEFF] });
+  const texto = textoDe(sinDesglose, RUTA_DOC_TEST);
+  assert.ok(!texto.includes('Gastos de investigación y desarrollo'));
+  assert.ok(!texto.includes('Gastos de publicidad'));
+
+  const conDesglose = await zipSinAnexoB();
+  insertarImagenesAnexoB(conDesglose, {
+    anio: 2025,
+    comparables: [{
+      ...COMPARABLE_CON_EEFF,
+      eeffDatos: {
+        ...COMPARABLE_CON_EEFF.eeffDatos,
+        gastos_investigacion_desarrollo: 70,
+        gastos_publicidad: 30,
+      },
+    }],
+  });
+  assert.match(textoDe(conDesglose, RUTA_DOC_TEST), /Gastos de investigación y desarrollo70/);
+  assert.match(textoDe(conDesglose, RUTA_DOC_TEST), /Gastos de publicidad30/);
+});
+
+test('una comparable sin estado financiero leído deja el hueco señalado, no cifras viejas', async () => {
+  /* El anexo se radicaba con los bloques del contribuyente anterior cuando faltaba la
+     ficha. Ahora sale el nombre con su descripción y un pendiente en rojo. */
+  const zip = await zipSinAnexoB();
+  const avisos = [];
+  insertarImagenesAnexoB(zip, {
+    anio: 2025,
+    comparables: [{ name: 'SIN FICHA SA', descActividad: 'Algo hace.' }],
+  }, avisos);
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.ok(texto.includes('SIN FICHA SA'), 'la comparable sigue en el anexo');
+  assert.match(texto, /\[PENDIENTE\] Falta el estado financiero de SIN FICHA SA/);
+  assert.ok(!texto.includes('Estado de Resultados'), 'y no se inventa una tabla de cifras vacía');
+  /* El marcador del anexo de descripciones, no el del A: este llamado solo reescribe el
+     suyo, y «EEFF DEL CLIENTE ANTERIOR» seguiría ahí con razón porque vive en el ANEXO A. */
+  assert.ok(!texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'no se conserva lo del informe anterior');
+  assert.match(avisos.join(' | '), /1 de 1 comparable\(s\) sin estado financiero/);
+});
