@@ -1,7 +1,15 @@
 import axios from 'axios';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { num } from '../utils/calculations.js';
 import { extraerJSON } from './comparablesEngine.js';
+import { extraerTextoPdf } from './eeffTextoPdf.js';
 
+/* Dos lecturas del PDF nativo conviven en este archivo y hay que saber cuál es cuál:
+   `extraerTextoEstructuradoPdf` (de aquí abajo) lee las FICHAS DE LAS COMPARABLES, que
+   salen de una macro de Word y traen árbol de estructura con sus celdas; `extraerTextoPdf`
+   (en eeffTextoPdf.js) lee el ESTADO FINANCIERO DEL CONTRIBUYENTE, que es un PDF cualquiera
+   del contador del cliente. Son el mismo problema resuelto para dos documentos distintos, y
+   la unificación queda pendiente con su propio spec — no dentro de un merge. */
 if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/legacy/build/pdf.worker.mjs',
@@ -10,56 +18,116 @@ if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
 }
 
 /**
- * Prompt para la lectura de Estados Financieros del Contribuyente por Gemini Vision OCR.
+ * Prompt para la lectura de Estados Financieros del Contribuyente.
+ *
+ * ── Qué se lee, y por qué solo eso (alcance fijado por el usuario, 2026-08-21) ──
+ *
+ * Del ESTADO DE SITUACIÓN FINANCIERA se toman TRES partidas y un subtotal:
+ * cuentas por cobrar a partes relacionadas, inventarios, cuentas por pagar a partes
+ * relacionadas y el total del activo corriente. Las dos de capital de trabajo son las de
+ * PARTES RELACIONADAS y no las comerciales, porque la operación bajo estudio es con la
+ * vinculada — y el propio estado lo confirma: en su flujo de efectivo, la línea «Aumento /
+ * disminución en proveedores» es exactamente la variación de las cuentas por pagar a partes
+ * relacionadas. El proveedor es la vinculada.
+ *
+ * Del ESTADO DE RESULTADOS se toman los ingresos de actividades ordinarias y el costo de
+ * ventas, y NADA MÁS que se parezca a una utilidad: la utilidad operacional se CALCULA
+ *
+ *     gastos operativos    = gastos de ventas + gastos de administración
+ *     utilidad operacional = ingresos − costo de ventas − gastos operativos
+ *
+ * y por eso se piden esos dos rubros de gasto por separado en vez de un total.
+ *
+ * Calcularla es lo que cierra el defecto que motivó todo esto: la versión anterior leía la
+ * fila que el documento rotulara «resultado de la operación», y en el estado de Montachem
+ * 2025 esa fila (−2.986.236.031) es en realidad el total de los gastos operativos. Se
+ * publicaban 4.877.416.281 de gastos y un margen operacional de tres dígitos. Con la
+ * utilidad derivada de cifras que no se pueden confundir —ingresos, costo y los dos gastos
+ * del giro— ningún rótulo engañoso puede volver a decidirla.
  */
 export const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
-Extrae las cifras del ESTADO DE RESULTADOS y del ESTADO DE SITUACIÓN FINANCIERA del ejercicio más reciente que aparezca.
+Extrae ÚNICAMENTE los rubros que se piden abajo. No devuelvas ningún otro.
 
-Campos del Estado de Situación Financiera (Balance General) a extraer:
-- efectivo_y_equivalentes: Efectivo y equivalentes de efectivo / Bancos
-- inversiones_asociadas: Inversiones asociadas / Fiducuenta
-- cuentas_por_cobrar: Cuentas por cobrar comerciales y otras cuentas por cobrar
-- activos_impuestos: Activos por impuestos corrientes / Anticipos de impuestos
-- total_activo_corriente: Total Activo Corriente
-- propiedad_planta_equipo: Propiedades, planta y equipo
-- intangibles: Intangibles / Licencias
-- diferidos: Diferidos / Gastos pagados por anticipado
-- total_activos_no_corrientes: Total Activos no Corrientes
-- total_activos: Total Activos
+REGLA CENTRAL: transcribe, no interpretes. Cada cifra que devuelvas debe estar impresa en el documento, dígito por dígito. Si un concepto no aparece, va en null. NO estimes, NO deduzcas por diferencia, NO inventes, NO sumes varias filas para armar un rubro.
 
-Campos del Estado de Resultados (P&L):
-- ingresos_operacionales: Ventas / Ingresos por servicios
-- costo_ventas: Costo de ventas / Costo de servicios
-- utilidad_operacional: Utilidad operacional / EBIT
-- cuentas_por_pagar: Cuentas por pagar a proveedores
-- inventarios: Inventarios / Existencias
+Para CADA campo devuelve un objeto {"valor": <número o null>, "rotulo": "<el texto EXACTO de la fila del documento de donde tomaste la cifra, o cadena vacía si el campo va en null>"}.
+El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila que elegiste es la correcta.
 
-Reglas:
-· Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo.
+── ESTADO DE SITUACIÓN FINANCIERA ──
+· cuentas_por_cobrar_relacionadas: cuentas por cobrar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí los deudores comerciales, los clientes ni las «otras cuentas por cobrar» con terceros: si el documento solo trae esas, este campo va en null.
+· inventarios: inventarios, existencias, mercancías.
+· cuentas_por_pagar_relacionadas: cuentas por pagar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí proveedores de terceros, acreedores comerciales ni «otras cuentas por pagar»: si el documento solo trae esas, este campo va en null.
+· total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
+
+── ESTADO DE RESULTADOS ──
+· ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos operacionales, ingresos por servicios.
+· costo_ventas: costo de ventas, costo de los servicios prestados, costo de mercancía vendida.
+· gastos_ventas: gastos de ventas, gastos de ventas y distribución, gastos comerciales.
+· gastos_administracion: gastos de administración, gastos administrativos.
+· utilidad_bruta: la utilidad o ganancia bruta, si el documento la imprime como fila propia.
+
+NO se pide ninguna utilidad operacional ni resultado de la operación: el sistema la calcula como ingresos menos costo de ventas menos la suma de los dos rubros de gasto. Si el documento imprime una fila llamada «resultado de actividades de la operación» o parecida, IGNÓRALA — hay estados donde ese rótulo acompaña al total de los gastos y no a la utilidad, y esa confusión es la que este cambio evita.
+Tampoco se piden «otros gastos» ni «otros ingresos»: quedan fuera de los gastos operativos a propósito.
+
+── RUBROS SIN ASIGNAR ──
+"rubros_no_asignados": las filas del estado de situación financiera con cifra que NO hayas usado en los campos de arriba y que sean partidas de capital de trabajo o de gasto — deudores comerciales, otras cuentas por cobrar, proveedores, otras cuentas por pagar, otros gastos—, con su rótulo literal. Sirve para que el analista vea qué quedó fuera y decida. NO incluyas los totales ni los subtotales.
+
+── REGLAS DE TRANSCRIPCIÓN ──
+· Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo, tal como está impresa.
+· Una raya, un guion o una celda vacía significan que no hay cifra: eso es null, no cero. Un cero explícito impreso sí es 0.
 · Regla de escala, obligatoria y sin excepción: cada cifra numérica va EXACTAMENTE como aparece impresa en el documento, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así el documento diga "en miles" o "en millones" en el encabezado. Si el documento imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa para que otra parte del sistema decida qué hacer con ella; no es una instrucción para que tú calcules nada.
-· Si un concepto no aparece, usa null. NO estimes, NO deduzcas por diferencia, NO inventes.
 
-Devuelve SOLO este JSON estricto sin marcas markdown:
+Devuelve SOLO este JSON, sin marcas markdown:
 {
-  "periodo": "",
-  "moneda": "",
+  "periodo": "el año o ejercicio de la columna que leíste",
+  "moneda": "COP, USD, etc.",
   "unidad_origen": "unidades|miles|millones",
-  "ingresos_operacionales": {"valor": 0},
-  "costo_ventas": {"valor": 0},
-  "utilidad_operacional": {"valor": 0},
-  "cuentas_por_cobrar": {"valor": 0},
-  "inventarios": {"valor": 0},
-  "cuentas_por_pagar": {"valor": 0},
-  "efectivo_y_equivalentes": {"valor": 0},
-  "inversiones_asociadas": {"valor": 0},
-  "activos_impuestos": {"valor": 0},
-  "total_activo_corriente": {"valor": 0},
-  "propiedad_planta_equipo": {"valor": 0},
-  "intangibles": {"valor": 0},
-  "diferidos": {"valor": 0},
-  "total_activos_no_corrientes": {"valor": 0},
-  "total_activos": {"valor": 0}
+  "cuentas_por_cobrar_relacionadas": {"valor": null, "rotulo": ""},
+  "inventarios": {"valor": null, "rotulo": ""},
+  "cuentas_por_pagar_relacionadas": {"valor": null, "rotulo": ""},
+  "total_activo_corriente": {"valor": null, "rotulo": ""},
+  "ingresos_operacionales": {"valor": null, "rotulo": ""},
+  "costo_ventas": {"valor": null, "rotulo": ""},
+  "gastos_ventas": {"valor": null, "rotulo": ""},
+  "gastos_administracion": {"valor": null, "rotulo": ""},
+  "utilidad_bruta": {"valor": null, "rotulo": ""},
+  "rubros_no_asignados": [{"rotulo": "", "valor": null}]
 }`;
+
+/**
+ * El prompt del contribuyente para un año gravable concreto.
+ *
+ * Los estados financieros colombianos son comparativos: imprimen el ejercicio y el
+ * anterior en dos columnas contiguas. El prompt anterior decía «del ejercicio más reciente
+ * que aparezca», que acierta solo cuando el estudio es del último año cerrado — y falla en
+ * silencio, con cifras internamente coherentes, cuando se está trabajando un año anterior.
+ * Nada las delataba después: cuadran entre sí, porque son las de otro ejercicio.
+ */
+export function promptEeffContribuyente(anio) {
+  const anioLimpio = String(anio || '').trim();
+  if (!anioLimpio) return EEFF_PROMPT;
+  return `${EEFF_PROMPT}
+
+── AÑO A EXTRAER: ${anioLimpio} ──
+El documento es comparativo y trae más de una columna de ejercicios. Extrae ÚNICAMENTE la columna del año ${anioLimpio} e ignora por completo las demás. Devuelve "${anioLimpio}" en "periodo" si esa columna existe; si el documento NO trae una columna del ${anioLimpio}, devuelve en "periodo" el año que sí leíste, para que el sistema pueda advertirlo. No mezcles cifras de dos columnas.`;
+}
+
+/**
+ * El texto del documento, si lo tiene, formateado para el prompt.
+ *
+ * Se manda ADEMÁS de la imagen, no en su lugar: la imagen conserva la disposición de las
+ * columnas —que es lo que permite saber qué cifra es de qué año— y el texto aporta los
+ * dígitos exactos. Un PDF escaneado no tiene capa de texto y entonces esto no aporta nada
+ * y se omite, quedando la lectura como era antes.
+ */
+export function bloqueDeTexto(texto) {
+  if (!texto || !String(texto).trim()) return null;
+  return `A continuación, la capa de texto del MISMO documento, extraída directamente del PDF. Los dígitos de aquí son exactos: úsalos para transcribir las cifras, y usa la imagen para entender la disposición de las columnas y a qué año pertenece cada una. Si el texto y la imagen discrepan, manda el texto.
+
+<texto_del_documento>
+${texto}
+</texto_del_documento>`;
+}
 
 /**
  * Prompt especializado para la Ingesta Asistida de EEFF de Empresas Comparables
@@ -136,74 +204,149 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
   throw ultimo;
 }
 
+/* Las cifras que la lectura devuelve y el campo del estudio al que van.
+
+   El alcance lo fijó el usuario el 2026-08-21, después de una primera versión que leía los
+   quince rubros del balance: de la situación financiera se toman SOLO tres partidas más el
+   subtotal del activo corriente, y las dos partidas de capital de trabajo son las de PARTES
+   RELACIONADAS, no las comerciales.
+
+   Esa elección no es un detalle de nomenclatura. En este estudio la operación vinculada es
+   con la matriz, y el propio estado financiero lo confirma: en su flujo de efectivo, la
+   línea «Aumento / disminución en proveedores» (−135.245.675) es exactamente la variación de
+   CUENTAS POR PAGAR A PARTES RELACIONADAS (5.400.016.795 − 5.535.262.470). El proveedor es
+   la vinculada, así que el capital de trabajo que el ajuste debe neutralizar es el de esas
+   partidas y no el de los deudores comerciales con terceros.
+
+   Se escribe una sola vez, aquí, y de ella salen el mapeo y la verificación. */
+export const CAMPO_POR_RUBRO = {
+  ingresos_operacionales: 't_s',
+  costo_ventas: 't_c',
+  cuentas_por_cobrar_relacionadas: 't_ar',
+  inventarios: 't_inv',
+  cuentas_por_pagar_relacionadas: 't_ap',
+  total_activo_corriente: 't_act_curr',
+};
+
+/* Los rubros que NO son campos del estudio pero se leen porque de ellos sale la utilidad
+   operacional. Ya no se «coteja» una utilidad leída contra las identidades del estado: por
+   decisión del usuario (2026-08-21) la utilidad operacional NO se lee de ninguna fila, se
+   CALCULA, y los gastos operativos son la suma de los dos rubros de gasto del giro:
+
+     gastos operativos   = gastos de ventas + gastos de administración
+     utilidad operacional = ventas netas − costo de ventas − gastos operativos
+
+   Con eso, la fila que el documento rotule «resultado de la operación» deja de importar —y
+   era justo la que en el estado de Montachem 2025 traía el total de los gastos en lugar de
+   la utilidad, y hacía que el libro publicara 4.877.416.281 de gastos operativos—. Quedan
+   fuera del cálculo «otros gastos» y «otros ingresos»: la definición del usuario son los
+   dos rubros del giro, y en ese estado esa diferencia es de 4.051.927 pesos.
+
+   `utilidad_bruta` se sigue leyendo, pero solo para poder advertir si el costo o las ventas
+   no cuadran con lo que el documento imprime. No entra en ningún campo del estudio. */
+export const RUBROS_DE_COTEJO = [
+  'gastos_ventas',
+  'gastos_administracion',
+  'utilidad_bruta',
+];
+
 /**
- * Extrae Estados Financieros del Contribuyente con Gemini Vision OCR
+ * El valor de un rubro de la respuesta, sea la forma que sea.
+ *
+ * Sustituye a un `extractVal` que exigía `typeof obj.valor === 'number'` y devolvía null
+ * en cuanto el modelo respondía `{"valor": "337.546.138"}` o el número plano
+ * `337546138` — dos formas que da con frecuencia, y las dos se descartaban en silencio
+ * dejando la celda del libro en cero. La ruta de comparables no tenía el problema porque
+ * pasaba el valor crudo y `num()` lo rescataba después; esta era la única asimétrica.
  */
-export async function parseEeffWithGeminiOCR(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result.split(',')[1];
-        let mimeType = 'application/pdf';
+export function valorDeRubro(rubro) {
+  if (rubro === null || rubro === undefined) return null;
+  if (typeof rubro === 'object') return num(rubro.valor);
+  return num(rubro);
+}
 
-        if (file.type.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
-          mimeType = file.type || 'image/jpeg';
-        }
+/** El rótulo literal con que el documento imprimió ese rubro, si vino. */
+export function rotuloDeRubro(rubro) {
+  if (!rubro || typeof rubro !== 'object') return '';
+  return String(rubro.rotulo || '').trim();
+}
 
-        const payload = {
-          model: 'gemini-3.5-flash',
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mimeType, data: base64Data } },
-              { text: EEFF_PROMPT }
-            ]
-          }]
-        };
+/**
+ * Lee los estados financieros del contribuyente.
+ *
+ * Manda las páginas rasterizadas Y la capa de texto del PDF cuando la tiene: el texto da
+ * los dígitos exactos y la imagen la disposición de las columnas. Devuelve los campos
+ * `t_*` del estudio, los rubros de cotejo, los rótulos de origen y el texto extraído, que
+ * es lo que `eeffVerificacion.js` necesita para comprobar que cada cifra existe de verdad
+ * en el documento.
+ *
+ * `anioEstudio` no es opcional en la práctica: sin él, un documento comparativo se lee por
+ * la columna que el modelo elija.
+ */
+export async function parseEeffWithGeminiOCR(file, anioEstudio) {
+  const base64Data = await leerBase64(file);
+  const mimeType = mimeDe(file);
+  const textoPdf = await extraerTextoPdf(file);
 
-        const response = await postGeminiWithRetry(payload);
-        const cand = response.data?.candidates?.[0];
-        const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+  const partes = [
+    { inline_data: { mime_type: mimeType, data: base64Data } },
+    { text: promptEeffContribuyente(anioEstudio) },
+  ];
+  const conTexto = bloqueDeTexto(textoPdf);
+  if (conTexto) partes.push({ text: conTexto });
 
-        if (text) {
-          const cleanJsonStr = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-          const parsed = JSON.parse(cleanJsonStr);
-
-          const extractVal = (obj) => {
-            if (!obj || typeof obj.valor !== 'number') return null;
-            return obj.valor;
-          };
-
-          resolve({
-            t_s: extractVal(parsed.ingresos_operacionales),
-            t_c: extractVal(parsed.costo_ventas),
-            t_op: extractVal(parsed.utilidad_operacional),
-            t_ar: extractVal(parsed.cuentas_por_cobrar),
-            t_inv: extractVal(parsed.inventarios),
-            t_ap: extractVal(parsed.cuentas_por_pagar),
-            t_cash: extractVal(parsed.efectivo_y_equivalentes),
-            t_inv_assoc: extractVal(parsed.inversiones_asociadas),
-            t_tax: extractVal(parsed.activos_impuestos),
-            t_act_curr: extractVal(parsed.total_activo_corriente),
-            t_ppe: extractVal(parsed.propiedad_planta_equipo),
-            t_intang: extractVal(parsed.intangibles),
-            t_dif: extractVal(parsed.diferidos),
-            t_act_nocurr: extractVal(parsed.total_activos_no_corrientes),
-            t_act_tot: extractVal(parsed.total_activos),
-            periodo: parsed.periodo,
-            rawJson: parsed
-          });
-        } else {
-          reject(new Error("No se obtuvo respuesta en formato JSON de Gemini Vision OCR."));
-        }
-      } catch (err) {
-        console.error("Error en parseEeffWithGeminiOCR:", err);
-        reject(err);
-      }
-    };
-    reader.onerror = (e) => reject(e);
+  const response = await postGeminiWithRetry({
+    model: 'gemini-3.5-flash',
+    contents: [{ parts: partes }],
   });
+
+  const text = response.data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text) throw new Error('No se obtuvo respuesta en formato JSON de Gemini Vision OCR.');
+
+  /* `extraerJSON` y no un `replace` de fences: el modelo agrega prosa antes o después del
+     objeto con frecuencia, y entonces `JSON.parse` sobre el texto recortado a mano
+     revienta y se pierde la lectura completa del documento (ver comparablesEngine.js). */
+  const parsed = extraerJSON(text);
+  if (!parsed) throw new Error('La respuesta de la lectura de estados financieros no traía un JSON reconocible.');
+
+  const lectura = {};
+  Object.entries(CAMPO_POR_RUBRO).forEach(([rubro, campo]) => {
+    lectura[campo] = valorDeRubro(parsed[rubro]);
+  });
+
+  const cotejo = {};
+  RUBROS_DE_COTEJO.forEach((rubro) => { cotejo[rubro] = valorDeRubro(parsed[rubro]); });
+
+  const rotulos = {};
+  [...Object.keys(CAMPO_POR_RUBRO), ...RUBROS_DE_COTEJO].forEach((rubro) => {
+    const r = rotuloDeRubro(parsed[rubro]);
+    if (r) rotulos[rubro] = r;
+  });
+
+  return {
+    ...lectura,
+    /* `t_op` NO se llena aquí. El estudio lo guarda como utilidad operacional y el libro
+       lo necesita como gastos, y cuál de las dos cosas es la que cuadra con el resto del
+       estado lo decide `eeffVerificacion.js` a partir de los rubros de cotejo — no el
+       rótulo de una sola fila, que es justo lo que llevó a publicar 4.877.416.281 como
+       gastos operativos de un estado que dice 2.986.236.031. */
+    cotejo,
+    rotulos,
+    rubrosNoAsignados: Array.isArray(parsed.rubros_no_asignados)
+      ? parsed.rubros_no_asignados
+        .map((r) => ({
+          rotulo: String((r && r.rotulo) || '').trim(),
+          valor: valorDeRubro(r && r.valor !== undefined ? r.valor : null),
+          seccion: String((r && r.seccion) || '').trim(),
+        }))
+        .filter((r) => r.rotulo && r.valor !== null)
+      : [],
+    periodo: parsed.periodo,
+    unidadOrigen: String(parsed.unidad_origen || '').trim().toLowerCase(),
+    moneda: parsed.moneda,
+    textoPdf,
+    rawJson: parsed,
+  };
 }
 
 /**

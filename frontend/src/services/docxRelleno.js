@@ -29,6 +29,7 @@
 
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
+import { justificarCuerpoOoxml } from './justificarOoxml.js';
 import { valorDeCampo } from './plantillaVocabulario.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
@@ -2518,6 +2519,18 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
     /* Los de la plantilla, para que las notas nuevas se lean igual que las que ya trae. */
     estilos: estilosDeNota(leerParte('word/styles.xml')),
   });
+
+  /* Todo el cuerpo del informe justificado, ANTES de cualquier relleno. La ruta de HTML ya
+     lo hacía por su CSS y por el conversor a OOXML; esta no, porque los párrafos vienen de
+     la plantilla del cliente con la alineación que esta traiga —y varía: END GAME deja 339
+     párrafos sin declararla y MC INTERNACIONAL trae 30 con «left» explícito—.
+
+     Va aquí y no al final por una razón de propiedad: la justificación normaliza la
+     PLANTILLA, mientras que los párrafos que este generador inserta después traen su
+     formato deliberado (los pies «FUENTE:» a la izquierda, los títulos de tabla y las
+     imágenes centrados). Al aplicarla antes, ese formato manda sobre ella. */
+  const justificado = justificarCuerpoOoxml(xml, leerParte('word/styles.xml'));
+  xml = justificado.xml;
 
   xml = actualizarApartadosMacroOoxml(xml, datosMacro, year, avisosTablas, notas);
   xml = actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, year, avisosTablas, notas);

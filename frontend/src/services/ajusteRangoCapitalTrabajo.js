@@ -38,7 +38,7 @@
    con END GAME al quinto decimal.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { num } from '../utils/calculations.js';
+import { num, egreso } from '../utils/calculations.js';
 
 /* Los seis ajustes del modelo, en el mismo orden y con las mismas etiquetas que
    las columnas de las hojas de método del Excel. 'ninguno' es el rango sin ajuste
@@ -87,11 +87,17 @@ const NUMERADOR_UTIL_BRUTA = new Set(['MB', 'Berry', 'CostPlus']);
    más las cuatro partidas de capital de trabajo promedio que el ajuste necesita. */
 function cifras(parte) {
   const p = parte || {};
+  /* `egreso` en `c` y en `op`: los dos son magnitudes de egreso y el documento las
+     imprime con signo negativo o entre paréntesis, signo que la lectura conserva a
+     propósito. Sin normalizarlo aquí, `gp = s − c` sumaba el costo en vez de restarlo
+     —utilidad bruta al doble y margen operacional de 171 % con las cifras de
+     Montachem 2025—. La utilidad operacional (`ebit`) NO se normaliza: se deriva de
+     estas tres y conserva su signo, porque una pérdida operativa es real. */
   return {
     s: num(p.s),        // ventas netas
-    c: num(p.c),        // costo de ventas (COGS)
-    op: num(p.op),      // gastos operativos totales
-    gp: num(p.s) !== null && num(p.c) !== null ? num(p.s) - num(p.c) : null, // utilidad bruta
+    c: egreso(p.c),     // costo de ventas (COGS), en positivo
+    op: egreso(p.op),   // gastos operativos totales, en positivo
+    gp: num(p.s) !== null && egreso(p.c) !== null ? num(p.s) - egreso(p.c) : null, // utilidad bruta
     ebit: pliEbit(p),   // utilidad operacional
     ar: num(p.ar) || 0, // CxC promedio
     inv: num(p.inv) || 0, // inventario promedio
@@ -103,7 +109,7 @@ function cifras(parte) {
 /* EBIT del sistema: ventas − costos − gastos. Coincide con Operating Profit del
    Excel (E17 = E12 − E16). */
 function pliEbit(p) {
-  const s = num(p.s), c = num(p.c), op = num(p.op);
+  const s = num(p.s), c = egreso(p.c), op = egreso(p.op);
   if (s === null || c === null || op === null) return null;
   return s - c - op;
 }

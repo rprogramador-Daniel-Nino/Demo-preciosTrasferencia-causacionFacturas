@@ -435,8 +435,11 @@ test('el ajuste de PP&E escala por la base, igual que las otras tres partidas', 
   const mo = hojas.find((h) => h.nombre === 'MO');
   assert.strictEqual(mo.celdas[2][16].f, `((H3/M3)-(Datos!$B$${fPpe}/Datos!$B$${fVentas}))*(M3*I3)`);
   const ncp = hojas.find((h) => h.nombre === 'NCP');
+  /* El costo y los gastos del contribuyente van envueltos en ABS: la hoja Datos los
+     guarda con el signo del estado financiero y la base del método necesita la
+     magnitud. Ver `egreso()` en utils/calculations.js. */
   assert.strictEqual(ncp.celdas[2][16].f,
-    `((H3/((C3-G3)+D3))-(Datos!$B$${fPpe}/(Datos!$B$${fCosto}+Datos!$B$${fGastos})))*(M3*I3)`,
+    `((H3/((C3-G3)+D3))-(Datos!$B$${fPpe}/(ABS(Datos!$B$${fCosto})+ABS(Datos!$B$${fGastos}))))*(M3*I3)`,
     'NCP toma el ratio sobre el denominador depurado pero escala con la base del método');
 });
 
@@ -785,8 +788,44 @@ test('las columnas A–I traen el literal que el emisor ya tiene, sin dejar de s
     'B–H en el orden de la tabla de Datos: ventas, costo, gastos, CxC, inv, CxP, PP&E');
   assert.strictEqual(f[8].v, ESTUDIO_4.prime / 100,
     'la tasa viaja en porcentaje y el emisor la divide entre 100');
-  f.slice(0, 9).forEach((c, k) => assert.ok(c.f && c.f.startsWith('Datos!'),
+  /* Todas siguen siendo referencia a la hoja Datos, y no un literal suelto. Las de
+     costo (C, índice 2) y gastos operativos (D, índice 3) la envuelven en ABS: la hoja
+     Datos conserva el signo con que el documento imprime el egreso y el cálculo del
+     método necesita la magnitud. */
+  f.slice(0, 9).forEach((c, k) => assert.ok(
+    c.f && (c.f.startsWith('Datos!') || c.f.startsWith('ABS(Datos!')),
     `la columna ${k} sigue siendo referencia a la hoja Datos`));
+  assert.deepStrictEqual([2, 3].map((k) => f[k].f.startsWith('ABS(')), [true, true],
+    'el costo y los gastos operativos de la comparable entran en magnitud');
+});
+
+test('el costo negativo del documento se conserva en Datos y entra en magnitud al método', () => {
+  /* El caso de Montachem 2025: el estado de resultados imprime «COSTO DE VENTAS
+     (21.850.187.494)» y la lectura conserva ese signo a propósito, para que el libro se
+     lea igual que el documento radicado. Sin la envoltura ABS, la utilidad bruta de la
+     columna K salía por el doble —45.591.555.238 en vez de 1.891.180.250— y el margen
+     operacional en 171 %, y el recálculo de Excel lo confirmaba en vez de delatarlo. */
+  const conSigno = {
+    ...ESTUDIO_4,
+    t_s: 23741367744, t_c: -21850187494, t_op: 2986236031,
+    comparables: [{ ...ESTUDIO_4.comparables[0], s: 1000, c: -600, op: -250, amb: 'Nac' }],
+  };
+  const hojas = hojasMemoriaRangoOptimo(conSigno, null);
+  const datos = hojas.find((h) => h.nombre === 'Datos');
+  const valorDe = (etiqueta) => {
+    const fila = datos.celdas.find((f) => f && f[0] && f[0].v === etiqueta);
+    return fila[1].v;
+  };
+  assert.strictEqual(valorDe('Costo de ventas'), -21850187494,
+    'la hoja Datos muestra el costo como lo imprime el estado financiero');
+
+  const mo = hojas.find((h) => h.nombre === 'MO');
+  const fila = mo.celdas[2];
+  assert.strictEqual(fila[2].v, 600, 'la columna de costo del método va en magnitud');
+  assert.strictEqual(fila[3].v, 250, 'la de gastos operativos también');
+  assert.strictEqual(fila[10].v, 400,
+    'la utilidad bruta de la comparable es ventas − costo, no ventas + costo');
+  assert.strictEqual(fila[9].v, 150, 'y el EBIT es ventas − costo − gastos');
 });
 
 test('los intermedios del ajuste (J–R) traen el valor que expone el motor', () => {
@@ -1035,4 +1074,43 @@ test('las celdas de porcentaje llevan tres decimales y las de razón se quedan e
   const datos = hojas.find((h) => h.nombre === 'Datos');
   assert.ok(datos.celdas.flat().some((c) => c && c.z === '0.000%'),
     'la hoja Datos también: el A.V. y la tasa son porcentajes');
+});
+
+test('el libro publica las cifras que la ingesta corrigió, con su motivo', () => {
+  /* Una corrección automática que solo vive en la pantalla no sirve de soporte: el libro
+     es lo que se radica, y quien lo audite tiene que poder ver que la utilidad operacional
+     que sustenta el margen no es la que el documento rotula como tal. */
+  const conCorrecciones = {
+    ...ESTUDIO3,
+    t_correcciones: [{
+      campo: 't_op',
+      etiqueta: 'Utilidad operacional',
+      valorLeido: -2986236031,
+      valorAplicado: -1095055781,
+      rotuloLeido: 'RESULTADO DE ACTIVIDADES DE LA OPERACIÓN',
+      motivo: 'La fila leída no cuadra con el resto del estado.',
+    }],
+  };
+  const hojas = hojasMemoriaRangoOptimo(conCorrecciones, null);
+  const diag = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  assert.ok(diag, 'el libro trae la hoja de diagnóstico');
+
+  const titulo = diag.celdas.findIndex(
+    (f) => f && f[0] && String(f[0].v || '').includes('CIFRAS CORREGIDAS'));
+  assert.ok(titulo >= 0, 'la sección de cifras corregidas tiene que estar');
+
+  const fila = diag.celdas.find((f) => f && f[0] && f[0].v === 'Utilidad operacional');
+  assert.ok(fila, 'con una fila por corrección');
+  assert.strictEqual(fila[1].v, -2986236031, 'lo que decía el documento');
+  assert.strictEqual(fila[2].v, -1095055781, 'lo que se aplicó');
+  assert.strictEqual(fila[3].v, 'RESULTADO DE ACTIVIDADES DE LA OPERACIÓN');
+  assert.match(String(fila[4].v), /no cuadra/);
+});
+
+test('sin correcciones, la hoja de diagnóstico no trae la sección vacía', () => {
+  const hojas = hojasMemoriaRangoOptimo(ESTUDIO3, null);
+  const diag = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  const titulo = diag.celdas.findIndex(
+    (f) => f && f[0] && String(f[0].v || '').includes('CIFRAS CORREGIDAS'));
+  assert.strictEqual(titulo, -1, 'no se anuncia una sección que no tiene filas');
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { montoOperacion, num, fmt, pctf } from './calculations.js';
+import { montoOperacion, num, fmt, pctf, egreso, pliOf, ratios } from './calculations.js';
 
 /* ══════ montoOperacion ══════
    El monto de las operaciones con vinculados se guarda en más de un campo y cada
@@ -85,4 +85,58 @@ test('pctf devuelve el hueco visible sin dato, incluido NaN', () => {
 
 test('pctf formatea los negativos con su signo y los tres decimales', () => {
   assert.strictEqual(pctf(-0.0432), '-4,320 %');
+});
+
+/* ══════ egreso: el signo del documento contra el convenio del cálculo ══════
+   Los estados financieros imprimen los egresos con signo negativo o entre paréntesis, y
+   la lectura conserva ese signo a propósito para que el libro y el ANEXO A se lean igual
+   que el documento radicado. Pero la utilidad bruta es `ventas − costo`: con el costo en
+   negativo, sumaba. Con las cifras de Montachem 2025 (ventas 23.741.367.744, costo
+   −21.850.187.494) la utilidad bruta salía 45.591.555.238 en vez de 1.891.180.250 y el
+   margen bruto 192 % en vez de 7,966 %. */
+
+const MONTACHEM = { s: 23741367744, c: -21850187494, op: 2986236031 };
+
+test('egreso devuelve la magnitud de la cifra, venga con signo, entre paréntesis o sin nada', () => {
+  assert.strictEqual(egreso(-21850187494), 21850187494);
+  assert.strictEqual(egreso('(21.850.187.494)'), 21850187494);
+  assert.strictEqual(egreso('-21.850.187.494'), 21850187494);
+  assert.strictEqual(egreso(21850187494), 21850187494);
+});
+
+test('egreso distingue la ausencia de cifra del cero, igual que num', () => {
+  assert.strictEqual(egreso(null), null);
+  assert.strictEqual(egreso(undefined), null);
+  assert.strictEqual(egreso(''), null);
+  assert.strictEqual(egreso(0), 0);
+});
+
+test('el margen bruto es el mismo con el costo en negativo que en positivo', () => {
+  const conSigno = pliOf(MONTACHEM, 'MB');
+  const enPositivo = pliOf({ ...MONTACHEM, c: 21850187494 }, 'MB');
+  assert.strictEqual(conSigno, enPositivo);
+  /* Y es el que se despeja del propio documento: 1.891.180.250 / 23.741.367.744. */
+  assert.ok(Math.abs(conSigno - 1891180250 / 23741367744) < 1e-12,
+    `el margen bruto debería ser 7,966 %, dio ${pctf(conSigno)}`);
+});
+
+test('el índice de Berry es el mismo con el costo en negativo que en positivo', () => {
+  const conSigno = pliOf(MONTACHEM, 'Berry');
+  const enPositivo = pliOf({ ...MONTACHEM, c: 21850187494 }, 'Berry');
+  assert.strictEqual(conSigno, enPositivo);
+});
+
+test('el margen operacional no se toca: una pérdida operativa sigue siendo negativa', () => {
+  /* La utilidad operacional NO pasa por `egreso`. Volverla positiva convertiría un
+     estudio en pérdidas en uno rentable, que es el error contrario y peor. */
+  assert.ok(pliOf({ s: 23741367744, c: -21850187494, op: -1095055781 }, 'MO') < 0);
+});
+
+test('el ratio de cuentas por pagar sobre costo no se invierte por el signo del documento', () => {
+  const conSigno = ratios({ ...MONTACHEM, ar: 6032337879, inv: 4734795891, ap: 658293893 });
+  const enPositivo = ratios({
+    ...MONTACHEM, c: 21850187494, ar: 6032337879, inv: 4734795891, ap: 658293893,
+  });
+  assert.deepStrictEqual(conSigno, enPositivo);
+  assert.ok(conSigno.apC > 0, 'un pasivo sobre un costo, los dos positivos, da un ratio positivo');
 });

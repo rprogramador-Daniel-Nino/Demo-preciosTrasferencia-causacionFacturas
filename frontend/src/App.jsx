@@ -355,7 +355,16 @@ export default function App() {
        «Sin razón social» y las guardas del generador lo cuentan como campo sin dato. */
     ent: '', nit: '', anio: 2025,
     ciiu: '', objeto: '', representante: '', vinc: '', pais_vinc: '', vinc_id: '',
-    vinc_tipo: '', t_s: '', t_c: '', t_op: '', t_ar: '', t_inv: '', t_ap: '',
+    vinc_tipo: '',
+    /* Los quince rubros de la parte examinada, los mismos y en el mismo orden que
+       `RUBROS_EXAMINADA` del libro. Los ocho del balance —efectivo, inversiones
+       asociadas, impuestos corrientes, los dos subtotales, el total, intangibles y
+       diferidos— no estaban declarados aquí ni tenían casilla en el formulario: existían
+       solo si la lectura del documento acertaba, y si no, la única forma de corregirlos
+       era editar el Excel a mano. */
+    t_s: '', t_c: '', t_op: '',
+    t_cash: '', t_inv_assoc: '', t_ar: '', t_inv: '', t_tax: '', t_act_curr: '',
+    t_ppe: '', t_intang: '', t_dif: '', t_act_nocurr: '', t_act_tot: '', t_ap: '',
     /* `prime` arranca en 7,37: el promedio anual 2025 de la Bank Prime Loan Rate
        (Reserva Federal, H.15 · serie FRED RIFSPBLPNA). Es editable como cualquier otro
        campo, y hay que cambiarlo si el año gravable no es 2025. Antes arrancaba vacío,
