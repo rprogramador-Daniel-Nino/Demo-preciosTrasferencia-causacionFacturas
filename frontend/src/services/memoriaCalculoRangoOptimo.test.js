@@ -910,7 +910,11 @@ test('una cifra en cadena formateada parte del mismo número en el libro y en el
 
   /* 2) Y las cifras de la comparable, que alimentan las columnas B–H. */
   const filaComp = datos.celdas.find((f) => f && f[0] && f[0].v === 'Con Cadenas SA');
-  assert.deepStrictEqual(filaComp.slice(1, 8).map((c) => c.v), [1500, 900, 300, 150, 60, 120, 300],
+  /* El costo y los gastos van en negativo: es el convenio de egreso de la hoja «Datos»
+     (2026-08-21), que la publica como el estado financiero. Lo que esta prueba vigila es la
+     MAGNITUD —con `Number('1.500')` las ventas darían 1,5— y la hoja de método, más abajo,
+     los recupera en positivo con ABS. */
+  assert.deepStrictEqual(filaComp.slice(1, 8).map((c) => c.v), [1500, -900, -300, 150, 60, 120, 300],
     'la tabla de comparables de Datos lee las cadenas con separador de miles');
   assert.deepStrictEqual(mo.celdas[2].slice(1, 8).map((c) => c.v), [1500, 900, 300, 150, 60, 120, 300],
     'y la hoja de método publica las mismas, no otras');
@@ -1113,4 +1117,90 @@ test('sin correcciones, la hoja de diagnóstico no trae la sección vacía', () 
   const titulo = diag.celdas.findIndex(
     (f) => f && f[0] && String(f[0].v || '').includes('CIFRAS CORREGIDAS'));
   assert.strictEqual(titulo, -1, 'no se anuncia una sección que no tiene filas');
+});
+
+/* ══════ LEY DE SIGNOS EN EL LIBRO ══════
+   La hoja «Datos» publica los egresos con el signo del estado financiero —negativos— y las
+   fórmulas los leen en magnitud. Las dos mitades tienen que sostenerse a la vez: si la hoja
+   los publica en negativo y una fórmula los lee sin ABS, la resta se convierte en suma y el
+   libro publica un margen de tres dígitos. */
+
+test('la hoja Datos publica los egresos en negativo, venga el dato como venga', () => {
+  [1, -1].forEach((sg) => {
+    const hojas = hojasMemoriaRangoOptimo({
+      ...ESTUDIO_4,
+      t_s: 23741367744, t_c: sg * 21850187494, t_op: sg * 2982184104,
+      comparables: [{ ...ESTUDIO_4.comparables[0], s: 10000, c: sg * 8200, op: sg * 1500 }],
+    }, null);
+    const datos = hojas.find((h) => h.nombre === 'Datos');
+    const valor = (etq) => datos.celdas.find((f) => f && f[0] && f[0].v === etq)[1].v;
+    assert.strictEqual(valor('Ventas netas'), 23741367744, 'los ingresos NO se tocan');
+    assert.strictEqual(valor('Costo de ventas'), -21850187494);
+    assert.strictEqual(valor('Gastos operativos'), -2982184104);
+    const comp = datos.celdas.find((f) => f && f[0] && f[0].v === ESTUDIO_4.comparables[0].name);
+    assert.strictEqual(comp[2].v, -8200, 'el costo de la comparable también');
+    assert.strictEqual(comp[3].v, -1500, 'y sus gastos operativos');
+  });
+});
+
+test('el libro entero da lo mismo con los egresos en negativo que en positivo', () => {
+  /* La comprobación de fondo: 1.084 celdas numéricas, y las únicas que difieren son las de
+     la hoja «Datos» que muestran el dato de entrada. Aquí se afirma sobre las derivadas. */
+  const libro = (sg) => hojasMemoriaRangoOptimo({
+    ...ESTUDIO_4,
+    t_s: 23741367744, t_c: sg * 21850187494, t_op: sg * 2982184104,
+    comparables: ESTUDIO_4.comparables.map((c) => ({
+      ...c, c: sg * Math.abs(c.c), op: sg * Math.abs(c.op),
+    })),
+  }, null);
+  const neg = libro(-1);
+  const pos = libro(1);
+
+  let comparadas = 0;
+  neg.forEach((hN, i) => (hN.celdas || []).forEach((fila, r) => (fila || []).forEach((cN, c) => {
+    /* La hoja Datos publica el dato de entrada y por eso ahí SÍ cambia el signo; el resto
+       del libro son cifras derivadas y no pueden depender de cómo llegó el egreso. */
+    if (hN.nombre === 'Datos') return;
+    const cP = (pos[i].celdas[r] || [])[c];
+    assert.strictEqual(cN && cN.f, cP && cP.f, `${hN.nombre} fila ${r + 1} col ${c}: la fórmula cambió`);
+    if (typeof (cN && cN.v) === 'number' && typeof (cP && cP.v) === 'number') {
+      assert.ok(Math.abs(cN.v - cP.v) <= 1e-9 * Math.max(1, Math.abs(cN.v)),
+        `${hN.nombre} fila ${r + 1} col ${c}: ${cN.v} ≠ ${cP.v} (fórmula: ${cN.f})`);
+      comparadas += 1;
+    }
+  })));
+  assert.ok(comparadas > 400, `debería comparar cientos de celdas derivadas, comparó ${comparadas}`);
+});
+
+test('los chequeos del diagnóstico leen los egresos en magnitud', () => {
+  /* Sin ABS, `COS<0.05*VEN` es cierto para toda comparable con el costo en negativo y la
+     hoja publicaría «Revisar: N de N» en cuatro de los cinco métodos de cualquier estudio.
+     Un diagnóstico que siempre grita se deja de leer. */
+  const hojas = hojasMemoriaRangoOptimo({
+    ...ESTUDIO_4,
+    comparables: ESTUDIO_4.comparables.map((c) => ({
+      ...c, c: -Math.abs(c.c), op: -Math.abs(c.op),
+    })),
+  }, null);
+  const dg = hojas.find((h) => h.nombre === 'Diagnóstico de datos');
+  assert.ok(dg, 'el libro trae la hoja de diagnóstico');
+
+  /* Los cuatro chequeos que tocan un egreso. El quinto (Margen Operacional) mira solo las
+     ventas y por eso no lleva ABS. Estas celdas son fórmula SIN valor en caché —el emisor no
+     evalúa SUMPRODUCT, lo deja para Excel—, así que lo que se afirma es la fórmula. */
+  ['Margen Bruto', 'Cost Plus', 'Índice de Berry', 'Net Cost Plus'].forEach((metodo) => {
+    const fila = dg.celdas.find((f) => f && f[0] && f[0].v === metodo);
+    assert.ok(fila, `falta el chequeo de ${metodo}`);
+    assert.match(fila[1].f, /ABS\(Datos!/,
+      `el chequeo de ${metodo} tiene que leer el egreso en magnitud: ${fila[1].f}`);
+  });
+
+  /* Y el criterio, evaluado a mano sobre las cifras del fixture: con los egresos en negativo
+     y ABS, ninguna comparable se marca; sin ABS, TODAS — que es el falso positivo que esto
+     evita. `ESTUDIO_4` trae costos que superan el 5 % de sus ventas. */
+  const comps = ESTUDIO_4.comparables.map((c) => ({ s: Number(c.s), c: -Math.abs(Number(c.c)) }));
+  assert.strictEqual(comps.filter((c) => Math.abs(c.c) < 0.05 * c.s).length, 0,
+    'con ABS ninguna comparable del fixture se marca');
+  assert.strictEqual(comps.filter((c) => c.c < 0.05 * c.s).length, comps.length,
+    'sin ABS se marcarían todas: ese es el falso positivo que el ABS evita');
 });

@@ -14,7 +14,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { verificarEeff, camposAplicables } from './eeffVerificacion.js';
+import {
+  verificarEeff, camposAplicables, utilidadOperacionalDe, gastosOperativosDe,
+} from './eeffVerificacion.js';
 
 /* La capa de texto del PDF, reducida a las líneas con cifra. Es lo que `extraerTextoPdf`
    devuelve para este documento (tiene texto embebido; no es un escaneo). */
@@ -229,4 +231,102 @@ test('camposAplicables no propaga los nulos, para no borrar lo escrito a mano', 
   const aplicables = camposAplicables(verificar({ t_inv: null }).campos);
   assert.ok(!('t_inv' in aplicables));
   assert.strictEqual(aplicables.t_ar, 2926256259);
+});
+
+/* ══════ LEY DE SIGNOS ══════
+   El punto que hay que blindar: los estados imprimen el costo y los gastos con signo
+   negativo o entre paréntesis casi sin excepción, y `ventas − costo − gastos` aplicado sobre
+   esos valores tal cual los SUMA por doble negación. Con las cifras de este estado daría
+   23.741.367.744 + 21.850.187.494 + 2.982.184.104 = 48.573.739.342 en vez de −1.091.003.854.
+
+   Y no vale con probarlo una vez: la misma fórmula se aplica en dos sitios —al leer el
+   documento y cuando el analista corrige una cifra a mano— y por eso vive en una sola
+   función. Estas pruebas la recorren en las dos direcciones y con las cuatro combinaciones
+   de signo con las que puede llegar un estado real. */
+
+const VENTAS = 23741367744;
+const COSTO = 21850187494;
+const GASTOS = 2982184104;          // 2.409.923.291 + 572.260.813
+const ESPERADO = -1091003854;       // 23.741.367.744 − 21.850.187.494 − 2.982.184.104
+
+test('la utilidad operacional es la misma con cualquier combinación de signos', () => {
+  [
+    ['los dos negativos, como los imprime el PDF', -COSTO, -GASTOS],
+    ['los dos positivos', COSTO, GASTOS],
+    ['costo negativo, gastos positivos', -COSTO, GASTOS],
+    ['costo positivo, gastos negativos', COSTO, -GASTOS],
+  ].forEach(([caso, costo, gastos]) => {
+    assert.strictEqual(
+      utilidadOperacionalDe({ ventas: VENTAS, costo, gastos }), ESPERADO,
+      `falla con ${caso}`);
+  });
+});
+
+test('los egresos entre paréntesis, como los escribe un contador, dan lo mismo', () => {
+  assert.strictEqual(
+    utilidadOperacionalDe({
+      ventas: '23.741.367.744', costo: '(21.850.187.494)', gastos: '(2.982.184.104)',
+    }),
+    ESPERADO, 'el formato colombiano con paréntesis es el del documento radicado');
+});
+
+test('la doble negación no puede volver: el resultado nunca sale positivo aquí', () => {
+  /* La cifra que saldría de restar los negativos tal cual. Si alguna vez vuelve a aparecer,
+     es que alguien quitó el valor absoluto. */
+  [-COSTO, COSTO].forEach((costo) => [-GASTOS, GASTOS].forEach((gastos) => {
+    assert.notStrictEqual(
+      utilidadOperacionalDe({ ventas: VENTAS, costo, gastos }), 48573739342);
+  }));
+});
+
+test('las ventas NO pasan por el valor absoluto', () => {
+  /* Un ingreso negativo es un dato —devoluciones por encima de la facturación— y volverlo
+     positivo cambiaría el sentido del estado. */
+  assert.strictEqual(
+    utilidadOperacionalDe({ ventas: -1000, costo: 200, gastos: 100 }), -1300);
+});
+
+test('la utilidad conserva su signo: una pérdida operativa sigue siendo pérdida', () => {
+  assert.ok(utilidadOperacionalDe({ ventas: VENTAS, costo: -COSTO, gastos: -GASTOS }) < 0);
+  /* Y una compañía rentable sale positiva, que es la otra mitad de la afirmación. */
+  assert.ok(utilidadOperacionalDe({ ventas: 10000, costo: -6000, gastos: -1000 }) > 0);
+});
+
+test('sin uno de los tres términos devuelve null, no un cero', () => {
+  assert.strictEqual(utilidadOperacionalDe({ ventas: null, costo: -COSTO, gastos: -GASTOS }), null);
+  assert.strictEqual(utilidadOperacionalDe({ ventas: VENTAS, costo: null, gastos: -GASTOS }), null);
+  assert.strictEqual(utilidadOperacionalDe({ ventas: VENTAS, costo: -COSTO, gastos: null }), null);
+  assert.strictEqual(utilidadOperacionalDe({}), null);
+});
+
+test('un término en cero sí es un dato y se usa', () => {
+  /* Distinto de la ausencia: una compañía sin gastos operativos desglosados es rara pero
+     posible, y su utilidad operacional es la utilidad bruta. */
+  assert.strictEqual(utilidadOperacionalDe({ ventas: 1000, costo: -600, gastos: 0 }), 400);
+});
+
+test('los gastos operativos suman en magnitud, sea cual sea el signo de cada rubro', () => {
+  assert.strictEqual(gastosOperativosDe({ ventas: -2409923291, administracion: -572260813 }), GASTOS);
+  assert.strictEqual(gastosOperativosDe({ ventas: 2409923291, administracion: 572260813 }), GASTOS);
+  assert.strictEqual(gastosOperativosDe({ ventas: '(2.409.923.291)', administracion: '(572.260.813)' }), GASTOS);
+  /* Nunca se restan entre sí: dos egresos suman, y un signo mezclado no puede convertir la
+     suma en una diferencia. */
+  assert.strictEqual(gastosOperativosDe({ ventas: -2409923291, administracion: 572260813 }), GASTOS);
+});
+
+test('con un solo rubro de gasto devuelve ese, y sin ninguno devuelve null', () => {
+  assert.strictEqual(gastosOperativosDe({ ventas: null, administracion: -572260813 }), 572260813);
+  assert.strictEqual(gastosOperativosDe({ ventas: -2409923291, administracion: null }), 2409923291);
+  assert.strictEqual(gastosOperativosDe({ ventas: null, administracion: null }), null);
+});
+
+test('la advertencia de utilidad bruta no salta por el signo del costo', () => {
+  /* Comparar 1.891.180.250 contra «ventas − costo» con el costo en negativo daría
+     45.591.555.238 y una advertencia falsa en todos los estados que lo imprimen así, que son
+     casi todos. */
+  const r = verificar();
+  assert.deepStrictEqual(r.advertencias.filter((a) => a.tipo === 'utilidad-bruta-no-cuadra'), []);
+  const enPositivo = verificar({ t_c: 21850187494 });
+  assert.deepStrictEqual(
+    enPositivo.advertencias.filter((a) => a.tipo === 'utilidad-bruta-no-cuadra'), []);
 });

@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2 } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseEeffWithGeminiOCR } from '../services/eeffParser';
-import { verificarEeff, camposAplicables } from '../services/eeffVerificacion';
+import {
+  verificarEeff, camposAplicables, utilidadOperacionalDe,
+} from '../services/eeffVerificacion';
 import { convertPdfToImages } from '../services/pdfRenderer';
 
 /* Las casillas del estado de situación financiera. Tres partidas y un subtotal, que es lo
@@ -44,8 +46,26 @@ export default function IngestaCifras({ study, updateStudy }) {
      sí se persiste son las correcciones (`t_correcciones`), que el libro publica. */
   const [hallazgos, setHallazgos] = useState(null);
 
+  /* Los tres insumos de la utilidad operacional. Cambiar cualquiera obliga a recalcularla:
+     es un valor derivado, no un dato, y dejarlo con la cifra de la carga anterior es peor
+     que no tenerlo — el margen del estudio saldría de una utilidad que ya no se deriva del
+     costo que el analista acaba de corregir. */
+  const INSUMOS_UTILIDAD = ['t_s', 't_c', 't_gastos'];
+
   const handleFieldChange = (key, value) => {
-    updateStudy({ [key]: value });
+    const cambios = { [key]: value };
+
+    if (INSUMOS_UTILIDAD.includes(key)) {
+      /* Con la MISMA función que usa la lectura del documento, para que el signo se aplique
+         igual escriba el analista «-21.850.187.494» o «21.850.187.494». */
+      const fuente = { ...study, ...cambios };
+      const uop = utilidadOperacionalDe({
+        ventas: fuente.t_s, costo: fuente.t_c, gastos: fuente.t_gastos,
+      });
+      if (uop !== null) cambios.t_op = uop;
+    }
+
+    updateStudy(cambios);
   };
 
   // Carga de Estados Financieros (EEFF) con Gemini Vision OCR
@@ -263,6 +283,23 @@ export default function IngestaCifras({ study, updateStudy }) {
             </div>
 
             <div className="flex flex-col">
+              <label className="text-xs font-semibold text-zinc-500 mb-1.5">Gastos Operativos</label>
+              <input
+                type="number"
+                value={study.t_gastos || ''}
+                onChange={(e) => handleFieldChange('t_gastos', e.target.value)}
+                placeholder="COP Gastos Op."
+                className={CLASE_CASILLA}
+              />
+              {/* Es el tercer insumo de la utilidad operacional y hasta ahora no tenía
+                  casilla: si la lectura no lo acertaba, no había forma de corregirlo. */}
+              <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
+                Gastos de ventas + gastos de administración. Puede escribirlo con el signo del
+                estado financiero: el cálculo usa la magnitud.
+              </p>
+            </div>
+
+            <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Utilidad Operacional</label>
               <input
                 type="number"
@@ -276,8 +313,8 @@ export default function IngestaCifras({ study, updateStudy }) {
                   los gastos decida el margen del estudio. Editable de todas formas, porque el
                   analista manda sobre lo que el documento diga. */}
               <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
-                La calcula la ingesta: ingresos − costo − gastos operativos (gastos de ventas +
-                administración). Utilidad, no gastos: con pérdida va en negativo.
+                Se recalcula sola: ingresos − |costo| − |gastos operativos|. Utilidad, no
+                gastos: con pérdida operativa va en negativo.
               </p>
             </div>
           </div>

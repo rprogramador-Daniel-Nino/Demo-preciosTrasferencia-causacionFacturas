@@ -114,22 +114,43 @@ test('los activos llevan el año gravable en el título y en las columnas', () =
   assert.strictEqual(t.fuente, 'Estados financieros de la Compañía a 31 de diciembre de 2025.');
 });
 
-test('los activos publican los diez rubros con su análisis vertical', () => {
+test('los activos publican los rubros con dato y los tres subtotales, con su análisis vertical', () => {
+  /* `EEFF` trae en cero `t_inv_assoc`, `t_intang` y `t_dif`: al no ser subtotales, esos tres
+     rubros de línea no publican fila. Quedan 4 rubros de línea con dato + los 3 subtotales = 7. */
   const t = filasActivos(EEFF);
-  assert.strictEqual(t.filas.length, 10);
+  assert.strictEqual(t.filas.length, 7);
   assert.deepStrictEqual(t.filas[0], ['Efectivo y equivalentes de efectivo', '12.417.756', '0,570 %']);
-  assert.deepStrictEqual(t.filas[9], ['Total, Activos', '2.179.479.687', '100,000 %']);
+  assert.deepStrictEqual(t.filas[t.filas.length - 1], ['Total, Activos', '2.179.479.687', '100,000 %']);
+  assert.ok(!t.filas.some((f) => f[0] === 'Inversiones asociadas'));
+  assert.ok(!t.filas.some((f) => f[0] === 'Intangibles'));
 });
 
-test('un rubro sin dato sale como hueco en el valor y en el vertical', () => {
+test('un rubro de línea sin dato no publica fila', () => {
   const t = filasActivos({ anio: 2025, t_act_tot: 1000 });
-  assert.deepStrictEqual(t.filas[0], ['Efectivo y equivalentes de efectivo', '—', '—']);
+  assert.ok(!t.filas.some((f) => f[0] === 'Efectivo y equivalentes de efectivo'));
 });
 
-test('un rubro en cero sale como hueco y no como «0»', () => {
-  /* Criterio que ya seguía la ruta .docx: en un balance, un rubro en cero y un rubro que
-     nadie cargó se leen igual de mal si se publica «0». */
+test('un rubro de línea en cero no publica fila, igual que si no tuviera dato', () => {
+  /* Criterio que ya seguía la ruta .docx para el guion: en un balance, un rubro en cero y un
+     rubro que nadie cargó se leen igual de mal si se publica «0» — y ahora, igual de mal si se
+     publica la fila vacía con un guion. */
   const t = filasActivos({ ...EEFF, t_intang: 0 });
-  const intangibles = t.filas.find((f) => f[0] === 'Intangibles');
-  assert.deepStrictEqual(intangibles, ['Intangibles', '—', '0,000 %']);
+  assert.ok(!t.filas.some((f) => f[0] === 'Intangibles'));
+});
+
+test('un subtotal sin dato sí publica su fila, con «—» en vez de desaparecer', () => {
+  const t = filasActivos({ anio: 2025, t_cash: 12417756 });
+  const totalActivos = t.filas.find((f) => f[0] === 'Total, Activos');
+  assert.deepStrictEqual(totalActivos, ['Total, Activos', '—', '—']);
+});
+
+test('solo se publican los rubros de línea que el estudio trae, más los tres subtotales', () => {
+  const t = filasActivos({ anio: 2025, t_cash: 12417756, t_ppe: 168030721, t_act_tot: 2179479687 });
+  assert.deepStrictEqual(t.filas.map((f) => f[0]), [
+    'Efectivo y equivalentes de efectivo',
+    'Total, Activo corriente',
+    'Propiedades, planta y equipo',
+    'Total, Activos no corrientes',
+    'Total, Activos',
+  ]);
 });
