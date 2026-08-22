@@ -65,10 +65,11 @@ const ETIQUETA = {
   t_inv: 'Inventarios',
   t_ap: 'Cuentas por pagar a partes relacionadas',
   t_act_curr: 'Total, Activo corriente',
+  t_act_tot: 'Total, Activos',
 };
 
 /* Los que se leen del documento. `t_op` no está: se calcula. */
-const LEIDOS = ['t_s', 't_c', 't_ar', 't_inv', 't_ap', 't_act_curr'];
+const LEIDOS = ['t_s', 't_c', 't_ar', 't_inv', 't_ap', 't_act_curr', 't_act_tot'];
 
 const fmtCop = (v) => (v === null || v === undefined
   ? '—'
@@ -150,8 +151,8 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
      La comprobación que habría frenado el 44.177.669. Solo se puede hacer con capa de
      texto; un escaneo no la tiene y entonces no se afirma haberla hecho. */
   const verificadoContraTexto = Boolean(l.textoPdf && String(l.textoPdf).trim());
+  const impresas = verificadoContraTexto ? cifrasDelTexto(l.textoPdf) : null;
   if (verificadoContraTexto) {
-    const impresas = cifrasDelTexto(l.textoPdf);
     LEIDOS.forEach((clave) => {
       const v = campos[clave];
       if (v === null || v === 0) return;
@@ -225,6 +226,35 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
         + 'Revise de qué filas se tomaron los ingresos y el costo.',
     });
   }
+
+  /* ── El detalle completo de la sección ACTIVOS (Tabla 10 / ANEXO A) ──
+     A diferencia de las partidas anteriores, aquí no hay un campo con nombre por rubro:
+     es el arreglo completo tal como lo transcribió la IA, fila por fila, y así cualquier
+     estructura de balance queda cubierta. Cada fila se verifica contra la capa de texto
+     igual que las demás cifras — si la suya no aparece impresa, se descarta esa fila sola,
+     sin tumbar las que sí están bien. */
+  const detalleCrudo = Array.isArray(l.activosDetalle) ? l.activosDetalle : [];
+  let filasDescartadas = 0;
+  const detalle = detalleCrudo.map((fila) => {
+    const etiqueta = String((fila && fila.etiqueta) || '').trim();
+    const esSubtotal = Boolean(fila && fila.esSubtotal);
+    const valor = num(fila && fila.valor);
+    if (valor !== null && verificadoContraTexto && !cifraApareceEnTexto(valor, impresas)) {
+      filasDescartadas += 1;
+      return { etiqueta, valor: null, esSubtotal };
+    }
+    return { etiqueta, valor, esSubtotal };
+  }).filter((fila) => fila.etiqueta);
+
+  if (filasDescartadas > 0) {
+    advertencias.push({
+      tipo: 'activos-detalle-cifra-inexistente',
+      mensaje: `${filasDescartadas} fila(s) del detalle de activos no se pudieron verificar `
+        + 'contra el documento y se descartaron; revíselas contra el estado financiero.',
+    });
+  }
+
+  if (detalle.some((fila) => fila.valor !== null)) campos.t_activos_detalle = detalle;
 
   /* ── 3. Lo que falta y hay que decir ──
      Las tres partidas del balance sostienen el ajuste de capital de trabajo: sin una, su

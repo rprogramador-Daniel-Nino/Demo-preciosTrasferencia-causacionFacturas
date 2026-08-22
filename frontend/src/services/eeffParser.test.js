@@ -114,6 +114,28 @@ test('el prompt del contribuyente pide los quince rubros del estudio', () => {
     EEFF_PROMPT.includes(rubro), `falta "${rubro}" en EEFF_PROMPT`));
 });
 
+/* ══════ Detalle completo de Activos (Tabla 10 / ANEXO A) ══════
+   Las tres partidas de partes relacionadas alimentan el ajuste de capital de trabajo, pero
+   no bastan para pintar la Tabla 10: distintos EEFF traen distintas filas de activo (ver
+   Montachem, End Game y Lamberti en tablasContribuyente.test.js), así que en vez de una
+   lista fija de campos con nombre se pide la sección ACTIVOS completa, transcrita fila por
+   fila tal como el documento la imprime. */
+
+test('el prompt pide el total de activos y el detalle completo de la sección ACTIVOS', () => {
+  assert.ok(EEFF_PROMPT.includes('total_activos'), 'falta "total_activos" en EEFF_PROMPT');
+  assert.ok(EEFF_PROMPT.includes('activos_detalle'), 'falta "activos_detalle" en EEFF_PROMPT');
+  assert.match(EEFF_PROMPT, /es_subtotal/);
+});
+
+test('el detalle de activos no agrupa ni renombra filas, y descarta los títulos de sección', () => {
+  assert.match(EEFF_PROMPT, /NO agrupes ni renombres/i);
+  assert.match(EEFF_PROMPT, /no la incluyas/i);
+});
+
+test('total_activos entra al mapeo de campos del estudio, como el total de activos', () => {
+  assert.strictEqual(CAMPO_POR_RUBRO.total_activos, 't_act_tot');
+});
+
 test('el prompt exige el rótulo literal de cada cifra', () => {
   assert.match(EEFF_PROMPT, /"rotulo"/);
   assert.match(EEFF_PROMPT, /texto EXACTO de la fila/i);
@@ -197,7 +219,7 @@ test('el mapeo produce exactamente los campos del alcance, y todos son del libro
      un rubro que el libro conoce — si no, escribiría en un campo que nadie publica. */
   const producidos = [...Object.values(CAMPO_POR_RUBRO), 't_op'].sort();
   assert.deepStrictEqual(producidos,
-    ['t_act_curr', 't_ap', 't_ar', 't_c', 't_inv', 't_op', 't_s'],
+    ['t_act_curr', 't_act_tot', 't_ap', 't_ar', 't_c', 't_inv', 't_op', 't_s'],
     'el alcance de la ingesta cambió sin que esta prueba lo diga');
   producidos.forEach((clave) => assert.ok(CLAVES_RUBROS_EXAMINADA.includes(clave),
     `${clave} no es un rubro de la hoja Datos`));

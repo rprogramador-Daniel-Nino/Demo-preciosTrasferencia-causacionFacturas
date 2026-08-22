@@ -51,6 +51,18 @@ const LECTURA = {
   t_inv: 4734795891,
   t_ap: 5400016795,
   t_act_curr: 14050942064,
+  t_act_tot: 15004112346,
+  /* El detalle completo de la sección ACTIVOS, en el orden del documento (ver TEXTO_PDF
+     arriba). A diferencia de t_ar (solo partes relacionadas), aquí entra TAMBIÉN la fila
+     comercial (6.032.337.879): son dos cifras distintas del mismo balance. */
+  activosDetalle: [
+    { etiqueta: 'EFECTIVO Y EQUIVALENTES DE EFECTIVO', valor: 337546138, esSubtotal: false },
+    { etiqueta: 'DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR', valor: 6032337879, esSubtotal: false },
+    { etiqueta: 'CUENTAS POR COBRAR A PARTES RELACIONADAS', valor: 2926256259, esSubtotal: false },
+    { etiqueta: 'INVENTARIOS', valor: 4734795891, esSubtotal: false },
+    { etiqueta: 'ACTIVOS FINANCIEROS', valor: 20005897, esSubtotal: false },
+    { etiqueta: 'TOTAL ACTIVO CORRIENTE', valor: 14050942064, esSubtotal: true },
+  ],
   cotejo: {
     gastos_ventas: -2409923291,
     gastos_administracion: -572260813,
@@ -143,11 +155,52 @@ test('el total del activo corriente entra tal como lo imprime el documento', () 
   assert.strictEqual(verificar().campos.t_act_curr, 14050942064);
 });
 
-test('no toca ningún otro rubro del balance', () => {
-  /* El alcance son tres partidas y un subtotal: si esta ingesta escribiera efectivo,
-     intangibles o el total de activos, estaría pisando campos que ya no le corresponden. */
+test('el total de activos se verifica y entra igual que las demás cifras', () => {
+  assert.strictEqual(verificar().campos.t_act_tot, 15004112346);
+});
+
+/* ══════ Detalle completo de Activos (Tabla 10 / ANEXO A) ══════ */
+
+test('el detalle de activos pasa completo cuando cada cifra está impresa en el documento', () => {
+  const { campos } = verificar();
+  assert.strictEqual(campos.t_activos_detalle.length, LECTURA.activosDetalle.length);
+  assert.strictEqual(
+    campos.t_activos_detalle.find((f) => f.etiqueta === 'DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR').valor,
+    6032337879,
+    'la comercial entra con su propio valor, no el de partes relacionadas');
+});
+
+test('una fila del detalle cuya cifra no está impresa se descarta y se avisa, sin tumbar las demás', () => {
+  const r = verificar({
+    activosDetalle: [
+      ...LECTURA.activosDetalle,
+      { etiqueta: 'INVENTADO', valor: 999999999, esSubtotal: false },
+    ],
+  });
+  const inventado = r.campos.t_activos_detalle.find((f) => f.etiqueta === 'INVENTADO');
+  assert.strictEqual(inventado.valor, null);
+  assert.ok(r.advertencias.some((a) => a.tipo === 'activos-detalle-cifra-inexistente'));
+  /* Las demás filas, correctas, no se ven afectadas por el descarte de una. */
+  assert.strictEqual(
+    r.campos.t_activos_detalle.find((f) => f.etiqueta === 'INVENTARIOS').valor, 4734795891);
+});
+
+test('sin capa de texto el detalle de activos pasa tal cual, sin descartar nada', () => {
+  const r = verificar({ textoPdf: '' });
+  assert.deepStrictEqual(r.campos.t_activos_detalle, LECTURA.activosDetalle);
+});
+
+test('un detalle de activos vacío no pisa uno ya cargado a mano', () => {
+  const aplicables = camposAplicables(verificar({ activosDetalle: [] }).campos);
+  assert.ok(!('t_activos_detalle' in aplicables));
+});
+
+test('no toca ningún otro campo con nombre del balance', () => {
+  /* Las partidas de partes relacionadas siguen siendo tres y un subtotal; el total general
+     de activos (`t_act_tot`) y el detalle completo (`t_activos_detalle`) sí se escriben
+     ahora, porque alimentan la Tabla 10 y el ANEXO A y no el motor de ajuste. */
   const aplicables = camposAplicables(verificar().campos);
-  ['t_cash', 't_inv_assoc', 't_tax', 't_ppe', 't_intang', 't_dif', 't_act_nocurr', 't_act_tot']
+  ['t_cash', 't_inv_assoc', 't_tax', 't_ppe', 't_intang', 't_dif', 't_act_nocurr']
     .forEach((clave) => assert.ok(!(clave in aplicables), `${clave} no debería escribirse`));
 });
 

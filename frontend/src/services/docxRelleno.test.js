@@ -409,6 +409,20 @@ test('sin cifras parseadas el ANEXO A avisa en vez de salir vacío', async () =>
     'y no conservar el anexo del informe anterior');
 });
 
+test('con solo el detalle dinámico de activos, el ANEXO A no muestra "Pendiente"', async () => {
+  /* La Tabla 10 puede llenarse hoy solo con `t_activos_detalle` (ver tablasContribuyente.js),
+     sin que ninguno de los campos con nombre de RUBROS_ESF tenga dato: el ANEXO A no puede
+     seguir avisando "Pendiente: carga el PDF..." cuando el cuerpo del informe sí trae cifras. */
+  const zip = await zipConAnexoA();
+  const { insertadas } = insertarAnexoA(zip, {
+    ent: 'ACME', anio: 2025,
+    t_activos_detalle: [{ etiqueta: 'Efectivo', valor: 100, esSubtotal: false }],
+  }, {});
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+  assert.strictEqual(insertadas, 0, 'sin imágenes que insertar, pero sin el aviso de "Pendiente"');
+  assert.ok(!texto.includes('Pendiente'));
+});
+
 test('una plantilla sin ANEXO A no se toca', async () => {
   const buf = await plantilla([parrafo('Informe sin anexos')]);
   const zip = new PizZip(buf);

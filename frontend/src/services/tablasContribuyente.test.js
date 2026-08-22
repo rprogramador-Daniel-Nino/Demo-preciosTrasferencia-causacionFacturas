@@ -179,3 +179,60 @@ test('solo se publican los rubros de línea que el estudio trae, más los tres s
     'Total, Activos',
   ]);
 });
+
+test('sin detalle dinámico, los inventarios sí publican fila (antes faltaban en la lista fija)', () => {
+  /* El único campo que la ingesta vigente sí llena por sí solo (t_inv) no tenía fila propia
+     en RUBROS_ACTIVO, así que nunca aparecía en la Tabla 10 aunque el estudio lo trajera. */
+  const t = filasActivos({ ...EEFF, t_inv: 4734795891 });
+  const fila = t.filas.find((f) => f[0] === 'Inventarios');
+  assert.ok(fila, 'la fila de Inventarios debe publicarse');
+  assert.strictEqual(fila[1], '4.734.795.891');
+});
+
+/* ── Tabla 10 con detalle dinámico: cualquier estructura de EEFF, no solo la de End Game ── */
+
+test('con t_activos_detalle, la Tabla 10 se arma directo de esa lista, en su orden', () => {
+  const estudio = {
+    anio: 2025,
+    t_act_tot: 15004112346,
+    t_activos_detalle: [
+      { etiqueta: 'Efectivo y equivalentes de efectivo', valor: 337546138, esSubtotal: false },
+      { etiqueta: 'Deudores comerciales y otras cuentas por cobrar', valor: 6032337879, esSubtotal: false },
+      { etiqueta: 'Cuentas por cobrar a partes relacionadas', valor: 2926256259, esSubtotal: false },
+      { etiqueta: 'Inventarios', valor: 4734795891, esSubtotal: false },
+      { etiqueta: 'Activos financieros', valor: 20005897, esSubtotal: false },
+      { etiqueta: 'Total, Activo corriente', valor: 14050942064, esSubtotal: true },
+    ],
+  };
+  const t = filasActivos(estudio);
+  assert.deepStrictEqual(t.filas.map((f) => f[0]), [
+    'Efectivo y equivalentes de efectivo',
+    'Deudores comerciales y otras cuentas por cobrar',
+    'Cuentas por cobrar a partes relacionadas',
+    'Inventarios',
+    'Activos financieros',
+    'Total, Activo corriente',
+  ]);
+  assert.deepStrictEqual(t.filas[0], [
+    'Efectivo y equivalentes de efectivo', '337.546.138', pctf(337546138 / 15004112346),
+  ]);
+});
+
+test('con t_activos_detalle, un rubro de línea sin dato no publica fila pero su subtotal sí', () => {
+  const estudio = {
+    anio: 2025,
+    t_act_tot: 1000,
+    t_activos_detalle: [
+      { etiqueta: 'Efectivo', valor: null, esSubtotal: false },
+      { etiqueta: 'Total, Activo corriente', valor: null, esSubtotal: true },
+    ],
+  };
+  const t = filasActivos(estudio);
+  assert.deepStrictEqual(t.filas, [['Total, Activo corriente', '—', '—']]);
+});
+
+test('sin t_activos_detalle (o vacío) la Tabla 10 cae al camino fijo de siempre', () => {
+  const t = filasActivos({ ...EEFF, t_activos_detalle: [] });
+  assert.strictEqual(t.filas.length, 7);
+  assert.strictEqual(t.filas[0][0], 'Efectivo y equivalentes de efectivo');
+});

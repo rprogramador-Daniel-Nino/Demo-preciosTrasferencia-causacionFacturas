@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2 } from 'lucide-react';
+import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseEeffWithGeminiOCR } from '../services/eeffParser';
 import {
@@ -66,6 +66,26 @@ export default function IngestaCifras({ study, updateStudy }) {
     }
 
     updateStudy(cambios);
+  };
+
+  /* El detalle completo de la sección ACTIVOS (Tabla 10 / ANEXO A). A diferencia de las
+     tres partidas de arriba, aquí no hay campos con nombre fijo: cada EEFF trae su propia
+     combinación de rubros, así que la lista es de largo variable y editable fila por fila. */
+  const detalleActivos = study.t_activos_detalle || [];
+
+  const handleActivoDetalleChange = (index, campo, valor) => {
+    const detalle = detalleActivos.map((fila, i) => (i === index ? { ...fila, [campo]: valor } : fila));
+    updateStudy({ t_activos_detalle: detalle });
+  };
+
+  const handleAgregarActivoDetalle = () => {
+    updateStudy({
+      t_activos_detalle: [...detalleActivos, { etiqueta: '', valor: '', esSubtotal: false }],
+    });
+  };
+
+  const handleEliminarActivoDetalle = (index) => {
+    updateStudy({ t_activos_detalle: detalleActivos.filter((_, i) => i !== index) });
   };
 
   // Carga de Estados Financieros (EEFF) con Gemini Vision OCR
@@ -386,6 +406,87 @@ export default function IngestaCifras({ study, updateStudy }) {
                 </p>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Detalle completo de Activos: la Tabla 10 y el ANEXO A se arman de esta lista */}
+        <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm space-y-4">
+          <h3 className="text-md font-bold text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-2">
+            <ListTree className="w-5 h-5 text-[#0FA3A1]" />
+            Detalle de Activos (Estado de Situación Financiera)
+          </h3>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            Cada fila de la sección ACTIVOS del documento, tal como el EEFF la trae — sin
+            estructura fija, porque cada compañía desglosa sus activos distinto. La ingesta la
+            llena sola al leer el PDF; agregue, corrija o elimine filas si algo no quedó bien.
+          </p>
+
+          {detalleActivos.length > 0 && (
+            <div className="space-y-2">
+              <div className="hidden md:grid grid-cols-[1fr_180px_90px_32px] gap-2 px-1">
+                <span className="text-[11px] font-semibold text-zinc-500">Rótulo</span>
+                <span className="text-[11px] font-semibold text-zinc-500">Valor (COP)</span>
+                <span className="text-[11px] font-semibold text-zinc-500">Subtotal</span>
+                <span />
+              </div>
+              {detalleActivos.map((fila, i) => (
+                <div key={i} className="grid grid-cols-[1fr_180px_90px_32px] gap-2 items-center">
+                  <input
+                    type="text"
+                    value={fila.etiqueta || ''}
+                    onChange={(e) => handleActivoDetalleChange(i, 'etiqueta', e.target.value)}
+                    placeholder="Rótulo del rubro"
+                    className={CLASE_CASILLA}
+                  />
+                  <input
+                    type="number"
+                    value={fila.valor ?? ''}
+                    onChange={(e) => handleActivoDetalleChange(i, 'valor', e.target.value)}
+                    placeholder="COP"
+                    className={CLASE_CASILLA}
+                  />
+                  <label className="flex items-center justify-center gap-1.5 text-[11px] text-zinc-500">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(fila.esSubtotal)}
+                      onChange={(e) => handleActivoDetalleChange(i, 'esSubtotal', e.target.checked)}
+                      className="accent-[#0FA3A1]"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleEliminarActivoDetalle(i)}
+                    className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors"
+                    aria-label="Eliminar rubro"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleAgregarActivoDetalle}
+            className="flex items-center gap-1.5 text-xs font-semibold text-[#0FA3A1] hover:underline"
+          >
+            <Plus className="w-4 h-4" />
+            Agregar rubro
+          </button>
+
+          <div className="flex flex-col pt-2 border-t border-zinc-100 dark:border-zinc-800 max-w-xs">
+            <label className="text-xs font-semibold text-zinc-500 mb-1.5">Total, Activos</label>
+            <input
+              type="number"
+              value={study.t_act_tot || ''}
+              onChange={(e) => handleFieldChange('t_act_tot', e.target.value)}
+              placeholder="COP"
+              className={CLASE_CASILLA}
+            />
+            <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
+              El total general de activos: es el denominador del análisis vertical de la Tabla 10.
+            </p>
           </div>
         </div>
       </div>

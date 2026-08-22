@@ -166,6 +166,7 @@ const RUBROS_ACTIVO = [
   ['Efectivo y equivalentes de efectivo', 't_cash'],
   ['Inversiones asociadas', 't_inv_assoc'],
   ['Cuentas por cobrar comerciales y otras cuentas por cobrar', 't_ar'],
+  ['Inventarios', 't_inv'],
   ['Activos por impuestos corrientes', 't_tax'],
   ['Total, Activo corriente', 't_act_curr', true],
   ['Propiedades, planta y equipo', 't_ppe'],
@@ -186,6 +187,13 @@ const RUBROS_ACTIVO = [
  * pinta lo que la Compañía reportó. Los subtotales son la excepción — siempre se publican,
  * con «—» si falta el dato, porque son el cierre de cada grupo del balance.
  *
+ * Con `estudio.t_activos_detalle` (la ingesta transcribe la sección ACTIVOS completa, ver
+ * `eeffParser.js`), las filas salen directo de ahí, en el orden del documento: ninguna lista
+ * fija de campos con nombre cubre a la vez a una compañía que trae «Inversiones asociadas»,
+ * otra que trae «Activos financieros» y otra que separa la CxC comercial de la de partes
+ * relacionadas. Sin detalle dinámico (estudios sin esa ingesta, o cargados a mano antes de
+ * que existiera), se conserva `RUBROS_ACTIVO` de siempre.
+ *
  * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
  */
 export function filasActivos(estudio) {
@@ -193,13 +201,20 @@ export function filasActivos(estudio) {
   const year = Number(e.anio) || 2025;
   const av = verticalSobreActivos(e);
 
+  const detalle = Array.isArray(e.t_activos_detalle) ? e.t_activos_detalle : [];
+  const filas = detalle.length > 0
+    ? detalle
+      .filter((fila) => fila.esSubtotal || num(fila.valor))
+      .map((fila) => [fila.etiqueta, cifra(fila.valor), av(fila.valor)])
+    : RUBROS_ACTIVO
+      .filter(([, campo, esSubtotal]) => esSubtotal || num(e[campo]))
+      .map(([etiqueta, campo]) => [etiqueta, cifra(e[campo]), av(e[campo])]);
+
   return {
     nombre: 'Activos a 31 de diciembre',
     titulo: 'Activos a 31 de diciembre de ' + year,
     encabezados: ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
-    filas: RUBROS_ACTIVO
-      .filter(([, campo, esSubtotal]) => esSubtotal || num(e[campo]))
-      .map(([etiqueta, campo]) => [etiqueta, cifra(e[campo]), av(e[campo])]),
+    filas,
     fuente: 'Estados financieros de la Compañía a 31 de diciembre de ' + year + '.',
   };
 }
