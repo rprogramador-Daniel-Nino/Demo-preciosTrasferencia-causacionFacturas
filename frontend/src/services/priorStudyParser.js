@@ -1,6 +1,7 @@
 import axios from 'axios';
 import mammoth from 'mammoth';
 import { extraerJSON } from './comparablesEngine.js';
+import { extraerTextoEstructuradoPdf } from './eeffParser.js';
 
 /* Se piden más datos por comparable que solo el nombre: estas empresas alimentan el
    catálogo histórico compartido, y una lista de nombres sueltos sirve para reconocer
@@ -136,27 +137,16 @@ export async function parsePriorStudyFile(file) {
     }
   }
 
-  // Para PDFs e imágenes: enviamos Gemini Vision OCR siempre con inline_data Base64
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result.split(',')[1];
-        let mimeType = 'application/pdf';
-
-        if (file.type.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
-          mimeType = file.type || 'image/jpeg';
-        }
-
+  // Para PDFs: intentamos extracción nativa por coordenadas antes de caer al OCR
+  if (file.name && file.name.match(/\.(pdf)$/i)) {
+    try {
+      const textoEstructurado = await extraerTextoEstructuradoPdf(file);
+      if (textoEstructurado) {
+        console.log(`[priorStudyParser] Extracción digital nativa exitosa para estudio anterior: ${file.name}`);
+        const payloadText = PRIOR_STUDY_PROMPT + `\n\nCONTENIDO DEL ESTUDIO ANTERIOR EXTRAÍDO DIRECTAMENTE DEL PDF:\n` + textoEstructurado.slice(0, 150000);
         const payload = {
           model: 'gemini-3.5-flash',
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mimeType, data: base64Data } },
-              { text: PRIOR_STUDY_PROMPT }
-            ]
-          }]
+          contents: [{ parts: [{ text: payloadText }] }]
         };
 
         const response = await postGeminiWithRetry(payload);
@@ -164,7 +154,7 @@ export async function parsePriorStudyFile(file) {
 
         if (text) {
           const parsed = extraerJSON(text);
-          resolve({
+          return {
             actividad_especifica: parsed.actividad_especifica || '',
             anio_gravable: parsed.anio_gravable || null,
             vinculado: parsed.vinculado || null,
@@ -173,15 +163,61 @@ export async function parsePriorStudyFile(file) {
             total_acciones: parsed.total_acciones || null,
             accionistas: parsed.accionistas || [],
             filename: file.name
-          });
-        } else {
-          reject(new Error("No se obtuvo respuesta JSON del estudio anterior por Gemini Vision OCR."));
+          };
         }
-      } catch (err) {
-        console.error("Error leyendo estudio anterior con Gemini OCR:", err);
-        reject(err);
       }
+    } catch (err) {
+      console.warn("[priorStudyParser] Falló extracción nativa del PDF, usando OCR como backup:", err);
+    }
+  }
+
+  // Fallback a Gemini Vision OCR siempre con inline_data Base64 (PDF escaneado o imágenes)
+  console.log(`[priorStudyParser] Usando Vision OCR de respaldo para estudio anterior: ${file.name}`);
+  
+  let base64Data = '';
+  if (typeof FileReader === 'undefined') {
+    const arrayBuffer = await file.arrayBuffer();
+    base64Data = Buffer.from(arrayBuffer).toString('base64');
+  } else {
+    base64Data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(String(reader.result).split(',')[1]);
+      reader.onerror = (e) => reject(e);
+    });
+  }
+
+  let mimeType = 'application/pdf';
+  if (file.type?.includes('image') || file.name.match(/\.(png|jpg|jpeg|webp)$/i)) {
+    mimeType = file.type || 'image/jpeg';
+  }
+
+  const payload = {
+    model: 'gemini-3.5-flash',
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: mimeType, data: base64Data } },
+        { text: PRIOR_STUDY_PROMPT }
+      ]
+    }]
+  };
+
+  const response = await postGeminiWithRetry(payload);
+  const text = response.data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+
+  if (text) {
+    const parsed = extraerJSON(text);
+    return {
+      actividad_especifica: parsed.actividad_especifica || '',
+      anio_gravable: parsed.anio_gravable || null,
+      vinculado: parsed.vinculado || null,
+      comparables: parsed.comparables || [],
+      capital_pagado: parsed.capital_pagado || null,
+      total_acciones: parsed.total_acciones || null,
+      accionistas: parsed.accionistas || [],
+      filename: file.name
     };
-    reader.onerror = (e) => reject(e);
-  });
+  } else {
+    throw new Error("No se obtuvo respuesta JSON del estudio anterior por Gemini Vision OCR.");
+  }
 }
