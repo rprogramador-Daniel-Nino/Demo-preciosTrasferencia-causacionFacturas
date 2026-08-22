@@ -3262,6 +3262,61 @@ test('las celdas de la tabla generada van centradas y en Arial 10pt', () => {
   assert.equal((tbl.match(/<w:sz w:val="20"\/>/g) || []).length, 2);
 });
 
+test('la tabla generada no es más ancha que el texto de los párrafos', () => {
+  /* Iba a `w:tblW w:w="9405" w:type="dxa"`, un ancho fijo en twips: en una carta con
+     márgenes de 1" la caja de texto son 9360, así que la tabla sobresalía, y en una
+     plantilla con otros márgenes el desajuste es mayor. En porcentaje, «5000» son el 100 %
+     de la columna de texto, sea cual sea la hoja y sean cuales sean los márgenes del
+     informe del cliente: la tabla mide exactamente lo que mide el párrafo. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['A', 'B', 'C'], [['1', '2', '3']]));
+  assert.match(tbl, /<w:tblW w:w="5000" w:type="pct"\/>/);
+  assert.doesNotMatch(tbl, /w:tblW w:w="9405"/, 'queda el ancho fijo viejo');
+  /* Sin `fixed` Word reparte las columnas por su contenido y se salta los anchos dados. */
+  assert.match(tbl, /<w:tblLayout w:type="fixed"\/>/);
+  /* Las columnas reparten ese 100 % y suman el total, sin sobrar ni faltar. */
+  const anchos = [...tbl.matchAll(/<w:tcW w:w="(\d+)" w:type="pct"\/>/g)].map((m) => Number(m[1]));
+  assert.strictEqual(anchos.length, 6, 'las tres columnas de la cabecera y las tres del dato');
+  assert.strictEqual(anchos.slice(0, 3).reduce((a, b) => a + b, 0), 5000,
+    'las columnas tienen que sumar el ancho de la tabla');
+  assert.doesNotMatch(tbl, /w:tcW w:w="\d+" w:type="dxa"/, 'queda una columna en twips');
+});
+
+test('una tabla de dos columnas reparte el ancho sin perder un punto por el redondeo', () => {
+  const tbl = tablaDe(generarTablaOoxml('T', ['A', 'B', 'C'], [['1', '2', '3']]));
+  const deLaFila = (i) => [...tablaDe(tbl).matchAll(/<w:tcW w:w="(\d+)"/g)].map((m) => Number(m[1])).slice(i * 3, i * 3 + 3);
+  assert.strictEqual(deLaFila(0).reduce((a, b) => a + b, 0), 5000);
+  /* Tres columnas no dividen 5000 en enteros: la última absorbe el resto en vez de dejar
+     la tabla en 4998. */
+  assert.deepStrictEqual(deLaFila(0), [1666, 1666, 1668]);
+});
+
+test('el texto largo de una celda va justificado; lo corto y las cifras, centrados', () => {
+  /* Un párrafo de descripción de actividad ocupa varias líneas dentro de su celda, y sin
+     justificar queda con el borde derecho en diente de sierra. Una cifra o un rótulo corto
+     justificados no cambian de aspecto, pero un rótulo de dos palabras estirado a lo ancho
+     de la celda sí, así que solo se justifica lo que de verdad es prosa. */
+  const largo = 'Huaxin Resources Technology Co. Ltd., fundada en 2006 y con sede en Pekín, '
+    + 'China, es una compañía dedicada a la utilización y tratamiento de residuos sólidos.';
+  const tbl = tablaDe(generarTablaOoxml('T', ['Compañía', 'Descripción'],
+    [['Huaxin', largo], ['Otra', '2.619,30']]));
+  const celdas = [...tbl.matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].map((m) => m[0]);
+  const jcDe = (i) => (/<w:jc w:val="(\w+)"\/>/.exec(celdas[i]) || [])[1];
+
+  assert.strictEqual(jcDe(0), 'center', 'la cabecera va centrada');
+  assert.strictEqual(jcDe(1), 'center');
+  assert.strictEqual(jcDe(2), 'center', 'un nombre corto va centrado');
+  assert.strictEqual(jcDe(3), 'both', 'la descripción larga va justificada');
+  assert.strictEqual(jcDe(5), 'center', 'una cifra va centrada aunque tenga puntos y comas');
+});
+
+test('un dato largo sin espacios no se justifica', () => {
+  /* Un identificador o una cifra muy larga no son prosa: justificarlos no hace nada bueno
+     y el criterio tiene que distinguirlos de un párrafo. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['A'], [['IQ' + '1'.repeat(120)]]));
+  const celdas = [...tbl.matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].map((m) => m[0]);
+  assert.match(celdas[1], /<w:jc w:val="center"\/>/);
+});
+
 test('la tabla generada respeta el aire de celda del modelo', () => {
   /* `padding:5px 6px` en twips. Word trae 108 a los lados y CERO arriba y abajo por defecto,
      así que sin esto las filas del archivo salen más apretadas que las del previo. */

@@ -41,7 +41,7 @@ import { claveTitulo, numeroDeTabla, prefijoDeEncabezado } from './docxRelleno.j
 /* La cita al pie de las tablas del motor sale de la misma constante que la prosa: dos sitios
    distintos para el nombre de la base de datos es la forma de que el informe se contradiga a sí
    mismo entre una tabla y el párrafo que la introduce. */
-import { BASE_DATOS_FUENTE } from './prosaBaseDatos.js';
+import { citaBaseDatos } from './prosaBaseDatos.js';
 import { pctf } from '../utils/calculations.js';
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -662,8 +662,7 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
       study.embudoSeleccion ? String(study.embudoSeleccion.evaluadas) : '—',
     ]);
   }
-  const dbFuente = study.database_source || `${BASE_DATOS_FUENTE} Publicado en septiembre de 2025`;
-  const fuenteRazones = `Información Base Datos ${dbFuente}.`;
+  const fuenteRazones = citaBaseDatos(study);
   sustituir(TABLA_RAZONES, filasRazones, { fuente: fuenteRazones });
 
   /* ── Criterios de búsqueda ── La plantilla trae «Códigos SIC utilizados» tres veces
@@ -712,15 +711,12 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   }
 
   /* ── Muestra de comparables ── */
-  const dbFuenteMuestra = study.database_source || BASE_DATOS_FUENTE;
-  const fuenteMuestra = `Información Base Datos ${dbFuenteMuestra}`;
+  const fuenteMuestra = citaBaseDatos(study);
   sustituir(TABLA_MUESTRA, filasMuestraComparables(study)
     .map((f) => [String(f.numero), f.nombre, f.ambito]), { mayusculas: true, fuente: fuenteMuestra });
 
   /* ── Márgenes de las comparables ── */
-  const dbFuenteMargenes = study.database_source || BASE_DATOS_FUENTE;
-  const year = Number(study.anio) || 2025;
-  const fuenteMargenes = `Información Base Datos ${dbFuenteMargenes} Fecha de consulta: septiembre de ${year}.`;
+  const fuenteMargenes = citaBaseDatos(study);
   const comparables = filasComparablesInforme(study);
   sustituir(TABLA_MARGENES, comparables
     .map((f) => [f.nombre, pct(f.noAjustado), pct(f.ajustado)]), { mayusculas: true, fuente: fuenteMargenes });

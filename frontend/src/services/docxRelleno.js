@@ -93,7 +93,7 @@ import { actualizarProsaTablas } from './prosaTablasInforme.js';
 /* El nombre de la base de datos de los comparables, por la misma función que la ruta del PDF.
    `BASE_DATOS_FUENTE` es además el valor por defecto de la cita al pie de cada tabla del motor:
    una sola definición para la prosa y para los pies, en las dos rutas. */
-import { actualizarProsaBaseDatos, BASE_DATOS_FUENTE } from './prosaBaseDatos.js';
+import { actualizarProsaBaseDatos, BASE_DATOS_FUENTE, citaBaseDatos, faltaFechaConsulta, AVISO_SIN_FECHA_CONSULTA } from './prosaBaseDatos.js';
 
 /* Misma resolución fuente+fecha que ya usan las tablas macro (`tablasMacroInforme` en
    `tablasInforme.js`, que llama a esta función): así el párrafo de narrativa y la tabla
@@ -240,10 +240,36 @@ function escaparXml(s) {
     .replace(/'/g, '&apos;');
 }
 
+/* El ancho de una tabla, en cincuentavos de por ciento: «5000» es el 100 % de la columna de
+   texto. En porcentaje y no en twips a propósito —antes iban 9405 dxa fijos—: una carta con
+   márgenes de 1" deja 9360 de caja, así que la tabla sobresalía del párrafo, y la plantilla
+   de cada cliente trae sus propios márgenes. En porcentaje la tabla mide exactamente lo que
+   mide el texto, sea cual sea la hoja. */
+const ANCHO_TABLA_PCT = 5000;
+
+/* A partir de cuántos caracteres el contenido de una celda se justifica en vez de centrarse.
+   Una celda de descripción de actividad ocupa varias líneas y sin justificar queda con el
+   borde derecho en diente de sierra; un rótulo de dos palabras estirado a lo ancho de la
+   celda queda peor que centrado. Se exige además que haya un espacio: un identificador o una
+   cifra larga no son prosa y justificarlos no hace nada bueno. */
+const MINIMO_TEXTO_JUSTIFICADO = 60;
+
+/** ¿El contenido de esta celda es prosa lo bastante larga para justificarla? */
+function esProsaLarga(texto) {
+  const t = String(texto == null ? '' : texto);
+  return t.length > MINIMO_TEXTO_JUSTIFICADO && /\s/.test(t.trim());
+}
+
 /** Genera el XML de una tabla limpia y estilizada en OOXML. */
 export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
   const colCount = cabeceras.length;
-  const colWidth = Math.round(9405 / colCount); // 9405 dxa es el ancho útil aproximado
+  /* Las columnas reparten el ancho de la tabla y tienen que sumarlo exacto: con tres
+     columnas la división no da entero, así que la última absorbe el resto en vez de dejar
+     la tabla en 4998. */
+  const anchoColumna = Math.floor(ANCHO_TABLA_PCT / colCount);
+  const anchoDe = (i) => (i === colCount - 1
+    ? ANCHO_TABLA_PCT - anchoColumna * (colCount - 1)
+    : anchoColumna);
 
   /* Tipografía de la celda, la misma para toda la tabla y sin heredar del documento: antes no
      se declaraba ninguna, así que la misma tabla salía a 12 pt en un informe y a 10 en otro
@@ -253,11 +279,12 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
   /* Un borde de la rejilla. `sz` va en octavos de punto: los 6 de la rejilla son el 1px del
      modelo y los 12 del contorno, sus 1,5px. */
   const borde = (lado, sz) => `<w:${lado} w:val="single" w:sz="${sz}" w:space="0" w:color="000000"/>`;
-  const celda = (texto, cabecera) =>
-    `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>`
+  const celda = (texto, cabecera, i) =>
+    `<w:tc><w:tcPr><w:tcW w:w="${anchoDe(i)}" w:type="pct"/>`
     + (cabecera ? `<w:shd w:val="clear" w:color="auto" w:fill="999999"/>` : '')
     + `<w:vAlign w:val="center"/></w:tcPr>`
-    + `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr>${letra}`
+    + `<w:p><w:pPr><w:jc w:val="${!cabecera && esProsaLarga(texto) ? 'both' : 'center'}"/></w:pPr>`
+    + `<w:r><w:rPr>${letra}`
     + (cabecera ? `<w:color w:val="000000"/><w:b/>` : '')
     + `</w:rPr><w:t>${escaparXml(texto)}</w:t></w:r></w:p></w:tc>`;
 
@@ -266,8 +293,11 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
   /* Rejilla negra completa. Antes `left`, `right` e `insideV` eran `none` y el resto un gris
      claro (#E2E8F0): la tabla salía sin bordes verticales mientras el previo los pintaba.
      `tblCellMar` es el `padding:5px 6px` del modelo en twips —Word trae 108 a los lados y CERO
-     arriba y abajo por defecto, así que sin esto las filas del archivo salen más apretadas—. */
-  xml += `<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="9405" w:type="dxa"/><w:tblBorders>`
+     arriba y abajo por defecto, así que sin esto las filas del archivo salen más apretadas—.
+     `tblLayout fixed` es lo que hace que Word respete los anchos dados: sin él reparte las
+     columnas por su contenido y el ancho declarado no manda. */
+  xml += `<w:tblPr><w:tblStyle w:val="TableGrid"/>`
+    + `<w:tblW w:w="${ANCHO_TABLA_PCT}" w:type="pct"/><w:tblLayout w:type="fixed"/><w:tblBorders>`
     + borde('top', 12) + borde('bottom', 12) + borde('left', 12) + borde('right', 12)
     + borde('insideH', 6) + borde('insideV', 6)
     + `</w:tblBorders>`
@@ -277,13 +307,13 @@ export function generarTablaOoxml(titulo, cabeceras, filas, fuente) {
 
   // Headers
   xml += `<w:tr><w:trPr><w:tblHeader/></w:trPr>`;
-  cabeceras.forEach((h) => { xml += celda(h, true); });
+  cabeceras.forEach((h, i) => { xml += celda(h, true, i); });
   xml += `</w:tr>`;
 
   // Rows
   filas.forEach((f) => {
     xml += `<w:tr>`;
-    f.forEach((c) => { xml += celda(c, false); });
+    f.forEach((c, i) => { xml += celda(c, false, i); });
     xml += `</w:tr>`;
   });
 
@@ -2172,12 +2202,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       '',
       totalEvaluadas
     ]);
-    const dbFuente = estudio.database_source || `${BASE_DATOS_FUENTE} Publicado en septiembre de 2025`;
     return generarTablaOoxml(
       tituloDe(b, 'Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)'),
       ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
       filas16,
-      `Información Base Datos ${dbFuente}.`
+      citaBaseDatos(estudio)
     );
   }, { numeros: [16] });
 
@@ -2276,7 +2305,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     const filas17 = filasMuestraComparables(estudio).map((f) => [
       String(f.numero), f.nombre, f.ambito,
     ]);
-    const dbFuente = estudio.database_source || BASE_DATOS_FUENTE;
     /* Todo en mayúscula menos el rótulo: en la ruta de PDF el rótulo vive FUERA de la tabla y
        no se sube, así que subirlo aquí separaría las dos salidas. La línea de fuente sí, porque
        allá va dentro de la tabla y sube con ella. */
@@ -2284,7 +2312,7 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       tituloDe(b, 'Muestra Compañías comparables'),
       ['Número', 'Nombre de la Compañía', 'Ámbito'].map(enMayusculas),
       filasEnMayusculas(filas17),
-      enMayusculas(`Información Base Datos ${dbFuente}`)
+      enMayusculas(citaBaseDatos(estudio))
     );
   }, { numeros: [17] });
 
@@ -2434,13 +2462,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         pStr(f.noAjustado),
         pStr(f.ajustado)
       ]);
-      const dbFuente = estudio.database_source || BASE_DATOS_FUENTE;
       /* En mayúscula, menos el rótulo: ver el comentario de la muestra. */
       return generarTablaOoxml(
         tituloDe(b, nombreSegunPlantilla(b, NOMBRES_TABLA_MARGENES)),
         ['COMPARABLES', `${estudio.pli || 'MO'} NO AJUSTADO`, `${estudio.pli || 'MO'} AJUSTADO`],
         filasEnMayusculas(filas19),
-        enMayusculas(`Información Base Datos ${dbFuente} Fecha de consulta: septiembre de ${year}.`)
+        enMayusculas(citaBaseDatos(estudio))
       );
     };
     /* Sin `numeros`: el prefijo «Tabla N.» cambia de una plantilla a otra —y hay plantillas que
@@ -2512,6 +2539,11 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
      sustituidor calcula el aviso y nadie lo lee: la tabla se queda con los datos del cliente
      anterior y el informe se radica así. */
   const avisosTablas = [];
+
+  /* Sin fecha de consulta las siete tablas del motor salen citando la base de datos pero no
+     cuándo se consultó, que es lo que exige el numeral 4 del artículo 1.2.2.2.1.5 del Decreto
+     1625 de 2016. No se fabrica una: se avisa, que es lo que el analista puede corregir. */
+  if (faltaFechaConsulta(estudio)) avisosTablas.push(AVISO_SIN_FECHA_CONSULTA);
 
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
@@ -3235,15 +3267,10 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
   const year = Number(estudio && estudio.anio) || 2025;
   let totalInsertadas = 0;
 
-  /* La cita al pie de las tablas de cifras es la base de datos de donde salieron —Capital IQ—,
-     no la comparable. Decía «Información de <razón social>», que es la fórmula de las tablas
-     de operaciones del contribuyente, donde la información sí la entrega la parte examinada;
-     aquí atribuía a un tercero unas cifras que él nunca nos dio y dejaba sin citar la única
-     fuente que hay. El nombre de la comparable ya va en su tabla de descripción, justo arriba.
-     Misma forma que el resto de las tablas del motor: `estudio.database_source` con
-     `BASE_DATOS_FUENTE` por defecto, así una sola base cambia en todas a la vez. */
-  const citaBaseDatos = 'Información Base Datos '
-    + ((estudio && estudio.database_source) || BASE_DATOS_FUENTE) + '.';
+  /* La cita al pie de las tablas de cifras: la base de datos de donde salieron y cuándo se
+     consultó, no la comparable. La arma `prosaBaseDatos.js` para las siete tablas del motor,
+     así que el nombre de la base y el formato de la fecha se cambian en un solo sitio. */
+  const cita = citaBaseDatos(estudio);
 
   const sinCifras = comparables.filter((c) => !c.eeffDatos);
   if (sinCifras.length && Array.isArray(avisos)) {
@@ -3274,7 +3301,7 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
         titulo,
         ['Descripción', String(anioCol)],
         rubrosConDato(rubros, c).map((r) => [r.etiqueta, celdaCifraAnexoB(cifraDeRubro(r, c))]),
-        citaBaseDatos,
+        cita,
       );
 
       nuevoXmlB += '\n' + tablaCifras('Estado de Resultados', RUBROS_RESULTADOS);
