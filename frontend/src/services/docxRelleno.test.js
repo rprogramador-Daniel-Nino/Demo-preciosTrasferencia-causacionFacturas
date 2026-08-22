@@ -656,6 +656,43 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
 
 
 
+/* ── Composición accionaria: sin certificado, la tabla de la plantilla se conserva ── */
+
+test('sin composición accionaria propia, la Tabla 6 del .docx no se toca', () => {
+  /* Espejo OOXML del mismo criterio que la ruta HTML: la plantilla es el informe del año
+     anterior del mismo contribuyente y sus «N° Acciones» y «Valor Capital» son datos que la
+     extracción con IA de esa misma tabla no recupera. Reescribirla los convertía en «—». */
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>Montachem International INC</w:t></w:p></w:tc>'
+    + '<w:tc><w:p><w:t>12.500</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME', pli: 'MO',
+    plantillaAccionistas: {
+      accionistas: [{ nombre: 'Montachem International INC', pais: 'Estados Unidos', participacion_pct: 100 }],
+    },
+  };
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, avisos);
+  assert.strictEqual(salida, xml, 'se reescribió una tabla que había que conservar');
+  assert.ok(!avisos.includes('Composición accionaria'),
+    'conservarla a propósito no es una tabla que no se encontró: ' + JSON.stringify(avisos));
+});
+
+test('con certificado cargado, la Tabla 6 del .docx sí se regenera', () => {
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>VIEJO ACCIONISTA</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME', pli: 'MO',
+    accionistas: [{ nombre: 'ACME HOLDINGS LLC', pais: 'ESTADOS UNIDOS', acciones: 1000, valor_capital: 10000, participacion_pct: 100 }],
+    plantillaAccionistas: {
+      accionistas: [{ nombre: 'Montachem International INC', participacion_pct: 100 }],
+    },
+  };
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+  assert.ok(salida.includes('ACME HOLDINGS LLC'), 'no entró el accionista del certificado');
+  assert.ok(!salida.includes('VIEJO ACCIONISTA'), 'sobrevivió el accionista de la plantilla');
+});
+
 /* ─────────────────────────────────────────────────────────────────────────────
    Códigos SIC utilizados (Criterios de búsqueda), ruta .docx.
 
@@ -3225,6 +3262,61 @@ test('las celdas de la tabla generada van centradas y en Arial 10pt', () => {
   assert.equal((tbl.match(/<w:sz w:val="20"\/>/g) || []).length, 2);
 });
 
+test('la tabla generada no es más ancha que el texto de los párrafos', () => {
+  /* Iba a `w:tblW w:w="9405" w:type="dxa"`, un ancho fijo en twips: en una carta con
+     márgenes de 1" la caja de texto son 9360, así que la tabla sobresalía, y en una
+     plantilla con otros márgenes el desajuste es mayor. En porcentaje, «5000» son el 100 %
+     de la columna de texto, sea cual sea la hoja y sean cuales sean los márgenes del
+     informe del cliente: la tabla mide exactamente lo que mide el párrafo. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['A', 'B', 'C'], [['1', '2', '3']]));
+  assert.match(tbl, /<w:tblW w:w="5000" w:type="pct"\/>/);
+  assert.doesNotMatch(tbl, /w:tblW w:w="9405"/, 'queda el ancho fijo viejo');
+  /* Sin `fixed` Word reparte las columnas por su contenido y se salta los anchos dados. */
+  assert.match(tbl, /<w:tblLayout w:type="fixed"\/>/);
+  /* Las columnas reparten ese 100 % y suman el total, sin sobrar ni faltar. */
+  const anchos = [...tbl.matchAll(/<w:tcW w:w="(\d+)" w:type="pct"\/>/g)].map((m) => Number(m[1]));
+  assert.strictEqual(anchos.length, 6, 'las tres columnas de la cabecera y las tres del dato');
+  assert.strictEqual(anchos.slice(0, 3).reduce((a, b) => a + b, 0), 5000,
+    'las columnas tienen que sumar el ancho de la tabla');
+  assert.doesNotMatch(tbl, /w:tcW w:w="\d+" w:type="dxa"/, 'queda una columna en twips');
+});
+
+test('una tabla de dos columnas reparte el ancho sin perder un punto por el redondeo', () => {
+  const tbl = tablaDe(generarTablaOoxml('T', ['A', 'B', 'C'], [['1', '2', '3']]));
+  const deLaFila = (i) => [...tablaDe(tbl).matchAll(/<w:tcW w:w="(\d+)"/g)].map((m) => Number(m[1])).slice(i * 3, i * 3 + 3);
+  assert.strictEqual(deLaFila(0).reduce((a, b) => a + b, 0), 5000);
+  /* Tres columnas no dividen 5000 en enteros: la última absorbe el resto en vez de dejar
+     la tabla en 4998. */
+  assert.deepStrictEqual(deLaFila(0), [1666, 1666, 1668]);
+});
+
+test('el texto largo de una celda va justificado; lo corto y las cifras, centrados', () => {
+  /* Un párrafo de descripción de actividad ocupa varias líneas dentro de su celda, y sin
+     justificar queda con el borde derecho en diente de sierra. Una cifra o un rótulo corto
+     justificados no cambian de aspecto, pero un rótulo de dos palabras estirado a lo ancho
+     de la celda sí, así que solo se justifica lo que de verdad es prosa. */
+  const largo = 'Huaxin Resources Technology Co. Ltd., fundada en 2006 y con sede en Pekín, '
+    + 'China, es una compañía dedicada a la utilización y tratamiento de residuos sólidos.';
+  const tbl = tablaDe(generarTablaOoxml('T', ['Compañía', 'Descripción'],
+    [['Huaxin', largo], ['Otra', '2.619,30']]));
+  const celdas = [...tbl.matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].map((m) => m[0]);
+  const jcDe = (i) => (/<w:jc w:val="(\w+)"\/>/.exec(celdas[i]) || [])[1];
+
+  assert.strictEqual(jcDe(0), 'center', 'la cabecera va centrada');
+  assert.strictEqual(jcDe(1), 'center');
+  assert.strictEqual(jcDe(2), 'center', 'un nombre corto va centrado');
+  assert.strictEqual(jcDe(3), 'both', 'la descripción larga va justificada');
+  assert.strictEqual(jcDe(5), 'center', 'una cifra va centrada aunque tenga puntos y comas');
+});
+
+test('un dato largo sin espacios no se justifica', () => {
+  /* Un identificador o una cifra muy larga no son prosa: justificarlos no hace nada bueno
+     y el criterio tiene que distinguirlos de un párrafo. */
+  const tbl = tablaDe(generarTablaOoxml('T', ['A'], [['IQ' + '1'.repeat(120)]]));
+  const celdas = [...tbl.matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].map((m) => m[0]);
+  assert.match(celdas[1], /<w:jc w:val="center"\/>/);
+});
+
 test('la tabla generada respeta el aire de celda del modelo', () => {
   /* `padding:5px 6px` en twips. Word trae 108 a los lados y CERO arriba y abajo por defecto,
      así que sin esto las filas del archivo salen más apretadas que las del previo. */
@@ -3598,6 +3690,8 @@ const COMPARABLE_CON_EEFF = {
   eeffDatos: {
     periodo: 2025, utilidad_bruta: 400, gastos_operacionales: 250,
     total_activos: 2000, propiedad_planta_equipo: 300, efectivo_y_equivalentes: 500,
+    otras_inversiones: 250, total_pasivos: 900,
+    gastos_generales_administrativos: 200, depreciacion: 50, activos_operativos: 1500,
   },
 };
 
@@ -3694,24 +3788,28 @@ test('las cifras leídas de la ficha llegan a las celdas del Anexo B, en el orde
   insertarImagenesAnexoB(zip, { anio: 2025, comparables: [COMPARABLE_CON_EEFF] });
   const texto = textoDe(zip, RUTA_DOC_TEST);
 
-  /* El orden y el formato son los de la ficha que produce la macro de Word, que es el
-     documento que el analista tiene delante al revisar el anexo: dos decimales siempre
-     —una cifra sin ellos parece redondeada a mano— y el balance en el orden en que la
-     ficha lo imprime, que empieza por el efectivo y no por el total de activos. */
+  /* Las dieciséis filas de la ficha que produce la macro de Word —siete del estado de
+     resultados y nueve del balance—, en su orden y con dos decimales. El «&» del rótulo de
+     SG&A va escapado porque `textoDe` entrega el texto del XML sin decodificar entidades. */
   const FILAS_ESPERADAS = [
     'Estado de Resultados', 'Descripción', '2025',
     'Ventas netas', '1.000,00',
     'Costo de los bienes vendidos', '600,00',
     'Beneficio bruto', '400,00',
+    'Gastos generales y administrativos (SG&amp;A)', '200,00',
+    'Depreciación', '50,00',
     'Gastos operativos', '250,00',
     'Utilidad de operación', '150,00',
     'FUENTE:',
     'Balance General', 'Descripción', '2025',
     'Efectivo promedio y equivalentes de efectivo', '500,00',
+    'Otras inversiones promedio', '250,00',
     'Promedio de cuentas por cobrar netas', '120,00',
     'Inventario neto promedio', '40,00',
     'EPP neto promedio', '300,00',
     'Activos totales promedio', '2.000,00',
+    'Activos operativos promedio', '1.500,00',
+    'Total de pasivos promedio', '900,00',
     'Promedio de cuentas por pagar netas', '80,00',
     'FUENTE:',
   ];
@@ -3780,4 +3878,21 @@ test('una comparable sin estado financiero leído deja el hueco señalado, no ci
      suyo, y «EEFF DEL CLIENTE ANTERIOR» seguiría ahí con razón porque vive en el ANEXO A. */
   assert.ok(!texto.includes('FICHAS DEL CLIENTE ANTERIOR'), 'no se conserva lo del informe anterior');
   assert.match(avisos.join(' | '), /1 de 1 comparable\(s\) sin estado financiero/);
+});
+
+
+test('otras inversiones y total de pasivos se omiten cuando la ficha no los trae', async () => {
+  /* Hay fichas que imprimen «-» en «Otras inversiones» —LYONDELLBASELL, frente a ASIA
+     POLYMER que sí la trae— y escribir un cero ahí diría que la comparable reportó cero.
+     Las demás filas no se mueven de sitio por eso. */
+  const sinEllas = { ...COMPARABLE_CON_EEFF, eeffDatos: {
+    ...COMPARABLE_CON_EEFF.eeffDatos, otras_inversiones: null, total_pasivos: null } };
+  const zip = await zipSinAnexoB();
+  insertarImagenesAnexoB(zip, { anio: 2025, comparables: [sinEllas] });
+  const texto = textoDe(zip, RUTA_DOC_TEST);
+
+  assert.ok(!texto.includes('Otras inversiones'), 'sin dato no se imprime la fila');
+  assert.ok(!texto.includes('Total de pasivos'), 'ni la de pasivos');
+  assert.match(texto, /Efectivo promedio y equivalentes de efectivo500,00Promedio de cuentas por cobrar netas120,00/,
+    'y las que quedan siguen contiguas y en orden');
 });

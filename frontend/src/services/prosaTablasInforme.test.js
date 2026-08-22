@@ -6,6 +6,8 @@ import {
 } from './prosaTablasInforme.js';
 import { PARRAFO_OOXML } from './prosaVecindad.js';
 import { filasMuestraComparables, filasRazonesRechazo } from './tablasInforme.js';
+import { umbralOperacionAdicional } from './tablasOperaciones.js';
+import { fmt } from '../utils/calculations.js';
 
 /* Un estudio con muestra y con embudo, para que los conteos existan de verdad. Como en el resto
    de las pruebas del informe, las cifras no se escriben a mano: se le preguntan al motor, así
@@ -130,6 +132,119 @@ test('sin monto en el estudio no se escribe nada', () => {
     + 'de $ 3.435.357.400 durante el ejercicio.</p>';
   const salida = actualizarProsaOperaciones(html, { ...estudio, monto_operacion: null }, []);
   assert.ok(salida.includes('3.435.357.400'), 'se tocó el monto sin tenerlo');
+});
+
+/* ══════ el monto de la información adicional del formato (códigos 61 a 63) ══════ */
+
+/* El mismo estudio, con la sección «4. Información adicional» del Formato 1125 por encima del
+   umbral del año gravable. El monto se deriva del umbral y no se escribe a mano: así la prueba
+   sigue midiendo lo que debe cuando cambie el UVT. */
+const MONTO_ADICIONAL = umbralOperacionAdicional(estudio.anio) * 2;
+const ADICIONAL = fmt(MONTO_ADICIONAL);
+const conAdicional = {
+  ...estudio,
+  operacionAdicional: {
+    monto: MONTO_ADICIONAL,
+    filas: [{
+      vinculado: 'MONTACHEM INTERNATIONAL S.A.', nit: '900123456', pais: 'Panamá',
+      tipo: 'Reintegros o reembolsos de gastos con vinculados que no fueron reflejados en el '
+        + 'Estado de Resultados (62)',
+      monto: MONTO_ADICIONAL,
+    }],
+  },
+};
+
+/* Literal de la plantilla del cliente: el análisis de la operación cita los DOS montos con el
+   mismo giro, separados por un punto y coma. */
+const HTML_DOS_MONTOS = '<p>En el año 2024, MONTACHEM INTERNATIONAL S.A. realizo operaciones con '
+  + 'su vinculado por <strong>compra neta de inventarios para distribución (31)</strong> por un '
+  + 'valor total de $ 18.836.847.464; adicionalmente se realizó un contrato de mandato entre la '
+  + 'sucursal y su vinculado en el exterior por <strong>reintegros o reembolsos de gastos con '
+  + 'vinculados que no fueron reflejados en el Estado de Resultados (62)</strong> por valor total '
+  + 'de $ 13.425.408.220.</p>';
+
+test('el monto de la información adicional entra sin pisar el de la operación analizada', () => {
+  /* El ancla del monto se llevaba el primero y el segundo se radicaba ante la DIAN con la cifra
+     del informe del año anterior. */
+  const salida = plano(actualizarProsaOperaciones(HTML_DOS_MONTOS, conAdicional, []));
+  assert.ok(salida.includes('por un valor total de $ ' + MONTO),
+    'el monto de la operación analizada no entró: ' + salida);
+  assert.ok(salida.includes('(62) por valor total de $ ' + ADICIONAL),
+    'el monto de la información adicional no entró: ' + salida);
+  assert.ok(!salida.includes('13.425.408.220'), 'sobrevive el monto adicional de la plantilla');
+  assert.ok(!salida.includes('18.836.847.464'), 'sobrevive el monto principal de la plantilla');
+});
+
+test('los dos montos también entran en la ruta del .docx', () => {
+  /* Word parte la frase en varios runs y la cifra puede quedar cortada por el medio. */
+  const ooxml = '<w:p><w:r><w:t xml:space="preserve">En el año 2024, MONTACHEM realizo '
+    + 'operaciones con su vinculado por compra neta de inventarios para distribución (31) por un '
+    + 'valor total de $ </w:t></w:r><w:r><w:t>18.836.847.464</w:t></w:r>'
+    + '<w:r><w:t xml:space="preserve">; adicionalmente se realizó un contrato de mandato por '
+    + 'reintegros o reembolsos de gastos con vinculados que no fueron reflejados en el Estado de '
+    + 'Resultados (62) por valor total de $ </w:t></w:r>'
+    + '<w:r><w:t>13.425.408.2</w:t></w:r><w:r><w:t>20</w:t></w:r></w:p>';
+  const salida = actualizarProsaOperaciones(ooxml, conAdicional, [], {
+    rxParrafo: PARRAFO_OOXML,
+  });
+  assert.ok(plano(salida).includes('(62) por valor total de $ ' + ADICIONAL),
+    'el monto adicional no entró: ' + plano(salida));
+  assert.ok(plano(salida).includes('por un valor total de $ ' + MONTO),
+    'el monto de la operación analizada no entró: ' + plano(salida));
+  assert.equal((salida.match(/<w:r>/g) || []).length, (ooxml.match(/<w:r>/g) || []).length,
+    'cambió el número de runs');
+});
+
+test('sin información adicional en el estudio, ese monto no se toca y se avisa', () => {
+  /* La plantilla es el informe del año anterior: su cifra es de aquel contribuyente. Escribir
+     ahí el monto de la operación analizada sería peor que dejarla, así que se avisa. */
+  const avisos = [];
+  const salida = plano(actualizarProsaOperaciones(HTML_DOS_MONTOS, estudio, avisos));
+  assert.ok(salida.includes('por valor total de $ 13.425.408.220'),
+    'se tocó el monto adicional sin tenerlo: ' + salida);
+  assert.ok(salida.includes('por un valor total de $ ' + MONTO),
+    'el monto de la operación analizada no entró: ' + salida);
+  assert.ok(avisos.some((a) => /cita un monto de información adicional/.test(a)),
+    'no avisó: ' + JSON.stringify(avisos));
+});
+
+test('un párrafo que sólo habla de la información adicional no recibe el monto analizado', () => {
+  /* La plantilla presenta esa tabla en su propio párrafo. El ancla del monto de la operación
+     analizada casaba ahí y colocaba una cifra creíble en el lugar de otra. */
+  const html = '<p>Adicionalmente, se realizó un contrato de mandato entre la sucursal y su '
+    + 'vinculado en el exterior por reintegros o reembolsos de gastos con vinculados que no '
+    + 'fueron reflejados en el Estado de Resultados (62) por valor total de $ 13.425.408.220, '
+    + 'detallado a continuación:</p>';
+  const salida = plano(actualizarProsaOperaciones(html, estudio, []));
+  assert.ok(salida.includes('$ 13.425.408.220'), 'se escribió el monto analizado ahí: ' + salida);
+  assert.ok(!salida.includes(MONTO), 'se escribió el monto analizado ahí: ' + salida);
+});
+
+test('la información adicional que no supera el umbral no se declara en la prosa', () => {
+  /* Misma condición que la tabla: el formato la trajo, pero por debajo de los 45.000 UVT no
+     entra al informe, así que la frase tampoco puede declararla. */
+  const avisos = [];
+  const bajoUmbral = {
+    ...estudio,
+    operacionAdicional: { monto: 1000000, filas: [{ tipo: 'Préstamos (61)', monto: 1000000 }] },
+  };
+  const salida = plano(actualizarProsaOperaciones(HTML_DOS_MONTOS, bajoUmbral, avisos));
+  assert.ok(salida.includes('$ 13.425.408.220'), 'se declaró por debajo del umbral: ' + salida);
+  assert.ok(avisos.some((a) => /cita un monto de información adicional/.test(a)),
+    'no avisó: ' + JSON.stringify(avisos));
+});
+
+test('si el estudio declara información adicional y el informe no la cita, se avisa', () => {
+  const avisos = [];
+  const html = '<p>En el año 2024, MONTACHEM tuvo operaciones de ingreso con sus vinculados '
+    + 'económicos por un valor total de $ 18.836.847.464.</p>';
+  actualizarProsaOperaciones(html, conAdicional, avisos);
+  assert.ok(avisos.some((a) => /no la menciona/.test(a)), 'no avisó: ' + JSON.stringify(avisos));
+});
+
+test('con los dos montos, aplicarlo dos veces da el mismo resultado', () => {
+  const una = actualizarProsaOperaciones(HTML_DOS_MONTOS, conAdicional, []);
+  assert.equal(actualizarProsaOperaciones(una, conAdicional, []), una);
 });
 
 /* ══════════════════ márgenes de las comparables ══════════════════ */

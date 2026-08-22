@@ -236,6 +236,30 @@ test('la composición accionaria y los criterios de vinculación también se reg
   assert.match(salida, /Vinculación Directa/);
 });
 
+test('sin composición accionaria propia, la tabla de la plantilla no se toca', () => {
+  /* Lo que la plantilla trae en «N° Acciones» y «Valor Capital» se queda: la extracción con IA
+     de esa misma tabla no las recupera, y reescribirla las convertía en «—». */
+  const tabla =
+    '<p><strong> Tabla 7. Composición accionaria</strong></p>' +
+    '<table><tr><th><p><strong> Accionista</strong></p></th><th><p><strong> País</strong></p></th>' +
+    '<th><p><strong> N° Acciones</strong></p></th><th><p><strong> Valor Capital</strong></p></th>' +
+    '<th><p><strong> % Participación</strong></p></th></tr>' +
+    '<tr><th><p> Montachem International INC</p></th><td><p> Estados Unidos</p></td>' +
+    '<td><p> 12.500</p></td><td><p> 1.250.000.000</p></td><td><p> 100%</p></td></tr></table>';
+  const estudio = {
+    ...ESTUDIO_COMPLETO,
+    accionistas: [],
+    plantillaAccionistas: {
+      accionistas: [{ nombre: 'Montachem International INC', pais: 'Estados Unidos', participacion_pct: 100 }],
+    },
+  };
+  const avisos = [];
+  const salida = actualizarTablasOperacionesHtml(tabla, estudio, avisos);
+  assert.strictEqual(salida, tabla, 'se reescribió una tabla que había que conservar');
+  assert.ok(!avisos.includes('Composición accionaria'),
+    'conservarla a propósito no es una tabla que no se encontró: ' + JSON.stringify(avisos));
+});
+
 test('las tablas ausentes se nombran todas en los avisos', () => {
   const avisos = [];
   actualizarTablasOperacionesHtml('<p> Un informe pelado.</p>', ESTUDIO_COMPLETO, avisos);

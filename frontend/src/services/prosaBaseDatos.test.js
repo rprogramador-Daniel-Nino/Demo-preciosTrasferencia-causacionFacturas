@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   actualizarProsaBaseDatos, BASE_DATOS_ACTUAL, BASE_DATOS_FUENTE, AVISO_BASE_DATOS,
+  citaBaseDatos, fechaConsultaBaseDatos, faltaFechaConsulta, AVISO_SIN_FECHA_CONSULTA,
 } from './prosaBaseDatos.js';
 import { PARRAFO_OOXML, textoVisibleConMapa } from './prosaVecindad.js';
 
@@ -165,4 +166,48 @@ test('tolera texto vacío o ausente', () => {
   assert.strictEqual(actualizarProsaBaseDatos('', []), '');
   assert.strictEqual(actualizarProsaBaseDatos(null, []), '');
   assert.strictEqual(actualizarProsaBaseDatos(undefined), '');
+});
+
+/* ══════ La cita al pie de las tablas del motor ══════ */
+
+test('la cita lleva la base de datos y la fecha de consulta del estudio', () => {
+  /* Lo que el usuario pidió (2026-08-21): la fuente con la fecha del estudio de Capital IQ,
+     en el estilo que ya tenía el informe. */
+  assert.strictEqual(
+    citaBaseDatos({ database_consulta: '2026-08-21T15:04:00.000Z' }),
+    "Información Base Datos Capital IQ (Standard & Poor's). Fecha de consulta: agosto de 2026.");
+});
+
+test('sin fecha registrada la cita sale sin ella, y no se inventa un mes', () => {
+  /* Dos tablas llevaban «Fecha de consulta: septiembre de <año>» con el mes escrito a mano,
+     heredado del informe de referencia: se radicaba «septiembre» en un estudio consultado en
+     cualquier otro mes. Mejor sin fecha y avisando que con una falsa. */
+  assert.strictEqual(citaBaseDatos({}),
+    "Información Base Datos Capital IQ (Standard & Poor's).");
+  assert.strictEqual(citaBaseDatos(null),
+    "Información Base Datos Capital IQ (Standard & Poor's).");
+  assert.ok(faltaFechaConsulta({}));
+  assert.ok(!faltaFechaConsulta({ database_consulta: '2026-08-21' }));
+});
+
+test('la cita respeta la base de datos que declare el estudio', () => {
+  assert.strictEqual(
+    citaBaseDatos({ database_source: 'Orbis (Bureau van Dijk)', database_consulta: '2026-03-02' }),
+    'Información Base Datos Orbis (Bureau van Dijk). Fecha de consulta: marzo de 2026.');
+});
+
+test('una fecha ilegible se trata como ausente en vez de escribir "Invalid Date"', () => {
+  ['', 'ayer', {}, 0].forEach((valor) => {
+    assert.strictEqual(fechaConsultaBaseDatos({ database_consulta: valor }), '', JSON.stringify(valor));
+  });
+});
+
+test('acepta el Timestamp de Firestore, que es como llega el estudio de la nube', () => {
+  const timestamp = { toDate: () => new Date('2026-08-21T15:04:00.000Z') };
+  assert.strictEqual(fechaConsultaBaseDatos({ database_consulta: timestamp }), 'agosto de 2026');
+});
+
+test('el aviso dice qué hacer para sellar la fecha', () => {
+  assert.match(AVISO_SIN_FECHA_CONSULTA, /paso 3/);
+  assert.match(AVISO_SIN_FECHA_CONSULTA, /1\.2\.2\.2\.1\.5/, 'cita la norma que la exige');
 });

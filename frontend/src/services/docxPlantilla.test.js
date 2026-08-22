@@ -7,7 +7,7 @@ import {
 import PizZip from 'pizzip';
 import {
   textoPorParrafo, aHtmlSintetico, htmlParaMarcar, aplicarMarcasOoxml, camposMarcados,
-  envolverTablaEnBucle,
+  envolverTablaEnBucle, sustituirRangosEnParrafo,
 } from './docxPlantilla.js';
 import { proponerMarcas, MOTIVO_NO_APARECE, MOTIVO_SIN_APARICION_LIBRE } from './plantillaMarcador.js';
 
@@ -372,4 +372,80 @@ test('envolverTablaEnBucle escribe el bucle aunque la celda de apertura no tenga
   assert.strictEqual(r.envuelta, true);
   assert.ok(r.xml.includes('{#razonesRechazo}'), 'la apertura se escribe aunque la celda estuviera vacía');
   assert.ok(r.xml.includes('{/razonesRechazo}'), 'el cierre también se escribe');
+});
+
+/* ══════ La sustitución quirúrgica: el salto de línea de la portada ══════
+   `redistribuir` metía todo el texto del párrafo en su primer `<w:t>` y vaciaba los demás.
+   El `<w:br/>` no contiene texto, así que al aplanar el párrafo todo el texto quedaba antes
+   del salto: la portada del informe de MONTACHEM 2025 salió con «MONTACHEM INTERNATIONAL
+   SAINFORME LOCAL DE PRECIOS DE TRANSFERENCIA», el nombre pegado al título. */
+
+test('marcar el nombre de la compañía no se lleva el salto de línea de la portada', () => {
+  const portada = '<w:document><w:body><w:p><w:pPr><w:jc w:val="center"/></w:pPr>'
+    + '<w:r><w:rPr><w:b/></w:rPr><w:t>END GAME INTERACTIVE COLOMBIA SAS</w:t></w:r>'
+    + '<w:r><w:br/></w:r>'
+    + '<w:r><w:rPr><w:b/></w:rPr><w:t>INFORME LOCAL DE PRECIOS DE TRANSFERENCIA</w:t></w:r>'
+    + '</w:p></w:body></w:document>';
+  const r = aplicarMarcasOoxml(portada, [
+    { fragmento: 'END GAME INTERACTIVE COLOMBIA SAS', campo: 'ent' },
+  ]);
+  assert.strictEqual(r.aplicadas, 1);
+  /* El salto sigue ENTRE los dos runs, que es lo que separa el nombre del título. */
+  assert.match(r.xml, /\{ent\}<\/w:t><\/w:r><w:r><w:br\/><\/w:r>/);
+  /* El título conserva su run y su negrita: no se aplanó al primero. */
+  assert.match(r.xml, /<w:rPr><w:b\/><\/w:rPr><w:t[^>]*>INFORME LOCAL DE PRECIOS/);
+  /* Y el nombre NO queda pegado al título en un solo `<w:t>`. */
+  assert.doesNotMatch(r.xml, /\{ent\}INFORME LOCAL/);
+});
+
+test('el marcador viaja contiguo en un solo <w:t>, aunque el valor cruzara varios runs', () => {
+  /* Si `{ent}` quedara partido entre dos `<w:t>`, Docxtemplater no lo reconocería y el dato
+     no se sustituiría nunca. Es la razón por la que el texto nuevo entra completo en el
+     primer run que toca el rango. */
+  const xml = '<w:document><w:body><w:p>'
+    + '<w:r><w:t>END GAME </w:t></w:r>'
+    + '<w:r><w:rPr><w:i/></w:rPr><w:t>INTERACTIVE</w:t></w:r>'
+    + '<w:r><w:t> COLOMBIA SAS</w:t></w:r>'
+    + '</w:p></w:body></w:document>';
+  const r = aplicarMarcasOoxml(xml, [
+    { fragmento: 'END GAME INTERACTIVE COLOMBIA SAS', campo: 'ent' },
+  ]);
+  assert.strictEqual(r.aplicadas, 1);
+  assert.match(r.xml, /<w:t[^>]*>\{ent\}<\/w:t>/, 'el marcador entero en un solo <w:t>');
+  assert.strictEqual((r.xml.match(/\{ent\}/g) || []).length, 1, 'y una sola vez');
+});
+
+test('lo que está fuera del rango marcado no se toca', () => {
+  const xml = '<w:document><w:body><w:p>'
+    + '<w:r><w:t xml:space="preserve">NIT </w:t></w:r>'
+    + '<w:r><w:rPr><w:b/></w:rPr><w:t>900.213.910-7</w:t></w:r>'
+    + '<w:r><w:t xml:space="preserve"> de Bogotá</w:t></w:r>'
+    + '</w:p></w:body></w:document>';
+  const r = aplicarMarcasOoxml(xml, [{ fragmento: '900.213.910-7', campo: 'nit' }]);
+  assert.match(r.xml, /<w:t xml:space="preserve">NIT <\/w:t>/, 'el prefijo, intacto');
+  assert.match(r.xml, /<w:t xml:space="preserve"> de Bogotá<\/w:t>/, 'el sufijo, intacto');
+  assert.match(r.xml, /<w:rPr><w:b\/><\/w:rPr><w:t[^>]*>\{nit\}<\/w:t>/, 'y el valor con su negrita');
+});
+
+test('sustituirRangosEnParrafo cambia solo los caracteres del rango', () => {
+  const p = '<w:p><w:r><w:t xml:space="preserve">PERÍODO FISCAL DE 20</w:t></w:r>'
+    + '<w:r><w:t>2</w:t></w:r><w:r><w:t>4</w:t></w:r></w:p>';
+  /* El año empieza en la posición 18 del texto unido «PERÍODO FISCAL DE 2024». */
+  const r = sustituirRangosEnParrafo(p, [{ pos: 18, largo: 4, texto: '2025' }]);
+  const texto = (r.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || [])
+    .map((t) => t.replace(/<[^>]+>/g, '')).join('');
+  assert.strictEqual(texto, 'PERÍODO FISCAL DE 2025');
+  assert.strictEqual((r.match(/<w:r>/g) || []).length, 3, 'los tres runs siguen existiendo');
+});
+
+test('sustituirRangosEnParrafo sin rangos devuelve el bloque tal cual', () => {
+  const p = '<w:p><w:r><w:t>algo</w:t></w:r></w:p>';
+  assert.strictEqual(sustituirRangosEnParrafo(p, []), p);
+  assert.strictEqual(sustituirRangosEnParrafo(p, null), p);
+});
+
+test('sustituirRangosEnParrafo escapa lo que escribe', () => {
+  const p = '<w:p><w:r><w:t>XX</w:t></w:r></w:p>';
+  const r = sustituirRangosEnParrafo(p, [{ pos: 0, largo: 2, texto: 'A & B < C' }]);
+  assert.match(r, /A &amp; B &lt; C/, 'un & suelto rompería el XML');
 });
