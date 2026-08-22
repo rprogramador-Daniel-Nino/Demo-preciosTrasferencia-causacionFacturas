@@ -656,6 +656,43 @@ test('actualización de tablas operativas en el OOXML de docxRelleno (Fase 3)', 
 
 
 
+/* ── Composición accionaria: sin certificado, la tabla de la plantilla se conserva ── */
+
+test('sin composición accionaria propia, la Tabla 6 del .docx no se toca', () => {
+  /* Espejo OOXML del mismo criterio que la ruta HTML: la plantilla es el informe del año
+     anterior del mismo contribuyente y sus «N° Acciones» y «Valor Capital» son datos que la
+     extracción con IA de esa misma tabla no recupera. Reescribirla los convertía en «—». */
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>Montachem International INC</w:t></w:p></w:tc>'
+    + '<w:tc><w:p><w:t>12.500</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME', pli: 'MO',
+    plantillaAccionistas: {
+      accionistas: [{ nombre: 'Montachem International INC', pais: 'Estados Unidos', participacion_pct: 100 }],
+    },
+  };
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, avisos);
+  assert.strictEqual(salida, xml, 'se reescribió una tabla que había que conservar');
+  assert.ok(!avisos.includes('Composición accionaria'),
+    'conservarla a propósito no es una tabla que no se encontró: ' + JSON.stringify(avisos));
+});
+
+test('con certificado cargado, la Tabla 6 del .docx sí se regenera', () => {
+  const xml = '<w:p><w:t>Tabla 6. Composición accionaria</w:t></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:t>VIEJO ACCIONISTA</w:t></w:p></w:tc></w:tr></w:tbl>';
+  const estudio = {
+    anio: 2025, ent: 'ACME', pli: 'MO',
+    accionistas: [{ nombre: 'ACME HOLDINGS LLC', pais: 'ESTADOS UNIDOS', acciones: 1000, valor_capital: 10000, participacion_pct: 100 }],
+    plantillaAccionistas: {
+      accionistas: [{ nombre: 'Montachem International INC', participacion_pct: 100 }],
+    },
+  };
+  const salida = actualizarTablasOperacionesOoxml(xml, estudio, []);
+  assert.ok(salida.includes('ACME HOLDINGS LLC'), 'no entró el accionista del certificado');
+  assert.ok(!salida.includes('VIEJO ACCIONISTA'), 'sobrevivió el accionista de la plantilla');
+});
+
 /* ─────────────────────────────────────────────────────────────────────────────
    Códigos SIC utilizados (Criterios de búsqueda), ruta .docx.
 

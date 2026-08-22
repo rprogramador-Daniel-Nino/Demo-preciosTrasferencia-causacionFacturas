@@ -2128,12 +2128,14 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     { numeros: [4] }
   );
 
-  // 6. Composición accionaria
-  reemplazar(
-    'Composición accionaria',
-    (b) => emitir(b, filasComposicionAccionaria(estudio)),
-    { numeros: [6] }
-  );
+  /* 6. Composición accionaria. Sólo si el estudio trae una propia —el certificado de la
+     Sección 1 o la heredada del informe del año anterior—; si no, la tabla de la plantilla se
+     deja tal cual, con sus filas y sus cifras (ver `filasComposicionAccionaria`). No se avisa:
+     conservarla es la decisión, no una tabla que no se encontró. */
+  {
+    const t6 = filasComposicionAccionaria(estudio);
+    if (t6) reemplazar('Composición accionaria', (b) => emitir(b, t6), { numeros: [6] });
+  }
 
   // 7. Compañías vinculadas al cierre del año gravable
   reemplazar(

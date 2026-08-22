@@ -16,6 +16,7 @@ import { crearNumeradorDeNotasHtml } from './notasAlPieHtml.js';
 import { actualizarTablasOperacionesHtml } from './tablasOperacionesHtml.js';
 import { actualizarAnexoBHtml } from './anexoBHtml.js';
 import { actualizarAnexoCHtml } from './anexoCHtml.js';
+import { tieneComposicionAccionariaPropia } from './tablasContribuyente.js';
 
 /* Escapa caracteres especiales para usar en una expresión regular. */
 const escaparParaRegex = (texto) => String(texto).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -39,6 +40,11 @@ const escaparHTML = (texto) => {
 const resaltar = resaltarValor;
 
 const RX_MARCA = /<span data-campo="([^"]+)">([\s\S]*?)<\/span>/g;
+
+/* Los campos que salen de la composición accionaria: el accionista principal, el capital pagado
+   y el total de acciones. Cuando el estudio no trae una composición propia se conservan tal como
+   los escribe la plantilla, igual que su tabla (ver `filasComposicionAccionaria`). */
+const RX_CAMPO_COMPOSICION = /^(?:accionista\.|capital_pagado$|total_acciones$)/;
 
 /**
  * @param {string} htmlMarcado
@@ -106,7 +112,16 @@ export function renderizar(htmlMarcado, estudio, recursos = [], opciones = {}) {
      se consultó. Misma función que la ruta .docx. */
   html = actualizarProsaBaseDatos(html, avisosTablas);
 
-  html = html.replace(RX_MARCA, (_, campo) => {
+  html = html.replace(RX_MARCA, (_, campo, original) => {
+    /* La composición accionaria de la plantilla se conserva TAL CUAL cuando el estudio no trae
+       una propia —mismo criterio que su tabla—, y sin pasar por `valorDeCampo`: la tercera rama
+       de la cascada sale de leer con IA esa misma tabla, así que reescribirla con eso deja «—»
+       en las columnas que la extracción no recupera (número de acciones, valor del capital) y
+       cambia la caja de las que sí. Mientras el motor reescribía la tabla entera esto no se
+       notaba: sus filas nuevas se llevaban por delante los `data-campo`. */
+    if (RX_CAMPO_COMPOSICION.test(campo) && !tieneComposicionAccionariaPropia(estudio)) {
+      return original;
+    }
     const valor = valorDeCampo(estudio, campo);
     if (valor === null) {
       vacios.add(campo);

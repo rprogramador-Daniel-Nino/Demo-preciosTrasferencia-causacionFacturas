@@ -88,15 +88,44 @@ export function resolverComposicionAccionaria(estudio) {
 }
 
 /**
+ * ¿El estudio trae una composición accionaria PROPIA, distinta de la que ya está escrita en la
+ * plantilla?
+ *
+ * Propia es la del certificado de la Sección 1 y la heredada del informe del año anterior: dos
+ * documentos que el usuario cargó aparte. La tercera rama de la cascada —`plantillaAccionistas`—
+ * NO lo es: sale de leer con IA la misma tabla que se iba a reescribir, así que regenerarla con
+ * eso es un viaje de ida y vuelta que sólo puede perder datos. Es exactamente lo que pasaba: la
+ * extracción devuelve razón social, país y participación, pero no el número de acciones ni el
+ * valor del capital, y la tabla se publicaba con «—» en esas dos columnas donde la plantilla
+ * traía las cifras.
+ *
+ * @param {object} estudio
+ * @returns {boolean}
+ */
+export function tieneComposicionAccionariaPropia(estudio) {
+  const { accionistas, fuente } = resolverComposicionAccionaria(estudio);
+  return !!accionistas.length && fuente !== 'plantilla';
+}
+
+/**
  * Tabla 6 — «Composición accionaria», con la fila de totales al cierre.
  *
- * La fila de total se emite siempre, incluso sin accionistas: es lo que delata que falta
- * cargar el certificado (y no hay dato heredado del año anterior), en vez de dejar en el
- * documento los accionistas de la plantilla.
+ * Devuelve `null` cuando el estudio no trae una composición accionaria propia
+ * (`tieneComposicionAccionariaPropia`), y quien la publica tiene que respetarlo DEJANDO LA
+ * TABLA DE LA PLANTILLA TAL CUAL, con sus filas y sus cifras.
  *
- * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}}
+ * Antes se emitía siempre, aunque sólo fuera la fila «Total» con huecos, para delatar que
+ * faltaba cargar el certificado. Se cambió por decisión del usuario (2026-08-22): un hueco a la
+ * vista no vale lo que cuesta, porque la plantilla es el informe del año anterior DEL MISMO
+ * contribuyente y su composición accionaria es un dato que casi nunca cambia de un año al otro
+ * —mientras que el certificado, cuando se carga, sí manda—. Si la plantilla fuera de otro
+ * cliente, esta tabla queda con sus accionistas: hay que revisarla a mano, igual que las demás
+ * tablas que este motor no sabe regenerar.
+ *
+ * @returns {{nombre:string, titulo:string, encabezados:string[], filas:string[][], fuente:string}|null}
  */
 export function filasComposicionAccionaria(estudio) {
+  if (!tieneComposicionAccionariaPropia(estudio)) return null;
   const { accionistas } = resolverComposicionAccionaria(estudio);
 
   const filas = accionistas.map((a) => [
