@@ -692,7 +692,11 @@ export async function parseEEFFComparablesLote(file, studyYear) {
 
 /* Extraídos para que la lectura individual y la de lote no dupliquen el manejo
    del archivo. */
-function leerBase64(file) {
+async function leerBase64(file) {
+  if (typeof FileReader === 'undefined') {
+    const arrayBuffer = await file.arrayBuffer();
+    return Buffer.from(arrayBuffer).toString('base64');
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);

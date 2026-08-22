@@ -403,3 +403,140 @@ test('una ficha limpia lo dice, para que el estado de la fila no quede en blanco
   assert.strictEqual(r.hallazgos.length, 1);
   assert.match(r.hallazgos[0], /✅/);
 });
+
+/* ══════ Pruebas de Integración (Mocking API) ══════ */
+
+test('parseEEFFComparableOCR integra la extracción nativa con la llamada a la API de Gemini (modelo texto)', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+
+  let apiPayloadRecibido = null;
+
+  // Mock de la llamada API
+  axios.post = async (url, payload) => {
+    apiPayloadRecibido = payload;
+    return {
+      data: {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                nombre: "QUBICGAMES S.A.",
+                identificador_fuente: "",
+                periodo: "2025",
+                moneda: "COP",
+                unidad_origen: "unidades",
+                ingresos_operacionales: 28.81,
+                costo_ventas: 0.15,
+                utilidad_bruta: 28.66,
+                gastos_operacionales: 28.23,
+                utilidad_operacional: 0.43,
+                cuentas_por_cobrar: 5.94,
+                inventarios: 0.06,
+                cuentas_por_pagar: 5.88,
+                total_activos: 16.58,
+                total_pasivos: 8.39,
+                patrimonio: 8.19,
+                propiedad_planta_equipo: 0.42,
+                efectivo_y_equivalentes: 3.05,
+                gastos_investigacion_desarrollo: null,
+                gastos_publicidad: null
+              })
+            }]
+          }
+        }]
+      }
+    };
+  };
+
+  try {
+    const mockFile = {
+      name: '1 QUBICGAMES S.A..pdf',
+      arrayBuffer: async () => {
+        return readFileSync('Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/EEFF Comparables/1 QUBICGAMES S.A..pdf');
+      }
+    };
+
+    const result = await (await import('./eeffParser.js')).parseEEFFComparableOCR(mockFile, 2025);
+
+    assert.ok(result, 'Debe devolver un resultado');
+    assert.strictEqual(result.data.nombre, 'QUBICGAMES S.A.');
+    assert.strictEqual(result.data.ingresos_operacionales, 28.81);
+    assert.strictEqual(result.verificacion.esValido, true, 'La verificación de cuadre contable debe ser exitosa');
+
+    // Verificar que se haya llamado al modelo de TEXTO de Gemini
+    assert.ok(apiPayloadRecibido, 'Debe haber enviado un payload a la API');
+    assert.ok(apiPayloadRecibido.contents[0].parts[0].text.includes('QUBICGAMES S.A.'), 'El payload debe contener el texto del PDF');
+    assert.ok(!apiPayloadRecibido.contents[0].parts[0].inline_data, 'No debe enviar datos inline/base64 ya que usó la extracción nativa');
+
+  } finally {
+    // Restaurar original
+    axios.post = originalPost;
+  }
+});
+
+test('parseEEFFComparableOCR cae correctamente al Vision OCR original si es una imagen o PDF escaneado', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+
+  let apiPayloadRecibido = null;
+
+  // Mock de la llamada API para el fallback de imagen
+  axios.post = async (url, payload) => {
+    apiPayloadRecibido = payload;
+    return {
+      data: {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                nombre: "QUBICGAMES S.A.",
+                identificador_fuente: "",
+                periodo: "2025",
+                moneda: "COP",
+                unidad_origen: "unidades",
+                ingresos_operacionales: 28.81,
+                costo_ventas: 0.15,
+                utilidad_bruta: 28.66,
+                gastos_operacionales: 28.23,
+                utilidad_operacional: 0.43,
+                cuentas_por_cobrar: 5.94,
+                inventarios: 0.06,
+                cuentas_por_pagar: 5.88,
+                total_activos: 16.58,
+                total_pasivos: 8.39,
+                patrimonio: 8.19,
+                propiedad_planta_equipo: 0.42,
+                efectivo_y_equivalentes: 3.05,
+                gastos_investigacion_desarrollo: null,
+                gastos_publicidad: null
+              })
+            }]
+          }
+        }]
+      }
+    };
+  };
+
+  try {
+    const mockFile = {
+      name: 'imagen_escaneada.png',
+      type: 'image/png',
+      arrayBuffer: async () => Buffer.from('bytes falsos de imagen')
+    };
+
+    const result = await (await import('./eeffParser.js')).parseEEFFComparableOCR(mockFile, 2025);
+
+    assert.ok(result, 'Debe devolver un resultado');
+    assert.strictEqual(result.data.nombre, 'QUBICGAMES S.A.');
+
+    // Verificar que se haya llamado a Vision OCR con datos base64 inline
+    assert.ok(apiPayloadRecibido, 'Debe haber enviado un payload a la API');
+    assert.ok(apiPayloadRecibido.contents[0].parts[0].inline_data, 'Debe enviar inline_data (base64) para Vision OCR');
+    assert.strictEqual(apiPayloadRecibido.contents[0].parts[0].inline_data.mime_type, 'image/png');
+
+  } finally {
+    // Restaurar original
+    axios.post = originalPost;
+  }
+});
