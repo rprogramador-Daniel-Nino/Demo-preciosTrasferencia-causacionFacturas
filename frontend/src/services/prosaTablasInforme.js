@@ -1,6 +1,7 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    prosaTablasInforme.js — las otras frases que citan cifras de una tabla: los conteos de la
-   muestra, el monto de la operación con el vinculado y el año de los márgenes.
+   muestra, el monto de la operación con el vinculado, el de la información adicional del formato
+   (códigos DIAN 61 a 63) y el año de los márgenes.
 
    La frase que comenta el rango intercuartil tiene su módulo (`prosaRangoInforme.js`) porque
    necesita emparejar tres cuartiles con tres cifras. Estas tres familias no: cada cifra la
@@ -41,9 +42,12 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { filasRazonesRechazo, filasMuestraComparables } from './tablasInforme.js';
-import { num } from '../utils/calculations.js';
+import { montoOperacionAdicional, tieneOperacionAdicional } from './tablasOperaciones.js';
+import { fmt, num } from '../utils/calculations.js';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { sincronizarCifrasDeProsa, HUECO, PARRAFO_HTML } from './prosaVecindad.js';
+import {
+  sincronizarCifrasDeProsa, textoVisibleConMapa, HUECO, PARRAFO_HTML,
+} from './prosaVecindad.js';
 
 /* Un conteo, como lo escriben las plantillas: «13», «442», «1.024». */
 const CONTEO = '\\d+(?:\\.\\d{3})*';
@@ -161,16 +165,73 @@ const INTRO_MONTO = '(?:valor|monto|importe|suma)'
   + '(?:\\s+(?:total|neto|bruto|global))?'
   + '(?:\\s+(?:de|por|a|que\\s+asciende\\s+a|asciende\\s+a|equivalente\\s+a))?';
 
+/* ── el monto de la información adicional del formato (códigos DIAN 61 a 63) ──
+
+   El análisis de la operación cita DOS montos con el mismo giro: el de la operación analizada y
+   el de la sección «4. Información adicional» del Formato 1125 —préstamos, reintegros y
+   operaciones a nombre de vinculados que no se reflejan en el Estado de Resultados—:
+
+     «…realizó operaciones con su vinculado por compra neta de inventarios para distribución (31)
+      por un valor total de $ 18.836.847.464; adicionalmente se realizó un contrato de mandato
+      entre la sucursal y su vinculado en el exterior por reintegros o reembolsos de gastos con
+      vinculados que no fueron reflejados en el Estado de Resultados (62) por valor total de
+      $ 13.425.408.220.»
+
+   El ancla del monto se llevaba el primero y el segundo se radicaba con la cifra del informe del
+   año anterior. Son dos cifras de dos tablas distintas, así que son dos anclas.
+
+   QUÉ MARCA LA SEGUNDA. El código DIAN entre paréntesis y la cola del nombre oficial de los tres
+   tipos —«…que no fueron reflejados en el Estado de Resultados»— vienen del catálogo de la DIAN
+   (`tiposOperacionDian.js`), así que no dependen de cómo redacte cada firma; «adicionalmente» y
+   «adicional a lo anterior» son los giros con que el informe entra en esa segunda operación. Se
+   pide uno de ellos ANTES del giro del monto y en la misma oración: el relleno no cruza un punto
+   —ni el de miles de otro monto— ni un punto y coma, que es lo que separa las dos operaciones. */
+const DISPARADOR_ADICIONAL = '(?:\\(\\s*6[123]\\s*\\)'
+  + '|no\\s+(?:fueron|fue|se|est[áa]n|est[áa])\\s+reflejad[oa]s?'
+  + '|no\\s+se\\s+reflej(?:aron|[óo])'
+  + '|adicionalmente|adicional\\s+a\\s+lo\\s+anterior'
+  + '|informaci[óo]n\\s+adicional'
+  + '|operaci(?:[óo]n|ones)\\s+adicional(?:es)?)';
+
+const RX_ES_ADICIONAL = new RegExp(DISPARADOR_ADICIONAL, 'i');
+
+const RX_MONTO_ADICIONAL = new RegExp(
+  '(' + DISPARADOR_ADICIONAL + '[^.;:]{0,200}?' + INTRO_MONTO + HUECO + '\\$?' + HUECO + ')('
+  + MONTO + ')', 'i');
+
+/* El orden importa: la información adicional va primero, para que en un párrafo que sólo hable de
+   ella se quede con su cifra; y el `veto` del monto de la operación analizada es lo que impide
+   que se la lleve él cuando el estudio no trae información adicional que declarar. */
 const ANCLAS_OPERACIONES = [
+  {
+    clave: 'montoAdicional',
+    grupoCifra: 2,
+    rx: RX_MONTO_ADICIONAL,
+  },
   {
     clave: 'monto',
     grupoCifra: 2,
     rx: new RegExp('(' + INTRO_MONTO + HUECO + '\\$?' + HUECO + ')(' + MONTO + ')', 'i'),
+    veto: RX_ES_ADICIONAL,
   },
 ];
 
+/* ¿Algún párrafo del análisis de la operación cita un monto de información adicional? Se mira
+   sobre el TEXTO VISIBLE y no sobre el crudo: en el OOXML del .docx, un
+   `<w:t xml:space="preserve">` por el medio mete dos puntos donde el relleno del ancla no los
+   admite. Sólo sirve para avisar; lo que se escribe lo decide el ancla. */
+function citaMontoAdicional(texto, rxParrafo) {
+  const parrafos = String(texto || '').match(rxParrafo) || [];
+  for (const parrafo of parrafos) {
+    if (!RX_ES_PROSA_OPERACIONES.test(parrafo)) continue;
+    if (RX_MONTO_ADICIONAL.test(textoVisibleConMapa(parrafo).plano)) return true;
+  }
+  return false;
+}
+
 /**
- * Pone en la prosa de la operación el monto que publican las Tablas 1, 2 y 12, y el año.
+ * Pone en la prosa de la operación el monto que publican las Tablas 1, 2 y 12, el de la tabla de
+ * la información adicional del formato cuando hay que declararla, y el año.
  *
  * @param {string} texto
  * @param {object} estudio
@@ -183,6 +244,13 @@ export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}
   /* El mismo valor y el mismo formateador que las tablas de la operación: `valorDeCampo`
      devuelve `monto_operacion` o `monto` pasado por `fmt`. */
   const monto = valorDeCampo(study, 'monto_operacion');
+  /* El monto de la información adicional, con la MISMA condición que la tabla: sólo si el formato
+     trajo la sección y su total supera el umbral del año gravable (45.000 UVT). Si la tabla no se
+     publica, la frase no puede declararla —en el .docx la tabla se borra— y si el estudio no la
+     trae, escribir aquí cualquier cifra sería inventarla. */
+  const montoAdicional = tieneOperacionAdicional(study)
+    ? fmt(montoOperacionAdicional(study))
+    : null;
   const anio = anioDe(study);
 
   const sustituciones = anio ? [
@@ -208,12 +276,31 @@ export function actualizarProsaOperaciones(texto, estudio, avisos, opciones = {}
     },
   ] : [];
 
+  const rxParrafo = opciones.rxParrafo || PARRAFO_HTML;
+
+  /* Lo que el informe dice de la información adicional y lo que el estudio trae tienen que
+     coincidir, y cuando no, no se toca la redacción: se avisa. Los dos sentidos importan porque
+     la plantilla es el informe del año anterior —puede citar una operación adicional que este
+     contribuyente no tiene— y porque un estudio que la declara con una plantilla que no la
+     menciona necesita el párrafo escrito a mano. */
+  if (Array.isArray(avisos)) {
+    const citada = citaMontoAdicional(texto, rxParrafo);
+    if (citada && !montoAdicional) {
+      avisos.push('el informe cita un monto de información adicional (códigos 61 a 63) y el '
+        + 'estudio no la declara: se queda el del informe de referencia, revise ese párrafo');
+    } else if (!citada && montoAdicional) {
+      avisos.push('el estudio declara información adicional (códigos 61 a 63) por $ '
+        + montoAdicional + ' y el análisis de la operación no la menciona: redacte la frase '
+        + 'que presenta esa tabla');
+    }
+  }
+
   return sincronizarCifrasDeProsa(texto, {
-    rxParrafo: opciones.rxParrafo || PARRAFO_HTML,
+    rxParrafo,
     reconocedor: RX_ES_PROSA_OPERACIONES,
     rotulos: [],
     anclas: ANCLAS_OPERACIONES,
-    valores: { monto },
+    valores: { monto, montoAdicional },
     sustituciones,
     avisos,
     reporte: opciones.reporte,

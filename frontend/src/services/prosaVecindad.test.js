@@ -238,6 +238,60 @@ test('las anclas mandan sobre el emparejamiento', () => {
   assert.ok(salida.includes('se sitúa en 6,456 %'), 'el ancla no entró: ' + salida);
 });
 
+test('un ancla con veto salta la coincidencia cuya oración lo case', () => {
+  /* Un mismo giro introduce dos cifras distintas en el análisis de la operación: la de la
+     operación analizada y la de la información adicional del formato. El veto es lo que impide
+     que el ancla de la primera se quede con la cifra de la segunda. */
+  const html = '<p>La compañía realizó operaciones con su vinculado, adicionalmente por '
+    + 'reintegros que no fueron reflejados en el Estado de Resultados (62) por valor total de '
+    + '$ 13.425.408.220, y así se detalla en el cuadro.</p>';
+  const ancla = {
+    clave: 'monto',
+    grupoCifra: 2,
+    rx: /(valor\s+total\s+de\s+\$?\s*)(\d+(?:\.\d{3})*)/i,
+    veto: /adicionalmente|\(\s*6[123]\s*\)/i,
+  };
+  const salida = sincronizarCifrasDeProsa(html, {
+    rxParrafo: PARRAFO_HTML,
+    reconocedor: /valor\s+total/i,
+    rotulos: [],
+    valores: { monto: '5.230.114.900' },
+    anclas: [ancla],
+  });
+  assert.equal(salida, html, 'se escribió sobre una cifra vetada: ' + salida);
+
+  /* Sin el veto, la misma cifra sí es la del ancla. */
+  const conVetoQueNoCasa = sincronizarCifrasDeProsa(html, {
+    rxParrafo: PARRAFO_HTML,
+    reconocedor: /valor\s+total/i,
+    rotulos: [],
+    valores: { monto: '5.230.114.900' },
+    anclas: [{ ...ancla, veto: undefined }],
+  });
+  assert.ok(conVetoQueNoCasa.includes('5.230.114.900'),
+    'sin veto el ancla tiene que entrar: ' + conVetoQueNoCasa);
+});
+
+test('un ancla con veto se queda con la primera coincidencia que no esté vetada', () => {
+  const html = '<p>La compañía realizó operaciones por valor total de $ 18.836.847.464; '
+    + 'adicionalmente por reintegros (62) por valor total de $ 13.425.408.220.</p>';
+  const salida = sincronizarCifrasDeProsa(html, {
+    rxParrafo: PARRAFO_HTML,
+    reconocedor: /valor\s+total/i,
+    rotulos: [],
+    valores: { monto: '5.230.114.900' },
+    anclas: [{
+      clave: 'monto',
+      grupoCifra: 2,
+      rx: /(valor\s+total\s+de\s+\$?\s*)(\d+(?:\.\d{3})*)/i,
+      veto: /adicionalmente|\(\s*6[123]\s*\)/i,
+    }],
+  });
+  assert.ok(salida.includes('por valor total de $ 5.230.114.900;'),
+    'no tomó la coincidencia no vetada: ' + salida);
+  assert.ok(salida.includes('$ 13.425.408.220'), 'se tocó la cifra vetada: ' + salida);
+});
+
 test('una sustitución que no es una cifra de la tabla se aplica aparte', () => {
   const html = '<p>Como se observa en el cuadro anterior, la mediana fue 15.356 % del margen '
     + 'operacional de las comparables ajustado durante el 2024.</p>';
