@@ -59,6 +59,52 @@ export const AVISO_BASE_DATOS = 'la plantilla nombra una base de datos anterior 
   + 'Thomson Reuters) en un giro que no se reconoció: revise que el informe no atribuya los '
   + 'comparables a una base que no se consultó';
 
+/* ══════════ La cita al pie de cada tabla del motor ══════════
+
+   Estaba escrita en SIETE sitios —cuatro en la ruta de OOXML y tres en la de HTML—, cada
+   uno con su sufijo: unos cerraban con punto, otros no, y dos añadían «Fecha de consulta:
+   septiembre de <año>» con el mes escrito a mano. Ese «septiembre» venía del informe de
+   referencia y se radicaba igual en un estudio consultado en otro mes.
+
+   Aquí se arma una sola vez, con la fecha de consulta REAL cuando el estudio la tiene:
+   `database_consulta`, que se sella al importar el export de Capital IQ. Cuando no la
+   tiene no se inventa —es el mismo criterio de `analisisMercado.js` con las fuentes
+   macroeconómicas— y la cita sale sin fecha; el generador lo anota en los avisos para que
+   el analista sepa que el informe va sin ella. El numeral 4 del artículo 1.2.2.2.1.5 del
+   Decreto 1625 de 2016 la exige, así que la ausencia importa. */
+
+/** Mes y año de consulta, «agosto de 2026», o cadena vacía si el estudio no la registró. */
+export function fechaConsultaBaseDatos(estudio) {
+  const bruto = estudio && estudio.database_consulta;
+  if (!bruto) return '';
+  const fecha = typeof bruto.toDate === 'function' ? bruto.toDate() : new Date(bruto);
+  if (Number.isNaN(fecha.getTime())) return '';
+  return fecha.toLocaleDateString('es-CO', { year: 'numeric', month: 'long' });
+}
+
+/**
+ * La cita al pie de una tabla armada con datos de la base: «Información Base Datos Capital
+ * IQ (Standard & Poor's). Fecha de consulta: agosto de 2026.»
+ *
+ * El nombre de la base sale de `estudio.database_source` y por defecto de
+ * `BASE_DATOS_FUENTE`, para que cambiar de proveedor siga siendo un solo sitio.
+ */
+export function citaBaseDatos(estudio) {
+  const base = (estudio && estudio.database_source) || BASE_DATOS_FUENTE;
+  const fecha = fechaConsultaBaseDatos(estudio);
+  return `Información Base Datos ${base}.` + (fecha ? ` Fecha de consulta: ${fecha}.` : '');
+}
+
+/** `true` si la cita va a salir sin fecha de consulta, para poder avisarlo. */
+export function faltaFechaConsulta(estudio) {
+  return !fechaConsultaBaseDatos(estudio);
+}
+
+export const AVISO_SIN_FECHA_CONSULTA = 'el estudio no registra cuándo se consultó la base '
+  + 'de datos, así que las tablas del motor salen sin fecha de consulta: vuelva a importar '
+  + 'el export de Capital IQ en el paso 3 para sellarla (el numeral 4 del artículo '
+  + '1.2.2.2.1.5 del Decreto 1625 de 2016 la exige)';
+
 /* El proveedor viejo tal como lo escriben las plantillas, con lo que varía entre ellas: el guion
    de «Thomson-Reuters» y la cola «-Refinitiv Fundamentals» que arrastran los informes
    posteriores a la compra. */

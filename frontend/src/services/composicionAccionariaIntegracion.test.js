@@ -37,13 +37,13 @@ test('Integración: Jerarquía Nivel 3 (Plantilla del Cliente como fallback)', (
   assert.strictEqual(res.total_acciones, 50000);
   assert.strictEqual(res.accionistas.length, 2);
 
-  // Verificación de generación de filas para el informe (Tabla 6)
-  const tabla = filasComposicionAccionaria(estudio);
-  assert.strictEqual(tabla.nombre, 'Composición accionaria');
-  assert.strictEqual(tabla.filas.length, 3); // 2 accionistas + 1 fila Total
-  assert.deepStrictEqual(tabla.filas[0], ['GLOBAL HOLDINGS LLC', 'ESTADOS UNIDOS', '45.000', '45.000.000', '90%']);
-  assert.deepStrictEqual(tabla.filas[1], ['SOCIO LOCAL', 'COLOMBIA', '5.000', '5.000.000', '10%']);
-  assert.deepStrictEqual(tabla.filas[2], ['Total', '', '50.000', '50.000.000', '100%']);
+  /* La Tabla 6 NO se regenera con lo que se leyó de la plantilla: se deja la que la plantilla
+     ya trae, con sus filas y sus cifras (decisión del usuario, 2026-08-22). La extracción con
+     IA de esa misma tabla no siempre recupera el número de acciones ni el valor del capital, y
+     reescribirla con eso publicaba «—» donde la plantilla traía las cifras.
+     Los CAMPOS del texto sí siguen resolviéndose con ella: son huecos del vocabulario que no
+     tienen otra fuente, y ahí un dato del mismo documento es lo mejor que hay. */
+  assert.strictEqual(filasComposicionAccionaria(estudio), null);
 
   // Verificación de resolución de variables en plantillaVocabulario
   assert.strictEqual(valorDeCampo(estudio, 'accionista.nombre'), 'GLOBAL HOLDINGS LLC');

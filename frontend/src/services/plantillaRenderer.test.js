@@ -27,6 +27,36 @@ test('un campo sin dato deja marcador visible y se reporta, nunca el valor viejo
   assert.deepStrictEqual(r.vacios, ['ciiu']);
 });
 
+/* ── composición accionaria: sin la del estudio, la de la plantilla se conserva ── */
+
+test('sin composición accionaria propia, las celdas marcadas se dejan como venían', () => {
+  /* Es el mismo criterio que su tabla: la plantilla es el informe del año anterior del mismo
+     contribuyente, y el número de acciones y el valor del capital son datos que la extracción
+     con IA de esa misma tabla no recupera. Un «—» ahí no es un hueco a la vista, es perder un
+     dato que estaba escrito. */
+  const marcado = '<tr><td><span data-campo="accionista.nombre">Montachem International INC</span></td>'
+    + '<td><span data-campo="accionista.acciones">12.500</span></td>'
+    + '<td><span data-campo="accionista.valor_capital">1.250.000.000</span></td></tr>';
+  const r = renderizar(marcado, estudio);
+  assert.ok(r.html.includes('12.500'), 'se perdió el número de acciones de la plantilla');
+  assert.ok(r.html.includes('1.250.000.000'), 'se perdió el valor del capital de la plantilla');
+  assert.ok(r.html.includes('Montachem International INC'), 'se perdió el accionista');
+  assert.deepStrictEqual(r.vacios, [], 'lo conservado no es un campo sin dato');
+});
+
+test('con certificado cargado, esas mismas celdas se rellenan con el del estudio', () => {
+  const conCertificado = {
+    ...estudio,
+    accionistas: [{ nombre: 'ACME HOLDINGS LLC', pais: 'ESTADOS UNIDOS', acciones: 1000, valor_capital: 10000, participacion_pct: 100 }],
+  };
+  const marcado = '<tr><td><span data-campo="accionista.nombre">Montachem International INC</span></td>'
+    + '<td><span data-campo="accionista.acciones">12.500</span></td></tr>';
+  const r = renderizar(marcado, conCertificado);
+  assert.ok(r.html.includes('ACME HOLDINGS LLC'), 'no entró el accionista del certificado');
+  assert.ok(r.html.includes('1.000'), 'no entraron las acciones del certificado');
+  assert.ok(!r.html.includes('12.500'), 'sobrevivió el dato de la plantilla');
+});
+
 test('resuelve las imágenes contra el catálogo de recursos', () => {
   const recursos = [{ id: 'img_p0_1', dataUrl: 'data:image/png;base64,AAA' }];
   const r = renderizar('<p><img data-recurso="img_p0_1" /></p>', estudio, recursos);

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   verticalSobreActivos, filasComposicionAccionaria, filasActivos, resolverComposicionAccionaria,
+  tieneComposicionAccionariaPropia,
 } from './tablasContribuyente.js';
 import { pctf } from '../utils/calculations.js';
 
@@ -38,13 +39,37 @@ test('la composición accionaria lista cada accionista y cierra con el total', (
   ]);
 });
 
-test('sin accionistas queda solo la fila de total, con huecos a la vista', () => {
-  /* Es lo que delata que falta cargar el certificado de composición accionaria. Dejar las
-     filas de la plantilla publicaría los accionistas del cliente anterior. */
-  assert.deepStrictEqual(
-    filasComposicionAccionaria({}).filas,
-    [['Total', '', '—', '—', '100%']]
-  );
+test('sin composición accionaria no se emite tabla: la de la plantilla se queda tal cual', () => {
+  /* Antes se emitía la fila «Total» con huecos para delatar que faltaba el certificado. Se
+     cambió por decisión del usuario (2026-08-22): la plantilla es el informe del año anterior
+     del mismo contribuyente y su composición accionaria es un dato que casi nunca cambia, así
+     que vale más conservarla entera que publicar una tabla de huecos. */
+  assert.strictEqual(filasComposicionAccionaria({}), null);
+});
+
+test('los accionistas leídos de la propia plantilla no regeneran la tabla', () => {
+  /* `plantillaAccionistas` sale de leer con IA la misma tabla que se iba a reescribir: la
+     extracción trae razón social, país y participación, pero no las acciones ni el capital, y
+     la tabla se publicaba con «—» donde la plantilla traía las cifras. */
+  const estudio = {
+    plantillaAccionistas: {
+      accionistas: [{ nombre: 'MONTACHEM INTERNATIONAL INC', pais: 'ESTADOS UNIDOS', participacion_pct: 100 }],
+    },
+  };
+  assert.strictEqual(resolverComposicionAccionaria(estudio).fuente, 'plantilla');
+  assert.strictEqual(filasComposicionAccionaria(estudio), null);
+});
+
+test('el certificado y el informe del año anterior sí regeneran la tabla', () => {
+  assert.ok(tieneComposicionAccionariaPropia({ accionistas: ACCIONISTAS }));
+  assert.ok(tieneComposicionAccionariaPropia({ estudioAnterior: { accionistas: ACCIONISTAS } }));
+  assert.ok(!tieneComposicionAccionariaPropia({ plantillaAccionistas: { accionistas: ACCIONISTAS } }));
+  assert.ok(!tieneComposicionAccionariaPropia({}));
+  /* El certificado manda sobre lo que la plantilla ya tenía escrito. */
+  assert.ok(tieneComposicionAccionariaPropia({
+    accionistas: ACCIONISTAS,
+    plantillaAccionistas: { accionistas: [{ nombre: 'OTRO' }] },
+  }));
 });
 
 test('un accionista sin cifras no inventa ceros', () => {

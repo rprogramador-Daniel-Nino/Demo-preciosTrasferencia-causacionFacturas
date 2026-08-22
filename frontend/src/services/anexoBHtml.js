@@ -41,6 +41,7 @@ import {
 import {
   interpretarEncabezadoAnexo, resolverAnexos, nombreDeAnexo,
 } from './anexosPlantilla.js';
+import { RUBROS_RESULTADOS as RUBROS_PL, RUBROS_BALANCE as RUBROS_BAL, cifraDeRubro, rubrosConDato } from './anexoBRubros.js';
 
 /* Una entrada del índice lleva el número de página pegado al final y NO abre sección: el
    índice repite «ANEXO B. Descripciones de comparables…55». Sin esta condición la búsqueda
@@ -56,31 +57,12 @@ const RX_CABECERA_BLOQUE = /nombre de la compa/i;
    nombrarlo en un aviso es porque no se encontró, y entonces no hay letra que citar. */
 export const NOMBRE_ANEXO_B = nombreDeAnexo('descripciones');
 
-/**
- * Los rubros del ANEXO B, en el orden en que van en el informe.
- *
- * `patron` reconoce la etiqueta en la plantilla —para reutilizar SU redacción— y
- * `etiqueta` es la que se escribe cuando la plantilla no trae esa fila, que pasa con I+D
- * y publicidad. `campo` es el rubro del parser (`eeffDatos`).
- */
-export const RUBROS_RESULTADOS = [
-  { campo: 'ingresos_operacionales', etiqueta: 'Ventas netas', patron: /ventas netas|ingresos operacionales/i },
-  { campo: 'costo_ventas', etiqueta: 'Costo de los bienes vendidos', patron: /costo de los bienes|costo de ventas/i },
-  { campo: 'utilidad_bruta', etiqueta: 'Beneficio bruto', patron: /beneficio bruto|utilidad bruta/i },
-  { campo: 'gastos_operacionales', etiqueta: 'Gastos operativos', patron: /gastos operativos|gastos de operaci/i },
-  { campo: 'utilidad_operacional', etiqueta: 'Utilidad de operación', patron: /utilidad de operaci|utilidad operacional/i },
-  { campo: 'gastos_investigacion_desarrollo', etiqueta: 'Gastos de investigación y desarrollo', patron: /investigaci/i },
-  { campo: 'gastos_publicidad', etiqueta: 'Gastos de publicidad', patron: /publicidad/i },
-];
+/* Las filas del anexo viven en anexoBRubros.js, compartidas con la ruta de OOXML: eran dos
+   listas que debían decir lo mismo y una se quedó atrás. Se re-exportan porque son parte de
+   la interfaz que ya usaban las pruebas de este módulo. */
+export { RUBROS_RESULTADOS, RUBROS_BALANCE } from './anexoBRubros.js';
 
-export const RUBROS_BALANCE = [
-  { campo: 'total_activos', etiqueta: 'Activos totales promedio', patron: /activos totales/i },
-  { campo: 'cuentas_por_pagar', etiqueta: 'Promedio de cuentas por pagar netas', patron: /cuentas por pagar/i },
-  { campo: 'cuentas_por_cobrar', etiqueta: 'Promedio de cuentas por cobrar netas', patron: /cuentas por cobrar/i },
-  { campo: 'propiedad_planta_equipo', etiqueta: 'EPP neto promedio', patron: /epp|propiedad, planta|planta y equipo/i },
-  { campo: 'inventarios', etiqueta: 'Inventario neto promedio', patron: /inventario/i },
-  { campo: 'efectivo_y_equivalentes', etiqueta: 'Efectivo promedio y equivalentes de efectivo', patron: /efectivo/i },
-];
+
 
 /**
  * Los encabezados de anexo del CUERPO del informe, en orden de aparición.
@@ -177,23 +159,25 @@ function separadorDeMiles(bloqueHtml) {
 }
 
 /**
- * Formatea una cifra con el separador indicado, sin redondear: el anexo en tabla debe
- * mostrar el dato tal como lo leyó el parser, no una versión truncada al entero. «—»
- * cuando no hay dato.
+ * Formatea una cifra con el separador indicado, con DOS decimales.
+ *
+ * Dos decimales siempre, como los imprime la ficha de la macro que el analista revisa al
+ * lado del anexo. Antes se emitía lo que trajera el número —«862,6» con un decimal,
+ * «1.470» con ninguno—, así que dos filas de la misma tabla salían con formatos distintos
+ * y ninguna coincidía con su ficha. Sigue sin redondear al entero, que era el defecto
+ * original que esta función vino a cerrar.
+ *
+ * El separador se copia de la plantilla; cuando no se pudo detectar se cae al del informe
+ * (es-CO). Esa rama antes emitía «1.234.6» —miles con punto y decimal con punto—, ilegible.
+ *
+ * «—» cuando no hay dato.
  */
 export function formatearCifra(valor, separador) {
   if (valor === null || valor === undefined || valor === '') return '—';
   const n = Number(valor);
   if (!Number.isFinite(n)) return '—';
-  const negativo = n < 0;
-  const [enteroStr, decStr] = Math.abs(n).toString().split('.');
-  const conComas = Number(enteroStr).toLocaleString('en-US');
-  const parteEntera = separador === '.' ? conComas.replace(/,/g, '.')
-    : separador === ',' ? conComas
-      : Number(enteroStr).toLocaleString('es-CO');
-  const separadorDecimal = separador === '.' ? ',' : '.';
-  const cuerpo = decStr ? parteEntera + separadorDecimal + decStr : parteEntera;
-  return (negativo ? '-' : '') + cuerpo;
+  const locale = separador === ',' ? 'en-US' : 'es-CO';
+  return n.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /* La etiqueta con la que la plantilla nombra un rubro, si la trae; si no, la del informe. */
@@ -262,7 +246,6 @@ function etiquetasDeTabla(tablaHtml) {
  */
 export function generarBloqueAnexoB(molde, moldeHtml, comparable, year) {
   const c = comparable || {};
-  const datos = c.eeffDatos || {};
   const sep = separadorDeMiles(moldeHtml);
 
   const tablaNombre = reescribirDosColumnas(molde.tablas[0].xml, [[
@@ -272,21 +255,20 @@ export function generarBloqueAnexoB(molde, moldeHtml, comparable, year) {
 
   /* Una fila por rubro QUE LA COMPARABLE TIENE. Los que no reporta no se inventan: es lo
      que hace la plantilla original, donde unas traen I+D y publicidad y otras no. */
-  const filasDeRubros = (rubros, etiquetas) => rubros
-    .filter((r) => datos[r.campo] !== null && datos[r.campo] !== undefined && datos[r.campo] !== '')
-    .map((r) => [etiquetaDe(r, etiquetas), formatearCifra(datos[r.campo], sep)]);
+  const filasDeRubros = (rubros, etiquetas) => rubrosConDato(rubros, c)
+    .map((r) => [etiquetaDe(r, etiquetas), formatearCifra(cifraDeRubro(r, c), sep)]);
 
   const tablaResultados = molde.tablas[1]
     ? conAnioEnCabecera(
       reescribirDosColumnas(molde.tablas[1].xml,
-        filasDeRubros(RUBROS_RESULTADOS, etiquetasDeTabla(molde.tablas[1].xml))),
+        filasDeRubros(RUBROS_PL, etiquetasDeTabla(molde.tablas[1].xml))),
       year)
     : '';
 
   const tablaBalance = molde.tablas[2]
     ? conAnioEnCabecera(
       reescribirDosColumnas(molde.tablas[2].xml,
-        filasDeRubros(RUBROS_BALANCE, etiquetasDeTabla(molde.tablas[2].xml))),
+        filasDeRubros(RUBROS_BAL, etiquetasDeTabla(molde.tablas[2].xml))),
       year)
     : '';
 

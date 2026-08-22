@@ -59,6 +59,8 @@ const OBJETIVOS = [
     todas: true, excluir: NOMBRES_TABLA_ADICIONAL,
   },
   { nombres: 'Método de Precios de Transferencia', filas: filasMetodoAplicable },
+  /* `filasComposicionAccionaria` devuelve `null` cuando el estudio no trae una composición
+     accionaria propia: entonces esta tabla no se toca. */
   { nombres: 'Composición accionaria', filas: filasComposicionAccionaria },
   { nombres: 'Compañías vinculadas', filas: filasCompaniasVinculadas, rotulo: true },
   { nombres: 'Criterios de vinculación', filas: filasCriteriosVinculacion },
@@ -183,6 +185,14 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
 
   for (const objetivo of OBJETIVOS) {
     const tabla = objetivo.filas(estudio);
+
+    /* `null` es una tabla que este estudio no puede regenerar y que la plantilla ya trae llena:
+       la composición accionaria cuando nadie cargó el certificado ni el informe del año
+       anterior. Se deja EXACTAMENTE como venía —con sus filas y sus cifras—, que es lo que pidió
+       el usuario. Sin aviso, por lo mismo que el borrado de la tabla de la sección 4: `avisos` se
+       publica como «no se encontró en la plantilla» y alimenta el semáforo de radicación, y
+       conservar la tabla a propósito no es eso. */
+    if (!tabla) continue;
 
     if (objetivo.todas) {
       /* De atrás hacia adelante: sustituir una desplaza los offsets de las que van después.

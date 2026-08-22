@@ -414,6 +414,59 @@ const solapa = (escrituras, inicio, fin) => escrituras.some(
   (e) => e.inicio < fin && e.fin > inicio,
 );
 
+/* Lo que corta una oración cuando se mira hacia atrás desde una cifra. El punto de miles corta
+   igual que el de una frase —«13.425.408.220» son tres cortes—, y eso sólo acorta el contexto:
+   lo que decide si la cifra es la que el ancla busca está entre el giro que la introduce y el
+   número, nunca al otro lado de otro monto. */
+const RX_CORTE_ORACION = /[.;:]/;
+
+/* El tramo de oración que precede a una cifra. */
+function oracionAntesDe(plano, hasta) {
+  let i = hasta;
+  while (i > 0 && !RX_CORTE_ORACION.test(plano[i - 1])) i -= 1;
+  return plano.slice(i, hasta);
+}
+
+/**
+ * El tramo de cifra que un ancla reclama en el párrafo, o `null`.
+ *
+ * Sin `veto` es la PRIMERA coincidencia, como siempre: un ancla medida contra el informe real
+ * apunta a un giro que sale una vez por párrafo.
+ *
+ * Con `veto`, se recorren las coincidencias hasta la primera cuya oración no lo case. Existe
+ * porque un mismo giro —«por valor total de $ X»— introduce en el análisis de la operación dos
+ * cifras distintas: la de la operación analizada y la de la información adicional del formato.
+ * Sin el veto, el ancla de la primera se quedaba con la cifra de la segunda en cuanto el párrafo
+ * hablaba sólo de aquélla, y una cifra creíble en el lugar de otra ya no se nota al revisar.
+ *
+ * El `veto` se prueba con `test`, así que NO puede llevar el flag `g`: arrastraría `lastIndex`
+ * entre párrafos.
+ */
+function tramoDeAncla(plano, ancla, escrituras) {
+  const grupo = ancla.grupoCifra;
+
+  if (!ancla.veto) {
+    const rx = conFlags(ancla.rx, 'd');
+    rx.lastIndex = 0;
+    const m = rx.exec(plano);
+    const tramo = m && m.indices && m.indices[grupo];
+    if (!tramo || solapa(escrituras, tramo[0], tramo[1])) return null;
+    return tramo;
+  }
+
+  const rx = conFlags(ancla.rx, 'gd');
+  rx.lastIndex = 0;
+  let m = rx.exec(plano);
+  while (m !== null) {
+    if (m[0] === '') { rx.lastIndex += 1; m = rx.exec(plano); continue; }
+    const tramo = m.indices && m.indices[grupo];
+    if (tramo && !solapa(escrituras, tramo[0], tramo[1])
+      && !ancla.veto.test(oracionAntesDe(plano, tramo[0]))) return tramo;
+    m = rx.exec(plano);
+  }
+  return null;
+}
+
 /**
  * Pone en la prosa que comenta una tabla las cifras que la tabla publica.
  *
@@ -427,8 +480,10 @@ const solapa = (escrituras, inicio, fin) => escrituras.some(
  * @param {RegExp} [opciones.reconocedor]  qué párrafos son la prosa de esta tabla.
  * @param {Array<{clave: string, rx: RegExp}>} [opciones.rotulos]  vacío desactiva la vecindad.
  * @param {Object<string, string|null>} [opciones.valores]  clave → cifra YA formateada.
- * @param {Array<{clave: string, rx: RegExp, grupoCifra: number}>} [opciones.anclas]  primera
- *        pasada, en el orden en que se prueban; manda sobre la vecindad.
+ * @param {Array<{clave: string, rx: RegExp, grupoCifra: number, veto?: RegExp}>}
+ *        [opciones.anclas]  primera pasada, en el orden en que se prueban; manda sobre la
+ *        vecindad. `veto` descarta las coincidencias cuya oración lo case y sigue con la
+ *        siguiente; sin él se prueba sólo la primera.
  * @param {RegExp} [opciones.rxCifra]  por defecto `RX_CIFRA_PCT`.
  * @param {Array<{antes?: RegExp, despues?: RegExp}>} [opciones.vetosCifra]
  * @param {Array<{clave: string, rx: RegExp, grupo?: number, valor: string, soloConCifras?: boolean}>}
@@ -480,12 +535,8 @@ export function sincronizarCifrasDeProsa(texto, opciones = {}) {
     for (const ancla of anclas) {
       const valor = valores[ancla.clave];
       if (!esEscribible(valor) || resueltas.has(ancla.clave)) continue;
-      const rx = conFlags(ancla.rx, 'd');
-      rx.lastIndex = 0;
-      const m = rx.exec(plano);
-      const tramo = m && m.indices && m.indices[ancla.grupoCifra];
+      const tramo = tramoDeAncla(plano, ancla, escrituras);
       if (!tramo) continue;
-      if (solapa(escrituras, tramo[0], tramo[1])) continue;
       escrituras.push({ inicio: tramo[0], fin: tramo[1], texto: valor });
       resueltas.add(ancla.clave);
       cifrasAqui += 1;

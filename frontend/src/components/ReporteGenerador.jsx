@@ -670,8 +670,10 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           if (resultado && resultado.accionistas && resultado.accionistas.length > 0) {
             updateStudy({ plantillaAccionistas: resultado });
             setAvisoAccionistasPlantilla(
-              `✅ ${resultado.accionistas.length} accionista(s) tomados de la plantilla como respaldo ` +
-              'de la Tabla 6 (se usan solo si no hay certificado en «1. Contribuyente» ni informe del año anterior).'
+              `✅ ${resultado.accionistas.length} accionista(s) leídos de la plantilla: sirven de respaldo ` +
+              'para los campos del texto (accionista principal, capital pagado) si no hay certificado en ' +
+              '«1. Contribuyente» ni informe del año anterior. La tabla de composición accionaria del ' +
+              'informe se conserva tal como viene en la plantilla.'
             );
           } else if (resultado && resultado.error) {
             setAvisoAccionistasPlantilla(
@@ -681,8 +683,9 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
             );
           } else {
             setAvisoAccionistasPlantilla(
-              'ℹ La plantilla no trae una tabla de composición accionaria reconocible. Si tampoco ' +
-              'hay certificado ni informe anterior, la Tabla 6 del informe saldrá vacía (solo la fila «Total»).'
+              'ℹ La plantilla no trae una tabla de composición accionaria reconocible. Sin certificado ' +
+              'ni informe anterior, la tabla de composición accionaria queda tal como viene en la ' +
+              'plantilla y hay que revisarla a mano.'
             );
           }
           return resultado;

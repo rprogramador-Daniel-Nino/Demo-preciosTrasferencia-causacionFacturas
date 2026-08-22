@@ -220,8 +220,9 @@ export default function DatosContribuyente({ study, updateStudy }) {
             <p className="text-xs text-amber-800 dark:text-amber-300">
               <strong>Falta la Composición Accionaria (Tabla 6).</strong> No hay certificado cargado en esta
               sección, ni un informe del año anterior con accionistas, ni la plantilla del cliente subida en
-              el Generador trajo una tabla reconocible. El informe final saldrá con la Tabla 6 vacía (solo la
-              fila «Total» con guiones) hasta que subas el Certificado de Composición Accionaria abajo.
+              el Generador trajo una tabla reconocible. El informe final saldrá con la tabla de composición
+              accionaria tal como viene en la plantilla —los accionistas de ese documento— hasta que subas
+              el Certificado de Composición Accionaria abajo: revísala antes de radicar.
             </p>
           </div>
         )}

@@ -104,6 +104,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      de compañía, ingresos, etc.), para reconstruir la Tabla 13 del informe con
      la corrida real de este año en vez de la del informe anterior. */
   const [criteriosScreening, setCriteriosScreening] = useState(study.criteriosScreening || []);
+  /* Cuándo se consultó la base de datos: se sella al importar el export de Capital IQ y
+     alimenta la cita al pie de las siete tablas del motor. Antes esa cita llevaba «septiembre
+     de 2025» escrito a mano en el código, heredado del informe de referencia, y se radicaba
+     igual en un estudio consultado en otro mes. El numeral 4 del artículo 1.2.2.2.1.5 del
+     Decreto 1625 de 2016 exige la fecha de consulta. */
+  const [dbConsulta, setDbConsulta] = useState(study.database_consulta || null);
   const [loadingExcel, setLoadingExcel] = useState(false);
   const [loadingSelection, setLoadingSelection] = useState(false);
   /* El embudo se guarda con el estudio: la tabla de razones de rechazo del informe se
@@ -206,6 +212,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       comparables,
       cmode,
       criteriosScreening,
+      database_consulta: dbConsulta,
       /* La matriz del ANEXO C: qué compañía quedó en cada motivo, solo los nombres. El
          generador del informe no puede calcularla —necesita el universo enriquecido, y
          `universo` no viaja con el estudio—, así que se guarda ya agrupada. Va en
@@ -228,7 +235,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       iaMatch,
       eeffImagenesComparables,
     });
-  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables, matrizRechazo]);
+  }, [actividad, estudioAnteriorInfo, engineConfig, universo, comparables, cmode, criteriosScreening, dbConsulta, iaMatch, selectionFunnel, cribadoIQ, eeffImagenesComparables, matrizRechazo]);
 
   // Handle Prior Study Ingestion (.pdf, .docx, .json, .txt)
   const handlePriorStudyUpload = async (file) => {
@@ -481,6 +488,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         if (cancelado) return;
         setUniverso(rows);
         setImportMeta(meta);
+        /* El export acaba de leerse: esta ES la fecha de consulta de la base de datos. */
+        setDbConsulta(new Date().toISOString());
         if (meta.criteriosScreening && meta.criteriosScreening.length) {
           setCriteriosScreening(meta.criteriosScreening);
         }
@@ -569,6 +578,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       });
 
       setImportMeta(meta);
+      /* El export acaba de leerse: esta ES la fecha de consulta de la base de datos. */
+      setDbConsulta(new Date().toISOString());
       setCriteriosScreening(meta.criteriosScreening || []);
       if (meta.criteriosScreening && meta.criteriosScreening.length) {
         anotar(`${meta.criteriosScreening.length} criterios de búsqueda leídos de la hoja "Screen Criteria" (Tabla 13 del informe)`, 'ok');
