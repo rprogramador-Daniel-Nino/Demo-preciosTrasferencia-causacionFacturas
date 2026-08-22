@@ -2819,7 +2819,10 @@ const RUBROS_ESF = [
 /** true si el estudio trae algo del estado financiero que se pueda publicar. */
 function traeCifrasEeff(estudio) {
   const claves = [...RUBROS_ESF.map(([, c]) => c), 't_ap', 't_s', 't_c', 't_op'];
-  return claves.some((c) => num(estudio && estudio[c]) !== null);
+  if (claves.some((c) => num(estudio && estudio[c]) !== null)) return true;
+  /* La Tabla 10 también se llena solo con el detalle dinámico de activos (ver
+     tablasContribuyente.js), sin que ninguno de los campos con nombre de arriba tenga dato. */
+  return Array.isArray(estudio && estudio.t_activos_detalle) && estudio.t_activos_detalle.length > 0;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────

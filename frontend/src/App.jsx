@@ -365,6 +365,10 @@ export default function App() {
     t_s: '', t_c: '', t_op: '',
     t_cash: '', t_inv_assoc: '', t_ar: '', t_inv: '', t_tax: '', t_act_curr: '',
     t_ppe: '', t_intang: '', t_dif: '', t_act_nocurr: '', t_act_tot: '', t_ap: '',
+    /* El detalle completo de la sección ACTIVOS, tal como la ingesta la transcribe del
+       EEFF (ver eeffParser.js): alimenta la Tabla 10 sin depender de una lista fija de
+       campos con nombre que no cubre cualquier estructura de balance. */
+    t_activos_detalle: [],
     /* `prime` arranca en 7,37: el promedio anual 2025 de la Bank Prime Loan Rate
        (Reserva Federal, H.15 · serie FRED RIFSPBLPNA). Es editable como cualquier otro
        campo, y hay que cambiarlo si el año gravable no es 2025. Antes arrancaba vacío,

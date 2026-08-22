@@ -58,6 +58,14 @@ El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila
 · inventarios: inventarios, existencias, mercancías.
 · cuentas_por_pagar_relacionadas: cuentas por pagar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí proveedores de terceros, acreedores comerciales ni «otras cuentas por pagar»: si el documento solo trae esas, este campo va en null.
 · total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
+· total_activos: el total general de activos ("Total Activo", "Total de activos", "TOTAL ACTIVOS"), tal como el documento lo imprime.
+
+── ACTIVOS: DETALLE COMPLETO, PARA LA TABLA DE ACTIVOS DEL INFORME ──
+Distintos estados financieros traen distintas filas de activo (uno trae "Inversiones asociadas", otro "Activos financieros", otro separa "Cuentas por cobrar a partes relacionadas" de las comerciales), así que además de las partidas de arriba se pide la sección ACTIVOS completa:
+
+"activos_detalle": TODAS las filas de la sección ACTIVOS (activo corriente y activo no corriente), en el ORDEN EXACTO en que aparecen en el documento. Cada fila:
+  {"rotulo": "<texto EXACTO de la fila>", "valor": <número o null>, "es_subtotal": true|false}
+Incluye los subtotales de cada grupo ("Total Activo Corriente", "Total Activo No Corriente") con "es_subtotal": true. NO agrupes ni renombres filas: cada una lleva el rótulo tal como el documento lo imprime. NO omitas ninguna fila que traiga cifra. Un título de sección sin cifra propia (p. ej. "Activos corrientes" como encabezado, sin número al frente) no es una fila de este arreglo: no la incluyas.
 
 ── ESTADO DE RESULTADOS ──
 · ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos operacionales, ingresos por servicios.
@@ -86,12 +94,14 @@ Devuelve SOLO este JSON, sin marcas markdown:
   "inventarios": {"valor": null, "rotulo": ""},
   "cuentas_por_pagar_relacionadas": {"valor": null, "rotulo": ""},
   "total_activo_corriente": {"valor": null, "rotulo": ""},
+  "total_activos": {"valor": null, "rotulo": ""},
   "ingresos_operacionales": {"valor": null, "rotulo": ""},
   "costo_ventas": {"valor": null, "rotulo": ""},
   "gastos_ventas": {"valor": null, "rotulo": ""},
   "gastos_administracion": {"valor": null, "rotulo": ""},
   "utilidad_bruta": {"valor": null, "rotulo": ""},
-  "rubros_no_asignados": [{"rotulo": "", "valor": null}]
+  "rubros_no_asignados": [{"rotulo": "", "valor": null}],
+  "activos_detalle": [{"rotulo": "", "valor": null, "es_subtotal": false}]
 }`;
 
 /**
@@ -226,6 +236,11 @@ export const CAMPO_POR_RUBRO = {
   inventarios: 't_inv',
   cuentas_por_pagar_relacionadas: 't_ap',
   total_activo_corriente: 't_act_curr',
+  /* El total general de activos, aparte de las tres partidas de partes relacionadas: lo
+     necesita `verticalSobreActivos()` como denominador del A.V. de la Tabla 10, y no lo
+     alimenta ninguna otra partida — es universal a cualquier balance, a diferencia del
+     detalle de `activos_detalle`, que varía de un EEFF a otro. */
+  total_activos: 't_act_tot',
 };
 
 /* Los rubros que NO son campos del estudio pero se leen porque de ellos sale la utilidad
@@ -340,6 +355,18 @@ export async function parseEeffWithGeminiOCR(file, anioEstudio) {
           seccion: String((r && r.seccion) || '').trim(),
         }))
         .filter((r) => r.rotulo && r.valor !== null)
+      : [],
+    /* El detalle completo de la sección ACTIVOS, tal como el documento la imprime: es lo
+       que alimenta la Tabla 10 y el ANEXO A sin importar qué estructura de balance traiga
+       cada EEFF (ver eeffVerificacion.js, que la verifica fila por fila contra el texto). */
+    activosDetalle: Array.isArray(parsed.activos_detalle)
+      ? parsed.activos_detalle
+        .map((r) => ({
+          etiqueta: String((r && r.rotulo) || '').trim(),
+          valor: valorDeRubro(r && r.valor !== undefined ? r.valor : null),
+          esSubtotal: Boolean(r && r.es_subtotal),
+        }))
+        .filter((r) => r.etiqueta)
       : [],
     periodo: parsed.periodo,
     unidadOrigen: String(parsed.unidad_origen || '').trim().toLowerCase(),
