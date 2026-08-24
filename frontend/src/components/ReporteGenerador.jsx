@@ -38,7 +38,9 @@ import {
 } from '../services/estiloDocumento.js';
 import { aDocxBlob } from '../services/docxWriter.js';
 import PizZip from 'pizzip';
-import { htmlParaMarcar, aplicarMarcasOoxml, envolverTablaEnBucle } from '../services/docxPlantilla.js';
+import {
+  htmlParaMarcar, aplicarMarcasOoxml, envolverTablaEnBucle, BUCLES_DE_TABLA,
+} from '../services/docxPlantilla.js';
 import { rellenarDocx, coleccionesDelEstudio, CENTINELA_ANEXO } from '../services/docxRelleno.js';
 import {
   subirPlantillaDelEstudio, descargarPlantillaDelEstudio, restaurarPlantillaEnLocal,
@@ -1063,10 +1065,10 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
        clone su formato una vez por comparable. Si la plantilla del cliente no trae
        esas tablas, no pasa nada: `envolverTablaEnBucle` avisa y sigue. */
     let conTablas = xml;
-    [
-      { ancla: 'Compañías comparables', coleccion: 'comparables', campos: ['n', 'nombre', 'ambito'] },
-      { ancla: 'Razones de rechazo', coleccion: 'razonesRechazo', campos: ['letra', 'criterio', 'cantidad'] },
-    ].forEach((cfg) => {
+    /* La lista vive en `docxPlantilla.js`: el relleno la necesita también, para reparar las
+       plantillas cuyo marcado dejó un bucle en la tabla equivocada. Con una copia aquí, las
+       dos podían divergir y la reparación buscaría un bucle con otro nombre. */
+    BUCLES_DE_TABLA.forEach((cfg) => {
       const r = envolverTablaEnBucle(conTablas, cfg);
       if (r.envuelta) conTablas = r.xml;
     });

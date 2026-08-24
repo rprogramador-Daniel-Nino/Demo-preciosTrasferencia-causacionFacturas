@@ -45,7 +45,9 @@ import { RUBROS_RESULTADOS, RUBROS_BALANCE, cifraDeRubro, rubrosConDato } from '
    decisión propia (izquierda y centro) y por eso la declaran ellos mismos. */
 const PPR_PROSA = '<w:pPr><w:jc w:val="both"/></w:pPr>';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { restaurarCamposSinDato } from './docxPlantilla.js';
+import {
+  restaurarCamposSinDato, retirarBucleFueraDeSitio, BUCLES_DE_TABLA,
+} from './docxPlantilla.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
 import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
@@ -2601,6 +2603,24 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
 
+  /* Antes que nada, los bucles que el marcado dejó en la tabla equivocada. Hasta el
+     2026-08-24 se anclaban en el primer párrafo que mencionara el nombre de la tabla, que en
+     un informe es la entrada del ÍNDICE, así que los dos acababan envueltos en la primera
+     tabla del documento y ésta se radicaba publicando las razones de rechazo. El anclaje ya
+     está corregido, pero el marcado se guarda y las plantillas marcadas antes lo conservan:
+     esto las repara al vuelo, sin volver a llamar a la IA. Ver `retirarBucleFueraDeSitio`. */
+  const buclesRetirados = [];
+  BUCLES_DE_TABLA.forEach((cfg) => {
+    const r = retirarBucleFueraDeSitio(xml, cfg, delimitadores || {});
+    if (!r.retirado) return;
+    xml = r.xml;
+    buclesRetirados.push(cfg.coleccion);
+    avisosTablas.push('el bucle «' + cfg.coleccion + '» venía envuelto en una tabla que no es '
+      + 'la suya (marcado antiguo de esta plantilla) y se retiró: «' + cfg.ancla + '» se llena '
+      + 'igual, pero revisa esa otra tabla antes de radicar');
+  });
+  if (buclesRetirados.length) zip.file(RUTA_DOC, xml);
+
   /* PRIMERO de todo, y sobre el XML tal como salió de la plantilla marcada: los campos que
      el estudio no trae vuelven al texto que la plantilla publicaba, en vez de salir como
      «—» (ver `restaurarCamposSinDato`, en `docxPlantilla.js`). Va aquí y no después porque
@@ -2615,7 +2635,10 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
        estudio: preguntarle a `valorDeCampo` por «nombre» o «ambito» daría vacío y se
        restauraría el comparable del informe de referencia dentro del bucle. */
     const camposDeColeccion = new Set();
-    Object.values(colecciones || {}).forEach((filas) => {
+    Object.entries(colecciones || {}).forEach(([nombre, filas]) => {
+      /* Salvo las de un bucle que se acaba de retirar: sus marcas ya no las resuelve ninguna
+         fila, así que son texto de la plantilla que hay que devolver a su sitio. */
+      if (buclesRetirados.includes(nombre)) return;
       (Array.isArray(filas) ? filas : []).forEach((fila) => {
         Object.keys(fila || {}).forEach((k) => camposDeColeccion.add(k));
       });
