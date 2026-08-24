@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   localizarAnexoB, bloquesAnexoB, generarBloqueAnexoB, actualizarAnexoBHtml,
   formatearCifra, NOMBRE_ANEXO_B, RUBROS_RESULTADOS, RUBROS_BALANCE,
+  anexosEscaneadosDeHtml,
 } from './anexoBHtml.js';
 import { textoPlanoHtml } from './tablasHtmlInforme.js';
 
@@ -326,4 +327,69 @@ test('el balance del Anexo B va en el orden en que la ficha lo imprime', () => {
     'total_pasivos',
     'cuentas_por_pagar',
   ]);
+});
+
+/* --- Los anexos escaneados de la plantilla --- */
+
+/* Para poder ofrecer una carga por anexo hay que saber cuáles trae la plantilla, cómo se
+   llaman en ELLA —el rótulo es el que verá el analista— y cuáles ya traen su página del
+   informe de referencia. El del contribuyente se distingue porque tiene su propia carga en la
+   ingesta de cifras y no se ofrece dos veces. */
+
+const HUECO_VACIO = (n) => '<div data-hueco="anexo_eeff" data-id="hueco_' + n + '">' +
+  '<p>[Falta el anexo de estados financieros firmados]</p></div>';
+const HUECO_CON_PAGINA = (n) => '<div data-hueco="anexo_eeff" data-id="hueco_' + n + '" ' +
+  'data-original="pag_' + n + '"><img data-recurso="pag_' + n + '" /></div>';
+
+test('devuelve un anexo escaneado por cada uno que traiga huecos, en orden', () => {
+  const html = '<p>ANEXO A. Estados financieros ATEB S.A.S</p>' + HUECO_VACIO(47) + HUECO_VACIO(48)
+    + '<p>ANEXO B. Contrato de Distribucion de Servicios</p>' + HUECO_CON_PAGINA(65)
+    + '<p>ANEXO C. Descripciones de comparables</p><p>una tabla</p>';
+  const escaneados = anexosEscaneadosDeHtml(html);
+  assert.deepStrictEqual(escaneados.map((a) => a.letra), ['A', 'B']);
+  assert.deepStrictEqual(escaneados[0].huecos, ['hueco_47', 'hueco_48']);
+  assert.deepStrictEqual(escaneados[1].huecos, ['hueco_65']);
+  assert.strictEqual(escaneados[1].titulo, 'ANEXO B. Contrato de Distribucion de Servicios');
+});
+
+test('dice cuál es el anexo de estados financieros del contribuyente', () => {
+  const html = '<p>ANEXO A. Contrato de Distribucion de Servicios</p>' + HUECO_CON_PAGINA(10)
+    + '<p>ANEXO B. Estados financieros de la Compania</p>' + HUECO_VACIO(20);
+  const escaneados = anexosEscaneadosDeHtml(html);
+  assert.deepStrictEqual(escaneados.map((a) => [a.letra, a.esEeff]), [['A', false], ['B', true]]);
+});
+
+test('cuenta cuántos huecos traen ya su página del informe de referencia', () => {
+  const html = '<p>ANEXO A. Estados financieros de la Compania</p>' + HUECO_VACIO(47)
+    + '<p>ANEXO B. Contrato de Distribucion</p>' + HUECO_CON_PAGINA(65) + HUECO_CON_PAGINA(66)
+    + HUECO_VACIO(67);
+  const escaneados = anexosEscaneadosDeHtml(html);
+  assert.strictEqual(escaneados[0].conPagina, 0);
+  assert.strictEqual(escaneados[1].conPagina, 2);
+  assert.strictEqual(escaneados[1].huecos.length, 3);
+});
+
+test('un hueco que no cae dentro de ningún anexo no se ofrece', () => {
+  /* No hay a qué anexo atribuirlo, así que tampoco hay carga que ofrecer para él. */
+  const html = HUECO_VACIO(5) + '<p>ANEXO A. Estados financieros de la Compania</p>'
+    + HUECO_VACIO(47);
+  const escaneados = anexosEscaneadosDeHtml(html);
+  assert.strictEqual(escaneados.length, 1);
+  assert.deepStrictEqual(escaneados[0].huecos, ['hueco_47']);
+});
+
+test('una plantilla sin anexos escaneados no ofrece ninguna carga', () => {
+  const html = '<p>ANEXO A. Estados financieros de la Compania</p><p>una tabla</p>';
+  assert.deepStrictEqual(anexosEscaneadosDeHtml(html), []);
+});
+
+test('las entradas del índice no crean un anexo escaneado', () => {
+  /* El índice repite los títulos con el número de página pegado. Si contara, el anexo del
+     contrato empezaría ahí y se llevaría los huecos del de estados financieros. */
+  const html = '<p>ANEXO A. Estados financieros de la Compania52</p>'
+    + '<p>ANEXO B. Contrato de Distribucion61</p>'
+    + '<p>ANEXO A. Estados financieros de la Compania</p>' + HUECO_VACIO(47)
+    + '<p>ANEXO B. Contrato de Distribucion</p>' + HUECO_CON_PAGINA(65);
+  const escaneados = anexosEscaneadosDeHtml(html);
+  assert.deepStrictEqual(escaneados.map((a) => [a.letra, a.huecos.length]), [['A', 1], ['B', 1]]);
 });

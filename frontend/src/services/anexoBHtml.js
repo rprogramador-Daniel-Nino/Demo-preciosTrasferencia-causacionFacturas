@@ -97,6 +97,57 @@ export function localizarAnexosHtml(html) {
   return delCuerpo;
 }
 
+/* La apertura del `<div>` con el que el extractor marca una página escaneada de anexo. Se
+   busca la etiqueta de apertura y no el bloque entero porque lo que hace falta son sus
+   atributos: el `data-id` que lo identifica y el `data-original` que dice si ya trae dentro
+   la página del informe de referencia. */
+const RX_APERTURA_HUECO = /<div\s[^>]*data-hueco="anexo_eeff"[^>]*>/gi;
+
+/**
+ * Los anexos escaneados que trae la plantilla: aquéllos cuyas páginas el informe de referencia
+ * lleva como imagen y no como texto.
+ *
+ * Es de aquí de donde sale la lista que el gestor ofrece para reemplazar páginas, y también el
+ * reparto con el que el .docx llena cada hueco con las páginas de SU anexo. Una sola definición
+ * para las dos cosas: si divergieran, el analista subiría páginas a un anexo y saldrían en otro.
+ *
+ * Un hueco que no cae dentro de ningún anexo no se devuelve: no hay a qué atribuirlo, y
+ * ofrecer una carga «para ninguna parte» no ayuda a nadie.
+ *
+ * @param {string} html  el de la plantilla, marcado o no.
+ * @returns {Array<{clave:string, titulo:string, letra:string, esEeff:boolean, huecos:string[],
+ *                  conPagina:number}>} en orden de aparición. `huecos` son los `data-id`, en
+ *          orden; `conPagina` cuántos de ellos ya traen su página; `esEeff` marca el anexo de
+ *          estados financieros del contribuyente, que tiene su propia carga en la ingesta.
+ */
+export function anexosEscaneadosDeHtml(html) {
+  const texto = String(html || '');
+  const anexos = localizarAnexosHtml(texto);
+  const eeff = resolverAnexos(anexos).eeff;
+  const porClave = new Map();
+  RX_APERTURA_HUECO.lastIndex = 0;
+  let m;
+  while ((m = RX_APERTURA_HUECO.exec(texto)) !== null) {
+    const zona = anexos.find((a) => m.index >= a.arranque && m.index < a.fin);
+    const id = (/data-id="([^"]+)"/.exec(m[0]) || [])[1];
+    if (!zona || !id) continue;
+    if (!porClave.has(zona.clave)) {
+      porClave.set(zona.clave, {
+        clave: zona.clave,
+        titulo: zona.titulo,
+        letra: zona.letra,
+        esEeff: !!eeff && eeff.clave === zona.clave,
+        huecos: [],
+        conPagina: 0,
+      });
+    }
+    const anexo = porClave.get(zona.clave);
+    anexo.huecos.push(id);
+    if (/data-original="/.test(m[0])) anexo.conPagina += 1;
+  }
+  return [...porClave.values()];
+}
+
 /**
  * Dónde empieza y acaba la sección de un anexo, buscándolo POR NOMBRE.
  *
