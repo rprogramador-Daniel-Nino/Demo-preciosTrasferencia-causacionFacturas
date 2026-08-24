@@ -90,13 +90,15 @@ test('el prompt pide los dos gastos del giro por separado, no un total', () => {
     EEFF_PROMPT.includes(campo), `falta "${campo}" en EEFF_PROMPT`));
 });
 
-test('el prompt NO pide ninguna utilidad operacional, y lo dice explícitamente', () => {
+test('el prompt no pide "utilidad_operacional" como campo del estudio; la calculada manda', () => {
   /* La fila «RESULTADO DE ACTIVIDADES DE LA OPERACIÓN» de Montachem 2025 trae el total de
-     los gastos, no la utilidad. Mientras se le pidiera al modelo «la utilidad operacional»
-     había una fila que podía engañarlo; ahora se le manda ignorarla. */
+     los gastos, no la utilidad, así que no se le pide al modelo esa utilidad como campo
+     primario del estudio: se calcula. La fila impresa SÍ se pide, pero bajo otro nombre
+     (`utilidad_operacional_impresa`, ver test de más abajo) y solo como último recurso —
+     `eeffVerificacion.js` la verifica contra el resto del estado antes de usarla. */
   assert.ok(!EEFF_PROMPT.includes('"utilidad_operacional"'));
-  assert.match(EEFF_PROMPT, /IGN[OÓ]RALA/);
-  assert.match(EEFF_PROMPT, /el sistema la calcula/i);
+  assert.match(EEFF_PROMPT, /NO usa esta fila como la utilidad operacional del estudio/i);
+  assert.match(EEFF_PROMPT, /la calcula como ingresos/i);
 });
 
 test('el prompt exige las partidas de PARTES RELACIONADAS y descarta las comerciales', () => {
@@ -214,15 +216,23 @@ test('rotuloDeRubro devuelve el texto de la fila, y cadena vacía si no vino', (
 
 test('el mapeo produce exactamente los campos del alcance, y todos son del libro', () => {
   /* Esta ingesta ya no llena las quince filas de la hoja Datos: toma tres partidas del
-     balance, el subtotal del activo corriente, los ingresos y el costo, y calcula la
-     utilidad operacional. Lo que sí tiene que cumplirse es que cada campo que produce sea
-     un rubro que el libro conoce — si no, escribiría en un campo que nadie publica. */
+     balance, el subtotal del activo corriente, PP&E, los ingresos y el costo, y calcula la
+     utilidad operacional (con su fallback a la impresa, ver eeffVerificacion.js). Lo que sí
+     tiene que cumplirse es que cada campo que produce sea un rubro que el libro conoce — si
+     no, escribiría en un campo que nadie publica. */
   const producidos = [...Object.values(CAMPO_POR_RUBRO), 't_op'].sort();
   assert.deepStrictEqual(producidos,
-    ['t_act_curr', 't_act_tot', 't_ap', 't_ar', 't_c', 't_inv', 't_op', 't_s'],
+    ['t_act_curr', 't_act_tot', 't_ap', 't_ar', 't_c', 't_inv', 't_op', 't_ppe', 't_s'],
     'el alcance de la ingesta cambió sin que esta prueba lo diga');
   producidos.forEach((clave) => assert.ok(CLAVES_RUBROS_EXAMINADA.includes(clave),
     `${clave} no es un rubro de la hoja Datos`));
+});
+
+test('propiedad_planta_equipo entra al mapeo de campos del estudio, como t_ppe', () => {
+  /* A diferencia de las tres partidas de partes relacionadas, PP&E no depende de con quién
+     sea la operación: es una partida universal del balance, y por eso se lee y se mapea
+     igual que `total_activos`. */
+  assert.strictEqual(CAMPO_POR_RUBRO.propiedad_planta_equipo, 't_ppe');
 });
 
 test('los rubros de cotejo no son campos del estudio', () => {
@@ -231,6 +241,37 @@ test('los rubros de cotejo no son campos del estudio', () => {
   RUBROS_DE_COTEJO.forEach((r) => assert.ok(
     !Object.keys(CAMPO_POR_RUBRO).includes(r) || r === 'utilidad_operacional',
     `${r} no debería ser a la vez campo del estudio y rubro de cotejo`));
+});
+
+/* ══════ Utilidad operacional impresa: cotejo para el fallback de eeffVerificacion.js ══════ */
+
+test('el prompt pide la utilidad operacional impresa, como rubro de cotejo y no de cálculo', () => {
+  /* No sustituye el cálculo (ingresos − costo − gastos): es la cifra que `eeffVerificacion.js`
+     usa como último recurso cuando ese cálculo no basta, y solo si cuadra con la identidad
+     utilidad bruta − gastos. El prompt sigue diciendo que el sistema calcula la utilidad
+     operacional; esto solo agrega de dónde sale el fallback. */
+  assert.ok(EEFF_PROMPT.includes('utilidad_operacional_impresa'),
+    'falta "utilidad_operacional_impresa" en EEFF_PROMPT');
+  assert.ok(RUBROS_DE_COTEJO.includes('utilidad_operacional_impresa'));
+  assert.ok(!Object.keys(CAMPO_POR_RUBRO).includes('utilidad_operacional_impresa'),
+    'no debe escribirse directo en el estudio: eeffVerificacion.js decide si se usa');
+});
+
+/* ══════ Costo de ventas desglosado en varios renglones ══════ */
+
+test('el prompt permite sumar renglones de costo, pero solo para costo_ventas', () => {
+  /* Symtek no imprime un total de "Costo de Ventas": lo desglosa en "Costo de servicios
+     prestados" + "Costo de venta de mercancía". La regla central sigue prohibiendo sumar
+     filas para todo lo demás — esto es una excepción angosta, no un permiso general. */
+  const defCostoVentas = EEFF_PROMPT.slice(EEFF_PROMPT.indexOf('· costo_ventas:'));
+  const finDefCostoVentas = defCostoVentas.indexOf('\n· gastos_ventas');
+  const bloqueCostoVentas = defCostoVentas.slice(0, finDefCostoVentas === -1 ? 400 : finDefCostoVentas);
+  assert.match(bloqueCostoVentas, /EXCEPCI[OÓ]N/i,
+    'la excepción debe estar en la propia definición de costo_ventas, no suelta en el prompt');
+  assert.match(bloqueCostoVentas, /su[mn]a/i,
+    'falta el permiso de sumar renglones cuando el documento desglosa el costo');
+  assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
+    'la regla central para el resto de rubros debe seguir intacta');
 });
 
 /* ══════ El texto del documento ══════ */
