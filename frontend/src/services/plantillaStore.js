@@ -103,6 +103,25 @@ export const leerAnexoBImagenes = (estudioId) =>
 export const borrarAnexoBImagenes = (estudioId) =>
   operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId) + ':cmpB'));
 
+/* Páginas con las que el analista REEMPLAZA las de un anexo escaneado que no es el del
+   contribuyente —el contrato de distribución, un certificado—. El extractor conserva las del
+   informe de referencia, que sirven mientras el documento no cambie; cuando cambia, éstas las
+   pisan.
+
+   Mismo almacén y mismo motivo de tamaño que las dos de arriba: son data URLs de varias
+   páginas y no caben ni en Firestore ni en localStorage. El valor es un mapa
+   `{ [claveDeAnexo]: string[] }` y la clave es el NOMBRE normalizado del anexo, no su letra:
+   la letra es de cada plantilla y cambia entre clientes, el nombre es lo que se conserva.
+   Clave distinta (":escan") para no colisionar con las de los otros dos anexos. */
+export const guardarAnexosEscaneados = (estudioId, mapaPorAnexo) =>
+  operar('anexos', 'readwrite', (s) => s.put(mapaPorAnexo, esc(estudioId) + ':escan'));
+
+export const leerAnexosEscaneados = (estudioId) =>
+  operar('anexos', 'readonly', (s) => s.get(esc(estudioId) + ':escan')).then((r) => r || {});
+
+export const borrarAnexosEscaneados = (estudioId) =>
+  operar('anexos', 'readwrite', (s) => s.delete(esc(estudioId) + ':escan'));
+
 /* Vínculo estudio -> plantilla. Sin esto, al recargar no hay forma de saber qué
    plantilla corresponde al estudio abierto, y la vista previa vuelve a la
    maestra genérica: las imágenes guardadas se quedan sin sitio donde ir.

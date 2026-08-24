@@ -4,6 +4,9 @@
 
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { fraccionDePagina, detectarPaginasDeAnexo } from './clasificadorImagenes.js';
+/* Cuál de los anexos del informe es el de estados financieros, por su NOMBRE: la letra es de
+   cada plantilla. Es la misma tabla que usan las dos rutas del informe para rellenar anexos. */
+import { interpretarEncabezadoAnexo, resolverAnexos } from './anexosPlantilla.js';
 import { codificarPNG, aBase64 } from './png.js';
 import { TEXTOS_PLANOS_FORMULA, esFormulaCorrupta, tipoDeAjusteDe } from './formulasOmml.js';
 
@@ -40,8 +43,10 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
          matemático de Word en vez de dejar las letras corruptas del PDF
     11 — las figuras de un PDF que no declara su rectángulo se emparejan por orden, así que
          el anexo escaneado deja su hueco y las imágenes del cuerpo no se pierden; y una hoja
-         del anexo escaneada a media página entra en el anexo en vez de copiarse */
-export const VERSION_EXTRACTOR = 11;
+         del anexo escaneada a media página entra en el anexo en vez de copiarse
+    12 — los anexos escaneados que NO son el de estados financieros conservan sus páginas del
+         informe de referencia, en vez de salir con un hueco que nada puede llenar */
+export const VERSION_EXTRACTOR = 12;
 
 /* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
    del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
@@ -245,8 +250,9 @@ export async function extraerReferencia(datos) {
     return { pagina: n, html: '<p>' + escapar(textoPlano) + '</p>', orientacion };
   });
 
-  /* --- Decisión: qué páginas son anexo --- */
+  /* --- Decisión: qué páginas son anexo, y de cuáles se conserva el escaneo --- */
   const paginasDeAnexo = detectarPaginasDeAnexo(dibujos);
+  const conservadas = paginasDeAnexoQueSeConservan(bloques, paginasDeAnexo);
 
   /* --- Segunda pasada: decodificar solo lo que se conserva, una vez por clave --- */
   const imagenes = [];
@@ -290,6 +296,47 @@ export async function extraerReferencia(datos) {
      Se conservan las claves distintas, no las cien repeticiones. */
   const artefactos = [];
 
+  /* Deduplicación por clave: hay 126 dibujos pero solo unas 20 imágenes
+     distintas, y decodificar por dibujo multiplicaba el trabajo por seis.
+     El recurso también se emite una sola vez por clave: el logo del
+     encabezado se dibuja en casi cien páginas, y una copia del base64 por
+     dibujo hinchaba cien veces lo que se guarda. */
+  const decodificar = async (d) => {
+    if (!yaDecodificada.has(d.clave)) {
+      const pagina = await doc.getPage(d.pagina);
+      const url = await aDataUrl(pagina, d.clave);
+      yaDecodificada.set(d.clave, url);
+      if (url) imagenes.push({ id: d.clave, dataUrl: url, pagina: d.pagina, orden: d.orden });
+    }
+    return yaDecodificada.get(d.clave);
+  };
+
+  /* La marca apunta al recurso y no lleva el base64 dentro: así el HTML que
+     se guarda pesa kilobytes en vez de megabytes, y una imagen que se repite
+     en noventa páginas se almacena una sola vez. Quien muestre o exporte el
+     documento la resuelve contra el catálogo de recursos.
+
+     Con el tamaño que el PDF le da, no el natural del PNG. Va en el `style` y no en
+     los atributos `width`/`height` porque en centímetros no admiten unidad, y en
+     píxeles habría que elegir una resolución: el punto es reproducir la medida del
+     informe, que está en centímetros. Word entiende una longitud CSS en una imagen. */
+  const marcaDeImagen = (d) => '<img data-recurso="' + d.clave + '" style="width:' +
+    d.cm.ancho.toFixed(2) + 'cm;height:' + d.cm.alto.toFixed(2) + 'cm" />';
+
+  /* El hueco lleva contenido visible dentro. Un `<div>` vacío no se ve ni en la vista previa
+     ni en el Word: las 16 páginas del anexo de estados financieros firmados desaparecían sin
+     dejar rastro. Que el documento diga qué falta es lo mínimo para que alguien lo note. */
+  const huecoVacio = (id, pagina) =>
+    '<div data-hueco="anexo_eeff" data-id="' + id + '">' +
+    '<p>[Falta el anexo de estados financieros firmados — corresponde a la página ' +
+    pagina + ' del informe de referencia. Adjúntelo antes de radicar.]</p></div>';
+
+  /* Y el de un anexo que sí se conserva lleva su propia página dentro. Sigue siendo un hueco:
+     es lo que permite reemplazarla subiendo otras cuando el documento haya cambiado. */
+  const huecoConPagina = (id, d) =>
+    '<div data-hueco="anexo_eeff" data-id="' + id + '" data-original="' + d.clave + '">' +
+    marcaDeImagen(d) + '</div>';
+
   for (const d of dibujos) {
     const figura = claveDeFigura.get(d);
 
@@ -299,44 +346,20 @@ export async function extraerReferencia(datos) {
       if (!figura) continue;
       if (!huecos.some((h) => h.pagina === d.pagina)) {
         const id = 'hueco_' + d.pagina;
-        huecos.push({ id, pagina: d.pagina });
-        /* El hueco lleva texto visible dentro. Un `<div>` vacío no se ve ni en
-           la vista previa ni en el Word: las 16 páginas del anexo de estados
-           financieros firmados desaparecían sin dejar rastro. Que el documento
-           diga qué falta es lo mínimo para que alguien lo note al revisarlo. */
-        marcaDeFigura.set(
-          figura,
-          '<div data-hueco="anexo_eeff" data-id="' + id + '">' +
-          '<p>[Falta el anexo de estados financieros firmados — corresponde a la página ' +
-          d.pagina + ' del informe de referencia. Adjúntelo antes de radicar.]</p></div>'
-        );
+        /* De un anexo escaneado que no es el de estados financieros se conserva la página del
+           informe de referencia: es el mismo documento —el contrato de distribución, un
+           certificado— y el sistema no tiene de dónde sacarlo, así que el hueco no se llenaría
+           nunca. Del de estados financieros no se conserva nada, ver
+           `paginasDeAnexoQueSeConservan`. */
+        const url = conservadas.has(d.pagina) ? await decodificar(d) : null;
+        huecos.push(url ? { id, pagina: d.pagina, original: d.clave } : { id, pagina: d.pagina });
+        marcaDeFigura.set(figura, url ? huecoConPagina(id, d) : huecoVacio(id, d.pagina));
       }
       continue;
     }
 
-    /* Deduplicación por clave: hay 126 dibujos pero solo unas 20 imágenes
-       distintas, y decodificar por dibujo multiplicaba el trabajo por seis.
-       El recurso también se emite una sola vez por clave: el logo del
-       encabezado se dibuja en casi cien páginas, y una copia del base64 por
-       dibujo hinchaba cien veces lo que se guarda. */
-    if (!yaDecodificada.has(d.clave)) {
-      const pagina = await doc.getPage(d.pagina);
-      const url = await aDataUrl(pagina, d.clave);
-      yaDecodificada.set(d.clave, url);
-      if (url) imagenes.push({ id: d.clave, dataUrl: url, pagina: d.pagina, orden: d.orden });
-    }
-    if (!yaDecodificada.get(d.clave)) continue;
-
-    /* La marca apunta al recurso y no lleva el base64 dentro: así el HTML que
-       se guarda pesa kilobytes en vez de megabytes, y una imagen que se repite
-       en noventa páginas se almacena una sola vez. Quien muestre o exporte el
-       documento la resuelve contra el catálogo de recursos. */
-    /* Con el tamaño que el PDF le da, no el natural del PNG. Va en el `style` y no en
-       los atributos `width`/`height` porque en centímetros no admiten unidad, y en
-       píxeles habría que elegir una resolución: el punto es reproducir la medida del
-       informe, que está en centímetros. Word entiende una longitud CSS en una imagen. */
-    const marca = '<img data-recurso="' + d.clave + '" style="width:' +
-      d.cm.ancho.toFixed(2) + 'cm;height:' + d.cm.alto.toFixed(2) + 'cm" />';
+    if (!await decodificar(d)) continue;
+    const marca = marcaDeImagen(d);
 
     if (figura) {
       marcaDeFigura.set(figura, marca);
@@ -516,6 +539,12 @@ export function loQueFaltaPorVersion(version) {
                'las imágenes del cuerpo se perdieron: el anexo se queda con el título y ' +
                'nada debajo. Y una hoja del anexo escaneada a media página se copió tal ' +
                'cual, con las cifras firmadas del año anterior dentro');
+  }
+  if (version < 12) {
+    falta.push('los anexos escaneados que no son el de estados financieros —el contrato de ' +
+               'distribución, un certificado— salen con un hueco en rojo en vez de con sus ' +
+               'páginas, porque el lector anterior descartaba esos escaneos y el sistema no ' +
+               'tiene de dónde sacarlos');
   }
   if (version < 6) {
     falta.push('las filas de las tablas llevan párrafos sueltos que Word saca de la ' +
@@ -913,6 +942,66 @@ function aHTML(nodo, porId, figuras, pagina, base, notas = [], formulaPorId = ne
     .join('');
   const etiqueta = MAPA_ETIQUETAS[nodo.role];
   return etiqueta ? '<' + etiqueta + '>' + hijos + '</' + etiqueta + '>' : hijos;
+}
+
+/* Un bloque de texto de una página, para leerle los encabezados de anexo. Mismo criterio que
+   `localizarAnexosHtml` aplica sobre el informe entero, aquí página por página. */
+const RX_BLOQUE_DE_TEXTO = /<(p|h[1-6])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi;
+
+/** El texto de un bloque de HTML, sin etiquetas y sin las entidades que el extractor escribe. */
+function textoDeBloque(html) {
+  return String(html || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Las páginas de anexo escaneado cuyo escaneo SE CONSERVA del informe de referencia.
+ *
+ * Un informe puede traer más de un anexo escaneado: el de ATEB lleva los estados financieros
+ * firmados y detrás el contrato de distribución. Del de estados financieros no se puede copiar
+ * nada —son cifras firmadas de otro año, y el informe se radica ante la DIAN—, pero el contrato
+ * es el MISMO documento año a año y el sistema no tiene de dónde sacarlo: dejarlo en hueco
+ * significa que ese anexo no sale nunca.
+ *
+ * La lista es de lo que se conserva y no de lo que se descarta, a propósito: así, todo lo que
+ * no se reconozca con certeza se queda con su hueco, que es el resultado seguro. Si no se sabe
+ * cuál de los anexos es el de estados financieros, cualquiera podría serlo y no se conserva
+ * ninguno.
+ *
+ * @param {Array<{pagina:number, html:string}>} bloques  las páginas del informe, en orden.
+ * @param {Set<number>} paginasDeAnexo  las que `detectarPaginasDeAnexo` marcó como escaneadas.
+ * @returns {Set<number>}
+ */
+export function paginasDeAnexoQueSeConservan(bloques, paginasDeAnexo) {
+  const conservadas = new Set();
+  const anexos = [];
+  for (const b of bloques || []) {
+    RX_BLOQUE_DE_TEXTO.lastIndex = 0;
+    let m;
+    while ((m = RX_BLOQUE_DE_TEXTO.exec(String(b.html || ''))) !== null) {
+      /* `interpretarEncabezadoAnexo` descarta por su cuenta las entradas del índice, que
+         repiten cada título con el número de página pegado sesenta páginas antes. */
+      const cabeza = interpretarEncabezadoAnexo(textoDeBloque(m[2]));
+      if (cabeza) anexos.push({ ...cabeza, pagina: b.pagina });
+    }
+  }
+  const eeff = resolverAnexos(anexos).eeff;
+  if (!eeff) return conservadas;
+
+  for (const p of paginasDeAnexo || []) {
+    /* A qué anexo pertenece la página: el último encabezado que va en ella o antes. `anexos`
+       está en orden de documento porque `bloques` viene en orden de página. */
+    let suyo = null;
+    for (const a of anexos) {
+      if (a.pagina > p) break;
+      suyo = a;
+    }
+    if (suyo && suyo !== eeff) conservadas.add(p);
+  }
+  return conservadas;
 }
 
 /* Empareja cada figura del árbol con el dibujo cuyo rectángulo ocupa. Medido

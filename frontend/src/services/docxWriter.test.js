@@ -7,8 +7,8 @@ import { extraerReferencia } from './pdfReferenceExtractor.js';
 import { HOJA_TWIPS, PUNTOS_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
 
 /* Relee el .docx generado. Es lo que hace que todo esto se pueda probar sin Word. */
-const abrir = async (html, recursos = [], anexo = []) => {
-  const zip = new PizZip(await aDocxBuffer({ html, recursos, anexo }));
+const abrir = async (html, recursos = [], anexo = [], extra = {}) => {
+  const zip = new PizZip(await aDocxBuffer({ html, recursos, anexo, ...extra }));
   const leer = (p) => (zip.file(p) ? zip.file(p).asText() : null);
   return { zip, leer, doc: leer('word/document.xml') };
 };
@@ -1131,11 +1131,25 @@ test('el anexo de estados financieros se reconoce por su nombre, no por ir prime
     'la página fue al hueco del contrato en vez de al de los estados financieros');
 });
 
-test('con menos páginas que huecos, los del propio anexo siguen avisando', async () => {
+test('con menos páginas que huecos, los que sobran desaparecen en vez de avisar', async () => {
+  /* Las páginas que sube el analista SON el documento de este año: si trae menos que el del
+     informe de referencia —los estados financieros de un año no tienen las mismas páginas que
+     los de otro— no falta nada, y el aviso en rojo seria una alarma falsa. El hueco de sobra
+     se va con su hoja: la del anexo es una imagen del alto de la caja de texto, así que la
+     página existe por la imagen y no por el hueco.
+
+     Cuando NO se sube nada es al contrario: ahí sí falta, y todos los huecos lo dicen —lo
+     cubre la prueba de abajo—. */
   const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(48, hueco(48));
   const { doc } = await abrir(html, [], [PNG_1x1]);
   assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
-  assert.match(doc, /Falta el anexo/);
+  assert.doesNotMatch(doc, /Falta el anexo/);
+});
+
+test('sin ninguna página subida, todos los huecos del anexo avisan', async () => {
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(48, hueco(48));
+  const { doc } = await abrir(html, [], []);
+  assert.equal((doc.match(/Falta el anexo/g) || []).length, 2);
 });
 
 test('sin un anexo de estados financieros reconocible, los huecos se reparten como antes', async () => {
@@ -1145,4 +1159,105 @@ test('sin un anexo de estados financieros reconocible, los huecos se reparten co
     + pagina(48, hueco(48));
   const { doc } = await abrir(html, [], [PNG_1x1, PNG_1x1]);
   assert.equal((doc.match(/<w:drawing>/g) || []).length, 2);
+});
+
+test('las páginas subidas sustituyen al documento viejo entero, no sólo a las primeras', async () => {
+  /* Un contrato nuevo de tres páginas que reemplaza a uno de diez no puede dejar detrás las
+     siete últimas del viejo: el anexo saldría con dos documentos cosidos. */
+  const conPagina = (n) => '<div data-hueco="anexo_eeff" data-id="hueco_' + n + '" ' +
+    'data-original="pag' + n + '">' +
+    '<img data-recurso="pag' + n + '" style="width:15.60cm;height:20.20cm" /></div>';
+  const html = pagina(47, TITULO_EEFF + hueco(47))
+    + pagina(65, TITULO_CONTRATO + conPagina(65)) + pagina(66, conPagina(66))
+    + pagina(67, conPagina(67)) + pagina(68, conPagina(68)) + pagina(69, conPagina(69));
+  const recursos = [65, 66, 67, 68, 69].map((n) => ({ id: 'pag' + n, dataUrl: PNG_1x1 }));
+  const { doc } = await abrir(html, recursos, [],
+    { anexosEscaneados: { [CLAVE_CONTRATO]: [JPEG_1x1, JPEG_1x1, JPEG_1x1] } });
+  const { contrato, dibujos } = posiciones(doc);
+  assert.equal(dibujos.filter((p) => p > contrato).length, 3,
+    'el anexo del contrato tiene que salir con las tres páginas nuevas y nada más');
+});
+
+test('el hueco de otro anexo sale con la página que trae dentro', async () => {
+  /* El extractor conserva las páginas escaneadas de los anexos que no son el de estados
+     financieros —el contrato es el mismo documento año a año y el sistema no tiene de dónde
+     sacarlo— y las deja dentro de su hueco. El hueco sigue ahí para poder reemplazarlas. */
+  const conOriginal = '<div data-hueco="anexo_eeff" data-id="hueco_65" data-original="pag65">' +
+    '<img data-recurso="pag65" style="width:15.60cm;height:20.20cm" /></div>';
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(65, TITULO_CONTRATO + conOriginal);
+  const { doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [PNG_1x1]);
+  const { contrato, dibujos } = posiciones(doc);
+  assert.equal(dibujos.length, 2, 'tienen que salir la del ANEXO A y la del contrato');
+  assert.ok(dibujos.some((p) => p > contrato), 'la página del contrato no salió en su anexo');
+  assert.doesNotMatch(doc, /Falta el anexo/, 'no falta nada: los dos anexos tienen su página');
+});
+
+test('las páginas subidas no se van al hueco de otro anexo aunque ése traiga la suya', async () => {
+  /* La cola de páginas subidas es del anexo de estados financieros. Que el del contrato ya
+     tenga contenido no cambia nada: sigue sin tocar esa cola. */
+  const conOriginal = '<div data-hueco="anexo_eeff" data-id="hueco_65" data-original="pag65">' +
+    '<img data-recurso="pag65" style="width:15.60cm;height:20.20cm" /></div>';
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(65, TITULO_CONTRATO + conOriginal);
+  const { doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [PNG_1x1, PNG_1x1]);
+  const { contrato, dibujos } = posiciones(doc);
+  /* Dos subidas al ANEXO A —la segunda no cabe en su único hueco y va detrás— más la del
+     contrato: tres, y sólo una después del título del contrato. */
+  assert.equal(dibujos.length, 3);
+  assert.equal(dibujos.filter((p) => p > contrato).length, 1);
+});
+
+/* --- Reemplazar las páginas de un anexo escaneado --- */
+
+/* Las páginas que el extractor conserva son las del informe del año pasado. Cuando el
+   documento cambió —un contrato renovado, un otrosí— el analista sube las nuevas y pisan a
+   aquéllas, cada una en SU anexo. Se usa un JPEG para la carga y un PNG para la original:
+   así el archivo generado dice por sí solo cuál de las dos entró. */
+const JPEG_1x1 = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJ' +
+  'CQgKDBQNDAsLDBkSEw8UHRofHh0aHBwcJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPDs0NDL/wAALCAABAAEB' +
+  'AREA/8QAFAABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAA' +
+  'AAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJQA/9k=';
+
+const huecoConPagina = (n) => '<div data-hueco="anexo_eeff" data-id="hueco_' + n + '" ' +
+  'data-original="pag' + n + '">' +
+  '<img data-recurso="pag' + n + '" style="width:15.60cm;height:20.20cm" /></div>';
+const CLAVE_CONTRATO = 'contrato de distribucion de servicios';
+const mediaDe = (zip) => Object.keys(zip.files).filter((f) => /^word\/media\/.+\./.test(f));
+
+test('las páginas subidas para un anexo reemplazan la que traía el hueco', async () => {
+  const html = pagina(47, TITULO_EEFF + hueco(47))
+    + pagina(65, TITULO_CONTRATO + huecoConPagina(65));
+  const { zip, doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [PNG_1x1],
+    { anexosEscaneados: { [CLAVE_CONTRATO]: [JPEG_1x1] } });
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 2, 'la del ANEXO A y la del contrato');
+  assert.ok(mediaDe(zip).some((f) => /\.jpe?g$/.test(f)), 'la página subida no entró');
+});
+
+test('las páginas subidas a un anexo no llenan los huecos de otro', async () => {
+  /* Sin carga de estados financieros, su anexo sigue avisando: la del contrato es suya. */
+  const html = pagina(47, TITULO_EEFF + hueco(47))
+    + pagina(65, TITULO_CONTRATO + huecoConPagina(65));
+  const { zip, doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [],
+    { anexosEscaneados: { [CLAVE_CONTRATO]: [JPEG_1x1] } });
+  assert.match(doc, /Falta el anexo/, 'el anexo de estados financieros tenía que seguir vacío');
+  assert.ok(mediaDe(zip).some((f) => /\.jpe?g$/.test(f)), 'la página del contrato no entró');
+});
+
+test('las páginas subidas que no caben se añaden al final de su anexo', async () => {
+  const html = pagina(47, TITULO_EEFF + hueco(47))
+    + pagina(65, TITULO_CONTRATO + huecoConPagina(65));
+  const { doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [],
+    { anexosEscaneados: { [CLAVE_CONTRATO]: [JPEG_1x1, JPEG_1x1, JPEG_1x1] } });
+  const { contrato, dibujos } = posiciones(doc);
+  assert.equal(dibujos.length, 3, 'un contrato de tres páginas tiene que salir entero');
+  assert.ok(dibujos.every((p) => p > contrato), 'alguna se salió del anexo del contrato');
+});
+
+test('en el anexo de estados financieros manda lo cargado en la ingesta', async () => {
+  /* Ese anexo tiene su propia carga y el gestor no lo ofrece aquí. Si algo llegara por las dos
+     vías, la de la ingesta es la que corresponde: es el PDF de estados financieros del año. */
+  const html = pagina(47, TITULO_EEFF + hueco(47));
+  const { zip, doc } = await abrir(html, [], [PNG_1x1],
+    { anexosEscaneados: { 'estados financieros ateb colombia s a s': [JPEG_1x1] } });
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
+  assert.ok(!mediaDe(zip).some((f) => /\.jpe?g$/.test(f)), 'entró la página que no debía');
 });
