@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
-  normalizarCaracteresMatematicos, textoPorId,
+  normalizarCaracteresMatematicos, textoPorId, emparejar,
 } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
@@ -561,4 +561,63 @@ test('el rótulo vale aunque esté en la página anterior a su ecuación', () =>
     { type: 'endMarkedContent' },
   ], new Map(), estadoAjuste);
   assert.equal(formulaPorId.get('f'), 'AP');
+});
+
+/* --- Emparejar figuras sin `bbox` --- */
+
+/* El informe de ATEB 2024 salía con los ANEXOS A y B vacíos: sólo su título. Sus 28 páginas
+   son escaneos —los estados financieros firmados y el contrato de distribución— y el árbol
+   del PDF las declara como `Figure`, pero SIN `bbox`. Con la coincidencia por rectángulo
+   como único criterio, ninguna figura encontraba su dibujo, así que no se emitía ni un
+   hueco del anexo y el escaneo tampoco salía como imagen: el anexo se quedaba en blanco.
+   El PDF de referencia de los otros tests trae `bbox` en sus 18 figuras, por eso pasaban. */
+
+test('una figura sin bbox se empareja por orden, saltándose el logo del encabezado', () => {
+  /* La página del anexo tal como la trae el PDF real: dos dibujos —el logo del encabezado
+     primero, el escaneo después— y una sola figura en el árbol, sin `bbox`. */
+  const logo = { clave: 'logo', rect: [456, 693, 527, 738] };
+  const escaneo = { clave: 'img_p47_1', rect: [85, 121, 527, 693] };
+  const pares = emparejar([{ bbox: null, alt: '' }], [logo, escaneo],
+    { mobiliario: new Set(['logo']) });
+  assert.strictEqual(pares[0], escaneo, 'la figura tenía que quedarse con el escaneo');
+});
+
+test('sin bbox y con varias figuras, el orden del documento manda', () => {
+  const logo = { clave: 'logo', rect: [456, 693, 527, 738] };
+  const uno = { clave: 'a', rect: [85, 400, 527, 693] };
+  const dos = { clave: 'b', rect: [85, 121, 527, 390] };
+  const pares = emparejar([{ bbox: null }, { bbox: null }], [logo, uno, dos],
+    { mobiliario: new Set(['logo']) });
+  assert.deepStrictEqual(pares, [uno, dos]);
+});
+
+test('el bbox sigue mandando cuando lo hay: no se empareja por orden', () => {
+  /* Una figura CON `bbox` que no coincide con ningún dibujo es un desajuste de verdad y no
+     se adivina: emparejarla por orden le colgaría al texto una imagen que no es la suya. */
+  const otro = { clave: 'otro', rect: [10, 10, 20, 20] };
+  const pares = emparejar([{ bbox: [85, 121, 527, 693] }], [otro], { mobiliario: new Set() });
+  assert.strictEqual(pares[0], null);
+});
+
+test('con bbox, la coincidencia por rectángulo gana al orden de aparición', () => {
+  const primero = { clave: 'primero', rect: [10, 10, 20, 20] };
+  const segundo = { clave: 'segundo', rect: [85, 121, 527, 693] };
+  const pares = emparejar([{ bbox: [85, 121, 527, 693] }], [primero, segundo],
+    { mobiliario: new Set() });
+  assert.strictEqual(pares[0], segundo);
+});
+
+test('una figura sin bbox no se queda con un dibujo que otra ya reclamó por rectángulo', () => {
+  const escaneo = { clave: 'escaneo', rect: [85, 121, 527, 693] };
+  const suelto = { clave: 'suelto', rect: [100, 200, 300, 400] };
+  const pares = emparejar([{ bbox: null }, { bbox: [85, 121, 527, 693] }], [escaneo, suelto],
+    { mobiliario: new Set() });
+  assert.strictEqual(pares[1], escaneo, 'la del bbox se queda con el suyo');
+  assert.strictEqual(pares[0], suelto, 'la de sin bbox toma el que quedó libre');
+});
+
+test('sin dibujos libres, la figura sin bbox se queda sin emparejar', () => {
+  const logo = { clave: 'logo', rect: [456, 693, 527, 738] };
+  const pares = emparejar([{ bbox: null }], [logo], { mobiliario: new Set(['logo']) });
+  assert.strictEqual(pares[0], null, 'el logo del encabezado no es la figura de la página');
 });

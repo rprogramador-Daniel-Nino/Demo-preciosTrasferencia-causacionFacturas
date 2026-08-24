@@ -577,7 +577,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
       if (docxMarcado) {
         if (!vivo) return;
         setPlantillaActiva({ id: idPlantilla, tipo: 'docx', huecos: 0, marcada: true });
-        await previsualizarDocx(docxMarcado);
+        await previsualizarDocx(docxMarcado, await leerDocx(idPlantilla));
         return;
       }
 
@@ -802,7 +802,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           const marcadoPrevio = await leerDocxMarcado(idPlantilla);
           if (marcadoPrevio) {
             setPlantillaActiva({ id: idPlantilla, tipo: 'docx', huecos: 0, marcada: true });
-            await previsualizarDocx(marcadoPrevio);
+            await previsualizarDocx(marcadoPrevio, binario);
           } else {
             const xml = new PizZip(binario).file('word/document.xml').asText();
             const propuestas = await proponerMarcas(htmlParaMarcar(xml), {
@@ -1076,7 +1076,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
     await guardarDocxMarcado(plantillaPendiente.id, marcado);
 
     setPlantillaActiva({ id: plantillaPendiente.id, tipo: 'docx', huecos: 0, marcada: true });
-    await previsualizarDocx(marcado);
+    await previsualizarDocx(marcado, plantillaPendiente.binario);
     setMarcasPropuestas(null);
     setPlantillaPendiente(null);
     setTelemetriaMarcado(null);
@@ -1085,7 +1085,11 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
 
   /* Rellena la plantilla .docx marcada con los datos del estudio y devuelve el
      binario. Es la única fuente del documento que se descarga. */
-  const construirDocxDelEstudio = (binarioMarcado, tipoSalida = 'blob') => rellenarDocx({
+  /* `binarioOriginal` es el .docx del cliente SIN marcar. Va para que un campo que el
+     estudio no trae conserve el texto que la plantilla publicaba, en vez de salir como «—»
+     (`restaurarCamposSinDato`, en `docxPlantilla.js`). Se lee de IndexedDB, donde
+     `guardarDocx` lo dejó al subirlo; si no está, el relleno se comporta como antes. */
+  const construirDocxDelEstudio = (binarioMarcado, tipoSalida = 'blob', binarioOriginal = null) => rellenarDocx({
     binario: binarioMarcado,
     estudio: study,
     datosMacro: analisisMercado,
@@ -1094,6 +1098,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
     imagenesAnexo: (study.eeffImages || []).map((img) => ({
       dataUrl: typeof img === 'string' ? img : (img && (img.dataUrl || img.src)),
     })),
+    binarioOriginal,
     tipoSalida,
   });
 
@@ -1102,9 +1107,10 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
      datos que de verdad va a llevar el archivo. Pierde el formato —mammoth lo
      descarta—, pero el .docx que se descarga sale del original intacto, que es lo
      que importa. */
-  const previsualizarDocx = async (binarioMarcado) => {
+  const previsualizarDocx = async (binarioMarcado, binarioOriginal = null) => {
     try {
-      const { salida, camposVacios, avisosTablas } = construirDocxDelEstudio(binarioMarcado, 'uint8array');
+      const { salida, camposVacios, avisosTablas } = construirDocxDelEstudio(
+        binarioMarcado, 'uint8array', binarioOriginal);
       const { value } = await mammoth.convertToHtml({ arrayBuffer: salida.buffer.slice(
         salida.byteOffset, salida.byteOffset + salida.byteLength) });
       setHtmlContent(value);
@@ -1325,7 +1331,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
          comenta salieran coherentes entre sí y desactualizadas las dos: mismo render viejo. */
       if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
         const marcado = await leerDocxMarcado(plantillaActiva.id);
-        if (marcado) await previsualizarDocx(marcado);
+        if (marcado) await previsualizarDocx(marcado, await leerDocx(plantillaActiva.id));
       } else if (plantillaActiva && plantillaActiva.marcada) {
         const marcado = await leerMarcado(plantillaActiva.id);
         if (marcado) {
@@ -1372,7 +1378,9 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
       if (plantillaActiva && plantillaActiva.tipo === 'docx' && plantillaActiva.marcada) {
         const marcado = await leerDocxMarcado(plantillaActiva.id);
         if (!marcado) throw new Error('No se encontró la plantilla marcada. Vuelve a subirla.');
-        const { salida, camposVacios, avisosTablas, imagenesInsertadas } = construirDocxDelEstudio(marcado, 'blob');
+        const {
+          salida, camposVacios, camposConservados, avisosTablas, imagenesInsertadas,
+        } = construirDocxDelEstudio(marcado, 'blob', await leerDocx(plantillaActiva.id));
         const enlace = document.createElement('a');
         enlace.href = URL.createObjectURL(salida);
         enlace.download = 'Informe_Local_PT_' + (study.ent || 'Empresa') + '_' +
@@ -1381,6 +1389,18 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
         URL.revokeObjectURL(enlace.href);
 
         const nuevos = [];
+        /* Los campos que el estudio no trae y que conservaron el texto de la plantilla
+           (`restaurarCamposSinDato`). Se dicen porque ESO es texto del informe del año
+           anterior: no es un hueco, pero tampoco es un dato de este estudio, y quien radica
+           tiene que poder revisarlo. */
+        if ((camposConservados || []).length) {
+          nuevos.push({
+            nivel: 'aviso', origen: 'docx',
+            texto: (camposConservados.length) + ' campo(s) sin dato en el estudio (' +
+              camposConservados.join(', ') + ') conservaron el texto que traía tu plantilla, ' +
+              'en vez de salir como «—». Revísalos antes de radicar: son del informe anterior.',
+          });
+        }
         if (camposVacios.length) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',

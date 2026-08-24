@@ -37,8 +37,11 @@ const TIEMPO_LIMITE_IMAGEN = 5000;
      8 — la orientación de cada página, para la sección apaisada
      9 — las citas legales apartadas como notas al pie, con su llamada marcada
     10 — las ecuaciones de ajuste marcadas, para que el .docx las escriba con el motor
-         matemático de Word en vez de dejar las letras corruptas del PDF */
-export const VERSION_EXTRACTOR = 10;
+         matemático de Word en vez de dejar las letras corruptas del PDF
+    11 — las figuras de un PDF que no declara su rectángulo se emparejan por orden, así que
+         el anexo escaneado deja su hueco y las imágenes del cuerpo no se pierden; y una hoja
+         del anexo escaneada a media página entra en el anexo en vez de copiarse */
+export const VERSION_EXTRACTOR = 11;
 
 /* Un punto PostScript es 1/72 de pulgada, y una pulgada 2,54 cm. Todas las medidas
    del PDF llegan en puntos, y las de la hoja se razonan en centímetros. */
@@ -255,8 +258,23 @@ export async function extraerReferencia(datos) {
      no cuelga del árbol— y no se emiten dentro del texto. */
   const dibujoDeFigura = new Map();
   const reclamados = new Set();
+  /* Mobiliario del documento: la imagen que se dibuja en casi todas las páginas, o sea el
+     logo del encabezado. Hace falta saberlo YA —y no sólo más abajo, al filtrar los
+     artefactos— porque una figura sin `bbox` se empareja por orden y el logo se pinta antes
+     que el contenido de la página. El umbral es el mismo que filtra los artefactos, y por el
+     mismo motivo: por debajo de ahí no es mobiliario sino una imagen del cuerpo. */
+  const minRepeticiones = Math.max(3, Math.round(leidas.length * 0.2));
+  const paginasPorClave = new Map();
+  for (const d of dibujos) {
+    if (!paginasPorClave.has(d.clave)) paginasPorClave.set(d.clave, new Set());
+    paginasPorClave.get(d.clave).add(d.pagina);
+  }
+  const mobiliario = new Set([...paginasPorClave]
+    .filter(([, paginas]) => paginas.size >= minRepeticiones)
+    .map(([clave]) => clave));
+
   for (const [n, figuras] of figurasPorPagina) {
-    const pares = emparejar(figuras, dibujos.filter((d) => d.pagina === n));
+    const pares = emparejar(figuras, dibujos.filter((d) => d.pagina === n), { mobiliario });
     pares.forEach((d, i) => {
       dibujoDeFigura.set(n + ':' + i, d);
       if (d) reclamados.add(d);
@@ -352,7 +370,6 @@ export async function extraerReferencia(datos) {
      etiquetado". Sin este filtro esa imagen —de cualquier tamaño, a veces más alta que
      media página— se sumaba al bloque de encabezado y se repetía en TODAS las páginas
      junto al logo real, invadiendo el cuerpo. */
-  const minRepeticiones = Math.max(3, Math.round(leidas.length * 0.2));
   const artefactosFiltrados = artefactos.filter((a) => a.paginas.length >= minRepeticiones);
   if (artefactosFiltrados.length < artefactos.length) {
     console.warn(
@@ -492,6 +509,13 @@ export function loQueFaltaPorVersion(version) {
                'el PDF, así que desbordan la hoja y Word reparte el desborde en ' +
                'páginas nuevas; y el logo del encabezado sale centrado y también en ' +
                'la portada, donde el informe no lo lleva');
+  }
+  if (version < 11) {
+    falta.push('si el PDF no declaraba el rectángulo de sus figuras —el informe de ATEB no ' +
+               'lo declara—, el anexo escaneado salió sin hueco donde poner sus páginas y ' +
+               'las imágenes del cuerpo se perdieron: el anexo se queda con el título y ' +
+               'nada debajo. Y una hoja del anexo escaneada a media página se copió tal ' +
+               'cual, con las cifras firmadas del año anterior dentro');
   }
   if (version < 6) {
     falta.push('las filas de las tablas llevan párrafos sueltos que Word saca de la ' +
@@ -895,10 +919,32 @@ function aHTML(nodo, porId, figuras, pagina, base, notas = [], formulaPorId = ne
    contra el PDF de referencia, la coincidencia es exacta; la tolerancia está por
    si otro generador redondea. Se empareja por solapamiento y no por orden porque
    en una página con logo de encabezado hay más dibujos que figuras, y el orden
-   no dice cuál es cuál. */
-function emparejar(figuras, dibujosDePagina, tolerancia = 2) {
+   no dice cuál es cuál.
+
+   Cuando la figura NO declara `bbox` no hay rectángulo que comparar, y entonces sí se va al
+   orden: es lo único que queda. El `bbox` de un elemento de estructura es OPCIONAL en PDF y
+   hay informes que no lo traen —el de ATEB 2024 no lo trae en ninguna de sus figuras—; sin
+   este respaldo, las 28 páginas de anexo escaneado de ese informe no encontraban su dibujo,
+   así que no se emitía el hueco del anexo ni salía la imagen y los ANEXOS A y B se radicaban
+   con el título y nada debajo. El PDF de referencia de los tests trae `bbox` en sus 18
+   figuras, y por eso el fallo no se veía en verde ni en rojo.
+
+   El orden se reparte sobre los dibujos que no son `mobiliario` de la página: el logo del
+   encabezado se dibuja ANTES que el contenido, así que sin apartarlo se llevaría la figura y
+   el escaneo se perdería igual. Y las figuras que sí traen `bbox` siguen resolviéndose sólo
+   por rectángulo: una con `bbox` que no coincide con nada es un desajuste de verdad, y
+   adivinarlo por orden le colgaría al texto una imagen que no es la suya.
+
+   @param {Array<{bbox?:number[]|null}>} figuras  en orden de documento.
+   @param {Array<{clave:string, rect?:number[]}>} dibujosDePagina  en orden de pintado.
+   @param {{mobiliario?:Set<string>, tolerancia?:number}} [opciones]  `mobiliario` son las
+          claves de los dibujos que se repiten por todo el documento —el logo—, que no
+          entran en el reparto por orden. */
+export function emparejar(figuras, dibujosDePagina, opciones = {}) {
+  const mobiliario = opciones.mobiliario || new Set();
+  const tolerancia = opciones.tolerancia === undefined ? 2 : opciones.tolerancia;
   const usados = new Set();
-  return figuras.map((f) => {
+  const pares = figuras.map((f) => {
     if (!f.bbox) return null;
     const [x0, y0, x1, y1] = f.bbox;
     for (const d of dibujosDePagina) {
@@ -912,6 +958,19 @@ function emparejar(figuras, dibujosDePagina, tolerancia = 2) {
     }
     return null;
   });
+
+  /* En una segunda pasada y no dentro de la primera: las figuras con `bbox` reclaman su
+     dibujo antes, y el reparto por orden sólo se lleva lo que quedó libre. */
+  const libres = dibujosDePagina.filter((d) => !usados.has(d) && !mobiliario.has(d.clave));
+  let siguiente = 0;
+  pares.forEach((d, i) => {
+    if (d || figuras[i].bbox) return;
+    const libre = libres[siguiente];
+    if (!libre) return;
+    siguiente += 1;
+    pares[i] = libre;
+  });
+  return pares;
 }
 
 /**

@@ -1192,6 +1192,20 @@ const filaOoxml = (textos) => '<w:tr>' + textos.map(
   (t) => `<w:tc><w:p><w:t>${t}</w:t></w:p></w:tc>`
 ).join('') + '</w:tr>';
 
+/* Un estudio con rango calculable, para los tests que prueban DÓNDE se sustituye la tabla y
+   no si hay datos: desde el 2026-08-24 una tabla sin una sola cifra se deja como está en la
+   plantilla (`datosDeTabla.js`), así que con un estudio vacío no habría sustitución que
+   comprobar. `cmode: 'all'` es lo que hace que el filtro de ámbito no descarte la muestra, y
+   las cifras del contribuyente son las que publica la columna de la horizontal. */
+const ESTUDIO_CON_RANGO = {
+  anio: 2025, ent: 'ACME', pli: 'MO', cmode: 'all',
+  t_s: 1000000, t_c: 800000, t_op: 100000,
+  comparables: [
+    { name: 'Alfa SA', s: 1000, c: 800, op: 100 }, { name: 'Beta SA', s: 2000, c: 1600, op: 260 },
+    { name: 'Gama SA', s: 3000, c: 2400, op: 300 }, { name: 'Delta SA', s: 4000, c: 3200, op: 520 },
+  ],
+};
+
 test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
   /* La plantilla trae el rango vertical dos veces: la «Tabla 18. Rango Intercuartil» de
      los resultados y la «Tabla 20. Tabla de rangos» de las conclusiones, esta última con
@@ -1203,7 +1217,10 @@ test('las DOS tablas de rango vertical se actualizan, no una u otra', () => {
     + '<w:tbl>' + filaOoxml(['Mínimo', 'x', 'vertical vieja']) + '</w:tbl>'
     + '<w:tbl>' + filaOoxml(['Tabla 20. Tabla de rangos', 'x', 'y'])
     + filaOoxml(['Mínimo', 'x', 'conclusiones vieja']) + '</w:tbl>';
-  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' });
+  /* Con comparables: lo que este test comprueba es la LOCALIZACIÓN de las dos verticales, y
+     desde el 2026-08-24 una tabla sin una sola cifra se deja como está en la plantilla
+     (`datosDeTabla.js`), así que un estudio vacío ya no la sustituiría. */
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_CON_RANGO);
   assert.ok(!salida.includes('horizontal vieja'), 'la Tabla 5 (horizontal) debe actualizarse');
   assert.ok(!salida.includes('vertical vieja'), 'la Tabla 18 debe actualizarse');
   assert.ok(!salida.includes('conclusiones vieja'), 'la Tabla 20 también');
@@ -1225,7 +1242,9 @@ test('con TRES ocurrencias de «Rango Intercuartil» —sin «Tabla de rangos»�
     + '<w:tbl>' + filaOoxml(['RANGO INTERCUARTIL', 'CUARTIL RANGE MO NO FIXED', 'CUARTIL RANGE MO FIXED'])
     + filaOoxml(['Mínimo', 'x', 'segunda vertical vieja']) + '</w:tbl>';
   const avisos = [];
-  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, ent: 'ACME', pli: 'MO' }, avisos);
+  /* Con comparables, por lo mismo que el test anterior: aquí se prueba que se localizan las
+     tres ocurrencias, no que se rellenen sin datos. */
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_CON_RANGO, avisos);
   assert.ok(!salida.includes('horizontal vieja'), 'la horizontal debe actualizarse');
   assert.ok(!salida.includes('primera vertical vieja'), 'la primera vertical debe actualizarse');
   assert.ok(!salida.includes('segunda vertical vieja'),
@@ -3909,4 +3928,160 @@ test('otras inversiones y total de pasivos se omiten cuando la ficha no los trae
   assert.ok(!texto.includes('Total de pasivos'), 'ni la de pasivos');
   assert.match(texto, /Efectivo promedio y equivalentes de efectivo500,00Promedio de cuentas por cobrar netas120,00/,
     'y las que quedan siguen contiguas y en orden');
+});
+
+/* ══════════════════ Sin datos se conserva la tabla de la plantilla ══════════════════ */
+
+/* La decisión del usuario del 2026-08-24, con el .docx de SHANDONG KERUI 2025 delante: sus
+   Tablas 2, 3, 4, 7 y 14 salieron en guiones («————») sobre unas que la plantilla traía
+   completas —«SERVICIOS TÉCNICOS (35) | SHANDONG RUICHENG… | CHINA | 6.719.644.000»—, y las
+   copias 18 a 21 de esas mismas tablas, que el generador no toca, seguían publicando los datos
+   buenos: el mismo dato vacío arriba y completo abajo, en el documento que se radica ante la
+   DIAN. El porqué del criterio está en `datosDeTabla.js`. */
+
+/** Una tabla de la plantilla con su rótulo y una fila de datos que no debería perderse. */
+const tablaConDatos = (rotulo, ...celdas) =>
+  `<w:p><w:t>${rotulo}</w:t></w:p><w:tbl>`
+  + filaOoxml(celdas.map(() => 'cabecera'))
+  + filaOoxml(celdas)
+  + '</w:tbl>';
+
+test('un estudio sin datos deja las tablas del contribuyente como las trae la plantilla', () => {
+  const xml = tablaConDatos('Tabla 2. Operación de egreso',
+    'SERVICIOS TÉCNICOS (35)', 'SHANDONG RUICHENG', 'CHINA', '6.719.644.000')
+    + tablaConDatos('Tabla 4. Operación analizar', 'Egreso (35)', 'Servicios Técnicos')
+    + tablaConDatos('Tabla 8. Método de Precios de Transferencia Aplicable',
+      '35', 'Servicios técnicos', 'TU', 'MO')
+    + tablaConDatos('Tabla 14. Compañías vinculadas al 31 de diciembre de 2024',
+      'SHANDONG RUICHENG', '91370502MACMFHA', 'CHINA')
+    + tablaConDatos('Tabla 15. Criterios de vinculación económica',
+      'SHANDONG RUICHENG', 'CHINA', 'Artículo 260-1', 'Vinculación Directa')
+    + tablaConDatos('Tabla 16. Activos a 31 de diciembre de 2024',
+      'Efectivo y equivalentes de efectivo', '10.570.918', '11,07%');
+
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025 }, avisos);
+
+  for (const dato of ['SERVICIOS TÉCNICOS (35)', 'SHANDONG RUICHENG', 'CHINA', '6.719.644.000',
+    'Servicios Técnicos', '91370502MACMFHA', '10.570.918', '11,07%']) {
+    assert.ok(salida.includes(dato), `se perdió «${dato}», que la plantilla ya publicaba`);
+  }
+  /* Y no queda ninguna rejilla de guiones donde antes había datos. */
+  assert.ok(!/<w:t>—<\/w:t>/.test(salida), 'no se emitió ninguna celda en guion');
+  for (const nombre of ['Operación analizar', 'Compañías vinculadas', 'Criterios de vinculación',
+    'Activos a 31 de diciembre', 'Método de Precios de Transferencia']) {
+    assert.ok(avisos.includes(nombre), `«${nombre}» tiene que quedar avisada`);
+  }
+});
+
+test('la ficha del vinculado sin datos no se sustituye por sus rótulos y guiones', () => {
+  /* Es el caso que el criterio del texto no atrapa: la primera columna son los rótulos que
+     pone el generador («Razón social», «Identificación fiscal»), así que la tabla generada
+     nunca queda del todo vacía aunque no traiga un solo dato. */
+  const xml = '<w:p><w:t>Tabla 7. Transacciones Inter compañía</w:t></w:p><w:tbl>'
+    + filaOoxml(['Compañía vinculada', ''])
+    + filaOoxml(['Razón social', 'RIO PETROLEO EQUIPAMENTOS E GESTAO LTDA'])
+    + filaOoxml(['Identificación fiscal', 'CEP 22.250-145'])
+    + '</w:tbl>';
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025 }, []);
+  assert.ok(salida.includes('RIO PETROLEO EQUIPAMENTOS E GESTAO LTDA'),
+    'la ficha de la plantilla se conserva entera');
+  assert.ok(salida.includes('CEP 22.250-145'));
+});
+
+test('con datos del estudio la tabla sí se sustituye: la regla no apaga el relleno', () => {
+  /* La otra mitad de la regla, y la que importa no romper: en cuanto el estudio trae el dato,
+     la tabla se rellena como siempre y el de la plantilla desaparece. */
+  const xml = tablaConDatos('Tabla 14. Compañías vinculadas al 31 de diciembre de 2024',
+    'SHANDONG RUICHENG', '91370502MACMFHA', 'CHINA');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, {
+    anio: 2025, vinc: 'ACME INC', vinc_id: '444444001', pais_vinc: 'ESTADOS UNIDOS',
+  }, avisos);
+  assert.ok(!salida.includes('SHANDONG RUICHENG'), 'el vinculado anterior no puede sobrevivir');
+  assert.ok(salida.includes('ACME INC') && salida.includes('ESTADOS UNIDOS'));
+  assert.ok(!avisos.includes('Compañías vinculadas'), 'y no se avisa de lo que sí se actualizó');
+});
+
+test('la muestra de comparables vacía no deja la tabla en su encabezado', () => {
+  /* Así salió la Tabla 32 del informe de SHANDONG: 60 comparables en la plantilla y solo la
+     franja gris del encabezado en el informe generado. */
+  const xml = tablaConDatos('Tabla 32. Muestra Compañías comparables',
+    '1', 'BAKER HUGHES COMPANY', 'INTERNACIONAL');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025 }, avisos);
+  assert.ok(salida.includes('BAKER HUGHES COMPANY'), 'la muestra de la plantilla se conserva');
+  assert.ok(avisos.includes('Muestra Compañías comparables'));
+});
+
+test('sin embudo, las razones de rechazo de la plantilla se conservan', () => {
+  const xml = tablaConDatos('Tabla 31. Razones de rechazo (Filtros Cuantitativos)',
+    'Diferencias funcionales', 'A', '120');
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025 }, []);
+  assert.ok(salida.includes('Diferencias funcionales'), 'el embudo de la plantilla se conserva');
+  assert.ok(!salida.includes('TOTAL, UNIVERSO'),
+    'y no se emite una tabla cuyo único contenido sería el total');
+});
+
+test('sin cifras de rango, las tablas de percentiles no se vacían', () => {
+  const xml = '<w:p><w:t>Tabla 21. Rango Intercuartil</w:t></w:p><w:tbl>'
+    + filaOoxml(['RANGO INTERCUARTIL', 'NO AJUSTADO', 'AJUSTADO'])
+    + filaOoxml(['Percentil 25', '3,45%', '3,80%'])
+    + '</w:tbl>';
+  const salida = actualizarTablasOperacionesOoxml(xml, { anio: 2025, pli: 'MO' }, []);
+  assert.ok(salida.includes('3,45%') && salida.includes('3,80%'),
+    'los percentiles de la plantilla se conservan cuando el motor no calculó ninguno');
+});
+
+/* ══════════════════ Campos marcados sin dato: se conserva la plantilla ══════════════════ */
+
+/* La otra mitad del arreglo del 2026-08-24. `datosDeTabla.js` cubre las tablas que este módulo
+   REESCRIBE; esto cubre las que la plantilla trae con una marca dentro de la celda, que es lo
+   que dejó las Tablas 2, 3, 5, 6 y 7 del informe de SHANDONG KERUI 2025 en guiones: ahí no
+   interviene ningún generador, sino `nullGetter`. */
+
+test('un campo marcado sin dato conserva el texto del .docx sin marcar', async () => {
+  const original = await plantilla([
+    parrafo('El vinculado es SHANDONG RUICHENG PETROLEUM EQUIPMENT CO.,LTD.'),
+    parrafo('La sociedad ACME COLOMBIA S.A.S declara.'),
+  ]);
+  const marcado = await plantilla([
+    parrafo('El vinculado es {vinc}.'),
+    parrafo('La sociedad {ent} declara.'),
+  ]);
+
+  /* El estudio trae `ent` pero NO `vinc`: uno se rellena y el otro se conserva. */
+  const { zip, camposVacios, camposConservados } = renderizarDocx(
+    marcado, { ent: 'KERUI COLOMBIA S.A.S', anio: 2025 }, { binarioOriginal: original });
+  const texto = textoDe(zip, 'word/document.xml');
+
+  assert.ok(texto.includes('SHANDONG RUICHENG PETROLEUM EQUIPMENT CO.,LTD'),
+    'el vinculado de la plantilla se conserva en vez de salir «—»');
+  assert.ok(texto.includes('KERUI COLOMBIA S.A.S'), 'y el campo con dato sí se rellena');
+  assert.ok(!texto.includes('ACME COLOMBIA S.A.S'), 'sin dejar el contribuyente anterior');
+  assert.ok(!texto.includes('—'), 'no queda ningún guion de campo vacío');
+  assert.deepStrictEqual(camposConservados, ['vinc']);
+  assert.ok(!camposVacios.includes('vinc'),
+    'un campo conservado ya no se reporta como que sale sin dato');
+});
+
+test('sin el .docx sin marcar, el campo vacío sigue saliendo como «—»', async () => {
+  /* Una plantilla marcada antes de que esto existiera, cuyo original ya no esté guardado:
+     el relleno se comporta como siempre y el aviso lo dice. */
+  const marcado = await plantilla([parrafo('El vinculado es {vinc}.')]);
+  const { zip, camposVacios, camposConservados } = renderizarDocx(marcado, { anio: 2025 });
+  assert.match(textoDe(zip, 'word/document.xml'), /El vinculado es —\./);
+  assert.deepStrictEqual(camposConservados, []);
+  assert.ok(camposVacios.includes('vinc'));
+});
+
+test('rellenarDocx propaga el .docx sin marcar hasta la restauración', async () => {
+  const original = await plantilla([parrafo('País del vinculado: CHINA.')]);
+  const marcado = await plantilla([parrafo('País del vinculado: {pais_vinc}.')]);
+  const { camposConservados } = rellenarDocx({
+    binario: marcado, estudio: { anio: 2025 }, binarioOriginal: original,
+    tipoSalida: 'nodebuffer',
+  });
+  assert.deepStrictEqual(camposConservados, ['pais_vinc'],
+    'el parámetro tiene que llegar desde la firma pública, no solo desde renderizarDocx');
 });

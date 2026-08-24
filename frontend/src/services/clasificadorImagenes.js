@@ -7,6 +7,16 @@
    gráfico suelto al 20,9 %. 0,35 cae en mitad de ese hueco. */
 export const UMBRAL_DOMINANTE = 0.35;
 
+/* Umbral con el que entra una página INTERIOR de un anexo ya detectado. Una hoja escaneada
+   puede acabarse a media página —la última de un estado financiero— y quedarse por debajo de
+   UMBRAL_DOMINANTE: en el informe de ATEB 2024 la página 54 se dibuja al 31,1 % entre
+   veintisiete páginas al 52 %. Quedarse fuera del anexo no la deja en blanco, la deja COPIADA:
+   el informe de 2025 se radicaba con una hoja firmada de 2024 dentro, que es justo lo que el
+   hueco existe para evitar. 0,25 cae entre ese 31,1 % y el gráfico suelto más grande del
+   cuerpo (20,9 %), y sólo se aplica encerrado entre páginas de anexo, así que fuera de un
+   anexo un gráfico grande sigue siendo un gráfico. */
+export const UMBRAL_INTERIOR = 0.25;
+
 /* Páginas consecutivas con imagen dominante que hacen falta para considerarlo
    un anexo y no una ilustración suelta. */
 export const MIN_PAGINAS_ANEXO = 3;
@@ -49,6 +59,23 @@ export function detectarPaginasDeAnexo(dibujos) {
     else { cerrarRacha(); racha = [p]; }
   }
   cerrarRacha();
+
+  /* Los huecos que quedan DENTRO del anexo. Se hace al final y sobre el conjunto ya formado
+     porque la condición es estar encerrado: el hueco se llena sólo si el anexo continúa al
+     otro lado y todas sus páginas llegan al umbral interior. Así una hoja a media página no
+     rompe el anexo, y las páginas de texto que separan un anexo del siguiente —el título del
+     que viene, su índice— siguen fuera. */
+  const paginas = [...anexo].sort((a, b) => a - b);
+  for (let i = 0; i + 1 < paginas.length; i += 1) {
+    const desde = paginas[i];
+    const hasta = paginas[i + 1];
+    if (hasta - desde <= 1) continue;
+    const hueco = [];
+    for (let p = desde + 1; p < hasta; p += 1) hueco.push(p);
+    if (hueco.every((p) => (dominanteDe.get(p) || 0) >= UMBRAL_INTERIOR)) {
+      for (const p of hueco) anexo.add(p);
+    }
+  }
 
   return anexo;
 }

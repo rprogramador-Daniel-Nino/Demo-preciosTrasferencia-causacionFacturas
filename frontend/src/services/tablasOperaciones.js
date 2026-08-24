@@ -10,10 +10,16 @@
    Ninguna celda tiene valor por defecto. Lo que el estudio no traiga sale como «—»: la
    plantilla es el informe del año anterior, así que un hueco silencioso no queda vacío,
    queda con el dato del cliente anterior.
+
+   Eso vale celda a celda, pero NO cuando la tabla entera se queda sin datos: ahí cada
+   función declara `sinDatos` y quien la publica conserva la tabla de la plantilla en vez
+   de sustituirla por una rejilla de guiones. El por qué, con el caso que lo motivó, está
+   en `datosDeTabla.js`.
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { fmt, num, getUvtValue } from '../utils/calculations.js';
 import { codigoDeTipoOperacion } from './tiposOperacionDian.js';
+import { sinNingunDato } from './datosDeTabla.js';
 
 const FUENTE = 'Información suministrada por la Administración de la Compañía.';
 const SIN_DATO = '—';
@@ -78,6 +84,9 @@ export function filasOperacionesDeIngreso(estudio) {
     ],
     filas: [[wrap(e.vinc_tipo), wrap(e.vinc), wrap(e.pais_vinc), montoDeLaOperacion(e)]],
     fuente: FUENTE,
+    /* Los cuatro campos que publica, en crudo: sin ninguno de ellos la única fila sale
+       «— — — —» y quien la emite conserva la de la plantilla. */
+    sinDatos: sinNingunDato([e.vinc_tipo, e.vinc, e.pais_vinc, e.monto_operacion ?? e.monto]),
   };
 }
 
@@ -95,6 +104,10 @@ export function filasOperacionAnalizar(estudio) {
     encabezados: ['No. Operaciones de análisis', 'Descripción'],
     filas: [[tipo + ' (' + (cod || SIN_DATO) + ')', wrap(desc)]],
     fuente: FUENTE,
+    /* «Ingreso»/«Egreso» lo pone esta función, así que la celda nunca queda del todo en
+       blanco y el criterio del texto la daría por llena: los datos son el código y la
+       descripción, y sin los dos no hay tabla que publicar. */
+    sinDatos: sinNingunDato([cod, desc]),
   };
 }
 
@@ -122,6 +135,12 @@ export function filasTransaccionesIntercompania(estudio) {
       ['Monto en pesos', montoDeLaOperacion(e)],
     ],
     fuente: 'Información de ' + (e.ent || 'la Compañía') + '.',
+    /* Ficha vertical: la primera columna son los rótulos que pone esta función y el
+       inciso de vinculación tiene valor por defecto, así que ninguno de los dos cuenta
+       como dato. Lo que decide son los campos del vinculado. */
+    sinDatos: sinNingunDato([
+      e.vinc, e.vinc_id, e.pais_vinc, e.vinc_tipo, e.monto_operacion ?? e.monto,
+    ]),
   };
 }
 
@@ -290,6 +309,10 @@ export function filasMetodoAplicable(estudio) {
     ],
     filas: [[wrap(cod), wrap(desc), e.metodo || 'TU', e.pli || 'MO']],
     fuente: FUENTE,
+    /* El método y el indicador tienen valor por defecto («TU»/«MO»), así que solos no
+       alcanzan: con el código y la descripción vacíos la tabla publicaría el método del
+       sistema junto a dos guiones, tapando el que la plantilla ya declaraba. */
+    sinDatos: sinNingunDato([cod, desc, e.metodo, e.pli]),
   };
 }
 
@@ -312,6 +335,7 @@ export function filasCompaniasVinculadas(estudio) {
     encabezados: ['Nombre Vinculada', 'No. ID Fiscal', 'País'],
     filas: [[wrap(e.vinc), wrap(e.vinc_id), wrap(e.pais_vinc)]],
     fuente: FUENTE,
+    sinDatos: sinNingunDato([e.vinc, e.vinc_id, e.pais_vinc]),
   };
 }
 
@@ -337,5 +361,8 @@ export function filasCriteriosVinculacion(estudio) {
       'Artículo. 260-1 del Estatuto Tributario, numeral 1, literal a', 'Vinculación Directa',
     ]],
     fuente: FUENTE,
+    /* Las dos últimas columnas son la norma que esta función escribe, no un dato: sin el
+       nombre y el país del vinculado la fila sería la cita legal sobre dos guiones. */
+    sinDatos: sinNingunDato([e.vinc, e.pais_vinc]),
   };
 }

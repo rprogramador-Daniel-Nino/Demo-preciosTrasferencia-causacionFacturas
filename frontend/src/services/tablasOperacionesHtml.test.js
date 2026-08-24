@@ -136,11 +136,20 @@ test('el número del rótulo desempata entre dos tablas homónimas', () => {
   assert.match(sinEtiquetas(salida), /VENTA SERVICIOS/);
 });
 
-test('un estudio sin datos deja huecos visibles y no los datos de la plantilla', () => {
-  const texto = sinEtiquetas(actualizarTablasOperacionesHtml(INFORME, {}));
-  assert.ok(!texto.includes('END GAME INTERACTIVE INC'), 'sobrevivió el vinculado anterior');
-  assert.ok(!texto.includes('3.435.357.400'), 'sobrevivió el monto anterior');
-  assert.match(texto, /—/);
+test('un estudio sin datos conserva la tabla de la plantilla y lo avisa', () => {
+  /* Al revés de como se decidió al principio —«un hueco silencioso no queda vacío, queda con
+     el dato del cliente anterior», por lo que la tabla se emitía en guiones—. El usuario lo
+     cambió el 2026-08-24 con el .docx de SHANDONG KERUI 2025 delante: las Tablas 2, 3, 4, 7 y
+     14 habían salido en guiones («————») sobre unas que la plantilla traía completas, mientras
+     las copias 18 a 21 de esas mismas tablas seguían publicando los datos buenos. Una rejilla
+     de guiones no avisa de nada por sí sola y deja el informe peor que la plantilla de la que
+     salió; el aviso del panel sí avisa, y es el que ahora lleva la señal. */
+  const avisos = [];
+  const texto = sinEtiquetas(actualizarTablasOperacionesHtml(INFORME, {}, avisos));
+  assert.ok(texto.includes('END GAME INTERACTIVE INC'),
+    'sin datos del estudio, el vinculado de la plantilla se conserva');
+  assert.ok(texto.includes('3.435.357.400'), 'y su monto también');
+  assert.ok(avisos.length > 0, 'y la conservación se avisa, que es lo que se revisa al radicar');
 });
 
 /* ── Las cuatro tablas restantes del vinculado y del contribuyente ── */

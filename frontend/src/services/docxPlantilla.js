@@ -436,3 +436,188 @@ export function camposMarcados(xml, delimitadores = {}) {
   while ((m = rx.exec(texto)) !== null) vistos.add(m[1]);
   return [...vistos];
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   RESTAURAR LO QUE LA PLANTILLA YA PUBLICABA.
+
+   El marcado sustituye el texto del cliente anterior por `{campo}`, y al rellenar, un
+   campo que el estudio no trae sale como «—» (`nullGetter`, en `docxRelleno.js`). Sobre
+   el informe de SHANDONG KERUI 2025 eso dejó las Tablas 2, 3, 5, 6 y 7 con todas sus
+   celdas en guiones —concepto, vinculado, país y monto— donde la plantilla traía
+   «SERVICIOS TÉCNICOS (35) | SHANDONG RUICHENG… | CHINA | 6.719.644.000». Es el mismo
+   defecto que `datosDeTabla.js` cerró para las tablas que el generador reescribe, pero
+   por el otro camino: aquí no interviene ningún generador de tablas, sino la marca que
+   vive dentro de la celda.
+
+   El texto original NO se perdió: `plantillaStore.js` guarda el .docx sin marcar
+   (`docx:<id>`) al lado del marcado (`docx-marcado:<id>`), justamente para poder volver a
+   marcar sin pedir el archivo otra vez. Así que se recupera sin gastar una llamada a la
+   IA y sin volver a marcar nada.
+
+   POR POSICIÓN Y NO POR CAMPO. Un mismo campo aparece en varias celdas con valores
+   distintos —en la plantilla de Shandong la Tabla 3 lista tres vinculados diferentes en
+   tres filas, todas con `{vinc}`—, así que un respaldo por nombre de campo escribiría el
+   primer vinculado en las tres filas: falsearía el informe, que es peor que el guion.
+   Aquí cada ocurrencia recupera SU texto, emparejando párrafo con párrafo.
+
+   El emparejamiento es por índice porque el marcado no crea ni reordena párrafos: solo
+   reescribe el texto de los que ya están (`sustituirRangosEnParrafo`), y `escribirEnCelda`
+   convierte un `<w:p/>` vacío en `<w:p>…</w:p>`, que sigue siendo un párrafo. Si los dos
+   documentos no traen el mismo número de párrafos no se adivina: no se restaura nada, se
+   dice qué campos quedaron sin respaldo y el relleno sigue como antes.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/** Escapa lo que un delimitador pueda tener de metacarácter. */
+const escRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Los tramos de un texto marcado: lo fijo y las marcas, en orden. */
+function tramosDeMarcado(texto, rx) {
+  const tramos = [];
+  let ultimo = 0;
+  let m;
+  rx.lastIndex = 0;
+  while ((m = rx.exec(texto)) !== null) {
+    tramos.push({ tipo: 'fijo', texto: texto.slice(ultimo, m.index) });
+    tramos.push({ tipo: 'campo', campo: m[1].trim(), pos: m.index, largo: m[0].length });
+    ultimo = m.index + m[0].length;
+  }
+  if (!tramos.length) return [];
+  tramos.push({ tipo: 'fijo', texto: texto.slice(ultimo) });
+  return tramos;
+}
+
+/**
+ * Qué decía el original en el sitio de cada marca de un párrafo.
+ *
+ * Se consumen los tramos FIJOS sobre el texto original —tienen que aparecer en orden— y
+ * lo que queda entre dos de ellos es el valor que la marca sustituyó. Ante cualquier duda
+ * se devuelve `null` y el párrafo se queda como está: dos marcas seguidas sin texto entre
+ * ellas no dicen dónde acaba una y empieza la otra, y un tramo fijo que no aparece en el
+ * original significa que estos dos párrafos no son el mismo.
+ *
+ * @returns {Array<{campo:string, pos:number, largo:number, valor:string}>|null}
+ */
+export function valoresQueSustituyoElMarcado(textoMarcado, textoOriginal, rx) {
+  const tramos = tramosDeMarcado(String(textoMarcado || ''), rx);
+  if (!tramos.length) return null;
+
+  /* Los extremos se recortan por los extremos, y no buscando el tramo fijo de izquierda a
+     derecha: con «El vinculado es {vinc}.» el tramo de cierre es «.», y su primera aparición
+     cae dentro del propio valor —«SHANDONG RUICHENG PETROLEUM EQUIPMENT CO.,LTD»—, así que
+     buscarla truncaba el nombre en «…EQUIPMENT CO.» y perdía «,LTD». Exigirlos al principio
+     y al final es además lo que confirma que estos dos párrafos son el mismo. */
+  let original = String(textoOriginal || '');
+  const prefijo = tramos[0].texto;
+  const sufijo = tramos[tramos.length - 1].texto;
+  if (prefijo) {
+    if (!original.startsWith(prefijo)) return null;
+    original = original.slice(prefijo.length);
+  }
+  if (sufijo) {
+    if (!original.endsWith(sufijo)) return null;
+    original = original.slice(0, original.length - sufijo.length);
+  }
+
+  const salida = [];
+  let cursor = 0;
+  /* Los tramos alternan fijo/campo empezando y acabando en fijo, así que los campos están
+     en las posiciones impares y el fijo que cierra cada uno, en la siguiente. */
+  for (let i = 1; i < tramos.length; i += 2) {
+    const t = tramos[i];
+    const cierre = tramos[i + 1];
+    const esElUltimo = i + 1 === tramos.length - 1;
+    let valor;
+    if (esElUltimo) {
+      /* Lo que quede: el sufijo ya se recortó por la derecha. */
+      valor = original.slice(cursor);
+      cursor = original.length;
+    } else if (!cierre.texto) {
+      /* Dos marcas pegadas, «{vinc}{pais_vinc}»: no hay forma de saber dónde acaba el valor
+         de una y empieza el de la otra. No se restaura el párrafo. */
+      return null;
+    } else {
+      const k = original.indexOf(cierre.texto, cursor);
+      if (k < 0) return null;
+      valor = original.slice(cursor, k);
+      cursor = k + cierre.texto.length;
+    }
+    salida.push({ campo: t.campo, pos: t.pos, largo: t.largo, valor });
+  }
+  return salida;
+}
+
+/**
+ * Devuelve a su texto original las marcas cuyos campos el estudio no trae.
+ *
+ * Lo que el estudio SÍ trae se queda como marca, para que el relleno lo sustituya como
+ * siempre: esto no reemplaza al relleno, solo evita que un campo vacío borre lo que la
+ * plantilla publicaba.
+ *
+ * @param {string} xmlMarcado    `word/document.xml` de la plantilla marcada.
+ * @param {string} xmlOriginal   el mismo archivo del .docx SIN marcar.
+ * @param {{sinDato:(campo:string)=>boolean, abrir?:string, cerrar?:string,
+ *          excluir?:string[]}} opciones
+ *        `sinDato`: si ese campo carece de valor en el estudio.
+ *        `excluir`: campos que no se tocan — los de las colecciones que se repiten en un
+ *        bucle (`nombre`, `ambito`, `letra`…), que no los resuelve el estudio sino la
+ *        fila en curso.
+ * @returns {{xml:string, restaurados:Array<{campo:string, valor:string}>,
+ *           sinRespaldo:string[]}}
+ */
+export function restaurarCamposSinDato(xmlMarcado, xmlOriginal, opciones = {}) {
+  const xml = String(xmlMarcado || '');
+  const sinDato = opciones.sinDato || (() => false);
+  const excluidos = new Set(opciones.excluir || []);
+  const abrir = opciones.abrir || '{';
+  const cerrar = opciones.cerrar || '}';
+  /* Sin `#`, `/` ni `^`: las marcas de bucle y de condición no son campos. */
+  const rx = new RegExp(
+    escRx(abrir) + '([^' + escRx(cerrar) + '\\s#/^]+)' + escRx(cerrar), 'g');
+
+  const restaurados = [];
+  const sinRespaldo = new Set();
+  const anotarSinRespaldo = (texto) => {
+    rx.lastIndex = 0;
+    let m;
+    while ((m = rx.exec(texto)) !== null) {
+      const campo = m[1].trim();
+      if (!excluidos.has(campo) && sinDato(campo)) sinRespaldo.add(campo);
+    }
+  };
+
+  if (!xmlOriginal) return { xml, restaurados, sinRespaldo: [] };
+
+  const marc = textoPorParrafo(xml);
+  const orig = textoPorParrafo(xmlOriginal);
+  if (marc.length !== orig.length) {
+    marc.forEach((p) => anotarSinRespaldo(p.texto));
+    return { xml, restaurados, sinRespaldo: [...sinRespaldo] };
+  }
+
+  /* De atrás hacia adelante: reescribir un párrafo cambia el largo del XML y movería los
+     offsets de los que van después. */
+  let salida = xml;
+  for (let i = marc.length - 1; i >= 0; i -= 1) {
+    const p = marc[i];
+    rx.lastIndex = 0;
+    if (!rx.test(p.texto)) continue;
+
+    const encontrados = valoresQueSustituyoElMarcado(p.texto, orig[i].texto, rx);
+    if (!encontrados) {
+      anotarSinRespaldo(p.texto);
+      continue;
+    }
+    const aRestaurar = encontrados.filter(
+      (v) => !excluidos.has(v.campo) && sinDato(v.campo) && String(v.valor).trim() !== ''
+    );
+    if (!aRestaurar.length) continue;
+
+    const bloque = salida.slice(p.inicio, p.fin);
+    const nuevo = sustituirRangosEnParrafo(
+      bloque, aRestaurar.map((v) => ({ pos: v.pos, largo: v.largo, texto: v.valor })));
+    salida = salida.slice(0, p.inicio) + nuevo + salida.slice(p.fin);
+    aRestaurar.forEach((v) => restaurados.push({ campo: v.campo, valor: v.valor }));
+  }
+
+  return { xml: salida, restaurados, sinRespaldo: [...sinRespaldo] };
+}

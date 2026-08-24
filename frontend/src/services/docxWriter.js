@@ -27,6 +27,10 @@ import {
 import { zonaQueAbre, cierraSeccionMacro } from './plantillaMarcador.js';
 import { estiloBaseDe } from './pdfReferenceExtractor.js';
 import { htmlAArbol, textoDe } from './htmlAArbol.js';
+/* Qué anexo del informe es el de los estados financieros, buscándolo por su NOMBRE: la letra
+   es de cada plantilla. Es el mismo localizador que usa la ruta de la plantilla marcada para
+   reescribir los anexos, y por el mismo motivo. */
+import { localizarAnexo } from './anexoBHtml.js';
 import {
   FORMULAS, PREFIJOS_PLANOS_FORMULA, esFormulaCorrupta, tipoDeAjusteDe,
 } from './formulasOmml.js';
@@ -401,7 +405,7 @@ export const docxDeFormula = (arbol) => new Paragraph({
    nada que derivar del cuerpo aquí — el tamaño del documento sigue saliendo de `base` y lo
    aplica `estilosPorDefecto`, no este traductor. */
 function traductor({
-  porId, anexo = [], cabeceras = [],
+  porId, anexo = [], cabeceras = [], huecosDelAnexo = null,
   notas = new Map(), numeroDeNodo = new Map(), llamadaDeNodo = new Map(),
 }) {
   /* Qué notas tienen llamada en el texto y por tanto pueden salir al pie. Una que no la tenga se
@@ -760,10 +764,43 @@ function traductor({
      que un hueco evidente. */
   let siguienteAnexo = 0;
 
+  /* Una página del anexo, del tamaño de la caja de texto. `null` si el dato no sirve. */
+  const paginaDeAnexo = (dataUrl) => {
+    const datos = bytesDeDataUrl(dataUrl);
+    if (!datos) return null;
+    const anchoPx = Math.round(CAJA_TEXTO * 96 / 1440);
+    return new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new ImageRun({
+        type: datos.tipo, data: datos.bytes,
+        transformation: { width: anchoPx, height: Math.round(anchoPx * 11 / 8.5) },
+      })],
+    });
+  };
+
   const bloqueDeHueco = (nodo) => {
+    const id = (nodo.atributos && nodo.atributos['data-id']) || '';
+    /* Un hueco de OTRO anexo escaneado no se sirve de esta cola. El informe de ATEB lleva el
+       contrato de distribución en el anexo siguiente al de los estados financieros, y sus diez
+       páginas también dejaron hueco: con una sola cola para todo el documento las páginas de
+       los estados financieros se derramaban ahí —la de las FIRMAS salía dentro del contrato— y
+       el anexo firmado se radicaba cortado a mitad de las notas. El hueco ajeno se queda con su
+       aviso, que es lo que corresponde: ahí falta algo. */
+    if (huecosDelAnexo && !huecosDelAnexo.includes(id)) return bloquesDe(nodo);
     const pagina = anexo[siguienteAnexo];
     if (!pagina) return bloquesDe(nodo);
     siguienteAnexo += 1;
+    /* El ÚLTIMO hueco del anexo se lleva además las páginas que no caben en ninguno: los
+       estados financieros de este año no tienen por qué traer las mismas páginas que los del
+       informe de referencia. Perderlas —son parte de un documento firmado que se radica ante la
+       DIAN— o empujarlas al anexo siguiente son las dos formas de equivocarse; van al final del
+       anexo al que pertenecen. */
+    if (huecosDelAnexo && huecosDelAnexo[huecosDelAnexo.length - 1] === id) {
+      const paginas = [pagina];
+      while (anexo[siguienteAnexo]) { paginas.push(anexo[siguienteAnexo]); siguienteAnexo += 1; }
+      const bloques = paginas.map(paginaDeAnexo).filter(Boolean);
+      return bloques.length ? bloques : bloquesDe(nodo);
+    }
     const datos = bytesDeDataUrl(pagina);
     if (!datos) return bloquesDe(nodo);
     /* La página del anexo ocupa la caja de texto entera: la misma `CAJA_TEXTO` que usan las
@@ -930,6 +967,10 @@ function traductor({
   return { runsDe, parrafoDe, bloquesDe, tablaDe, runDeImagen, notasDeWord };
 }
 
+/* Un hueco de anexo con su identificador, para saber a qué anexo pertenece cada uno. El
+   `[^>]*` deja pasar cualquier otro atributo que el extractor añada por el medio. */
+const RX_HUECO_CON_ID = /data-hueco="anexo_eeff"[^>]*data-id="([^"]+)"/g;
+
 /* Las páginas del original, agrupadas en tandas de la misma orientación. Cada tanda es una
    sección de Word, porque la orientación es una propiedad de la sección. Dentro de una tanda,
    un salto de página duro entre página y página: es lo que hace que la página N empiece donde
@@ -972,11 +1013,30 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
   const cuerpo = enc ? html.replace(enc.bloque, '') : html;
   const arbol = htmlAArbol(cuerpo);
   const porId = new Map((recursos || []).map((r) => [r.id, r.dataUrl]));
+  /* Cuáles de los huecos son del anexo de estados financieros, que es de donde son las páginas
+     que sube el analista. Un informe puede traer más de un anexo escaneado —el de ATEB lleva
+     detrás el contrato de distribución, con sus propios diez huecos— y sin esta frontera las
+     páginas se derramaban de uno al otro. El anexo se busca por su NOMBRE, con la misma tabla
+     que usan las demás cirugías del informe.
+
+     Si la plantilla no trae un anexo reconocible por nombre queda `null` y los huecos se
+     reparten entre todos, como se hacía siempre: repartir de más se ve y se corrige; dejar el
+     anexo firmado sin sus páginas, no. */
+  const zonaEeff = localizarAnexo(cuerpo, 'eeff');
+  const huecosDelAnexo = zonaEeff
+    ? [...cuerpo.matchAll(RX_HUECO_CON_ID)]
+      .filter((m) => m.index >= zonaEeff.inicio && m.index < zonaEeff.fin)
+      .map((m) => m[1])
+    : null;
+
   /* Si suben más páginas de anexo que huecos hay, las que sobran no se pierden en silencio:
-     perder páginas de un anexo firmado sería grave. Se avisa por consola y se quedan sin usar,
-     en el orden en que llegaron. */
-  const totalHuecos = (cuerpo.match(/data-hueco="anexo_eeff"/g) || []).length;
-  if ((anexo || []).length > totalHuecos) {
+     perder páginas de un anexo firmado sería grave. Sólo se avisa cuando de verdad quedan
+     fuera —sin anexo localizado—; con el anexo localizado, las que no caben se añaden al final
+     de su anexo y no hay nada que avisar. */
+  const totalHuecos = huecosDelAnexo
+    ? huecosDelAnexo.length
+    : (cuerpo.match(/data-hueco="anexo_eeff"/g) || []).length;
+  if (!huecosDelAnexo && (anexo || []).length > totalHuecos) {
     console.warn('[docxWriter] el anexo trae ' + anexo.length + ' página(s) para sólo ' +
       totalHuecos + ' hueco(s) en el informe: sobran ' + (anexo.length - totalHuecos) +
       ' página(s) que no se usan.');
@@ -992,7 +1052,7 @@ export function construirDocumento({ html = '', recursos = [], anexo = [] } = {}
   /* El cuerpo base se pasa al traductor porque de él sale el tamaño reducido de las tablas:
      el mismo 0,9 que la vista previa aplica por CSS. */
   const { bloquesDe, runsDe, notasDeWord } = traductor({
-    porId, anexo, cabeceras,
+    porId, anexo, cabeceras, huecosDelAnexo,
     notas, numeroDeNodo, llamadaDeNodo,
   });
 

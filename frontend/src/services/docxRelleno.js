@@ -29,6 +29,7 @@
 
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
+import { tablaSinDatos } from './datosDeTabla.js';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
 import { compactarEspaciosOoxml } from './compactarEspaciosOoxml.js';
 import { actualizarAnioPeriodo } from './anioPeriodoOoxml.js';
@@ -44,6 +45,7 @@ import { RUBROS_RESULTADOS, RUBROS_BALANCE, cifraDeRubro, rubrosConDato } from '
    decisión propia (izquierda y centro) y por eso la declaran ellos mismos. */
 const PPR_PROSA = '<w:pPr><w:jc w:val="both"/></w:pPr>';
 import { valorDeCampo } from './plantillaVocabulario.js';
+import { restaurarCamposSinDato } from './docxPlantilla.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
 import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
@@ -956,7 +958,13 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
      tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso pasan por
      el mismo localizador, que compara sobre el texto ya reconstruido. */
   tablasMacroInforme(datosMacro, year).forEach((t) => {
-    doc.reemplazar(t.nombre, () => generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente));
+    /* Igual que las del contribuyente: una tabla sin filas no se publica, se conserva la
+       de la plantilla y el aviso lo dice. Las series que faltan sí se publican, porque su
+       celda lleva el marcador de pendiente con el año y el concepto —ahí hay algo que
+       leer y que corregir—, y eso no es lo mismo que una tabla sin nada. */
+    doc.reemplazar(t.nombre, () => (tablaSinDatos(t)
+      ? null
+      : generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente)));
   });
 
   return doc.xml;
@@ -1853,6 +1861,19 @@ function sustituidorDeTablas(xmlInicial, avisos) {
          que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
       const nuevo = generar(bloque, out.slice(bloque.inicio, bloque.fin));
 
+      /* Sin datos no se sustituye: la tabla de la plantilla se queda como está y el aviso
+         lo dice —«Esto no se actualizó con los datos del estudio … revísalo antes de
+         radicar»—. El generador lo pide devolviendo `null`, que es la única forma de
+         distinguir «no hay nada que publicar» de «esto es lo que hay que publicar»;
+         emitir la tabla igual la dejaba en una rejilla de guiones (ver `datosDeTabla.js`).
+         Es la decisión del usuario del 2026-08-24, con el .docx de SHANDONG KERUI 2025. */
+      if (nuevo === null || nuevo === undefined || nuevo === '') {
+        if (Array.isArray(avisos)) {
+          avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+        }
+        return false;
+      }
+
       /* La línea «FUENTE: …» de la plantilla vive DETRÁS del cierre de la tabla, fuera del
          bloque. `generarTablaOoxml` emite la suya, así que dejar la vieja publicaba las dos
          —y la vieja nombra al contribuyente del informe de referencia, debajo de la tabla y
@@ -2046,9 +2067,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   /* `titulo` cuando lo trae y `nombre` si no: hay tablas cuyo rótulo es más largo que el
      nombre con el que se localizan —«Método de Precios de Transferencia Aplicable» frente a
      «Método de Precios de Transferencia»— o que llevan el año gravable dentro. */
-  const emitir = (b, t) => generarTablaOoxml(
+  /* `null` cuando la tabla no aporta ningún dato del estudio: el sustituidor lo lee como
+     «deja la de la plantilla y avisa». Vale para las nueve tablas que pasan por aquí y
+     para las que se agreguen, sin repetir la comprobación en cada una. */
+  const emitir = (b, t) => (tablaSinDatos(t) ? null : generarTablaOoxml(
     tituloDe(b, t.titulo || t.nombre), t.encabezados, t.filas, t.fuente
-  );
+  ));
 
   // 1. Operaciones de Ingreso/Egreso
   reemplazar(
@@ -2070,9 +2094,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      por ocurrencia, sin depender de esos números. */
   {
     const t3 = filasTransaccionesIntercompania(estudio);
-    const tablaTx = (b) => generarTablaOoxml(
+    const tablaTx = (b) => (tablaSinDatos(t3) ? null : generarTablaOoxml(
       tituloDe(b, t3.nombre), t3.encabezados, t3.filas, escaparXml(t3.fuente)
-    );
+    ));
     /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
        segunda, y el localizador trabaja sobre posiciones del XML. */
     /* `excluir`: hay plantillas que rotulan la tabla de la sección 4 como «Operación adicional
@@ -2191,7 +2215,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   // 10. Razones de rechazo
   reemplazar('Razones de rechazo', (b) => {
     const { filas: razonesFilas } = filasRazonesRechazo(estudio.embudoSeleccion);
-    const filas16 = (razonesFilas || []).map((f) => [
+    /* Sin embudo no hay filtros que declarar, y la tabla saldría con su única fila
+       «TOTAL, UNIVERSO — » encima del embudo que la plantilla ya publicaba: se conserva
+       aquélla y se avisa. El total no cuenta como dato porque lo pone esta función. */
+    if (!razonesFilas || !razonesFilas.length) return null;
+    const filas16 = razonesFilas.map((f) => [
       f.etiqueta,
       f.letra,
       String(f.cuantas)
@@ -2305,6 +2333,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     const filas17 = filasMuestraComparables(estudio).map((f) => [
       String(f.numero), f.nombre, f.ambito,
     ]);
+    /* Sin muestra la tabla se quedaba en su encabezado gris y nada más —así salió la Tabla
+       32 del informe de SHANDONG 2024, que en la plantilla traía sesenta comparables—. */
+    if (!filas17.length) return null;
     /* Todo en mayúscula menos el rótulo: en la ruta de PDF el rótulo vive FUERA de la tabla y
        no se sube, así que subirlo aquí separaría las dos salidas. La línea de fuente sí, porque
        allá va dentro de la tabla y sube con ella. */
@@ -2350,6 +2381,21 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     }
 
     if (!sinSolape.length) {
+      if (Array.isArray(avisos)) avisos.push('Rango Intercuartil');
+      return xmlActual;
+    }
+
+    /* Sin una sola cifra —ni percentiles ni indicador del contribuyente— las dos formas de
+       la tabla saldrían en guiones sobre el rango que la plantilla ya publicaba. Aquí no
+       basta con mirar `rango.filas`: sus etiquetas («Mínimo», «Percentil 25») las pone el
+       motor, así que se miran los valores. */
+    const rangoSinCifras = tablaSinDatos({
+      filas: [
+        ...rango.filas.map((f) => [f.noAjustado, f.ajustado]),
+        [tPLI, p25Ajustado, medAjustado, p75Ajustado],
+      ],
+    });
+    if (rangoSinCifras) {
       if (Array.isArray(avisos)) avisos.push('Rango Intercuartil');
       return xmlActual;
     }
@@ -2462,6 +2508,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         pStr(f.noAjustado),
         pStr(f.ajustado)
       ]);
+      /* Sin comparables no hay márgenes que publicar: se conserva la tabla de la plantilla
+         y se avisa, en vez de dejar el encabezado con el indicador y ninguna fila debajo. */
+      if (!filas19.length) return null;
       /* En mayúscula, menos el rótulo: ver el comentario de la muestra. */
       return generarTablaOoxml(
         tituloDe(b, nombreSegunPlantilla(b, NOMBRES_TABLA_MARGENES)),
@@ -2530,8 +2579,11 @@ function quitarBucleSiDesbalanceado(xml, nombre, avisos) {
 }
 
 export function renderizarDocx(binario, estudio, opciones = {}) {
-  const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
+  const {
+    datosMacro, analisisSector, colecciones = {}, delimitadores, binarioOriginal,
+  } = opciones;
   const camposVacios = new Set();
+  const camposConservados = new Set();
 
   const zip = new PizZip(binario);
 
@@ -2548,6 +2600,57 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
+
+  /* PRIMERO de todo, y sobre el XML tal como salió de la plantilla marcada: los campos que
+     el estudio no trae vuelven al texto que la plantilla publicaba, en vez de salir como
+     «—» (ver `restaurarCamposSinDato`, en `docxPlantilla.js`). Va aquí y no después porque
+     el emparejamiento con el .docx sin marcar es párrafo a párrafo, y todo lo que sigue
+     —apartados macro, análisis sectorial, tablas— inserta y quita párrafos.
+
+     Sin `binarioOriginal` no hay con qué restaurar y el relleno sigue como antes: es el
+     caso de una plantilla marcada antes de que esto existiera, cuyo original ya no esté
+     guardado. */
+  if (binarioOriginal) {
+    /* Los campos de las colecciones los resuelve la fila en curso del bucle, no el
+       estudio: preguntarle a `valorDeCampo` por «nombre» o «ambito» daría vacío y se
+       restauraría el comparable del informe de referencia dentro del bucle. */
+    const camposDeColeccion = new Set();
+    Object.values(colecciones || {}).forEach((filas) => {
+      (Array.isArray(filas) ? filas : []).forEach((fila) => {
+        Object.keys(fila || {}).forEach((k) => camposDeColeccion.add(k));
+      });
+    });
+
+    let xmlOriginal = null;
+    try {
+      xmlOriginal = new PizZip(binarioOriginal).file(RUTA_DOC).asText();
+    } catch (err) {
+      console.warn('[docxRelleno] el .docx sin marcar no se pudo leer, '
+        + 'los campos sin dato saldrán como «—»:', err && err.message);
+    }
+
+    if (xmlOriginal) {
+      const r = restaurarCamposSinDato(xml, xmlOriginal, {
+        ...(delimitadores ? { abrir: delimitadores.abrir, cerrar: delimitadores.cerrar } : {}),
+        excluir: [...camposDeColeccion],
+        sinDato: (campo) => {
+          const v = valorDeCampo(estudio, campo, { datosMacro, analisisSector });
+          return v === null || v === undefined || v === '';
+        },
+      });
+      xml = r.xml;
+      r.restaurados.forEach((x) => camposConservados.add(x.campo));
+      if (r.restaurados.length) {
+        console.log(`[docxRelleno] ${r.restaurados.length} campo(s) sin dato conservaron el `
+          + `texto de la plantilla: ${[...camposConservados].join(', ')}`);
+      }
+      if (r.sinRespaldo.length) {
+        console.log('[docxRelleno] sin respaldo en la plantilla (saldrán como «—»): '
+          + r.sinRespaldo.join(', '));
+      }
+      zip.file(RUTA_DOC, xml);
+    }
+  }
 
   /* Las fuentes de la Sección III van como notas al pie, en formato bibliográfico y con el enlace
      clicable (2026-08-20). Aquí es el único sitio con el paquete entero, que es lo que una nota al
@@ -2665,7 +2768,10 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
 
   const zipFinal = doc.getZip();
   insertarFormulasAjuste(zipFinal, avisosTablas);
-  return { zip: zipFinal, camposVacios: [...camposVacios], avisosTablas };
+  return {
+    zip: zipFinal, camposVacios: [...camposVacios], avisosTablas,
+    camposConservados: [...camposConservados],
+  };
 }
 
 /**
@@ -3333,13 +3439,22 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
  *
  * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
  *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
+ *          binarioOriginal?:ArrayBuffer|Uint8Array|Buffer,
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
- * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
+ *        `binarioOriginal`: el mismo .docx SIN marcar. Con él, los campos que el estudio
+ *        no trae conservan el texto que la plantilla publicaba en vez de salir como «—»;
+ *        sin él, el relleno se comporta como antes.
+ * @returns {{salida:*, camposVacios:string[], camposConservados:string[],
+ *           avisosTablas:string[], imagenesInsertadas:number}}
  */
 export function rellenarDocx({
-  binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
+  binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores,
+  binarioOriginal, tipoSalida = 'blob',
 }) {
-  const { zip, camposVacios, avisosTablas } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
+  const { zip, camposVacios, avisosTablas, camposConservados } = renderizarDocx(
+    binario, estudio,
+    { datosMacro, analisisSector, colecciones, delimitadores, binarioOriginal },
+  );
   const { insertadas } = insertarImagenes(zip, imagenesAnexo, { avisos: avisosTablas });
   /* El anexo de estados financieros siempre se rearma —sus tablas salen de la ingesta—, pero
      las páginas del PDF solo van aquí si el centinela no se las llevó ya: con las dos vías
@@ -3363,6 +3478,7 @@ export function rellenarDocx({
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
     camposVacios,
+    camposConservados,
     avisosTablas,
     imagenesInsertadas: insertadas + insertadasA + insertadasB,
   };

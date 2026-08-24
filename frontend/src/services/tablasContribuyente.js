@@ -14,6 +14,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { fmt, num, pctf } from '../utils/calculations.js';
+import { celdaSinDato } from './datosDeTabla.js';
 
 const SIN_DATO = '—';
 
@@ -216,5 +217,9 @@ export function filasActivos(estudio) {
     encabezados: ['Cifras Expresadas en pesos colombianos', String(year), 'A.V. ' + year],
     filas,
     fuente: 'Estados financieros de la Compañía a 31 de diciembre de ' + year + '.',
+    /* Los subtotales se publican siempre, con «—» si falta el dato, así que sin balance
+       cargado la tabla queda con tres rótulos y seis guiones. Lo que decide es si alguna
+       fila llegó con cifra: si no, se conserva el balance que trae la plantilla. */
+    sinDatos: filas.every((f) => celdaSinDato(f[1])),
   };
 }
