@@ -1072,3 +1072,77 @@ test('un numeral romano dentro de la Sección III no la corta', async () => {
   assert.doesNotMatch(parrafoCon(doc, 'Prosa de la cuarta'),
     new RegExp('w:ascii="' + FUENTE_MACRO + '"'), 'la sección no se cerró en IV');
 });
+
+/* --- Cada anexo escaneado se queda con SUS páginas --- */
+
+/* Un informe puede traer más de un anexo escaneado: el de ATEB trae los estados financieros
+   firmados (18 páginas) y detrás el contrato de distribución (10). Los huecos se llenaban de
+   una sola cola para todo el documento, así que las páginas de los estados financieros se
+   derramaban en el anexo del contrato: la 19.ª —la de las FIRMAS del representante legal, el
+   contador y el revisor fiscal— salía dentro del «ANEXO B. Contrato de Distribución», y el
+   anexo de estados financieros se radicaba cortado a mitad de las notas.
+
+   Cuál de los anexos es el de los estados financieros se decide por su NOMBRE, con
+   `anexosPlantilla.js`, igual que las demás cirugías del informe: la letra es de cada
+   plantilla y no se puede dar por hecha. */
+const pagina = (n, dentro) =>
+  '<div class="pagina" data-pagina="' + n + '" data-orientacion="vertical">' + dentro + '</div>';
+const hueco = (n) => '<div data-hueco="anexo_eeff" data-id="hueco_' + n + '">' +
+  '<p>[Falta el anexo de estados financieros firmados — corresponde a la página ' + n +
+  ' del informe de referencia. Adjúntelo antes de radicar.]</p></div>';
+const TITULO_EEFF = '<p><strong> ANEXO A. Estados financieros ATEB COLOMBIA S.A.S</strong></p>';
+const TITULO_CONTRATO = '<h1>ANEXO B. Contrato de Distribucion de Servicios</h1>';
+
+/* Dónde queda cada cosa en el document.xml, para saber en qué anexo cayó cada imagen. */
+const posiciones = (doc) => ({
+  contrato: doc.indexOf('ANEXO B. Contrato'),
+  eeff: doc.indexOf('ANEXO A. Estados financieros'),
+  dibujos: [...doc.matchAll(/<w:drawing>/g)].map((m) => m.index),
+});
+
+test('las páginas de los estados financieros no se derraman en el anexo siguiente', async () => {
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(65, TITULO_CONTRATO + hueco(65));
+  const { doc } = await abrir(html, [], [PNG_1x1, PNG_1x1]);
+  const { contrato, dibujos } = posiciones(doc);
+  assert.equal(dibujos.length, 2, 'las dos páginas tienen que salir');
+  assert.ok(dibujos.every((p) => p < contrato),
+    'una página de los estados financieros cayó dentro del anexo del contrato');
+  /* Y el hueco del contrato sigue avisando: ahí falta su escaneo, no éste. */
+  assert.match(doc, /Falta el anexo/);
+});
+
+test('las páginas que no caben en los huecos se añaden al final de su anexo', async () => {
+  /* Los estados financieros de un año no traen las mismas páginas que los del informe de
+     referencia. Las que sobran no se pueden perder —son parte de un documento firmado que se
+     radica ante la DIAN— ni empujar al anexo siguiente. */
+  const { doc } = await abrir(pagina(47, TITULO_EEFF + hueco(47)), [], [PNG_1x1, PNG_1x1, PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 3, 'se perdieron páginas del anexo');
+  assert.doesNotMatch(doc, /Falta el anexo/);
+});
+
+test('el anexo de estados financieros se reconoce por su nombre, no por ir primero', async () => {
+  /* Con el contrato delante, la primera cola de huecos NO es la de los estados financieros: si
+     la página se fuera a la primera, saldría por delante del título del ANEXO A. */
+  const html = pagina(65, TITULO_CONTRATO + hueco(65)) + pagina(47, TITULO_EEFF + hueco(47));
+  const { doc } = await abrir(html, [], [PNG_1x1]);
+  const { eeff, dibujos } = posiciones(doc);
+  assert.equal(dibujos.length, 1);
+  assert.ok(dibujos[0] > eeff,
+    'la página fue al hueco del contrato en vez de al de los estados financieros');
+});
+
+test('con menos páginas que huecos, los del propio anexo siguen avisando', async () => {
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(48, hueco(48));
+  const { doc } = await abrir(html, [], [PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 1);
+  assert.match(doc, /Falta el anexo/);
+});
+
+test('sin un anexo de estados financieros reconocible, los huecos se reparten como antes', async () => {
+  /* Una plantilla cuyo anexo se llame de otra forma no se queda sin páginas: se reparten en
+     orden entre todos los huecos, que es lo que se hacía siempre. */
+  const html = pagina(47, '<h1>ANEXO A. Documentos de soporte</h1>' + hueco(47))
+    + pagina(48, hueco(48));
+  const { doc } = await abrir(html, [], [PNG_1x1, PNG_1x1]);
+  assert.equal((doc.match(/<w:drawing>/g) || []).length, 2);
+});
