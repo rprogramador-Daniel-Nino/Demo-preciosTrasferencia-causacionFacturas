@@ -4032,3 +4032,56 @@ test('sin cifras de rango, las tablas de percentiles no se vacían', () => {
   assert.ok(salida.includes('3,45%') && salida.includes('3,80%'),
     'los percentiles de la plantilla se conservan cuando el motor no calculó ninguno');
 });
+
+/* ══════════════════ Campos marcados sin dato: se conserva la plantilla ══════════════════ */
+
+/* La otra mitad del arreglo del 2026-08-24. `datosDeTabla.js` cubre las tablas que este módulo
+   REESCRIBE; esto cubre las que la plantilla trae con una marca dentro de la celda, que es lo
+   que dejó las Tablas 2, 3, 5, 6 y 7 del informe de SHANDONG KERUI 2025 en guiones: ahí no
+   interviene ningún generador, sino `nullGetter`. */
+
+test('un campo marcado sin dato conserva el texto del .docx sin marcar', async () => {
+  const original = await plantilla([
+    parrafo('El vinculado es SHANDONG RUICHENG PETROLEUM EQUIPMENT CO.,LTD.'),
+    parrafo('La sociedad ACME COLOMBIA S.A.S declara.'),
+  ]);
+  const marcado = await plantilla([
+    parrafo('El vinculado es {vinc}.'),
+    parrafo('La sociedad {ent} declara.'),
+  ]);
+
+  /* El estudio trae `ent` pero NO `vinc`: uno se rellena y el otro se conserva. */
+  const { zip, camposVacios, camposConservados } = renderizarDocx(
+    marcado, { ent: 'KERUI COLOMBIA S.A.S', anio: 2025 }, { binarioOriginal: original });
+  const texto = textoDe(zip, 'word/document.xml');
+
+  assert.ok(texto.includes('SHANDONG RUICHENG PETROLEUM EQUIPMENT CO.,LTD'),
+    'el vinculado de la plantilla se conserva en vez de salir «—»');
+  assert.ok(texto.includes('KERUI COLOMBIA S.A.S'), 'y el campo con dato sí se rellena');
+  assert.ok(!texto.includes('ACME COLOMBIA S.A.S'), 'sin dejar el contribuyente anterior');
+  assert.ok(!texto.includes('—'), 'no queda ningún guion de campo vacío');
+  assert.deepStrictEqual(camposConservados, ['vinc']);
+  assert.ok(!camposVacios.includes('vinc'),
+    'un campo conservado ya no se reporta como que sale sin dato');
+});
+
+test('sin el .docx sin marcar, el campo vacío sigue saliendo como «—»', async () => {
+  /* Una plantilla marcada antes de que esto existiera, cuyo original ya no esté guardado:
+     el relleno se comporta como siempre y el aviso lo dice. */
+  const marcado = await plantilla([parrafo('El vinculado es {vinc}.')]);
+  const { zip, camposVacios, camposConservados } = renderizarDocx(marcado, { anio: 2025 });
+  assert.match(textoDe(zip, 'word/document.xml'), /El vinculado es —\./);
+  assert.deepStrictEqual(camposConservados, []);
+  assert.ok(camposVacios.includes('vinc'));
+});
+
+test('rellenarDocx propaga el .docx sin marcar hasta la restauración', async () => {
+  const original = await plantilla([parrafo('País del vinculado: CHINA.')]);
+  const marcado = await plantilla([parrafo('País del vinculado: {pais_vinc}.')]);
+  const { camposConservados } = rellenarDocx({
+    binario: marcado, estudio: { anio: 2025 }, binarioOriginal: original,
+    tipoSalida: 'nodebuffer',
+  });
+  assert.deepStrictEqual(camposConservados, ['pais_vinc'],
+    'el parámetro tiene que llegar desde la firma pública, no solo desde renderizarDocx');
+});

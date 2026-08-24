@@ -45,6 +45,7 @@ import { RUBROS_RESULTADOS, RUBROS_BALANCE, cifraDeRubro, rubrosConDato } from '
    decisión propia (izquierda y centro) y por eso la declaran ellos mismos. */
 const PPR_PROSA = '<w:pPr><w:jc w:val="both"/></w:pPr>';
 import { valorDeCampo } from './plantillaVocabulario.js';
+import { restaurarCamposSinDato } from './docxPlantilla.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
 import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
@@ -2578,8 +2579,11 @@ function quitarBucleSiDesbalanceado(xml, nombre, avisos) {
 }
 
 export function renderizarDocx(binario, estudio, opciones = {}) {
-  const { datosMacro, analisisSector, colecciones = {}, delimitadores } = opciones;
+  const {
+    datosMacro, analisisSector, colecciones = {}, delimitadores, binarioOriginal,
+  } = opciones;
   const camposVacios = new Set();
+  const camposConservados = new Set();
 
   const zip = new PizZip(binario);
 
@@ -2596,6 +2600,57 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   // Actualizar tablas macro antes de procesar marcas con docxtemplater
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
+
+  /* PRIMERO de todo, y sobre el XML tal como salió de la plantilla marcada: los campos que
+     el estudio no trae vuelven al texto que la plantilla publicaba, en vez de salir como
+     «—» (ver `restaurarCamposSinDato`, en `docxPlantilla.js`). Va aquí y no después porque
+     el emparejamiento con el .docx sin marcar es párrafo a párrafo, y todo lo que sigue
+     —apartados macro, análisis sectorial, tablas— inserta y quita párrafos.
+
+     Sin `binarioOriginal` no hay con qué restaurar y el relleno sigue como antes: es el
+     caso de una plantilla marcada antes de que esto existiera, cuyo original ya no esté
+     guardado. */
+  if (binarioOriginal) {
+    /* Los campos de las colecciones los resuelve la fila en curso del bucle, no el
+       estudio: preguntarle a `valorDeCampo` por «nombre» o «ambito» daría vacío y se
+       restauraría el comparable del informe de referencia dentro del bucle. */
+    const camposDeColeccion = new Set();
+    Object.values(colecciones || {}).forEach((filas) => {
+      (Array.isArray(filas) ? filas : []).forEach((fila) => {
+        Object.keys(fila || {}).forEach((k) => camposDeColeccion.add(k));
+      });
+    });
+
+    let xmlOriginal = null;
+    try {
+      xmlOriginal = new PizZip(binarioOriginal).file(RUTA_DOC).asText();
+    } catch (err) {
+      console.warn('[docxRelleno] el .docx sin marcar no se pudo leer, '
+        + 'los campos sin dato saldrán como «—»:', err && err.message);
+    }
+
+    if (xmlOriginal) {
+      const r = restaurarCamposSinDato(xml, xmlOriginal, {
+        ...(delimitadores ? { abrir: delimitadores.abrir, cerrar: delimitadores.cerrar } : {}),
+        excluir: [...camposDeColeccion],
+        sinDato: (campo) => {
+          const v = valorDeCampo(estudio, campo, { datosMacro, analisisSector });
+          return v === null || v === undefined || v === '';
+        },
+      });
+      xml = r.xml;
+      r.restaurados.forEach((x) => camposConservados.add(x.campo));
+      if (r.restaurados.length) {
+        console.log(`[docxRelleno] ${r.restaurados.length} campo(s) sin dato conservaron el `
+          + `texto de la plantilla: ${[...camposConservados].join(', ')}`);
+      }
+      if (r.sinRespaldo.length) {
+        console.log('[docxRelleno] sin respaldo en la plantilla (saldrán como «—»): '
+          + r.sinRespaldo.join(', '));
+      }
+      zip.file(RUTA_DOC, xml);
+    }
+  }
 
   /* Las fuentes de la Sección III van como notas al pie, en formato bibliográfico y con el enlace
      clicable (2026-08-20). Aquí es el único sitio con el paquete entero, que es lo que una nota al
@@ -2713,7 +2768,10 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
 
   const zipFinal = doc.getZip();
   insertarFormulasAjuste(zipFinal, avisosTablas);
-  return { zip: zipFinal, camposVacios: [...camposVacios], avisosTablas };
+  return {
+    zip: zipFinal, camposVacios: [...camposVacios], avisosTablas,
+    camposConservados: [...camposConservados],
+  };
 }
 
 /**
@@ -3381,13 +3439,22 @@ export function insertarImagenesAnexoB(zip, estudio, avisos) {
  *
  * @param {{binario:ArrayBuffer|Uint8Array|Buffer, estudio:object,
  *          colecciones?:object, imagenesAnexo?:Array, delimitadores?:object,
+ *          binarioOriginal?:ArrayBuffer|Uint8Array|Buffer,
  *          tipoSalida?:'blob'|'nodebuffer'|'uint8array'}} args
- * @returns {{salida:*, camposVacios:string[], avisosTablas:string[], imagenesInsertadas:number}}
+ *        `binarioOriginal`: el mismo .docx SIN marcar. Con él, los campos que el estudio
+ *        no trae conservan el texto que la plantilla publicaba en vez de salir como «—»;
+ *        sin él, el relleno se comporta como antes.
+ * @returns {{salida:*, camposVacios:string[], camposConservados:string[],
+ *           avisosTablas:string[], imagenesInsertadas:number}}
  */
 export function rellenarDocx({
-  binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores, tipoSalida = 'blob',
+  binario, estudio, datosMacro, analisisSector, colecciones, imagenesAnexo, delimitadores,
+  binarioOriginal, tipoSalida = 'blob',
 }) {
-  const { zip, camposVacios, avisosTablas } = renderizarDocx(binario, estudio, { datosMacro, analisisSector, colecciones, delimitadores });
+  const { zip, camposVacios, avisosTablas, camposConservados } = renderizarDocx(
+    binario, estudio,
+    { datosMacro, analisisSector, colecciones, delimitadores, binarioOriginal },
+  );
   const { insertadas } = insertarImagenes(zip, imagenesAnexo, { avisos: avisosTablas });
   /* El anexo de estados financieros siempre se rearma —sus tablas salen de la ingesta—, pero
      las páginas del PDF solo van aquí si el centinela no se las llevó ya: con las dos vías
@@ -3411,6 +3478,7 @@ export function rellenarDocx({
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
     camposVacios,
+    camposConservados,
     avisosTablas,
     imagenesInsertadas: insertadas + insertadasA + insertadasB,
   };
