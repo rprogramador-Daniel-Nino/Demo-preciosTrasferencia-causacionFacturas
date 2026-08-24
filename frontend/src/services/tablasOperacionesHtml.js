@@ -31,6 +31,7 @@ import {
   NOMBRES_TABLA_ADICIONAL, NOMBRES_TABLA_TRANSACCIONES,
 } from './tablasOperaciones.js';
 import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
+import { tablaSinDatos } from './datosDeTabla.js';
 
 /* La tabla de operaciones se llama de ingreso o de egreso según el sentido de la operación
    del contribuyente, y la plantilla trae el rótulo que le corresponde: se buscan los dos. */
@@ -193,6 +194,17 @@ export function actualizarTablasOperacionesHtml(html, estudio, avisos) {
        publica como «no se encontró en la plantilla» y alimenta el semáforo de radicación, y
        conservar la tabla a propósito no es eso. */
     if (!tabla) continue;
+
+    /* Y sin datos tampoco se sustituye, por la misma razón y con el mismo resultado: la
+       tabla de la plantilla se queda como está. Aquí SÍ se avisa —a diferencia del caso de
+       arriba—, porque el estudio debería traer estos campos y no traerlos es algo que hay
+       que ver antes de radicar. La misma regla que aplica la ruta .docx en
+       `sustituidorDeTablas.reemplazar`, para que las dos salidas del mismo estudio digan
+       lo mismo. */
+    if (tablaSinDatos(tabla)) {
+      if (Array.isArray(avisos)) avisos.push(tabla.nombre);
+      continue;
+    }
 
     if (objetivo.todas) {
       /* De atrás hacia adelante: sustituir una desplaza los offsets de las que van después.

@@ -29,6 +29,7 @@
 
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
+import { tablaSinDatos } from './datosDeTabla.js';
 import { justificarCuerpoOoxml } from './justificarOoxml.js';
 import { compactarEspaciosOoxml } from './compactarEspaciosOoxml.js';
 import { actualizarAnioPeriodo } from './anioPeriodoOoxml.js';
@@ -956,7 +957,13 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
      tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso pasan por
      el mismo localizador, que compara sobre el texto ya reconstruido. */
   tablasMacroInforme(datosMacro, year).forEach((t) => {
-    doc.reemplazar(t.nombre, () => generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente));
+    /* Igual que las del contribuyente: una tabla sin filas no se publica, se conserva la
+       de la plantilla y el aviso lo dice. Las series que faltan sí se publican, porque su
+       celda lleva el marcador de pendiente con el año y el concepto —ahí hay algo que
+       leer y que corregir—, y eso no es lo mismo que una tabla sin nada. */
+    doc.reemplazar(t.nombre, () => (tablaSinDatos(t)
+      ? null
+      : generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente)));
   });
 
   return doc.xml;
@@ -1853,6 +1860,19 @@ function sustituidorDeTablas(xmlInicial, avisos) {
          que ya está ahí. Es el mismo criterio que la ruta del PDF aplica al rango. */
       const nuevo = generar(bloque, out.slice(bloque.inicio, bloque.fin));
 
+      /* Sin datos no se sustituye: la tabla de la plantilla se queda como está y el aviso
+         lo dice —«Esto no se actualizó con los datos del estudio … revísalo antes de
+         radicar»—. El generador lo pide devolviendo `null`, que es la única forma de
+         distinguir «no hay nada que publicar» de «esto es lo que hay que publicar»;
+         emitir la tabla igual la dejaba en una rejilla de guiones (ver `datosDeTabla.js`).
+         Es la decisión del usuario del 2026-08-24, con el .docx de SHANDONG KERUI 2025. */
+      if (nuevo === null || nuevo === undefined || nuevo === '') {
+        if (Array.isArray(avisos)) {
+          avisos.push(Array.isArray(nombres) ? nombres[0] : nombres);
+        }
+        return false;
+      }
+
       /* La línea «FUENTE: …» de la plantilla vive DETRÁS del cierre de la tabla, fuera del
          bloque. `generarTablaOoxml` emite la suya, así que dejar la vieja publicaba las dos
          —y la vieja nombra al contribuyente del informe de referencia, debajo de la tabla y
@@ -2046,9 +2066,12 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   /* `titulo` cuando lo trae y `nombre` si no: hay tablas cuyo rótulo es más largo que el
      nombre con el que se localizan —«Método de Precios de Transferencia Aplicable» frente a
      «Método de Precios de Transferencia»— o que llevan el año gravable dentro. */
-  const emitir = (b, t) => generarTablaOoxml(
+  /* `null` cuando la tabla no aporta ningún dato del estudio: el sustituidor lo lee como
+     «deja la de la plantilla y avisa». Vale para las nueve tablas que pasan por aquí y
+     para las que se agreguen, sin repetir la comprobación en cada una. */
+  const emitir = (b, t) => (tablaSinDatos(t) ? null : generarTablaOoxml(
     tituloDe(b, t.titulo || t.nombre), t.encabezados, t.filas, t.fuente
-  );
+  ));
 
   // 1. Operaciones de Ingreso/Egreso
   reemplazar(
@@ -2070,9 +2093,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
      por ocurrencia, sin depender de esos números. */
   {
     const t3 = filasTransaccionesIntercompania(estudio);
-    const tablaTx = (b) => generarTablaOoxml(
+    const tablaTx = (b) => (tablaSinDatos(t3) ? null : generarTablaOoxml(
       tituloDe(b, t3.nombre), t3.encabezados, t3.filas, escaparXml(t3.fuente)
-    );
+    ));
     /* De atrás hacia adelante: sustituir la primera desplaza los índices de la
        segunda, y el localizador trabaja sobre posiciones del XML. */
     /* `excluir`: hay plantillas que rotulan la tabla de la sección 4 como «Operación adicional
@@ -2191,7 +2214,11 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
   // 10. Razones de rechazo
   reemplazar('Razones de rechazo', (b) => {
     const { filas: razonesFilas } = filasRazonesRechazo(estudio.embudoSeleccion);
-    const filas16 = (razonesFilas || []).map((f) => [
+    /* Sin embudo no hay filtros que declarar, y la tabla saldría con su única fila
+       «TOTAL, UNIVERSO — » encima del embudo que la plantilla ya publicaba: se conserva
+       aquélla y se avisa. El total no cuenta como dato porque lo pone esta función. */
+    if (!razonesFilas || !razonesFilas.length) return null;
+    const filas16 = razonesFilas.map((f) => [
       f.etiqueta,
       f.letra,
       String(f.cuantas)
@@ -2305,6 +2332,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     const filas17 = filasMuestraComparables(estudio).map((f) => [
       String(f.numero), f.nombre, f.ambito,
     ]);
+    /* Sin muestra la tabla se quedaba en su encabezado gris y nada más —así salió la Tabla
+       32 del informe de SHANDONG 2024, que en la plantilla traía sesenta comparables—. */
+    if (!filas17.length) return null;
     /* Todo en mayúscula menos el rótulo: en la ruta de PDF el rótulo vive FUERA de la tabla y
        no se sube, así que subirlo aquí separaría las dos salidas. La línea de fuente sí, porque
        allá va dentro de la tabla y sube con ella. */
@@ -2350,6 +2380,21 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
     }
 
     if (!sinSolape.length) {
+      if (Array.isArray(avisos)) avisos.push('Rango Intercuartil');
+      return xmlActual;
+    }
+
+    /* Sin una sola cifra —ni percentiles ni indicador del contribuyente— las dos formas de
+       la tabla saldrían en guiones sobre el rango que la plantilla ya publicaba. Aquí no
+       basta con mirar `rango.filas`: sus etiquetas («Mínimo», «Percentil 25») las pone el
+       motor, así que se miran los valores. */
+    const rangoSinCifras = tablaSinDatos({
+      filas: [
+        ...rango.filas.map((f) => [f.noAjustado, f.ajustado]),
+        [tPLI, p25Ajustado, medAjustado, p75Ajustado],
+      ],
+    });
+    if (rangoSinCifras) {
       if (Array.isArray(avisos)) avisos.push('Rango Intercuartil');
       return xmlActual;
     }
@@ -2462,6 +2507,9 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         pStr(f.noAjustado),
         pStr(f.ajustado)
       ]);
+      /* Sin comparables no hay márgenes que publicar: se conserva la tabla de la plantilla
+         y se avisa, en vez de dejar el encabezado con el indicador y ninguna fila debajo. */
+      if (!filas19.length) return null;
       /* En mayúscula, menos el rótulo: ver el comentario de la muestra. */
       return generarTablaOoxml(
         tituloDe(b, nombreSegunPlantilla(b, NOMBRES_TABLA_MARGENES)),
