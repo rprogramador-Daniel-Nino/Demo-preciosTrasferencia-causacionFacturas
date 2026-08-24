@@ -132,6 +132,57 @@ export async function extraerTextoPdf(file, { getDocument = pdfjs.getDocument } 
   }
 }
 
+/* Cuando dos o más cifras de una misma fila quedan pegadas sin ningún separador —el hueco
+   entre celdas no alcanzó el umbral de `unirTrozos» para este generador de PDF en
+   particular—, el bloque de dígitos que arma `agregar()` mezcla los grupos de miles de
+   varias cifras en uno solo: el final de una y el principio de la siguiente forman un
+   grupo de más de tres dígitos, que no es ninguna de las dos cifras reales. Caso real:
+   LAMBERTI COLOMBIA SAS (2026-08-24), donde el modelo leía bien las diez cifras del activo
+   —por la imagen— y esta verificación las descartaba igual, con «no aparece impresa».
+
+   Un grupo de miles colombiano vale SIEMPRE tres dígitos, salvo el primero de cada cifra.
+   Un grupo de más de tres dígitos delata la costura: los tres primeros cierran la cifra en
+   curso y el resto empieza la siguiente. Repetirlo grupo a grupo separa cualquier cantidad
+   de cifras pegadas en cadena — el caso de Lamberti pega cuatro seguidas.
+
+   El primer grupo del bloque (`i === 0`) nunca se parte: es la cabecera de la primera
+   cifra, que puede tener de uno a tres dígitos por sí misma, y partirla arriesgaría a
+   trocear un número que simplemente no lleva separador de miles (un año, un NIT, un
+   código). Sin nada pegado, esta función devuelve el bloque intacto, tal como antes.
+
+   Igual que `interpretaciones()`, no se elige una convención: se prueban las dos —miles
+   con punto y miles con coma— y se devuelven los candidatos de ambas. Elegir mal para un
+   bloque anglosajón («23,741,367,744.00») no debe romper su lectura solo por perseguir el
+   defecto colombiano; los candidatos de más son gratis para lo único que esto alimenta,
+   «¿está esta cifra impresa?». */
+function desglosarCifrasPegadas(bloque) {
+  return [
+    ...desglosarPorSeparador(bloque, '.', ','),
+    ...desglosarPorSeparador(bloque, ',', '.'),
+  ];
+}
+
+function desglosarPorSeparador(bloque, sepMiles, sepDecimal) {
+  const partes = String(bloque).split(sepDecimal);
+  const entero = partes[0];
+  const decimal = partes.length > 1 ? partes.slice(1).join(sepDecimal) : undefined;
+  const grupos = entero.split(sepMiles);
+  const cifras = [];
+  let actual = [];
+  grupos.forEach((grupo, i) => {
+    if (i === 0 || grupo.length <= 3) {
+      actual.push(grupo);
+      return;
+    }
+    actual.push(grupo.slice(0, 3));
+    cifras.push(actual.join(sepMiles));
+    actual = [grupo.slice(3)];
+  });
+  cifras.push(actual.join(sepMiles));
+  if (decimal !== undefined) cifras[cifras.length - 1] += sepDecimal + decimal;
+  return cifras;
+}
+
 /**
  * Todas las cifras que aparecen impresas en un texto, normalizadas a número.
  *
@@ -152,7 +203,9 @@ export function cifrasDelTexto(texto) {
     while ((m = patron.exec(cadena)) !== null) {
       const crudo = m[0].replace(/[.,]+$/, '');
       if (!crudo) continue;
-      interpretaciones(crudo).forEach((n) => encontradas.add(Math.abs(n)));
+      desglosarCifrasPegadas(crudo).forEach((pieza) => {
+        interpretaciones(pieza).forEach((n) => encontradas.add(Math.abs(n)));
+      });
     }
   };
 
