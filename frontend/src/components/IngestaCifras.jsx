@@ -25,13 +25,11 @@ const RUBROS_BALANCE = [
   { clave: 't_inv', etiqueta: 'Inventarios' },
   { clave: 't_ap', etiqueta: 'Cuentas por pagar a partes relacionadas' },
   { clave: 't_act_curr', etiqueta: 'Total, Activo corriente' },
-];
-
-/* PP&E no lo lee esta ingesta, pero conserva su casilla: alimenta dos de los siete
-   escenarios de ajuste del motor y sin dato se calculan contra cero. Queda para
-   escribirlo a mano cuando el cliente tenga propiedad, planta y equipo relevante — en
-   Montachem el equipo está totalmente depreciado y el neto es cero. */
-const RUBROS_MANUALES = [
+  /* Hasta el caso de Symtek (2026-08-24) esta casilla era 100% manual: alimenta dos de los
+     siete escenarios de ajuste del motor y sin dato se calculan contra cero, y el caso que
+     fijó ese diseño (Montachem) tenía el equipo totalmente depreciado y en cero. Para una
+     compañía con PP&E real, dejarlo en manual lo trataba como cero por omisión — ahora se
+     lee y se verifica contra el documento como cualquier otra partida del balance. */
   { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
 ];
 
@@ -137,10 +135,14 @@ export default function IngestaCifras({ study, updateStudy }) {
     }
   };
 
+  /* Sin coaccionar a 0: un `t_op` (o `t_s`) faltante es `null`, no una utilidad de cero, y
+     `pliOf` ya sabe devolver `null` en ese caso — coaccionarlo aquí antes de llamarlo es lo
+     que hacía que la tarjeta de Resultado Preliminar mostrara «0,000 %» cuando en realidad
+     no había cifra con qué calcular el margen (ver el `'—'` de la línea de abajo). */
   const calculatedPli = pliOf({
-    s: study.t_s || 0,
-    c: study.t_c || 0,
-    op: study.t_op || 0
+    s: study.t_s,
+    c: study.t_c,
+    op: study.t_op,
   }, study.pli || 'MO');
 
   return (
@@ -167,9 +169,11 @@ export default function IngestaCifras({ study, updateStudy }) {
             Adjunte el Estado de Situación Financiera y el Estado de Resultados de la compañía
             (PDF o imagen). Se leen los ingresos de actividades ordinarias, el costo de ventas,
             los gastos de ventas y de administración, las cuentas por cobrar y por pagar a
-            partes relacionadas, los inventarios y el total del activo corriente. La utilidad
-            operacional no se lee: se calcula como ingresos − costo − gastos operativos. De cada
-            cifra se comprueba que esté impresa en el documento.
+            partes relacionadas, los inventarios, propiedad planta y equipo y el total del
+            activo corriente. La utilidad operacional se calcula como ingresos − costo − gastos
+            operativos; si ese cálculo no basta, se recurre a la utilidad operacional impresa
+            en el documento, solo cuando cuadra con utilidad bruta − gastos y no se confunde
+            con el total de gastos. De cada cifra se comprueba que esté impresa en el documento.
           </p>
 
           <div className="border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-xl p-4 flex flex-col items-center justify-center text-center hover:border-[#0FA3A1] transition-colors relative cursor-pointer bg-zinc-50/50 dark:bg-zinc-900/30">
@@ -373,7 +377,8 @@ export default function IngestaCifras({ study, updateStudy }) {
           <p className="text-xs text-zinc-500 leading-relaxed">
             Las tres partidas de capital de trabajo sostienen el ajuste de comparabilidad. Son
             las de <strong>partes relacionadas</strong>, no las comerciales con terceros: la
-            operación bajo estudio es con la vinculada.
+            operación bajo estudio es con la vinculada. Propiedad, planta y equipo alimenta los
+            ajustes que la usan; se lee del documento cuando lo trae y sigue siendo editable.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -387,23 +392,6 @@ export default function IngestaCifras({ study, updateStudy }) {
                   placeholder="COP"
                   className={CLASE_CASILLA}
                 />
-              </div>
-            ))}
-
-            {/* Los que la ingesta no lee pero el motor usa: se escriben a mano. */}
-            {RUBROS_MANUALES.map(({ clave, etiqueta }) => (
-              <div key={clave} className="flex flex-col">
-                <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
-                <input
-                  type="number"
-                  value={study[clave] || ''}
-                  onChange={(e) => handleFieldChange(clave, e.target.value)}
-                  placeholder="COP"
-                  className={CLASE_CASILLA}
-                />
-                <p className="text-[10px] text-zinc-500 mt-1 leading-snug">
-                  No se lee del documento: escríbalo si la compañía tiene PP&amp;E relevante.
-                </p>
               </div>
             ))}
           </div>

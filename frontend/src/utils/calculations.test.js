@@ -132,6 +132,13 @@ test('el margen operacional no se toca: una pérdida operativa sigue siendo nega
   assert.ok(pliOf({ s: 23741367744, c: -21850187494, op: -1095055781 }, 'MO') < 0);
 });
 
+test('sin utilidad operacional el margen operacional es null, no cero', () => {
+  /* `null / s` da 0 en JavaScript por coerción numérica, y `pctf(0)` imprime «0,000 %» —
+     un margen falso, indistinguible en pantalla de una compañía que de verdad ganó cero.
+     Antes de este cambio, un `t_op` faltante producía exactamente ese «0,000 %». */
+  assert.strictEqual(pliOf({ s: 23741367744, c: -21850187494, op: null }, 'MO'), null);
+});
+
 test('el ratio de cuentas por pagar sobre costo no se invierte por el signo del documento', () => {
   const conSigno = ratios({ ...MONTACHEM, ar: 6032337879, inv: 4734795891, ap: 658293893 });
   const enPositivo = ratios({

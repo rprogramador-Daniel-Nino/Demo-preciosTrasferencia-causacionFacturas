@@ -198,9 +198,13 @@ test('un detalle de activos vacío no pisa uno ya cargado a mano', () => {
 test('no toca ningún otro campo con nombre del balance', () => {
   /* Las partidas de partes relacionadas siguen siendo tres y un subtotal; el total general
      de activos (`t_act_tot`) y el detalle completo (`t_activos_detalle`) sí se escriben
-     ahora, porque alimentan la Tabla 10 y el ANEXO A y no el motor de ajuste. */
+     ahora, porque alimentan la Tabla 10 y el ANEXO A y no el motor de ajuste. `t_ppe` YA NO
+     está en esta lista: ver la sección de PP&E más abajo — el criterio cambió porque dejarlo
+     100% manual hacía que un PP&E real (como el de Symtek, ~32% del activo) se tratara como
+     cero en los ajustes por omisión, a diferencia del caso que motivó el diseño manual
+     (Montachem, donde el PP&E neto SÍ era cero por depreciación total). */
   const aplicables = camposAplicables(verificar().campos);
-  ['t_cash', 't_inv_assoc', 't_tax', 't_ppe', 't_intang', 't_dif', 't_act_nocurr']
+  ['t_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr']
     .forEach((clave) => assert.ok(!(clave in aplicables), `${clave} no debería escribirse`));
 });
 
@@ -382,4 +386,137 @@ test('la advertencia de utilidad bruta no salta por el signo del costo', () => {
   const enPositivo = verificar({ t_c: 21850187494 });
   assert.deepStrictEqual(
     enPositivo.advertencias.filter((a) => a.tipo === 'utilidad-bruta-no-cuadra'), []);
+});
+
+/* ══════ Fallback: la utilidad operacional impresa, cuando el cálculo analítico no basta ══════
+
+   El fixture son las cifras reales de INDUSTRIA Y TECNOLOGÍA SYMTEK S.A.S. al 31 de
+   diciembre de 2025. El Estado de Resultados desglosa el costo en dos renglones («Costo de
+   servicios prestados» + «Costo de venta de mercancía») sin imprimir un total de «Costo de
+   Ventas», y además trae una fila «Ingreso diferido NIIF» (168.595) que SÍ está incluida en
+   la «Utilidad Bruta» impresa (6.216.008) pero no en «Ingresos de actividades ordinarias»
+   (16.028.194) — lo único que este módulo lee como ventas. Por eso, aun con el costo ya
+   consolidado (9.980.782), `ventas − costo − gastos` da 1.292.133 (8,062 %), no los
+   1.460.729 (9,113 %) que el documento imprime y que sí son la cifra correcta: coincide
+   exactamente con «Utilidad Bruta» (6.216.008) − gastos (4.755.279). El fallback existe para
+   este caso: cuando el cálculo analítico falla O da un número que no cuadra con esa
+   identidad, y hay una fila impresa que sí cuadra y no se confunde con el total de gastos. */
+
+const TEXTO_SYMTEK = `--- Página 1 ---
+Ingresos de actividades ordinarias | 3 | $ 16.028.194 | $ 14.581.884
+Costo de servicios prestados | 4 | $ 1.578.593 | $ 1.778.649
+Costo de venta de mercancia | 4 | $ 8.402.189 | $ 8.037.264
+Utilidad Bruta | $ 6.216.008 | $ 4.492.417
+Gastos de administracion | 5 y 7 | $ 3.234.968 | $ 3.106.673
+Gastos de venta | 6 y 7 | $ 1.520.311 | $ 1.016.835
+Utilidad Operacional | $ 1.460.729 | $ 368.909
+Propiedades, planta y equipo, neto | 16 | $ 3.590.297 | $ 3.674.607`;
+
+const LECTURA_SYMTEK = {
+  t_s: 16028194,
+  t_c: null,
+  t_ppe: 3590297,
+  cotejo: {
+    gastos_ventas: 1520311,
+    gastos_administracion: 3234968,
+    utilidad_bruta: 6216008,
+    utilidad_operacional_impresa: 1460729,
+  },
+  rotulos: {},
+  periodo: '2025',
+  unidadOrigen: 'miles',
+  textoPdf: TEXTO_SYMTEK,
+};
+
+const verificarSymtek = (extra = {}) => verificarEeff({ ...LECTURA_SYMTEK, ...extra }, { anioEstudio: 2025 });
+
+test('sin costo consolidado (uop analítico null), el fallback aplica la utilidad operacional impresa', () => {
+  assert.strictEqual(verificarSymtek().campos.t_op, 1460729);
+});
+
+test('el margen que resulta del fallback es el 9,113 % objetivo, no el 8,062 % del cálculo analítico', () => {
+  const { campos } = verificarSymtek();
+  const margen = campos.t_op / campos.t_s;
+  assert.ok(Math.abs(margen - 0.0911350) < 1e-6, `margen calculado: ${margen}`);
+});
+
+test('con el costo ya consolidado, el uop analítico no cuadra con la identidad y el fallback igual aplica', () => {
+  /* Este es el caso que importa: después de arreglar la suma de renglones de costo,
+     `t_c` deja de ser null (9.980.782), así que el cálculo analítico YA NO da null — da
+     1.292.133, un número válido pero equivocado por el ingreso diferido NIIF. Sin este
+     camino, arreglar el costo desharía el propio arreglo del margen. */
+  const r = verificarSymtek({ t_c: 9980782 });
+  assert.strictEqual(r.campos.t_op, 1460729, 'debe preferir la cifra impresa, no el 1.292.133 analítico');
+});
+
+test('el fallback deja constancia en correcciones, no entra en silencio', () => {
+  const { correcciones } = verificarSymtek();
+  const c = correcciones.find((x) => x.campo === 't_op');
+  assert.ok(c, 'debe registrar que aplicó la utilidad operacional impresa');
+  assert.strictEqual(c.valorAplicado, 1460729);
+  assert.match(c.motivo, /impresa/i);
+});
+
+test('ya no se avisa "sin-utilidad-operacional" cuando el fallback sí pudo aplicarse', () => {
+  assert.ok(!verificarSymtek().advertencias.some((a) => a.tipo === 'sin-utilidad-operacional'));
+});
+
+test('si la cifra impresa no aparece en el texto del documento, el fallback no se aplica', () => {
+  const r = verificarSymtek({
+    cotejo: { ...LECTURA_SYMTEK.cotejo, utilidad_operacional_impresa: 9999999 },
+  });
+  assert.strictEqual(r.campos.t_op, null);
+  assert.ok(r.advertencias.some((a) => a.tipo === 'sin-utilidad-operacional'));
+});
+
+test('sin utilidad bruta impresa, el fallback no tiene con qué confirmar la cifra y no se aplica', () => {
+  const r = verificarSymtek({ cotejo: { ...LECTURA_SYMTEK.cotejo, utilidad_bruta: null } });
+  assert.strictEqual(r.campos.t_op, null);
+});
+
+test('anti-Montachem: una cifra impresa que se parece al total de gastos se rechaza como fallback', () => {
+  /* Variante de Montachem: el costo no se pudo leer (cálculo analítico null) y la fila
+     «resultado de la operación» (−2.986.236.031) es, en la práctica, el total de gastos del
+     giro (2.982.184.104) con otro rótulo — la diferencia es apenas 0,14 % (los 4.051.927 de
+     «otros gastos» que ese estado también mete en esa fila). El chequeo debe rechazarla
+     igual que si no existiera. */
+  const r = verificarEeff({
+    t_s: 23741367744,
+    t_c: null,
+    cotejo: {
+      gastos_ventas: -2409923291,
+      gastos_administracion: -572260813,
+      utilidad_bruta: 1891180250,
+      utilidad_operacional_impresa: -2986236031,
+    },
+    textoPdf: `INGRESOS DE ACTIVIDADES ORDINARIAS | 23.741.367.744
+GASTOS DE VENTAS Y DISTRIBUCION | -2.409.923.291
+GASTOS DE ADMINISTRACION | -572.260.813
+UTILIDAD BRUTA | 1.891.180.250
+RESULTADO DE ACTIVIDADES DE LA OPERACIÓN | -2.986.236.031`,
+  }, { anioEstudio: 2025 });
+  assert.strictEqual(r.campos.t_op, null, 'no debe adoptar un subtotal de gastos como utilidad');
+  assert.ok(r.advertencias.some((a) => a.tipo === 'sin-utilidad-operacional'));
+});
+
+test('el uop analítico que sí cuadra con la identidad no dispara el fallback ni avisa de más', () => {
+  /* Montachem: −1.091.003.854 (analítico) == 1.891.180.250 − 2.982.184.104 (bruta − gastos).
+     Cuadra exacto, así que no debe tocarse ni generar ninguna corrección. */
+  const r = verificar();
+  assert.strictEqual(r.campos.t_op, -1091003854);
+  assert.deepStrictEqual(r.correcciones, []);
+});
+
+/* ══════ PP&E: se lee y se verifica como cualquier otra partida del balance ══════ */
+
+test('t_ppe se lee, se verifica contra el texto y se escribe como las demás partidas', () => {
+  const { campos } = verificarSymtek();
+  assert.strictEqual(campos.t_ppe, 3590297);
+  assert.ok('t_ppe' in camposAplicables(campos));
+});
+
+test('un t_ppe que no aparece impreso se descarta igual que cualquier otra cifra', () => {
+  const r = verificarSymtek({ t_ppe: 999999999 });
+  assert.strictEqual(r.campos.t_ppe, null);
+  assert.ok(r.advertencias.some((a) => a.tipo === 'cifra-inexistente' && a.campo === 't_ppe'));
 });
