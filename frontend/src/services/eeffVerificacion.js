@@ -8,22 +8,28 @@
    así entró un 44.177.669 como cuentas por pagar de un documento donde esa cifra no
    aparece en ninguna de sus cuatro páginas.
 
-   ── Qué se toma, y de dónde (alcance fijado por el usuario el 2026-08-21) ──
+   ── Qué se toma, y de dónde (alcance fijado por el usuario el 2026-08-21; ampliado el
+   2026-08-24 con el caso de Symtek) ──
 
-   Del ESTADO DE SITUACIÓN FINANCIERA, tres partidas y un subtotal:
+   Del ESTADO DE SITUACIÓN FINANCIERA:
 
      t_ar        ← cuentas por cobrar A PARTES RELACIONADAS
      t_inv       ← inventarios
      t_ap        ← cuentas por pagar A PARTES RELACIONADAS
      t_act_curr  ← total del activo corriente
+     t_ppe       ← propiedad, planta y equipo
 
    Las dos de capital de trabajo son las de partes relacionadas y no las comerciales
    porque la operación bajo estudio es con la vinculada. El propio estado lo confirma: en
    su flujo de efectivo, la línea «Aumento / disminución en proveedores» (−135.245.675) es
    exactamente la variación de las cuentas por pagar a partes relacionadas
    (5.400.016.795 − 5.535.262.470). Para esta compañía el proveedor ES la vinculada.
+   `t_ppe` se lee y se verifica igual que las demás desde el caso de Symtek: dejarlo 100%
+   manual (el diseño original) trataba como cero, por omisión, el PP&E de una compañía que
+   sí lo tiene — el caso que fijó ese diseño (Montachem) lo tenía en cero por depreciación
+   total, y esa coincidencia no generaliza.
 
-   Del ESTADO DE RESULTADOS, dos cifras leídas y una calculada:
+   Del ESTADO DE RESULTADOS, dos cifras leídas y una calculada, con un fallback:
 
      t_s      ← ingresos de actividades ordinarias
      t_c      ← costo de ventas
@@ -35,10 +41,21 @@
    Montachem 2025 esa fila (−2.986.236.031) es el total de los gastos operativos y no la
    utilidad: se publicaban 4.877.416.281 de gastos y un margen operacional de tres
    dígitos. Derivándola de ingresos, costo y los dos gastos del giro —cifras que no se
-   pueden confundir con otra cosa— ningún rótulo engañoso puede volver a decidirla.
+   pueden confundir con otra cosa— ningún rótulo engañoso puede volver a decidirla por
+   sí solo.
 
    «Otros gastos» y «otros ingresos» quedan fuera de los gastos operativos a propósito:
    la definición son los dos rubros del giro. En ese estado la diferencia es de 4.051.927.
+
+   El caso de Symtek (2026-08-24) mostró que ese cálculo, aunque se complete, puede no
+   bastar: su costo de ventas viene desglosado en renglones sin un total impreso, y aun
+   consolidándolos el cálculo analítico no cuadra con la utilidad bruta impresa, porque esa
+   utilidad bruta incluye un ingreso (un diferido NIIF) que no está en los ingresos de
+   actividades ordinarias. Cuando el cálculo falla o no cuadra con «utilidad bruta −
+   gastos», y el documento SÍ imprime una fila de utilidad operacional, se recurre a ella
+   —pero solo si supera las mismas verificaciones que hubieran atrapado el defecto de
+   Montachem: que no se parezca al total de gastos, y que la identidad «utilidad bruta −
+   gastos» sí la reproduzca. Ver `pareceElTotalDeGastos` y el bloque del fallback más abajo.
 
    El módulo es puro: ni React, ni red, ni acceso a `localStorage`.
    ───────────────────────────────────────────────────────────────────────────── */
@@ -55,6 +72,18 @@ const TOLERANCIA_RELATIVA = 0.001;
 const tolerancia = (escala) => Math.max(1, Math.abs(num(escala) || 0) * TOLERANCIA_RELATIVA);
 const cuadra = (a, b, escala) => Math.abs(a - b) <= tolerancia(escala);
 
+/* Tolerancia amplia para el chequeo anti-rótulo-engañoso de la utilidad operacional impresa:
+   no es una identidad exacta, es «¿esta cifra impresa es, en la práctica, el total de gastos
+   con otro nombre?». El caso real que motiva esto (Montachem 2025) difiere del total de
+   gastos del giro en 4.051.927 sobre 2.982.184.104 (~0,14 %) porque ese estado también mete
+   «otros gastos» en esa fila; la milésima de `TOLERANCIA_RELATIVA` no lo alcanzaría, y por
+   eso este chequeo usa la suya. */
+const TOLERANCIA_ROTULO_ENGANOSO = 0.03;
+const pareceElTotalDeGastos = (impresa, gastos) => {
+  if (impresa === null || gastos === null || gastos === 0) return false;
+  return Math.abs(Math.abs(impresa) - Math.abs(gastos)) <= Math.abs(gastos) * TOLERANCIA_ROTULO_ENGANOSO;
+};
+
 /* Los campos del estudio que esta ingesta llena, con el nombre que el analista ve en su
    casilla. Es la lista completa: lo que no está aquí, esta lectura no lo toca. */
 const ETIQUETA = {
@@ -66,10 +95,15 @@ const ETIQUETA = {
   t_ap: 'Cuentas por pagar a partes relacionadas',
   t_act_curr: 'Total, Activo corriente',
   t_act_tot: 'Total, Activos',
+  t_ppe: 'Propiedad, planta y equipo',
 };
 
-/* Los que se leen del documento. `t_op` no está: se calcula. */
-const LEIDOS = ['t_s', 't_c', 't_ar', 't_inv', 't_ap', 't_act_curr', 't_act_tot'];
+/* Los que se leen del documento. `t_op` no está: se calcula (o, en su defecto, sale del
+   fallback de más abajo). `t_ppe` sí es de lectura directa como cualquier otra partida del
+   balance — a diferencia del diseño anterior (100% manual), que dejaba en cero, por
+   omisión, el PP&E de un estudio real como Symtek (~32% del activo) solo porque el caso que
+   motivó ese diseño (Montachem) tenía el equipo totalmente depreciado. */
+const LEIDOS = ['t_s', 't_c', 't_ar', 't_inv', 't_ap', 't_act_curr', 't_act_tot', 't_ppe'];
 
 const fmtCop = (v) => (v === null || v === undefined
   ? '—'
@@ -188,28 +222,84 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     ventas: cotejo.gastos_ventas,
     administracion: cotejo.gastos_administracion,
   });
-  const uop = utilidadOperacionalDe({ ventas, costo, gastos });
+  const uopAnalitico = utilidadOperacionalDe({ ventas, costo, gastos });
+
+  /* La utilidad bruta que el documento imprime. Sirve dos veces: aquí, como la identidad
+     contra la que se valida cualquier utilidad operacional —calculada o impresa— antes de
+     aplicarla; más abajo, para comprobar que el costo o los ingresos no se tomaron de la
+     fila equivocada. */
+  const utilidadBrutaLeida = num(cotejo.utilidad_bruta);
+  const puedeVerificarConBruta = utilidadBrutaLeida !== null && gastos !== null;
+  const uopCuadraConBruta = puedeVerificarConBruta && uopAnalitico !== null
+    && cuadra(utilidadBrutaLeida - gastos, uopAnalitico, utilidadBrutaLeida);
+
+  /* ── Fallback: la utilidad operacional impresa en el documento ──
+     Se intenta cuando el cálculo analítico no se pudo completar, O cuando sí se completó
+     pero no cuadra con «utilidad bruta − gastos» — que es lo que le pasa a un estado que,
+     como el de Symtek, mete en la utilidad bruta impresa un ingreso (un diferido NIIF) que
+     no está en los ingresos de actividades ordinarias: ahí el cálculo analítico da un
+     número válido pero equivocado, y sin este camino arreglar el costo desglosado
+     desharía el propio arreglo del margen.
+
+     Solo se aplica si, además de existir una cifra impresa:
+       1. NO se parece al total de gastos —el defecto de Montachem: una fila como
+          «resultado de la operación» que en realidad es el total de gastos con otro
+          nombre—;
+       2. «utilidad bruta − gastos» SÍ la reproduce, la identidad contable que confirma que
+          es utilidad y no otra cosa; y
+       3. está impresa en el documento, cuando hay capa de texto que comprobarlo. */
+  let uop = uopAnalitico;
+  let fallbackAplicado = false;
+  if (uopAnalitico === null || (puedeVerificarConBruta && !uopCuadraConBruta)) {
+    const impresa = num(cotejo.utilidad_operacional_impresa);
+    if (impresa !== null && puedeVerificarConBruta
+        && !pareceElTotalDeGastos(impresa, gastos)
+        && cuadra(utilidadBrutaLeida - gastos, impresa, utilidadBrutaLeida)
+        && (!verificadoContraTexto || cifraApareceEnTexto(impresa, impresas))) {
+      uop = impresa;
+      fallbackAplicado = true;
+      correcciones.push({
+        campo: 't_op',
+        etiqueta: ETIQUETA.t_op,
+        valorLeido: uopAnalitico,
+        valorAplicado: impresa,
+        motivo: (uopAnalitico === null
+          ? 'No se pudo calcular la utilidad operacional de ingresos, costo y gastos. '
+          : `El cálculo analítico dio ${fmtCop(uopAnalitico)}, que no cuadra con utilidad `
+            + `bruta (${fmtCop(utilidadBrutaLeida)}) − gastos (${fmtCop(gastos)}). `)
+          + `Se aplicó la utilidad operacional impresa en el documento (${fmtCop(impresa)}): `
+          + 'coincide con esa identidad y no se confunde con el total de gastos.',
+      });
+    }
+  }
 
   campos.t_op = uop;
   if (gastos !== null) campos.t_gastos = gastos;
 
-  if (uop === null) {
-    const falta = [];
-    if (ventas === null) falta.push('los ingresos de actividades ordinarias');
-    if (costo === null) falta.push('el costo de ventas');
-    if (gastos === null) falta.push('los gastos de ventas y de administración');
-    advertencias.push({
-      tipo: 'sin-utilidad-operacional',
-      campo: 't_op',
-      mensaje: `No se pudo calcular la utilidad operacional: falta ${falta.join(' y ')} en el `
-        + 'documento. Escríbala a mano — sin ella no hay margen operacional ni Índice de Berry.',
-    });
+  if (!fallbackAplicado) {
+    if (uop === null) {
+      const falta = [];
+      if (ventas === null) falta.push('los ingresos de actividades ordinarias');
+      if (costo === null) falta.push('el costo de ventas');
+      if (gastos === null) falta.push('los gastos de ventas y de administración');
+      advertencias.push({
+        tipo: 'sin-utilidad-operacional',
+        campo: 't_op',
+        mensaje: `No se pudo calcular la utilidad operacional: falta ${falta.join(' y ')} en el `
+          + 'documento. Escríbala a mano — sin ella no hay margen operacional ni Índice de Berry.',
+      });
+    } else if (puedeVerificarConBruta && !uopCuadraConBruta) {
+      advertencias.push({
+        tipo: 'utilidad-operacional-no-cuadra-con-bruta',
+        campo: 't_op',
+        mensaje: `La utilidad operacional calculada (${fmtCop(uop)}) no coincide con utilidad `
+          + `bruta (${fmtCop(utilidadBrutaLeida)}) − gastos (${fmtCop(gastos)}) = `
+          + `${fmtCop(utilidadBrutaLeida - gastos)}, y el documento no trae una fila propia `
+          + 'que lo confirme. Revísela contra el estado financiero.',
+      });
+    }
   }
 
-  /* La utilidad bruta que el documento imprime, contra la que sale de las dos cifras
-     leídas. No corrige nada: si no cuadra, es que el costo o los ingresos se tomaron de la
-     fila equivocada, y eso lo tiene que ver el analista antes de seguir. */
-  const utilidadBrutaLeida = num(cotejo.utilidad_bruta);
   /* En magnitud, igual que en el cálculo de la utilidad operacional: `costo` conserva el
      signo del documento, y restarlo tal cual lo sumaría. Con las cifras de Montachem la
      comparación daría 45.591.555.238 contra los 1.891.180.250 que el estado imprime, y

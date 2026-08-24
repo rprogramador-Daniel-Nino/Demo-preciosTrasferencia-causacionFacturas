@@ -20,18 +20,21 @@ if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
 /**
  * Prompt para la lectura de Estados Financieros del Contribuyente.
  *
- * ── Qué se lee, y por qué solo eso (alcance fijado por el usuario, 2026-08-21) ──
+ * ── Qué se lee, y por qué (alcance fijado por el usuario, 2026-08-21; ampliado 2026-08-24) ──
  *
- * Del ESTADO DE SITUACIÓN FINANCIERA se toman TRES partidas y un subtotal:
- * cuentas por cobrar a partes relacionadas, inventarios, cuentas por pagar a partes
- * relacionadas y el total del activo corriente. Las dos de capital de trabajo son las de
- * PARTES RELACIONADAS y no las comerciales, porque la operación bajo estudio es con la
- * vinculada — y el propio estado lo confirma: en su flujo de efectivo, la línea «Aumento /
- * disminución en proveedores» es exactamente la variación de las cuentas por pagar a partes
- * relacionadas. El proveedor es la vinculada.
+ * Del ESTADO DE SITUACIÓN FINANCIERA se toman: cuentas por cobrar y por pagar A PARTES
+ * RELACIONADAS (no las comerciales, porque la operación bajo estudio es con la vinculada —
+ * el propio estado lo confirma: en su flujo de efectivo, la línea «Aumento / disminución en
+ * proveedores» es exactamente la variación de las cuentas por pagar a partes relacionadas),
+ * inventarios, el total del activo corriente, el total general de activos y propiedad,
+ * planta y equipo — esta última desde el caso de Symtek (2026-08-24): dejarla 100% manual
+ * hacía que un PP&E real se tratara como cero por omisión en los ajustes que lo usan, a
+ * diferencia del caso que fijó el alcance original (Montachem), donde sí era cero.
  *
  * Del ESTADO DE RESULTADOS se toman los ingresos de actividades ordinarias y el costo de
- * ventas, y NADA MÁS que se parezca a una utilidad: la utilidad operacional se CALCULA
+ * ventas (con una excepción angosta para sumar renglones de costo desglosado — ver su propia
+ * definición abajo). La utilidad operacional del estudio NO se lee como fuente primaria de
+ * ninguna fila: se CALCULA
  *
  *     gastos operativos    = gastos de ventas + gastos de administración
  *     utilidad operacional = ingresos − costo de ventas − gastos operativos
@@ -43,7 +46,15 @@ if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
  * 2025 esa fila (−2.986.236.031) es en realidad el total de los gastos operativos. Se
  * publicaban 4.877.416.281 de gastos y un margen operacional de tres dígitos. Con la
  * utilidad derivada de cifras que no se pueden confundir —ingresos, costo y los dos gastos
- * del giro— ningún rótulo engañoso puede volver a decidirla.
+ * del giro— ningún rótulo engañoso puede volver a decidirla por sí solo.
+ *
+ * La fila impresa SÍ se pide, bajo otro nombre (utilidad_operacional_impresa) y solo como
+ * último recurso: el caso de Symtek (2026-08-24) mostró que el cálculo analítico, aunque
+ * completo, puede no cuadrar con la utilidad bruta impresa cuando el documento reconoce un
+ * ingreso (p. ej. un diferido NIIF) que no está en los ingresos de actividades ordinarias.
+ * `eeffVerificacion.js` recurre entonces a la fila impresa, pero solo si supera las mismas
+ * verificaciones que hubieran atrapado el defecto de Montachem (no se parece al total de
+ * gastos; sí cuadra con utilidad bruta − gastos).
  */
 export const EEFF_PROMPT = `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
 Extrae ÚNICAMENTE los rubros que se piden abajo. No devuelvas ningún otro.
@@ -59,6 +70,7 @@ El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila
 · cuentas_por_pagar_relacionadas: cuentas por pagar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí proveedores de terceros, acreedores comerciales ni «otras cuentas por pagar»: si el documento solo trae esas, este campo va en null.
 · total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
 · total_activos: el total general de activos ("Total Activo", "Total de activos", "TOTAL ACTIVOS"), tal como el documento lo imprime.
+· propiedad_planta_equipo: propiedad, planta y equipo, activos fijos, inmuebles maquinaria y equipo — el NETO (después de depreciación acumulada), tal como el documento lo imprime.
 
 ── ACTIVOS: DETALLE COMPLETO, PARA LA TABLA DE ACTIVOS DEL INFORME ──
 Distintos estados financieros traen distintas filas de activo (uno trae "Inversiones asociadas", otro "Activos financieros", otro separa "Cuentas por cobrar a partes relacionadas" de las comerciales), así que además de las partidas de arriba se pide la sección ACTIVOS completa:
@@ -70,11 +82,13 @@ Incluye los subtotales de cada grupo ("Total Activo Corriente", "Total Activo No
 ── ESTADO DE RESULTADOS ──
 · ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos operacionales, ingresos por servicios.
 · costo_ventas: costo de ventas, costo de los servicios prestados, costo de mercancía vendida.
+  EXCEPCIÓN a la regla central de no sumar filas, solo para este campo: si el documento NO imprime un total consolidado de "Costo de Ventas" y en cambio lo desglosa en varios renglones de costo del giro (por ejemplo "Costo de servicios prestados" + "Costo de venta de mercancía", o con "Costo de producción"), suma esos renglones y devuelve el total en costo_ventas. Esta excepción es SOLO para costo_ventas: si el documento ya imprime un total consolidado, transcríbelo tal cual y no sumes nada; y ningún otro campo de este prompt admite sumar filas.
 · gastos_ventas: gastos de ventas, gastos de ventas y distribución, gastos comerciales.
 · gastos_administracion: gastos de administración, gastos administrativos.
 · utilidad_bruta: la utilidad o ganancia bruta, si el documento la imprime como fila propia.
+· utilidad_operacional_impresa: la utilidad, ganancia o resultado operacional, SI el documento la imprime como fila propia (por ejemplo "Utilidad Operacional", "Ganancia Operacional", "Resultado de Actividades de la Operación"). Transcríbela tal cual esté impresa, con su rótulo exacto. NO la calcules ni la deduzcas: si no aparece como fila propia, va en null.
 
-NO se pide ninguna utilidad operacional ni resultado de la operación: el sistema la calcula como ingresos menos costo de ventas menos la suma de los dos rubros de gasto. Si el documento imprime una fila llamada «resultado de actividades de la operación» o parecida, IGNÓRALA — hay estados donde ese rótulo acompaña al total de los gastos y no a la utilidad, y esa confusión es la que este cambio evita.
+El sistema NO usa esta fila como la utilidad operacional del estudio: la calcula como ingresos menos costo de ventas menos la suma de los dos rubros de gasto, y solo si ese cálculo falla o no cuadra con la utilidad bruta recurre a la fila impresa, verificándola contra el resto del estado antes de usarla — hay estados donde ese rótulo acompaña al total de los gastos y no a la utilidad, y esa confusión es la que ese cálculo evita. Por eso se pide igual: es el último recurso, no la primera fuente.
 Tampoco se piden «otros gastos» ni «otros ingresos»: quedan fuera de los gastos operativos a propósito.
 
 ── RUBROS SIN ASIGNAR ──
@@ -95,11 +109,13 @@ Devuelve SOLO este JSON, sin marcas markdown:
   "cuentas_por_pagar_relacionadas": {"valor": null, "rotulo": ""},
   "total_activo_corriente": {"valor": null, "rotulo": ""},
   "total_activos": {"valor": null, "rotulo": ""},
+  "propiedad_planta_equipo": {"valor": null, "rotulo": ""},
   "ingresos_operacionales": {"valor": null, "rotulo": ""},
   "costo_ventas": {"valor": null, "rotulo": ""},
   "gastos_ventas": {"valor": null, "rotulo": ""},
   "gastos_administracion": {"valor": null, "rotulo": ""},
   "utilidad_bruta": {"valor": null, "rotulo": ""},
+  "utilidad_operacional_impresa": {"valor": null, "rotulo": ""},
   "rubros_no_asignados": [{"rotulo": "", "valor": null}],
   "activos_detalle": [{"rotulo": "", "valor": null, "es_subtotal": false}]
 }`;
@@ -225,16 +241,17 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
 /* Las cifras que la lectura devuelve y el campo del estudio al que van.
 
    El alcance lo fijó el usuario el 2026-08-21, después de una primera versión que leía los
-   quince rubros del balance: de la situación financiera se toman SOLO tres partidas más el
-   subtotal del activo corriente, y las dos partidas de capital de trabajo son las de PARTES
-   RELACIONADAS, no las comerciales.
+   quince rubros del balance: de la situación financiera se toman las partidas de PARTES
+   RELACIONADAS (no las comerciales), el subtotal del activo corriente, el total general de
+   activos y, desde el caso de Symtek (2026-08-24), PP&E — antes 100% manual, lo que dejaba
+   en cero por omisión el PP&E de un estudio con esa partida significativa.
 
-   Esa elección no es un detalle de nomenclatura. En este estudio la operación vinculada es
-   con la matriz, y el propio estado financiero lo confirma: en su flujo de efectivo, la
-   línea «Aumento / disminución en proveedores» (−135.245.675) es exactamente la variación de
-   CUENTAS POR PAGAR A PARTES RELACIONADAS (5.400.016.795 − 5.535.262.470). El proveedor es
-   la vinculada, así que el capital de trabajo que el ajuste debe neutralizar es el de esas
-   partidas y no el de los deudores comerciales con terceros.
+   La elección de partes relacionadas no es un detalle de nomenclatura. En este estudio la
+   operación vinculada es con la matriz, y el propio estado financiero lo confirma: en su
+   flujo de efectivo, la línea «Aumento / disminución en proveedores» (−135.245.675) es
+   exactamente la variación de CUENTAS POR PAGAR A PARTES RELACIONADAS (5.400.016.795 −
+   5.535.262.470). El proveedor es la vinculada, así que el capital de trabajo que el ajuste
+   debe neutralizar es el de esas partidas y no el de los deudores comerciales con terceros.
 
    Se escribe una sola vez, aquí, y de ella salen el mapeo y la verificación. */
 export const CAMPO_POR_RUBRO = {
@@ -249,28 +266,43 @@ export const CAMPO_POR_RUBRO = {
      alimenta ninguna otra partida — es universal a cualquier balance, a diferencia del
      detalle de `activos_detalle`, que varía de un EEFF a otro. */
   total_activos: 't_act_tot',
+  /* Universal igual que el total de activos: no depende de con quién sea la operación. Antes
+     era 100% manual (ver el comentario que acompañaba a `RUBROS_MANUALES` en
+     `IngestaCifras.jsx`) porque el caso que fijó el alcance (Montachem) tenía el equipo
+     totalmente depreciado y en cero; para una compañía con PP&E real, dejarlo en manual lo
+     trataba como cero por omisión en los ajustes que lo usan. */
+  propiedad_planta_equipo: 't_ppe',
 };
 
 /* Los rubros que NO son campos del estudio pero se leen porque de ellos sale la utilidad
-   operacional. Ya no se «coteja» una utilidad leída contra las identidades del estado: por
-   decisión del usuario (2026-08-21) la utilidad operacional NO se lee de ninguna fila, se
-   CALCULA, y los gastos operativos son la suma de los dos rubros de gasto del giro:
+   operacional (o, en su defecto, su fallback). Por decisión del usuario (2026-08-21) la
+   utilidad operacional NO se lee como fuente primaria de ninguna fila, se CALCULA, y los
+   gastos operativos son la suma de los dos rubros de gasto del giro:
 
      gastos operativos   = gastos de ventas + gastos de administración
      utilidad operacional = ventas netas − costo de ventas − gastos operativos
 
-   Con eso, la fila que el documento rotule «resultado de la operación» deja de importar —y
-   era justo la que en el estado de Montachem 2025 traía el total de los gastos en lugar de
-   la utilidad, y hacía que el libro publicara 4.877.416.281 de gastos operativos—. Quedan
-   fuera del cálculo «otros gastos» y «otros ingresos»: la definición del usuario son los
-   dos rubros del giro, y en ese estado esa diferencia es de 4.051.927 pesos.
+   Con eso, la fila que el documento rotule «resultado de la operación» deja de decidir el
+   margen por sí sola —y era justo la que en el estado de Montachem 2025 traía el total de
+   los gastos en lugar de la utilidad, y hacía que el libro publicara 4.877.416.281 de gastos
+   operativos—. Quedan fuera del cálculo «otros gastos» y «otros ingresos»: la definición del
+   usuario son los dos rubros del giro, y en ese estado esa diferencia es de 4.051.927 pesos.
 
-   `utilidad_bruta` se sigue leyendo, pero solo para poder advertir si el costo o las ventas
-   no cuadran con lo que el documento imprime. No entra en ningún campo del estudio. */
+   `utilidad_bruta` se sigue leyendo para advertir si el costo o las ventas no cuadran con lo
+   que el documento imprime, y también como la identidad contra la que se valida cualquier
+   utilidad operacional antes de aplicarla.
+
+   `utilidad_operacional_impresa` se agregó el 2026-08-24 (caso Symtek): la fila impresa, SI
+   el documento la trae, para que `eeffVerificacion.js` la use como último recurso cuando el
+   cálculo analítico falla o no cuadra con la utilidad bruta — verificada primero contra el
+   resto del estado (no se parece al total de gastos; sí cuadra con utilidad bruta − gastos),
+   así que el defecto de Montachem sigue cerrado. Ninguno de los dos entra en ningún campo
+   del estudio directamente: `eeffVerificacion.js` decide. */
 export const RUBROS_DE_COTEJO = [
   'gastos_ventas',
   'gastos_administracion',
   'utilidad_bruta',
+  'utilidad_operacional_impresa',
 ];
 
 /**

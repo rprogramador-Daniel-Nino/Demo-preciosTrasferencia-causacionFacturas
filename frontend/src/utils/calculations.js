@@ -186,7 +186,10 @@ export function pliOf(o, kind) {
   if (!o) return null;
   const s = num(o.s);
   if (!s || s === 0) return null;
-  if (kind === 'MO') return num(o.op) / s;
+  if (kind === 'MO') {
+    const op = num(o.op);
+    return op === null ? null : op / s;
+  }
   /* `egreso` y no `num`: el costo llega con el signo que traía el documento (ver
      `egreso`), y con signo negativo la utilidad bruta salía por el doble. */
   if (kind === 'MB') return (s - egreso(o.c)) / s;
