@@ -195,6 +195,41 @@ test('aunque la partición sobreviva a la agrupación, la cifra sigue reconocié
     'la cifra está impresa en el documento, aunque llegue troceada');
 });
 
+/* ══════ Cifras de una misma fila pegadas sin ningún separador ══════
+   Caso real: LAMBERTI COLOMBIA SAS (2026-08-24). El hueco entre celdas de este generador
+   de PDF no siempre alcanza el umbral de `unirTrozos`, y cuatro cifras de una misma fila
+   del análisis vertical quedan pegadas en un solo bloque de dígitos: el final de una y el
+   principio de la siguiente forman un grupo de miles de más de tres dígitos, que no es
+   ninguna de las dos cifras reales. El modelo las leía bien (por la imagen); esta
+   verificación las descartaba igual, con «no aparece impresa en el documento». */
+
+test('dos cifras pegadas sin separador se reconocen las dos, no una mezcla de las dos', () => {
+  const cifras = cifrasDelTexto('1.684.940.1711.232.048.169');
+  assert.ok(cifraApareceEnTexto(1684940171, cifras), 'la primera cifra');
+  assert.ok(cifraApareceEnTexto(1232048169, cifras), 'la segunda cifra');
+  /* El grupo mixto «1711» no es ninguna cifra real: no debe colarse como si lo fuera. */
+  assert.strictEqual(cifraApareceEnTexto(17111232048169, cifras), false);
+});
+
+test('cuatro cifras pegadas en cadena se reconocen todas', () => {
+  /* El bloque real, tal como lo entrega `agruparEnLineas` para esa fila de Lamberti. */
+  const cifras = cifrasDelTexto('1.684.940.1711.232.048.1692.856.848.8075.990.412.774');
+  [1684940171, 1232048169, 2856848807, 5990412774].forEach((n) => assert.ok(
+    cifraApareceEnTexto(n, cifras), `falta reconocer ${n}`));
+});
+
+test('una cifra normal, sin nada pegado, se sigue reconociendo igual que antes', () => {
+  const cifras = cifrasDelTexto('TOTAL ACTIVO | 21.850.187.494');
+  assert.ok(cifraApareceEnTexto(21850187494, cifras));
+});
+
+test('un número sin separadores de miles no se trocea', () => {
+  /* Un año, un NIT o un código sin puntos no tiene grupos que desglosar: debe pasar entero. */
+  const cifras = cifrasDelTexto('NIT 900213910');
+  assert.ok(cifraApareceEnTexto(900213910, cifras));
+  assert.strictEqual(cifraApareceEnTexto(900, cifras), false);
+});
+
 test('sin geometría en los fragmentos, cada uno sigue siendo su propia celda', () => {
   /* Degradación: un PDF cuyos fragmentos no traen width/height se comporta como antes de
      que existiera el criterio del hueco, en vez de pegarlo todo. */
