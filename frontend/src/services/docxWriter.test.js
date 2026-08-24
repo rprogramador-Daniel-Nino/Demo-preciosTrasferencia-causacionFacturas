@@ -1146,3 +1146,31 @@ test('sin un anexo de estados financieros reconocible, los huecos se reparten co
   const { doc } = await abrir(html, [], [PNG_1x1, PNG_1x1]);
   assert.equal((doc.match(/<w:drawing>/g) || []).length, 2);
 });
+
+test('el hueco de otro anexo sale con la página que trae dentro', async () => {
+  /* El extractor conserva las páginas escaneadas de los anexos que no son el de estados
+     financieros —el contrato es el mismo documento año a año y el sistema no tiene de dónde
+     sacarlo— y las deja dentro de su hueco. El hueco sigue ahí para poder reemplazarlas. */
+  const conOriginal = '<div data-hueco="anexo_eeff" data-id="hueco_65" data-original="pag65">' +
+    '<img data-recurso="pag65" style="width:15.60cm;height:20.20cm" /></div>';
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(65, TITULO_CONTRATO + conOriginal);
+  const { doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [PNG_1x1]);
+  const { contrato, dibujos } = posiciones(doc);
+  assert.equal(dibujos.length, 2, 'tienen que salir la del ANEXO A y la del contrato');
+  assert.ok(dibujos.some((p) => p > contrato), 'la página del contrato no salió en su anexo');
+  assert.doesNotMatch(doc, /Falta el anexo/, 'no falta nada: los dos anexos tienen su página');
+});
+
+test('las páginas subidas no se van al hueco de otro anexo aunque ése traiga la suya', async () => {
+  /* La cola de páginas subidas es del anexo de estados financieros. Que el del contrato ya
+     tenga contenido no cambia nada: sigue sin tocar esa cola. */
+  const conOriginal = '<div data-hueco="anexo_eeff" data-id="hueco_65" data-original="pag65">' +
+    '<img data-recurso="pag65" style="width:15.60cm;height:20.20cm" /></div>';
+  const html = pagina(47, TITULO_EEFF + hueco(47)) + pagina(65, TITULO_CONTRATO + conOriginal);
+  const { doc } = await abrir(html, [{ id: 'pag65', dataUrl: PNG_1x1 }], [PNG_1x1, PNG_1x1]);
+  const { contrato, dibujos } = posiciones(doc);
+  /* Dos subidas al ANEXO A —la segunda no cabe en su único hueco y va detrás— más la del
+     contrato: tres, y sólo una después del título del contrato. */
+  assert.equal(dibujos.length, 3);
+  assert.equal(dibujos.filter((p) => p > contrato).length, 1);
+});
