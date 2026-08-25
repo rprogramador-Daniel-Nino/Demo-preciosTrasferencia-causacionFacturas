@@ -1839,32 +1839,36 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           )}
         </div>
         <div className="flex gap-3">
-          {/* Solo cuando al estudio le faltan los criterios de búsqueda: recarga
-              ÚNICAMENTE esa hoja, sin pasar por la importación completa de comparables
-              (que reiniciaría la curación con IA ya hecha del paso 3). */}
-          {!(study.criteriosScreening && study.criteriosScreening.length) && (
-            <div className="relative">
-              <button
-                className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer"
-                title="Suba de nuevo el export de Capital IQ para completar solo los criterios de búsqueda (Tabla de Códigos SIC), sin tocar las comparables ya seleccionadas"
-              >
-                {cargandoCriteriosScreening ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                Cargar Criterios de Búsqueda (Capital IQ)
-              </button>
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                disabled={cargandoCriteriosScreening}
-                onChange={(e) => {
-                  if (e.target.files[0]) {
-                    handleCargarCriteriosScreening(e.target.files[0]);
-                  }
-                  e.target.value = null;
-                }}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-            </div>
-          )}
+          {/* Siempre disponible, tenga o no ya criterios el estudio: recarga ÚNICAMENTE
+              esa hoja, sin pasar por la importación completa de comparables (que
+              reiniciaría la curación con IA ya hecha del paso 3). Antes se ocultaba en
+              cuanto `study.criteriosScreening` tenía algo, así que si esos criterios
+              habían quedado mal leídos en la importación inicial no había forma de
+              corregirlos desde esta pantalla. */}
+          <div className="relative">
+            <button
+              className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer"
+              title="Suba de nuevo el export de Capital IQ para completar o corregir solo los criterios de búsqueda (Tabla de Códigos SIC), sin tocar las comparables ya seleccionadas"
+            >
+              {cargandoCriteriosScreening ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              {(study.criteriosScreening && study.criteriosScreening.length)
+                ? 'Recargar Criterios de Búsqueda (Capital IQ)'
+                : 'Cargar Criterios de Búsqueda (Capital IQ)'}
+            </button>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              disabled={cargandoCriteriosScreening}
+              onChange={(e) => {
+                if (e.target.files[0]) {
+                  handleCargarCriteriosScreening(e.target.files[0]);
+                }
+                e.target.value = null;
+              }}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+          </div>
+
           <div className="relative">
             <button className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
