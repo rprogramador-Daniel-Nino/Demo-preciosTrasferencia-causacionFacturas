@@ -70,6 +70,34 @@ export function parsearCriteriosScreening(workbook) {
 }
 
 /**
+ * Solo los criterios de búsqueda (hoja "Screen Criteria") de un archivo de Capital IQ,
+ * sin tocar nada de comparables.
+ *
+ * Existe para el caso de un estudio ya curado con IA al que le falta esta hoja (porque
+ * el archivo que se subió al principio no la traía): volver a subir el archivo completo
+ * por `importCapitalIQExcel` reiniciaría `iaMatch`, `selectionFunnel` y `motorAuditoria`
+ * —el veredicto de la curación, el embudo y la auditoría de rechazadas/en reserva—,
+ * borrando trabajo ya hecho solo para rellenar una tabla. Esta función lee el mismo tipo
+ * de archivo pero no devuelve nada más que los criterios.
+ */
+export async function leerCriteriosScreeningDeArchivo(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        resolve(parsearCriteriosScreening(workbook));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/**
  * Localiza la fila de encabezados. El export de Capital IQ NO los pone en la
  * primera fila: la 0 es el título del reporte ("Capital IQ Company Screening
  * Report > ..."), la 1 va vacía y los encabezados están en la 2. Asumir json[0]
