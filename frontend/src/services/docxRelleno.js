@@ -848,24 +848,36 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
   const doc = sustituidorDeTablas(xml, null);
 
-  /* Sinónimos por posición confirmados contra una plantilla real (LATV SUCURSAL
-     COLOMBIA) que no usaba la redacción exacta esperada:
-     - "Análisis del Sector" → esa plantilla trae "Análisis EN el sector de...".
-       `tablasInforme.js` (`RX_SECTORIAL`) ya toleraba esta variante para su propio
-       chequeo de cobertura; aquí nunca se había alineado. Se suma también "Análisis
-       Sectorial", la otra redacción usual en informes de PT en Colombia.
-     - "Importaciones y exportaciones del sector" → esa misma plantilla trae solo
-       "Importaciones y exportaciones", sin el sufijo "del sector". La comparación
-       exige que el texto EN el documento contenga al rótulo buscado, nunca al
-       revés, así que un rótulo de plantilla más corto que el buscado no podía calzar.
-     No se inventan sinónimos para las demás posiciones sin evidencia de una plantilla
-     real: se suman del mismo modo el día que aparezca una. */
+  /* Sinónimos por posición. Dos formas, según qué tan cerrada es la variación:
+     - Lista fija de frases, cuando ya se confirmaron variantes concretas contra una
+       plantilla real (LATV SUCURSAL COLOMBIA): "Análisis del Sector" → esa plantilla
+       trae "Análisis EN el sector de..." (`tablasInforme.js`/`RX_SECTORIAL` ya
+       toleraba esta variante para su propio chequeo de cobertura; aquí nunca se había
+       alineado) y también "Análisis Sectorial", la otra redacción usual en informes de
+       PT en Colombia.
+     - `{etiqueta, test}` (`coincideTitulo`), cuando la variación no es una lista
+       cerrada de frases sino una FORMA: agregar una frase literal por cada plantilla
+       de cliente que redacte distinto no escala — la próxima empresa siempre puede
+       traer una redacción más. "Importaciones y exportaciones del sector" y "¿Qué se
+       proyecta para el sector" usan esta forma porque una plantilla real (PROMOCIONES
+       FANTÁSTICAS S.A.S., 2026-08-25) las trae como "Exportaciones e Importaciones..."
+       (orden invertido, conector «e» en vez de «y») y "¿Cuáles son las proyecciones y
+       perspectivas...?" (sin ninguna palabra en común con "¿Qué se proyecta",
+       aparte del tema): ninguna lista de frases fijas cubre eso, pero las RAÍCES de
+       palabra sí, sin importar en qué orden o con qué conector se escriban. */
   const titulos = [
     ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
     'Comportamiento del Sector',
     'Datos Clave del Sector',
-    ['Importaciones y exportaciones del sector', 'Importaciones y exportaciones'],
-    '¿Qué se proyecta para el sector',
+    {
+      etiqueta: 'Importaciones y exportaciones del sector',
+      test: (clave) => clave.includes('importacion') && clave.includes('exportacion'),
+    },
+    {
+      etiqueta: '¿Qué se proyecta para el sector',
+      test: (clave) => clave.includes('sector')
+        && (clave.includes('proyect') || clave.includes('perspectiv')),
+    },
     'Conclusiones y Perspectivas',
     'ANÁLISIS ECONÓMICO',
   ];
@@ -1515,16 +1527,36 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
  * @param {string[]} titulos
  * @returns {Array<{inicio:number, finPropio:number}|null>}
  */
-export function localizarHitos(xml, titulos) {
+/**
+ * ¿La clave normalizada de un candidato satisface esta posición de `titulos`?
+ *
+ * Tres formas de sinónimo, de más rígida a más flexible:
+ * - un string: coincide por inclusión de la frase exacta (normalizada).
+ * - un arreglo de strings: coincide con cualquiera de la lista — variantes fijas ya
+ *   confirmadas contra una plantilla real (ver `titulos` en
+ *   `actualizarApartadoSectorialOoxml`).
+ * - `{ etiqueta, test }`: coincide según `test(claveCandidato)`, para variantes que NO
+ *   son una lista cerrada de frases sino una forma (mismas raíces de palabra, sin
+ *   importar orden ni conector) — "Exportaciones e Importaciones" vs "Importaciones y
+ *   exportaciones", o "¿Cuáles son las proyecciones y perspectivas...?" vs "¿Qué se
+ *   proyecta...?". Agregar un sinónimo literal por cada plantilla de cliente que redacte
+ *   distinto no escala: una nueva empresa siempre puede traer una redacción más: esta
+ *   forma cubre la VARIACIÓN, no la empresa.
+ */
+function coincideTitulo(entrada, claveCandidato) {
+  if (entrada && typeof entrada.test === 'function') return entrada.test(claveCandidato);
+  const lista = Array.isArray(entrada) ? entrada : [entrada];
+  return lista.some((t) => claveCandidato.includes(claveTitulo(t)));
+}
+
+export function localizarHitos(xml, titulosArg) {
   const texto = String(xml || '');
-  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
-     traer redacciones distintas según qué consultor escribió la plantilla de ese cliente
-     en su momento ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
-     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
-     Mismo mecanismo que ya usa `localizarBloqueTabla` para nombres de tabla. */
-  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
-  const resultado = new Array(claves.length).fill(null);
-  if (!claves.length) return resultado;
+  /* Cada posición admite un título único, un arreglo de sinónimos, o un `{etiqueta,test}`
+     — ver `coincideTitulo`. Mismo mecanismo (por inclusión) que ya usa
+     `localizarBloqueTabla` para nombres de tabla, en su forma más simple. */
+  const titulos = titulosArg || [];
+  const resultado = new Array(titulos.length).fill(null);
+  if (!resultado.length) return resultado;
 
   /* Candidatos: cada párrafo con pinta de título, en orden de aparición, recogidos de
      una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
@@ -1553,9 +1585,9 @@ export function localizarHitos(xml, titulos) {
      principio, así una tabla que se llame igual que un encabezado posterior no se
      confunde con él. */
   let desde = 0;
-  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+  for (let objetivo = 0; objetivo < titulos.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
+    while (k < candidatos.length && !coincideTitulo(titulos[objetivo], candidatos[k].clave)) k += 1;
     if (k >= candidatos.length) continue;
     /* Si el hito es el título de una tabla —caso normal para los nombres de
        `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
@@ -1588,7 +1620,7 @@ export function localizarHitos(xml, titulos) {
 /** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
  *  sinónimos si trae varios (`['Desempleo en Colombia', 'Tasa de Desempleo', ...]`) — para
  *  avisos y logs, nunca la representación por defecto de un arreglo. */
-const etiquetaTitulo = (t) => (Array.isArray(t) ? t[0] : t);
+const etiquetaTitulo = (t) => (t && typeof t.etiqueta === 'string' ? t.etiqueta : (Array.isArray(t) ? t[0] : t));
 
 /**
  * Para cada hueco entre `titulos[i]` y `titulos[i+1]` (índices `0..hitos.length-2`),
@@ -1660,7 +1692,10 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
        arregla una vez y descuelga todos los apartados que dependían de él. */
     titulos.forEach((titulo, i) => {
       if (hitos[i]) return;
-      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+      /* `titulo` puede ser un `{etiqueta,test}` (ver `coincideTitulo`): el aviso, y su
+         deduplicación más abajo, siempre usan su forma legible. */
+      const etiqueta = etiquetaTitulo(titulo);
+      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
         + '», así que los apartados que delimita se quedan como están en la plantilla';
       console.warn('[docxRelleno] ' + aviso);
       if (!Array.isArray(avisos)) return;
@@ -1669,7 +1704,7 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
          sector—, así que sin esto el mismo rótulo ausente se avisa dos veces, con dos
          encabezados distintos y la misma causa detrás. Se compara por el rótulo
          entrecomillado, que es lo único que el usuario tiene que ir a corregir. */
-      if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+      if (avisos.some((a) => a.includes('«' + etiqueta + '»'))) return;
       avisos.push(aviso);
     });
 
@@ -2343,7 +2378,26 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
       return actual;
     }
-    const bloques = localizarBloquesTabla(actual, NOMBRES_TABLA_CRITERIOS);
+    /* Uno de los nombres de `NOMBRES_TABLA_CRITERIOS» —«Criterios de búsqueda»— puede
+       calzar con un texto DENTRO de la misma tabla que ya encontró «Códigos SIC
+       utilizados» (p. ej. una leyenda «Criterios de Búsqueda» en su interior), no con
+       una copia distinta: dos bloques que comparten el mismo `fin` porque uno está
+       anidado en el otro. Sin filtrar esto, se contaban como 2 copias «ambiguas», la
+       lógica de desambiguación decidía borrar las dos, y el segundo borrado usaba el
+       `fin` original (990443 en un caso real) sobre un texto que el primer borrado ya
+       había acortado — cortando una etiqueta a la mitad ~15 000 caracteres más
+       adelante y dejando un .docx que Word ya no podía abrir (reportado 2026-08-25,
+       estudio de PROMOCIONES FANTÁSTICAS S.A.S.). Mismo criterio de desanidado que ya
+       usa «Rango Intercuartil» más abajo: ordenar por inicio y quedarse con el más
+       ancho de cada grupo que se solape. */
+    const bloques = [];
+    localizarBloquesTabla(actual, NOMBRES_TABLA_CRITERIOS)
+      .sort((a, b) => a.inicio - b.inicio)
+      .forEach((b) => {
+        const anterior = bloques[bloques.length - 1];
+        if (anterior && b.inicio < anterior.fin) return;
+        bloques.push(b);
+      });
     if (!bloques.length) {
       if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
       return actual;

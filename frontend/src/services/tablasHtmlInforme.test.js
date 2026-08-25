@@ -1006,6 +1006,51 @@ test('actualizarApartadoSectorialHtml ubica la narrativa aunque la plantilla esc
   assert.doesNotMatch(texto, /Texto viejo de conclusiones/);
 });
 
+test('actualizarApartadoSectorialHtml reconoce "Importaciones/Exportaciones" en cualquier orden y "proyección" con cualquier redacción — no por lista de frases fijas, por FORMA', () => {
+  /* Espejo HTML del test equivalente en docxRelleno.test.js. Plantilla sintética distinta
+     de LATV: orden invertido de "Exportaciones e Importaciones" (conector «e») y una
+     pregunta de proyección sin ninguna palabra en común con "¿Qué se proyecta" salvo el
+     tema (caso real, plantilla de PROMOCIONES FANTÁSTICAS S.A.S., 2026-08-25). */
+  const html = [
+    '<h2>Análisis del Sector de fabricación de empaques</h2>',
+    '<h3>Comportamiento del Sector de la Industria de empaques en 2025 y Comparación con 2024</h3>',
+    '<p>Texto viejo de comportamiento, referencia 2024.</p>',
+    '<h3>Datos Clave del Sector</h3>',
+    '<h3>Exportaciones e Importaciones del sector de fabricación de empaques</h3>',
+    '<p>Texto viejo de comercio exterior, referencia 2024.</p>',
+    '<h3>¿Cuáles son las proyecciones y perspectivas del sector de fabricación de empaques?</h3>',
+    '<p>Texto viejo de proyección, referencia 2024.</p>',
+    '<h3>Conclusiones y Perspectivas</h3>',
+    '<p>Texto viejo de conclusiones, referencia 2024.</p>',
+    '<h2>ANÁLISIS ECONÓMICO</h2>',
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2025: {
+        tituloSector: 'de empaques',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real 2025.</p>',
+          comercioExterior: '<p>Comercio exterior real 2025.</p>',
+          proyeccion: '<p>Proyección real 2025.</p>',
+          conclusiones: '<p>Conclusiones reales 2025.</p>',
+        },
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2025 }, 2025, avisos);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  assert.match(texto, /Comercio exterior real 2025\./, 'no se ubicó junto a "Exportaciones e Importaciones" con el orden invertido');
+  assert.doesNotMatch(texto, /Texto viejo de comercio exterior/);
+  assert.match(texto, /Proyección real 2025\./, 'no se ubicó junto a una pregunta de proyección con otra redacción');
+  assert.doesNotMatch(texto, /Texto viejo de proyección/);
+  assert.doesNotMatch(avisos.join(' '), /no se encontró el rótulo «Importaciones y exportaciones del sector»/);
+  assert.doesNotMatch(avisos.join(' '), /no se encontró el rótulo «¿Qué se proyecta para el sector»/);
+});
+
 /* Tabla de datos clave como la trae la plantilla de END GAME: encabezado con los DOS años
    del informe anterior y filas de datos de aquel contribuyente. */
 const TABLA_DATOS_CLAVE = '<table>'

@@ -685,7 +685,21 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   if (!criterios.length) {
     anotar(TABLA_CRITERIOS);
   } else {
-    const bloques = localizarTablasHtml(salida, NOMBRES_TABLA_CRITERIOS);
+    /* «Criterios de búsqueda» (uno de los `NOMBRES_TABLA_CRITERIOS») puede calzar con un
+       texto DENTRO de la misma tabla que ya encontró «Códigos SIC utilizados» —una
+       leyenda en su interior—, no con una copia distinta: dos bloques anidados, mismo
+       `fin`. Sin filtrar esto se procesan dos veces el mismo tramo con offsets que el
+       primer paso ya movió (mismo bug confirmado en `docxRelleno.js`, reportado
+       2026-08-25). Se ordena por inicio y se descarta el que empiece dentro de uno ya
+       aceptado, igual que hace el rango intercuartil un poco más abajo. */
+    const bloques = [];
+    localizarTablasHtml(salida, NOMBRES_TABLA_CRITERIOS)
+      .sort((a, b) => a.inicio - b.inicio)
+      .forEach((b) => {
+        const anterior = bloques[bloques.length - 1];
+        if (anterior && b.inicio < anterior.fin) return;
+        bloques.push(b);
+      });
     if (!bloques.length) {
       anotar(TABLA_CRITERIOS);
     } else {
@@ -910,16 +924,23 @@ function finDeTablaInmediataHtml(html, cursor) {
  * @param {string[]} titulos
  * @returns {Array<{inicio:number, finPropio:number}|null>}
  */
-export function localizarHitosHtml(html, titulos) {
+/** Igual que `coincideTitulo` de `docxRelleno.js` — no se reexporta para no crear un
+ *  import cruzado innecesario de un módulo interno; ver ahí la explicación completa de
+ *  las tres formas de sinónimo (string, arreglo de strings, `{etiqueta,test}`). */
+function coincideTituloHtml(entrada, claveCandidato) {
+  if (entrada && typeof entrada.test === 'function') return entrada.test(claveCandidato);
+  const lista = Array.isArray(entrada) ? entrada : [entrada];
+  return lista.some((t) => claveCandidato.includes(claveTitulo(t)));
+}
+
+export function localizarHitosHtml(html, titulosArg) {
   const texto = String(html || '');
-  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
-     traer redacciones distintas según qué consultor escribió el documento de referencia de
-     ese cliente ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
-     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
-     Mismo mecanismo que `localizarHitos` de `docxRelleno.js`. */
-  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
-  const resultado = new Array(claves.length).fill(null);
-  if (!claves.length) return resultado;
+  /* Cada posición admite un título único, un arreglo de sinónimos, o un `{etiqueta,test}`
+     — ver `coincideTituloHtml`. Mismo mecanismo que `localizarHitos` de
+     `docxRelleno.js`. */
+  const titulos = titulosArg || [];
+  const resultado = new Array(titulos.length).fill(null);
+  if (!resultado.length) return resultado;
 
   /* Candidatos: cada bloque con pinta de título, en orden de aparición, recogidos de
      una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
@@ -939,9 +960,9 @@ export function localizarHitosHtml(html, titulos) {
   }
 
   let desde = 0;
-  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+  for (let objetivo = 0; objetivo < titulos.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
+    while (k < candidatos.length && !coincideTituloHtml(titulos[objetivo], candidatos[k].clave)) k += 1;
     if (k >= candidatos.length) continue;
     let finPropio = candidatos[k].fin;
     const finTabla = finDeTablaInmediataHtml(texto, finPropio);
@@ -956,7 +977,7 @@ export function localizarHitosHtml(html, titulos) {
  *  vez de operar sobre un `sustituidorDeTablas` (esta ruta no tiene ese envoltorio). */
 /** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
  *  sinónimos si trae varios — mismo criterio que `docxRelleno.js`. */
-const etiquetaTituloHtml = (t) => (Array.isArray(t) ? t[0] : t);
+const etiquetaTituloHtml = (t) => (t && typeof t.etiqueta === 'string' ? t.etiqueta : (Array.isArray(t) ? t[0] : t));
 
 /** El punto de un hito donde ancla una inserción — mismo criterio que `puntoDeHito` de
  *  `docxRelleno.js`, que no se reexporta para no crear un import cruzado innecesario de
@@ -974,13 +995,15 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
      texto que `reemplazarPorHitos` en `docxRelleno.js`, donde está la explicación. */
   titulos.forEach((titulo, i) => {
     if (hitos[i]) return;
-    const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+    /* `titulo` puede ser un `{etiqueta,test}` — el aviso siempre usa su forma legible. */
+    const etiqueta = etiquetaTituloHtml(titulo);
+    const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
       + '», así que los apartados que delimita se quedan como están en la plantilla';
     console.warn('[tablasHtmlInforme] ' + aviso);
     if (!Array.isArray(avisos)) return;
     /* Un rótulo cierra una cadena y abre la siguiente, así que sin esto se avisaría dos
        veces del mismo. Ver la nota de `reemplazarPorHitos` en `docxRelleno.js`. */
-    if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+    if (avisos.some((a) => a.includes('«' + etiqueta + '»'))) return;
     avisos.push(aviso);
   });
 
@@ -1263,13 +1286,25 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
 
   /* Sinónimos por posición — mismo criterio y misma evidencia que
      `actualizarApartadoSectorialOoxml` de `docxRelleno.js`, donde está la explicación
-     completa (plantilla real de LATV SUCURSAL COLOMBIA con "Análisis EN el sector..." e
-     "Importaciones y exportaciones" sin el sufijo "del sector"). */
+     completa: lista fija para variantes concretas ya confirmadas (LATV SUCURSAL
+     COLOMBIA: "Análisis EN el sector..."), y `{etiqueta,test}` para variación de FORMA
+     que una lista de frases no puede cubrir sin agregar una entrada por cada plantilla
+     de cliente (PROMOCIONES FANTÁSTICAS S.A.S.: "Exportaciones e Importaciones..." con
+     el orden invertido, y "¿Cuáles son las proyecciones y perspectivas...?" sin ninguna
+     palabra en común con "¿Qué se proyecta"). */
   const titulos = [
     ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
     'Comportamiento del Sector', 'Datos Clave del Sector',
-    ['Importaciones y exportaciones del sector', 'Importaciones y exportaciones'],
-    '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
+    {
+      etiqueta: 'Importaciones y exportaciones del sector',
+      test: (clave) => clave.includes('importacion') && clave.includes('exportacion'),
+    },
+    {
+      etiqueta: '¿Qué se proyecta para el sector',
+      test: (clave) => clave.includes('sector')
+        && (clave.includes('proyect') || clave.includes('perspectiv')),
+    },
+    'Conclusiones y Perspectivas',
     'ANÁLISIS ECONÓMICO',
   ];
 

@@ -858,6 +858,35 @@ test('Códigos SIC: coincide por título completo "Códigos SIC utilizados en la
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'no emite aviso');
 });
 
+test('Códigos SIC: la primera fila dice literalmente "Criterios de Búsqueda" — es la MISMA tabla encontrada dos veces, no dos copias', () => {
+  /* Caso real (PROMOCIONES FANTÁSTICAS S.A.S., 2026-08-25): la tabla se encuentra por su
+     párrafo de título («Tabla 12. Códigos SIC utilizados») Y, por separado, porque su
+     PROPIA primera fila dice «Criterios de Búsqueda» —uno de los sinónimos de
+     `NOMBRES_TABLA_CRITERIOS`—, que `candidatosPorFilaTitulo` toma como IDENTIFICADOR de
+     tabla. Las dos búsquedas devuelven la misma tabla dos veces, con el mismo `fin` y un
+     `inicio` distinto (una anida dentro de la otra) — no dos tablas duplicadas de fuentes
+     distintas. Antes de este fix, `bloques.length === 2` disparaba la lógica de
+     desambiguación pensada para copias genuinas (Ryan LLC/Capital IQ/Refinitiv), decidía
+     borrar las dos, y el segundo borrado usaba el `fin` de la tabla ORIGINAL sobre un XML
+     que el primer borrado ya había acortado — cortando una etiqueta a la mitad muy por
+     delante y dejando un .docx que Word ya no podía abrir. */
+  const xml = '<w:p><w:t>Tabla 12. Códigos SIC utilizados</w:t></w:p>'
+    + '<w:tbl>'
+    + filaUnaCeldaOoxml('Criterios de Búsqueda')
+    + CUERPO_SIC_VIEJO
+    + filaUnaCeldaOoxml('Fuente: Búsqueda de Capital IQ, publicado en agosto de 2025.')
+    + '</w:tbl>'
+    + '<w:p><w:t>Después de la tabla, el resto del documento sigue intacto.</w:t></w:p>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla se actualiza con los criterios del estudio');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no quedaron los criterios viejos');
+  assert.ok(salida.includes('Después de la tabla, el resto del documento sigue intacto.'),
+    'el contenido posterior a la tabla no se pierde ni se corta a mitad de una etiqueta');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'se encontró y se pudo actualizar, no hay que avisar');
+});
+
 test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, tcW) en las filas nuevas', () => {
   const cuerpoConSombreado = '<w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="FFF2CC"/></w:tcPr>'
     + '<w:p><w:t>Código SIC primario:</w:t></w:p></w:tc>'
@@ -2556,6 +2585,56 @@ test('actualizarApartadoSectorialOoxml ubica la narrativa aunque la plantilla es
   assert.doesNotMatch(texto, /Texto viejo de proyección/);
   assert.match(texto, /Conclusiones reales LATV 2025\./);
   assert.doesNotMatch(texto, /Texto viejo de conclusiones/);
+});
+
+test('actualizarApartadoSectorialOoxml reconoce "Importaciones/Exportaciones" en cualquier orden y "proyección" con cualquier redacción — no por lista de frases fijas, por FORMA', () => {
+  /* Plantilla sintética distinta de LATV, para probar que la coincidencia es genérica y
+     no una frase más agregada a una lista cerrada por empresa: orden invertido de
+     "Exportaciones e Importaciones" (conector «e», no «y») y una pregunta de proyección
+     que no comparte NINGUNA palabra con "¿Qué se proyecta" salvo el tema del sector
+     (caso real reportado, plantilla de PROMOCIONES FANTÁSTICAS S.A.S., 2026-08-25: dice
+     "Exportaciones e Importaciones del sector..." y "¿Cuáles son las proyecciones y
+     perspectivas del sector...?"). */
+  const xml = [
+    parrafoXml('Análisis del Sector de fabricación de empaques'),
+    parrafoXml('Comportamiento del Sector de la Industria de empaques en 2025 y Comparación con 2024'),
+    parrafoXml('Texto viejo de comportamiento, referencia 2024.'),
+    parrafoXml('Datos Clave del Sector'),
+    parrafoXml('Exportaciones e Importaciones del sector de fabricación de empaques'),
+    parrafoXml('Texto viejo de comercio exterior, referencia 2024.'),
+    parrafoXml('¿Cuáles son las proyecciones y perspectivas del sector de fabricación de empaques?'),
+    parrafoXml('Texto viejo de proyección, referencia 2024.'),
+    parrafoXml('Conclusiones y Perspectivas'),
+    parrafoXml('Texto viejo de conclusiones, referencia 2024.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2025: {
+        tituloSector: 'de empaques',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real 2025.</p>',
+          comercioExterior: '<p>Comercio exterior real 2025.</p>',
+          proyeccion: '<p>Proyección real 2025.</p>',
+          conclusiones: '<p>Conclusiones reales 2025.</p>',
+        },
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, avisos);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  assert.match(texto, /Comercio exterior real 2025\./, 'no se ubicó junto a "Exportaciones e Importaciones" con el orden invertido');
+  assert.doesNotMatch(texto, /Texto viejo de comercio exterior/, 'no se reemplazó el hueco de comercio exterior');
+  assert.match(texto, /Proyección real 2025\./, 'no se ubicó junto a una pregunta de proyección con otra redacción');
+  assert.doesNotMatch(texto, /Texto viejo de proyección/, 'no se reemplazó el hueco de proyección');
+  assert.doesNotMatch(avisos.join(' '), /no se encontró el rótulo «Importaciones y exportaciones del sector»/,
+    'no debe reportarse ausente: se reconoció con el orden invertido');
+  assert.doesNotMatch(avisos.join(' '), /no se encontró el rótulo «¿Qué se proyecta para el sector»/,
+    'no debe reportarse ausente: se reconoció con otra redacción de la pregunta');
 });
 
 test('reescribirTextoParrafoOoxml deja el texto nuevo en el primer run y vacía los demás', () => {
