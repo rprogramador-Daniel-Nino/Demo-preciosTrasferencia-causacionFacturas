@@ -229,6 +229,17 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
      aplicarla; más abajo, para comprobar que el costo o los ingresos no se tomaron de la
      fila equivocada. */
   const utilidadBrutaLeida = num(cotejo.utilidad_bruta);
+
+  /* ── Costo de ventas implícito en cero ──
+     Si la utilidad bruta impresa es igual a los ingresos, el propio documento está
+     afirmando que no hay costo de ventas que restar — no es una ausencia sin explicación,
+     es una cifra de cero que el documento no imprime como fila propia. Caso real: LATV
+     Sucursal Colombia (2026-08-25), Utilidad Bruta == Ingresos exactos, sin línea de Costo
+     de Ventas en ningún lado del documento (ni en sus notas). No se asigna sola: se
+     ofrece como sugerencia y el analista decide (ver Fuera de alcance del spec). */
+  const costoImplicitoCero = costo === null && ventas !== null && utilidadBrutaLeida !== null
+    && cuadra(utilidadBrutaLeida, ventas, ventas);
+
   const puedeVerificarConBruta = utilidadBrutaLeida !== null && gastos !== null;
   const uopCuadraConBruta = puedeVerificarConBruta && uopAnalitico !== null
     && cuadra(utilidadBrutaLeida - gastos, uopAnalitico, utilidadBrutaLeida);
@@ -360,6 +371,7 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     advertencias.push({
       tipo: 'sin-partida-relacionada',
       campo,
+      estado: 'no_verificado',
       mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
         + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
         + (candidatas.length
@@ -369,10 +381,27 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     });
   });
 
+  if (campos.t_c === null) {
+    advertencias.push({
+      tipo: 'sin-costo-de-ventas',
+      campo: 't_c',
+      estado: costoImplicitoCero ? 'implicito_cero' : 'no_verificado',
+      mensaje: costoImplicitoCero
+        ? `No se leyó una fila de costo de ventas, pero la utilidad bruta que imprime el `
+          + `documento (${fmtCop(utilidadBrutaLeida)}) es igual a los ingresos: el propio `
+          + 'documento implica que el costo de ventas es cero. Puede aceptarlo escribiendo '
+          + '0, o pedir al cliente el detalle si sabe que sí existe.'
+        : 'No se leyó el costo de ventas. Sin él no hay margen operacional ni Índice de '
+          + 'Berry — escríbalo a mano si lo tiene, o verifique si el documento lo '
+          + 'desglosa en otra parte.',
+    });
+  }
+
   if (campos.t_inv === null) {
     advertencias.push({
       tipo: 'sin-inventarios',
       campo: 't_inv',
+      estado: 'no_verificado',
       mensaje: 'No se leyeron inventarios. Si la compañía los tiene, escríbalos: su ajuste '
         + 'de capital de trabajo se está calculando contra cero.',
     });

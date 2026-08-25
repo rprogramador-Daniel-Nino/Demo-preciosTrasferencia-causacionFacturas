@@ -520,3 +520,58 @@ test('un t_ppe que no aparece impreso se descarta igual que cualquier otra cifra
   assert.strictEqual(r.campos.t_ppe, null);
   assert.ok(r.advertencias.some((a) => a.tipo === 'cifra-inexistente' && a.campo === 't_ppe'));
 });
+
+/* ══════ Costo de ventas ausente: implícito en cero, o genuinamente sin dato ══════
+   Caso real: LATV Sucursal Colombia (2026-08-25). Su Estado de Resultados imprime
+   Utilidad Bruta == Ingresos, sin línea de Costo de Ventas en ningún lado del documento
+   (ni en sus notas) — el propio estado está afirmando que el costo es cero, no que sea
+   desconocido. */
+
+test('sin costo de ventas se avisa con su propio tipo, con campo t_c', () => {
+  const r = verificar({ t_c: null });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.ok(a, 'debe haber una advertencia dedicada al costo de ventas');
+  assert.strictEqual(a.campo, 't_c');
+});
+
+test('si la utilidad bruta impresa es igual a los ingresos, el costo ausente es "implicito_cero"', () => {
+  const r = verificar({
+    t_c: null,
+    cotejo: { gastos_ventas: -2409923291, gastos_administracion: -572260813, utilidad_bruta: 23741367744 },
+  });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.strictEqual(a.estado, 'implicito_cero');
+  assert.match(a.mensaje, /cero/);
+});
+
+test('si la utilidad bruta impresa NO es igual a los ingresos, el costo ausente queda "no_verificado"', () => {
+  const r = verificar({ t_c: null }); // LECTURA.cotejo.utilidad_bruta = 1.891.180.250, distinto de t_s
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.strictEqual(a.estado, 'no_verificado');
+});
+
+test('sin utilidad bruta impresa, el costo ausente tampoco es implicito_cero', () => {
+  const r = verificar({ t_c: null, cotejo: { ...LECTURA.cotejo, utilidad_bruta: null } });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.strictEqual(a.estado, 'no_verificado');
+});
+
+test('el costo implícito en cero NO se asigna solo: t_c sigue en null', () => {
+  const r = verificar({
+    t_c: null,
+    cotejo: { gastos_ventas: -2409923291, gastos_administracion: -572260813, utilidad_bruta: 23741367744 },
+  });
+  assert.strictEqual(r.campos.t_c, null, 'se sugiere, no se asigna — el analista decide');
+});
+
+/* ══════ Estado por campo en las advertencias ya existentes ══════ */
+
+test('las advertencias de partes relacionadas e inventarios llevan estado "no_verificado" por defecto', () => {
+  const r = verificar({ t_ap: null, t_ar: null, t_inv: null });
+  ['t_ap', 't_ar'].forEach((campo) => {
+    const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === campo);
+    assert.strictEqual(a.estado, 'no_verificado');
+  });
+  const inv = r.advertencias.find((x) => x.tipo === 'sin-inventarios');
+  assert.strictEqual(inv.estado, 'no_verificado');
+});
