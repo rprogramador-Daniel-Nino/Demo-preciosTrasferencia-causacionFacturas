@@ -96,14 +96,62 @@ function unirTrozos(trozos) {
   return salida.replace(/[ \t]+/g, ' ').trim();
 }
 
+/* Un PDF puede traer fuentes embebidas sin tabla `ToUnicode`: el documento se ve perfecto
+   en cualquier lector porque las fuentes sí dibujan los glifos correctos, pero `pdf.js`
+   (igual que `pdftotext`) no tiene cómo traducir esos códigos de glifo a caracteres reales
+   y devuelve una cadena no vacía pero irreconocible. Caso real: LATV Sucursal Colombia
+   (2026-08-25, PDF con notas 1-23, 92 fuentes embebidas, 0 con `ToUnicode`), donde ese
+   texto «presente» hizo que `cifraApareceEnTexto` no encontrara casi ninguna cifra real y
+   `eeffVerificacion.js` descartara ingresos, total activo, PP&E y nueve filas del detalle
+   de activos que la lectura por imagen había leído bien — la misma familia de daño que
+   Montachem y Lamberti, por una tercera vía: texto que existe pero no dice nada. */
+const PALABRAS_ESPERADAS = ['activo', 'pasivo', 'patrimonio', 'total', 'diciembre'];
+const MINIMO_PALABRAS = 2;
+
+/** ¿Vale la pena verificar cifras contra este texto, o es basura de una fuente sin
+ *  `ToUnicode`? Exportada para poder probarla con el texto real de un caso así, sin
+ *  depender de pdf.js. */
+export function textoEsConfiable(texto) {
+  /* Ninguna de las PALABRAS_ESPERADAS lleva tilde, así que basta con minúsculas —
+     no hace falta normalizar acentos para esta comparación. */
+  const normalizado = String(texto || '').toLowerCase();
+  const encontradas = PALABRAS_ESPERADAS.filter((p) => normalizado.includes(p));
+  return encontradas.length >= MINIMO_PALABRAS;
+}
+
+/**
+ * Cuántas páginas trae el PDF, o 1 para una imagen y 0 si no se puede abrir.
+ *
+ * Sirve para decidir si vale la pena una pasada angosta a las notas del documento: un
+ * archivo corto (el escaneo de 5 páginas de LATV, por ejemplo) casi seguro no las trae, y
+ * preguntarle a Gemini de todas formas solo gastaría la llamada en vano.
+ */
+export async function contarPaginasPdf(file, { getDocument = pdfjs.getDocument } = {}) {
+  if (!file) return 0;
+  if (file.type && file.type.startsWith('image/')) return 1;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const doc = await getDocument({
+      data: new Uint8Array(arrayBuffer),
+      isOffscreenCanvasSupported: false,
+    }).promise;
+    return doc.numPages;
+  } catch (err) {
+    console.warn('[contarPaginasPdf] no se pudo abrir el documento:', err && err.message);
+    return 0;
+  }
+}
+
 /**
  * Texto de un PDF, página por página, con las celdas de cada fila en una sola línea.
  *
  * Devuelve `''` sin lanzar cuando el archivo es una imagen, cuando es un PDF escaneado
- * (sin capa de texto) o cuando pdf.js no puede abrirlo: la lectura por imagen sigue
- * siendo el camino y este texto es un refuerzo, no un requisito. Que el llamador tenga
- * que distinguir «no hay texto» de «falló algo» sería una carga inútil — en los dos
- * casos hace lo mismo.
+ * (sin capa de texto), cuando sus fuentes no traen `ToUnicode` (texto ilegible aunque no
+ * esté vacío, ver `textoEsConfiable`) o cuando pdf.js no puede abrirlo: la lectura por
+ * imagen sigue siendo el camino y este texto es un refuerzo, no un requisito. Que el
+ * llamador tenga que distinguir «no hay texto» de «falló algo» sería una carga inútil — en
+ * los tres casos hace lo mismo.
  */
 export async function extraerTextoPdf(file, { getDocument = pdfjs.getDocument } = {}) {
   if (!file) return '';
@@ -123,7 +171,8 @@ export async function extraerTextoPdf(file, { getDocument = pdfjs.getDocument } 
       const lineas = agruparEnLineas(contenido.items);
       if (lineas.length) paginas.push(`--- Página ${n} ---\n${lineas.join('\n')}`);
     }
-    return paginas.join('\n\n');
+    const texto = paginas.join('\n\n');
+    return textoEsConfiable(texto) ? texto : '';
   } catch (err) {
     /* Un PDF que no se puede leer como texto no interrumpe la ingesta: se sigue con la
        imagen, que es lo que funcionaba antes de que esta función existiera. */
