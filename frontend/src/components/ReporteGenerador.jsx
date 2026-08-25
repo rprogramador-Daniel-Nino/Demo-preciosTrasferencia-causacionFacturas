@@ -2,7 +2,7 @@ import React, {
   useState, useEffect, useMemo, useRef,
 } from 'react';
 import axios from 'axios';
-import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Upload, FileDown, Edit3, Loader2, Sparkles, Check, FileText, AlertTriangle, RefreshCw, Paperclip, X } from 'lucide-react';
 import mammoth from 'mammoth';
 import { diagnosticarCobertura } from '../services/tablasInforme';
 import {
@@ -16,6 +16,7 @@ import {
   guardarVinculo, leerVinculo, guardarMarcado, leerMarcado, borrarMarcado,
   guardarHuecos, leerHuecos,
   guardarDocx, leerDocx, guardarDocxMarcado, leerDocxMarcado, borrarDocxMarcado,
+  guardarAnexosEscaneados, leerAnexosEscaneados,
 } from '../services/plantillaStore';
 import {
   leerAnalisisMercado, leerAnalisisSector, leerNarrativaMacroEstudio, guardarNarrativaMacroEstudio,
@@ -38,6 +39,10 @@ import {
   altoMaximoDeEncabezado,
 } from '../services/estiloDocumento.js';
 import { aDocxBlob } from '../services/docxWriter.js';
+/* Los anexos escaneados que trae la plantilla, con el rótulo que ella les da: es la misma
+   lista con la que el writer reparte las páginas entre los huecos de cada anexo. */
+import { anexosEscaneadosDeHtml } from '../services/anexoBHtml.js';
+import { convertPdfToImages } from '../services/pdfRenderer';
 import PizZip from 'pizzip';
 import { htmlParaMarcar, aplicarMarcasOoxml, envolverTablaEnBucle } from '../services/docxPlantilla.js';
 import { rellenarDocx, coleccionesDelEstudio, CENTINELA_ANEXO } from '../services/docxRelleno.js';
@@ -155,6 +160,66 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
   /* Plantilla vinculada al estudio: `{ id, html, huecos, marcada }`. Se guarda para
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
+  /* Páginas con las que se reemplazan las de un anexo escaneado, por clave de anexo. Vacío es
+     lo normal: mientras el documento no cambie sirven las que el extractor conservó del
+     informe de referencia. */
+  const [anexosEscaneados, setAnexosEscaneados] = useState({});
+  const [cargandoAnexo, setCargandoAnexo] = useState('');
+
+  /* Los anexos escaneados de la plantilla activa, para ofrecer una carga por cada uno. El de
+     estados financieros del contribuyente se excluye: tiene su propia carga en la ingesta de
+     cifras y ofrecerlo aquí sería una segunda vía para lo mismo. */
+  const anexosParaReemplazar = useMemo(() => {
+    const html = plantillaActiva && plantillaActiva.html;
+    if (!html) return [];
+    return anexosEscaneadosDeHtml(html).filter((a) => !a.esEeff);
+  }, [plantillaActiva]);
+
+  /* Lo guardado para este estudio. Va en IndexedDB, no en el estudio: son data URLs de varias
+     páginas y no caben en Firestore. */
+  useEffect(() => {
+    let vivo = true;
+    if (!estudioId) { setAnexosEscaneados({}); return undefined; }
+    leerAnexosEscaneados(estudioId)
+      .then((m) => { if (vivo) setAnexosEscaneados(m || {}); })
+      .catch((err) => console.error('[anexos] no se pudieron leer las páginas guardadas', err));
+    return () => { vivo = false; };
+  }, [estudioId]);
+
+  /* Sube el PDF con el que se reemplazan las páginas de un anexo. Se rasteriza igual que el de
+     estados financieros —`convertPdfToImages`, el mismo camino— porque lo que el informe lleva
+     ahí es una imagen por página, no texto. */
+  const reemplazarPaginasDeAnexo = async (anexoDestino, file) => {
+    if (!file) return;
+    setCargandoAnexo(anexoDestino.clave);
+    try {
+      const paginas = await convertPdfToImages(file);
+      if (!paginas || !paginas.length) {
+        /* Falla en silencio si no se avisa: el analista creería que quedó cargado y se
+           enteraría al abrir el Word. Mismo aviso que la ingesta de cifras. */
+        window.alert('No se pudieron leer las páginas de ese archivo. Comprueba que el PDF no '
+          + 'esté dañado y vuelve a intentarlo.');
+        return;
+      }
+      const nuevo = { ...anexosEscaneados, [anexoDestino.clave]: paginas };
+      setAnexosEscaneados(nuevo);
+      if (estudioId) await guardarAnexosEscaneados(estudioId, nuevo);
+    } catch (err) {
+      console.error('[anexos] no se pudo cargar el PDF del anexo', err);
+      window.alert('No se pudo cargar ese archivo: ' + ((err && err.message) || 'error desconocido'));
+    } finally {
+      setCargandoAnexo('');
+    }
+  };
+
+  /* Quita el reemplazo y vuelve a las páginas que el extractor conservó del informe de
+     referencia, que es el estado de partida. */
+  const quitarPaginasDeAnexo = async (clave) => {
+    const nuevo = { ...anexosEscaneados };
+    delete nuevo[clave];
+    setAnexosEscaneados(nuevo);
+    if (estudioId) await guardarAnexosEscaneados(estudioId, nuevo);
+  };
 
   /* Dispara la redacción en vivo si hace falta, o aplica el caché de Firestore si ya
      existe uno vigente — mismo criterio en la carga inicial y en "Actualizar información".
@@ -1511,6 +1576,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           html: htmlContent,
           recursos: recursosCargados,
           anexo: study.eeffImages || [],
+          anexosEscaneados,
         });
       } finally {
         console.warn = warnOriginal;
@@ -1538,6 +1604,21 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
       }
       if (avisoAnexo) {
         nuevosAvisos.push({ nivel: 'aviso', origen: 'docx', texto: avisoAnexo });
+      }
+      /* Los anexos que salieron con las páginas escaneadas del informe de referencia. Es lo
+         correcto mientras el documento no haya cambiado —un contrato es el mismo año a año— pero
+         quien radica tiene que saber que son escaneos del año anterior. */
+      const copiados = anexosParaReemplazar
+        .filter((a) => a.conPagina > 0 && !(anexosEscaneados[a.clave] || []).length);
+      if (copiados.length) {
+        nuevosAvisos.push({
+          nivel: 'aviso',
+          origen: 'docx',
+          texto: 'Estos anexos salieron con las páginas escaneadas del informe de referencia: '
+            + copiados.map((a) => a.titulo + ' (' + a.conPagina + ' página(s))').join(' · ')
+            + '. Está bien si el documento no ha cambiado; si se renovó, súbelo con «Reemplazar '
+            + 'páginas» y vuelve a generar antes de radicar.',
+        });
       }
       for (const texto of avisosRecuperacion) {
         nuevosAvisos.push({ nivel: 'aviso', origen: 'docx', texto });
@@ -1848,6 +1929,70 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           </button>
         </div>
       </div>
+
+      {/* Los anexos escaneados del informe. Sus páginas salen del informe de referencia —son
+          el mismo documento año a año: un contrato, un certificado— y aquí se reemplazan cuando
+          han cambiado. El de estados financieros del contribuyente no está en esta lista: ése se
+          carga en la ingesta de cifras, y de él NO se copia nada del año anterior. */}
+      {anexosParaReemplazar.length > 0 && (
+        <div className="bg-[#ffffff] dark:bg-[#171717] border border-zinc-200 dark:border-zinc-800 rounded-xl px-5 py-4">
+          <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
+            <Paperclip className="w-3.5 h-3.5" />
+            Anexos escaneados del informe
+          </p>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+            Estas páginas se copian del informe de referencia, que es lo correcto mientras el
+            documento no haya cambiado. Si se renovó, sube el nuevo aquí antes de radicar.
+          </p>
+          <ul className="mt-3 flex flex-col gap-2">
+            {anexosParaReemplazar.map((a) => {
+              const subidas = (anexosEscaneados[a.clave] || []).length;
+              return (
+                <li key={a.clave} className="flex items-center gap-3 text-xs">
+                  <span className="text-zinc-700 dark:text-zinc-300 grow truncate" title={a.titulo}>
+                    {a.titulo}
+                  </span>
+                  <span className={'shrink-0 ' + (subidas
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-amber-700 dark:text-amber-400')}>
+                    {subidas
+                      ? subidas + ' página(s) que subiste'
+                      : a.conPagina + ' de ' + a.huecos.length + ' página(s) del informe de referencia'}
+                  </span>
+                  {subidas > 0 && (
+                    <button
+                      onClick={() => quitarPaginasDeAnexo(a.clave)}
+                      title="Vuelve a las páginas del informe de referencia"
+                      className="shrink-0 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <div className="relative shrink-0">
+                    <button className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-[11px] font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer">
+                      {cargandoAnexo === a.clave
+                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                        : <Upload className="w-3 h-3" />}
+                      Reemplazar páginas
+                    </button>
+                    <input
+                      type="file"
+                      accept="application/pdf,image/*"
+                      disabled={!!cargandoAnexo}
+                      onChange={(e) => {
+                        const f = e.target.files[0];
+                        e.target.value = null;
+                        if (f) reemplazarPaginasDeAnexo(a, f);
+                      }}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {marcasPropuestas && (
         <RevisorDeMarcas

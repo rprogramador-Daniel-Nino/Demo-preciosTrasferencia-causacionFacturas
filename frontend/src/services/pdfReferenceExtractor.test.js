@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import {
   extraerReferencia, estiloBaseDe, versionDe, loQueFaltaPorVersion, VERSION_EXTRACTOR,
-  normalizarCaracteresMatematicos, textoPorId, emparejar,
+  normalizarCaracteresMatematicos, textoPorId, emparejar, paginasDeAnexoQueSeConservan,
 } from './pdfReferenceExtractor.js';
 
 const RUTA = 'Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/estudio pasado.pdf';
@@ -620,4 +620,105 @@ test('sin dibujos libres, la figura sin bbox se queda sin emparejar', () => {
   const logo = { clave: 'logo', rect: [456, 693, 527, 738] };
   const pares = emparejar([{ bbox: null }], [logo], { mobiliario: new Set(['logo']) });
   assert.strictEqual(pares[0], null, 'el logo del encabezado no es la figura de la página');
+});
+
+/* --- Qué páginas escaneadas se conservan del informe de referencia --- */
+
+/* Un informe puede traer más de un anexo escaneado. El de ATEB trae los estados financieros
+   firmados (págs. 47-64) y detrás el contrato de distribución (65-74), y los dos son páginas
+   sin más texto que una imagen. La diferencia importa: del anexo de estados financieros NO se
+   puede copiar el escaneo del informe de referencia —son cifras firmadas de otro año— y del
+   contrato sí, porque es el mismo documento y el sistema no tiene de dónde sacarlo.
+
+   La lista es de lo que SE CONSERVA, no de lo que se descarta: así, todo lo que no se
+   reconozca con certeza se queda con su hueco, que es el comportamiento seguro. */
+
+const bloquesDe = (paginas) => paginas.map(([pagina, html]) => ({ pagina, html }));
+
+test('del anexo de estados financieros no se conserva ninguna página, del otro sí', () => {
+  const bloques = bloquesDe([
+    [47, '<h1>VIII. ANEXOS</h1><p><strong>ANEXO A. Estados financieros ATEB S.A.S</strong></p>'],
+    [48, '<p></p>'],
+    [49, '<p></p>'],
+    [65, '<h1>ANEXO B. Contrato de Distribucion de Servicios</h1>'],
+    [66, '<p></p>'],
+  ]);
+  const anexo = new Set([47, 48, 49, 65, 66]);
+  assert.deepStrictEqual(
+    [...paginasDeAnexoQueSeConservan(bloques, anexo)].sort((a, b) => a - b),
+    [65, 66]
+  );
+});
+
+test('el anexo de estados financieros se reconoce por su nombre, no por ir primero', () => {
+  const bloques = bloquesDe([
+    [10, '<h1>ANEXO A. Contrato de Distribucion de Servicios</h1>'],
+    [11, '<p></p>'],
+    [20, '<p><strong>ANEXO B. Estados financieros de la Compania</strong></p>'],
+    [21, '<p></p>'],
+  ]);
+  assert.deepStrictEqual(
+    [...paginasDeAnexoQueSeConservan(bloques, new Set([10, 11, 20, 21]))].sort((a, b) => a - b),
+    [10, 11]
+  );
+});
+
+test('sin un anexo de estados financieros reconocible no se conserva nada', () => {
+  /* Si no se sabe cuál de los anexos es el de estados financieros, cualquiera podría serlo:
+     conservar sus páginas sería radicar cifras firmadas de otro año sin que nada lo delate.
+     Se cae al comportamiento de siempre —hueco vacío en todos— que se ve y se corrige. */
+  const bloques = bloquesDe([
+    [10, '<h1>ANEXO A. Documentos de soporte</h1>'],
+    [11, '<p></p>'],
+    [12, '<p></p>'],
+  ]);
+  assert.strictEqual(paginasDeAnexoQueSeConservan(bloques, new Set([10, 11, 12])).size, 0);
+});
+
+test('un anexo con otro nombre se conserva si el de estados financieros sí se reconoció', () => {
+  /* No hace falta que el nombre esté en la tabla: basta con saber que NO es el de estados
+     financieros. Un certificado, un acuerdo de costos compartidos —lo que el informe del
+     cliente lleve escaneado— entra igual que el contrato. */
+  const bloques = bloquesDe([
+    [30, '<p><strong>ANEXO A. Estados financieros de la Compania</strong></p>'],
+    [31, '<p></p>'],
+    [40, '<h1>ANEXO B. Acuerdo de costos compartidos</h1>'],
+    [41, '<p></p>'],
+  ]);
+  assert.deepStrictEqual(
+    [...paginasDeAnexoQueSeConservan(bloques, new Set([30, 31, 40, 41]))].sort((a, b) => a - b),
+    [40, 41]
+  );
+});
+
+test('la entrada del índice no abre el anexo', () => {
+  /* El índice repite los títulos con el número de página pegado, sesenta páginas antes. Si
+     contara, el anexo del contrato empezaría ahí y se conservarían las páginas de los estados
+     financieros. */
+  const bloques = bloquesDe([
+    [3, '<p>ANEXO A. Estados financieros ATEB S.A.S52</p>' +
+        '<p>ANEXO B. Contrato de Distribucion de Servicios61</p>'],
+    [47, '<p><strong>ANEXO A. Estados financieros ATEB S.A.S</strong></p>'],
+    [48, '<p></p>'],
+    [65, '<h1>ANEXO B. Contrato de Distribucion de Servicios</h1>'],
+  ]);
+  assert.deepStrictEqual(
+    [...paginasDeAnexoQueSeConservan(bloques, new Set([47, 48, 65]))],
+    [65]
+  );
+});
+
+test('una página escaneada anterior al primer anexo no se conserva', () => {
+  /* `detectarPaginasDeAnexo` mira imágenes, no títulos: puede marcar una racha de gráficos del
+     cuerpo. Esa no está en ningún anexo, así que no se conserva por esta vía —sigue el camino
+     normal de las imágenes del cuerpo—. */
+  const bloques = bloquesDe([
+    [5, '<p>una racha de graficos del cuerpo</p>'],
+    [47, '<p><strong>ANEXO A. Estados financieros ATEB S.A.S</strong></p>'],
+    [65, '<h1>ANEXO B. Contrato de Distribucion de Servicios</h1>'],
+  ]);
+  assert.deepStrictEqual(
+    [...paginasDeAnexoQueSeConservan(bloques, new Set([5, 47, 65]))],
+    [65]
+  );
 });
