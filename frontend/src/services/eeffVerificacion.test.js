@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   verificarEeff, camposAplicables, utilidadOperacionalDe, gastosOperativosDe,
+  fusionarHallazgosEnLectura, marcarEstadosConHallazgos, marcarProbableAusentePorVocabulario,
 } from './eeffVerificacion.js';
 
 /* La capa de texto del PDF, reducida a las líneas con cifra. Es lo que `extraerTextoPdf`
@@ -574,4 +575,56 @@ test('las advertencias de partes relacionadas e inventarios llevan estado "no_ve
   });
   const inv = r.advertencias.find((x) => x.tipo === 'sin-inventarios');
   assert.strictEqual(inv.estado, 'no_verificado');
+});
+
+/* ══════ Fusionar los hallazgos de la pasada angosta a notas ══════ */
+
+test('fusionarHallazgosEnLectura escribe el valor encontrado sobre la lectura original', () => {
+  const lectura = { t_c: null, t_s: 100 };
+  const hallazgos = { t_c: { valor: 42, encontradoEn: 'nota', palabra: 'costo del servicio', cita: 'Nota 19' } };
+  const fusionada = fusionarHallazgosEnLectura(lectura, hallazgos);
+  assert.strictEqual(fusionada.t_c, 42);
+  assert.strictEqual(fusionada.t_s, 100, 'no toca lo que no vino en hallazgos');
+});
+
+test('fusionarHallazgosEnLectura no pisa con null lo que ya venía en la lectura', () => {
+  const lectura = { t_ap: null };
+  const hallazgos = { t_ap: { valor: null, encontradoEn: null, palabra: '', cita: 'Revisé la Nota 13, no lo desglosa.' } };
+  assert.strictEqual(fusionarHallazgosEnLectura(lectura, hallazgos).t_ap, null);
+});
+
+test('fusionarHallazgosEnLectura no muta la lectura original', () => {
+  const lectura = { t_c: null };
+  fusionarHallazgosEnLectura(lectura, { t_c: { valor: 42 } });
+  assert.strictEqual(lectura.t_c, null);
+});
+
+test('marcarEstadosConHallazgos marca confirmado_ausente con su cita cuando la IA no lo encontró', () => {
+  const advertencias = [{ tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' }];
+  const hallazgos = { t_c: { valor: null, encontradoEn: null, palabra: '', cita: 'Revisé la Nota 19: solo trae gastos de administración, sin desglose de costo.' } };
+  const [a] = marcarEstadosConHallazgos(advertencias, hallazgos);
+  assert.strictEqual(a.estado, 'confirmado_ausente');
+  assert.match(a.mensaje, /Nota 19/);
+});
+
+test('marcarEstadosConHallazgos no toca una advertencia cuyo campo sí se encontró', () => {
+  const advertencias = [{ tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' }];
+  const hallazgos = { t_c: { valor: 42, encontradoEn: 'nota', palabra: 'costo del servicio', cita: '' } };
+  const [a] = marcarEstadosConHallazgos(advertencias, hallazgos);
+  assert.strictEqual(a.estado, 'no_verificado', 'se resuelve por re-verificación, no por esta función');
+});
+
+test('marcarEstadosConHallazgos no toca advertencias sin campo, o de campos fuera de hallazgos', () => {
+  const advertencias = [{ tipo: 'periodo-distinto', mensaje: 'x' }];
+  assert.deepStrictEqual(marcarEstadosConHallazgos(advertencias, { t_c: { valor: null } }), advertencias);
+});
+
+test('marcarProbableAusentePorVocabulario marca solo los campos indicados', () => {
+  const advertencias = [
+    { tipo: 'sin-inventarios', campo: 't_inv', estado: 'no_verificado', mensaje: 'No se leyeron inventarios.' },
+    { tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' },
+  ];
+  const marcadas = marcarProbableAusentePorVocabulario(advertencias, ['t_inv']);
+  assert.strictEqual(marcadas.find((a) => a.campo === 't_inv').estado, 'probable_ausente_por_vocabulario');
+  assert.strictEqual(marcadas.find((a) => a.campo === 't_c').estado, 'no_verificado');
 });

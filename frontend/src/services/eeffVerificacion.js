@@ -442,3 +442,58 @@ export function camposAplicables(campos) {
     Object.entries(campos || {}).filter(([, v]) => v !== null && v !== undefined),
   );
 }
+
+/**
+ * Fusiona en una lectura los hallazgos de la pasada angosta a notas, para volver a
+ * verificar con `verificarEeff()` — reutiliza todo su cálculo (utilidad operacional,
+ * identidades) en vez de repetirlo aquí. Solo escribe los campos con valor encontrado:
+ * un hallazgo sin valor no debe pisar con `null` lo que ya hubiera. Puro, no muta.
+ */
+export function fusionarHallazgosEnLectura(lectura, hallazgos) {
+  const fusionada = { ...(lectura || {}) };
+  Object.entries(hallazgos || {}).forEach(([campo, hallazgo]) => {
+    if (hallazgo && hallazgo.valor !== null && hallazgo.valor !== undefined) {
+      fusionada[campo] = hallazgo.valor;
+    }
+  });
+  return fusionada;
+}
+
+/**
+ * Marca `confirmado_ausente`, con su cita, las advertencias cuyo campo la pasada angosta
+ * revisó y no encontró en ninguna parte. Las que sí se encontraron no se tocan aquí: al
+ * fusionar el hallazgo y volver a llamar `verificarEeff()`, esa advertencia ya no se
+ * genera. Puro.
+ */
+export function marcarEstadosConHallazgos(advertencias, hallazgos) {
+  if (!hallazgos) return advertencias;
+  return (advertencias || []).map((a) => {
+    const hallazgo = a.campo ? hallazgos[a.campo] : null;
+    if (!hallazgo || (hallazgo.valor !== null && hallazgo.valor !== undefined)) return a;
+    return {
+      ...a,
+      estado: 'confirmado_ausente',
+      mensaje: `${a.mensaje} La IA revisó el documento completo, incluidas sus notas, y `
+        + `confirma que no aparece${hallazgo.cita ? ` (${hallazgo.cita})` : ''}.`,
+    };
+  });
+}
+
+/**
+ * Marca `probable_ausente_por_vocabulario` las advertencias de los campos que el
+ * diccionario compartido (ya maduro) no encontró en el texto del documento — una señal
+ * más débil que `confirmado_ausente`, porque el diccionario pudo simplemente no conocer
+ * el sinónimo que usa esta empresa. Puro.
+ */
+export function marcarProbableAusentePorVocabulario(advertencias, campos) {
+  const objetivo = new Set(campos || []);
+  return (advertencias || []).map((a) => (a.campo && objetivo.has(a.campo)
+    ? {
+      ...a,
+      estado: 'probable_ausente_por_vocabulario',
+      mensaje: `${a.mensaje} No encontramos ninguna palabra relacionada con este rubro en `
+        + 'todo el documento, según lo aprendido de otros estudios similares — puede que '
+        + 'use un término distinto; revíselo manualmente antes de descartarlo.',
+    }
+    : a));
+}
