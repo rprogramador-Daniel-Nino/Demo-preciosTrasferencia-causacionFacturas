@@ -37,7 +37,7 @@ import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
   filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme, NOMBRES_TABLA_MARGENES,
 } from './tablasInforme.js';
-import { claveTitulo, numeroDeTabla, prefijoDeEncabezado, resolverAnclasDeHuecos } from './docxRelleno.js';
+import { claveTitulo, numeroDeTabla, prefijoDeEncabezado } from './docxRelleno.js';
 /* La cita al pie de las tablas del motor sale de la misma constante que la prosa: dos sitios
    distintos para el nombre de la base de datos es la forma de que el informe se contradiga a sí
    mismo entre una tabla y el párrafo que la introduce. */
@@ -605,13 +605,6 @@ export const TABLA_MUESTRA = 'Muestra Compañías comparables';
 export const TABLA_RANGO = 'Rango Intercuartil';
 export const TABLA_RANGOS_CONCLUSION = 'Tabla de rangos';
 export const TABLA_RAZONES = 'Razones de rechazo';
-export const NOMBRES_TABLA_CRITERIOS = [
-  'Códigos SIC utilizados en la búsqueda de comparables',
-  'Códigos SIC utilizados',
-  'Criterios utilizados en la búsqueda de comparables',
-  'Criterios de búsqueda de comparables',
-  'Criterios de búsqueda',
-];
 export const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 /**
@@ -685,7 +678,7 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   if (!criterios.length) {
     anotar(TABLA_CRITERIOS);
   } else {
-    const bloques = localizarTablasHtml(salida, NOMBRES_TABLA_CRITERIOS);
+    const bloques = localizarTablasHtml(salida, TABLA_CRITERIOS);
     if (!bloques.length) {
       anotar(TABLA_CRITERIOS);
     } else {
@@ -958,11 +951,6 @@ export function localizarHitosHtml(html, titulos) {
  *  sinónimos si trae varios — mismo criterio que `docxRelleno.js`. */
 const etiquetaTituloHtml = (t) => (Array.isArray(t) ? t[0] : t);
 
-/** El punto de un hito donde ancla una inserción — mismo criterio que `puntoDeHito` de
- *  `docxRelleno.js`, que no se reexporta para no crear un import cruzado innecesario de
- *  un helper de una línea. */
-const puntoDeHitoHtml = (hito, lado) => (lado === 'derecha-de' ? hito.finPropio : hito.inicio);
-
 export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombreParaAvisos) {
   let salida = String(html || '');
   const hitos = localizarHitosHtml(salida, titulos);
@@ -984,61 +972,67 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
     avisos.push(aviso);
   });
 
-  /* Emparejamiento por vecino más cercano — mismo algoritmo, mismo motivo y misma
-     explicación que `reemplazarPorHitos` de `docxRelleno.js`: `resolverAnclasDeHuecos`
-     es la función pura compartida entre las dos rutas. Nunca funde dos huecos en una
-     sola región reemplazable: un título intermedio ausente no distingue "la subsección
-     nunca existió aquí" de "existe, con otro rótulo que no se reconoce" (texto real del
-     cliente, no seguro de borrar). */
-  const anclas = resolverAnclasDeHuecos(hitos);
-  const inserciones = new Map();
-  const reemplazos = [];
-  for (let i = 0; i < contenidos.length; i += 1) {
-    const ancla = anclas[i];
-    if (ancla.tipo === 'reemplazo') {
-      const hitoActual = hitos[i];
-      const hitoSiguiente = hitos[i + 1];
-      const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
-      const nuevo = contenidos[i](textoHueco);
-      if (nuevo === null) {
-        console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
-        continue;
+  /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
+     siguiente— no aparece en el documento de referencia bajo NINGUNA redacción (no es
+     que esté mal escrito: la sección nunca existió ahí, típico de una referencia más
+     vieja que la sección que se quiere insertar). El último título de la lista es
+     siempre un límite —el encabezado de la sección o tabla que viene después, sin
+     generador propio en `contenidos`—, así que si se encuentra sirve de sitio de
+     respaldo: mejor un párrafo al final de esta sección que perder en silencio un
+     contenido que sí se generó. Se ajusta con cada edición que caiga antes de él, en el
+     mismo recorrido de atrás hacia adelante, para no apuntar a un índice viejo. */
+  /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
+     nunca existió aquí" (una plantilla completamente ajena a esta cadena de títulos,
+     como la mayoría de los documentos de prueba) de "sí existe, solo falta un título
+     intermedio": en el primer caso, insertar al final del documento sería un despropósito
+     — meter párrafos de sector en una plantilla que no tiene ninguna sección de
+     Tendencias de la Economía. Por eso el respaldo solo se activa cuando el límite final
+     SÍ se encontró: ahí sí se sabe que esta sección existe en algún punto del documento. */
+  const ultimoHito = hitos[hitos.length - 1];
+  let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
+
+  for (let i = contenidos.length - 1; i >= 0; i -= 1) {
+    const hitoActual = hitos[i];
+    const hitoSiguiente = hitos[i + 1];
+    if (!hitoActual || !hitoSiguiente) {
+      /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando el
+         rótulo ausente que lo causa. Aquí solo queda el respaldo. */
+      /* Sin el límite final tampoco hay dónde poner un respaldo: seguir con el
+         comportamiento de siempre (avisar y no tocar nada). */
+      if (cursorRespaldo !== null) {
+        /* Se prueba igual, como si el hueco viejo viniera vacío: los generadores que sí
+           tienen contenido real (narrativa ya redactada) lo devuelven sin importar el
+           texto viejo; los que solo fabrican un marcador de "pendiente" cuando había
+           prosa sustancial que retirar no fabrican nada de la nada, así que aquí no
+           inventan un marcador que antes no existía. */
+        const nuevo = contenidos[i]('');
+        if (nuevo !== null) {
+          console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
+            '": sin ancla, insertado de respaldo al final de la sección');
+          if (Array.isArray(avisos)) {
+            avisos.push(
+              (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
+              'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
+              'revisa el orden antes de radicar'
+            );
+          }
+          salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
+        }
       }
-      console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado');
-      reemplazos.push({ inicio: hitoActual.finPropio, fin: hitoSiguiente.inicio, contenido: nuevo });
       continue;
     }
-    /* 'sin-ancla': ni el propio límite del hueco ni ningún otro rótulo de la cadena
-       aparece en el documento — no hay dónde ubicar este contenido sin adivinar, así
-       que se deja perder (el aviso de "no se encontró el rótulo" ya lo explica). */
-    if (ancla.tipo === 'sin-ancla') continue;
-    /* Se prueba igual, como si el hueco viejo viniera vacío: los generadores que sí
-       tienen contenido real (narrativa ya redactada) lo devuelven sin importar el texto
-       viejo; los que solo fabrican un marcador de "pendiente" cuando había prosa
-       sustancial que retirar no fabrican nada de la nada, así que aquí no inventan un
-       marcador que antes no existía. */
-    const nuevo = contenidos[i]('');
-    if (nuevo === null) continue;
-    const punto = puntoDeHitoHtml(hitos[ancla.ref], ancla.lado);
-    const clave = ancla.lado + ':' + ancla.ref;
-    const previo = inserciones.get(clave);
-    inserciones.set(clave, { inicio: punto, fin: punto, contenido: (previo ? previo.contenido : '') + nuevo });
-    console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
-      '": sin ancla propia, ubicado junto a "' + etiquetas[ancla.ref] + '"');
-    if (Array.isArray(avisos)) {
-      avisos.push(
-        (nombreParaAvisos || '') + ': el apartado entre «' + etiquetas[i] + '» y «' + etiquetas[i + 1]
-        + '» no se pudo ubicar en su lugar propio, así que su contenido se ubicó junto al encabezado '
-        + 'más cercano, «' + etiquetas[ancla.ref] + '» — revísalo antes de radicar'
-      );
+    const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+    const nuevo = contenidos[i](textoHueco);
+    if (nuevo === null) {
+      console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
+      continue;
     }
+    console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado');
+    if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
+      cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
+    }
+    salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
   }
-
-  reemplazos.concat(Array.from(inserciones.values()))
-    .sort((a, b) => b.inicio - a.inicio)
-    .forEach((op) => {
-      salida = salida.slice(0, op.inicio) + op.contenido + salida.slice(op.fin);
-    });
   return salida;
 }
 
@@ -1261,15 +1255,9 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     return bloque(narrativaHtml, tema)();
   };
 
-  /* Sinónimos por posición — mismo criterio y misma evidencia que
-     `actualizarApartadoSectorialOoxml` de `docxRelleno.js`, donde está la explicación
-     completa (plantilla real de LATV SUCURSAL COLOMBIA con "Análisis EN el sector..." e
-     "Importaciones y exportaciones" sin el sufijo "del sector"). */
   const titulos = [
-    ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
-    'Comportamiento del Sector', 'Datos Clave del Sector',
-    ['Importaciones y exportaciones del sector', 'Importaciones y exportaciones'],
-    '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
+    'Análisis del Sector', 'Comportamiento del Sector', 'Datos Clave del Sector',
+    'Importaciones y exportaciones del sector', '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
     'ANÁLISIS ECONÓMICO',
   ];
 

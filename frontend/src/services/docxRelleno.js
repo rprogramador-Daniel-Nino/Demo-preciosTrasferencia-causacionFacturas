@@ -180,13 +180,10 @@ const RUTA_DOC = 'word/document.xml';
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
 
-export const NOMBRES_TABLA_CRITERIOS = [
-  'Códigos SIC utilizados en la búsqueda de comparables',
-  'Códigos SIC utilizados',
-  'Criterios utilizados en la búsqueda de comparables',
-  'Criterios de búsqueda de comparables',
-  'Criterios de búsqueda',
-];
+/** Nombre con el que la plantilla del cliente rotula la tabla de criterios de búsqueda.
+ *  No se importa de `tablasHtmlInforme.js`: esa dirección de import ya existe al revés
+ *  (`tablasHtmlInforme.js` importa `claveTitulo`/`numeroDeTabla` de aquí), y traer la
+ *  constante desde allí crearía un ciclo. */
 const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 
@@ -848,23 +845,11 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
   const doc = sustituidorDeTablas(xml, null);
 
-  /* Sinónimos por posición confirmados contra una plantilla real (LATV SUCURSAL
-     COLOMBIA) que no usaba la redacción exacta esperada:
-     - "Análisis del Sector" → esa plantilla trae "Análisis EN el sector de...".
-       `tablasInforme.js` (`RX_SECTORIAL`) ya toleraba esta variante para su propio
-       chequeo de cobertura; aquí nunca se había alineado. Se suma también "Análisis
-       Sectorial", la otra redacción usual en informes de PT en Colombia.
-     - "Importaciones y exportaciones del sector" → esa misma plantilla trae solo
-       "Importaciones y exportaciones", sin el sufijo "del sector". La comparación
-       exige que el texto EN el documento contenga al rótulo buscado, nunca al
-       revés, así que un rótulo de plantilla más corto que el buscado no podía calzar.
-     No se inventan sinónimos para las demás posiciones sin evidencia de una plantilla
-     real: se suman del mismo modo el día que aparezca una. */
   const titulos = [
-    ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
+    'Análisis del Sector',
     'Comportamiento del Sector',
     'Datos Clave del Sector',
-    ['Importaciones y exportaciones del sector', 'Importaciones y exportaciones'],
+    'Importaciones y exportaciones del sector',
     '¿Qué se proyecta para el sector',
     'Conclusiones y Perspectivas',
     'ANÁLISIS ECONÓMICO',
@@ -1590,62 +1575,6 @@ export function localizarHitos(xml, titulos) {
  *  avisos y logs, nunca la representación por defecto de un arreglo. */
 const etiquetaTitulo = (t) => (Array.isArray(t) ? t[0] : t);
 
-/**
- * Para cada hueco entre `titulos[i]` y `titulos[i+1]` (índices `0..hitos.length-2`),
- * decide cómo ubicar su contenido cuando no se encuentran los DOS límites propios del
- * hueco: contra el rótulo LOCALIZADO más cercano a cada lado —el de menor distancia y,
- * en empate, el de la izquierda—, en vez de un único punto de respaldo al final de toda
- * la cadena (como hacía antes `cursorRespaldo`, que solo servía si el ÚLTIMO título de
- * la cadena se encontraba, sin importar cuán cerca hubiera otro título encontrado).
- *
- * Nunca se funden dos huecos en una sola región para poder BORRAR el texto entre dos
- * hitos que no son adyacentes en la lista original: un título intermedio ausente no
- * distingue "esta subsección nunca existió en la plantilla" (seguro fundir y
- * reemplazar) de "existe, pero está escrita con otro rótulo que no se reconoce" (nada
- * seguro de borrar — es texto real del cliente). Como el código no puede saber cuál de
- * las dos es, cada hueco sin límite propio solo INSERTA junto al hito más cercano, sin
- * tocar lo que ya hubiera ahí — la prueba `el respaldo no se lleva la subsección
- * intermedia cuyo rótulo no se reconoció` (`docxRelleno.test.js`) protege justo esto.
- *
- * Puro: solo mira qué posiciones de `hitos` son no nulas, nunca el contenido del
- * documento, así lo reutilizan tanto `reemplazarPorHitos` (aquí) como
- * `reemplazarHuecosHtml` de `tablasHtmlInforme.js`.
- *
- * @param {Array<{inicio:number, finPropio:number}|null>} hitos
- * @returns {Array<{tipo:'reemplazo'}|{tipo:'insertar', lado:'derecha-de'|'izquierda-de', ref:number}|{tipo:'sin-ancla'}>}
- *          longitud `hitos.length - 1`, una entrada por hueco.
- */
-export function resolverAnclasDeHuecos(hitos) {
-  const n = hitos.length;
-  const antes = new Array(n).fill(-1);
-  for (let i = 0, ultimo = -1; i < n; i += 1) { antes[i] = ultimo; if (hitos[i]) ultimo = i; }
-  const despues = new Array(n).fill(-1);
-  for (let i = n - 1, siguiente = -1; i >= 0; i -= 1) { despues[i] = siguiente; if (hitos[i]) siguiente = i; }
-
-  const resultado = [];
-  for (let i = 0; i < n - 1; i += 1) {
-    if (hitos[i] && hitos[i + 1]) { resultado.push({ tipo: 'reemplazo' }); continue; }
-    if (hitos[i]) { resultado.push({ tipo: 'insertar', lado: 'derecha-de', ref: i }); continue; }
-    if (hitos[i + 1]) { resultado.push({ tipo: 'insertar', lado: 'izquierda-de', ref: i + 1 }); continue; }
-    const izq = antes[i];
-    const der = despues[i + 1];
-    if (izq === -1 && der === -1) { resultado.push({ tipo: 'sin-ancla' }); continue; }
-    if (izq === -1) { resultado.push({ tipo: 'insertar', lado: 'izquierda-de', ref: der }); continue; }
-    if (der === -1) { resultado.push({ tipo: 'insertar', lado: 'derecha-de', ref: izq }); continue; }
-    resultado.push(
-      (i - izq) <= (der - (i + 1))
-        ? { tipo: 'insertar', lado: 'derecha-de', ref: izq }
-        : { tipo: 'insertar', lado: 'izquierda-de', ref: der }
-    );
-  }
-  return resultado;
-}
-
-/** El punto de un hito donde ancla una inserción: justo detrás de su párrafo
- *  (`derecha-de`, en el hueco que lo sigue) o justo delante (`izquierda-de`, en el que
- *  lo precede). */
-const puntoDeHito = (hito, lado) => (lado === 'derecha-de' ? hito.finPropio : hito.inicio);
-
 export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaAvisos) {
   doc.aplicar((actual) => {
     const hitos = localizarHitos(actual, titulos);
@@ -1672,59 +1601,61 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
       avisos.push(aviso);
     });
+    let salida = actual;
 
-    const anclas = resolverAnclasDeHuecos(hitos);
-    /* Inserciones agrupadas por punto de ancla: dos o más huecos consecutivos sin
-       título propio pueden terminar apuntando al MISMO rótulo vecino —dos apartados
-       intermedios seguidos que la plantilla no trae, por ejemplo—, y ahí su contenido
-       se concatena en vez de que uno le gane la posición al otro: se recorre en orden
-       ascendente de hueco (el orden en que aparecen en la cadena), así que lo que va
-       primero en la cadena queda primero en el texto. */
-    const inserciones = new Map();
-    const reemplazos = [];
-    for (let i = 0; i < contenidos.length; i += 1) {
-      const ancla = anclas[i];
-      if (ancla.tipo === 'reemplazo') {
-        const hitoActual = hitos[i];
-        const hitoSiguiente = hitos[i + 1];
-        const textoHueco = textoPlanoOoxml(actual.slice(hitoActual.finPropio, hitoSiguiente.inicio));
-        const nuevo = contenidos[i](textoHueco);
-        if (nuevo === null) {
-          console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
-          continue;
+    /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
+       siguiente— no aparece en la plantilla bajo NINGUNA redacción: no está mal escrito,
+       la sección nunca existió ahí (plantilla más vieja que la sección que se quiere
+       insertar). El último título de la lista es siempre un límite —sin generador propio
+       en `contenidos`—, así que si se encuentra sirve de sitio de respaldo: mejor un
+       párrafo al final de esta sección que perder en silencio un contenido que sí se
+       generó. Se ajusta con cada edición que caiga antes de él, en el mismo recorrido de
+       atrás hacia adelante, para no apuntar a un índice viejo. Misma lógica que
+       `reemplazarHuecosHtml` de `tablasHtmlInforme.js`. */
+    /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
+       nunca existió aquí" de "la plantilla no tiene nada que ver con esta cadena de
+       títulos" (la mayoría de las plantillas de prueba, por ejemplo): insertar al final
+       del documento sería un despropósito en ese segundo caso. El respaldo solo se activa
+       cuando el límite final SÍ se encontró. */
+    const ultimoHito = hitos[hitos.length - 1];
+    let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
+
+    for (let i = contenidos.length - 1; i >= 0; i -= 1) {
+      const hitoActual = hitos[i];
+      const hitoSiguiente = hitos[i + 1];
+      if (!hitoActual || !hitoSiguiente) {
+        /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando
+           el rótulo ausente que lo causa. Aquí solo queda el respaldo. */
+        if (cursorRespaldo !== null) {
+          const nuevo = contenidos[i]('');
+          if (nuevo !== null) {
+            console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
+              '": sin ancla, insertado de respaldo al final de la sección');
+            if (Array.isArray(avisos)) {
+              avisos.push(
+                (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
+                'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
+                'revisa el orden antes de radicar'
+              );
+            }
+            salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
+          }
         }
-        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
-          + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
-        reemplazos.push({ inicio: hitoActual.finPropio, fin: hitoSiguiente.inicio, contenido: nuevo });
         continue;
       }
-      /* 'sin-ancla': ni el propio límite del hueco ni ningún otro rótulo de la cadena
-         aparece en la plantilla — no hay dónde ubicar este contenido sin adivinar, así
-         que se deja perder (el aviso de "no se encontró el rótulo" ya lo explica). */
-      if (ancla.tipo === 'sin-ancla') continue;
-      const nuevo = contenidos[i]('');
-      if (nuevo === null) continue;
-      const punto = puntoDeHito(hitos[ancla.ref], ancla.lado);
-      const clave = ancla.lado + ':' + ancla.ref;
-      const previo = inserciones.get(clave);
-      inserciones.set(clave, { inicio: punto, fin: punto, contenido: (previo ? previo.contenido : '') + nuevo });
-      console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
-        '": sin ancla propia, ubicado junto a "' + etiquetas[ancla.ref] + '"');
-      if (Array.isArray(avisos)) {
-        avisos.push(
-          (nombreParaAvisos || '') + ': el apartado entre «' + etiquetas[i] + '» y «' + etiquetas[i + 1]
-          + '» no se pudo ubicar en su lugar propio, así que su contenido se ubicó junto al encabezado '
-          + 'más cercano, «' + etiquetas[ancla.ref] + '» — revísalo antes de radicar'
-        );
+      const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+      const nuevo = contenidos[i](textoHueco);
+      if (nuevo === null) {
+        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
+        continue;
       }
+      console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
+        + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+      if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
+        cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
+      }
+      salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
     }
-
-    let salida = actual;
-    reemplazos.concat(Array.from(inserciones.values()))
-      .sort((a, b) => b.inicio - a.inicio)
-      .forEach((op) => {
-        salida = salida.slice(0, op.inicio) + op.contenido + salida.slice(op.fin);
-      });
     return salida;
   });
 }
@@ -2343,16 +2274,13 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
       return actual;
     }
-    const bloques = localizarBloquesTabla(actual, NOMBRES_TABLA_CRITERIOS);
+    const bloques = localizarBloquesTabla(actual, TABLA_CRITERIOS);
     if (!bloques.length) {
       if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
       return actual;
     }
 
     const veredictos = bloques.map((bloque, idx) => {
-      if (bloques.length === 1) {
-        return { eliminar: false, conservar: true };
-      }
       const esNumeroDescartable = bloque.numero === 13 || bloque.numero === 15;
       return {
         eliminar: esNumeroDescartable
@@ -2378,8 +2306,6 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         if (i === aConservar) veredictos[i].conservar = true;
         else veredictos[i].eliminar = true;
       });
-    } else if (indecisos.length === 1) {
-      veredictos[indecisos[0]].conservar = true;
     }
 
     let salida = actual;
