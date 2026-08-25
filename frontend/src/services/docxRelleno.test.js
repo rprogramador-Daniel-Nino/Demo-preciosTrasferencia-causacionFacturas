@@ -833,16 +833,29 @@ test('Códigos SIC: dos ocurrencias sin numerar y sin que ninguna cite Capital I
   assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
 });
 
-test('Códigos SIC: una sola copia ambigua (sin número) se deja intacta — no hay con qué desambiguar', () => {
-  /* La regla de la fuente es para elegir ENTRE copias. Con una sola no hay nada que
-     desambiguar, así que no debe borrarse solo porque su fuente no diga «Capital IQ» con
-     esas palabras: eso sería más arriesgado que el problema que se está resolviendo. */
+test('Códigos SIC: una sola tabla coincidente por título se conserva y actualiza con los criterios del estudio', () => {
   const xml = tablaSicOoxml(null, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.');
   const avisos = [];
   const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
 
-  assert.strictEqual(salida, xml, 'la única copia no debe alterarse');
-  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'se actualizaron los criterios del estudio');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no quedaron los criterios viejos');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'no emite aviso de tabla omitida');
+});
+
+test('Códigos SIC: coincide por título completo "Códigos SIC utilizados en la búsqueda de comparables" con número arbitrario (ej. Tabla 12)', () => {
+  const xml = '<w:p><w:t>Tabla 12. Códigos SIC utilizados en la búsqueda de comparables</w:t></w:p>'
+    + '<w:tbl>'
+    + '<w:tr><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p><w:t>Criterio de búsqueda</w:t></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t></w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p><w:t>Código SIC primario:</w:t></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p><w:t>Entre 1111 y 2222</w:t></w:p></w:tc></w:tr>'
+    + '<w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:t>Fuente: Capital IQ.</w:t></w:p></w:tc></w:tr>'
+    + '</w:tbl>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'se actualizaron los criterios del estudio');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no quedaron los criterios viejos');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'no emite aviso');
 });
 
 test('reescribirFilasOoxml preserva el tcPr del molde (sombreado, tcW) en las filas nuevas', () => {
@@ -2051,13 +2064,18 @@ test('reemplazarPorHitos no toca el hueco cuando la función de contenido devuel
   assert.match(doc.xml, /Tabla que no hay que tocar\./);
 });
 
-test('reemplazarPorHitos avisa cuando un hito no se encuentra, sin lanzar', () => {
+test('reemplazarPorHitos avisa cuando un hito no se encuentra, y recupera el contenido junto al título encontrado más cercano', () => {
+  /* Antes, sin "Encabezado B", el contenido se perdía en silencio: el único respaldo
+     dependía de que el ÚLTIMO título de la cadena se encontrara, y aquí "Encabezado B"
+     ES el último. Ahora se ancla al título encontrado más próximo, sea o no el último —
+     "Encabezado A" en este caso —, en vez de perder el contenido. */
   const xml = parrafoXml('Encabezado A');
   const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
   const avisos = [];
-  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => 'nunca se usa'], avisos, 'III.A');
-  assert.equal(avisos.length, 1);
-  assert.match(avisos[0], /III\.A/);
+  reemplazarPorHitos(doc, ['Encabezado A', 'Encabezado B'], [() => parrafoXml('Contenido recuperado.')], avisos, 'III.A');
+  assert.match(doc.xml, /Contenido recuperado\./);
+  assert.ok(avisos.some((a) => a.includes('III.A') && /no se encontró el rótulo «Encabezado B»/.test(a)));
+  assert.ok(avisos.some((a) => /entre «Encabezado A» y «Encabezado B».*se ubicó junto al encabezado más cercano, «Encabezado A»/.test(a)));
 });
 
 test('reemplazarPorHitos encuentra el hito con un sinónimo, y el aviso muestra un nombre legible si falla', () => {
@@ -2109,7 +2127,7 @@ test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falt
   /* Antes del límite final, no después: se insertó DENTRO de la sección. */
   assert.ok(doc.xml.indexOf('Contenido de B') < doc.xml.indexOf('Encabezado C'));
   assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
-  assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
+  assert.ok(avisos.some((a) => /entre «Encabezado B» y «Encabezado C».*se ubicó junto al encabezado más cercano, «Encabezado C»/.test(a)));
 });
 
 test('reemplazarPorHitos NO inserta de respaldo si ni siquiera el límite final aparece', () => {
@@ -2142,6 +2160,26 @@ test('reemplazarPorHitos avisa una vez por rótulo ausente, no una por par conse
   assert.equal(porRotulo.length, 2, 'uno por cada rótulo que falta, no tres por los pares');
   assert.ok(porRotulo.some((a) => a.includes('«Dos»')), 'nombra el rótulo «Dos»');
   assert.ok(porRotulo.some((a) => a.includes('«Tres»')), 'nombra el rótulo «Tres»');
+});
+
+test('reemplazarPorHitos: dos huecos seguidos sin título propio se anclan al mismo vecino y su contenido se concatena en orden', () => {
+  /* "Dos" y "Tres" faltan los dos, entre "Uno" y "Cuatro" (ambos sí están). El hueco
+     Uno→Dos tiene su propio límite izquierdo ("Uno"), así que se ancla ahí directo. El
+     hueco Dos→Tres no tiene ninguno de sus dos límites propios: queda a distancia 1 de
+     "Uno" y distancia 1 de "Cuatro" —empate—, que se resuelve a la izquierda, así que
+     TAMBIÉN se ancla junto a "Uno". Los dos terminan en el mismo punto: el punto es que
+     ninguno se pierde y que no se pisan entre sí, sino que se concatenan en el orden en
+     que aparecen en la cadena. */
+  const xml = parrafoXml('Uno') + parrafoXml('Cuatro');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  const avisos = [];
+  reemplazarPorHitos(doc, ['Uno', 'Dos', 'Tres', 'Cuatro'],
+    [() => parrafoXml('Contenido de Uno-Dos.'), () => parrafoXml('Contenido de Dos-Tres.'), () => null],
+    avisos, 'III.X');
+  assert.match(doc.xml, /Contenido de Uno-Dos\./);
+  assert.match(doc.xml, /Contenido de Dos-Tres\./);
+  assert.ok(doc.xml.indexOf('Contenido de Uno-Dos') < doc.xml.indexOf('Contenido de Dos-Tres'),
+    'el que va primero en la cadena queda primero en el texto, sin importar a qué vecino se ancló cada uno');
 });
 
 /* El respaldo INSERTA en el cursor, no reemplaza el tramo, y esa distinción es la que
@@ -2209,8 +2247,8 @@ test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios en
   assert.doesNotMatch(salida, /Este párrafo del informe de referencia se retiró/);
   ['la política monetaria', 'la tasa de cambio \\(TRM\\)', 'el mercado laboral en Colombia',
     'las conclusiones del panorama económico'].forEach((tema) => {
-    assert.match(salida, new RegExp('Actualizar con datos verificados sobre ' + tema));
-  });
+      assert.match(salida, new RegExp('Actualizar con datos verificados sobre ' + tema));
+    });
 });
 
 test('actualizarApartadosMacroOoxml no toca un hueco intermedio corto (sin prosa real)', () => {
@@ -2446,6 +2484,80 @@ test('actualizarApartadoSectorialOoxml escribe los encabezados de III.C con la i
   assert.match(texto, /Conclusiones y Perspectivas/);
 });
 
+test('actualizarApartadoSectorialOoxml ubica la narrativa aunque la plantilla escriba los rótulos distinto y le falte "Datos Clave del Sector" (caso real LATV)', () => {
+  /* Fixture calcado de una plantilla de cliente real (LATV SUCURSAL COLOMBIA): dice
+     "Análisis EN el sector..." (no "del Sector") e "Importaciones y exportaciones" sin
+     el sufijo "del sector", y no tiene subsección "Datos Clave del Sector" en absoluto
+     (ni encabezado ni tabla) — antes de este fix, esas tres cosas dejaban la narrativa
+     nueva de "Comportamiento del Sector" fuera de su lugar mientras el encabezado sí se
+     actualizaba, que es exactamente el síntoma reportado. */
+  const xml = [
+    parrafoXml('Análisis en el sector de publicidad de televisión'),
+    parrafoXml('Comportamiento del Sector de la Industria de la televisión en 2025 y Comparación con 2024'),
+    parrafoXml('Texto viejo de comportamiento, referencia 2024.'),
+    parrafoXml('Importaciones y exportaciones'),
+    parrafoXml('Texto viejo de comercio exterior, referencia 2024.'),
+    parrafoXml('¿Qué se proyecta para el sector de la industria de la televisión en 2025?'),
+    parrafoXml('Texto viejo de proyección, referencia 2024.'),
+    parrafoXml('Conclusiones y Perspectivas'),
+    parrafoXml('Texto viejo de conclusiones, referencia 2024.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2025: {
+        tituloSector: 'de la televisión',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real LATV 2025.</p>',
+          comercioExterior: '<p>Comercio exterior real LATV 2025.</p>',
+          proyeccion: '<p>Proyección real LATV 2025.</p>',
+          conclusiones: '<p>Conclusiones reales LATV 2025.</p>',
+        },
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, avisos);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  /* Los dos rótulos con otra redacción se reconocen por sinónimo, y sus encabezados
+     quedan reescritos con la forma canónica y la industria/año correctos — ya no se
+     quedan con la redacción truncada de la plantilla. */
+  assert.match(texto, /Análisis del Sector de la industria de la televisión/);
+  assert.match(texto, /Importaciones y exportaciones del sector de la industria de la televisión/);
+
+  /* La narrativa de "Comportamiento del Sector" —el apartado que reportó el bug— queda
+     pegada a SU encabezado, no perdida ni amontonada al final de la sección, aunque
+     "Datos Clave del Sector" no exista en esta plantilla. */
+  assert.match(texto, /Comportamiento real LATV 2025\./);
+  const idxEncabezado = texto.indexOf('Comportamiento del Sector de la Industria de la televisión');
+  const idxNuevo = texto.indexOf('Comportamiento real LATV 2025.');
+  assert.ok(idxEncabezado !== -1 && idxNuevo !== -1 && idxEncabezado < idxNuevo,
+    'la narrativa nueva aparece después de su propio encabezado');
+  assert.ok(idxNuevo < texto.indexOf('Importaciones y exportaciones del sector'),
+    'y antes del siguiente apartado, no amontonada al final de toda la sección');
+
+  /* Sin un límite propio a ambos lados —falta "Datos Clave del Sector" del todo—, no se
+     puede borrar con certeza el texto viejo de esa zona sin arriesgar contenido real del
+     cliente que solo esté escrito con otro rótulo: se queda, visible, junto a la
+     narrativa nueva que sí se ubicó en su sitio. */
+  assert.match(texto, /Texto viejo de comportamiento, referencia 2024\./);
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Datos Clave del Sector»/.test(a)));
+  assert.ok(avisos.some((a) => /entre «Comportamiento del Sector» y «Datos Clave del Sector».*se ubicó junto al encabezado más cercano, «Comportamiento del Sector»/.test(a)));
+
+  /* "Importaciones y exportaciones" → "¿Qué se proyecta" sí son dos rótulos adyacentes y
+     los dos se encontraron (uno por sinónimo): ahí el reemplazo es directo y el texto
+     viejo correspondiente sí desaparece. */
+  assert.match(texto, /Comercio exterior real LATV 2025\./);
+  assert.doesNotMatch(texto, /Texto viejo de comercio exterior/);
+  assert.match(texto, /Proyección real LATV 2025\./);
+  assert.doesNotMatch(texto, /Texto viejo de proyección/);
+  assert.match(texto, /Conclusiones reales LATV 2025\./);
+  assert.doesNotMatch(texto, /Texto viejo de conclusiones/);
+});
+
 test('reescribirTextoParrafoOoxml deja el texto nuevo en el primer run y vacía los demás', () => {
   /* Word parte el encabezado en varios runs; el texto nuevo no puede quedar repetido ni
      partido, y las propiedades de cada run se conservan. */
@@ -2504,10 +2616,14 @@ test('actualizarApartadoSectorialOoxml reemplaza el hueco de entrada con la intr
   ].join('');
 
   const analisisSector = {
-    porAnio: { '2025': { narrativa: {
-      introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
-      comportamiento: '<p>Texto real de comportamiento.</p>',
-    } } },
+    porAnio: {
+      '2025': {
+        narrativa: {
+          introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
+          comportamiento: '<p>Texto real de comportamiento.</p>',
+        }
+      }
+    },
   };
   const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
 
@@ -2523,9 +2639,15 @@ test('actualizarApartadoSectorialOoxml no fabrica un marcador si el hueco de ent
     parrafoXml('Datos Clave del Sector'),
   ].join('');
 
-  const analisisSector = { porAnio: { '2025': { narrativa: {
-    comportamiento: '<p>Texto real de comportamiento.</p>',
-  } } } };
+  const analisisSector = {
+    porAnio: {
+      '2025': {
+        narrativa: {
+          comportamiento: '<p>Texto real de comportamiento.</p>',
+        }
+      }
+    }
+  };
   const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
 
   assert.doesNotMatch(salida, /Actualizar con el análisis del contexto introductorio/);
@@ -2545,10 +2667,16 @@ test('actualizarApartadoSectorialOoxml inserta la introduccion aunque el hueco d
     parrafoXml('Datos Clave del Sector'),
   ].join('');
 
-  const analisisSector = { porAnio: { '2025': { narrativa: {
-    introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
-    comportamiento: '<p>Texto real de comportamiento.</p>',
-  } } } };
+  const analisisSector = {
+    porAnio: {
+      '2025': {
+        narrativa: {
+          introduccion: '<p>El sector de videojuegos mostró dinamismo en 2025.</p>',
+          comportamiento: '<p>Texto real de comportamiento.</p>',
+        }
+      }
+    }
+  };
   const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2025 }, 2025, []);
 
   assert.match(salida, /mostró dinamismo en 2025/);
@@ -2927,10 +3055,14 @@ test('una cirugía que rompería el documento no se aplica y se avisa', async ()
 
 const ADICIONAL_DOCX = {
   filas: [
-    { vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
-      tipo: 'Préstamos con vinculados (61)', monto: 1800000000 },
-    { vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
-      tipo: 'Reintegros o reembolsos (62)', monto: 900000000 },
+    {
+      vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Préstamos con vinculados (61)', monto: 1800000000
+    },
+    {
+      vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+      tipo: 'Reintegros o reembolsos (62)', monto: 900000000
+    },
   ],
   monto: 2700000000,
 };
@@ -2941,7 +3073,7 @@ const tablaAdicionalPlantilla = () => new Table({
     new TableRow({
       children: ['Compañía vinculada', 'Identificación fiscal', 'País - Residencia fiscal',
         'Tipo de operación', 'Monto en pesos'].map(
-        (t) => new TableCell({ children: [new Paragraph(t)] })),
+          (t) => new TableCell({ children: [new Paragraph(t)] })),
     }),
     new TableRow({
       children: ['END GAME INTERACTIVE INC', '444444001', 'ESTADOS UNIDOS', 'Préstamos (61)',
@@ -3069,8 +3201,10 @@ test('por debajo del umbral la tabla del .docx también se elimina', () => {
     anio: 2025, ent: 'ACME',
     operacionAdicional: {
       monto: 500000000,
-      filas: [{ vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
-        tipo: 'Préstamos con vinculados (61)', monto: 500000000 }],
+      filas: [{
+        vinculado: 'BETA GMBH', nit: '900222', pais: 'ALEMANIA',
+        tipo: 'Préstamos con vinculados (61)', monto: 500000000
+      }],
     },
   };
 
@@ -3118,8 +3252,10 @@ test('sobre el umbral la tabla del .docx se publica, no se borra', () => {
     anio: 2025, ent: 'ACME',
     operacionAdicional: {
       monto: 14516485850,
-      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
-        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+      filas: [{
+        vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850
+      }],
     },
   };
 
@@ -3144,8 +3280,10 @@ test('sin la tabla en la plantilla y sobre el umbral, se inserta tras Transaccio
     vinc: 'ACME LLC', vinc_id: '900111', pais_vinc: 'MEXICO',
     operacionAdicional: {
       monto: 14516485850,
-      filas: [{ vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
-        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850 }],
+      filas: [{
+        vinculado: 'MONTACHEM INTERNATIONAL INC', nit: '760575817', pais: 'EEUU',
+        tipo: 'Reintegros o reembolsos de gastos con vinculados (62)', monto: 14516485850
+      }],
     },
   };
   const avisos = [];
@@ -3918,8 +4056,11 @@ test('otras inversiones y total de pasivos se omiten cuando la ficha no los trae
   /* Hay fichas que imprimen «-» en «Otras inversiones» —LYONDELLBASELL, frente a ASIA
      POLYMER que sí la trae— y escribir un cero ahí diría que la comparable reportó cero.
      Las demás filas no se mueven de sitio por eso. */
-  const sinEllas = { ...COMPARABLE_CON_EEFF, eeffDatos: {
-    ...COMPARABLE_CON_EEFF.eeffDatos, otras_inversiones: null, total_pasivos: null } };
+  const sinEllas = {
+    ...COMPARABLE_CON_EEFF, eeffDatos: {
+      ...COMPARABLE_CON_EEFF.eeffDatos, otras_inversiones: null, total_pasivos: null
+    }
+  };
   const zip = await zipSinAnexoB();
   insertarImagenesAnexoB(zip, { anio: 2025, comparables: [sinEllas] });
   const texto = textoDe(zip, RUTA_DOC_TEST);
