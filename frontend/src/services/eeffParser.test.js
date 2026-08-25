@@ -6,6 +6,7 @@ import {
   promptEeffContribuyente, bloqueDeTexto, valorDeRubro, rotuloDeRubro,
   CAMPO_POR_RUBRO, RUBROS_DE_COTEJO, extraerTextoEstructuradoPdf,
   verifyAccountingEqualities,
+  CAMPOS_CON_FALLBACK_NOTAS, promptFaltantesEnNotas, buscarFaltantesEnNotas,
 } from './eeffParser.js';
 import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 
@@ -578,6 +579,73 @@ test('parseEEFFComparableOCR cae correctamente al Vision OCR original si es una 
 
   } finally {
     // Restaurar original
+    axios.post = originalPost;
+  }
+});
+
+/* ══════ La pasada angosta a notas, cuando algo quedó en null ══════ */
+
+test('CAMPOS_CON_FALLBACK_NOTAS son exactamente costo de ventas, partes relacionadas e inventarios', () => {
+  assert.deepStrictEqual(Object.keys(CAMPOS_CON_FALLBACK_NOTAS).sort(), ['t_ap', 't_ar', 't_c', 't_inv']);
+});
+
+test('promptFaltantesEnNotas solo pide los campos indicados, con su definición', () => {
+  const prompt = promptFaltantesEnNotas(['t_c']);
+  assert.match(prompt, /costo de ventas/);
+  assert.doesNotMatch(prompt, /inventarios/);
+  assert.match(prompt, /"t_c"/);
+});
+
+test('promptFaltantesEnNotas exige revisar notas y citar la ausencia', () => {
+  const prompt = promptFaltantesEnNotas(['t_ap']);
+  assert.match(prompt, /nota/i);
+  assert.match(prompt, /cita/i);
+});
+
+test('buscarFaltantesEnNotas sin faltantes no llama a la API', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+  let llamado = false;
+  axios.post = async () => { llamado = true; return { data: {} }; };
+  try {
+    const r = await buscarFaltantesEnNotas({}, []);
+    assert.deepStrictEqual(r, { hallazgos: {}, conclusion: '' });
+    assert.strictEqual(llamado, false);
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
+test('buscarFaltantesEnNotas interpreta la respuesta de Gemini, encontrado y ausente', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+  axios.post = async () => ({
+    data: {
+      candidates: [{
+        content: {
+          parts: [{
+            text: JSON.stringify({
+              hallazgos: {
+                t_c: { valor: null, encontrado_en: null, palabra: '', cita: 'Revisé la Nota 19: solo trae gastos de administración.' },
+                t_inv: { valor: 4200, encontrado_en: 'nota', palabra: 'existencias', cita: '' },
+              },
+              conclusion: 'No se encontró el costo de ventas ni en el estado ni en las notas; sí se encontraron los inventarios en la Nota 8.',
+            }),
+          }],
+        },
+      }],
+    },
+  });
+
+  const mockFile = { type: 'application/pdf', name: 'x.pdf', arrayBuffer: async () => new ArrayBuffer(8) };
+  try {
+    const { hallazgos, conclusion } = await buscarFaltantesEnNotas(mockFile, ['t_c', 't_inv']);
+    assert.strictEqual(hallazgos.t_c.valor, null);
+    assert.match(hallazgos.t_c.cita, /Nota 19/);
+    assert.strictEqual(hallazgos.t_inv.valor, 4200);
+    assert.strictEqual(hallazgos.t_inv.encontradoEn, 'nota');
+    assert.match(conclusion, /inventarios/);
+  } finally {
     axios.post = originalPost;
   }
 });

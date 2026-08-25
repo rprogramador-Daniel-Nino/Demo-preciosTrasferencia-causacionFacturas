@@ -305,6 +305,95 @@ export const RUBROS_DE_COTEJO = [
   'utilidad_operacional_impresa',
 ];
 
+/* Los campos donde, por evidencia real (LATV Sucursal Colombia, 2026-08-25), el desglose
+   puede vivir solo en una nota — o genuinamente no existir en ninguna parte del
+   documento. Acotado a estos cuatro y no a todo `LEIDOS` de `eeffVerificacion.js`: los
+   demás (ingresos, los dos totales de activo, PP&E) son cifras que un balance colombiano
+   siempre imprime en su cuerpo principal; preguntar por ellas en las notas no tiene
+   precedente real y solo gastaría la llamada en vano. */
+export const CAMPOS_CON_FALLBACK_NOTAS = {
+  t_c: 'costo de ventas',
+  t_ar: 'cuentas por cobrar a partes relacionadas',
+  t_ap: 'cuentas por pagar a partes relacionadas',
+  t_inv: 'inventarios',
+};
+
+/**
+ * El prompt de la pasada angosta: un solo objetivo (los campos que `verificarEeff()`
+ * dejó en null) en vez de los ~15 que compiten por atención en `EEFF_PROMPT`. Exige, por
+ * campo, la palabra/frase literal si lo encuentra, o una cita de qué nota revisó y por
+ * qué no lo contiene si no lo encuentra en ninguna parte — un `null` sin más no es una
+ * respuesta aceptable, porque es lo único que hace verificable una ausencia.
+ */
+export function promptFaltantesEnNotas(faltantes) {
+  const lista = faltantes
+    .map((campo) => `· ${campo}: ${CAMPOS_CON_FALLBACK_NOTAS[campo]}`)
+    .join('\n');
+  const esqueleto = faltantes
+    .map((campo) => `    "${campo}": {"valor": null, "encontrado_en": null, "palabra": "", "cita": ""}`)
+    .join(',\n');
+
+  return `Eres un contador público que lee estados financieros colombianos preparados bajo NIIF.
+
+Ya se leyó este documento una vez y los siguientes datos quedaron sin encontrar en el cuerpo principal de los estados. Busca ESPECÍFICAMENTE estos datos EN TODO EL DOCUMENTO, incluyendo cualquier nota a los estados financieros que traiga (no solo el Estado de Situación Financiera y el Estado de Resultados):
+
+${lista}
+
+Para CADA uno de los campos de arriba, devuelve un objeto con esta forma exacta:
+{"valor": <número o null>, "encontrado_en": "estado_principal"|"nota"|null, "palabra": "<palabra o frase literal con la que el documento lo llama, o cadena vacía>", "cita": "<en qué nota o página lo buscaste y por qué no lo contiene, o cadena vacía si sí lo encontraste>"}
+
+Si genuinamente no aparece en ninguna parte tras revisar el documento completo (estados y notas), "valor" y "encontrado_en" van en null, pero "cita" es OBLIGATORIA: no basta un null sin sustento, di explícitamente en qué nota(s) buscaste y por qué esa nota no lo contiene.
+
+Devuelve también una "conclusion": una frase breve en español explicando qué encontraste y qué sigue faltando, para mostrarle al analista.
+
+Devuelve SOLO este JSON, sin marcas markdown:
+{
+  "hallazgos": {
+${esqueleto}
+  },
+  "conclusion": ""
+}`;
+}
+
+/**
+ * La pasada angosta: reintenta con el mismo documento ya en base64, preguntando solo por
+ * los campos que `verificarEeff()` dejó en null. No rasteriza nada nuevo: Gemini ya
+ * recibió el PDF completo (con sus notas, si las trae) en `parseEeffWithGeminiOCR`.
+ */
+export async function buscarFaltantesEnNotas(file, faltantes) {
+  if (!faltantes || faltantes.length === 0) return { hallazgos: {}, conclusion: '' };
+
+  const base64Data = await leerBase64(file);
+  const mimeType = mimeDe(file);
+
+  const response = await postGeminiWithRetry({
+    model: 'gemini-3.5-flash',
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: mimeType, data: base64Data } },
+        { text: promptFaltantesEnNotas(faltantes) },
+      ],
+    }],
+  });
+
+  const text = response.data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  const parsed = extraerJSON(text);
+  if (!parsed) throw new Error('La respuesta de la pasada a notas no traía un JSON reconocible.');
+
+  const hallazgos = {};
+  faltantes.forEach((campo) => {
+    const h = (parsed.hallazgos && parsed.hallazgos[campo]) || {};
+    hallazgos[campo] = {
+      valor: valorDeRubro(h.valor !== undefined ? { valor: h.valor } : null),
+      encontradoEn: (h.encontrado_en === 'estado_principal' || h.encontrado_en === 'nota') ? h.encontrado_en : null,
+      palabra: String(h.palabra || '').trim(),
+      cita: String(h.cita || '').trim(),
+    };
+  });
+
+  return { hallazgos, conclusion: String(parsed.conclusion || '').trim() };
+}
+
 /**
  * El valor de un rubro de la respuesta, sea la forma que sea.
  *
