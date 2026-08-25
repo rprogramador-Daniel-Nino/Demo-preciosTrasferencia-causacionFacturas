@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
-import { parseEeffWithGeminiOCR } from '../services/eeffParser';
+import { parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS } from '../services/eeffParser';
 import {
   verificarEeff, camposAplicables, utilidadOperacionalDe,
 } from '../services/eeffVerificacion';
+import { resolverFaltantesConNotas, aprenderDeLecturaExitosa } from '../services/notasEeffOrquestacion';
+import { leerVocabularioEeff, guardarVocabularioEeff } from '../services/firestoreRepo';
 import { convertPdfToImages } from '../services/pdfRenderer';
+import PopupFaltantesEeff from './PopupFaltantesEeff';
 
 /* Las casillas del estado de situación financiera. Tres partidas y un subtotal, que es lo
    que esta ingesta toma por decisión del usuario (2026-08-21).
@@ -43,6 +46,9 @@ export default function IngestaCifras({ study, updateStudy }) {
      en el componente y no en el estudio porque describe UNA lectura, no el estudio; lo que
      sí se persiste son las correcciones (`t_correcciones`), que el libro publica. */
   const [hallazgos, setHallazgos] = useState(null);
+  /* Los estados por campo que la ingesta no pudo resolver ni con la pasada a notas —
+     solo se llena cuando hay algo que de verdad merece un popup, no en cada carga. */
+  const [popupFaltantes, setPopupFaltantes] = useState(null);
 
   /* Los tres insumos de la utilidad operacional. Cambiar cualquiera obliga a recalcularla:
      es un valor derivado, no un dato, y dejarlo con la cifra de la carga anterior es peor
@@ -110,12 +116,52 @@ export default function IngestaCifras({ study, updateStudy }) {
          ingresos, el costo y los dos gastos del giro —en vez de creerle a una fila rotulada
          «resultado de la operación»— y descarta las cifras que no están impresas en el
          documento. */
-      const verificacion = verificarEeff(res, { anioEstudio: study.anio });
+      const primeraVerificacion = verificarEeff(res, { anioEstudio: study.anio });
+
+      /* La pasada a notas solo corre si algo de costo de ventas, partes relacionadas o
+         inventarios quedó en null — con diccionario y páginas decidiendo si vale la pena
+         gastar la llamada. Un fallo aquí (Firestore o Gemini caídos) no debe tumbar la
+         ingesta: se sigue con lo que ya se tenía de la primera pasada. */
+      let verificacion = primeraVerificacion;
+      try {
+        verificacion = await resolverFaltantesConNotas({
+          file,
+          lectura: res,
+          verificacion: primeraVerificacion,
+          anioEstudio: study.anio,
+          leerVocabulario: leerVocabularioEeff,
+          guardarVocabulario: guardarVocabularioEeff,
+        });
+      } catch (err) {
+        console.error('No se pudo completar la pasada a notas:', err);
+      }
+
+      /* Alimenta el diccionario con lo que la pasada 1 SÍ encontró, para que madure con
+         cada estudio exitoso y no solo con los que necesitaron el fallback. No bloquea la
+         ingesta si falla. */
+      aprenderDeLecturaExitosa({
+        campos: verificacion.campos,
+        rotulos: res.rotulos,
+        leerVocabulario: leerVocabularioEeff,
+        guardarVocabulario: guardarVocabularioEeff,
+      }).catch((err) => console.warn('No se pudo actualizar el diccionario de vocabulario:', err));
+
       Object.assign(updates, camposAplicables(verificacion.campos));
       updates.t_correcciones = verificacion.correcciones;
 
       updateStudy(updates);
       setHallazgos(verificacion);
+
+      /* El popup solo aparece si queda algo confirmado ausente, probablemente ausente
+         por vocabulario, o sin poder revisar por falta de páginas — el caso feliz (todo
+         resuelto o nunca hizo falta el fallback) no debe interrumpir al analista. */
+      const necesitanPopup = verificacion.advertencias.filter((a) => (
+        a.campo && CAMPOS_CON_FALLBACK_NOTAS[a.campo]
+        && ['confirmado_ausente', 'probable_ausente_por_vocabulario', 'implicito_cero'].includes(a.estado)
+      ));
+      if (necesitanPopup.length > 0) {
+        setPopupFaltantes({ advertencias: necesitanPopup, conclusion: verificacion.conclusionNotas || '' });
+      }
 
       /* El mensaje decía siempre "páginas adjuntadas" aunque convertPdfToImages
          hubiera devuelto un arreglo vacío (falla silenciosa, ver pdfRenderer.js): el
@@ -146,6 +192,7 @@ export default function IngestaCifras({ study, updateStudy }) {
   }, study.pli || 'MO');
 
   return (
+    <>
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Columna Izquierda: Formulario de Cifras e Ingesta */}
       <div className="lg:col-span-2 space-y-6">
@@ -551,5 +598,14 @@ export default function IngestaCifras({ study, updateStudy }) {
         </div>
       </div>
     </div>
+
+    {popupFaltantes && (
+      <PopupFaltantesEeff
+        advertencias={popupFaltantes.advertencias}
+        conclusion={popupFaltantes.conclusion}
+        alCerrar={() => setPopupFaltantes(null)}
+      />
+    )}
+    </>
   );
 }
