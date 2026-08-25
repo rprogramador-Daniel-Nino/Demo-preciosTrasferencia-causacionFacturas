@@ -703,31 +703,81 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
     if (!bloques.length) {
       anotar(TABLA_CRITERIOS);
     } else {
+      /* Mismo criterio de desambiguación que `docxRelleno.js` (donde está la explicación
+         completa, con el caso real de LATV SUCURSAL COLOMBIA, 2026-08-25): número 13/15 se
+         borra, número 14 se conserva, y con exactamente 3 sin numerar se borran la primera
+         y la tercera por posición. Lo que queda sin decidir por número o posición se decide
+         por si cita «Capital IQ» en su fuente. */
+      const veredictos = bloques.map((bloque, idx) => {
+        const num = numeroDeTabla(bloque.titulo);
+        if (num === 13 || num === 15) return { eliminar: true };
+        if (num === 14) return { conservar: true };
+        if (bloques.length === 3 && (idx === 0 || idx === 2)) return { eliminar: true };
+        if (bloques.length === 3 && idx === 1) return { conservar: true };
+        return {};
+      });
+      const indecisos = veredictos
+        .map((v, i) => (!v.eliminar && !v.conservar ? i : -1))
+        .filter((i) => i >= 0);
+      if (indecisos.length >= 2) {
+        const citaCapitalIQ = (i) => /capital\s*iq/i.test(
+          textoPlanoHtml(salida.slice(bloques[i].inicio, bloques[i].fin))
+        );
+        const conCita = indecisos.filter(citaCapitalIQ);
+        if (conCita.length === 1) {
+          indecisos.forEach((i) => {
+            if (i === conCita[0]) veredictos[i].conservar = true;
+            else veredictos[i].eliminar = true;
+          });
+        } else {
+          /* Ninguna cita Capital IQ (Ryan LLC + Refinitiv, el caso real de LATV), o las
+             dos la citan: no hay una «correcta» que conservar tal cual. Con criterios
+             nuevos disponibles (si no los hubiera, ya se habría salido arriba en
+             `if (!criterios.length)`), no debe quedar el hueco vacío: se borran todas y se
+             publica una sola con los criterios nuevos y una fuente que sí cita Capital IQ
+             — no se "conserva" ninguna de las originales, ni su fuente desactualizada. */
+          indecisos.forEach((i, k) => {
+            if (k === 0) veredictos[i].reemplazarSinConservar = true;
+            else veredictos[i].eliminar = true;
+          });
+        }
+      } else if (indecisos.length === 1) {
+        veredictos[indecisos[0]].conservar = true;
+      }
+
+      let algunaConservada = false;
       /* De atrás hacia adelante para no alterar los offsets al eliminar o modificar */
       for (const bloque of [...bloques].reverse()) {
-        const num = numeroDeTabla(bloque.titulo);
         const idxOriginal = bloques.indexOf(bloque);
+        const { eliminar, conservar, reemplazarSinConservar } = veredictos[idxOriginal];
 
-        // Determinamos si es la Tabla 13 o 15 para borrarla. Si no tiene número pero hay 3,
-        // borramos la primera (índice 0, correspondiente a la 13) y la tercera (índice 2, a la 15).
-        const esParaEliminar = num === 13 || num === 15 || (num !== 14 && bloques.length === 3 && (idxOriginal === 0 || idxOriginal === 2));
-
-        if (esParaEliminar) {
+        if (eliminar) {
           // Eliminamos la tabla entera incluyendo el párrafo de su rótulo si existe
           const inicioEliminar = bloque.rotulo ? bloque.rotulo.inicio : bloque.inicio;
           /* Y su línea de fuente, si la trae: no está dentro del bloque —acaba en
-             `</table>`— y dejarla quedaría huérfana bajo la Tabla 14 que sí se conserva,
+             `</table>`— y dejarla quedaría huérfana bajo la que sí se conserva,
              atribuyéndole el origen (Ryan LLC, Refinitiv) de una tabla que ya no está. */
           const fuente = elementoFuenteSiguiente(salida, bloque.fin);
           const finEliminar = fuente ? fuente.fin : bloque.fin;
           salida = salida.slice(0, inicioEliminar) + salida.slice(finEliminar);
-        } else {
+        } else if (conservar) {
           // Conservamos la Tabla 14 (Capital IQ) y la reescribimos con los criterios reales
           salida = salida.slice(0, bloque.inicio)
             + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
             + salida.slice(bloque.fin);
+          algunaConservada = true;
+        } else if (reemplazarSinConservar) {
+          salida = salida.slice(0, bloque.inicio)
+            + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
+            + salida.slice(bloque.fin);
+          const finNuevo = finDeTabla(salida, bloque.inicio);
+          if (finNuevo > bloque.inicio) {
+            salida = reescribirFuenteHtml(salida, finNuevo, citaBaseDatos(study));
+          }
+          algunaConservada = true;
         }
       }
+      if (!algunaConservada) anotar(TABLA_CRITERIOS);
     }
   }
 

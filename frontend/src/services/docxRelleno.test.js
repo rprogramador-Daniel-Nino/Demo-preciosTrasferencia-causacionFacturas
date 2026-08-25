@@ -819,18 +819,77 @@ test('Códigos SIC: dos ocurrencias sin numerar, una cita Capital IQ en su fuent
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'se pudo distinguir cuál conservar, no hay que avisar');
 });
 
-test('Códigos SIC: dos ocurrencias sin numerar y sin que ninguna cite Capital IQ — se borran las dos y se avisa', () => {
-  /* Sin número, sin posición y sin fuente que lo diga, no hay con qué distinguir cuál de las
-     dos es la vigente. Pedido explícito del usuario 2026-08-20: ante esa ambigüedad se
-     prefiere borrar las dos —dejar el hueco visible y avisado— a arriesgar conservar la
-     copia equivocada con datos del año anterior sin que nadie se entere. */
+test('Códigos SIC: dos ocurrencias sin numerar, ninguna cita Capital IQ, y hay criterios nuevos — se borran las dos viejas y se publica una tabla nueva', () => {
+  /* Caso real: LATV SUCURSAL COLOMBIA (2026-08-25) trae la tabla dos veces, sin numerar,
+     una citando Ryan LLC y la otra Refinitiv — ninguna de las dos fuentes que el sistema
+     usa hoy. Antes esto borraba las dos y avisaba "pendiente" (pedido del usuario el
+     2026-08-20, para el caso general de no arriesgar conservar la copia equivocada), pero
+     el mismo usuario pidió el 2026-08-25 que, HABIENDO criterios nuevos de Capital IQ para
+     publicar, no se pierdan: se borran las dos viejas (con sus fuentes desactualizadas) y
+     se publica una sola tabla nueva con los criterios del estudio y una fuente que sí
+     cita Capital IQ — no se "conserva" ninguna de las dos originales. */
   const xml = tablaSicOoxml(18, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
     + tablaSicOoxml(19, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
   const avisos = [];
   const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
 
-  assert.ok(!salida.includes('Códigos SIC utilizados'), 'ninguna de las dos copias sobrevive');
-  assert.ok(avisos.includes('Códigos SIC utilizados'), 'y hay que avisarlo');
+  assert.strictEqual((salida.match(/Códigos SIC utilizados/g) || []).length, 1,
+    'sobrevive una sola tabla, no las dos viejas ni cero');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla que sobrevive trae los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no sobrevive ningún criterio viejo');
+  assert.ok(!salida.includes('Fuente: Ryan LLC.'), 'no sobrevive la fuente vieja de Ryan LLC');
+  assert.ok(!salida.includes('Fuente: Refinitiv.'), 'no sobrevive la fuente vieja de Refinitiv');
+  assert.match(salida, /Fuente: Información Base Datos Capital IQ/, 'la fuente nueva sí cita Capital IQ');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'se publicó una tabla, no queda pendiente');
+});
+
+/* La plantilla REAL de LATV SUCURSAL COLOMBIA no trae la fuente como fila interna de la
+   tabla (`filaUnaCeldaOoxml`, lo que asumían las pruebas de arriba) sino como un párrafo
+   APARTE justo después — comprobado descomprimiendo el .docx real. Sin manejar esta forma
+   también, la fuente vieja (Ryan LLC / Refinitiv) queda huérfana o sobrevive intacta
+   aunque la tabla se borre o se reescriba. */
+const tablaSicFuenteExternaOoxml = (numero, cuerpo, fuente) =>
+  '<w:p><w:t>' + (numero != null ? 'Tabla ' + numero + '. ' : '') + 'Códigos SIC utilizados</w:t></w:p><w:tbl>'
+  + filaDosCeldasOoxml('Criterio de búsqueda', '')
+  + cuerpo
+  + '</w:tbl>'
+  + (fuente ? '<w:p><w:t>' + fuente + '</w:t></w:p>' : '');
+
+test('Códigos SIC (fuente como párrafo aparte, no fila interna): al eliminar una copia redundante, su fuente no queda huérfana', () => {
+  const xml = tablaSicFuenteExternaOoxml(13, CUERPO_SIC_VIEJO, 'Fuente: Ryan LLC.')
+    + tablaSicFuenteExternaOoxml(14, CUERPO_SIC_VIEJO, 'Fuente: Capital IQ.')
+    + tablaSicFuenteExternaOoxml(15, CUERPO_SIC_VIEJO, 'Fuente: Refinitiv.');
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.ok(!salida.includes('Fuente: Ryan LLC.'), 'la fuente de la tabla 13 borrada no queda huérfana');
+  assert.ok(!salida.includes('Fuente: Refinitiv.'), 'la fuente de la tabla 15 borrada no queda huérfana');
+  assert.match(salida, /Fuente: Capital IQ\./, 'la fuente de la tabla 14 conservada sigue ahí, intacta');
+  assert.ok(salida.includes('Tabla 14. Códigos SIC utilizados'), 'se conservó la tabla 14');
+});
+
+test('Códigos SIC (fuente como párrafo aparte, caso real LATV): dos copias sin numerar, ninguna cita Capital IQ — se borran las dos con su fuente, se publica una tabla nueva con fuente propia', () => {
+  /* Calcado del .docx real de LATV SUCURSAL COLOMBIA (2026-08-25): "Criterios de
+     Búsqueda" dos veces, sin "Tabla N.", una con fuente "…por Ryan, LLC" y otra
+     "…por Refinitiv" — cada fuente en su propio párrafo después de su tabla, no como
+     fila interna. */
+  const xml = '<w:p><w:t>Criterios de Búsqueda</w:t></w:p><w:tbl>'
+    + filaDosCeldasOoxml('Criterio de búsqueda', '') + CUERPO_SIC_VIEJO + '</w:tbl>'
+    + '<w:p><w:t>Fuente: Búsqueda en la base de datos mundial de empresas privadas, publicado en noviembre de 2024 por Ryan, LLC</w:t></w:p>'
+    + '<w:p><w:t>Criterios de Búsqueda</w:t></w:p><w:tbl>'
+    + filaDosCeldasOoxml('Criterio de búsqueda', '') + CUERPO_SIC_VIEJO + '</w:tbl>'
+    + '<w:p><w:t>Fuente: Búsqueda de fundamentos de Refinitiv, publicado en octubre de 2024 por Refinitiv</w:t></w:p>';
+  const avisos = [];
+  const salida = actualizarTablasOperacionesOoxml(xml, ESTUDIO_SIC, avisos);
+
+  assert.strictEqual((salida.match(/Criterios de B[uú]squeda/g) || []).length, 1,
+    'sobrevive una sola tabla, no las dos viejas ni cero');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla que sobrevive trae los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no sobrevive ningún criterio viejo');
+  assert.ok(!salida.includes('por Ryan, LLC'), 'no sobrevive la fuente vieja de Ryan LLC');
+  assert.ok(!salida.includes('por Refinitiv'), 'no sobrevive la fuente vieja de Refinitiv');
+  assert.match(salida, /Fuente: Información Base Datos Capital IQ/, 'la fuente nueva sí cita Capital IQ');
+  assert.ok(!avisos.includes('Códigos SIC utilizados'), 'se publicó una tabla, no queda pendiente');
 });
 
 test('Códigos SIC: una sola tabla coincidente por título se conserva y actualiza con los criterios del estudio', () => {

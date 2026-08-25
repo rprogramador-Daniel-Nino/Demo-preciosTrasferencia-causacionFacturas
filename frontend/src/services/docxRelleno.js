@@ -1139,9 +1139,10 @@ function celdasDeOoxml(filaXml) {
  *        párrafo de título, si lo hay, no tiene ninguno.
  * @param {Array<string[]>} filas  una entrada `[etiqueta, valor]` por fila — la forma que ya
  *        produce `filasCriteriosScreening` (`tablasInforme.js`).
- * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
- *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
- *        detección de la fila de fuente.
+ * @param {{filasEncabezado?:number, pie?:boolean, fuente?:string}} [opciones]  mismo
+ *        contrato que `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para
+ *        desactivar la detección de la fila de fuente. `fuente`, si se da, SÍ reescribe esa
+ *        fila (ver más abajo por qué es la excepción a "no se recalcula en ninguna ruta").
  * @returns {string} el XML con las filas de cuerpo nuevas, o el original si no hay molde.
  */
 export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
@@ -1153,7 +1154,14 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
   /* Misma heurística de pie de fuente que `reescribirFilasHtml`: la última fila se conserva
      intacta cuando es de una sola celda y el resto de la tabla tiene más de una. No se
      regenera aquí — es la misma decisión ya tomada en la ruta HTML, no algo que decidir de
-     nuevo: el pie «Fuente: ... publicado en ...» no se recalcula en ninguna de las dos rutas. */
+     nuevo: el pie «Fuente: ... publicado en ...» no se recalcula en ninguna de las dos rutas.
+
+     EXCEPCIÓN, vía `opciones.fuente`: cuando la tabla que se está reescribiendo no es la
+     misma que ya traía la plantilla sino una elegida entre varias ambiguas que citaban OTRA
+     base de datos (Ryan LLC, Refinitiv — ninguna Capital IQ, caso real de LATV SUCURSAL
+     COLOMBIA, 2026-08-25), conservar ese pie sin tocar dejaría los criterios NUEVOS de
+     Capital IQ atribuidos a una fuente que ya no es la que los produjo — peor que no
+     regenerarlo. Ahí sí hay que sobrescribirlo. */
   const columnas = celdasDeOoxml(todas[encabezados - 1].xml).length;
   const ultima = todas[todas.length - 1];
   const esPie = opciones.pie !== false
@@ -1178,7 +1186,25 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
     return '<w:tr>' + celdas + '</w:tr>';
   }).join('');
 
-  return tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
+  let salida = tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
+
+  if (esPie && typeof opciones.fuente === 'string' && opciones.fuente) {
+    const celdaPie = celdasDeOoxml(ultima.xml)[0];
+    if (celdaPie) {
+      const filaPieNueva = ultima.xml.slice(0, celdaPie.inicio)
+        + reescribirTextoParrafoOoxml(celdaPie.xml, opciones.fuente)
+        + ultima.xml.slice(celdaPie.fin);
+      /* `ultima.inicio`/`.fin` son posiciones en la tabla ORIGINAL; el cuerpo ya
+         reescrito arriba puede tener otra longitud, así que se recalculan sobre el
+         nuevo largo total en vez de reutilizar los del molde viejo. */
+      const desplazamiento = nuevas.length - (cuerpo[cuerpo.length - 1].fin - cuerpo[0].inicio);
+      const inicioPie = ultima.inicio + desplazamiento;
+      const finPie = ultima.fin + desplazamiento;
+      salida = salida.slice(0, inicioPie) + filaPieNueva + salida.slice(finPie);
+    }
+  }
+
+  return salida;
 }
 
 /**
@@ -1469,6 +1495,48 @@ function finDeFuenteSiguienteOoxml(xml, desde) {
     return hermano.fin;
   }
   return desde;
+}
+
+/** Igual que `finDeFuenteSiguienteOoxml`, pero devuelve el párrafo completo
+ *  (`{inicio,fin,xml}`) en vez de solo su final, para poder reescribir su texto en vez de
+ *  solo delimitarlo — `null` si no hay ninguno. */
+function parrafoFuenteSiguienteOoxml(xml, desde) {
+  const cursor = saltarHuecosOoxml(xml, desde);
+  const hermano = parrafoHermanoSiguiente(xml, cursor);
+  if (hermano && hermano.xml && esLineaFuenteOoxml(textoPlanoOoxml(hermano.xml))) {
+    return hermano;
+  }
+  return null;
+}
+
+/**
+ * Reescribe el texto de la línea «FUENTE: …» que sigue a `desde` —el final de un bloque
+ * (tabla o párrafo)—, conservando su marcado y el prefijo original («Fuente:»,
+ * «FUENTES:», etc.). Equivalente OOXML de `reescribirFuenteHtml`
+ * (`tablasHtmlInforme.js`), que no tenía contraparte en esta ruta: cada tabla que
+ * necesitaba tocar su fuente reinventaba la búsqueda del párrafo hermano a mano.
+ *
+ * Universal a propósito: sirve para CUALQUIER tabla de esta ruta cuya plantilla traiga
+ * la fuente como párrafo aparte después de la tabla (no como fila interna) — no es un
+ * ajuste para una plantilla puntual.
+ *
+ * @param {string} xml
+ * @param {number} desde  el offset donde acaba el bloque.
+ * @param {string} fuenteTexto  el texto nuevo, sin el prefijo «FUENTE:».
+ * @returns {string} el xml con la línea reescrita, o igual si no había ninguna.
+ */
+function reescribirFuenteOoxml(xml, desde, fuenteTexto) {
+  const texto = String(xml || '');
+  if (!fuenteTexto) return texto;
+  const parrafo = parrafoFuenteSiguienteOoxml(texto, desde);
+  if (!parrafo) return texto;
+
+  const plano = textoPlanoOoxml(parrafo.xml);
+  const m = /^\s*(fuentes?\s*:)/i.exec(plano);
+  if (!m) return texto;
+
+  const nuevo = reescribirTextoParrafoOoxml(parrafo.xml, m[1] + ' ' + fuenteTexto);
+  return texto.slice(0, parrafo.inicio) + nuevo + texto.slice(parrafo.fin);
 }
 
 /**
@@ -2427,11 +2495,30 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         textoPlanoOoxml(actual.slice(bloques[i].inicio, bloques[i].fin))
       );
       const conCita = indecisos.filter(citaCapitalIQ);
-      const aConservar = conCita.length === 1 ? conCita[0] : -1;
-      indecisos.forEach((i) => {
-        if (i === aConservar) veredictos[i].conservar = true;
-        else veredictos[i].eliminar = true;
-      });
+      if (conCita.length === 1) {
+        indecisos.forEach((i) => {
+          if (i === conCita[0]) veredictos[i].conservar = true;
+          else veredictos[i].eliminar = true;
+        });
+      } else {
+        /* Ninguna cita Capital IQ (el caso real: la plantilla trae Ryan LLC y Refinitiv,
+           ninguna de las dos fuentes que el sistema usa hoy — LATV SUCURSAL COLOMBIA,
+           2026-08-25), o las dos la citan: de cualquier modo no hay una «correcta» que
+           conservar tal cual. Antes esto borraba TODAS y avisaba «pendiente», aunque
+           hubiera criterios nuevos de verdad para publicar — pedido explícito del
+           usuario el 2026-08-20 para no arriesgar conservar la copia equivocada. Pero
+           el usuario pidió lo contrario el 2026-08-25 para este caso puntual: con
+           criterios nuevos disponibles (si no los hubiera, esta función ya habría
+           salido arriba, en `if (!criterios.length)`), no debe quedar ninguna de las
+           viejas ni el hueco vacío — se borran TODAS y se publica una tabla nueva,
+           sin conservar ninguna (ni su fuente vieja, que citaría un proveedor que ya
+           no se usa). `reemplazarSinConservar` marca cuál posición recibe la tabla
+           nueva; las demás solo se eliminan. */
+        indecisos.forEach((i, k) => {
+          if (k === 0) veredictos[i].reemplazarSinConservar = true;
+          else veredictos[i].eliminar = true;
+        });
+      }
     } else if (indecisos.length === 1) {
       veredictos[indecisos[0]].conservar = true;
     }
@@ -2442,13 +2529,58 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
        borrar o reescribir mueve los índices de lo que va después en el documento. */
     for (let idx = bloques.length - 1; idx >= 0; idx -= 1) {
       const bloque = bloques[idx];
-      const { eliminar, conservar } = veredictos[idx];
+      const { eliminar, conservar, reemplazarSinConservar } = veredictos[idx];
       if (eliminar) {
-        salida = salida.slice(0, bloque.inicio) + salida.slice(bloque.fin);
+        /* La fuente de esta copia puede venir como fila interna (dentro de `bloque.fin`,
+           ya se va con la tabla) o como párrafo APARTE justo después —así la trae LATV
+           SUCURSAL COLOMBIA, 2026-08-25—, y en ese segundo caso `bloque.fin` no la
+           incluye: sin extender el borrado quedaría huérfana bajo lo que sea que venga
+           después, atribuyéndole el origen (Ryan LLC, Refinitiv) de una tabla que ya no
+           está. Universal a las dos formas reales, no una plantilla puntual. */
+        const finConFuente = finDeFuenteSiguienteOoxml(salida, bloque.fin);
+        salida = salida.slice(0, bloque.inicio) + salida.slice(finConFuente);
       } else if (conservar) {
         salida = salida.slice(0, bloque.inicio)
           + reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios)
           + salida.slice(bloque.fin);
+        algunaConservada = true;
+      } else if (reemplazarSinConservar) {
+        /* No se conserva ninguna de las originales, así que su fuente TAMPOCO —citaría un
+           proveedor (Ryan LLC, Refinitiv) que no es el de los criterios nuevos—. Se
+           reescribe la fuente ya sea que la plantilla la traiga como fila interna de la
+           tabla (`reescribirFilasOoxml` con `opciones.fuente`) o como párrafo aparte
+           después (`reescribirFuenteOoxml`); si no trae ninguna de las dos formas, se le
+           agrega una, porque la corrida SÍ tiene una fuente real que declarar (el
+           numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016 la exige). */
+        const fuenteTexto = citaBaseDatos(estudio);
+        /* ¿Esta tabla trae la fuente como fila interna (una sola celda, al final)? Mismo
+           cálculo que hace `reescribirFilasOoxml` para decidir si `opciones.fuente`
+           tiene algo que tocar — se repite aquí, en vez de inferirlo buscando el texto ya
+           escapado en el resultado, porque «Standard & Poor's» sale como «&amp;» y esa
+           búsqueda nunca calzaría. */
+        const filasOriginales = filasDeOoxml(salida.slice(bloque.inicio, bloque.fin));
+        const ultimaOriginal = filasOriginales[filasOriginales.length - 1];
+        const teniaPieInterno = filasOriginales.length > 2
+          && celdasDeOoxml(filasOriginales[0].xml).length > 1
+          && ultimaOriginal && celdasDeOoxml(ultimaOriginal.xml).length === 1;
+
+        const nuevaTabla = reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios, {
+          fuente: 'Fuente: ' + fuenteTexto,
+        });
+        salida = salida.slice(0, bloque.inicio) + nuevaTabla + salida.slice(bloque.fin);
+
+        if (!teniaPieInterno) {
+          /* Ninguna fila interna que tocar: la fuente, si existe, es un párrafo aparte
+             después de la tabla (LATV SUCURSAL COLOMBIA, 2026-08-25) — se reescribe; si
+             tampoco hay ninguna de las dos formas, se agrega una, porque la corrida SÍ
+             tiene una fuente real que declarar (numeral 4, artículo 1.2.2.2.1.5, Decreto
+             1625 de 2016). */
+          const finTablaNueva = bloque.inicio + nuevaTabla.length;
+          const conFuenteExterna = reescribirFuenteOoxml(salida, finTablaNueva, fuenteTexto);
+          salida = conFuenteExterna !== salida
+            ? conFuenteExterna
+            : salida.slice(0, finTablaNueva) + parrafoFuenteOoxml(fuenteTexto) + salida.slice(finTablaNueva);
+        }
         algunaConservada = true;
       }
     }

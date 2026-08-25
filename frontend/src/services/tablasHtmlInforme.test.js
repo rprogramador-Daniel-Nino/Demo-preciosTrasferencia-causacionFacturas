@@ -600,6 +600,33 @@ test('los criterios de búsqueda conservan y actualizan la del medio aunque la n
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
 });
 
+test('los criterios de búsqueda: dos copias sin numerar, ninguna cita Capital IQ, y hay criterios nuevos — se borran las dos viejas y se publica una tabla nueva', () => {
+  /* Espejo HTML del test equivalente en docxRelleno.test.js. Caso real: LATV SUCURSAL
+     COLOMBIA (2026-08-25) trae la tabla dos veces, sin numerar, citando Ryan LLC y
+     Refinitiv — ninguna de las dos fuentes que el sistema usa hoy. Con criterios nuevos
+     de Capital IQ disponibles, no debe quedar el hueco vacío ni ninguna de las dos viejas
+     (con su fuente desactualizada): se publica una sola tabla nueva. */
+  const tabla = (fuente) =>
+    '<p><strong> Criterios de Búsqueda</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr></table>' +
+    '<p><strong>FUENTE: ' + fuente + '</strong></p>';
+  const html = tabla('Ryan LLC.') + '<p> Medio.</p>' + tabla('Refinitiv.');
+  const estudio = {
+    criteriosScreening: [{ conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' }],
+  };
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, estudio, avisos);
+
+  assert.strictEqual((salida.match(/<table>/g) || []).length, 1, 'sobrevive una sola tabla, no las dos viejas ni cero');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla que sobrevive trae los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no sobrevive ningún criterio viejo');
+  assert.ok(!salida.includes('Ryan LLC.'), 'no sobrevive la fuente vieja de Ryan LLC');
+  assert.ok(!salida.includes('Refinitiv.'), 'no sobrevive la fuente vieja de Refinitiv');
+  assert.match(salida, /FUENTE: Información Base Datos Capital IQ/, 'la fuente nueva sí cita Capital IQ');
+  assert.ok(!avisos.includes(TABLA_CRITERIOS), 'se publicó una tabla, no queda pendiente');
+});
+
 test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () => {
   const html =
     '<p><strong> Tabla 13. Códigos SIC utilizados</strong></p>' +
