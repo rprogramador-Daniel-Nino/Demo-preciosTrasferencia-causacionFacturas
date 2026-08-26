@@ -254,6 +254,15 @@ service cloud.firestore {
         && d.estudiosSinPalabraNueva is number && d.estudiosSinPalabraNueva >= 0;
     }
 
+    // `guardarRotulosConfirmadosPorEmpresa` (firestoreRepo.js) también escribe el
+    // documento completo con `setDoc`. Los dos campos son opcionales porque un NIT nuevo
+    // puede tener confirmado solo cuentas por cobrar, o solo por pagar.
+    function rotulosRelacionadasPorEmpresaValido(d) {
+      return soloEstosCampos(['t_ar', 't_ap'])
+        && listaOpcional(d, 't_ar', 50)
+        && listaOpcional(d, 't_ap', 50);
+    }
+
     // =============================================================
     // Espacio privado de cada consultor
     // =============================================================
@@ -373,6 +382,20 @@ service cloud.firestore {
     match /vocabularioEeff/{campo} {
       allow read: if esMiembro();
       allow write: if esMiembro() && vocabularioEeffValido(request.resource.data);
+    }
+
+    // =============================================================
+    // rotulosRelacionadasPorEmpresa — rótulos genéricos («Cuentas comerciales por
+    // pagar», etc.) que se confirmaron, para un NIT puntual, como la cuenta con la
+    // parte relacionada. No se comparte entre empresas como vocabularioEeff —el mismo
+    // rótulo genérico puede ser la vinculada para una y un tercero normal para otra—,
+    // pero sí entre consultores, igual que vocabularioEeff: es un hecho de la empresa,
+    // no del consultor que la estudió.
+    // =============================================================
+
+    match /rotulosRelacionadasPorEmpresa/{nit} {
+      allow read: if esMiembro();
+      allow write: if esMiembro() && rotulosRelacionadasPorEmpresaValido(request.resource.data);
     }
 
     /* ── «Compartidos conmigo» ──

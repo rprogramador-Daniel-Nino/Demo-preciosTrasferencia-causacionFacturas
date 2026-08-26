@@ -62,6 +62,7 @@
 
 import { num, egreso } from '../utils/calculations.js';
 import { cifrasDelTexto, cifraApareceEnTexto } from './eeffTextoPdf.js';
+import { contienePalabraConocida, normalizarPalabra } from './vocabularioEeff.js';
 
 /* Una identidad se considera cumplida dentro de una milésima de la escala del estado, con
    un piso de un peso para los estados expresados en unidades pequeñas: los estados
@@ -171,7 +172,21 @@ export function gastosOperativosDe({ ventas: gastosVentas, administracion }) {
  *  · `verificadoContraTexto` — si el documento tenía capa de texto. Con `false`, la
  *                    comprobación anti-alucinación no se pudo hacer y hay que decirlo.
  */
-export function verificarEeff(lectura, { anioEstudio } = {}) {
+export function verificarEeff(lectura, {
+  anioEstudio,
+  /* Rótulos que nombran EN SÍ MISMOS la relación con partes vinculadas (relacionada,
+     vinculada, matriz, subsidiaria, controlante, grupo económico...): aprendidos con el
+     mismo mecanismo que `vocabularioEeff.js` ya usa para detectar ausencia, pero aplicados
+     aquí a una candidata puntual en vez de al texto completo. Es compartido entre TODAS las
+     empresas a propósito: el propio rótulo ya lo dice, no depende de la estructura de
+     ninguna compañía en particular. `{ t_ar: <diccionario>, t_ap: <diccionario> }`. */
+  diccionarioRelacionadaGlobal = {},
+  /* Rótulos GENÉRICOS (sin marcador explícito) que, para ESTA empresa puntual, ya se
+     confirmaron como la cuenta con la vinculada — nunca se comparten entre empresas: el
+     mismo rótulo genérico («Cuentas comerciales por pagar») puede ser la vinculada para una
+     y un tercero normal para otra. `{ t_ar: ['<rótulo normalizado>', ...], t_ap: [...] }`. */
+  rotulosConfirmadosEmpresa = {},
+} = {}) {
   const l = lectura || {};
   const cotejo = l.cotejo || {};
   const rotulos = l.rotulos || {};
@@ -395,6 +410,49 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     if (valor !== null && valor !== 0) return;
     const candidatas = noAsignados.filter((r) => patron.test(r.rotulo) && Math.abs(r.valor) > 0);
 
+    /* ── Resolución aprendida, antes de la heurística amplia de más abajo ──
+       Dos fuentes, en este orden, cada una exige una sola candidata sin ambigüedad —igual
+       que la heurística amplia— para aplicarse:
+         1. Un rótulo que ESTA empresa ya confirmó en un estudio anterior (aprendido de una
+            corrección manual del analista): específico de la empresa porque un rótulo
+            genérico («Cuentas comerciales por pagar») puede ser la vinculada para una
+            compañía y un tercero normal para otra.
+         2. Un rótulo que en sí mismo nombra la relación (relacionada, vinculada, matriz,
+            subsidiaria, controlante, grupo económico...): seguro de compartir entre TODAS
+            las empresas porque el propio texto ya lo dice. */
+    const porEmpresaConfirmado = candidatas.filter((r) => (
+      (rotulosConfirmadosEmpresa[campo] || []).includes(normalizarPalabra(r.rotulo))
+    ));
+    const porMarcadorExplicito = candidatas.filter((r) => (
+      contienePalabraConocida(r.rotulo, diccionarioRelacionadaGlobal[campo])
+    ));
+
+    const indexarAprendida = (lista, motivo) => {
+      if (lista.length !== 1) return false;
+      const [candidata] = lista;
+      correcciones.push({
+        campo,
+        etiqueta: ETIQUETA[campo],
+        valorLeido: valor,
+        valorAplicado: candidata.valor,
+        motivo: `${motivo} Se indexó «${candidata.rotulo}» (${fmtCop(candidata.valor)}).`,
+      });
+      campos[campo] = candidata.valor;
+      return true;
+    };
+
+    if (indexarAprendida(
+      porEmpresaConfirmado,
+      'El documento no desglosa esta partida por partes relacionadas, pero esta misma '
+        + 'empresa ya confirmó en un estudio anterior que este rótulo corresponde a la '
+        + 'vinculada.',
+    )) return;
+    if (indexarAprendida(
+      porMarcadorExplicito,
+      'El documento no desglosa esta partida por partes relacionadas, pero una de las cifras '
+        + 'de la tabla principal nombra explícitamente la relación en su propio rótulo.',
+    )) return;
+
     /* El documento no desglosa esta partida por partes relacionadas (ni con una fila
        literal, ni con un $0 que la cubra por completo), pero la tabla principal SÍ trae,
        sin ambigüedad, una única cifra agregada bajo un rótulo emparentado —caso real: NET
@@ -429,6 +487,10 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
       advertencias.push({
         tipo: 'sin-partida-relacionada',
         campo,
+        /* Estructurada, no solo dentro de `mensaje`: es lo que permite aprender de una
+           corrección manual del analista sin tener que re-parsear el texto del aviso —
+           ver `candidataParaAprender`. */
+        candidatas,
         estado: 'no_verificado',
         mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
           + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
@@ -442,6 +504,7 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
       advertencias.push({
         tipo: 'relacionada-en-cero-con-total-mayor',
         campo,
+        candidatas,
         estado: 'revisar_total_mayor',
         mensaje: `«${ETIQUETA[campo]}» quedó en $0: es lo único que el documento desglosa `
           + 'explícitamente para partes relacionadas. El estado principal también trae, sin '
@@ -570,6 +633,30 @@ export function camposAplicables(campos) {
 }
 
 /**
+ * Los campos que hay que limpiar explícitamente en la casilla porque ESTA lectura concluyó
+ * que no hay cifra para ellos (quedaron en `null` tras la verificación) y traen una
+ * advertencia asociada: dejar ahí el valor de una carga o edición anterior contradice el
+ * aviso que se le muestra al analista en este mismo momento. `camposAplicables()` no los
+ * toca a propósito —esa protección es para cuando una lectura simplemente no intenta un
+ * campo—, pero esta ingesta siempre reintenta los mismos campos en cada carga, así que un
+ * `null` con advertencia sí debe borrar lo que hubiera.
+ *
+ * Generaliza lo que antes solo cubría `inventario-solo-por-nota` (commit 203eaa3) a
+ * cualquier advertencia con `campo`: `sin-partida-relacionada`, `campo-no-encontrado-en-detalle`,
+ * `sin-costo-de-ventas`, `sin-inventarios`, `cifra-inexistente`, etc. No toca
+ * `t_activos_detalle` (su advertencia, `activos-detalle-cifra-inexistente`, no lleva `campo`)
+ * ni un campo que quedó en `0` en vez de `null` (p. ej. `relacionada-en-cero-con-total-mayor`):
+ * ese `0` sí es una cifra válida y ya la escribe `camposAplicables()`.
+ */
+export function camposParaLimpiar(campos, advertencias) {
+  return Object.fromEntries(
+    (advertencias || [])
+      .filter((a) => a.campo && (campos || {})[a.campo] === null)
+      .map((a) => [a.campo, '']),
+  );
+}
+
+/**
  * Fusiona en una lectura los hallazgos de la pasada angosta a notas, para volver a
  * verificar con `verificarEeff()` — reutiliza todo su cálculo (utilidad operacional,
  * identidades) en vez de repetirlo aquí. Solo escribe los campos con valor encontrado:
@@ -603,6 +690,45 @@ export function marcarEstadosConHallazgos(advertencias, hallazgos) {
         + `confirma que no aparece${hallazgo.cita ? ` (${hallazgo.cita})` : ''}.`,
     };
   });
+}
+
+/* Marcadores que, si aparecen en un rótulo, ya nombran EXPLÍCITAMENTE la relación con
+   partes vinculadas — la semilla del diccionario global compartido entre empresas
+   (`t_ar_relacionada` / `t_ap_relacionada` en `vocabularioEeff.js`). Cualquier otro rótulo
+   que resulte ser la cuenta con la vinculada (uno genérico, como «Cuentas comerciales por
+   pagar») es un hecho de ESA empresa, no una regla de lenguaje, y por eso no entra aquí. */
+/* Raíces, no palabras completas, para no depender de la concordancia de género/número con
+   el sustantivo que modifican («cuentas relacionadaS» vs «deudores relacionadOS»). Se
+   normalizan aquí mismo (sin tildes, en minúscula) para compararse contra un rótulo ya
+   normalizado por `normalizarPalabra`. */
+export const MARCADORES_RELACIONADA = [
+  'relacionad', 'vinculad', 'matriz', 'subsidiari', 'controlante', 'compañías del grupo',
+  'grupo económico',
+].map(normalizarPalabra);
+
+/**
+ * A qué diccionario debe alimentarse una candidata que el analista confirmó a mano: al
+ * global (compartido entre empresas) si su rótulo ya nombra explícitamente la relación, o
+ * al de esta empresa (no se comparte: un rótulo genérico puede significar otra cosa para
+ * otra compañía) en cualquier otro caso. Puro: no toca Firestore, solo decide.
+ */
+export function destinoDelAprendizaje(rotulo) {
+  const normalizado = normalizarPalabra(rotulo);
+  return MARCADORES_RELACIONADA.some((m) => normalizado.includes(m)) ? 'global' : 'empresa';
+}
+
+/**
+ * La candidata que corresponde aprender de una corrección manual del analista: entre las
+ * `candidatas` de una advertencia `sin-partida-relacionada` / `relacionada-en-cero-con-total-mayor`,
+ * la única cuyo valor coincide EXACTAMENTE con lo que el analista acaba de escribir. Sin una
+ * coincidencia única no hay nada seguro que aprender —el valor pudo no venir de ninguna fila
+ * del documento, o dos candidatas podrían compartir el mismo valor— y se devuelve `null`.
+ */
+export function candidataParaAprender(candidatas, valorEscrito) {
+  const v = num(valorEscrito);
+  if (v === null) return null;
+  const coincidencias = (candidatas || []).filter((c) => num(c.valor) === v);
+  return coincidencias.length === 1 ? coincidencias[0] : null;
 }
 
 /**

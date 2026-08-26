@@ -16,11 +16,13 @@
  
 import {
   verificarEeff, fusionarHallazgosEnLectura, marcarEstadosConHallazgos,
-  marcarProbableAusentePorVocabulario,
+  marcarProbableAusentePorVocabulario, destinoDelAprendizaje,
 } from './eeffVerificacion.js';
 import { CAMPOS_CON_FALLBACK_NOTAS, CAMPO_POR_RUBRO, buscarFaltantesEnNotas } from './eeffParser.js';
 import { contarPaginasPdf } from './eeffTextoPdf.js';
-import { diccionarioVacio, esMaduro, contienePalabraConocida, agregarPalabras } from './vocabularioEeff.js';
+import {
+  diccionarioVacio, esMaduro, contienePalabraConocida, agregarPalabras, normalizarPalabra,
+} from './vocabularioEeff.js';
 
 /* Heurística: portada + los 4 estados principales ≈ 5-6 páginas en los casos vistos. No
    pretende ser exacta, solo evitar la llamada cuando es obvio que no hay notas (el
@@ -42,6 +44,7 @@ function camposFaltantes(verificacion) {
 
 export async function resolverFaltantesConNotas({
   file, lectura, verificacion, anioEstudio,
+  diccionarioRelacionadaGlobal = {}, rotulosConfirmadosEmpresa = {},
   leerVocabulario, guardarVocabulario,
   buscar = buscarFaltantesEnNotas,
   contarPaginas = contarPaginasPdf,
@@ -83,7 +86,9 @@ export async function resolverFaltantesConNotas({
 
   const { hallazgos, conclusion } = await buscar(file, pendientes);
   const lecturaFusionada = fusionarHallazgosEnLectura(lectura, hallazgos);
-  const reverificada = verificarEeff(lecturaFusionada, { anioEstudio });
+  const reverificada = verificarEeff(lecturaFusionada, {
+    anioEstudio, diccionarioRelacionadaGlobal, rotulosConfirmadosEmpresa,
+  });
 
   resultado = {
     ...reverificada,
@@ -106,6 +111,36 @@ export async function resolverFaltantesConNotas({
   }));
 
   return resultado;
+}
+
+/**
+ * Aprende de una corrección manual del analista sobre «cuentas por cobrar/pagar a partes
+ * relacionadas»: cuando el rótulo que acaba de confirmarse ya nombra explícitamente la
+ * relación (`destinoDelAprendizaje` → 'global'), se agrega al diccionario compartido entre
+ * TODAS las empresas (mismo mecanismo que `vocabularioEeff.js` ya usa para detectar
+ * ausencia, bajo la clave `${campo}_relacionada`); si es genérico, se recuerda solo para
+ * este NIT —un rótulo genérico puede ser la vinculada para una empresa y un tercero normal
+ * para otra— y sin NIT no hay dónde guardarlo, así que no se aprende nada. No bloquea la
+ * ingesta si falla: es aprendizaje, no una escritura crítica del estudio.
+ */
+export async function aprenderRotuloConfirmado({
+  campo, rotulo, nit,
+  leerVocabulario, guardarVocabulario,
+  leerRotulosEmpresa, guardarRotulosEmpresa,
+}) {
+  if (!rotulo) return;
+  if (destinoDelAprendizaje(rotulo) === 'global') {
+    const clave = `${campo}_relacionada`;
+    const diccionario = await leerVocabulario(clave);
+    await guardarVocabulario(clave, agregarPalabras(diccionario, [rotulo]));
+    return;
+  }
+  if (!nit) return;
+  const actuales = (await leerRotulosEmpresa(nit)) || {};
+  const lista = actuales[campo] || [];
+  const normalizado = normalizarPalabra(rotulo);
+  if (lista.includes(normalizado)) return;
+  await guardarRotulosEmpresa(nit, { ...actuales, [campo]: [...lista, normalizado] });
 }
 
 /**

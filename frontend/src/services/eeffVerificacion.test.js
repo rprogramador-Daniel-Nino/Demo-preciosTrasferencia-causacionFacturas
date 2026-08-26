@@ -15,8 +15,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  verificarEeff, camposAplicables, utilidadOperacionalDe, gastosOperativosDe,
+  verificarEeff, camposAplicables, camposParaLimpiar, utilidadOperacionalDe, gastosOperativosDe,
   fusionarHallazgosEnLectura, marcarEstadosConHallazgos, marcarProbableAusentePorVocabulario,
+  destinoDelAprendizaje, candidataParaAprender,
 } from './eeffVerificacion.js';
 
 /* La capa de texto del PDF, reducida a las líneas con cifra. Es lo que `extraerTextoPdf`
@@ -455,6 +456,150 @@ test('camposAplicables no propaga los nulos, para no borrar lo escrito a mano', 
   const aplicables = camposAplicables(verificar({ t_inv: null, activosDetalle: [] }).campos);
   assert.ok(!('t_inv' in aplicables));
   assert.strictEqual(aplicables.t_ar, 2926256259);
+});
+
+/* ══════ camposParaLimpiar: no dejar en pantalla una cifra que contradiga la advertencia ══════
+   Generaliza lo que antes solo limpiaba `inventario-solo-por-nota` (commit 203eaa3) a
+   cualquier advertencia con `campo` cuyo valor verificado en esta lectura quedó en null. */
+
+test('sin-partida-relacionada (varias candidatas ambiguas) limpia la casilla', () => {
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.strictEqual(limpiar.t_ap, '');
+});
+
+test('campo-no-encontrado-en-detalle (t_ppe no hallado) limpia la casilla', () => {
+  const r = verificar({
+    textoPdf: '',
+    activosDetalle: [
+      { etiqueta: 'ACTIVOS FIJOS', valor: 305238877, esSubtotal: false },
+      { etiqueta: 'INMUEBLES MAQUINARIA Y EQUIPO', valor: 200000000, esSubtotal: false },
+    ],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.strictEqual(limpiar.t_ppe, '');
+});
+
+test('inventario-solo-por-nota sigue limpiando la casilla (no regresión de 203eaa3)', () => {
+  const r = verificar({
+    rotulos: { ...LECTURA.rotulos, inventarios: 'Activos corrientes mantenidos para la venta' },
+    activosDetalle: LECTURA.activosDetalle.map((fila) => (
+      fila.etiqueta === 'INVENTARIOS' ? { ...fila, etiqueta: 'ACTIVOS CORRIENTES MANTENIDOS PARA LA VENTA' } : fila
+    )),
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.strictEqual(limpiar.t_inv, '');
+});
+
+test('relacionada-en-cero-con-total-mayor NO limpia: el $0 es una cifra válida', () => {
+  const r = verificar({
+    t_ar: 0,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'CLIENTES DEL EXTERIOR', valor: 900000000 }],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.ok(!('t_ar' in limpiar), 'el campo ya tiene un $0 sustentado, no se limpia');
+});
+
+test('una advertencia sin campo (activos-detalle-cifra-inexistente) no limpia nada', () => {
+  const r = verificar({
+    activosDetalle: [
+      ...LECTURA.activosDetalle,
+      { etiqueta: 'INVENTADO', valor: 999999999, esSubtotal: false },
+    ],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.ok(!('t_activos_detalle' in limpiar));
+});
+
+/* ══════ Aprender a resolver la ambigüedad, sin gastar IA ══════
+   Dos fuentes, además de la heurística amplia ya existente (una sola candidata sin más):
+   un rótulo que ESTA empresa ya confirmó (no se comparte entre empresas: uno genérico puede
+   significar otra cosa para otra compañía) y un rótulo que en sí mismo nombra la relación
+   (ese sí se comparte, porque el propio texto ya lo dice). */
+
+test('con varias candidatas ambiguas, un rótulo ya confirmado para esta empresa se indexa solo', () => {
+  const r = verificarEeff({ ...LECTURA, t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }] },
+  {
+    anioEstudio: 2025,
+    rotulosConfirmadosEmpresa: { t_ap: ['otras cuentas por pagar'] },
+  });
+  assert.strictEqual(r.campos.t_ap, 658293893, 'se aplicó la candidata confirmada, no una ambigüedad');
+  const c = r.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c);
+  assert.match(c.motivo, /estudio anterior/);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada'), undefined);
+});
+
+test('con varias candidatas ambiguas, un rótulo que ya nombra la relación se indexa solo', () => {
+  const r = verificarEeff({ ...LECTURA, t_ap: null,
+    rubrosNoAsignados: [
+      { rotulo: 'CUENTAS POR PAGAR A COMPAÑÍAS VINCULADAS', valor: 300000000 },
+      { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 },
+    ] },
+  {
+    anioEstudio: 2025,
+    diccionarioRelacionadaGlobal: { t_ap: { palabras: ['vinculada'], estudiosSinPalabraNueva: 0 } },
+  });
+  assert.strictEqual(r.campos.t_ap, 300000000);
+  const c = r.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c);
+  assert.match(c.motivo, /nombra explícitamente/);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada'), undefined);
+});
+
+test('un rótulo confirmado de otra empresa, o un marcador que no matchea, no resuelve nada', () => {
+  const r = verificarEeff({ ...LECTURA, t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }] },
+  {
+    anioEstudio: 2025,
+    rotulosConfirmadosEmpresa: { t_ap: ['una frase que no aparece en ninguna candidata'] },
+    diccionarioRelacionadaGlobal: { t_ap: { palabras: ['inexistente'], estudiosSinPalabraNueva: 0 } },
+  });
+  assert.strictEqual(r.campos.t_ap, null, 'sigue ambiguo: el comportamiento actual no cambia');
+  assert.ok(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap'));
+});
+
+test('sin-partida-relacionada expone las candidatas como dato, no solo dentro del mensaje', () => {
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+  });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
+  assert.strictEqual(a.candidatas.length, 2);
+  assert.ok(a.candidatas.some((c) => c.rotulo === 'PROVEEDORES DEL EXTERIOR' && c.valor === 500000000));
+});
+
+test('destinoDelAprendizaje: un rótulo que nombra la relación va al diccionario global', () => {
+  assert.strictEqual(destinoDelAprendizaje('CUENTAS POR COBRAR COMPAÑÍAS VINCULADAS'), 'global');
+  assert.strictEqual(destinoDelAprendizaje('Deudores relacionados'), 'global');
+});
+
+test('destinoDelAprendizaje: un rótulo genérico va al diccionario de la empresa', () => {
+  assert.strictEqual(destinoDelAprendizaje('Cuentas comerciales por pagar'), 'empresa');
+  assert.strictEqual(destinoDelAprendizaje('Otras cuentas comerciales por cobrar'), 'empresa');
+});
+
+test('candidataParaAprender: una sola candidata coincide con el valor escrito a mano', () => {
+  const candidatas = [
+    { rotulo: 'CUENTAS COMERCIALES POR PAGAR', valor: 3640797508 },
+    { rotulo: 'IMPUESTOS CORRIENTES POR PAGAR', valor: 172380750 },
+  ];
+  assert.deepStrictEqual(candidataParaAprender(candidatas, 3640797508), candidatas[0]);
+  assert.deepStrictEqual(candidataParaAprender(candidatas, '3.640.797.508'), candidatas[0]);
+});
+
+test('candidataParaAprender: sin coincidencia exacta, o con varias, no aprende nada', () => {
+  const candidatas = [
+    { rotulo: 'CUENTAS COMERCIALES POR PAGAR', valor: 100 },
+    { rotulo: 'OTRA', valor: 100 },
+  ];
+  assert.strictEqual(candidataParaAprender(candidatas, 999), null);
+  assert.strictEqual(candidataParaAprender(candidatas, 100), null, 'dos candidatas comparten el valor: ambiguo');
+  assert.strictEqual(candidataParaAprender([], 100), null);
 });
 
 /* ══════ LEY DE SIGNOS ══════

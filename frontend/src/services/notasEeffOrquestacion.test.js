@@ -3,7 +3,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { resolverFaltantesConNotas, aprenderDeLecturaExitosa } from './notasEeffOrquestacion.js';
+import {
+  resolverFaltantesConNotas, aprenderDeLecturaExitosa, aprenderRotuloConfirmado,
+} from './notasEeffOrquestacion.js';
 import { diccionarioVacio, UMBRAL_MADUREZ } from './vocabularioEeff.js';
 
 const verificacionBase = () => ({
@@ -152,6 +154,71 @@ test('aprenderDeLecturaExitosa no guarda nada si ningún campo con fallback se e
     rotulos: {},
     leerVocabulario: async () => diccionarioVacio(),
     guardarVocabulario: async () => { sellamo = true; },
+  });
+  assert.strictEqual(sellamo, false);
+});
+
+/* ══════ aprenderRotuloConfirmado: dónde recordar una candidata que el analista confirmó ══════ */
+
+test('un rótulo explícito se guarda en el diccionario global bajo "<campo>_relacionada"', async () => {
+  let guardado = null;
+  await aprenderRotuloConfirmado({
+    campo: 't_ap',
+    rotulo: 'CUENTAS POR PAGAR COMPAÑÍAS VINCULADAS',
+    nit: '900213910',
+    leerVocabulario: async () => diccionarioVacio(),
+    guardarVocabulario: async (clave, diccionario) => { guardado = { clave, diccionario }; },
+    leerRotulosEmpresa: async () => { throw new Error('no debería consultarse: el rótulo es explícito'); },
+    guardarRotulosEmpresa: async () => { throw new Error('no debería escribirse: el rótulo es explícito'); },
+  });
+  assert.strictEqual(guardado.clave, 't_ap_relacionada');
+  assert.deepStrictEqual(guardado.diccionario.palabras, ['cuentas por pagar companias vinculadas']);
+});
+
+test('un rótulo genérico se guarda por NIT, sin tocar el diccionario global', async () => {
+  let guardadoGlobal = false;
+  let guardadoEmpresa = null;
+  await aprenderRotuloConfirmado({
+    campo: 't_ap',
+    rotulo: 'Cuentas comerciales por pagar',
+    nit: '900.213.910-7',
+    leerVocabulario: async () => { guardadoGlobal = true; return diccionarioVacio(); },
+    guardarVocabulario: async () => { guardadoGlobal = true; },
+    leerRotulosEmpresa: async () => ({ t_ap: ['un rotulo ya confirmado antes'] }),
+    guardarRotulosEmpresa: async (nit, datos) => { guardadoEmpresa = { nit, datos }; },
+  });
+  assert.strictEqual(guardadoGlobal, false, 'un rótulo genérico no toca el diccionario compartido');
+  assert.strictEqual(guardadoEmpresa.nit, '900.213.910-7');
+  assert.deepStrictEqual(
+    guardadoEmpresa.datos.t_ap,
+    ['un rotulo ya confirmado antes', 'cuentas comerciales por pagar'],
+  );
+});
+
+test('un rótulo genérico ya confirmado antes no se duplica en la lista', async () => {
+  let sellamo = false;
+  await aprenderRotuloConfirmado({
+    campo: 't_ar',
+    rotulo: 'Cuentas comerciales por cobrar',
+    nit: '900213910',
+    leerVocabulario: async () => diccionarioVacio(),
+    guardarVocabulario: async () => {},
+    leerRotulosEmpresa: async () => ({ t_ar: ['cuentas comerciales por cobrar'] }),
+    guardarRotulosEmpresa: async () => { sellamo = true; },
+  });
+  assert.strictEqual(sellamo, false);
+});
+
+test('un rótulo genérico sin NIT no se aprende: no hay dónde guardarlo', async () => {
+  let sellamo = false;
+  await aprenderRotuloConfirmado({
+    campo: 't_ar',
+    rotulo: 'Cuentas comerciales por cobrar',
+    nit: '',
+    leerVocabulario: async () => diccionarioVacio(),
+    guardarVocabulario: async () => {},
+    leerRotulosEmpresa: async () => { sellamo = true; return {}; },
+    guardarRotulosEmpresa: async () => { sellamo = true; },
   });
   assert.strictEqual(sellamo, false);
 });

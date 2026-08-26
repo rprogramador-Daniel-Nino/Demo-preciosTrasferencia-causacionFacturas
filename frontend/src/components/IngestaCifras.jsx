@@ -3,10 +3,15 @@ import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2
 import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS } from '../services/eeffParser';
 import {
-  verificarEeff, camposAplicables, utilidadOperacionalDe,
+  verificarEeff, camposAplicables, camposParaLimpiar, candidataParaAprender, utilidadOperacionalDe,
 } from '../services/eeffVerificacion';
-import { resolverFaltantesConNotas, aprenderDeLecturaExitosa } from '../services/notasEeffOrquestacion';
-import { leerVocabularioEeff, guardarVocabularioEeff } from '../services/firestoreRepo';
+import {
+  resolverFaltantesConNotas, aprenderDeLecturaExitosa, aprenderRotuloConfirmado,
+} from '../services/notasEeffOrquestacion';
+import {
+  leerVocabularioEeff, guardarVocabularioEeff,
+  leerRotulosConfirmadosPorEmpresa, guardarRotulosConfirmadosPorEmpresa,
+} from '../services/firestoreRepo';
 import { convertPdfToImages } from '../services/pdfRenderer';
 import PopupFaltantesEeff from './PopupFaltantesEeff';
 import CampoMoneda from './CampoMoneda';
@@ -57,6 +62,12 @@ export default function IngestaCifras({ study, updateStudy }) {
      costo que el analista acaba de corregir. */
   const INSUMOS_UTILIDAD = ['t_s', 't_c', 't_gastos'];
 
+  /* Los dos campos de partes relacionadas: si el analista escribe a mano exactamente el
+     valor de una de las candidatas ambiguas que la última carga mostró, es la confirmación
+     de cuál rótulo corresponde a la vinculada — se aprende para no volver a preguntar en el
+     próximo EEFF (de esta empresa, o de cualquiera si el rótulo ya nombra la relación). */
+  const CAMPOS_RELACIONADAS_APRENDIBLES = ['t_ar', 't_ap'];
+
   const handleFieldChange = (key, value) => {
     const cambios = { [key]: value };
 
@@ -68,6 +79,24 @@ export default function IngestaCifras({ study, updateStudy }) {
         ventas: fuente.t_s, costo: fuente.t_c, gastos: fuente.t_gastos,
       });
       if (uop !== null) cambios.t_op = uop;
+    }
+
+    if (CAMPOS_RELACIONADAS_APRENDIBLES.includes(key) && hallazgos) {
+      const advertencia = hallazgos.advertencias.find(
+        (a) => a.campo === key && Array.isArray(a.candidatas) && a.candidatas.length > 0,
+      );
+      const candidata = advertencia && candidataParaAprender(advertencia.candidatas, value);
+      if (candidata) {
+        aprenderRotuloConfirmado({
+          campo: key,
+          rotulo: candidata.rotulo,
+          nit: study.nit,
+          leerVocabulario: leerVocabularioEeff,
+          guardarVocabulario: guardarVocabularioEeff,
+          leerRotulosEmpresa: leerRotulosConfirmadosPorEmpresa,
+          guardarRotulosEmpresa: guardarRotulosConfirmadosPorEmpresa,
+        }).catch((err) => console.warn('No se pudo aprender el rótulo confirmado:', err));
+      }
     }
 
     updateStudy(cambios);
@@ -106,7 +135,23 @@ export default function IngestaCifras({ study, updateStudy }) {
       /* El año del estudio viaja al prompt: los estados financieros colombianos son
          comparativos y sin decirle qué columna leer, el modelo elige la más reciente
          —que no es la del estudio cuando se trabaja un año anterior—. */
-      const res = await parseEeffWithGeminiOCR(file, study.anio);
+      const [res, diccionarioRelacionadaGlobal, rotulosConfirmadosEmpresa] = await Promise.all([
+        parseEeffWithGeminiOCR(file, study.anio),
+        /* El diccionario de rótulos que YA nombran la relación (relacionada, vinculada,
+           matriz...), compartido entre todas las empresas. Un fallo de Firestore no debe
+           tumbar la ingesta: se sigue como si nunca hubiera aprendido nada. */
+        Promise.all([
+          leerVocabularioEeff('t_ar_relacionada'),
+          leerVocabularioEeff('t_ap_relacionada'),
+        ]).then(([t_ar, t_ap]) => ({ t_ar, t_ap }))
+          .catch((err) => { console.warn('No se pudo leer el diccionario de rótulos relacionados:', err); return {}; }),
+        /* Los rótulos genéricos que YA se confirmaron para esta empresa puntual. Sin NIT
+           todavía (estudio nuevo, sin contribuyente guardado) no hay nada que leer. */
+        study.nit
+          ? leerRotulosConfirmadosPorEmpresa(study.nit)
+            .catch((err) => { console.warn('No se pudieron leer los rótulos confirmados de la empresa:', err); return {}; })
+          : Promise.resolve({}),
+      ]);
 
       const updates = {};
       if (eeffImages && eeffImages.length > 0) {
@@ -116,8 +161,11 @@ export default function IngestaCifras({ study, updateStudy }) {
       /* La verificación decide qué entra: calcula la utilidad operacional a partir de los
          ingresos, el costo y los dos gastos del giro —en vez de creerle a una fila rotulada
          «resultado de la operación»— y descarta las cifras que no están impresas en el
-         documento. */
-      const primeraVerificacion = verificarEeff(res, { anioEstudio: study.anio });
+         documento. También intenta resolver partes relacionadas ambiguas con lo ya
+         aprendido, antes de rendirse y pedirle al analista que lo escriba a mano. */
+      const primeraVerificacion = verificarEeff(res, {
+        anioEstudio: study.anio, diccionarioRelacionadaGlobal, rotulosConfirmadosEmpresa,
+      });
 
       /* La pasada a notas solo corre si algo de costo de ventas, partes relacionadas o
          inventarios quedó en null — con diccionario y páginas decidiendo si vale la pena
@@ -128,6 +176,8 @@ export default function IngestaCifras({ study, updateStudy }) {
         verificacion = await resolverFaltantesConNotas({
           file,
           lectura: res,
+          diccionarioRelacionadaGlobal,
+          rotulosConfirmadosEmpresa,
           verificacion: primeraVerificacion,
           anioEstudio: study.anio,
           leerVocabulario: leerVocabularioEeff,
@@ -149,17 +199,13 @@ export default function IngestaCifras({ study, updateStudy }) {
 
       Object.assign(updates, camposAplicables(verificacion.campos));
 
-      /* «inventario-solo-por-nota» es un rechazo explícito de ESTA lectura, no un «no se
-         encontró nada»: el valor sí se leyó, y la propia verificación decidió que no es de
-         fiar (la fila del estado principal no dice «inventario»; solo lo confirma una
-         nota). camposAplicables() no lo propaga porque queda en null —esa protección es
-         para cuando una lectura simplemente no encuentra algo, y no debe borrar lo que el
-         analista ya escribió a mano—, pero aquí sí hay que limpiar la casilla: dejar el
-         número de una carga anterior contradice el aviso que se le está mostrando al
-         analista en este mismo momento. */
-      verificacion.advertencias
-        .filter((a) => a.tipo === 'inventario-solo-por-nota')
-        .forEach((a) => { updates[a.campo] = ''; });
+      /* Cualquier campo que ESTA lectura dejó en null y trae una advertencia asociada se
+         limpia explícitamente: camposAplicables() no lo propaga porque protege lo que el
+         analista ya escribió a mano, pero esta ingesta siempre relee y reverifica el mismo
+         balance en cada carga, así que dejar el número de una carga o edición anterior
+         contradice el aviso que se le está mostrando al analista en este mismo momento
+         (antes esto solo cubría inventarios — ver commit 203eaa3 —, ahora es general). */
+      Object.assign(updates, camposParaLimpiar(verificacion.campos, verificacion.advertencias));
 
       updates.t_correcciones = verificacion.correcciones;
 
