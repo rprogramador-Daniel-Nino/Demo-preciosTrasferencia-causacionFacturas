@@ -591,7 +591,7 @@ test('con el campo en $0 y una cifra mayor sin desglosar, advierte que se revise
   const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
   assert.ok(a, 'debe advertir sobre la cifra mayor sin desglosar');
   assert.match(a.mensaje, /8\.439\.325\.383|DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
-  assert.strictEqual(a.estado, 'no_verificado');
+  assert.strictEqual(a.estado, 'revisar_total_mayor');
 });
 
 test('con el campo en $0 y sin ninguna cifra mayor sin desglosar, no advierte nada', () => {

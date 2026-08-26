@@ -396,7 +396,7 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
       advertencias.push({
         tipo: 'relacionada-en-cero-con-total-mayor',
         campo,
-        estado: 'no_verificado',
+        estado: 'revisar_total_mayor',
         mensaje: `«${ETIQUETA[campo]}» quedó en $0: es lo único que el documento desglosa `
           + 'explícitamente para partes relacionadas. El estado principal también trae, sin '
           + `desglosar por contraparte: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `

@@ -21,6 +21,10 @@ const ESTILO_ESTADO = {
     titulo: 'No se pudo revisar',
     clase: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-300',
   },
+  revisar_total_mayor: {
+    titulo: 'Verifique con el cliente',
+    clase: 'bg-amber-100 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300',
+  },
 };
 
 /**

@@ -153,11 +153,12 @@ export default function IngestaCifras({ study, updateStudy }) {
       setHallazgos(verificacion);
 
       /* El popup solo aparece si queda algo confirmado ausente, probablemente ausente
-         por vocabulario, o sin poder revisar por falta de páginas — el caso feliz (todo
-         resuelto o nunca hizo falta el fallback) no debe interrumpir al analista. */
+         por vocabulario, sin poder revisar por falta de páginas, o en $0 con una cifra
+         mayor sin desglosar por contraparte — el caso feliz (todo resuelto o nunca hizo
+         falta el fallback) no debe interrumpir al analista. */
       const necesitanPopup = verificacion.advertencias.filter((a) => (
         a.campo && CAMPOS_CON_FALLBACK_NOTAS[a.campo]
-        && ['confirmado_ausente', 'probable_ausente_por_vocabulario', 'implicito_cero'].includes(a.estado)
+        && ['confirmado_ausente', 'probable_ausente_por_vocabulario', 'implicito_cero', 'revisar_total_mayor'].includes(a.estado)
       ));
       if (necesitanPopup.length > 0) {
         setPopupFaltantes({ advertencias: necesitanPopup, conclusion: verificacion.conclusionNotas || '' });
