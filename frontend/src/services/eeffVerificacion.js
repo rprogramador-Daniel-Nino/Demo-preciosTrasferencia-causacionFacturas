@@ -366,19 +366,43 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     { campo: 't_ar', patron: /cobrar|deudor|cliente/i },
   ];
   relacionadas.forEach(({ campo, patron }) => {
-    if (campos[campo] !== null) return;
+    const valor = campos[campo];
+    if (valor !== null && valor !== 0) return;
     const candidatas = noAsignados.filter((r) => patron.test(r.rotulo) && Math.abs(r.valor) > 0);
-    advertencias.push({
-      tipo: 'sin-partida-relacionada',
-      campo,
-      estado: 'no_verificado',
-      mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
-        + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
-        + (candidatas.length
-          ? ` Las que sí trae son: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
-            + 'Si alguna corresponde a la operación, escríbala a mano.'
-          : ''),
-    });
+
+    if (valor === null) {
+      advertencias.push({
+        tipo: 'sin-partida-relacionada',
+        campo,
+        estado: 'no_verificado',
+        mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
+          + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
+          + (candidatas.length
+            ? ` Las que sí trae son: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
+              + 'Si alguna corresponde a la operación, escríbala a mano.'
+            : ''),
+      });
+    } else if (candidatas.length) {
+      /* El documento SÍ trae un $0 explícito para partes relacionadas (p. ej. una nota que
+         discrimina «Cuentas por cobrar a Accionistas: $0»), pero el estado principal
+         también trae una cifra mayor bajo un rótulo emparentado que el documento nunca
+         desglosa por contraparte —caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26),
+         «Deudores comerciales y otras cuentas por cobrar» $8.439.325.383, sin desglose de
+         partes relacionadas, junto a un $0 explícito solo para la sub-línea de
+         accionistas—. El $0 puede ser correcto, pero solo cubre lo que el documento SÍ
+         desglosó; esta cifra mayor puede incluir partes relacionadas que el documento no
+         declaró como tales, así que se muestra para que el analista la revise antes de
+         confiar en el $0 sin más. */
+      advertencias.push({
+        tipo: 'relacionada-en-cero-con-total-mayor',
+        campo,
+        estado: 'no_verificado',
+        mensaje: `«${ETIQUETA[campo]}» quedó en $0: es lo único que el documento desglosa `
+          + 'explícitamente para partes relacionadas. El estado principal también trae, sin '
+          + `desglosar por contraparte: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
+          + 'Verifique si alguna porción de esa cifra corresponde a la vinculada antes de aceptar el $0.',
+      });
+    }
   });
 
   if (campos.t_c === null) {

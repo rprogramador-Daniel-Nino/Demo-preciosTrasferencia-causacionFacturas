@@ -577,6 +577,35 @@ test('las advertencias de partes relacionadas e inventarios llevan estado "no_ve
   assert.strictEqual(inv.estado, 'no_verificado');
 });
 
+/* ══════ Partes relacionadas en $0 con una cifra mayor sin desglosar ══════
+   Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26). El documento trae, en una nota,
+   un $0 explícito para «Cuentas por cobrar a Accionistas» — y ese $0 es correcto para lo
+   que el documento SÍ desglosó. Pero el estado principal también trae «Deudores
+   comerciales y otras cuentas por cobrar» por $8.439.325.383, sin desglosar por
+   contraparte, y el documento nunca dice si contiene o no partes relacionadas (a
+   diferencia de su Nota de cuentas por pagar, que sí declara qué porción es del mismo
+   grupo). El $0 desaparecía silenciosamente sin mostrar esa cifra mayor al analista. */
+
+test('con el campo en $0 y una cifra mayor sin desglosar, advierte que se revise antes de aceptar el $0', () => {
+  const r = verificar({ t_ar: 0 });
+  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
+  assert.ok(a, 'debe advertir sobre la cifra mayor sin desglosar');
+  assert.match(a.mensaje, /8\.439\.325\.383|DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
+  assert.strictEqual(a.estado, 'no_verificado');
+});
+
+test('con el campo en $0 y sin ninguna cifra mayor sin desglosar, no advierte nada', () => {
+  const r = verificar({ t_ar: 0, rubrosNoAsignados: [] });
+  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
+  assert.strictEqual(a, undefined, 'nada que revisar: el ajuste en cero ya está sustentado');
+});
+
+test('con el campo en un valor distinto de $0, no advierte sobre cifras mayores (comportamiento sin cambios)', () => {
+  const r = verificar(); // LECTURA.t_ar = 2926256259
+  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor');
+  assert.strictEqual(a, undefined);
+});
+
 /* ══════ Fusionar los hallazgos de la pasada angosta a notas ══════ */
 
 test('fusionarHallazgosEnLectura escribe el valor encontrado sobre la lectura original', () => {

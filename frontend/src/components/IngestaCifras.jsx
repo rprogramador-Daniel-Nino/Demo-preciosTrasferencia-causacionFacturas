@@ -328,7 +328,7 @@ export default function IngestaCifras({ study, updateStudy }) {
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Ingresos (Ventas)</label>
               <input
                 type="number"
-                value={study.t_s || ''}
+                value={study.t_s ?? ''}
                 onChange={(e) => handleFieldChange('t_s', e.target.value)}
                 placeholder="COP Ventas"
                 className={CLASE_CASILLA}
@@ -339,7 +339,7 @@ export default function IngestaCifras({ study, updateStudy }) {
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Costo de Ventas</label>
               <input
                 type="number"
-                value={study.t_c || ''}
+                value={study.t_c ?? ''}
                 onChange={(e) => handleFieldChange('t_c', e.target.value)}
                 placeholder="COP Costos"
                 className={CLASE_CASILLA}
@@ -357,7 +357,7 @@ export default function IngestaCifras({ study, updateStudy }) {
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Gastos Operativos</label>
               <input
                 type="number"
-                value={study.t_gastos || ''}
+                value={study.t_gastos ?? ''}
                 onChange={(e) => handleFieldChange('t_gastos', e.target.value)}
                 placeholder="COP Gastos Op."
                 className={CLASE_CASILLA}
@@ -374,7 +374,7 @@ export default function IngestaCifras({ study, updateStudy }) {
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Utilidad Operacional</label>
               <input
                 type="number"
-                value={study.t_op || ''}
+                value={study.t_op ?? ''}
                 onChange={(e) => handleFieldChange('t_op', e.target.value)}
                 placeholder="COP Utilidad Op."
                 className={CLASE_CASILLA}
@@ -395,7 +395,7 @@ export default function IngestaCifras({ study, updateStudy }) {
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Monto Excluido (Operación No Vinculada)</label>
               <input
                 type="number"
-                value={study.seg_excluido || ''}
+                value={study.seg_excluido ?? ''}
                 onChange={(e) => handleFieldChange('seg_excluido', e.target.value)}
                 placeholder="COP a excluir del ingreso/gasto"
                 className={CLASE_CASILLA}
@@ -434,7 +434,7 @@ export default function IngestaCifras({ study, updateStudy }) {
                 <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
                 <input
                   type="number"
-                  value={study[clave] || ''}
+                  value={study[clave] ?? ''}
                   onChange={(e) => handleFieldChange(clave, e.target.value)}
                   placeholder="COP"
                   className={CLASE_CASILLA}
@@ -514,7 +514,7 @@ export default function IngestaCifras({ study, updateStudy }) {
             <label className="text-xs font-semibold text-zinc-500 mb-1.5">Total, Activos</label>
             <input
               type="number"
-              value={study.t_act_tot || ''}
+              value={study.t_act_tot ?? ''}
               onChange={(e) => handleFieldChange('t_act_tot', e.target.value)}
               placeholder="COP"
               className={CLASE_CASILLA}
@@ -567,7 +567,7 @@ export default function IngestaCifras({ study, updateStudy }) {
               <input
                 type="number"
                 step="0.01"
-                value={study.prime || ''}
+                value={study.prime ?? ''}
                 onChange={(e) => handleFieldChange('prime', e.target.value)}
                 placeholder="Ej: 7.37"
                 className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100"
