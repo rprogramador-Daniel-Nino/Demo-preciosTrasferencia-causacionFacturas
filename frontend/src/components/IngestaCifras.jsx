@@ -147,6 +147,19 @@ export default function IngestaCifras({ study, updateStudy }) {
       }).catch((err) => console.warn('No se pudo actualizar el diccionario de vocabulario:', err));
 
       Object.assign(updates, camposAplicables(verificacion.campos));
+
+      /* «inventario-solo-por-nota» es un rechazo explícito de ESTA lectura, no un «no se
+         encontró nada»: el valor sí se leyó, y la propia verificación decidió que no es de
+         fiar (la fila del estado principal no dice «inventario»; solo lo confirma una
+         nota). camposAplicables() no lo propaga porque queda en null —esa protección es
+         para cuando una lectura simplemente no encuentra algo, y no debe borrar lo que el
+         analista ya escribió a mano—, pero aquí sí hay que limpiar la casilla: dejar el
+         número de una carga anterior contradice el aviso que se le está mostrando al
+         analista en este mismo momento. */
+      verificacion.advertencias
+        .filter((a) => a.tipo === 'inventario-solo-por-nota')
+        .forEach((a) => { updates[a.campo] = ''; });
+
       updates.t_correcciones = verificacion.correcciones;
 
       updateStudy(updates);
