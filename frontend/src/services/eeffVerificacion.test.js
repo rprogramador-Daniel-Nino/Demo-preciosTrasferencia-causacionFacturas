@@ -239,8 +239,147 @@ test('si hay varias cifras mayores emparentadas y ambiguas, no se indexa ninguna
   assert.match(a.mensaje, /ambiguas/);
 });
 
+/* ══════ Inventarios: la fila propia debe decir "inventario" ══════
+   Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26). La tabla principal del balance
+   trae una fila rotulada "Activos corrientes mantenidos para la venta" (no "Inventarios")
+   con el mismo valor que la Nota 6, titulada "INVENTARIOS" — el modelo la toma como
+   inventario por el título de la nota, no por lo que la fila misma dice. Decisión
+   explícita del usuario: eso es interpretar una nota, no transcribir el estado; se
+   descarta y se avisa, no se completa solo. */
+
+test('si la fila de inventarios no menciona inventario y solo una nota lo confirma, se descarta y se avisa', () => {
+  /* t_inv se deja en el valor de LECTURA (4.734.795.891): tiene que seguir apareciendo en
+     el texto del documento para sobrevivir la comprobación de presencia literal (sección
+     1) y llegar a esta — de lo contrario la discarta esa, no esta, y la prueba no
+     verificaría lo que dice verificar. activosDetalle se reescribe con el mismo rótulo
+     equívoco (un documento real sería consistente entre `rotulo` y `activos_detalle`; si
+     se dejara la fila "INVENTARIOS" del fixture base, la búsqueda por rótulo emparentado
+     la volvería a encontrar y deshería el descarte que esta prueba verifica). */
+  const r = verificar({
+    rotulos: { ...LECTURA.rotulos, inventarios: 'Activos corrientes mantenidos para la venta' },
+    activosDetalle: LECTURA.activosDetalle.map((fila) => (
+      fila.etiqueta === 'INVENTARIOS' ? { ...fila, etiqueta: 'ACTIVOS CORRIENTES MANTENIDOS PARA LA VENTA' } : fila
+    )),
+  });
+  assert.strictEqual(r.campos.t_inv, null, 'no se completa solo con lo que dice una nota');
+  const a = r.advertencias.find((x) => x.tipo === 'inventario-solo-por-nota');
+  assert.ok(a);
+  assert.strictEqual(a.campo, 't_inv');
+  assert.match(a.mensaje, /Activos corrientes mantenidos para la venta/);
+  assert.match(a.mensaje, /4\.734\.795\.891/);
+});
+
+test('si la fila de inventarios sí dice inventario (o existencias/mercancías), se conserva', () => {
+  const r = verificar({
+    rotulos: { ...LECTURA.rotulos, inventarios: 'INVENTARIOS' },
+  });
+  assert.strictEqual(r.campos.t_inv, 4734795891);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'inventario-solo-por-nota'), undefined);
+});
+
+test('sin rótulo de inventarios (lectura sin ese dato) no se descarta nada: no hay con qué comparar', () => {
+  const r = verificar(); // LECTURA.rotulos no trae 'inventarios'
+  assert.strictEqual(r.campos.t_inv, 4734795891);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'inventario-solo-por-nota'), undefined);
+});
+
+/* ══════ Inventarios, Total Activo Corriente y PP&E: buscar bajo otro rótulo ══════
+   Misma filosofía que partes relacionadas (decisión explícita del usuario, 2026-08-26),
+   aplicada al detalle de activos: si el campo no aparece con el rótulo esperado pero hay
+   una única fila emparentada en el detalle, se indexa; con varias o ninguna, no se aplica
+   nada y se avisa (salvo t_inv, que ya tiene su propio aviso "sin-inventarios"). */
+
+test('t_inv se encuentra bajo un sinónimo en el detalle de activos cuando no llegó con su nombre', () => {
+  /* textoPdf: '' porque esta cifra no está en TEXTO_PDF (el fixture de Montachem) — con la
+     capa de texto activa, la comprobación de presencia literal la descartaría antes de
+     llegar a esta búsqueda, y la prueba no verificaría lo que dice verificar. */
+  const r = verificar({
+    t_inv: null,
+    textoPdf: '',
+    activosDetalle: [{ etiqueta: 'EXISTENCIAS', valor: 1000000, esSubtotal: false }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_inv');
+  assert.ok(c);
+  assert.strictEqual(c.valorAplicado, 1000000);
+  assert.match(c.motivo, /EXISTENCIAS/);
+  assert.strictEqual(r.campos.t_inv, 1000000);
+});
+
+test('t_inv con varios sinónimos ambiguos en el detalle no indexa ninguno', () => {
+  const r = verificar({
+    t_inv: null,
+    activosDetalle: [
+      { etiqueta: 'EXISTENCIAS', valor: 1000000, esSubtotal: false },
+      { etiqueta: 'MERCANCIAS EN TRANSITO', valor: 500000, esSubtotal: false },
+    ],
+  });
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_inv'), undefined);
+  assert.strictEqual(r.campos.t_inv, null);
+  assert.ok(r.advertencias.some((a) => a.tipo === 'sin-inventarios'), 'sigue avisando por el canal ya existente');
+});
+
+test('t_ppe se encuentra bajo un sinónimo en el detalle de activos', () => {
+  const r = verificar({
+    textoPdf: '', // esta cifra no está en TEXTO_PDF; ver nota en la prueba de t_inv de arriba
+    activosDetalle: [{ etiqueta: 'ACTIVOS FIJOS', valor: 305238877, esSubtotal: false }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_ppe');
+  assert.ok(c);
+  assert.strictEqual(c.valorAplicado, 305238877);
+  assert.match(c.motivo, /ACTIVOS FIJOS/);
+  assert.strictEqual(r.campos.t_ppe, 305238877);
+});
+
+test('t_ppe con varios sinónimos ambiguos no indexa ninguno y avisa', () => {
+  const r = verificar({
+    textoPdf: '', // estas cifras no están en TEXTO_PDF; ver nota en la prueba de t_inv de arriba
+    activosDetalle: [
+      { etiqueta: 'ACTIVOS FIJOS', valor: 305238877, esSubtotal: false },
+      { etiqueta: 'INMUEBLES MAQUINARIA Y EQUIPO', valor: 200000000, esSubtotal: false },
+    ],
+  });
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ppe'), undefined);
+  assert.strictEqual(r.campos.t_ppe, null);
+  const a = r.advertencias.find((x) => x.tipo === 'campo-no-encontrado-en-detalle' && x.campo === 't_ppe');
+  assert.ok(a);
+  assert.match(a.mensaje, /ACTIVOS FIJOS/);
+  assert.match(a.mensaje, /INMUEBLES MAQUINARIA Y EQUIPO/);
+});
+
+test('t_ppe sin ninguna fila emparentada avisa que no se encontró', () => {
+  const r = verificar({ activosDetalle: [] });
+  assert.strictEqual(r.campos.t_ppe, null);
+  const a = r.advertencias.find((x) => x.tipo === 'campo-no-encontrado-en-detalle' && x.campo === 't_ppe');
+  assert.ok(a);
+  assert.match(a.mensaje, /Escríbala a mano/);
+});
+
+test('t_act_curr se encuentra bajo un sinónimo entre los subtotales del detalle', () => {
+  const r = verificar({
+    t_act_curr: null,
+    activosDetalle: [{ etiqueta: 'TOTAL ACTIVOS CORRIENTES', valor: 14050942064, esSubtotal: true }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_act_curr');
+  assert.ok(c);
+  assert.strictEqual(c.valorAplicado, 14050942064);
+  assert.strictEqual(r.campos.t_act_curr, 14050942064);
+});
+
+test('t_act_curr ignora una fila que menciona "corriente" pero no es subtotal', () => {
+  const r = verificar({
+    t_act_curr: null,
+    activosDetalle: [{ etiqueta: 'CUENTAS CORRIENTES BANCARIAS', valor: 999999, esSubtotal: false }],
+  });
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_act_curr'), undefined);
+  assert.strictEqual(r.campos.t_act_curr, null);
+});
+
 test('sin inventarios se avisa, porque su ajuste queda contra cero', () => {
-  const r = verificar({ t_inv: null });
+  /* activosDetalle: [] para que no haya ninguna fila que la búsqueda por rótulo emparentado
+     pueda recuperar — de lo contrario encontraría la fila "INVENTARIOS" de LECTURA y la
+     indexaría sola, y esta prueba dejaría de cubrir el caso "de verdad no está en ninguna
+     parte" que le da nombre. */
+  const r = verificar({ t_inv: null, activosDetalle: [] });
   assert.ok(r.advertencias.some((a) => a.tipo === 'sin-inventarios'));
 });
 
@@ -313,7 +452,7 @@ test('una escala en miles se advierte pero no se convierte', () => {
 });
 
 test('camposAplicables no propaga los nulos, para no borrar lo escrito a mano', () => {
-  const aplicables = camposAplicables(verificar({ t_inv: null }).campos);
+  const aplicables = camposAplicables(verificar({ t_inv: null, activosDetalle: [] }).campos);
   assert.ok(!('t_inv' in aplicables));
   assert.strictEqual(aplicables.t_ar, 2926256259);
 });
@@ -596,7 +735,7 @@ test('el costo implícito en cero NO se asigna solo: t_c sigue en null', () => {
 
 test('las advertencias de partes relacionadas e inventarios llevan estado "no_verificado" por defecto', () => {
   const r = verificar({
-    t_ap: null, t_ar: null, t_inv: null, rubrosNoAsignados: [],
+    t_ap: null, t_ar: null, t_inv: null, rubrosNoAsignados: [], activosDetalle: [],
   });
   ['t_ap', 't_ar'].forEach((campo) => {
     const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === campo);

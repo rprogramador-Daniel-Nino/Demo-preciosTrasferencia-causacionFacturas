@@ -209,6 +209,31 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     });
   }
 
+  /* ── 1.5. Inventarios: la fila propia debe decir "inventario" — no basta con que solo
+     una nota lo reinterprete ──
+     El prompt pide transcribir, no interpretar; pero un estado puede traer una fila con
+     OTRO rótulo (p. ej. "Activos corrientes mantenidos para la venta") que remite a una
+     nota titulada "INVENTARIOS" con la misma cifra, y el modelo la toma como inventario
+     por el título de la nota, no por lo que la fila misma dice — eso es interpretar una
+     nota, no transcribir el estado. Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26).
+     Decisión explícita del usuario: si la fila propia no confirma el concepto, se descarta
+     y se avisa, igual que si no estuviera — el sistema no completa un campo apoyándose en
+     una nota. */
+  const ROTULO_INVENTARIO_VALIDO = /inventari|existencia|mercanc/i;
+  if (campos.t_inv !== null && campos.t_inv !== 0
+      && rotulos.inventarios && !ROTULO_INVENTARIO_VALIDO.test(rotulos.inventarios)) {
+    advertencias.push({
+      tipo: 'inventario-solo-por-nota',
+      campo: 't_inv',
+      estado: 'no_verificado',
+      mensaje: `«${ETIQUETA.t_inv}»: el valor ${fmtCop(campos.t_inv)} se encontró en una fila `
+        + `rotulada «${rotulos.inventarios}», que no menciona inventarios, existencias ni `
+        + 'mercancías — solo una nota lo confirma. No se completó solo; verifique la nota '
+        + 'correspondiente y escríbalo a mano si corresponde.',
+    });
+    campos.t_inv = null;
+  }
+
   /* ── 2. Los gastos operativos y la utilidad operacional ──
      gastos operativos    = gastos de ventas + gastos de administración
      utilidad operacional = ingresos − costo de ventas − gastos operativos */
@@ -423,6 +448,61 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
           + `desglosar por contraparte, varias cifras emparentadas: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
           + 'Son ambiguas, así que no se indexó ninguna sola: verifique si alguna corresponde '
           + 'a la vinculada antes de aceptar el $0.',
+      });
+    }
+  });
+
+  /* ── Inventarios, Total Activo Corriente y PP&E: buscar bajo otro rótulo en el detalle
+     de activos, no solo con el nombre exacto que pide el prompt ──
+     Misma filosofía que arriba, aplicada a los otros tres campos del balance (decisión
+     explícita del usuario, 2026-08-26): si el rótulo esperado no aparece, no se rinde en
+     null sin más — busca una fila emparentada en `detalle` (el detalle de activos, que el
+     prompt SÍ transcribe completo, a diferencia de `rubrosNoAsignados`, que solo pide
+     deudores/proveedores/otras cuentas/otros gastos). Si hay una sola candidata sin
+     ambigüedad, se indexa como corrección; con varias o ninguna, no se aplica nada. */
+  const CAMPOS_DESDE_DETALLE_ACTIVOS = [
+    { campo: 't_inv', patron: /inventari|existencia|mercanc/i, soloSubtotal: false, avisarSiFalta: false },
+    { campo: 't_act_curr', patron: /activo.*corriente|corriente.*activo/i, soloSubtotal: true, avisarSiFalta: true },
+    { campo: 't_ppe', patron: /propiedad.*planta.*equipo|activo.*fij|inmuebles.*maquinaria/i, soloSubtotal: false, avisarSiFalta: true },
+  ];
+  CAMPOS_DESDE_DETALLE_ACTIVOS.forEach(({
+    campo, patron, soloSubtotal, avisarSiFalta,
+  }) => {
+    const valor = campos[campo];
+    if (valor !== null && valor !== 0) return;
+    const candidatas = detalle.filter((f) => (
+      patron.test(f.etiqueta) && Math.abs(f.valor) > 0 && (!soloSubtotal || f.esSubtotal)
+    ));
+
+    if (candidatas.length === 1) {
+      const [candidata] = candidatas;
+      correcciones.push({
+        campo,
+        etiqueta: ETIQUETA[campo],
+        valorLeido: valor,
+        valorAplicado: candidata.valor,
+        motivo: `No se encontró bajo el rótulo esperado; se indexó «${candidata.etiqueta}» `
+          + `(${fmtCop(candidata.valor)}) del detalle de activos del documento, la única `
+          + 'fila que corresponde a este rubro con otro nombre. Verifíquela contra el '
+          + 'estado financiero.',
+      });
+      campos[campo] = candidata.valor;
+      return;
+    }
+
+    /* `t_inv` no avisa aquí: si sigue en null, la advertencia 'sin-inventarios' de más
+       abajo ya lo cubre — evita duplicar el mismo aviso dos veces. */
+    if (valor === null && avisarSiFalta) {
+      advertencias.push({
+        tipo: 'campo-no-encontrado-en-detalle',
+        campo,
+        estado: 'no_verificado',
+        mensaje: `«${ETIQUETA[campo]}»: no se encontró ninguna fila del documento que `
+          + 'corresponda a este rubro.'
+          + (candidatas.length
+            ? ` Hay varias posibles y ambiguas: ${candidatas.map((f) => `«${f.etiqueta}» ${fmtCop(f.valor)}`).join(', ')}. `
+              + 'Verifique cuál corresponde y escríbala a mano.'
+            : ' Escríbala a mano si el documento la trae con otro nombre.'),
       });
     }
   });
