@@ -378,13 +378,39 @@ export function envolverTablaEnBucle(xml, config) {
     return { xml: fuente, envuelta: false, motivo: 'configuración incompleta' };
   }
 
-  /* El ancla se busca sobre el texto de los párrafos —puede venir partida en runs—
-     y de ahí se pasa al offset del XML. */
-  const parrafo = textoPorParrafo(fuente).find((p) => p.texto.includes(ancla));
-  if (!parrafo) return { xml: fuente, envuelta: false, motivo: 'no se encontró el título de la tabla' };
+  /* El ancla se busca sobre el texto de los párrafos —puede venir partida en runs— y de ahí
+     se pasa al offset del XML. Se exige que la tabla venga INMEDIATAMENTE después, y por eso
+     se recorren todos los candidatos en vez de quedarse con el primero.
+
+     Sin esa condición, el primer párrafo que menciona el nombre es el del ÍNDICE —en la
+     plantilla de Shandong, «2.5.Razones de rechazo (Filtros Cuantitativos – Filtros
+     Cualitativos)77», con el número de página pegado— y la primera tabla que hay después de
+     él es la Tabla 1, «Operación con vinculados económicos», a 100 000 caracteres de
+     distancia. Ahí acababan envueltos los DOS bucles, el de razones de rechazo y el de
+     comparables, así que la última fila de la Tabla 1 se convertía en la fila modelo y el
+     informe publicaba «A | Diferencias funcionales» donde iba «Ingreso intereses sobre presta
+     (13) | 96.297.749». Reportado con capturas el 2026-08-24.
+
+     Es el mismo error que `anexosDelDocumento` ya corrigió para los anexos —anclaba en la
+     tabla de contenido—, y el mismo criterio que sigue `localizarBloqueTabla` en
+     `docxRelleno.js`; no se reutiliza aquélla para no montar un ciclo de imports entre los
+     dos módulos, que desde el 2026-08-24 se importan en un solo sentido. */
+  const candidatos = textoPorParrafo(fuente).filter((p) => nombraLaTabla(p.texto, ancla));
+  if (!candidatos.length) {
+    return { xml: fuente, envuelta: false, motivo: 'no se encontró el título de la tabla' };
+  }
+
+  let inicioTabla = -1;
+  for (const p of candidatos) {
+    const i = tablaInmediataOoxml(fuente, p.fin);
+    if (i >= 0) { inicioTabla = i; break; }
+  }
+  if (inicioTabla < 0) {
+    return { xml: fuente, envuelta: false, motivo: 'el título no va seguido de una tabla' };
+  }
 
   RX_TABLA.lastIndex = 0;
-  const tabla = [...fuente.matchAll(RX_TABLA)].find((m) => m.index >= parrafo.fin);
+  const tabla = [...fuente.matchAll(RX_TABLA)].find((m) => m.index === inicioTabla);
   if (!tabla) return { xml: fuente, envuelta: false, motivo: 'no hay ninguna tabla tras el título' };
 
   const filas = [...tabla[0].matchAll(RX_FILA)];
@@ -620,4 +646,159 @@ export function restaurarCamposSinDato(xmlMarcado, xmlOriginal, opciones = {}) {
   }
 
   return { xml: salida, restaurados, sinRespaldo: [...sinRespaldo] };
+}
+
+/**
+ * El `<w:tbl>` que sigue INMEDIATAMENTE a `desde`, o -1 si lo que sigue es otra cosa.
+ *
+ * Entre el rótulo de una tabla y la tabla, Word deja huecos de maquetación: párrafos en
+ * blanco, marcas de índice y avisos del corrector. Todo eso se salta. Cualquier otra cosa
+ * —un párrafo con texto, otra sección— significa que ese párrafo no era el rótulo de esa
+ * tabla, que es como la entrada del ÍNDICE se colaba haciéndose pasar por el rótulo.
+ *
+ * Es la misma idea que `saltarHuecosOoxml` en `docxRelleno.js`. Vive aquí duplicada a
+ * propósito: importarla montaría un ciclo entre los dos módulos, y son quince líneas.
+ *
+ * @param {string} xml
+ * @param {number} desde  offset donde acaba el párrafo del rótulo.
+ * @returns {number} offset de apertura del `<w:tbl>`, o -1.
+ */
+export function tablaInmediataOoxml(xml, desde) {
+  const fuente = String(xml || '');
+  let cursor = Math.max(0, desde);
+  for (;;) {
+    const resto = fuente.slice(cursor);
+    if (/^\s*<w:tbl[\s>]/.test(resto)) return cursor + resto.indexOf('<w:tbl');
+    const hueco = /^\s*(?:<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<\/w:p>)[\s\S])*?<\/w:p>|<w:bookmarkStart[^>]*\/?>|<w:bookmarkEnd[^>]*\/?>|<w:proofErr[^>]*\/?>)/.exec(resto);
+    if (!hueco) return -1;
+    /* Un párrafo con texto visible no es un hueco: ahí se acabó la búsqueda. */
+    if (/<w:t[\s>]/.test(hueco[0]) && textoPorParrafo(hueco[0]).some((p) => p.texto.trim())) {
+      return -1;
+    }
+    cursor += hueco[0].length;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   BUCLES QUE QUEDARON EN LA TABLA EQUIVOCADA.
+
+   `envolverTablaEnBucle` anclaba en el primer párrafo que mencionara el nombre de la tabla,
+   y en un informe eso es la entrada del ÍNDICE. En la plantilla de Shandong los dos bucles
+   —comparables y razones de rechazo— acabaron envueltos en la Tabla 1, «Operación con
+   vinculados económicos», que es la primera tabla del documento: su última fila pasó a ser
+   la fila modelo, y el informe publicaba «A | Diferencias funcionales» donde iba «Ingreso
+   intereses sobre presta (13) | 96.297.749». Reportado con capturas el 2026-08-24.
+
+   El anclaje ya está corregido, pero eso no basta: el marcado se paga una vez por plantilla
+   y se guarda (`docx-marcado:<id>`), así que las plantillas marcadas antes siguen llevando
+   el bucle donde no va. Retirarlo al rellenar las repara sin volver a llamar a la IA y sin
+   pedir el archivo otra vez.
+
+   Retirar el bucle no deja la tabla sin llenar: «Muestra Compañías comparables» y «Razones
+   de rechazo» las regenera `actualizarTablasOperacionesOoxml` localizándolas por su nombre,
+   que es de donde salen bien. Y las marcas de campo que el bucle dejó dentro de la fila
+   (`{letra}`, `{criterio}`…) las devuelve a su texto `restaurarCamposSinDato`, porque una vez
+   sin bucle ya no son campos de una colección.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Cómo se compara el rótulo de una tabla con el nombre que se busca: en minúsculas, sin
+   tildes y con los espacios colapsados. NUNCA por el número que lleve delante — «Tabla 14.»
+   en Beumer, «Tabla 16.» en Tyazhmash, «Tabla 19.» en Grupo VDT y «Tabla 31.» en Shandong
+   son la MISMA tabla, y hay plantillas que no la numeran—. Es la misma normalización que
+   `claveTitulo` aplica en `docxRelleno.js`, aquí duplicada para no cruzar los dos módulos. */
+const normalizarTitulo = (s) => String(s || '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().replace(/\s+/g, ' ').trim();
+
+/** ¿El texto de este párrafo nombra la tabla que se busca? */
+function nombraLaTabla(texto, ancla) {
+  return normalizarTitulo(texto).includes(normalizarTitulo(ancla));
+}
+
+/** Los bucles que el marcado envuelve, con la tabla a la que pertenece cada uno. */
+export const BUCLES_DE_TABLA = [
+  { ancla: 'Compañías comparables', coleccion: 'comparables', campos: ['n', 'nombre', 'ambito'] },
+  { ancla: 'Razones de rechazo', coleccion: 'razonesRechazo', campos: ['letra', 'criterio', 'cantidad'] },
+];
+
+/** El `<w:tbl>` que contiene `posicion`, como par de offsets, o null si no está en ninguna. */
+function tablaQueContiene(xml, posicion) {
+  const apertura = xml.lastIndexOf('<w:tbl>', posicion);
+  if (apertura < 0) return null;
+  /* Contando anidamiento: Word admite tablas dentro de una celda. */
+  const rx = /<w:tbl>|<\/w:tbl>/g;
+  rx.lastIndex = apertura;
+  let nivel = 0;
+  let m;
+  while ((m = rx.exec(xml)) !== null) {
+    nivel += m[0] === '<w:tbl>' ? 1 : -1;
+    if (nivel === 0) {
+      const fin = m.index + m[0].length;
+      return fin > posicion ? { inicio: apertura, fin } : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Quita el bucle de una colección si quedó envuelto en una tabla que no es la suya.
+ *
+ * @param {string} xml  `word/document.xml` de la plantilla marcada.
+ * @param {{ancla:string, coleccion:string}} config
+ * @param {{abrir?:string, cerrar?:string}} [delimitadores]
+ * @returns {{xml:string, retirado:boolean, motivo:string|null}}
+ */
+export function retirarBucleFueraDeSitio(xml, config, delimitadores = {}) {
+  const fuente = String(xml || '');
+  const { ancla, coleccion } = config || {};
+  if (!ancla || !coleccion) return { xml: fuente, retirado: false, motivo: 'configuración incompleta' };
+
+  const abrir = delimitadores.abrir || '{';
+  const cerrar = delimitadores.cerrar || '}';
+  const marcaApertura = abrir + '#' + coleccion + cerrar;
+  const marcaCierre = abrir + '/' + coleccion + cerrar;
+
+  const parrafos = textoPorParrafo(fuente);
+  const conApertura = parrafos.find((p) => p.texto.includes(marcaApertura));
+  if (!conApertura) return { xml: fuente, retirado: false, motivo: 'la plantilla no trae ese bucle' };
+
+  /* Dónde debería estar: la primera tabla que siga INMEDIATAMENTE a un rótulo con el nombre. */
+  let inicioCorrecta = -1;
+  for (const p of parrafos) {
+    if (!nombraLaTabla(p.texto, ancla)) continue;
+    const i = tablaInmediataOoxml(fuente, p.fin);
+    if (i >= 0) { inicioCorrecta = i; break; }
+  }
+
+  const dondeEsta = tablaQueContiene(fuente, conApertura.inicio);
+  if (!dondeEsta) return { xml: fuente, retirado: false, motivo: 'el bucle no está dentro de una tabla' };
+  /* Sin tabla correcta identificable no se toca nada: quitar el bucle a ciegas dejaría la
+     colección sin publicar y el informe sin esas filas. */
+  if (inicioCorrecta < 0) return { xml: fuente, retirado: false, motivo: 'no se pudo ubicar la tabla propia' };
+  if (dondeEsta.inicio === inicioCorrecta) return { xml: fuente, retirado: false, motivo: null };
+
+  /* Está en la tabla equivocada: se quitan sus dos marcas, de atrás hacia adelante para no
+     mover los offsets de la primera. */
+  let salida = fuente;
+  const aQuitar = parrafos
+    .filter((p) => p.texto.includes(marcaApertura) || p.texto.includes(marcaCierre))
+    .sort((a, b) => b.inicio - a.inicio);
+
+  for (const p of aQuitar) {
+    const rangos = [];
+    for (const marca of [marcaApertura, marcaCierre]) {
+      let desde = 0;
+      for (;;) {
+        const k = p.texto.indexOf(marca, desde);
+        if (k < 0) break;
+        rangos.push({ pos: k, largo: marca.length, texto: '' });
+        desde = k + marca.length;
+      }
+    }
+    if (!rangos.length) continue;
+    const bloque = salida.slice(p.inicio, p.fin);
+    salida = salida.slice(0, p.inicio) + sustituirRangosEnParrafo(bloque, rangos) + salida.slice(p.fin);
+  }
+
+  return { xml: salida, retirado: true, motivo: 'estaba en otra tabla' };
 }

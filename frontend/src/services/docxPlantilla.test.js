@@ -341,7 +341,10 @@ test('un título sin tabla detrás no rompe', async () => {
   const xml = await documentXml([parrafo('Tabla 15. Pendiente de incluir')]);
   const r = envolverTablaEnBucle(xml, { ancla: 'Tabla 15', coleccion: 'c', campos: ['n'] });
   assert.strictEqual(r.envuelta, false);
-  assert.match(r.motivo, /no hay ninguna tabla/);
+  /* El motivo cambió el 2026-08-24 al exigir que la tabla venga INMEDIATAMENTE después del
+     rótulo: antes bastaba con que hubiera una tabla en cualquier punto posterior, y por eso
+     el bucle acababa en la primera tabla del documento cuando el ancla casaba con el índice. */
+  assert.match(r.motivo, /no va seguido de una tabla/);
 });
 
 test('una configuración incompleta se rechaza sin tocar nada', async () => {
