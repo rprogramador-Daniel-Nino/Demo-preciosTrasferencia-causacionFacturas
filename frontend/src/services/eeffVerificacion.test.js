@@ -209,12 +209,34 @@ test('no toca ningún otro campo con nombre del balance', () => {
     .forEach((clave) => assert.ok(!(clave in aplicables), `${clave} no debería escribirse`));
 });
 
-test('si falta una partida de partes relacionadas, se listan las que el documento sí trae', () => {
+test('si falta una partida de partes relacionadas y hay una sola cifra mayor sin desglosar, se indexa como corrección', () => {
   const sinCxp = verificar({ t_ap: null });
-  const a = sinCxp.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
-  assert.ok(a, 'su ajuste quedaría en cero sin avisar');
+  const c = sinCxp.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c, 'debe indexar la única cifra agregada emparentada');
+  assert.strictEqual(c.valorLeido, null);
+  assert.strictEqual(c.valorAplicado, 658293893);
+  assert.match(c.motivo, /OTRAS CUENTAS POR PAGAR/);
+  assert.match(c.motivo, /cliente/i);
+  assert.strictEqual(sinCxp.campos.t_ap, 658293893, 'se aplica al campo, no solo se sugiere');
+  assert.strictEqual(
+    sinCxp.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap'),
+    undefined,
+    'ya no queda como advertencia sin resolver: se resolvió con la corrección',
+  );
+});
+
+test('si hay varias cifras mayores emparentadas y ambiguas, no se indexa ninguna sola', () => {
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+  });
+  assert.strictEqual(r.campos.t_ap, null, 'ambiguo: no se aplica ninguna');
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ap'), undefined);
+  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
+  assert.ok(a);
   assert.match(a.mensaje, /OTRAS CUENTAS POR PAGAR/);
-  assert.match(a.mensaje, /en cero/);
+  assert.match(a.mensaje, /PROVEEDORES DEL EXTERIOR/);
+  assert.match(a.mensaje, /ambiguas/);
 });
 
 test('sin inventarios se avisa, porque su ajuste queda contra cero', () => {
@@ -227,11 +249,16 @@ test('sin inventarios se avisa, porque su ajuste queda contra cero', () => {
 test('una cifra que no aparece en el documento se descarta y se reporta', () => {
   /* El caso literal: la lectura devolvió 44.177.669 como cuentas por pagar de un documento
      donde esa cifra no aparece en ninguna de sus cuatro páginas. */
-  const { campos, advertencias } = verificar({ t_ap: 44177669 });
-  assert.strictEqual(campos.t_ap, null);
+  const { campos, advertencias, correcciones } = verificar({ t_ap: 44177669 });
   const a = advertencias.find((x) => x.tipo === 'cifra-inexistente' && x.campo === 't_ap');
   assert.ok(a);
   assert.match(a.mensaje, /44\.177\.669/);
+  /* Descartada la cifra inventada, campos.t_ap vuelve a null — y como sigue habiendo una
+     única cifra agregada sin ambigüedad en la tabla principal, se indexa en su lugar (ver
+     el siguiente bloque de pruebas). */
+  const c = correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c);
+  assert.strictEqual(campos.t_ap, 658293893);
 });
 
 test('una cifra descartada no se cuela en el cálculo de la utilidad', () => {
@@ -568,7 +595,9 @@ test('el costo implícito en cero NO se asigna solo: t_c sigue en null', () => {
 /* ══════ Estado por campo en las advertencias ya existentes ══════ */
 
 test('las advertencias de partes relacionadas e inventarios llevan estado "no_verificado" por defecto', () => {
-  const r = verificar({ t_ap: null, t_ar: null, t_inv: null });
+  const r = verificar({
+    t_ap: null, t_ar: null, t_inv: null, rubrosNoAsignados: [],
+  });
   ['t_ap', 't_ar'].forEach((campo) => {
     const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === campo);
     assert.strictEqual(a.estado, 'no_verificado');
@@ -577,33 +606,58 @@ test('las advertencias de partes relacionadas e inventarios llevan estado "no_ve
   assert.strictEqual(inv.estado, 'no_verificado');
 });
 
-/* ══════ Partes relacionadas en $0 con una cifra mayor sin desglosar ══════
-   Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26). El documento trae, en una nota,
-   un $0 explícito para «Cuentas por cobrar a Accionistas» — y ese $0 es correcto para lo
-   que el documento SÍ desglosó. Pero el estado principal también trae «Deudores
-   comerciales y otras cuentas por cobrar» por $8.439.325.383, sin desglosar por
-   contraparte, y el documento nunca dice si contiene o no partes relacionadas (a
-   diferencia de su Nota de cuentas por pagar, que sí declara qué porción es del mismo
-   grupo). El $0 desaparecía silenciosamente sin mostrar esa cifra mayor al analista. */
+/* ══════ Partes relacionadas sin desglose: una sola cifra mayor se indexa, varias no ══════
+   Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26). El documento no desglosa "Cuentas
+   por cobrar/pagar a partes relacionadas" en ninguna fila propia — solo trae, en la tabla
+   principal, una cifra agregada por rubro emparentado ("Deudores comerciales y otras
+   cuentas por cobrar" $8.439.325.383; "Acreedores y otras cuentas por pagar"
+   $3.519.703.689). Decisión explícita del usuario (2026-08-26): cuando esa cifra agregada
+   es única y no ambigua, se indexa igual —como corrección, con su motivo, editable—; el
+   analista la confirma con el cliente después. Con varias candidatas ambiguas, no se
+   indexa ninguna sola y solo se advierte. */
 
-test('con el campo en $0 y una cifra mayor sin desglosar, advierte que se revise antes de aceptar el $0', () => {
+test('con el campo en $0 y una única cifra mayor sin desglosar, se indexa como corrección', () => {
   const r = verificar({ t_ar: 0 });
-  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
-  assert.ok(a, 'debe advertir sobre la cifra mayor sin desglosar');
-  assert.match(a.mensaje, /8\.439\.325\.383|DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
-  assert.strictEqual(a.estado, 'revisar_total_mayor');
+  const c = r.correcciones.find((x) => x.campo === 't_ar');
+  assert.ok(c, 'debe indexar la única cifra agregada emparentada');
+  assert.strictEqual(c.valorLeido, 0);
+  assert.strictEqual(c.valorAplicado, 6032337879);
+  assert.match(c.motivo, /DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
+  assert.match(c.motivo, /cliente/i);
+  assert.strictEqual(r.campos.t_ar, 6032337879, 'se aplica al campo, no solo se sugiere');
+  assert.strictEqual(
+    r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor'),
+    undefined,
+    'se resolvió con la corrección, ya no queda como advertencia sin resolver',
+  );
 });
 
-test('con el campo en $0 y sin ninguna cifra mayor sin desglosar, no advierte nada', () => {
+test('con el campo en $0 y sin ninguna cifra mayor sin desglosar, no hace nada', () => {
   const r = verificar({ t_ar: 0, rubrosNoAsignados: [] });
-  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
-  assert.strictEqual(a, undefined, 'nada que revisar: el ajuste en cero ya está sustentado');
+  assert.strictEqual(r.campos.t_ar, 0, 'nada que indexar: el $0 ya está sustentado');
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
+  assert.strictEqual(r.advertencias.find((a) => a.campo === 't_ar'), undefined);
 });
 
-test('con el campo en un valor distinto de $0, no advierte sobre cifras mayores (comportamiento sin cambios)', () => {
+test('con el campo en $0 y varias cifras mayores ambiguas, advierte pero no indexa ninguna', () => {
+  const r = verificar({
+    t_ar: 0,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'CLIENTES DEL EXTERIOR', valor: 900000000 }],
+  });
+  assert.strictEqual(r.campos.t_ar, 0, 'ambiguo: no se aplica ninguna, el $0 queda tal cual');
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
+  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
+  assert.ok(a);
+  assert.strictEqual(a.estado, 'revisar_total_mayor');
+  assert.match(a.mensaje, /DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
+  assert.match(a.mensaje, /CLIENTES DEL EXTERIOR/);
+});
+
+test('con el campo en un valor distinto de $0, no toca nada (comportamiento sin cambios)', () => {
   const r = verificar(); // LECTURA.t_ar = 2926256259
-  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor');
-  assert.strictEqual(a, undefined);
+  assert.strictEqual(r.campos.t_ar, 2926256259);
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
+  assert.strictEqual(r.advertencias.find((a) => a.campo === 't_ar'), undefined);
 });
 
 /* ══════ Fusionar los hallazgos de la pasada angosta a notas ══════ */
