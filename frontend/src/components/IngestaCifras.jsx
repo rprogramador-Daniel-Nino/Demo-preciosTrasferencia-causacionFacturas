@@ -9,6 +9,7 @@ import { resolverFaltantesConNotas, aprenderDeLecturaExitosa } from '../services
 import { leerVocabularioEeff, guardarVocabularioEeff } from '../services/firestoreRepo';
 import { convertPdfToImages } from '../services/pdfRenderer';
 import PopupFaltantesEeff from './PopupFaltantesEeff';
+import CampoMoneda from './CampoMoneda';
 
 /* Las casillas del estado de situación financiera. Tres partidas y un subtotal, que es lo
    que esta ingesta toma por decisión del usuario (2026-08-21).
@@ -340,10 +341,9 @@ export default function IngestaCifras({ study, updateStudy }) {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Ingresos (Ventas)</label>
-              <input
-                type="number"
+              <CampoMoneda
                 value={study.t_s ?? ''}
-                onChange={(e) => handleFieldChange('t_s', e.target.value)}
+                onChange={(v) => handleFieldChange('t_s', v)}
                 placeholder="COP Ventas"
                 className={CLASE_CASILLA}
               />
@@ -351,10 +351,9 @@ export default function IngestaCifras({ study, updateStudy }) {
 
             <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Costo de Ventas</label>
-              <input
-                type="number"
+              <CampoMoneda
                 value={study.t_c ?? ''}
-                onChange={(e) => handleFieldChange('t_c', e.target.value)}
+                onChange={(v) => handleFieldChange('t_c', v)}
                 placeholder="COP Costos"
                 className={CLASE_CASILLA}
               />
@@ -369,10 +368,9 @@ export default function IngestaCifras({ study, updateStudy }) {
 
             <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Gastos Operativos</label>
-              <input
-                type="number"
+              <CampoMoneda
                 value={study.t_gastos ?? ''}
-                onChange={(e) => handleFieldChange('t_gastos', e.target.value)}
+                onChange={(v) => handleFieldChange('t_gastos', v)}
                 placeholder="COP Gastos Op."
                 className={CLASE_CASILLA}
               />
@@ -386,10 +384,9 @@ export default function IngestaCifras({ study, updateStudy }) {
 
             <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Utilidad Operacional</label>
-              <input
-                type="number"
+              <CampoMoneda
                 value={study.t_op ?? ''}
-                onChange={(e) => handleFieldChange('t_op', e.target.value)}
+                onChange={(v) => handleFieldChange('t_op', v)}
                 placeholder="COP Utilidad Op."
                 className={CLASE_CASILLA}
               />
@@ -407,10 +404,9 @@ export default function IngestaCifras({ study, updateStudy }) {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-100 dark:border-zinc-800">
             <div className="flex flex-col">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Monto Excluido (Operación No Vinculada)</label>
-              <input
-                type="number"
+              <CampoMoneda
                 value={study.seg_excluido ?? ''}
-                onChange={(e) => handleFieldChange('seg_excluido', e.target.value)}
+                onChange={(v) => handleFieldChange('seg_excluido', v)}
                 placeholder="COP a excluir del ingreso/gasto"
                 className={CLASE_CASILLA}
               />
@@ -446,10 +442,9 @@ export default function IngestaCifras({ study, updateStudy }) {
             {RUBROS_BALANCE.map(({ clave, etiqueta }) => (
               <div key={clave} className="flex flex-col">
                 <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
-                <input
-                  type="number"
+                <CampoMoneda
                   value={study[clave] ?? ''}
-                  onChange={(e) => handleFieldChange(clave, e.target.value)}
+                  onChange={(v) => handleFieldChange(clave, v)}
                   placeholder="COP"
                   className={CLASE_CASILLA}
                 />
@@ -487,10 +482,9 @@ export default function IngestaCifras({ study, updateStudy }) {
                     placeholder="Rótulo del rubro"
                     className={CLASE_CASILLA}
                   />
-                  <input
-                    type="number"
+                  <CampoMoneda
                     value={fila.valor ?? ''}
-                    onChange={(e) => handleActivoDetalleChange(i, 'valor', e.target.value)}
+                    onChange={(v) => handleActivoDetalleChange(i, 'valor', v)}
                     placeholder="COP"
                     className={CLASE_CASILLA}
                   />
@@ -526,10 +520,9 @@ export default function IngestaCifras({ study, updateStudy }) {
 
           <div className="flex flex-col pt-2 border-t border-zinc-100 dark:border-zinc-800 max-w-xs">
             <label className="text-xs font-semibold text-zinc-500 mb-1.5">Total, Activos</label>
-            <input
-              type="number"
+            <CampoMoneda
               value={study.t_act_tot ?? ''}
-              onChange={(e) => handleFieldChange('t_act_tot', e.target.value)}
+              onChange={(v) => handleFieldChange('t_act_tot', v)}
               placeholder="COP"
               className={CLASE_CASILLA}
             />

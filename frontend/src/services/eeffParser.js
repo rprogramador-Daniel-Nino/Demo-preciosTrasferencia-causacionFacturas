@@ -148,7 +148,9 @@ El documento es comparativo y trae más de una columna de ejercicios. Extrae ÚN
  */
 export function bloqueDeTexto(texto) {
   if (!texto || !String(texto).trim()) return null;
-  return `A continuación, la capa de texto del MISMO documento, extraída directamente del PDF. Los dígitos de aquí son exactos: úsalos para transcribir las cifras, y usa la imagen para entender la disposición de las columnas y a qué año pertenece cada una. Si el texto y la imagen discrepan, manda el texto.
+  return `A continuación, la capa de texto del MISMO documento, extraída directamente del PDF. 
+  Los dígitos de aquí son exactos: úsalos para transcribir las cifras, y usa la imagen para entender la disposición de las 
+  columnas y a qué año pertenece cada una. Si el texto y la imagen discrepan, manda el texto.
 
 <texto_del_documento>
 ${texto}
@@ -287,7 +289,7 @@ export const CAMPO_POR_RUBRO = {
    los gastos en lugar de la utilidad, y hacía que el libro publicara 4.877.416.281 de gastos
    operativos—. Quedan fuera del cálculo «otros gastos» y «otros ingresos»: la definición del
    usuario son los dos rubros del giro, y en ese estado esa diferencia es de 4.051.927 pesos.
-
+ 
    `utilidad_bruta` se sigue leyendo para advertir si el costo o las ventas no cuadran con lo
    que el documento imprime, y también como la identidad contra la que se valida cualquier
    utilidad operacional antes de aplicarla.

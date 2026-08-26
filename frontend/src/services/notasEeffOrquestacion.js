@@ -13,7 +13,7 @@
    Todo el I/O (Firestore, la llamada a Gemini, abrir el PDF para contar páginas) se
    inyecta con un valor por defecto — mismo patrón que ya usa `extraerTextoPdf(file,
    { getDocument })` —, así que este módulo se prueba sin red ni base de datos real. */
-
+ 
 import {
   verificarEeff, fusionarHallazgosEnLectura, marcarEstadosConHallazgos,
   marcarProbableAusentePorVocabulario,
