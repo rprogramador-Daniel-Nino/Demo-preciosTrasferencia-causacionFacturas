@@ -13,6 +13,7 @@ import {
   leerRotulosConfirmadosPorEmpresa, guardarRotulosConfirmadosPorEmpresa,
 } from '../services/firestoreRepo';
 import { convertPdfToImages } from '../services/pdfRenderer';
+import { RUBROS_EXAMINADA } from '../services/memoriaCalculoRangoOptimo.js';
 import PopupFaltantesEeff from './PopupFaltantesEeff';
 import CampoMoneda from './CampoMoneda';
 
@@ -41,6 +42,20 @@ const RUBROS_BALANCE = [
      lee y se verifica contra el documento como cualquier otra partida del balance. */
   { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
 ];
+
+/* Los seis rubros que el Excel Soporte Motor ya publica (hoja Datos, columna A.V.) pero
+   que hasta ahora ningún punto de la interfaz permitía corregir: solo los escribía la
+   lectura del documento, y esta no los toma (ver `CAMPO_POR_RUBRO` en eeffParser.js), así
+   que quedaban siempre en 0,00. No alimentan la utilidad operacional ni los ajustes de
+   capital de trabajo — solo el Análisis Vertical de la hoja Datos y del ANEXO A/Tabla 10.
+
+   Las etiquetas se toman de `RUBROS_EXAMINADA` y no se repiten aquí a mano: es la misma
+   fila que el Excel escribe, y una etiqueta distinta en los dos sitios confundiría a quien
+   audite el libro contra la pantalla. */
+const CLAVES_BALANCE_ADICIONALES = ['t_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr'];
+const RUBROS_BALANCE_ADICIONALES = CLAVES_BALANCE_ADICIONALES.map(
+  (clave) => RUBROS_EXAMINADA.find((r) => r.clave === clave),
+);
 
 const CLASE_CASILLA = 'bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono';
 
@@ -496,6 +511,28 @@ export default function IngestaCifras({ study, updateStudy }) {
                 />
               </div>
             ))}
+          </div>
+
+          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
+            <p className="text-xs text-zinc-500 leading-relaxed mb-3">
+              Estos rubros no cambian la utilidad ni los ajustes de capital de trabajo: solo
+              alimentan el Análisis Vertical de la hoja Datos del Excel de soporte y del
+              ANEXO A / Tabla 10. La lectura del documento no los completa todavía —
+              escríbalos a mano si el balance los trae.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {RUBROS_BALANCE_ADICIONALES.map(({ clave, etiqueta }) => (
+                <div key={clave} className="flex flex-col">
+                  <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
+                  <CampoMoneda
+                    value={study[clave] ?? ''}
+                    onChange={(v) => handleFieldChange(clave, v)}
+                    placeholder="COP"
+                    className={CLASE_CASILLA}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
