@@ -102,6 +102,14 @@ export default function IngestaCifras({ study, updateStudy }) {
     updateStudy(cambios);
   };
 
+  /* Elegir una de las candidatas ambiguas que la alerta lista (botón en la caja roja o en
+     el popup): usa la MISMA ruta que si el analista la hubiera escrito a mano, para que
+     dispare el mismo aprendizaje — no hay dos caminos distintos que puedan divergir. */
+  const elegirCandidataRelacionada = (campo, candidata) => {
+    if (!campo || !candidata) return;
+    handleFieldChange(campo, candidata.valor);
+  };
+
   /* El detalle completo de la sección ACTIVOS (Tabla 10 / ANEXO A). A diferencia de las
      tres partidas de arriba, aquí no hay campos con nombre fijo: cada EEFF trae su propia
      combinación de rubros, así que la lista es de largo variable y editable fila por fila. */
@@ -360,6 +368,23 @@ export default function IngestaCifras({ study, updateStudy }) {
                 {hallazgos.advertencias.map((a, i) => (
                   <li key={i} className="text-[11px] text-rose-900 dark:text-rose-200 leading-snug">
                     {a.mensaje}
+                    {/* Un botón por candidata ambigua: sin esto, la única forma de resolver
+                        la ambigüedad era escribir a mano el número exacto en la casilla de
+                        más abajo, sin ninguna pista de que hacerlo cuenta como confirmación. */}
+                    {Array.isArray(a.candidatas) && a.candidatas.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {a.candidatas.map((c, j) => (
+                          <button
+                            key={j}
+                            type="button"
+                            onClick={() => elegirCandidataRelacionada(a.campo, c)}
+                            className="text-[10px] font-semibold px-2 py-0.5 rounded-full border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 transition-colors"
+                          >
+                            Usar «{c.rotulo}» ({fmt(c.valor)})
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -657,6 +682,7 @@ export default function IngestaCifras({ study, updateStudy }) {
         advertencias={popupFaltantes.advertencias}
         conclusion={popupFaltantes.conclusion}
         alCerrar={() => setPopupFaltantes(null)}
+        onElegirCandidata={elegirCandidataRelacionada}
       />
     )}
     </>
