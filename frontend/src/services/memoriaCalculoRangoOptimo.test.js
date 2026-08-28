@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { hojasMemoriaRangoOptimo, TERMINOS_HOLDING_HOJA } from './memoriaCalculoRangoOptimo.js';
+import { hojasMemoriaRangoOptimo, TERMINOS_HOLDING_HOJA, RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 import { analizarRangoAjustado, desgloseAjuste } from './ajusteRangoCapitalTrabajo.js';
 import { enriquecerUniverso } from './comparablesEngine.js';
 import { TERMINOS_HOLDING } from './filtrosComparablesPatch.js';
@@ -1203,4 +1203,21 @@ test('los chequeos del diagnóstico leen los egresos en magnitud', () => {
     'con ABS ninguna comparable del fixture se marca');
   assert.strictEqual(comps.filter((c) => c.c < 0.05 * c.s).length, comps.length,
     'sin ABS se marcarían todas: ese es el falso positivo que el ABS evita');
+});
+
+test('RUBROS_EXAMINADA expone clave y etiqueta de los seis rubros que la ingesta aún no permite editar', () => {
+  const claves = ['t_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr'];
+  const etiquetasEsperadas = {
+    t_cash: 'Efectivo y equivalentes de efectivo',
+    t_inv_assoc: 'Inversiones asociadas',
+    t_tax: 'Activos por impuestos corrientes',
+    t_intang: 'Intangibles',
+    t_dif: 'Diferidos',
+    t_act_nocurr: 'Total, Activos no corrientes',
+  };
+  for (const clave of claves) {
+    const rubro = RUBROS_EXAMINADA.find((r) => r.clave === clave);
+    assert.ok(rubro, `falta el rubro ${clave} en RUBROS_EXAMINADA`);
+    assert.strictEqual(rubro.etiqueta, etiquetasEsperadas[clave]);
+  }
 });
