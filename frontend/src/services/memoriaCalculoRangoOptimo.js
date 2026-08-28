@@ -82,7 +82,7 @@ const METODOS = [
    Las etiquetas son las literales de `RUBROS_ESF`, sin abreviar: quien audite el libro
    contra el ANEXO A tiene que poder mapear cada fila por su texto exacto, sin tener que
    saber cuáles son fieles y cuáles un alias histórico de la hoja. */
-const RUBROS_EXAMINADA = [
+export const RUBROS_EXAMINADA = [
   { clave: 't_s', etiqueta: 'Ventas netas', av: false },
   /* `egreso: true` — la hoja los publica con el signo del estado financiero, en negativo,
      que es la convención que el usuario fijó el 2026-08-21 para que la hoja se lea igual que
