@@ -10,6 +10,8 @@ import {
   pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
   normalizarCorreo, esCorreoCompartible, agregarCompartido, quitarCompartido,
   TOPE_COMPARTIDO, rastroPropio,
+  ROL_LECTOR, ROL_EDITOR, esRolValido, rolEnEstudio, puedeEditarEstudio,
+  accesosDe, aplicarAcceso,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -335,6 +337,145 @@ test('docEstudio normaliza y deduplica la lista antes de escribirla', () => {
     compartidoCon: ['JUAN@' + DOM, 'juan@' + DOM, '  daniel@' + DOM + ' ', ''],
   });
   assert.deepStrictEqual(doc.compartidoCon, ['juan@' + DOM, 'daniel@' + DOM]);
+});
+
+/* ══════ niveles de acceso: consultar y editar ══════ */
+
+const JUAN = 'juan@' + DOM;
+const DANIEL = 'daniel@' + DOM;
+
+test('esRolValido acepta los dos niveles y nada más', () => {
+  assert.ok(esRolValido(ROL_LECTOR));
+  assert.ok(esRolValido(ROL_EDITOR));
+  assert.ok(!esRolValido('dueño'), 'ser dueño no es un nivel que se conceda');
+  assert.ok(!esRolValido(''));
+});
+
+test('rolEnEstudio distingue quién consulta, quién edita y quién no entra', () => {
+  const datos = { compartidoCon: [JUAN, DANIEL], editores: [DANIEL] };
+  assert.strictEqual(rolEnEstudio(datos, JUAN), ROL_LECTOR);
+  assert.strictEqual(rolEnEstudio(datos, DANIEL), ROL_EDITOR);
+  assert.strictEqual(rolEnEstudio(datos, 'ajeno@' + DOM), null);
+  assert.strictEqual(rolEnEstudio({}, JUAN), null, 'un estudio privado no da acceso a nadie');
+});
+
+test('rolEnEstudio compara sin distinguir mayúsculas, como las reglas', () => {
+  const datos = { compartidoCon: [JUAN], editores: [JUAN] };
+  assert.strictEqual(rolEnEstudio(datos, ' JUAN@' + DOM.toUpperCase() + ' '), ROL_EDITOR);
+});
+
+test('figurar en editores sin figurar en compartidoCon no concede nada', () => {
+  /* La lista de edición no puede ser una segunda puerta: las reglas exigen lo mismo
+     —`editoresHabilitados`— y aquí se comprueba antes de intentar la escritura. */
+  const datos = { compartidoCon: [], editores: [DANIEL] };
+  assert.strictEqual(rolEnEstudio(datos, DANIEL), null);
+  assert.ok(!puedeEditarEstudio(datos, DANIEL));
+});
+
+test('puedeEditarEstudio solo es cierto para el nivel de edición', () => {
+  const datos = { compartidoCon: [JUAN, DANIEL], editores: [DANIEL] };
+  assert.ok(puedeEditarEstudio(datos, DANIEL));
+  assert.ok(!puedeEditarEstudio(datos, JUAN), 'consultar no es editar');
+});
+
+test('accesosDe enumera a cada persona con su nivel', () => {
+  const datos = { compartidoCon: [JUAN, DANIEL], editores: [DANIEL] };
+  assert.deepStrictEqual(accesosDe(datos), [
+    { correo: JUAN, rol: ROL_LECTOR },
+    { correo: DANIEL, rol: ROL_EDITOR },
+  ]);
+  assert.deepStrictEqual(accesosDe({}), []);
+});
+
+test('aplicarAcceso concede consulta y edición por separado', () => {
+  const soloLectura = aplicarAcceso({}, JUAN, { rol: ROL_LECTOR, correoPropio: USUARIO.correo });
+  assert.strictEqual(soloLectura.error, null);
+  assert.deepStrictEqual(soloLectura.compartidoCon, [JUAN]);
+  assert.deepStrictEqual(soloLectura.editores, [], 'consultar no agrega a la lista de edición');
+
+  const conEdicion = aplicarAcceso({}, DANIEL, { rol: ROL_EDITOR, correoPropio: USUARIO.correo });
+  assert.deepStrictEqual(conEdicion.compartidoCon, [DANIEL],
+    'quien edita también tiene que estar entre los habilitados, o las reglas rechazan el documento');
+  assert.deepStrictEqual(conEdicion.editores, [DANIEL]);
+});
+
+test('aplicarAcceso sube y baja de nivel a quien ya tenía acceso', () => {
+  const sube = aplicarAcceso({ compartidoCon: [JUAN], editores: [] }, JUAN, { rol: ROL_EDITOR });
+  assert.strictEqual(sube.error, null, 'cambiar de nivel es la operación normal, no un intento repetido');
+  assert.deepStrictEqual(sube.compartidoCon, [JUAN], 'y no lo duplica entre los habilitados');
+  assert.deepStrictEqual(sube.editores, [JUAN]);
+
+  const baja = aplicarAcceso({ compartidoCon: [JUAN], editores: [JUAN] }, JUAN, { rol: ROL_LECTOR });
+  assert.strictEqual(baja.error, null);
+  assert.deepStrictEqual(baja.compartidoCon, [JUAN], 'bajar a consulta no retira el acceso');
+  assert.deepStrictEqual(baja.editores, []);
+});
+
+test('aplicarAcceso avisa cuando el nivel pedido es el que ya tenía', () => {
+  const lector = aplicarAcceso({ compartidoCon: [JUAN], editores: [] }, JUAN, { rol: ROL_LECTOR });
+  assert.match(lector.error, /Ya puede consultar/);
+  const editor = aplicarAcceso({ compartidoCon: [JUAN], editores: [JUAN] }, JUAN, { rol: ROL_EDITOR });
+  assert.match(editor.error, /Ya puede editar/);
+});
+
+test('aplicarAcceso retira a la persona de las dos listas', () => {
+  const fuera = aplicarAcceso({ compartidoCon: [JUAN, DANIEL], editores: [DANIEL] }, DANIEL, { quitar: true });
+  assert.deepStrictEqual(fuera.compartidoCon, [JUAN]);
+  assert.deepStrictEqual(fuera.editores, [],
+    'dejarlo en la lista de edición le devolvería permiso de escritura al volver a compartir');
+});
+
+test('aplicarAcceso sigue rechazando lo que rechazaba compartir', () => {
+  const propio = aplicarAcceso({}, USUARIO.correo, { rol: ROL_EDITOR, correoPropio: USUARIO.correo });
+  assert.match(propio.error, /ya es suyo/);
+  const malEscrito = aplicarAcceso({}, 'juan(arroba)algo', { rol: ROL_EDITOR });
+  assert.match(malEscrito.error, /correo válido/);
+  const llena = { compartidoCon: Array.from({ length: TOPE_COMPARTIDO }, (_, i) => `p${i}@${DOM}`), editores: [] };
+  assert.match(aplicarAcceso(llena, 'otro@' + DOM, { rol: ROL_LECTOR }).error, new RegExp(String(TOPE_COMPARTIDO)));
+});
+
+test('aplicarAcceso no acepta un nivel que no existe', () => {
+  const raro = aplicarAcceso({}, JUAN, { rol: 'administrador', correoPropio: USUARIO.correo });
+  assert.match(raro.error, /nivel de acceso/);
+  assert.deepStrictEqual(raro.compartidoCon, []);
+});
+
+test('docEstudio guarda la lista de editores junto a la de habilitados', () => {
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA,
+    compartidoCon: [JUAN, DANIEL], editores: [DANIEL],
+  });
+  assert.deepStrictEqual(doc.compartidoCon, [JUAN, DANIEL]);
+  assert.deepStrictEqual(doc.editores, [DANIEL]);
+});
+
+test('docEstudio no deja editores que no estén habilitados', () => {
+  /* Retirar a alguien y dejarlo en `editores` lo mantendría con permiso de escritura
+     aunque «Compartidos conmigo» ya no le muestre el estudio. Las reglas rechazan ese
+     documento entero, así que aquí se limpia antes de intentar escribirlo. */
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA,
+    compartidoCon: [JUAN], editores: [JUAN, DANIEL],
+  });
+  assert.deepStrictEqual(doc.editores, [JUAN]);
+});
+
+test('docEstudio sin editores no deja el campo vacío en el documento', () => {
+  const doc = docEstudio({
+    study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, marcaDeTiempo: AHORA,
+    compartidoCon: [JUAN], editores: [],
+  });
+  assert.ok(!('editores' in doc), 'un estudio compartido solo para consultar no lleva el campo');
+});
+
+test('docEstudio conserva los editores cuando el guardado no los menciona', () => {
+  /* El mismo motivo que con `compartidoCon`: un editor reescribe el documento entero en
+     cada autoguardado, y las reglas le exigen devolver las dos listas intactas. Si aquí
+     se perdieran, la nube rechazaría su escritura y además se quedaría sin permiso. */
+  const previo = { creadoPor: 'uid-antonio', creadoEn: 'F', compartidoCon: [JUAN], editores: [JUAN] };
+  const doc = docEstudio({ study: { ent: 'Acme', anio: 2024 }, usuario: USUARIO, previo, marcaDeTiempo: AHORA });
+  assert.deepStrictEqual(doc.compartidoCon, [JUAN]);
+  assert.deepStrictEqual(doc.editores, [JUAN]);
 });
 
 /* ══════ documento de cliente ══════ */

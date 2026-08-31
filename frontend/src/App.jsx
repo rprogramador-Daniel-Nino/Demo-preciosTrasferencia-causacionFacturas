@@ -16,9 +16,9 @@ import CompartirEstudio from './components/CompartirEstudio';
 import {
   usuarioDeSesion, guardarEstudio, leerEstudio, listarEstudios, borrarEstudio,
   guardarCliente, migrarDesdeLocalStorage, migrarDesdeRaiz,
-  listarEstudiosCompartidosConmigo, leerEstudioCompartido,
+  listarEstudiosCompartidosConmigo, leerEstudioCompartido, guardarEstudioCompartido,
 } from './services/firestoreRepo';
-import { separarEstudio, SELLO_ESTUDIO } from './services/firestoreModelo';
+import { separarEstudio, SELLO_ESTUDIO, ROL_EDITOR } from './services/firestoreModelo';
 import {
   guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes,
   borrarRecursosDelEstudio,
@@ -168,9 +168,11 @@ export default function App() {
     if (!usuario || !activeStudyId || !study || Object.keys(study).length === 0) return;
     /* No guardar lo que se acaba de leer: abrir un estudio no es modificarlo. */
     if (cargando.current) { cargando.current = false; return; }
-    /* Un estudio ajeno se consulta, no se edita: intentar guardarlo daría un error de
-       permisos por cada tecla. La barra ya avisa de que es de solo lectura. */
-    if (estudioAjeno) return;
+    /* Un estudio ajeno compartido para consultar no se guarda: intentarlo daría un error
+       de permisos por cada tecla. La barra ya avisa de que es de solo lectura. Si el
+       dueño concedió edición sí se guarda, pero en SU espacio y por el camino que
+       comprueba que nadie más se adelantó. */
+    if (estudioAjeno && estudioAjeno.rol !== ROL_EDITOR) return;
 
     /* Los datos en memoria tienen que ser los del estudio activo. Sin esta comprobación
        un estudio acabó con los datos de otro —dos documentos, misma razón social, mismo
@@ -210,7 +212,28 @@ export default function App() {
         if (local.eeffImagenesComparables && Object.keys(local.eeffImagenesComparables).length) {
           await guardarAnexoBImagenes(activeStudyId, local.eeffImagenesComparables);
         }
-        await guardarEstudio(activeStudyId, study, usuario);
+        const resultado = estudioAjeno
+          ? await guardarEstudioCompartido(estudioAjeno.duenoUid, activeStudyId, study, usuario)
+          : await guardarEstudio(activeStudyId, study, usuario);
+
+        /* Otra persona escribió el estudio entre lo que se abrió aquí y este guardado.
+           No se pisa: se avisa y se deja el trabajo en pantalla, que es lo único que
+           permite decidir qué conservar. Guardar encima borraría lo suyo sin rastro. */
+        if (resultado && resultado.conflicto) {
+          setEstadoGuardado('error');
+          setAvisoSesion(
+            `No se guardó: ${resultado.quien} modificó este estudio mientras usted trabajaba. ` +
+            'Copie aparte lo que acaba de cambiar y recargue la página (F5) antes de seguir, ' +
+            'o se perdería el trabajo de uno de los dos.'
+          );
+          return;
+        }
+        if (resultado && resultado.error) {
+          setEstadoGuardado('error');
+          setAvisoSesion(resultado.error);
+          return;
+        }
+
         await guardarCliente(study, usuario);
         setEstadoGuardado('guardado');
         setAvisoSesion('');
@@ -326,20 +349,27 @@ export default function App() {
     setVistasMontadas(prev => acumularVistaMontada(prev, { estudioId: activeStudyId, tab: activeTab }));
   }, [activeStudyId, activeTab]);
 
-  /* Abre un estudio que otra persona compartió. Se carga en solo lectura y sin tocar
-     los recursos locales: las imágenes de su ANEXO A están en el navegador del dueño,
-     así que aquí no hay nada que leer de IndexedDB. */
+  /* Abre un estudio que otra persona compartió, con el nivel que su dueño concedió, y
+     sin tocar los recursos locales: las imágenes de su ANEXO A están en el navegador del
+     dueño, así que aquí no hay nada que leer de IndexedDB.
+
+     El rol se toma de la lectura y no de la fila del tablero: esa puede llevar minutos
+     en memoria y el acceso haber cambiado entretanto. */
   const abrirCompartido = async (compartido) => {
     try {
-      const datos = await leerEstudioCompartido(compartido.duenoUid, compartido.id);
-      if (!datos) {
+      const leido = await leerEstudioCompartido(compartido.duenoUid, compartido.id, usuario);
+      if (!leido) {
         setAvisoSesion('Ese estudio ya no está disponible: puede que su dueño le haya retirado el acceso.');
         return;
       }
       cargando.current = true;
-      setEstudioAjeno({ duenoUid: compartido.duenoUid, duenoNombre: compartido.duenoNombre || 'otro consultor' });
+      setEstudioAjeno({
+        duenoUid: compartido.duenoUid,
+        duenoNombre: compartido.duenoNombre || 'otro consultor',
+        rol: leido.rol,
+      });
       setActiveStudyId(compartido.id);
-      setStudy({ ...(datos || {}), [SELLO_ESTUDIO]: compartido.id });
+      setStudy({ ...(leido.datos || {}), [SELLO_ESTUDIO]: compartido.id });
       setActiveTab('contribuyente');
     } catch (err) {
       console.error('[compartidos] no se pudo abrir', err);
@@ -499,9 +529,25 @@ export default function App() {
           <CompartirEstudio estudioId={activeStudyId} usuario={usuario} />
         )}
 
+        {/* En un estudio ajeno con edición interesa lo mismo que en el propio —si lo
+            último quedó guardado—, más de quién es. Con solo lectura no hay estado de
+            guardado que mostrar, porque no se guarda nada. */}
         {activeStudyId && estudioAjeno ? (
-          <span className="text-amber-600 dark:text-amber-400 font-semibold">
-            solo lectura · compartido por {estudioAjeno.duenoNombre}
+          <span className={estudioAjeno.rol === ROL_EDITOR
+            ? 'text-zinc-500'
+            : 'text-amber-600 dark:text-amber-400 font-semibold'}>
+            {estudioAjeno.rol === ROL_EDITOR ? (
+              <>
+                <span className={
+                  estadoGuardado === 'error' ? 'text-amber-600 dark:text-amber-400 font-semibold'
+                    : estadoGuardado === 'guardando' ? 'text-zinc-400' : 'text-emerald-600 dark:text-emerald-500'
+                }>
+                  {estadoGuardado === 'error' ? '⚠ no se pudo guardar en la nube'
+                    : estadoGuardado === 'guardando' ? 'guardando…' : 'guardado'}
+                </span>
+                {' · puede editar · de '}{estudioAjeno.duenoNombre}
+              </>
+            ) : `solo lectura · compartido por ${estudioAjeno.duenoNombre}`}
           </span>
         ) : activeStudyId && (
           <span className={
