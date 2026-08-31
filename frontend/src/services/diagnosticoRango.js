@@ -142,7 +142,12 @@ export function diagnosticarCumplimiento({
     ? (indicador < stats.p25 ? stats.p25 - indicador : indicador - stats.p75)
     : null;
 
-  const palancas = cumple ? [] : palancasQueCambianElVeredicto({
+  /* Sin rango calculable no hay veredicto que cambiar, así que tampoco hay vías que
+     proponer: la palanca de segmentación no depende del rango y se colaba sola, de modo que
+     la tarjeta decía «1 vía que sí cambia el veredicto» junto a «ingrese cifras y comparables
+     para analizar». Prometía algo sobre una conclusión que todavía no existe. */
+  const hayVeredicto = Boolean(stats) && indicador !== null;
+  const palancas = (cumple || !hayVeredicto) ? [] : palancasQueCambianElVeredicto({
     study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
   });
 

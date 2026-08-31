@@ -389,3 +389,15 @@ test('los hallazgos en vivo pisan al rastro persistido', () => {
   });
   assert.strictEqual(d.confianza.verificado, true, 'la lectura de esta sesión es la que manda');
 });
+
+test('sin rango calculable no se proponen vías', () => {
+  /* Visto en pruebas: la tarjeta mostraba «1 vía que sí cambia el veredicto» junto a «ingrese
+     cifras y comparables para analizar». La palanca de segmentación no mira el rango, así que
+     se colaba sola y prometía algo sobre una conclusión que todavía no existe. */
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, monto_operacion: 500 },
+    comparables: [],
+  });
+  assert.strictEqual(d.veredicto, null);
+  assert.deepEqual(d.palancas, []);
+});
