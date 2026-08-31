@@ -131,12 +131,40 @@ test('una vez intentada la restauración, el recuerdo sigue al estudio abierto',
   );
 });
 
-test('un estudio de otra persona no se recuerda', () => {
-  /* Se abre por otra vía, que necesita el identificador de su dueño; restaurarlo por la
-     normal falla contra las reglas y el usuario vería un error que no pidió. */
+test('un estudio de otra persona también se recuerda', () => {
+  /* Antes no: se abre por otra vía, que necesita el uid de su dueño, y restaurarlo por la
+     normal fallaba contra las reglas. Ahora ese uid se guarda con el recuerdo, así que se
+     puede reabrir —y dejarlo fuera penalizaba justo a quien tiene permiso de edición, que
+     al recargar volvía al tablero en mitad del trabajo. */
   assert.strictEqual(
     accionSobreElRecuerdo({ restauracionIntentada: true, estudioId: 'study_1', estudioAjeno: { duenoUid: 'otro' } }),
-    'limpiar'
+    'guardar'
+  );
+});
+
+test('el recuerdo de un compartido lleva el uid de su dueño', () => {
+  const almacen = almacenFalso();
+  guardarSesionUi({ estudioId: 'study_1', tab: 'comparables', duenoUid: 'uid-antonio' }, almacen);
+  assert.deepStrictEqual(leerSesionUi(almacen), {
+    estudioId: 'study_1', tab: 'comparables', duenoUid: 'uid-antonio',
+  });
+});
+
+test('el recuerdo de un estudio propio no inventa un dueño', () => {
+  const almacen = almacenFalso();
+  guardarSesionUi({ estudioId: 'study_1', tab: 'comparables', duenoUid: '' }, almacen);
+  assert.deepStrictEqual(leerSesionUi(almacen), { estudioId: 'study_1', tab: 'comparables' },
+    'sin uid ajeno se restaura por la vía propia, que es la que corresponde');
+});
+
+test('un uid de dueño en blanco o ilegible se ignora, no rompe la restauración', () => {
+  assert.deepStrictEqual(
+    leerSesionUi(almacenFalso({ [CLAVE_SESION_UI]: '{"estudioId":"study_1","tab":"comparables","duenoUid":"   "}' })),
+    { estudioId: 'study_1', tab: 'comparables' }
+  );
+  assert.deepStrictEqual(
+    leerSesionUi(almacenFalso({ [CLAVE_SESION_UI]: '{"estudioId":"study_1","tab":"comparables","duenoUid":42}' })),
+    { estudioId: 'study_1', tab: 'comparables' }
   );
 });
 

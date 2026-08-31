@@ -372,6 +372,9 @@ export async function leerEstudioCompartido(duenoUid, id, usuario) {
   return {
     datos: datos.datos || {},
     rol: rolEnEstudio(datos, usuario && usuario.correo),
+    /* De quién es. Hace falta al restaurar tras una recarga: ahí no se viene del tablero
+       y no hay ninguna fila de la que sacar el nombre para la barra de estado. */
+    duenoNombre: datos.creadoPorNombre || '',
   };
 }
 
