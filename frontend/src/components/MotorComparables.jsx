@@ -200,6 +200,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
   }, [universo, comparables, auditoria]);
 
+  /* Detalle de candidatas rechazadas y en reserva de la última corrida del motor,
+     para el Excel de soporte. Igual que `universo`, NO se persiste con el estudio:
+     puede traer miles de filas y guardarlas revienta la cuota de localStorage. Se
+     recalcula corriendo el motor otra vez. */
+  const [motorAuditoria, setMotorAuditoria] = useState(null); // { rechazadas, reserva } | null
+
   useEffect(() => {
     updateStudy({
       /* El aviso de «no extraído» no se guarda: el apartado sectorial del informe se
@@ -647,13 +653,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setIaMatch(null);
       setSelectionFunnel(null);
       setMotorAuditoria(null);
-
       /* El archivo se guarda tal como se cargó. Va después de dejar el universo en
          pantalla y en su propio try: si la subida falla, el motor tiene que seguir
          funcionando exactamente como antes —el universo ya está en memoria— y lo único
          que se pierde es poder reabrir el estudio sin volver a cargar el Excel. */
       await guardarCribadoEnLaNube(file, meta, rows.length);
-
       anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
@@ -1316,10 +1320,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     };
   });
 
-  const activeSeries = calculatedRows
+  /* Filas ordenadas por PLI ajustado: es la serie exacta sobre la que se calcula
+     el rango. Se conserva con nombre (no solo el número) para que el Excel de
+     soporte pueda mostrar de qué comparable sale cada percentil, no solo la
+     fórmula en abstracto. */
+  const activeRowsOrdenadas = calculatedRows
     .filter(r => r.isIncluded && r.adjustedPli !== null)
-    .map(r => r.adjustedPli)
-    .sort((a, b) => a - b);
+    .sort((a, b) => a.adjustedPli - b.adjustedPli);
+  const activeSeries = activeRowsOrdenadas.map(r => r.adjustedPli);
 
   const stats = rango.stats;
 
@@ -1333,7 +1341,6 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       alert('No hay comparables cargadas: importe o agregue al menos una antes de exportar el Excel de soporte.');
       return;
     }
-
     /* El universo es el import crudo: el motivo de rechazo y el perfil funcional los
        aporta la auditoría del motor (ver `enriquecerUniverso`). */
     const candidatasUniverso = Array.isArray(universo) && universo.length > 0
@@ -1513,7 +1520,6 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             />
             <div className="flex gap-2">
               <button
-                /* el embudo describía una corrida contra la actividad anterior */
                 onClick={() => {
                   setActividad(actInput);
                   updateStudy({ actividad_especifica: actInput });
