@@ -96,7 +96,7 @@ export function camposContribuyente(datos) {
     t_opFuente: n.opFuente,
   };
 }
-
+ 
 /* Aplicación a una fila de comparable: los campos cortos que consume el cálculo.
    Sustituye el mapeo op ← utilidad_operacional y añade ppe, que no se mapeaba. */
 export function camposComparable(datos) {

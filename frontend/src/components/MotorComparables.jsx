@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
@@ -35,6 +35,7 @@ import {
   debeRestaurarCribado, bucketAusente, AVISO_STORAGE_APAGADO,
 } from '../services/cribadoStorage';
 import MemoriaRangoModal from './MemoriaRangoModal.jsx';
+import CampoMoneda from './CampoMoneda';
 
 /* Aviso que ocupa el lugar de la actividad económica mientras no se extraiga de los
    adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
@@ -56,6 +57,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [actividad, setActividad] = useState(study.actividad_especifica || ACTIVIDAD_SIN_EXTRAER);
   const [editingAct, setEditingAct] = useState(false);
   const [actInput, setActInput] = useState(actividad);
+
+  useEffect(() => {
+    if (study.actividad_especifica) {
+      setActividad(study.actividad_especifica);
+      setActInput(study.actividad_especifica);
+    }
+  }, [study.actividad_especifica]);
 
   // Engine Configuration State
   const [engineConfig, setEngineConfig] = useState(study.motorConfig || {
@@ -191,6 +199,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     if (!Array.isArray(universo) || !universo.length) return null;
     return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
   }, [universo, comparables, auditoria]);
+
+
 
   useEffect(() => {
     updateStudy({
@@ -352,8 +362,26 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setCuracionProgreso({ etapa: 'inicio', mensaje: 'Preparando la curación…' });
     try {
       const priorComps = (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [];
+      const kind = study.pli || 'MO';
+      const segExcluido = num(study.seg_excluido) || 0;
+      const tSNum = num(study.t_s);
+      const tOpNum = num(study.t_op);
+      const T = {
+        s: tSNum !== null ? tSNum - segExcluido : null,
+        c: num(study.t_c),
+        op: tOpNum !== null ? tOpNum - segExcluido : null,
+        ar: num(study.t_ar),
+        inv: num(study.t_inv),
+        ap: num(study.t_ap),
+        ppe: num(study.t_ppe),
+      };
+      const tPLI = pliOf(T, kind);
+      const targetProfitability = tPLI !== null ? (tPLI * 100).toFixed(3) : '4.716';
+
       const veredicto = await curateCandidatesWithGemini(candidatas, act, {
         priorComps,
+        targetProfitability,
+        pli: kind,
         fuente: (importMeta && importMeta.archivo) || '',
         veredictoPrevio: forzar ? null : iaMatch,
         onProgress: (info) => {
@@ -621,13 +649,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setIaMatch(null);
       setSelectionFunnel(null);
       setMotorAuditoria(null);
-
       /* El archivo se guarda tal como se cargó. Va después de dejar el universo en
          pantalla y en su propio try: si la subida falla, el motor tiene que seguir
          funcionando exactamente como antes —el universo ya está en memoria— y lo único
          que se pierde es poder reabrir el estudio sin volver a cargar el Excel. */
       await guardarCribadoEnLaNube(file, meta, rows.length);
-
       anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
@@ -1290,10 +1316,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     };
   });
 
-  const activeSeries = calculatedRows
+  /* Filas ordenadas por PLI ajustado: es la serie exacta sobre la que se calcula
+     el rango. Se conserva con nombre (no solo el número) para que el Excel de
+     soporte pueda mostrar de qué comparable sale cada percentil, no solo la
+     fórmula en abstracto. */
+  const activeRowsOrdenadas = calculatedRows
     .filter(r => r.isIncluded && r.adjustedPli !== null)
-    .map(r => r.adjustedPli)
-    .sort((a, b) => a - b);
+    .sort((a, b) => a.adjustedPli - b.adjustedPli);
+  const activeSeries = activeRowsOrdenadas.map(r => r.adjustedPli);
 
   const stats = rango.stats;
 
@@ -1307,7 +1337,6 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       alert('No hay comparables cargadas: importe o agregue al menos una antes de exportar el Excel de soporte.');
       return;
     }
-
     /* El universo es el import crudo: el motivo de rechazo y el perfil funcional los
        aporta la auditoría del motor (ver `enriquecerUniverso`). */
     const candidatasUniverso = Array.isArray(universo) && universo.length > 0
@@ -1487,8 +1516,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             />
             <div className="flex gap-2">
               <button
-                /* el embudo describía una corrida contra la actividad anterior */
-                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); setMotorAuditoria(null); }}
+                onClick={() => {
+                  setActividad(actInput);
+                  updateStudy({ actividad_especifica: actInput });
+                  setEditingAct(false);
+                  setSelectionFunnel(null);
+                  setMotorAuditoria(null);
+                }}
                 className="bg-[#0FA3A1] text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
               >
                 Guardar Actividad
@@ -2382,65 +2416,58 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     </select>
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.s}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 's', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 's', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.c}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'c', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'c', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.op}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'op', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'op', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.ar}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'ar', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'ar', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.inv}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'inv', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'inv', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.ap}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'ap', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'ap', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.ppe ?? ''}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'ppe', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'ppe', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>

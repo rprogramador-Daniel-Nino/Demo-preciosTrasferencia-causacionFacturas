@@ -45,7 +45,9 @@ import { RUBROS_RESULTADOS, RUBROS_BALANCE, cifraDeRubro, rubrosConDato } from '
    decisión propia (izquierda y centro) y por eso la declaran ellos mismos. */
 const PPR_PROSA = '<w:pPr><w:jc w:val="both"/></w:pPr>';
 import { valorDeCampo } from './plantillaVocabulario.js';
-import { restaurarCamposSinDato } from './docxPlantilla.js';
+import {
+  restaurarCamposSinDato, retirarBucleFueraDeSitio, BUCLES_DE_TABLA,
+} from './docxPlantilla.js';
 /* El aspecto de la tabla sale de la MISMA hoja que pinta el previo y el .doc. Es lo único que
    impide que el cliente vea una tabla distinta según por qué ruta salió su informe. */
 import { PUNTOS_TABLA, FUENTE_TABLA, FUENTE_MACRO, PUNTOS_MACRO } from './estiloDocumento.js';
@@ -180,10 +182,13 @@ const RUTA_DOC = 'word/document.xml';
 /** El valor que se escribe cuando un campo no tiene dato. */
 export const SIN_DATO = '—';
 
-/** Nombre con el que la plantilla del cliente rotula la tabla de criterios de búsqueda.
- *  No se importa de `tablasHtmlInforme.js`: esa dirección de import ya existe al revés
- *  (`tablasHtmlInforme.js` importa `claveTitulo`/`numeroDeTabla` de aquí), y traer la
- *  constante desde allí crearía un ciclo. */
+export const NOMBRES_TABLA_CRITERIOS = [
+  'Códigos SIC utilizados en la búsqueda de comparables',
+  'Códigos SIC utilizados',
+  'Criterios utilizados en la búsqueda de comparables',
+  'Criterios de búsqueda de comparables',
+  'Criterios de búsqueda',
+];
 const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 
@@ -845,12 +850,36 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
     + ', corrida de sector para este año: ' + (entrada ? 'sí (' + (entrada.tituloSector || 'sin título') + ')' : 'no (marcador)'));
   const doc = sustituidorDeTablas(xml, null);
 
+  /* Sinónimos por posición. Dos formas, según qué tan cerrada es la variación:
+     - Lista fija de frases, cuando ya se confirmaron variantes concretas contra una
+       plantilla real (LATV SUCURSAL COLOMBIA): "Análisis del Sector" → esa plantilla
+       trae "Análisis EN el sector de..." (`tablasInforme.js`/`RX_SECTORIAL` ya
+       toleraba esta variante para su propio chequeo de cobertura; aquí nunca se había
+       alineado) y también "Análisis Sectorial", la otra redacción usual en informes de
+       PT en Colombia.
+     - `{etiqueta, test}` (`coincideTitulo`), cuando la variación no es una lista
+       cerrada de frases sino una FORMA: agregar una frase literal por cada plantilla
+       de cliente que redacte distinto no escala — la próxima empresa siempre puede
+       traer una redacción más. "Importaciones y exportaciones del sector" y "¿Qué se
+       proyecta para el sector" usan esta forma porque una plantilla real (PROMOCIONES
+       FANTÁSTICAS S.A.S., 2026-08-25) las trae como "Exportaciones e Importaciones..."
+       (orden invertido, conector «e» en vez de «y») y "¿Cuáles son las proyecciones y
+       perspectivas...?" (sin ninguna palabra en común con "¿Qué se proyecta",
+       aparte del tema): ninguna lista de frases fijas cubre eso, pero las RAÍCES de
+       palabra sí, sin importar en qué orden o con qué conector se escriban. */
   const titulos = [
-    'Análisis del Sector',
+    ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
     'Comportamiento del Sector',
     'Datos Clave del Sector',
-    'Importaciones y exportaciones del sector',
-    '¿Qué se proyecta para el sector',
+    {
+      etiqueta: 'Importaciones y exportaciones del sector',
+      test: (clave) => clave.includes('importacion') && clave.includes('exportacion'),
+    },
+    {
+      etiqueta: '¿Qué se proyecta para el sector',
+      test: (clave) => clave.includes('sector')
+        && (clave.includes('proyect') || clave.includes('perspectiv')),
+    },
     'Conclusiones y Perspectivas',
     'ANÁLISIS ECONÓMICO',
   ];
@@ -1112,9 +1141,10 @@ function celdasDeOoxml(filaXml) {
  *        párrafo de título, si lo hay, no tiene ninguno.
  * @param {Array<string[]>} filas  una entrada `[etiqueta, valor]` por fila — la forma que ya
  *        produce `filasCriteriosScreening` (`tablasInforme.js`).
- * @param {{filasEncabezado?:number, pie?:boolean}} [opciones]  mismo contrato que
- *        `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para desactivar la
- *        detección de la fila de fuente.
+ * @param {{filasEncabezado?:number, pie?:boolean, fuente?:string}} [opciones]  mismo
+ *        contrato que `reescribirFilasHtml`: `filasEncabezado` (1 por defecto), `pie` para
+ *        desactivar la detección de la fila de fuente. `fuente`, si se da, SÍ reescribe esa
+ *        fila (ver más abajo por qué es la excepción a "no se recalcula en ninguna ruta").
  * @returns {string} el XML con las filas de cuerpo nuevas, o el original si no hay molde.
  */
 export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
@@ -1126,7 +1156,14 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
   /* Misma heurística de pie de fuente que `reescribirFilasHtml`: la última fila se conserva
      intacta cuando es de una sola celda y el resto de la tabla tiene más de una. No se
      regenera aquí — es la misma decisión ya tomada en la ruta HTML, no algo que decidir de
-     nuevo: el pie «Fuente: ... publicado en ...» no se recalcula en ninguna de las dos rutas. */
+     nuevo: el pie «Fuente: ... publicado en ...» no se recalcula en ninguna de las dos rutas.
+
+     EXCEPCIÓN, vía `opciones.fuente`: cuando la tabla que se está reescribiendo no es la
+     misma que ya traía la plantilla sino una elegida entre varias ambiguas que citaban OTRA
+     base de datos (Ryan LLC, Refinitiv — ninguna Capital IQ, caso real de LATV SUCURSAL
+     COLOMBIA, 2026-08-25), conservar ese pie sin tocar dejaría los criterios NUEVOS de
+     Capital IQ atribuidos a una fuente que ya no es la que los produjo — peor que no
+     regenerarlo. Ahí sí hay que sobrescribirlo. */
   const columnas = celdasDeOoxml(todas[encabezados - 1].xml).length;
   const ultima = todas[todas.length - 1];
   const esPie = opciones.pie !== false
@@ -1151,7 +1188,25 @@ export function reescribirFilasOoxml(tablaXml, filas, opciones = {}) {
     return '<w:tr>' + celdas + '</w:tr>';
   }).join('');
 
-  return tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
+  let salida = tabla.slice(0, cuerpo[0].inicio) + nuevas + tabla.slice(cuerpo[cuerpo.length - 1].fin);
+
+  if (esPie && typeof opciones.fuente === 'string' && opciones.fuente) {
+    const celdaPie = celdasDeOoxml(ultima.xml)[0];
+    if (celdaPie) {
+      const filaPieNueva = ultima.xml.slice(0, celdaPie.inicio)
+        + reescribirTextoParrafoOoxml(celdaPie.xml, opciones.fuente)
+        + ultima.xml.slice(celdaPie.fin);
+      /* `ultima.inicio`/`.fin` son posiciones en la tabla ORIGINAL; el cuerpo ya
+         reescrito arriba puede tener otra longitud, así que se recalculan sobre el
+         nuevo largo total en vez de reutilizar los del molde viejo. */
+      const desplazamiento = nuevas.length - (cuerpo[cuerpo.length - 1].fin - cuerpo[0].inicio);
+      const inicioPie = ultima.inicio + desplazamiento;
+      const finPie = ultima.fin + desplazamiento;
+      salida = salida.slice(0, inicioPie) + filaPieNueva + salida.slice(finPie);
+    }
+  }
+
+  return salida;
 }
 
 /**
@@ -1444,6 +1499,48 @@ function finDeFuenteSiguienteOoxml(xml, desde) {
   return desde;
 }
 
+/** Igual que `finDeFuenteSiguienteOoxml`, pero devuelve el párrafo completo
+ *  (`{inicio,fin,xml}`) en vez de solo su final, para poder reescribir su texto en vez de
+ *  solo delimitarlo — `null` si no hay ninguno. */
+function parrafoFuenteSiguienteOoxml(xml, desde) {
+  const cursor = saltarHuecosOoxml(xml, desde);
+  const hermano = parrafoHermanoSiguiente(xml, cursor);
+  if (hermano && hermano.xml && esLineaFuenteOoxml(textoPlanoOoxml(hermano.xml))) {
+    return hermano;
+  }
+  return null;
+}
+
+/**
+ * Reescribe el texto de la línea «FUENTE: …» que sigue a `desde` —el final de un bloque
+ * (tabla o párrafo)—, conservando su marcado y el prefijo original («Fuente:»,
+ * «FUENTES:», etc.). Equivalente OOXML de `reescribirFuenteHtml`
+ * (`tablasHtmlInforme.js`), que no tenía contraparte en esta ruta: cada tabla que
+ * necesitaba tocar su fuente reinventaba la búsqueda del párrafo hermano a mano.
+ *
+ * Universal a propósito: sirve para CUALQUIER tabla de esta ruta cuya plantilla traiga
+ * la fuente como párrafo aparte después de la tabla (no como fila interna) — no es un
+ * ajuste para una plantilla puntual.
+ *
+ * @param {string} xml
+ * @param {number} desde  el offset donde acaba el bloque.
+ * @param {string} fuenteTexto  el texto nuevo, sin el prefijo «FUENTE:».
+ * @returns {string} el xml con la línea reescrita, o igual si no había ninguna.
+ */
+function reescribirFuenteOoxml(xml, desde, fuenteTexto) {
+  const texto = String(xml || '');
+  if (!fuenteTexto) return texto;
+  const parrafo = parrafoFuenteSiguienteOoxml(texto, desde);
+  if (!parrafo) return texto;
+
+  const plano = textoPlanoOoxml(parrafo.xml);
+  const m = /^\s*(fuentes?\s*:)/i.exec(plano);
+  if (!m) return texto;
+
+  const nuevo = reescribirTextoParrafoOoxml(parrafo.xml, m[1] + ' ' + fuenteTexto);
+  return texto.slice(0, parrafo.inicio) + nuevo + texto.slice(parrafo.fin);
+}
+
 /**
  * Delimita un bloque de párrafos entre un encabezado de inicio y el primero de una
  * lista de encabezados de fin — pensado para reemplazar la PROSA de un apartado sin
@@ -1500,16 +1597,36 @@ export function localizarBloqueProsa(xml, tituloInicio, titulosFin) {
  * @param {string[]} titulos
  * @returns {Array<{inicio:number, finPropio:number}|null>}
  */
-export function localizarHitos(xml, titulos) {
+/**
+ * ¿La clave normalizada de un candidato satisface esta posición de `titulos`?
+ *
+ * Tres formas de sinónimo, de más rígida a más flexible:
+ * - un string: coincide por inclusión de la frase exacta (normalizada).
+ * - un arreglo de strings: coincide con cualquiera de la lista — variantes fijas ya
+ *   confirmadas contra una plantilla real (ver `titulos` en
+ *   `actualizarApartadoSectorialOoxml`).
+ * - `{ etiqueta, test }`: coincide según `test(claveCandidato)`, para variantes que NO
+ *   son una lista cerrada de frases sino una forma (mismas raíces de palabra, sin
+ *   importar orden ni conector) — "Exportaciones e Importaciones" vs "Importaciones y
+ *   exportaciones", o "¿Cuáles son las proyecciones y perspectivas...?" vs "¿Qué se
+ *   proyecta...?". Agregar un sinónimo literal por cada plantilla de cliente que redacte
+ *   distinto no escala: una nueva empresa siempre puede traer una redacción más: esta
+ *   forma cubre la VARIACIÓN, no la empresa.
+ */
+function coincideTitulo(entrada, claveCandidato) {
+  if (entrada && typeof entrada.test === 'function') return entrada.test(claveCandidato);
+  const lista = Array.isArray(entrada) ? entrada : [entrada];
+  return lista.some((t) => claveCandidato.includes(claveTitulo(t)));
+}
+
+export function localizarHitos(xml, titulosArg) {
   const texto = String(xml || '');
-  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
-     traer redacciones distintas según qué consultor escribió la plantilla de ese cliente
-     en su momento ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
-     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
-     Mismo mecanismo que ya usa `localizarBloqueTabla` para nombres de tabla. */
-  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
-  const resultado = new Array(claves.length).fill(null);
-  if (!claves.length) return resultado;
+  /* Cada posición admite un título único, un arreglo de sinónimos, o un `{etiqueta,test}`
+     — ver `coincideTitulo`. Mismo mecanismo (por inclusión) que ya usa
+     `localizarBloqueTabla` para nombres de tabla, en su forma más simple. */
+  const titulos = titulosArg || [];
+  const resultado = new Array(titulos.length).fill(null);
+  if (!resultado.length) return resultado;
 
   /* Candidatos: cada párrafo con pinta de título, en orden de aparición, recogidos de
      una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
@@ -1538,9 +1655,9 @@ export function localizarHitos(xml, titulos) {
      principio, así una tabla que se llame igual que un encabezado posterior no se
      confunde con él. */
   let desde = 0;
-  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+  for (let objetivo = 0; objetivo < titulos.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
+    while (k < candidatos.length && !coincideTitulo(titulos[objetivo], candidatos[k].clave)) k += 1;
     if (k >= candidatos.length) continue;
     /* Si el hito es el título de una tabla —caso normal para los nombres de
        `tablasMacroInforme`—, el hueco siguiente empieza DESPUÉS de la tabla entera,
@@ -1573,7 +1690,63 @@ export function localizarHitos(xml, titulos) {
 /** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
  *  sinónimos si trae varios (`['Desempleo en Colombia', 'Tasa de Desempleo', ...]`) — para
  *  avisos y logs, nunca la representación por defecto de un arreglo. */
-const etiquetaTitulo = (t) => (Array.isArray(t) ? t[0] : t);
+const etiquetaTitulo = (t) => (t && typeof t.etiqueta === 'string' ? t.etiqueta : (Array.isArray(t) ? t[0] : t));
+
+/**
+ * Para cada hueco entre `titulos[i]` y `titulos[i+1]` (índices `0..hitos.length-2`),
+ * decide cómo ubicar su contenido cuando no se encuentran los DOS límites propios del
+ * hueco: contra el rótulo LOCALIZADO más cercano a cada lado —el de menor distancia y,
+ * en empate, el de la izquierda—, en vez de un único punto de respaldo al final de toda
+ * la cadena (como hacía antes `cursorRespaldo`, que solo servía si el ÚLTIMO título de
+ * la cadena se encontraba, sin importar cuán cerca hubiera otro título encontrado).
+ *
+ * Nunca se funden dos huecos en una sola región para poder BORRAR el texto entre dos
+ * hitos que no son adyacentes en la lista original: un título intermedio ausente no
+ * distingue "esta subsección nunca existió en la plantilla" (seguro fundir y
+ * reemplazar) de "existe, pero está escrita con otro rótulo que no se reconoce" (nada
+ * seguro de borrar — es texto real del cliente). Como el código no puede saber cuál de
+ * las dos es, cada hueco sin límite propio solo INSERTA junto al hito más cercano, sin
+ * tocar lo que ya hubiera ahí — la prueba `el respaldo no se lleva la subsección
+ * intermedia cuyo rótulo no se reconoció` (`docxRelleno.test.js`) protege justo esto.
+ *
+ * Puro: solo mira qué posiciones de `hitos` son no nulas, nunca el contenido del
+ * documento, así lo reutilizan tanto `reemplazarPorHitos` (aquí) como
+ * `reemplazarHuecosHtml` de `tablasHtmlInforme.js`.
+ *
+ * @param {Array<{inicio:number, finPropio:number}|null>} hitos
+ * @returns {Array<{tipo:'reemplazo'}|{tipo:'insertar', lado:'derecha-de'|'izquierda-de', ref:number}|{tipo:'sin-ancla'}>}
+ *          longitud `hitos.length - 1`, una entrada por hueco.
+ */
+export function resolverAnclasDeHuecos(hitos) {
+  const n = hitos.length;
+  const antes = new Array(n).fill(-1);
+  for (let i = 0, ultimo = -1; i < n; i += 1) { antes[i] = ultimo; if (hitos[i]) ultimo = i; }
+  const despues = new Array(n).fill(-1);
+  for (let i = n - 1, siguiente = -1; i >= 0; i -= 1) { despues[i] = siguiente; if (hitos[i]) siguiente = i; }
+
+  const resultado = [];
+  for (let i = 0; i < n - 1; i += 1) {
+    if (hitos[i] && hitos[i + 1]) { resultado.push({ tipo: 'reemplazo' }); continue; }
+    if (hitos[i]) { resultado.push({ tipo: 'insertar', lado: 'derecha-de', ref: i }); continue; }
+    if (hitos[i + 1]) { resultado.push({ tipo: 'insertar', lado: 'izquierda-de', ref: i + 1 }); continue; }
+    const izq = antes[i];
+    const der = despues[i + 1];
+    if (izq === -1 && der === -1) { resultado.push({ tipo: 'sin-ancla' }); continue; }
+    if (izq === -1) { resultado.push({ tipo: 'insertar', lado: 'izquierda-de', ref: der }); continue; }
+    if (der === -1) { resultado.push({ tipo: 'insertar', lado: 'derecha-de', ref: izq }); continue; }
+    resultado.push(
+      (i - izq) <= (der - (i + 1))
+        ? { tipo: 'insertar', lado: 'derecha-de', ref: izq }
+        : { tipo: 'insertar', lado: 'izquierda-de', ref: der }
+    );
+  }
+  return resultado;
+}
+
+/** El punto de un hito donde ancla una inserción: justo detrás de su párrafo
+ *  (`derecha-de`, en el hueco que lo sigue) o justo delante (`izquierda-de`, en el que
+ *  lo precede). */
+const puntoDeHito = (hito, lado) => (lado === 'derecha-de' ? hito.finPropio : hito.inicio);
 
 export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaAvisos) {
   doc.aplicar((actual) => {
@@ -1589,7 +1762,10 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
        arregla una vez y descuelga todos los apartados que dependían de él. */
     titulos.forEach((titulo, i) => {
       if (hitos[i]) return;
-      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+      /* `titulo` puede ser un `{etiqueta,test}` (ver `coincideTitulo`): el aviso, y su
+         deduplicación más abajo, siempre usan su forma legible. */
+      const etiqueta = etiquetaTitulo(titulo);
+      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
         + '», así que los apartados que delimita se quedan como están en la plantilla';
       console.warn('[docxRelleno] ' + aviso);
       if (!Array.isArray(avisos)) return;
@@ -1598,64 +1774,62 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
          sector—, así que sin esto el mismo rótulo ausente se avisa dos veces, con dos
          encabezados distintos y la misma causa detrás. Se compara por el rótulo
          entrecomillado, que es lo único que el usuario tiene que ir a corregir. */
-      if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+      if (avisos.some((a) => a.includes('«' + etiqueta + '»'))) return;
       avisos.push(aviso);
     });
-    let salida = actual;
 
-    /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
-       siguiente— no aparece en la plantilla bajo NINGUNA redacción: no está mal escrito,
-       la sección nunca existió ahí (plantilla más vieja que la sección que se quiere
-       insertar). El último título de la lista es siempre un límite —sin generador propio
-       en `contenidos`—, así que si se encuentra sirve de sitio de respaldo: mejor un
-       párrafo al final de esta sección que perder en silencio un contenido que sí se
-       generó. Se ajusta con cada edición que caiga antes de él, en el mismo recorrido de
-       atrás hacia adelante, para no apuntar a un índice viejo. Misma lógica que
-       `reemplazarHuecosHtml` de `tablasHtmlInforme.js`. */
-    /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
-       nunca existió aquí" de "la plantilla no tiene nada que ver con esta cadena de
-       títulos" (la mayoría de las plantillas de prueba, por ejemplo): insertar al final
-       del documento sería un despropósito en ese segundo caso. El respaldo solo se activa
-       cuando el límite final SÍ se encontró. */
-    const ultimoHito = hitos[hitos.length - 1];
-    let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
-
-    for (let i = contenidos.length - 1; i >= 0; i -= 1) {
-      const hitoActual = hitos[i];
-      const hitoSiguiente = hitos[i + 1];
-      if (!hitoActual || !hitoSiguiente) {
-        /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando
-           el rótulo ausente que lo causa. Aquí solo queda el respaldo. */
-        if (cursorRespaldo !== null) {
-          const nuevo = contenidos[i]('');
-          if (nuevo !== null) {
-            console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
-              '": sin ancla, insertado de respaldo al final de la sección');
-            if (Array.isArray(avisos)) {
-              avisos.push(
-                (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
-                'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
-                'revisa el orden antes de radicar'
-              );
-            }
-            salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
-          }
+    const anclas = resolverAnclasDeHuecos(hitos);
+    /* Inserciones agrupadas por punto de ancla: dos o más huecos consecutivos sin
+       título propio pueden terminar apuntando al MISMO rótulo vecino —dos apartados
+       intermedios seguidos que la plantilla no trae, por ejemplo—, y ahí su contenido
+       se concatena en vez de que uno le gane la posición al otro: se recorre en orden
+       ascendente de hueco (el orden en que aparecen en la cadena), así que lo que va
+       primero en la cadena queda primero en el texto. */
+    const inserciones = new Map();
+    const reemplazos = [];
+    for (let i = 0; i < contenidos.length; i += 1) {
+      const ancla = anclas[i];
+      if (ancla.tipo === 'reemplazo') {
+        const hitoActual = hitos[i];
+        const hitoSiguiente = hitos[i + 1];
+        const textoHueco = textoPlanoOoxml(actual.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+        const nuevo = contenidos[i](textoHueco);
+        if (nuevo === null) {
+          console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
+          continue;
         }
+        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
+          + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
+        reemplazos.push({ inicio: hitoActual.finPropio, fin: hitoSiguiente.inicio, contenido: nuevo });
         continue;
       }
-      const textoHueco = textoPlanoOoxml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
-      const nuevo = contenidos[i](textoHueco);
-      if (nuevo === null) {
-        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
-        continue;
+      /* 'sin-ancla': ni el propio límite del hueco ni ningún otro rótulo de la cadena
+         aparece en la plantilla — no hay dónde ubicar este contenido sin adivinar, así
+         que se deja perder (el aviso de "no se encontró el rótulo" ya lo explica). */
+      if (ancla.tipo === 'sin-ancla') continue;
+      const nuevo = contenidos[i]('');
+      if (nuevo === null) continue;
+      const punto = puntoDeHito(hitos[ancla.ref], ancla.lado);
+      const clave = ancla.lado + ':' + ancla.ref;
+      const previo = inserciones.get(clave);
+      inserciones.set(clave, { inicio: punto, fin: punto, contenido: (previo ? previo.contenido : '') + nuevo });
+      console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
+        '": sin ancla propia, ubicado junto a "' + etiquetas[ancla.ref] + '"');
+      if (Array.isArray(avisos)) {
+        avisos.push(
+          (nombreParaAvisos || '') + ': el apartado entre «' + etiquetas[i] + '» y «' + etiquetas[i + 1]
+          + '» no se pudo ubicar en su lugar propio, así que su contenido se ubicó junto al encabezado '
+          + 'más cercano, «' + etiquetas[ancla.ref] + '» — revísalo antes de radicar'
+        );
       }
-      console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
-        + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
-      if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
-        cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
-      }
-      salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
     }
+
+    let salida = actual;
+    reemplazos.concat(Array.from(inserciones.values()))
+      .sort((a, b) => b.inicio - a.inicio)
+      .forEach((op) => {
+        salida = salida.slice(0, op.inicio) + op.contenido + salida.slice(op.fin);
+      });
     return salida;
   });
 }
@@ -2274,13 +2448,35 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
       if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
       return actual;
     }
-    const bloques = localizarBloquesTabla(actual, TABLA_CRITERIOS);
+    /* Uno de los nombres de `NOMBRES_TABLA_CRITERIOS» —«Criterios de búsqueda»— puede
+       calzar con un texto DENTRO de la misma tabla que ya encontró «Códigos SIC
+       utilizados» (p. ej. una leyenda «Criterios de Búsqueda» en su interior), no con
+       una copia distinta: dos bloques que comparten el mismo `fin` porque uno está
+       anidado en el otro. Sin filtrar esto, se contaban como 2 copias «ambiguas», la
+       lógica de desambiguación decidía borrar las dos, y el segundo borrado usaba el
+       `fin` original (990443 en un caso real) sobre un texto que el primer borrado ya
+       había acortado — cortando una etiqueta a la mitad ~15 000 caracteres más
+       adelante y dejando un .docx que Word ya no podía abrir (reportado 2026-08-25,
+       estudio de PROMOCIONES FANTÁSTICAS S.A.S.). Mismo criterio de desanidado que ya
+       usa «Rango Intercuartil» más abajo: ordenar por inicio y quedarse con el más
+       ancho de cada grupo que se solape. */
+    const bloques = [];
+    localizarBloquesTabla(actual, NOMBRES_TABLA_CRITERIOS)
+      .sort((a, b) => a.inicio - b.inicio)
+      .forEach((b) => {
+        const anterior = bloques[bloques.length - 1];
+        if (anterior && b.inicio < anterior.fin) return;
+        bloques.push(b);
+      });
     if (!bloques.length) {
       if (Array.isArray(avisos)) avisos.push(TABLA_CRITERIOS);
       return actual;
     }
 
     const veredictos = bloques.map((bloque, idx) => {
+      if (bloques.length === 1) {
+        return { eliminar: false, conservar: true };
+      }
       const esNumeroDescartable = bloque.numero === 13 || bloque.numero === 15;
       return {
         eliminar: esNumeroDescartable
@@ -2301,11 +2497,32 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
         textoPlanoOoxml(actual.slice(bloques[i].inicio, bloques[i].fin))
       );
       const conCita = indecisos.filter(citaCapitalIQ);
-      const aConservar = conCita.length === 1 ? conCita[0] : -1;
-      indecisos.forEach((i) => {
-        if (i === aConservar) veredictos[i].conservar = true;
-        else veredictos[i].eliminar = true;
-      });
+      if (conCita.length === 1) {
+        indecisos.forEach((i) => {
+          if (i === conCita[0]) veredictos[i].conservar = true;
+          else veredictos[i].eliminar = true;
+        });
+      } else {
+        /* Ninguna cita Capital IQ (el caso real: la plantilla trae Ryan LLC y Refinitiv,
+           ninguna de las dos fuentes que el sistema usa hoy — LATV SUCURSAL COLOMBIA,
+           2026-08-25), o las dos la citan: de cualquier modo no hay una «correcta» que
+           conservar tal cual. Antes esto borraba TODAS y avisaba «pendiente», aunque
+           hubiera criterios nuevos de verdad para publicar — pedido explícito del
+           usuario el 2026-08-20 para no arriesgar conservar la copia equivocada. Pero
+           el usuario pidió lo contrario el 2026-08-25 para este caso puntual: con
+           criterios nuevos disponibles (si no los hubiera, esta función ya habría
+           salido arriba, en `if (!criterios.length)`), no debe quedar ninguna de las
+           viejas ni el hueco vacío — se borran TODAS y se publica una tabla nueva,
+           sin conservar ninguna (ni su fuente vieja, que citaría un proveedor que ya
+           no se usa). `reemplazarSinConservar` marca cuál posición recibe la tabla
+           nueva; las demás solo se eliminan. */
+        indecisos.forEach((i, k) => {
+          if (k === 0) veredictos[i].reemplazarSinConservar = true;
+          else veredictos[i].eliminar = true;
+        });
+      }
+    } else if (indecisos.length === 1) {
+      veredictos[indecisos[0]].conservar = true;
     }
 
     let salida = actual;
@@ -2314,13 +2531,58 @@ export function actualizarTablasOperacionesOoxml(xml, estudio, avisos) {
        borrar o reescribir mueve los índices de lo que va después en el documento. */
     for (let idx = bloques.length - 1; idx >= 0; idx -= 1) {
       const bloque = bloques[idx];
-      const { eliminar, conservar } = veredictos[idx];
+      const { eliminar, conservar, reemplazarSinConservar } = veredictos[idx];
       if (eliminar) {
-        salida = salida.slice(0, bloque.inicio) + salida.slice(bloque.fin);
+        /* La fuente de esta copia puede venir como fila interna (dentro de `bloque.fin`,
+           ya se va con la tabla) o como párrafo APARTE justo después —así la trae LATV
+           SUCURSAL COLOMBIA, 2026-08-25—, y en ese segundo caso `bloque.fin` no la
+           incluye: sin extender el borrado quedaría huérfana bajo lo que sea que venga
+           después, atribuyéndole el origen (Ryan LLC, Refinitiv) de una tabla que ya no
+           está. Universal a las dos formas reales, no una plantilla puntual. */
+        const finConFuente = finDeFuenteSiguienteOoxml(salida, bloque.fin);
+        salida = salida.slice(0, bloque.inicio) + salida.slice(finConFuente);
       } else if (conservar) {
         salida = salida.slice(0, bloque.inicio)
           + reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios)
           + salida.slice(bloque.fin);
+        algunaConservada = true;
+      } else if (reemplazarSinConservar) {
+        /* No se conserva ninguna de las originales, así que su fuente TAMPOCO —citaría un
+           proveedor (Ryan LLC, Refinitiv) que no es el de los criterios nuevos—. Se
+           reescribe la fuente ya sea que la plantilla la traiga como fila interna de la
+           tabla (`reescribirFilasOoxml` con `opciones.fuente`) o como párrafo aparte
+           después (`reescribirFuenteOoxml`); si no trae ninguna de las dos formas, se le
+           agrega una, porque la corrida SÍ tiene una fuente real que declarar (el
+           numeral 4 del artículo 1.2.2.2.1.5 del Decreto 1625 de 2016 la exige). */
+        const fuenteTexto = citaBaseDatos(estudio);
+        /* ¿Esta tabla trae la fuente como fila interna (una sola celda, al final)? Mismo
+           cálculo que hace `reescribirFilasOoxml` para decidir si `opciones.fuente`
+           tiene algo que tocar — se repite aquí, en vez de inferirlo buscando el texto ya
+           escapado en el resultado, porque «Standard & Poor's» sale como «&amp;» y esa
+           búsqueda nunca calzaría. */
+        const filasOriginales = filasDeOoxml(salida.slice(bloque.inicio, bloque.fin));
+        const ultimaOriginal = filasOriginales[filasOriginales.length - 1];
+        const teniaPieInterno = filasOriginales.length > 2
+          && celdasDeOoxml(filasOriginales[0].xml).length > 1
+          && ultimaOriginal && celdasDeOoxml(ultimaOriginal.xml).length === 1;
+
+        const nuevaTabla = reescribirFilasOoxml(salida.slice(bloque.inicio, bloque.fin), criterios, {
+          fuente: 'Fuente: ' + fuenteTexto,
+        });
+        salida = salida.slice(0, bloque.inicio) + nuevaTabla + salida.slice(bloque.fin);
+
+        if (!teniaPieInterno) {
+          /* Ninguna fila interna que tocar: la fuente, si existe, es un párrafo aparte
+             después de la tabla (LATV SUCURSAL COLOMBIA, 2026-08-25) — se reescribe; si
+             tampoco hay ninguna de las dos formas, se agrega una, porque la corrida SÍ
+             tiene una fuente real que declarar (numeral 4, artículo 1.2.2.2.1.5, Decreto
+             1625 de 2016). */
+          const finTablaNueva = bloque.inicio + nuevaTabla.length;
+          const conFuenteExterna = reescribirFuenteOoxml(salida, finTablaNueva, fuenteTexto);
+          salida = conFuenteExterna !== salida
+            ? conFuenteExterna
+            : salida.slice(0, finTablaNueva) + parrafoFuenteOoxml(fuenteTexto) + salida.slice(finTablaNueva);
+        }
         algunaConservada = true;
       }
     }
@@ -2601,6 +2863,24 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
   let xml = zip.file(RUTA_DOC).asText();
   const year = Number(estudio && estudio.anio) || 2025;
 
+  /* Antes que nada, los bucles que el marcado dejó en la tabla equivocada. Hasta el
+     2026-08-24 se anclaban en el primer párrafo que mencionara el nombre de la tabla, que en
+     un informe es la entrada del ÍNDICE, así que los dos acababan envueltos en la primera
+     tabla del documento y ésta se radicaba publicando las razones de rechazo. El anclaje ya
+     está corregido, pero el marcado se guarda y las plantillas marcadas antes lo conservan:
+     esto las repara al vuelo, sin volver a llamar a la IA. Ver `retirarBucleFueraDeSitio`. */
+  const buclesRetirados = [];
+  BUCLES_DE_TABLA.forEach((cfg) => {
+    const r = retirarBucleFueraDeSitio(xml, cfg, delimitadores || {});
+    if (!r.retirado) return;
+    xml = r.xml;
+    buclesRetirados.push(cfg.coleccion);
+    avisosTablas.push('el bucle «' + cfg.coleccion + '» venía envuelto en una tabla que no es '
+      + 'la suya (marcado antiguo de esta plantilla) y se retiró: «' + cfg.ancla + '» se llena '
+      + 'igual, pero revisa esa otra tabla antes de radicar');
+  });
+  if (buclesRetirados.length) zip.file(RUTA_DOC, xml);
+
   /* PRIMERO de todo, y sobre el XML tal como salió de la plantilla marcada: los campos que
      el estudio no trae vuelven al texto que la plantilla publicaba, en vez de salir como
      «—» (ver `restaurarCamposSinDato`, en `docxPlantilla.js`). Va aquí y no después porque
@@ -2615,7 +2895,10 @@ export function renderizarDocx(binario, estudio, opciones = {}) {
        estudio: preguntarle a `valorDeCampo` por «nombre» o «ambito» daría vacío y se
        restauraría el comparable del informe de referencia dentro del bucle. */
     const camposDeColeccion = new Set();
-    Object.values(colecciones || {}).forEach((filas) => {
+    Object.entries(colecciones || {}).forEach(([nombre, filas]) => {
+      /* Salvo las de un bucle que se acaba de retirar: sus marcas ya no las resuelve ninguna
+         fila, así que son texto de la plantilla que hay que devolver a su sitio. */
+      if (buclesRetirados.includes(nombre)) return;
       (Array.isArray(filas) ? filas : []).forEach((fila) => {
         Object.keys(fila || {}).forEach((k) => camposDeColeccion.add(k));
       });

@@ -600,6 +600,33 @@ test('los criterios de búsqueda conservan y actualizan la del medio aunque la n
   assert.ok(!avisos.includes('Códigos SIC utilizados'), 'las tres tablas estaban, no hay nada que avisar');
 });
 
+test('los criterios de búsqueda: dos copias sin numerar, ninguna cita Capital IQ, y hay criterios nuevos — se borran las dos viejas y se publica una tabla nueva', () => {
+  /* Espejo HTML del test equivalente en docxRelleno.test.js. Caso real: LATV SUCURSAL
+     COLOMBIA (2026-08-25) trae la tabla dos veces, sin numerar, citando Ryan LLC y
+     Refinitiv — ninguna de las dos fuentes que el sistema usa hoy. Con criterios nuevos
+     de Capital IQ disponibles, no debe quedar el hueco vacío ni ninguna de las dos viejas
+     (con su fuente desactualizada): se publica una sola tabla nueva. */
+  const tabla = (fuente) =>
+    '<p><strong> Criterios de Búsqueda</strong></p>' +
+    '<table><tr><th><p><strong> Criterio de búsqueda</strong></p></th></tr>' +
+    '<tr><th><p> Código SIC primario:</p></th><td><p> Entre 1111 y 2222</p></td></tr></table>' +
+    '<p><strong>FUENTE: ' + fuente + '</strong></p>';
+  const html = tabla('Ryan LLC.') + '<p> Medio.</p>' + tabla('Refinitiv.');
+  const estudio = {
+    criteriosScreening: [{ conector: null, etiqueta: 'Código SIC primario:', valor: 'Entre 7371 y 7375' }],
+  };
+  const avisos = [];
+  const salida = actualizarTablasMotorHtml(html, estudio, avisos);
+
+  assert.strictEqual((salida.match(/<table>/g) || []).length, 1, 'sobrevive una sola tabla, no las dos viejas ni cero');
+  assert.ok(salida.includes('Entre 7371 y 7375'), 'la tabla que sobrevive trae los criterios nuevos');
+  assert.ok(!salida.includes('Entre 1111 y 2222'), 'no sobrevive ningún criterio viejo');
+  assert.ok(!salida.includes('Ryan LLC.'), 'no sobrevive la fuente vieja de Ryan LLC');
+  assert.ok(!salida.includes('Refinitiv.'), 'no sobrevive la fuente vieja de Refinitiv');
+  assert.match(salida, /FUENTE: Información Base Datos Capital IQ/, 'la fuente nueva sí cita Capital IQ');
+  assert.ok(!avisos.includes(TABLA_CRITERIOS), 'se publicó una tabla, no queda pendiente');
+});
+
 test('sin criterios de cribado las tablas de SIC se conservan y se avisa', () => {
   const html =
     '<p><strong> Tabla 13. Códigos SIC utilizados</strong></p>' +
@@ -812,7 +839,7 @@ test('reemplazarHuecosHtml inserta de respaldo al final de la sección cuando fa
   assert.match(salida, /Contenido de B, sin ancla propia\./);
   assert.ok(salida.indexOf('Contenido de B') < salida.indexOf('Encabezado C'));
   assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
-  assert.ok(avisos.some((a) => /"Encabezado B".*se insertó al final de esta sección/.test(a)));
+  assert.ok(avisos.some((a) => /entre «Encabezado B» y «Encabezado C».*se ubicó junto al encabezado más cercano, «Encabezado C»/.test(a)));
 });
 
 test('reemplazarHuecosHtml NO inserta de respaldo si ni siquiera el límite final aparece', () => {
@@ -941,6 +968,114 @@ test('actualizarApartadoSectorialHtml reemplaza los cuatro bloques y deja intact
   assert.match(salida, /Conclusiones reales 2026\./);
   assert.doesNotMatch(salida, /Texto viejo/);
   assert.match(salida, /<table>/); // la tabla sigue ahí: es de una sola fila, no hay molde que clonar
+});
+
+test('actualizarApartadoSectorialHtml ubica la narrativa aunque la plantilla escriba los rótulos distinto y le falte "Datos Clave del Sector" (caso real LATV)', () => {
+  /* Mismo fixture y mismo motivo que su equivalente en docxRelleno.test.js — plantilla
+     calcada de un cliente real (LATV SUCURSAL COLOMBIA) que dice "Análisis EN el
+     sector..." e "Importaciones y exportaciones" sin el sufijo "del sector", y no tiene
+     subsección "Datos Clave del Sector" en absoluto. */
+  const html = [
+    '<h2>Análisis en el sector de publicidad de televisión</h2>',
+    '<h3>Comportamiento del Sector de la Industria de la televisión en 2025 y Comparación con 2024</h3>',
+    '<p>Texto viejo de comportamiento, referencia 2024.</p>',
+    '<h3>Importaciones y exportaciones</h3>',
+    '<p>Texto viejo de comercio exterior, referencia 2024.</p>',
+    '<h3>¿Qué se proyecta para el sector de la industria de la televisión en 2025?</h3>',
+    '<p>Texto viejo de proyección, referencia 2024.</p>',
+    '<h3>Conclusiones y Perspectivas</h3>',
+    '<p>Texto viejo de conclusiones, referencia 2024.</p>',
+    '<h2>ANÁLISIS ECONÓMICO</h2>',
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2025: {
+        tituloSector: 'de la televisión',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real LATV 2025.</p>',
+          comercioExterior: '<p>Comercio exterior real LATV 2025.</p>',
+          proyeccion: '<p>Proyección real LATV 2025.</p>',
+          conclusiones: '<p>Conclusiones reales LATV 2025.</p>',
+        },
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2025 }, 2025, avisos);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  assert.match(texto, /Análisis del Sector de la industria de la televisión/);
+  assert.match(texto, /Importaciones y exportaciones del sector de la industria de la televisión/);
+
+  assert.match(texto, /Comportamiento real LATV 2025\./);
+  const idxEncabezado = texto.indexOf('Comportamiento del Sector de la Industria de la televisión');
+  const idxNuevo = texto.indexOf('Comportamiento real LATV 2025.');
+  assert.ok(idxEncabezado !== -1 && idxNuevo !== -1 && idxEncabezado < idxNuevo,
+    'la narrativa nueva aparece después de su propio encabezado');
+  assert.ok(idxNuevo < texto.indexOf('Importaciones y exportaciones del sector'),
+    'y antes del siguiente apartado, no amontonada al final de toda la sección');
+
+  /* Sin límite propio a ambos lados, el texto viejo de esa zona no se borra con certeza
+     — se queda, visible, junto a la narrativa nueva que sí se ubicó en su sitio. */
+  assert.match(texto, /Texto viejo de comportamiento, referencia 2024\./);
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Datos Clave del Sector»/.test(a)));
+
+  /* "Importaciones y exportaciones" → "¿Qué se proyecta" sí son adyacentes y los dos se
+     encontraron (uno por sinónimo): el reemplazo ahí es directo y el texto viejo
+     correspondiente sí desaparece. */
+  assert.match(texto, /Comercio exterior real LATV 2025\./);
+  assert.doesNotMatch(texto, /Texto viejo de comercio exterior/);
+  assert.match(texto, /Proyección real LATV 2025\./);
+  assert.doesNotMatch(texto, /Texto viejo de proyección/);
+  assert.match(texto, /Conclusiones reales LATV 2025\./);
+  assert.doesNotMatch(texto, /Texto viejo de conclusiones/);
+});
+
+test('actualizarApartadoSectorialHtml reconoce "Importaciones/Exportaciones" en cualquier orden y "proyección" con cualquier redacción — no por lista de frases fijas, por FORMA', () => {
+  /* Espejo HTML del test equivalente en docxRelleno.test.js. Plantilla sintética distinta
+     de LATV: orden invertido de "Exportaciones e Importaciones" (conector «e») y una
+     pregunta de proyección sin ninguna palabra en común con "¿Qué se proyecta" salvo el
+     tema (caso real, plantilla de PROMOCIONES FANTÁSTICAS S.A.S., 2026-08-25). */
+  const html = [
+    '<h2>Análisis del Sector de fabricación de empaques</h2>',
+    '<h3>Comportamiento del Sector de la Industria de empaques en 2025 y Comparación con 2024</h3>',
+    '<p>Texto viejo de comportamiento, referencia 2024.</p>',
+    '<h3>Datos Clave del Sector</h3>',
+    '<h3>Exportaciones e Importaciones del sector de fabricación de empaques</h3>',
+    '<p>Texto viejo de comercio exterior, referencia 2024.</p>',
+    '<h3>¿Cuáles son las proyecciones y perspectivas del sector de fabricación de empaques?</h3>',
+    '<p>Texto viejo de proyección, referencia 2024.</p>',
+    '<h3>Conclusiones y Perspectivas</h3>',
+    '<p>Texto viejo de conclusiones, referencia 2024.</p>',
+    '<h2>ANÁLISIS ECONÓMICO</h2>',
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2025: {
+        tituloSector: 'de empaques',
+        narrativa: {
+          comportamiento: '<p>Comportamiento real 2025.</p>',
+          comercioExterior: '<p>Comercio exterior real 2025.</p>',
+          proyeccion: '<p>Proyección real 2025.</p>',
+          conclusiones: '<p>Conclusiones reales 2025.</p>',
+        },
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialHtml(html, analisisSector, { anio: 2025 }, 2025, avisos);
+  const texto = salida.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+  assert.match(texto, /Comercio exterior real 2025\./, 'no se ubicó junto a "Exportaciones e Importaciones" con el orden invertido');
+  assert.doesNotMatch(texto, /Texto viejo de comercio exterior/);
+  assert.match(texto, /Proyección real 2025\./, 'no se ubicó junto a una pregunta de proyección con otra redacción');
+  assert.doesNotMatch(texto, /Texto viejo de proyección/);
+  assert.doesNotMatch(avisos.join(' '), /no se encontró el rótulo «Importaciones y exportaciones del sector»/);
+  assert.doesNotMatch(avisos.join(' '), /no se encontró el rótulo «¿Qué se proyecta para el sector»/);
 });
 
 /* Tabla de datos clave como la trae la plantilla de END GAME: encabezado con los DOS años

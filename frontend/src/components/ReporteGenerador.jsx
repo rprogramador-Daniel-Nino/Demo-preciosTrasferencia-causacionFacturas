@@ -21,6 +21,7 @@ import {
 import {
   leerAnalisisMercado, leerAnalisisSector, leerNarrativaMacroEstudio, guardarNarrativaMacroEstudio,
 } from '../services/firestoreRepo';
+import { leerCriteriosScreeningDeArchivo } from '../services/comparablesEngine.js';
 import { necesitaRedaccion, redactarNarrativaMacroEnVivo } from '../services/analisisMercadoRedaccion';
 import RevisorDeMarcas from './RevisorDeMarcas.jsx';
 import {
@@ -43,7 +44,9 @@ import { aDocxBlob } from '../services/docxWriter.js';
 import { anexosEscaneadosDeHtml } from '../services/anexoBHtml.js';
 import { convertPdfToImages } from '../services/pdfRenderer';
 import PizZip from 'pizzip';
-import { htmlParaMarcar, aplicarMarcasOoxml, envolverTablaEnBucle } from '../services/docxPlantilla.js';
+import {
+  htmlParaMarcar, aplicarMarcasOoxml, envolverTablaEnBucle, BUCLES_DE_TABLA,
+} from '../services/docxPlantilla.js';
 import { rellenarDocx, coleccionesDelEstudio, CENTINELA_ANEXO } from '../services/docxRelleno.js';
 import {
   subirPlantillaDelEstudio, descargarPlantillaDelEstudio, restaurarPlantillaEnLocal,
@@ -150,6 +153,12 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
      recién subida. Antes esto era un console.warn silencioso: quien la subía solo se
      enteraba, si acaso, al abrir el Word final y ver la Tabla 6 vacía. */
   const [avisoAccionistasPlantilla, setAvisoAccionistasPlantilla] = useState('');
+  /* Resultado de recargar solo los criterios de búsqueda (hoja "Screen Criteria") cuando
+     al estudio le faltan — sin pasar por la importación completa de comparables, que
+     reiniciaría la curación con IA ya hecha (`iaMatch`/`selectionFunnel`/`motorAuditoria`
+     de MotorComparables.jsx). Ver `leerCriteriosScreeningDeArchivo`. */
+  const [avisoCriteriosScreening, setAvisoCriteriosScreening] = useState('');
+  const [cargandoCriteriosScreening, setCargandoCriteriosScreening] = useState(false);
   /* Plantilla vinculada al estudio: `{ id, html, huecos, marcada }`. Se guarda para
      poder volver a marcarla sin pedirle al usuario que suba otra vez el PDF. */
   const [plantillaActiva, setPlantillaActiva] = useState(null);
@@ -720,6 +729,35 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
   };
 
   // Carga de una nueva plantilla Word (.docx) por si el usuario desea usar otro documento modelo
+  /* Solo para cuando falta la hoja "Screen Criteria": lee ese único archivo con
+     `leerCriteriosScreeningDeArchivo` (comparablesEngine.js) y escribe únicamente
+     `study.criteriosScreening` — nunca pasa por `importCapitalIQExcel`, que reiniciaría
+     el universo de comparables y la curación con IA ya hecha en el paso 3. */
+  const handleCargarCriteriosScreening = async (file) => {
+    if (!file) return;
+    setCargandoCriteriosScreening(true);
+    setAvisoCriteriosScreening('');
+    try {
+      const criterios = await leerCriteriosScreeningDeArchivo(file);
+      if (!criterios.length) {
+        setAvisoCriteriosScreening(
+          `⚠ El archivo «${file.name}» no trae la hoja "Screen Criteria" — no hay criterios que leer de ahí.`
+        );
+        return;
+      }
+      updateStudy({ criteriosScreening: criterios });
+      setAvisoCriteriosScreening(
+        `✅ ${criterios.length} criterio(s) de búsqueda leídos de «${file.name}». No se tocó el universo de `
+        + 'comparables ni la curación con IA ya hecha.'
+      );
+    } catch (err) {
+      console.error('No se pudieron leer los criterios de búsqueda:', err);
+      setAvisoCriteriosScreening(`⚠ No se pudo leer «${file.name}»: ${err && err.message ? err.message : err}`);
+    } finally {
+      setCargandoCriteriosScreening(false);
+    }
+  };
+
   const handleTemplateUpload = (file) => {
     setLoading(true);
     setAvisoAccionistasPlantilla('');
@@ -1128,10 +1166,10 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
        clone su formato una vez por comparable. Si la plantilla del cliente no trae
        esas tablas, no pasa nada: `envolverTablaEnBucle` avisa y sigue. */
     let conTablas = xml;
-    [
-      { ancla: 'Compañías comparables', coleccion: 'comparables', campos: ['n', 'nombre', 'ambito'] },
-      { ancla: 'Razones de rechazo', coleccion: 'razonesRechazo', campos: ['letra', 'criterio', 'cantidad'] },
-    ].forEach((cfg) => {
+    /* La lista vive en `docxPlantilla.js`: el relleno la necesita también, para reparar las
+       plantillas cuyo marcado dejó un bucle en la tabla equivocada. Con una copia aquí, las
+       dos podían divergir y la reparación buscaría un bucle con otro nombre. */
+    BUCLES_DE_TABLA.forEach((cfg) => {
       const r = envolverTablaEnBucle(conTablas, cfg);
       if (r.envuelta) conTablas = r.xml;
     });
@@ -1788,8 +1826,51 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
               {avisoAccionistasPlantilla.replace(/^(✅|⚠|ℹ)\s*/, '')}
             </p>
           )}
+          {avisoCriteriosScreening && (
+            <p className={
+              'text-[11px] mt-1 flex items-center gap-1 ' +
+              (avisoCriteriosScreening.startsWith('✅')
+                ? 'text-emerald-700 dark:text-emerald-400'
+                : 'text-amber-700 dark:text-amber-400')
+            }>
+              {avisoCriteriosScreening.startsWith('✅')
+                ? <Check className="w-3 h-3" />
+                : <AlertTriangle className="w-3 h-3" />}
+              {avisoCriteriosScreening.replace(/^(✅|⚠|ℹ)\s*/, '')}
+            </p>
+          )}
         </div>
         <div className="flex gap-3">
+          {/* Siempre disponible, tenga o no ya criterios el estudio: recarga ÚNICAMENTE
+              esa hoja, sin pasar por la importación completa de comparables (que
+              reiniciaría la curación con IA ya hecha del paso 3). Antes se ocultaba en
+              cuanto `study.criteriosScreening` tenía algo, así que si esos criterios
+              habían quedado mal leídos en la importación inicial no había forma de
+              corregirlos desde esta pantalla. */}
+          <div className="relative">
+            <button
+              className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer"
+              title="Suba de nuevo el export de Capital IQ para completar o corregir solo los criterios de búsqueda (Tabla de Códigos SIC), sin tocar las comparables ya seleccionadas"
+            >
+              {cargandoCriteriosScreening ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              {(study.criteriosScreening && study.criteriosScreening.length)
+                ? 'Recargar Criterios de Búsqueda (Capital IQ)'
+                : 'Cargar Criterios de Búsqueda (Capital IQ)'}
+            </button>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              disabled={cargandoCriteriosScreening}
+              onChange={(e) => {
+                if (e.target.files[0]) {
+                  handleCargarCriteriosScreening(e.target.files[0]);
+                }
+                e.target.value = null;
+              }}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+          </div>
+
           <div className="relative">
             <button className="flex items-center gap-2 bg-[#ffffff] dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-lg px-4 py-2 text-xs font-semibold hover:bg-[#f8fafc] dark:hover:bg-zinc-800 transition-colors shadow-sm cursor-pointer">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}

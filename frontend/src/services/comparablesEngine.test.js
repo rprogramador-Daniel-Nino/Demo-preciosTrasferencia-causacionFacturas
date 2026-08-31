@@ -10,7 +10,7 @@ import {
   scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
-  parsearCriteriosScreening, CURACION_LOTE, enriquecerUniverso,
+  parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
   MINIMO_COMPARABLES, gradoDeActividad, consultarGemini,
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
@@ -820,6 +820,42 @@ test('parsearCriteriosScreening descarta líneas sin etiqueta o sin valor', () =
   const criterios = parsearCriteriosScreening(wb);
   assert.strictEqual(criterios.length, 1);
   assert.strictEqual(criterios[0].etiqueta, 'Company Status');
+});
+
+/* ══════ Recargar solo los criterios de búsqueda, sin tocar comparables ══════
+   Para cuando a un estudio ya curado con IA le falta la hoja "Screen Criteria": subir el
+   Excel completo por `importCapitalIQExcel` reiniciaría `iaMatch`/`selectionFunnel`/
+   `motorAuditoria`, borrando el trabajo de curación ya hecho. Esta función solo lee esa
+   hoja y no toca nada de comparables. */
+
+test('leerCriteriosScreeningDeArchivo lee los criterios de un archivo real, sin pasar por el universo de comparables', async () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Capital IQ Company Screening Report > PRUEBA'],
+    [''],
+    ['Screening Criteria'],
+    ['1) Company Status: Operating'],
+    ['2) SIC Codes: 7371 Computer Programming Services'],
+  ]), 'Screen Criteria');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+  await conFileReader(buf, async () => {
+    const criterios = await leerCriteriosScreeningDeArchivo({ name: 'iq.xlsx', size: buf.length });
+    assert.strictEqual(criterios.length, 2);
+    assert.strictEqual(criterios[0].etiqueta, 'Company Status');
+    assert.strictEqual(criterios[1].etiqueta, 'SIC Codes');
+  });
+});
+
+test('leerCriteriosScreeningDeArchivo devuelve arreglo vacío si el archivo no trae la hoja "Screen Criteria"', async () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['nada aquí']]), 'Screening');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+  await conFileReader(buf, async () => {
+    const criterios = await leerCriteriosScreeningDeArchivo({ name: 'sin-criterios.xlsx', size: buf.length });
+    assert.deepStrictEqual(criterios, []);
+  });
 });
 
 /* ── el archivo real del cliente, si está en el repo ── */

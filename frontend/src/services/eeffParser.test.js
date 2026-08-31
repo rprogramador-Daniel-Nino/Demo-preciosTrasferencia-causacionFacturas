@@ -6,6 +6,7 @@ import {
   promptEeffContribuyente, bloqueDeTexto, valorDeRubro, rotuloDeRubro,
   CAMPO_POR_RUBRO, RUBROS_DE_COTEJO, extraerTextoEstructuradoPdf,
   verifyAccountingEqualities,
+  CAMPOS_CON_FALLBACK_NOTAS, promptFaltantesEnNotas, buscarFaltantesEnNotas,
 } from './eeffParser.js';
 import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 
@@ -270,6 +271,29 @@ test('el prompt permite sumar renglones de costo, pero solo para costo_ventas', 
     'la excepción debe estar en la propia definición de costo_ventas, no suelta en el prompt');
   assert.match(bloqueCostoVentas, /su[mn]a/i,
     'falta el permiso de sumar renglones cuando el documento desglosa el costo');
+  assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
+    'la regla central para el resto de rubros debe seguir intacta');
+});
+
+/* ══════ Partes relacionadas repartidas en corriente y no corriente ══════ */
+
+test('el prompt permite sumar partes relacionadas repartidas en corriente y no corriente', () => {
+  /* HH Colombia imprime "Cuentas por pagar a vinculadas" dos veces: una en el pasivo
+     corriente (en cero) y otra en el no corriente (con la cifra real). Sin esta excepción
+     el campo se queda en null o toma la fila equivocada — justo el tipo de dato faltante
+     o incorrecto que reportó el analista. La regla central sigue prohibiendo sumar filas
+     para todo lo demás. */
+  const camposConExcepcion = ['cuentas_por_cobrar_relacionadas', 'cuentas_por_pagar_relacionadas'];
+  camposConExcepcion.forEach((campo) => {
+    const inicio = EEFF_PROMPT.indexOf(`· ${campo}:`);
+    assert.ok(inicio !== -1, `no se encontró la definición de ${campo} en EEFF_PROMPT`);
+    const siguiente = EEFF_PROMPT.indexOf('\n·', inicio + 1);
+    const bloque = EEFF_PROMPT.slice(inicio, siguiente === -1 ? inicio + 700 : siguiente);
+    assert.match(bloque, /EXCEPCI[OÓ]N/i,
+      `falta la excepción de suma corriente/no-corriente en la definición de ${campo}`);
+    assert.match(bloque, /corriente/i);
+    assert.match(bloque, /su[mn]a/i);
+  });
   assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
     'la regla central para el resto de rubros debe seguir intacta');
 });
@@ -578,6 +602,73 @@ test('parseEEFFComparableOCR cae correctamente al Vision OCR original si es una 
 
   } finally {
     // Restaurar original
+    axios.post = originalPost;
+  }
+});
+
+/* ══════ La pasada angosta a notas, cuando algo quedó en null ══════ */
+
+test('CAMPOS_CON_FALLBACK_NOTAS son exactamente costo de ventas, partes relacionadas e inventarios', () => {
+  assert.deepStrictEqual(Object.keys(CAMPOS_CON_FALLBACK_NOTAS).sort(), ['t_ap', 't_ar', 't_c', 't_inv']);
+});
+
+test('promptFaltantesEnNotas solo pide los campos indicados, con su definición', () => {
+  const prompt = promptFaltantesEnNotas(['t_c']);
+  assert.match(prompt, /costo de ventas/);
+  assert.doesNotMatch(prompt, /inventarios/);
+  assert.match(prompt, /"t_c"/);
+});
+
+test('promptFaltantesEnNotas exige revisar notas y citar la ausencia', () => {
+  const prompt = promptFaltantesEnNotas(['t_ap']);
+  assert.match(prompt, /nota/i);
+  assert.match(prompt, /cita/i);
+});
+
+test('buscarFaltantesEnNotas sin faltantes no llama a la API', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+  let llamado = false;
+  axios.post = async () => { llamado = true; return { data: {} }; };
+  try {
+    const r = await buscarFaltantesEnNotas({}, []);
+    assert.deepStrictEqual(r, { hallazgos: {}, conclusion: '' });
+    assert.strictEqual(llamado, false);
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
+test('buscarFaltantesEnNotas interpreta la respuesta de Gemini, encontrado y ausente', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+  axios.post = async () => ({
+    data: {
+      candidates: [{
+        content: {
+          parts: [{
+            text: JSON.stringify({
+              hallazgos: {
+                t_c: { valor: null, encontrado_en: null, palabra: '', cita: 'Revisé la Nota 19: solo trae gastos de administración.' },
+                t_inv: { valor: 4200, encontrado_en: 'nota', palabra: 'existencias', cita: '' },
+              },
+              conclusion: 'No se encontró el costo de ventas ni en el estado ni en las notas; sí se encontraron los inventarios en la Nota 8.',
+            }),
+          }],
+        },
+      }],
+    },
+  });
+
+  const mockFile = { type: 'application/pdf', name: 'x.pdf', arrayBuffer: async () => new ArrayBuffer(8) };
+  try {
+    const { hallazgos, conclusion } = await buscarFaltantesEnNotas(mockFile, ['t_c', 't_inv']);
+    assert.strictEqual(hallazgos.t_c.valor, null);
+    assert.match(hallazgos.t_c.cita, /Nota 19/);
+    assert.strictEqual(hallazgos.t_inv.valor, 4200);
+    assert.strictEqual(hallazgos.t_inv.encontradoEn, 'nota');
+    assert.match(conclusion, /inventarios/);
+  } finally {
     axios.post = originalPost;
   }
 });

@@ -245,6 +245,24 @@ service cloud.firestore {
         && d.narrativa is map;
     }
 
+    // `guardarVocabularioEeff` (firestoreRepo.js) siempre escribe el documento completo
+    // con `setDoc`, con estos dos campos y ningún otro.
+    function vocabularioEeffValido(d) {
+      return soloEstosCampos(['palabras', 'estudiosSinPalabraNueva'])
+        && tieneTodos(['palabras', 'estudiosSinPalabraNueva'])
+        && d.palabras is list && d.palabras.size() <= 200
+        && d.estudiosSinPalabraNueva is number && d.estudiosSinPalabraNueva >= 0;
+    }
+
+    // `guardarRotulosConfirmadosPorEmpresa` (firestoreRepo.js) también escribe el
+    // documento completo con `setDoc`. Los dos campos son opcionales porque un NIT nuevo
+    // puede tener confirmado solo cuentas por cobrar, o solo por pagar.
+    function rotulosRelacionadasPorEmpresaValido(d) {
+      return soloEstosCampos(['t_ar', 't_ap'])
+        && listaOpcional(d, 't_ar', 50)
+        && listaOpcional(d, 't_ap', 50);
+    }
+
     // =============================================================
     // Espacio privado de cada consultor
     // =============================================================
@@ -350,6 +368,34 @@ service cloud.firestore {
     match /narrativaMacroPorEstudio/{estudioId} {
       allow read: if esMiembro();
       allow write: if esMiembro() && narrativaMacroValida(request.resource.data);
+    }
+
+    // =============================================================
+    // vocabularioEeff — diccionario compartido de sinónimos por campo de EEFF
+    // (costo de ventas, partes relacionadas, inventarios), que aprende de cada
+    // estudio para decidir cuándo ya no hace falta preguntarle a la IA si un
+    // concepto está ausente. Dato compartido entre todos los consultores, no
+    // por usuario ni por cliente — mismo criterio que analisisMercado y
+    // analisisSector, salvo que aquí SÍ escribe el cliente directamente.
+    // =============================================================
+
+    match /vocabularioEeff/{campo} {
+      allow read: if esMiembro();
+      allow write: if esMiembro() && vocabularioEeffValido(request.resource.data);
+    }
+
+    // =============================================================
+    // rotulosRelacionadasPorEmpresa — rótulos genéricos («Cuentas comerciales por
+    // pagar», etc.) que se confirmaron, para un NIT puntual, como la cuenta con la
+    // parte relacionada. No se comparte entre empresas como vocabularioEeff —el mismo
+    // rótulo genérico puede ser la vinculada para una y un tercero normal para otra—,
+    // pero sí entre consultores, igual que vocabularioEeff: es un hecho de la empresa,
+    // no del consultor que la estudió.
+    // =============================================================
+
+    match /rotulosRelacionadasPorEmpresa/{nit} {
+      allow read: if esMiembro();
+      allow write: if esMiembro() && rotulosRelacionadasPorEmpresaValido(request.resource.data);
     }
 
     /* ── «Compartidos conmigo» ──

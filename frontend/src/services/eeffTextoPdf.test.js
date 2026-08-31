@@ -8,7 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  agruparEnLineas, cifrasDelTexto, cifraApareceEnTexto, extraerTextoPdf,
+  agruparEnLineas, cifrasDelTexto, cifraApareceEnTexto, extraerTextoPdf, textoEsConfiable,
+  contarPaginasPdf,
 } from './eeffTextoPdf.js';
 
 /* Los fragmentos como los entrega pdf.js: `transform[4]` es la X y `transform[5]` la Y, y
@@ -137,6 +138,54 @@ test('un PDF escaneado, sin fragmentos de texto, devuelve cadena vacía', async 
   assert.strictEqual(resultado, '');
 });
 
+/* ══════ Fuentes sin `ToUnicode` ══════
+   Un PDF puede tener capa de texto no vacía y aun así ser inútil para comprobar cifras: si
+   sus fuentes no traen tabla `ToUnicode`, `pdf.js` (igual que `pdftotext`) no puede traducir
+   los códigos de glifo a caracteres reales. Caso real: LATV Sucursal Colombia (PDF con
+   notas 1-23, 92 fuentes embebidas, 0 con `ToUnicode`), extraído con `pdftotext -f 2 -l 2`
+   sobre la página del balance — el propio texto que descartó ingresos, total activo y PP&E
+   por «no aparecer impresos» cuando sí lo estaban. */
+const TEXTO_FUENTE_SIN_TOUNICODE = `2II182''=.9933'4-::#79J&&92:4&.#!3;!&&-7&2<#$='.&!2#:(=1'1%-,#9K&&'93&,$'"&'#%9'9:;&&9'=#9!&'&(
+DC>B ??@@LA?C6BDB6C?G@@@LC?DHBH?BM?A>E HL@H??E>AN>FACL@@@@>?ADOBGFENGBCF
+2SPI2$22'&!933!44:=JJ&44"..9&#33"--977"22#@QK!(2%%".#&2911;-,K<3=,!&
+???FH? L?EOCGM@@LLDHBMFTGBTR LO?>OA?CMHNC@LL@@CH?DH?FTDB
+WV2P222=9#33&44#:JJ9&XXP'!44&&55!--&:77&$22!!.$=2Q!1%1-9,&'K"&'3&$&,'#9%;&9'=#9!&!Q
+????>AEG N?GANE?G?H>L@@L@>NCNG?TBFTBEF?E ?ATT?EH?AGGC@@@LL@GHHGFFFHH>GOOE`;
+
+test('un texto de fuente sin ToUnicode (basura, sin palabras reconocibles) no es confiable', () => {
+  assert.strictEqual(textoEsConfiable(TEXTO_FUENTE_SIN_TOUNICODE), false);
+});
+
+test('un texto normal de estado financiero, con sus palabras de siempre, sí es confiable', () => {
+  assert.strictEqual(textoEsConfiable(
+    'ESTADO DE SITUACIÓN FINANCIERA\n31 DE DICIEMBRE DE 2025\nTotal activo | 3.518.366\n'
+    + 'Total pasivo | 910.961\nTotal del patrimonio | 2.607.405',
+  ), true);
+});
+
+test('menos de dos palabras esperadas tampoco es confiable', () => {
+  assert.strictEqual(textoEsConfiable('Total | 3.518.366'), false);
+  assert.strictEqual(textoEsConfiable(''), false);
+  assert.strictEqual(textoEsConfiable(null), false);
+});
+
+test('un PDF con fuentes sin ToUnicode extrae texto ilegible y extraerTextoPdf lo descarta', async () => {
+  const archivo = { type: 'application/pdf', name: 'latv-con-notas.pdf', arrayBuffer: async () => new ArrayBuffer(8) };
+  const resultado = await extraerTextoPdf(archivo, {
+    getDocument: () => ({
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({
+            items: TEXTO_FUENTE_SIN_TOUNICODE.split('\n').map((linea, i) => item(linea, 60, 700 - i * 12)),
+          }),
+        }),
+      }),
+    }),
+  });
+  assert.strictEqual(resultado, '');
+});
+
 test('un PDF con texto devuelve sus páginas rotuladas', async () => {
   const archivo = { type: 'application/pdf', name: 'eeff.pdf', arrayBuffer: async () => new ArrayBuffer(8) };
   const resultado = await extraerTextoPdf(archivo, {
@@ -247,4 +296,33 @@ test('el orden de lectura no depende del orden en que pdf.js entregue los fragme
     frag('21.850.', 200, 700, 30),
   ];
   assert.deepStrictEqual(agruparEnLineas(desordenados), ['COSTO | 21.850.187.494']);
+});
+
+/* ══════ Cuántas páginas trae el PDF ══════
+   Sirve para decidir si vale la pena una pasada angosta a las notas: un documento con
+   pocas páginas (el escaneo de 5 de LATV) casi seguro no las trae. */
+
+test('contarPaginasPdf cuenta las páginas de un PDF con texto', async () => {
+  const archivo = { type: 'application/pdf', name: 'eeff.pdf', arrayBuffer: async () => new ArrayBuffer(8) };
+  const paginas = await contarPaginasPdf(archivo, {
+    getDocument: () => ({ promise: Promise.resolve({ numPages: 23 }) }),
+  });
+  assert.strictEqual(paginas, 23);
+});
+
+test('contarPaginasPdf devuelve 1 para una imagen', async () => {
+  const archivo = { type: 'image/png', name: 'balance.png', arrayBuffer: async () => { throw new Error('no debería llegar aquí'); } };
+  assert.strictEqual(await contarPaginasPdf(archivo), 1);
+});
+
+test('contarPaginasPdf devuelve 0 si pdf.js no puede abrirlo', async () => {
+  const archivo = { type: 'application/pdf', name: 'roto.pdf', arrayBuffer: async () => new ArrayBuffer(8) };
+  const paginas = await contarPaginasPdf(archivo, {
+    getDocument: () => ({ promise: Promise.reject(new Error('formato inválido')) }),
+  });
+  assert.strictEqual(paginas, 0);
+});
+
+test('contarPaginasPdf devuelve 0 sin archivo', async () => {
+  assert.strictEqual(await contarPaginasPdf(null), 0);
 });
