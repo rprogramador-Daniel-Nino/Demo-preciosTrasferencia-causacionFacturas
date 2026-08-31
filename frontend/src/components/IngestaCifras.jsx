@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
+import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, FileWarning, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS } from '../services/eeffParser';
 import {
@@ -406,7 +406,25 @@ export default function IngestaCifras({ study, updateStudy }) {
             </div>
           )}
 
-          {hallazgos && hallazgos.correcciones.length === 0 && hallazgos.advertencias.length === 0 && (
+          {/* `verificadoContraTexto` distingue una lectura que sí se cruzó contra el texto
+              nativo del PDF de una que no tuvo con qué —documento escaneado o con fuentes
+              sin ToUnicode—. Sin este aviso, un documento 100% escaneado que por azar no
+              dispara ninguna advertencia puntual se ve en pantalla igual que una lectura
+              verificada cifra por cifra: el analista no tiene forma de saber que ninguna
+              cifra pudo cotejarse contra el documento. */}
+          {hallazgos && hallazgos.verificadoContraTexto === false && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-[11px] text-amber-900 dark:text-amber-200 flex gap-2 items-center">
+              <FileWarning className="w-4 h-4 flex-shrink-0" />
+              <span>
+                Este documento no tiene una capa de texto legible (es un escaneo o sus fuentes
+                no se pueden leer): ninguna cifra pudo cotejarse contra el texto del PDF.
+                Revise el estado financiero a mano antes de confiar en esta lectura.
+              </span>
+            </div>
+          )}
+
+          {hallazgos && hallazgos.correcciones.length === 0 && hallazgos.advertencias.length === 0
+            && hallazgos.verificadoContraTexto && (
             <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-[11px] text-emerald-800 dark:text-emerald-300 flex gap-2 items-center">
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               <span>

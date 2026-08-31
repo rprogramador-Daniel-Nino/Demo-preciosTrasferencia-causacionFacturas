@@ -1133,6 +1133,8 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
     onProgress, priorComps = [], fuente = '', veredictoPrevio = null,
     /* parametrizados para que las pruebas no tengan que esperar los backoffs reales */
     reintentos = CURACION_REINTENTOS, pausaBaseMs = CURACION_PAUSA_BASE_MS,
+    targetProfitability = '4.716',
+    pli = 'MO',
   } = opciones;
   const avisar = (info) => {
     if (typeof onProgress === 'function') {
@@ -1240,18 +1242,33 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
   });
 
   await conConcurrencia(lotes, async (lote, indice) => {
-    const candidatos = lote.map(c => ({
-      id: String(c.id).trim(),
-      name: c.name || '',
-      desc: String(c.desc || '').slice(0, 300),
-      country: c.country || '',
-    }));
+    const candidatos = lote.map(c => {
+      const pliVal = pliOf({
+        s: num(c.s),
+        c: num(c.c),
+        op: num(c.op),
+        ar: num(c.ar),
+        inv: num(c.inv),
+        ap: num(c.ap),
+      }, pli);
+      const marginPct = pliVal !== null ? (pliVal * 100).toFixed(3) + ' %' : 'N/A';
+      return {
+        id: String(c.id).trim(),
+        name: c.name || '',
+        desc: String(c.desc || '').slice(0, 300),
+        country: c.country || '',
+        margin: marginPct,
+      };
+    });
 
-    const prompt =
+        const prompt =
       'Eres un experto en precios de transferencia que revisa comparables de una base de datos financiera.\n\n' +
       'La empresa examinada tiene esta actividad económica real:\n"' + actividad + '"\n\n' +
       referencia +
-      'A continuación hay una lista de empresas candidatas con su descripción de negocio real (habitualmente en inglés). ' +
+      'La empresa examinada tiene un indicador de rentabilidad de ' + String(targetProfitability).replace('.', ',') + ' %. ' +
+      'Prioriza como "MISMA" a las candidatas cuyo margen esté cerca de ese valor ' +
+      'o sea bajo, y clasifica como "DISTINTA" a las que tengan márgenes altos sin omitir las la actividad economica .\n\n' +
+      'A continuación hay una lista de empresas candidatas con su descripción de negocio y su margen financiero ("margin"). ' +
       'Para cada una, gradúa cuánto se parece su actividad real a la de la empresa examinada, sin importar el idioma ' +
       'en que esté escrita la descripción:\n' +
       '- "MISMA": el mismo tipo de negocio, los mismos productos o servicios, o una función equivalente.\n' +
@@ -1266,7 +1283,7 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
       'intelectual propia ni asume el riesgo de mercado del producto final.\n' +
       '- "EMPRESARIO": explota su propia propiedad intelectual, marcas o productos y asume el riesgo de mercado.\n' +
       '- "MIXTO": hace las dos cosas de forma relevante.\n' +
-      '- "INDEFINIDO": la descripción no alcanza para decidirlo. Úsalo en lugar de adivinar.\n\n' +
+        '- "INDEFINIDO": la descripción no alcanza para decidirlo. Úsalo en lugar de adivinar.\n\n' +
       'Candidatas:\n' + JSON.stringify(candidatos) + '\n\n' +
       'Responde ÚNICAMENTE con un objeto JSON válido, sin marcas markdown, con esta forma exacta:\n' +
       '{"resultados":[{"id":"","grado":"MISMA","perfil":"SERVICIO","motivo":""}]}\n' +
