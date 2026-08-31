@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, Eye, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
 } from 'lucide-react';
 import { num, pliOf, ratios, quart, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey } from '../services/comparablesEngine';
+import { exportarSoporteMotor } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
@@ -83,6 +84,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [iaMatch, setIaMatch] = useState(study.iaMatch || null);
   const [curando, setCurando] = useState(false);
   const [curacionProgreso, setCuracionProgreso] = useState(null);
+
+  /* Detalle de candidatas rechazadas y en reserva de la última corrida del motor,
+     para el Excel de soporte. Igual que `universo`, NO se persiste con el estudio:
+     puede traer miles de filas y guardarlas revienta la cuota de localStorage. Se
+     recalcula corriendo el motor otra vez. */
+  const [motorAuditoria, setMotorAuditoria] = useState(null); // { rechazadas, reserva } | null
 
   useEffect(() => {
     updateStudy({
@@ -258,6 +265,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const cambiarConfig = (campo, valor) => {
     setEngineConfig(prev => ({ ...prev, [campo]: valor }));
     setSelectionFunnel(null);
+    setMotorAuditoria(null);
   };
 
   // Handle Capital IQ File Upload
@@ -308,6 +316,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          filtros solo consulta las candidatas que aún no tengan dictamen. */
       setIaMatch(null);
       setSelectionFunnel(null);
+      setMotorAuditoria(null);
       anotar('Siguiente: defina los filtros del paso 2 y ejecute la selección del paso 3, que cura con IA lo que pase esos filtros.', 'ok');
     } catch (err) {
       // El error trae meta cuando el archivo se leyó pero no se pudo mapear:
@@ -374,6 +383,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const nTarget = engineConfig.nTarget || 12;
       const finales = result.seleccionadas;
       setComparables(finales);
+      /* Detalle por candidata para el Excel de soporte: `scoreCandidates` ya lo
+         calcula (motivo, categoría, score, factores), pero hasta ahora solo se
+         guardaban los conteos agregados en el embudo y este detalle se perdía. */
+      setMotorAuditoria({ rechazadas: result.rechazadas, reserva: result.reserva });
       setSelectionFunnel({
         evaluadas: result.evaluadas,
         validas: result.totalValidas,
@@ -687,15 +700,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return {
       ...c,
       pli: pliVal,
+      adj,
+      ratiosComp: cR,
       adjustedPli,
       isIncluded
     };
   });
 
-  const activeSeries = calculatedRows
+  /* Filas ordenadas por PLI ajustado: es la serie exacta sobre la que se calcula
+     el rango. Se conserva con nombre (no solo el número) para que el Excel de
+     soporte pueda mostrar de qué comparable sale cada percentil, no solo la
+     fórmula en abstracto. */
+  const activeRowsOrdenadas = calculatedRows
     .filter(r => r.isIncluded && r.adjustedPli !== null)
-    .map(r => r.adjustedPli)
-    .sort((a, b) => a - b);
+    .sort((a, b) => a.adjustedPli - b.adjustedPli);
+  const activeSeries = activeRowsOrdenadas.map(r => r.adjustedPli);
 
   const stats = activeSeries.length ? {
     p25: quart(activeSeries, .25),
@@ -704,6 +723,29 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   } : null;
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
+
+  /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
+     rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de
+     capital de trabajo. Solo arma lo que ya está calculado en este componente. */
+  const handleExportarExcel = () => {
+    if (!comparables.length) {
+      alert('No hay comparables cargadas: importe o agregue al menos una antes de exportar el Excel de soporte.');
+      return;
+    }
+    const datos = {
+      estudio: { entidad: study.ent || '', anio: study.anio || '', pli: kind, useAdj, interestRate },
+      examinada: { T, tPLI, tR },
+      rango: { stats, activeCount: activeSeries.length, adjustment, serie: activeRowsOrdenadas },
+      filtros: { engineConfig, selectionFunnel },
+      comparables: calculatedRows,
+      auditoria: motorAuditoria,
+    };
+    const entidadSlug = String(datos.estudio.entidad || 'estudio')
+      .trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'estudio';
+    exportarSoporteMotor(datos, `Soporte_Motor_Comparables_${entidadSlug}_${datos.estudio.anio || 's-f'}.xlsx`);
+  };
 
   return (
     <div className="space-y-6">
@@ -840,7 +882,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="flex gap-2">
               <button
                 /* el embudo describía una corrida contra la actividad anterior */
-                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); }}
+                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); setMotorAuditoria(null); }}
                 className="bg-[#0FA3A1] text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
               >
                 Guardar Actividad
@@ -1646,6 +1688,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* ══════ EXPORTAR EXCEL DE SOPORTE DEL MOTOR ══════ */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={handleExportarExcel}
+          disabled={!comparables.length}
+          className="flex items-center gap-2 bg-[#0FA3A1] hover:bg-[#0B7C7A] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-5 py-2.5 text-xs font-bold transition-colors shadow-sm cursor-pointer"
+          title="Genera un Excel con los filtros aplicados, las comparables (seleccionadas, rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de capital de trabajo"
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          Exportar Excel de Soporte del Motor
+        </button>
       </div>
     </div>
   );
