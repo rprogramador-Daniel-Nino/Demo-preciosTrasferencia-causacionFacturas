@@ -37,7 +37,7 @@ import {
   filasComparablesInforme, filasMuestraComparables, filasRangoIntercuartil,
   filasRazonesRechazo, filasCriteriosScreening, tablasMacroInforme, NOMBRES_TABLA_MARGENES,
 } from './tablasInforme.js';
-import { claveTitulo, numeroDeTabla, prefijoDeEncabezado } from './docxRelleno.js';
+import { claveTitulo, numeroDeTabla, prefijoDeEncabezado, resolverAnclasDeHuecos } from './docxRelleno.js';
 /* La cita al pie de las tablas del motor sale de la misma constante que la prosa: dos sitios
    distintos para el nombre de la base de datos es la forma de que el informe se contradiga a sí
    mismo entre una tabla y el párrafo que la introduce. */
@@ -605,6 +605,13 @@ export const TABLA_MUESTRA = 'Muestra Compañías comparables';
 export const TABLA_RANGO = 'Rango Intercuartil';
 export const TABLA_RANGOS_CONCLUSION = 'Tabla de rangos';
 export const TABLA_RAZONES = 'Razones de rechazo';
+export const NOMBRES_TABLA_CRITERIOS = [
+  'Códigos SIC utilizados en la búsqueda de comparables',
+  'Códigos SIC utilizados',
+  'Criterios utilizados en la búsqueda de comparables',
+  'Criterios de búsqueda de comparables',
+  'Criterios de búsqueda',
+];
 export const TABLA_CRITERIOS = 'Códigos SIC utilizados';
 
 /**
@@ -678,35 +685,99 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
   if (!criterios.length) {
     anotar(TABLA_CRITERIOS);
   } else {
-    const bloques = localizarTablasHtml(salida, TABLA_CRITERIOS);
+    /* «Criterios de búsqueda» (uno de los `NOMBRES_TABLA_CRITERIOS») puede calzar con un
+       texto DENTRO de la misma tabla que ya encontró «Códigos SIC utilizados» —una
+       leyenda en su interior—, no con una copia distinta: dos bloques anidados, mismo
+       `fin`. Sin filtrar esto se procesan dos veces el mismo tramo con offsets que el
+       primer paso ya movió (mismo bug confirmado en `docxRelleno.js`, reportado
+       2026-08-25). Se ordena por inicio y se descarta el que empiece dentro de uno ya
+       aceptado, igual que hace el rango intercuartil un poco más abajo. */
+    const bloques = [];
+    localizarTablasHtml(salida, NOMBRES_TABLA_CRITERIOS)
+      .sort((a, b) => a.inicio - b.inicio)
+      .forEach((b) => {
+        const anterior = bloques[bloques.length - 1];
+        if (anterior && b.inicio < anterior.fin) return;
+        bloques.push(b);
+      });
     if (!bloques.length) {
       anotar(TABLA_CRITERIOS);
     } else {
+      /* Mismo criterio de desambiguación que `docxRelleno.js` (donde está la explicación
+         completa, con el caso real de LATV SUCURSAL COLOMBIA, 2026-08-25): número 13/15 se
+         borra, número 14 se conserva, y con exactamente 3 sin numerar se borran la primera
+         y la tercera por posición. Lo que queda sin decidir por número o posición se decide
+         por si cita «Capital IQ» en su fuente. */
+      const veredictos = bloques.map((bloque, idx) => {
+        const num = numeroDeTabla(bloque.titulo);
+        if (num === 13 || num === 15) return { eliminar: true };
+        if (num === 14) return { conservar: true };
+        if (bloques.length === 3 && (idx === 0 || idx === 2)) return { eliminar: true };
+        if (bloques.length === 3 && idx === 1) return { conservar: true };
+        return {};
+      });
+      const indecisos = veredictos
+        .map((v, i) => (!v.eliminar && !v.conservar ? i : -1))
+        .filter((i) => i >= 0);
+      if (indecisos.length >= 2) {
+        const citaCapitalIQ = (i) => /capital\s*iq/i.test(
+          textoPlanoHtml(salida.slice(bloques[i].inicio, bloques[i].fin))
+        );
+        const conCita = indecisos.filter(citaCapitalIQ);
+        if (conCita.length === 1) {
+          indecisos.forEach((i) => {
+            if (i === conCita[0]) veredictos[i].conservar = true;
+            else veredictos[i].eliminar = true;
+          });
+        } else {
+          /* Ninguna cita Capital IQ (Ryan LLC + Refinitiv, el caso real de LATV), o las
+             dos la citan: no hay una «correcta» que conservar tal cual. Con criterios
+             nuevos disponibles (si no los hubiera, ya se habría salido arriba en
+             `if (!criterios.length)`), no debe quedar el hueco vacío: se borran todas y se
+             publica una sola con los criterios nuevos y una fuente que sí cita Capital IQ
+             — no se "conserva" ninguna de las originales, ni su fuente desactualizada. */
+          indecisos.forEach((i, k) => {
+            if (k === 0) veredictos[i].reemplazarSinConservar = true;
+            else veredictos[i].eliminar = true;
+          });
+        }
+      } else if (indecisos.length === 1) {
+        veredictos[indecisos[0]].conservar = true;
+      }
+
+      let algunaConservada = false;
       /* De atrás hacia adelante para no alterar los offsets al eliminar o modificar */
       for (const bloque of [...bloques].reverse()) {
-        const num = numeroDeTabla(bloque.titulo);
         const idxOriginal = bloques.indexOf(bloque);
+        const { eliminar, conservar, reemplazarSinConservar } = veredictos[idxOriginal];
 
-        // Determinamos si es la Tabla 13 o 15 para borrarla. Si no tiene número pero hay 3,
-        // borramos la primera (índice 0, correspondiente a la 13) y la tercera (índice 2, a la 15).
-        const esParaEliminar = num === 13 || num === 15 || (num !== 14 && bloques.length === 3 && (idxOriginal === 0 || idxOriginal === 2));
-
-        if (esParaEliminar) {
+        if (eliminar) {
           // Eliminamos la tabla entera incluyendo el párrafo de su rótulo si existe
           const inicioEliminar = bloque.rotulo ? bloque.rotulo.inicio : bloque.inicio;
           /* Y su línea de fuente, si la trae: no está dentro del bloque —acaba en
-             `</table>`— y dejarla quedaría huérfana bajo la Tabla 14 que sí se conserva,
+             `</table>`— y dejarla quedaría huérfana bajo la que sí se conserva,
              atribuyéndole el origen (Ryan LLC, Refinitiv) de una tabla que ya no está. */
           const fuente = elementoFuenteSiguiente(salida, bloque.fin);
           const finEliminar = fuente ? fuente.fin : bloque.fin;
           salida = salida.slice(0, inicioEliminar) + salida.slice(finEliminar);
-        } else {
+        } else if (conservar) {
           // Conservamos la Tabla 14 (Capital IQ) y la reescribimos con los criterios reales
           salida = salida.slice(0, bloque.inicio)
             + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
             + salida.slice(bloque.fin);
+          algunaConservada = true;
+        } else if (reemplazarSinConservar) {
+          salida = salida.slice(0, bloque.inicio)
+            + reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), criterios)
+            + salida.slice(bloque.fin);
+          const finNuevo = finDeTabla(salida, bloque.inicio);
+          if (finNuevo > bloque.inicio) {
+            salida = reescribirFuenteHtml(salida, finNuevo, citaBaseDatos(study));
+          }
+          algunaConservada = true;
         }
       }
+      if (!algunaConservada) anotar(TABLA_CRITERIOS);
     }
   }
 
@@ -903,16 +974,23 @@ function finDeTablaInmediataHtml(html, cursor) {
  * @param {string[]} titulos
  * @returns {Array<{inicio:number, finPropio:number}|null>}
  */
-export function localizarHitosHtml(html, titulos) {
+/** Igual que `coincideTitulo` de `docxRelleno.js` — no se reexporta para no crear un
+ *  import cruzado innecesario de un módulo interno; ver ahí la explicación completa de
+ *  las tres formas de sinónimo (string, arreglo de strings, `{etiqueta,test}`). */
+function coincideTituloHtml(entrada, claveCandidato) {
+  if (entrada && typeof entrada.test === 'function') return entrada.test(claveCandidato);
+  const lista = Array.isArray(entrada) ? entrada : [entrada];
+  return lista.some((t) => claveCandidato.includes(claveTitulo(t)));
+}
+
+export function localizarHitosHtml(html, titulosArg) {
   const texto = String(html || '');
-  /* Cada posición admite un título único o un arreglo de sinónimos: el mismo tema puede
-     traer redacciones distintas según qué consultor escribió el documento de referencia de
-     ese cliente ("Desempleo en Colombia" / "Tasa de Desempleo" / "Mercado Laboral en
-     Colombia" son el mismo apartado universal, no contenido específico del contribuyente).
-     Mismo mecanismo que `localizarHitos` de `docxRelleno.js`. */
-  const claves = (titulos || []).map((t) => (Array.isArray(t) ? t.map(claveTitulo) : [claveTitulo(t)]));
-  const resultado = new Array(claves.length).fill(null);
-  if (!claves.length) return resultado;
+  /* Cada posición admite un título único, un arreglo de sinónimos, o un `{etiqueta,test}`
+     — ver `coincideTituloHtml`. Mismo mecanismo que `localizarHitos` de
+     `docxRelleno.js`. */
+  const titulos = titulosArg || [];
+  const resultado = new Array(titulos.length).fill(null);
+  if (!resultado.length) return resultado;
 
   /* Candidatos: cada bloque con pinta de título, en orden de aparición, recogidos de
      una sola pasada. Antes se buscaba el título `objetivo` avanzando un único cursor
@@ -932,9 +1010,9 @@ export function localizarHitosHtml(html, titulos) {
   }
 
   let desde = 0;
-  for (let objetivo = 0; objetivo < claves.length; objetivo += 1) {
+  for (let objetivo = 0; objetivo < titulos.length; objetivo += 1) {
     let k = desde;
-    while (k < candidatos.length && !claves[objetivo].some((c) => candidatos[k].clave.includes(c))) k += 1;
+    while (k < candidatos.length && !coincideTituloHtml(titulos[objetivo], candidatos[k].clave)) k += 1;
     if (k >= candidatos.length) continue;
     let finPropio = candidatos[k].fin;
     const finTabla = finDeTablaInmediataHtml(texto, finPropio);
@@ -949,7 +1027,12 @@ export function localizarHitosHtml(html, titulos) {
  *  vez de operar sobre un `sustituidorDeTablas` (esta ruta no tiene ese envoltorio). */
 /** Nombre legible de una posición de `titulos`: el título tal cual, o el primero de sus
  *  sinónimos si trae varios — mismo criterio que `docxRelleno.js`. */
-const etiquetaTituloHtml = (t) => (Array.isArray(t) ? t[0] : t);
+const etiquetaTituloHtml = (t) => (t && typeof t.etiqueta === 'string' ? t.etiqueta : (Array.isArray(t) ? t[0] : t));
+
+/** El punto de un hito donde ancla una inserción — mismo criterio que `puntoDeHito` de
+ *  `docxRelleno.js`, que no se reexporta para no crear un import cruzado innecesario de
+ *  un helper de una línea. */
+const puntoDeHitoHtml = (hito, lado) => (lado === 'derecha-de' ? hito.finPropio : hito.inicio);
 
 export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombreParaAvisos) {
   let salida = String(html || '');
@@ -962,77 +1045,73 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
      texto que `reemplazarPorHitos` en `docxRelleno.js`, donde está la explicación. */
   titulos.forEach((titulo, i) => {
     if (hitos[i]) return;
-    const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + titulo
+    /* `titulo` puede ser un `{etiqueta,test}` — el aviso siempre usa su forma legible. */
+    const etiqueta = etiquetaTituloHtml(titulo);
+    const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
       + '», así que los apartados que delimita se quedan como están en la plantilla';
     console.warn('[tablasHtmlInforme] ' + aviso);
     if (!Array.isArray(avisos)) return;
     /* Un rótulo cierra una cadena y abre la siguiente, así que sin esto se avisaría dos
        veces del mismo. Ver la nota de `reemplazarPorHitos` en `docxRelleno.js`. */
-    if (avisos.some((a) => a.includes('«' + titulo + '»'))) return;
+    if (avisos.some((a) => a.includes('«' + etiqueta + '»'))) return;
     avisos.push(aviso);
   });
 
-  /* Respaldo para cuando un hueco no se puede localizar porque su propio título —o el
-     siguiente— no aparece en el documento de referencia bajo NINGUNA redacción (no es
-     que esté mal escrito: la sección nunca existió ahí, típico de una referencia más
-     vieja que la sección que se quiere insertar). El último título de la lista es
-     siempre un límite —el encabezado de la sección o tabla que viene después, sin
-     generador propio en `contenidos`—, así que si se encuentra sirve de sitio de
-     respaldo: mejor un párrafo al final de esta sección que perder en silencio un
-     contenido que sí se generó. Se ajusta con cada edición que caiga antes de él, en el
-     mismo recorrido de atrás hacia adelante, para no apuntar a un índice viejo. */
-  /* Si NI SIQUIERA el límite final aparece, no hay con qué distinguir "esta sección
-     nunca existió aquí" (una plantilla completamente ajena a esta cadena de títulos,
-     como la mayoría de los documentos de prueba) de "sí existe, solo falta un título
-     intermedio": en el primer caso, insertar al final del documento sería un despropósito
-     — meter párrafos de sector en una plantilla que no tiene ninguna sección de
-     Tendencias de la Economía. Por eso el respaldo solo se activa cuando el límite final
-     SÍ se encontró: ahí sí se sabe que esta sección existe en algún punto del documento. */
-  const ultimoHito = hitos[hitos.length - 1];
-  let cursorRespaldo = ultimoHito ? ultimoHito.inicio : null;
-
-  for (let i = contenidos.length - 1; i >= 0; i -= 1) {
-    const hitoActual = hitos[i];
-    const hitoSiguiente = hitos[i + 1];
-    if (!hitoActual || !hitoSiguiente) {
-      /* El aviso de que este hueco no se pudo delimitar ya se emitió arriba, nombrando el
-         rótulo ausente que lo causa. Aquí solo queda el respaldo. */
-      /* Sin el límite final tampoco hay dónde poner un respaldo: seguir con el
-         comportamiento de siempre (avisar y no tocar nada). */
-      if (cursorRespaldo !== null) {
-        /* Se prueba igual, como si el hueco viejo viniera vacío: los generadores que sí
-           tienen contenido real (narrativa ya redactada) lo devuelven sin importar el
-           texto viejo; los que solo fabrican un marcador de "pendiente" cuando había
-           prosa sustancial que retirar no fabrican nada de la nada, así que aquí no
-           inventan un marcador que antes no existía. */
-        const nuevo = contenidos[i]('');
-        if (nuevo !== null) {
-          console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
-            '": sin ancla, insertado de respaldo al final de la sección');
-          if (Array.isArray(avisos)) {
-            avisos.push(
-              (nombreParaAvisos || '') + ': "' + etiquetas[i] + '" no está en la plantilla, así que ' +
-              'su contenido se insertó al final de esta sección en vez de en su lugar propio — ' +
-              'revisa el orden antes de radicar'
-            );
-          }
-          salida = salida.slice(0, cursorRespaldo) + nuevo + salida.slice(cursorRespaldo);
-        }
+  /* Emparejamiento por vecino más cercano — mismo algoritmo, mismo motivo y misma
+     explicación que `reemplazarPorHitos` de `docxRelleno.js`: `resolverAnclasDeHuecos`
+     es la función pura compartida entre las dos rutas. Nunca funde dos huecos en una
+     sola región reemplazable: un título intermedio ausente no distingue "la subsección
+     nunca existió aquí" de "existe, con otro rótulo que no se reconoce" (texto real del
+     cliente, no seguro de borrar). */
+  const anclas = resolverAnclasDeHuecos(hitos);
+  const inserciones = new Map();
+  const reemplazos = [];
+  for (let i = 0; i < contenidos.length; i += 1) {
+    const ancla = anclas[i];
+    if (ancla.tipo === 'reemplazo') {
+      const hitoActual = hitos[i];
+      const hitoSiguiente = hitos[i + 1];
+      const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
+      const nuevo = contenidos[i](textoHueco);
+      if (nuevo === null) {
+        console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
+        continue;
       }
+      console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado');
+      reemplazos.push({ inicio: hitoActual.finPropio, fin: hitoSiguiente.inicio, contenido: nuevo });
       continue;
     }
-    const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
-    const nuevo = contenidos[i](textoHueco);
-    if (nuevo === null) {
-      console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
-      continue;
+    /* 'sin-ancla': ni el propio límite del hueco ni ningún otro rótulo de la cadena
+       aparece en el documento — no hay dónde ubicar este contenido sin adivinar, así
+       que se deja perder (el aviso de "no se encontró el rótulo" ya lo explica). */
+    if (ancla.tipo === 'sin-ancla') continue;
+    /* Se prueba igual, como si el hueco viejo viniera vacío: los generadores que sí
+       tienen contenido real (narrativa ya redactada) lo devuelven sin importar el texto
+       viejo; los que solo fabrican un marcador de "pendiente" cuando había prosa
+       sustancial que retirar no fabrican nada de la nada, así que aquí no inventan un
+       marcador que antes no existía. */
+    const nuevo = contenidos[i]('');
+    if (nuevo === null) continue;
+    const punto = puntoDeHitoHtml(hitos[ancla.ref], ancla.lado);
+    const clave = ancla.lado + ':' + ancla.ref;
+    const previo = inserciones.get(clave);
+    inserciones.set(clave, { inicio: punto, fin: punto, contenido: (previo ? previo.contenido : '') + nuevo });
+    console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] +
+      '": sin ancla propia, ubicado junto a "' + etiquetas[ancla.ref] + '"');
+    if (Array.isArray(avisos)) {
+      avisos.push(
+        (nombreParaAvisos || '') + ': el apartado entre «' + etiquetas[i] + '» y «' + etiquetas[i + 1]
+        + '» no se pudo ubicar en su lugar propio, así que su contenido se ubicó junto al encabezado '
+        + 'más cercano, «' + etiquetas[ancla.ref] + '» — revísalo antes de radicar'
+      );
     }
-    console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado');
-    if (cursorRespaldo !== null && hitoActual.finPropio <= cursorRespaldo) {
-      cursorRespaldo += nuevo.length - (hitoSiguiente.inicio - hitoActual.finPropio);
-    }
-    salida = salida.slice(0, hitoActual.finPropio) + nuevo + salida.slice(hitoSiguiente.inicio);
   }
+
+  reemplazos.concat(Array.from(inserciones.values()))
+    .sort((a, b) => b.inicio - a.inicio)
+    .forEach((op) => {
+      salida = salida.slice(0, op.inicio) + op.contenido + salida.slice(op.fin);
+    });
   return salida;
 }
 
@@ -1255,9 +1334,27 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     return bloque(narrativaHtml, tema)();
   };
 
+  /* Sinónimos por posición — mismo criterio y misma evidencia que
+     `actualizarApartadoSectorialOoxml` de `docxRelleno.js`, donde está la explicación
+     completa: lista fija para variantes concretas ya confirmadas (LATV SUCURSAL
+     COLOMBIA: "Análisis EN el sector..."), y `{etiqueta,test}` para variación de FORMA
+     que una lista de frases no puede cubrir sin agregar una entrada por cada plantilla
+     de cliente (PROMOCIONES FANTÁSTICAS S.A.S.: "Exportaciones e Importaciones..." con
+     el orden invertido, y "¿Cuáles son las proyecciones y perspectivas...?" sin ninguna
+     palabra en común con "¿Qué se proyecta"). */
   const titulos = [
-    'Análisis del Sector', 'Comportamiento del Sector', 'Datos Clave del Sector',
-    'Importaciones y exportaciones del sector', '¿Qué se proyecta para el sector', 'Conclusiones y Perspectivas',
+    ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
+    'Comportamiento del Sector', 'Datos Clave del Sector',
+    {
+      etiqueta: 'Importaciones y exportaciones del sector',
+      test: (clave) => clave.includes('importacion') && clave.includes('exportacion'),
+    },
+    {
+      etiqueta: '¿Qué se proyecta para el sector',
+      test: (clave) => clave.includes('sector')
+        && (clave.includes('proyect') || clave.includes('perspectiv')),
+    },
+    'Conclusiones y Perspectivas',
     'ANÁLISIS ECONÓMICO',
   ];
 

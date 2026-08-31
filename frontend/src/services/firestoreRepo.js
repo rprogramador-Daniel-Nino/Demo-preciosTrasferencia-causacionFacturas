@@ -33,6 +33,7 @@ import {
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
   verificarTamano, agregarCompartido, quitarCompartido, rastroPropio,
 } from './firestoreModelo';
+import { diccionarioVacio } from './vocabularioEeff';
 
 const ESTUDIOS = 'estudios';
 const CLIENTES = 'clientes';
@@ -446,6 +447,45 @@ export async function leerNarrativaMacroEstudio(estudioId) {
 export async function guardarNarrativaMacroEstudio(estudioId, seriesActualizadoEnMs, narrativa) {
   if (!estudioId) return;
   await setDoc(doc(db, NARRATIVA_MACRO_ESTUDIO, estudioId), { seriesActualizadoEnMs, narrativa });
+}
+
+/* ══════════════════════ vocabulario de EEFF (diccionario compartido) ══════════════════════ */
+
+const VOCABULARIO_EEFF = 'vocabularioEeff';
+
+/** El diccionario compartido de un campo (costo de ventas, partes relacionadas,
+ *  inventarios), o uno vacío si nunca se ha escrito. Dato compartido entre todos los
+ *  consultores, igual que `analisisSector` — no pasa por `usuarios/{uid}`. */
+export async function leerVocabularioEeff(campo) {
+  const instantanea = await getDoc(doc(db, VOCABULARIO_EEFF, campo));
+  return instantanea.exists() ? instantanea.data() : diccionarioVacio();
+}
+
+export async function guardarVocabularioEeff(campo, diccionario) {
+  await setDoc(doc(db, VOCABULARIO_EEFF, campo), diccionario);
+}
+
+/* ══════ rótulos de partes relacionadas confirmados por empresa ══════
+   Un rótulo genérico («Cuentas comerciales por pagar») puede ser, para una empresa
+   puntual, la cuenta con la vinculada, y para otra, terceros normales — así que esto NO
+   se comparte entre empresas como `vocabularioEeff`, sino que se guarda por NIT. Sí se
+   comparte entre consultores (no bajo `usuarios/{uid}`), igual que `vocabularioEeff`: es
+   un hecho de la estructura contable de la empresa, no del consultor que la estudió. */
+
+const ROTULOS_RELACIONADAS_POR_EMPRESA = 'rotulosRelacionadasPorEmpresa';
+
+/** Los rótulos que ya se confirmaron para este NIT, o `{}` si nunca se ha escrito. */
+export async function leerRotulosConfirmadosPorEmpresa(nit) {
+  const clave = normalizarNit(nit);
+  if (!clave) return {};
+  const instantanea = await getDoc(doc(db, ROTULOS_RELACIONADAS_POR_EMPRESA, clave));
+  return instantanea.exists() ? instantanea.data() : {};
+}
+
+export async function guardarRotulosConfirmadosPorEmpresa(nit, datos) {
+  const clave = normalizarNit(nit);
+  if (!clave) return;
+  await setDoc(doc(db, ROTULOS_RELACIONADAS_POR_EMPRESA, clave), datos);
 }
 
 /* ══════════════════════ migraciones ══════════════════════ */

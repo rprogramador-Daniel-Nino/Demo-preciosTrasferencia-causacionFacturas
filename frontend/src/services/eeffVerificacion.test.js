@@ -15,7 +15,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  verificarEeff, camposAplicables, utilidadOperacionalDe, gastosOperativosDe,
+  verificarEeff, camposAplicables, camposParaLimpiar, utilidadOperacionalDe, gastosOperativosDe,
+  fusionarHallazgosEnLectura, marcarEstadosConHallazgos, marcarProbableAusentePorVocabulario,
+  destinoDelAprendizaje, candidataParaAprender,
 } from './eeffVerificacion.js';
 
 /* La capa de texto del PDF, reducida a las líneas con cifra. Es lo que `extraerTextoPdf`
@@ -208,16 +210,177 @@ test('no toca ningún otro campo con nombre del balance', () => {
     .forEach((clave) => assert.ok(!(clave in aplicables), `${clave} no debería escribirse`));
 });
 
-test('si falta una partida de partes relacionadas, se listan las que el documento sí trae', () => {
+test('si falta una partida de partes relacionadas y hay una sola cifra mayor sin desglosar, se indexa como corrección', () => {
   const sinCxp = verificar({ t_ap: null });
-  const a = sinCxp.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
-  assert.ok(a, 'su ajuste quedaría en cero sin avisar');
+  const c = sinCxp.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c, 'debe indexar la única cifra agregada emparentada');
+  assert.strictEqual(c.valorLeido, null);
+  assert.strictEqual(c.valorAplicado, 658293893);
+  assert.match(c.motivo, /OTRAS CUENTAS POR PAGAR/);
+  assert.match(c.motivo, /cliente/i);
+  assert.strictEqual(sinCxp.campos.t_ap, 658293893, 'se aplica al campo, no solo se sugiere');
+  assert.strictEqual(
+    sinCxp.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap'),
+    undefined,
+    'ya no queda como advertencia sin resolver: se resolvió con la corrección',
+  );
+});
+
+test('si hay varias cifras mayores emparentadas y ambiguas, no se indexa ninguna sola', () => {
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+  });
+  assert.strictEqual(r.campos.t_ap, null, 'ambiguo: no se aplica ninguna');
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ap'), undefined);
+  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
+  assert.ok(a);
   assert.match(a.mensaje, /OTRAS CUENTAS POR PAGAR/);
-  assert.match(a.mensaje, /en cero/);
+  assert.match(a.mensaje, /PROVEEDORES DEL EXTERIOR/);
+  assert.match(a.mensaje, /ambiguas/);
+});
+
+/* ══════ Inventarios: la fila propia debe decir "inventario" ══════
+   Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26). La tabla principal del balance
+   trae una fila rotulada "Activos corrientes mantenidos para la venta" (no "Inventarios")
+   con el mismo valor que la Nota 6, titulada "INVENTARIOS" — el modelo la toma como
+   inventario por el título de la nota, no por lo que la fila misma dice. Decisión
+   explícita del usuario: eso es interpretar una nota, no transcribir el estado; se
+   descarta y se avisa, no se completa solo. */
+
+test('si la fila de inventarios no menciona inventario y solo una nota lo confirma, se descarta y se avisa', () => {
+  /* t_inv se deja en el valor de LECTURA (4.734.795.891): tiene que seguir apareciendo en
+     el texto del documento para sobrevivir la comprobación de presencia literal (sección
+     1) y llegar a esta — de lo contrario la discarta esa, no esta, y la prueba no
+     verificaría lo que dice verificar. activosDetalle se reescribe con el mismo rótulo
+     equívoco (un documento real sería consistente entre `rotulo` y `activos_detalle`; si
+     se dejara la fila "INVENTARIOS" del fixture base, la búsqueda por rótulo emparentado
+     la volvería a encontrar y deshería el descarte que esta prueba verifica). */
+  const r = verificar({
+    rotulos: { ...LECTURA.rotulos, inventarios: 'Activos corrientes mantenidos para la venta' },
+    activosDetalle: LECTURA.activosDetalle.map((fila) => (
+      fila.etiqueta === 'INVENTARIOS' ? { ...fila, etiqueta: 'ACTIVOS CORRIENTES MANTENIDOS PARA LA VENTA' } : fila
+    )),
+  });
+  assert.strictEqual(r.campos.t_inv, null, 'no se completa solo con lo que dice una nota');
+  const a = r.advertencias.find((x) => x.tipo === 'inventario-solo-por-nota');
+  assert.ok(a);
+  assert.strictEqual(a.campo, 't_inv');
+  assert.match(a.mensaje, /Activos corrientes mantenidos para la venta/);
+  assert.match(a.mensaje, /4\.734\.795\.891/);
+});
+
+test('si la fila de inventarios sí dice inventario (o existencias/mercancías), se conserva', () => {
+  const r = verificar({
+    rotulos: { ...LECTURA.rotulos, inventarios: 'INVENTARIOS' },
+  });
+  assert.strictEqual(r.campos.t_inv, 4734795891);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'inventario-solo-por-nota'), undefined);
+});
+
+test('sin rótulo de inventarios (lectura sin ese dato) no se descarta nada: no hay con qué comparar', () => {
+  const r = verificar(); // LECTURA.rotulos no trae 'inventarios'
+  assert.strictEqual(r.campos.t_inv, 4734795891);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'inventario-solo-por-nota'), undefined);
+});
+
+/* ══════ Inventarios, Total Activo Corriente y PP&E: buscar bajo otro rótulo ══════
+   Misma filosofía que partes relacionadas (decisión explícita del usuario, 2026-08-26),
+   aplicada al detalle de activos: si el campo no aparece con el rótulo esperado pero hay
+   una única fila emparentada en el detalle, se indexa; con varias o ninguna, no se aplica
+   nada y se avisa (salvo t_inv, que ya tiene su propio aviso "sin-inventarios"). */
+
+test('t_inv se encuentra bajo un sinónimo en el detalle de activos cuando no llegó con su nombre', () => {
+  /* textoPdf: '' porque esta cifra no está en TEXTO_PDF (el fixture de Montachem) — con la
+     capa de texto activa, la comprobación de presencia literal la descartaría antes de
+     llegar a esta búsqueda, y la prueba no verificaría lo que dice verificar. */
+  const r = verificar({
+    t_inv: null,
+    textoPdf: '',
+    activosDetalle: [{ etiqueta: 'EXISTENCIAS', valor: 1000000, esSubtotal: false }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_inv');
+  assert.ok(c);
+  assert.strictEqual(c.valorAplicado, 1000000);
+  assert.match(c.motivo, /EXISTENCIAS/);
+  assert.strictEqual(r.campos.t_inv, 1000000);
+});
+
+test('t_inv con varios sinónimos ambiguos en el detalle no indexa ninguno', () => {
+  const r = verificar({
+    t_inv: null,
+    activosDetalle: [
+      { etiqueta: 'EXISTENCIAS', valor: 1000000, esSubtotal: false },
+      { etiqueta: 'MERCANCIAS EN TRANSITO', valor: 500000, esSubtotal: false },
+    ],
+  });
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_inv'), undefined);
+  assert.strictEqual(r.campos.t_inv, null);
+  assert.ok(r.advertencias.some((a) => a.tipo === 'sin-inventarios'), 'sigue avisando por el canal ya existente');
+});
+
+test('t_ppe se encuentra bajo un sinónimo en el detalle de activos', () => {
+  const r = verificar({
+    textoPdf: '', // esta cifra no está en TEXTO_PDF; ver nota en la prueba de t_inv de arriba
+    activosDetalle: [{ etiqueta: 'ACTIVOS FIJOS', valor: 305238877, esSubtotal: false }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_ppe');
+  assert.ok(c);
+  assert.strictEqual(c.valorAplicado, 305238877);
+  assert.match(c.motivo, /ACTIVOS FIJOS/);
+  assert.strictEqual(r.campos.t_ppe, 305238877);
+});
+
+test('t_ppe con varios sinónimos ambiguos no indexa ninguno y avisa', () => {
+  const r = verificar({
+    textoPdf: '', // estas cifras no están en TEXTO_PDF; ver nota en la prueba de t_inv de arriba
+    activosDetalle: [
+      { etiqueta: 'ACTIVOS FIJOS', valor: 305238877, esSubtotal: false },
+      { etiqueta: 'INMUEBLES MAQUINARIA Y EQUIPO', valor: 200000000, esSubtotal: false },
+    ],
+  });
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ppe'), undefined);
+  assert.strictEqual(r.campos.t_ppe, null);
+  const a = r.advertencias.find((x) => x.tipo === 'campo-no-encontrado-en-detalle' && x.campo === 't_ppe');
+  assert.ok(a);
+  assert.match(a.mensaje, /ACTIVOS FIJOS/);
+  assert.match(a.mensaje, /INMUEBLES MAQUINARIA Y EQUIPO/);
+});
+
+test('t_ppe sin ninguna fila emparentada avisa que no se encontró', () => {
+  const r = verificar({ activosDetalle: [] });
+  assert.strictEqual(r.campos.t_ppe, null);
+  const a = r.advertencias.find((x) => x.tipo === 'campo-no-encontrado-en-detalle' && x.campo === 't_ppe');
+  assert.ok(a);
+  assert.match(a.mensaje, /Escríbala a mano/);
+});
+
+test('t_act_curr se encuentra bajo un sinónimo entre los subtotales del detalle', () => {
+  const r = verificar({
+    t_act_curr: null,
+    activosDetalle: [{ etiqueta: 'TOTAL ACTIVOS CORRIENTES', valor: 14050942064, esSubtotal: true }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_act_curr');
+  assert.ok(c);
+  assert.strictEqual(c.valorAplicado, 14050942064);
+  assert.strictEqual(r.campos.t_act_curr, 14050942064);
+});
+
+test('t_act_curr ignora una fila que menciona "corriente" pero no es subtotal', () => {
+  const r = verificar({
+    t_act_curr: null,
+    activosDetalle: [{ etiqueta: 'CUENTAS CORRIENTES BANCARIAS', valor: 999999, esSubtotal: false }],
+  });
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_act_curr'), undefined);
+  assert.strictEqual(r.campos.t_act_curr, null);
 });
 
 test('sin inventarios se avisa, porque su ajuste queda contra cero', () => {
-  const r = verificar({ t_inv: null });
+  /* activosDetalle: [] para que no haya ninguna fila que la búsqueda por rótulo emparentado
+     pueda recuperar — de lo contrario encontraría la fila "INVENTARIOS" de LECTURA y la
+     indexaría sola, y esta prueba dejaría de cubrir el caso "de verdad no está en ninguna
+     parte" que le da nombre. */
+  const r = verificar({ t_inv: null, activosDetalle: [] });
   assert.ok(r.advertencias.some((a) => a.tipo === 'sin-inventarios'));
 });
 
@@ -226,11 +389,16 @@ test('sin inventarios se avisa, porque su ajuste queda contra cero', () => {
 test('una cifra que no aparece en el documento se descarta y se reporta', () => {
   /* El caso literal: la lectura devolvió 44.177.669 como cuentas por pagar de un documento
      donde esa cifra no aparece en ninguna de sus cuatro páginas. */
-  const { campos, advertencias } = verificar({ t_ap: 44177669 });
-  assert.strictEqual(campos.t_ap, null);
+  const { campos, advertencias, correcciones } = verificar({ t_ap: 44177669 });
   const a = advertencias.find((x) => x.tipo === 'cifra-inexistente' && x.campo === 't_ap');
   assert.ok(a);
   assert.match(a.mensaje, /44\.177\.669/);
+  /* Descartada la cifra inventada, campos.t_ap vuelve a null — y como sigue habiendo una
+     única cifra agregada sin ambigüedad en la tabla principal, se indexa en su lugar (ver
+     el siguiente bloque de pruebas). */
+  const c = correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c);
+  assert.strictEqual(campos.t_ap, 658293893);
 });
 
 test('una cifra descartada no se cuela en el cálculo de la utilidad', () => {
@@ -285,9 +453,153 @@ test('una escala en miles se advierte pero no se convierte', () => {
 });
 
 test('camposAplicables no propaga los nulos, para no borrar lo escrito a mano', () => {
-  const aplicables = camposAplicables(verificar({ t_inv: null }).campos);
+  const aplicables = camposAplicables(verificar({ t_inv: null, activosDetalle: [] }).campos);
   assert.ok(!('t_inv' in aplicables));
   assert.strictEqual(aplicables.t_ar, 2926256259);
+});
+
+/* ══════ camposParaLimpiar: no dejar en pantalla una cifra que contradiga la advertencia ══════
+   Generaliza lo que antes solo limpiaba `inventario-solo-por-nota` (commit 203eaa3) a
+   cualquier advertencia con `campo` cuyo valor verificado en esta lectura quedó en null. */
+
+test('sin-partida-relacionada (varias candidatas ambiguas) limpia la casilla', () => {
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.strictEqual(limpiar.t_ap, '');
+});
+
+test('campo-no-encontrado-en-detalle (t_ppe no hallado) limpia la casilla', () => {
+  const r = verificar({
+    textoPdf: '',
+    activosDetalle: [
+      { etiqueta: 'ACTIVOS FIJOS', valor: 305238877, esSubtotal: false },
+      { etiqueta: 'INMUEBLES MAQUINARIA Y EQUIPO', valor: 200000000, esSubtotal: false },
+    ],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.strictEqual(limpiar.t_ppe, '');
+});
+
+test('inventario-solo-por-nota sigue limpiando la casilla (no regresión de 203eaa3)', () => {
+  const r = verificar({
+    rotulos: { ...LECTURA.rotulos, inventarios: 'Activos corrientes mantenidos para la venta' },
+    activosDetalle: LECTURA.activosDetalle.map((fila) => (
+      fila.etiqueta === 'INVENTARIOS' ? { ...fila, etiqueta: 'ACTIVOS CORRIENTES MANTENIDOS PARA LA VENTA' } : fila
+    )),
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.strictEqual(limpiar.t_inv, '');
+});
+
+test('relacionada-en-cero-con-total-mayor NO limpia: el $0 es una cifra válida', () => {
+  const r = verificar({
+    t_ar: 0,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'CLIENTES DEL EXTERIOR', valor: 900000000 }],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.ok(!('t_ar' in limpiar), 'el campo ya tiene un $0 sustentado, no se limpia');
+});
+
+test('una advertencia sin campo (activos-detalle-cifra-inexistente) no limpia nada', () => {
+  const r = verificar({
+    activosDetalle: [
+      ...LECTURA.activosDetalle,
+      { etiqueta: 'INVENTADO', valor: 999999999, esSubtotal: false },
+    ],
+  });
+  const limpiar = camposParaLimpiar(r.campos, r.advertencias);
+  assert.ok(!('t_activos_detalle' in limpiar));
+});
+
+/* ══════ Aprender a resolver la ambigüedad, sin gastar IA ══════
+   Dos fuentes, además de la heurística amplia ya existente (una sola candidata sin más):
+   un rótulo que ESTA empresa ya confirmó (no se comparte entre empresas: uno genérico puede
+   significar otra cosa para otra compañía) y un rótulo que en sí mismo nombra la relación
+   (ese sí se comparte, porque el propio texto ya lo dice). */
+
+test('con varias candidatas ambiguas, un rótulo ya confirmado para esta empresa se indexa solo', () => {
+  const r = verificarEeff({ ...LECTURA, t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }] },
+  {
+    anioEstudio: 2025,
+    rotulosConfirmadosEmpresa: { t_ap: ['otras cuentas por pagar'] },
+  });
+  assert.strictEqual(r.campos.t_ap, 658293893, 'se aplicó la candidata confirmada, no una ambigüedad');
+  const c = r.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c);
+  assert.match(c.motivo, /estudio anterior/);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada'), undefined);
+});
+
+test('con varias candidatas ambiguas, un rótulo que ya nombra la relación se indexa solo', () => {
+  const r = verificarEeff({ ...LECTURA, t_ap: null,
+    rubrosNoAsignados: [
+      { rotulo: 'CUENTAS POR PAGAR A COMPAÑÍAS VINCULADAS', valor: 300000000 },
+      { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 },
+    ] },
+  {
+    anioEstudio: 2025,
+    diccionarioRelacionadaGlobal: { t_ap: { palabras: ['vinculada'], estudiosSinPalabraNueva: 0 } },
+  });
+  assert.strictEqual(r.campos.t_ap, 300000000);
+  const c = r.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c);
+  assert.match(c.motivo, /nombra explícitamente/);
+  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada'), undefined);
+});
+
+test('un rótulo confirmado de otra empresa, o un marcador que no matchea, no resuelve nada', () => {
+  const r = verificarEeff({ ...LECTURA, t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }] },
+  {
+    anioEstudio: 2025,
+    rotulosConfirmadosEmpresa: { t_ap: ['una frase que no aparece en ninguna candidata'] },
+    diccionarioRelacionadaGlobal: { t_ap: { palabras: ['inexistente'], estudiosSinPalabraNueva: 0 } },
+  });
+  assert.strictEqual(r.campos.t_ap, null, 'sigue ambiguo: el comportamiento actual no cambia');
+  assert.ok(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap'));
+});
+
+test('sin-partida-relacionada expone las candidatas como dato, no solo dentro del mensaje', () => {
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+  });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
+  assert.strictEqual(a.candidatas.length, 2);
+  assert.ok(a.candidatas.some((c) => c.rotulo === 'PROVEEDORES DEL EXTERIOR' && c.valor === 500000000));
+});
+
+test('destinoDelAprendizaje: un rótulo que nombra la relación va al diccionario global', () => {
+  assert.strictEqual(destinoDelAprendizaje('CUENTAS POR COBRAR COMPAÑÍAS VINCULADAS'), 'global');
+  assert.strictEqual(destinoDelAprendizaje('Deudores relacionados'), 'global');
+});
+
+test('destinoDelAprendizaje: un rótulo genérico va al diccionario de la empresa', () => {
+  assert.strictEqual(destinoDelAprendizaje('Cuentas comerciales por pagar'), 'empresa');
+  assert.strictEqual(destinoDelAprendizaje('Otras cuentas comerciales por cobrar'), 'empresa');
+});
+
+test('candidataParaAprender: una sola candidata coincide con el valor escrito a mano', () => {
+  const candidatas = [
+    { rotulo: 'CUENTAS COMERCIALES POR PAGAR', valor: 3640797508 },
+    { rotulo: 'IMPUESTOS CORRIENTES POR PAGAR', valor: 172380750 },
+  ];
+  assert.deepStrictEqual(candidataParaAprender(candidatas, 3640797508), candidatas[0]);
+  assert.deepStrictEqual(candidataParaAprender(candidatas, '3.640.797.508'), candidatas[0]);
+});
+
+test('candidataParaAprender: sin coincidencia exacta, o con varias, no aprende nada', () => {
+  const candidatas = [
+    { rotulo: 'CUENTAS COMERCIALES POR PAGAR', valor: 100 },
+    { rotulo: 'OTRA', valor: 100 },
+  ];
+  assert.strictEqual(candidataParaAprender(candidatas, 999), null);
+  assert.strictEqual(candidataParaAprender(candidatas, 100), null, 'dos candidatas comparten el valor: ambiguo');
+  assert.strictEqual(candidataParaAprender([], 100), null);
 });
 
 /* ══════ LEY DE SIGNOS ══════
@@ -519,4 +831,167 @@ test('un t_ppe que no aparece impreso se descarta igual que cualquier otra cifra
   const r = verificarSymtek({ t_ppe: 999999999 });
   assert.strictEqual(r.campos.t_ppe, null);
   assert.ok(r.advertencias.some((a) => a.tipo === 'cifra-inexistente' && a.campo === 't_ppe'));
+});
+
+/* ══════ Costo de ventas ausente: implícito en cero, o genuinamente sin dato ══════
+   Caso real: LATV Sucursal Colombia (2026-08-25). Su Estado de Resultados imprime
+   Utilidad Bruta == Ingresos, sin línea de Costo de Ventas en ningún lado del documento
+   (ni en sus notas) — el propio estado está afirmando que el costo es cero, no que sea
+   desconocido. */
+
+test('sin costo de ventas se avisa con su propio tipo, con campo t_c', () => {
+  const r = verificar({ t_c: null });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.ok(a, 'debe haber una advertencia dedicada al costo de ventas');
+  assert.strictEqual(a.campo, 't_c');
+});
+
+test('si la utilidad bruta impresa es igual a los ingresos, el costo ausente es "implicito_cero"', () => {
+  const r = verificar({
+    t_c: null,
+    cotejo: { gastos_ventas: -2409923291, gastos_administracion: -572260813, utilidad_bruta: 23741367744 },
+  });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.strictEqual(a.estado, 'implicito_cero');
+  assert.match(a.mensaje, /cero/);
+});
+
+test('si la utilidad bruta impresa NO es igual a los ingresos, el costo ausente queda "no_verificado"', () => {
+  const r = verificar({ t_c: null }); // LECTURA.cotejo.utilidad_bruta = 1.891.180.250, distinto de t_s
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.strictEqual(a.estado, 'no_verificado');
+});
+
+test('sin utilidad bruta impresa, el costo ausente tampoco es implicito_cero', () => {
+  const r = verificar({ t_c: null, cotejo: { ...LECTURA.cotejo, utilidad_bruta: null } });
+  const a = r.advertencias.find((x) => x.tipo === 'sin-costo-de-ventas');
+  assert.strictEqual(a.estado, 'no_verificado');
+});
+
+test('el costo implícito en cero NO se asigna solo: t_c sigue en null', () => {
+  const r = verificar({
+    t_c: null,
+    cotejo: { gastos_ventas: -2409923291, gastos_administracion: -572260813, utilidad_bruta: 23741367744 },
+  });
+  assert.strictEqual(r.campos.t_c, null, 'se sugiere, no se asigna — el analista decide');
+});
+
+/* ══════ Estado por campo en las advertencias ya existentes ══════ */
+
+test('las advertencias de partes relacionadas e inventarios llevan estado "no_verificado" por defecto', () => {
+  const r = verificar({
+    t_ap: null, t_ar: null, t_inv: null, rubrosNoAsignados: [], activosDetalle: [],
+  });
+  ['t_ap', 't_ar'].forEach((campo) => {
+    const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === campo);
+    assert.strictEqual(a.estado, 'no_verificado');
+  });
+  const inv = r.advertencias.find((x) => x.tipo === 'sin-inventarios');
+  assert.strictEqual(inv.estado, 'no_verificado');
+});
+
+/* ══════ Partes relacionadas sin desglose: una sola cifra mayor se indexa, varias no ══════
+   Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26). El documento no desglosa "Cuentas
+   por cobrar/pagar a partes relacionadas" en ninguna fila propia — solo trae, en la tabla
+   principal, una cifra agregada por rubro emparentado ("Deudores comerciales y otras
+   cuentas por cobrar" $8.439.325.383; "Acreedores y otras cuentas por pagar"
+   $3.519.703.689). Decisión explícita del usuario (2026-08-26): cuando esa cifra agregada
+   es única y no ambigua, se indexa igual —como corrección, con su motivo, editable—; el
+   analista la confirma con el cliente después. Con varias candidatas ambiguas, no se
+   indexa ninguna sola y solo se advierte. */
+
+test('con el campo en $0 y una única cifra mayor sin desglosar, se indexa como corrección', () => {
+  const r = verificar({ t_ar: 0 });
+  const c = r.correcciones.find((x) => x.campo === 't_ar');
+  assert.ok(c, 'debe indexar la única cifra agregada emparentada');
+  assert.strictEqual(c.valorLeido, 0);
+  assert.strictEqual(c.valorAplicado, 6032337879);
+  assert.match(c.motivo, /DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
+  assert.match(c.motivo, /cliente/i);
+  assert.strictEqual(r.campos.t_ar, 6032337879, 'se aplica al campo, no solo se sugiere');
+  assert.strictEqual(
+    r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor'),
+    undefined,
+    'se resolvió con la corrección, ya no queda como advertencia sin resolver',
+  );
+});
+
+test('con el campo en $0 y sin ninguna cifra mayor sin desglosar, no hace nada', () => {
+  const r = verificar({ t_ar: 0, rubrosNoAsignados: [] });
+  assert.strictEqual(r.campos.t_ar, 0, 'nada que indexar: el $0 ya está sustentado');
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
+  assert.strictEqual(r.advertencias.find((a) => a.campo === 't_ar'), undefined);
+});
+
+test('con el campo en $0 y varias cifras mayores ambiguas, advierte pero no indexa ninguna', () => {
+  const r = verificar({
+    t_ar: 0,
+    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'CLIENTES DEL EXTERIOR', valor: 900000000 }],
+  });
+  assert.strictEqual(r.campos.t_ar, 0, 'ambiguo: no se aplica ninguna, el $0 queda tal cual');
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
+  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
+  assert.ok(a);
+  assert.strictEqual(a.estado, 'revisar_total_mayor');
+  assert.match(a.mensaje, /DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
+  assert.match(a.mensaje, /CLIENTES DEL EXTERIOR/);
+});
+
+test('con el campo en un valor distinto de $0, no toca nada (comportamiento sin cambios)', () => {
+  const r = verificar(); // LECTURA.t_ar = 2926256259
+  assert.strictEqual(r.campos.t_ar, 2926256259);
+  assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
+  assert.strictEqual(r.advertencias.find((a) => a.campo === 't_ar'), undefined);
+});
+
+/* ══════ Fusionar los hallazgos de la pasada angosta a notas ══════ */
+
+test('fusionarHallazgosEnLectura escribe el valor encontrado sobre la lectura original', () => {
+  const lectura = { t_c: null, t_s: 100 };
+  const hallazgos = { t_c: { valor: 42, encontradoEn: 'nota', palabra: 'costo del servicio', cita: 'Nota 19' } };
+  const fusionada = fusionarHallazgosEnLectura(lectura, hallazgos);
+  assert.strictEqual(fusionada.t_c, 42);
+  assert.strictEqual(fusionada.t_s, 100, 'no toca lo que no vino en hallazgos');
+});
+
+test('fusionarHallazgosEnLectura no pisa con null lo que ya venía en la lectura', () => {
+  const lectura = { t_ap: null };
+  const hallazgos = { t_ap: { valor: null, encontradoEn: null, palabra: '', cita: 'Revisé la Nota 13, no lo desglosa.' } };
+  assert.strictEqual(fusionarHallazgosEnLectura(lectura, hallazgos).t_ap, null);
+});
+
+test('fusionarHallazgosEnLectura no muta la lectura original', () => {
+  const lectura = { t_c: null };
+  fusionarHallazgosEnLectura(lectura, { t_c: { valor: 42 } });
+  assert.strictEqual(lectura.t_c, null);
+});
+
+test('marcarEstadosConHallazgos marca confirmado_ausente con su cita cuando la IA no lo encontró', () => {
+  const advertencias = [{ tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' }];
+  const hallazgos = { t_c: { valor: null, encontradoEn: null, palabra: '', cita: 'Revisé la Nota 19: solo trae gastos de administración, sin desglose de costo.' } };
+  const [a] = marcarEstadosConHallazgos(advertencias, hallazgos);
+  assert.strictEqual(a.estado, 'confirmado_ausente');
+  assert.match(a.mensaje, /Nota 19/);
+});
+
+test('marcarEstadosConHallazgos no toca una advertencia cuyo campo sí se encontró', () => {
+  const advertencias = [{ tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' }];
+  const hallazgos = { t_c: { valor: 42, encontradoEn: 'nota', palabra: 'costo del servicio', cita: '' } };
+  const [a] = marcarEstadosConHallazgos(advertencias, hallazgos);
+  assert.strictEqual(a.estado, 'no_verificado', 'se resuelve por re-verificación, no por esta función');
+});
+
+test('marcarEstadosConHallazgos no toca advertencias sin campo, o de campos fuera de hallazgos', () => {
+  const advertencias = [{ tipo: 'periodo-distinto', mensaje: 'x' }];
+  assert.deepStrictEqual(marcarEstadosConHallazgos(advertencias, { t_c: { valor: null } }), advertencias);
+});
+
+test('marcarProbableAusentePorVocabulario marca solo los campos indicados', () => {
+  const advertencias = [
+    { tipo: 'sin-inventarios', campo: 't_inv', estado: 'no_verificado', mensaje: 'No se leyeron inventarios.' },
+    { tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' },
+  ];
+  const marcadas = marcarProbableAusentePorVocabulario(advertencias, ['t_inv']);
+  assert.strictEqual(marcadas.find((a) => a.campo === 't_inv').estado, 'probable_ausente_por_vocabulario');
+  assert.strictEqual(marcadas.find((a) => a.campo === 't_c').estado, 'no_verificado');
 });

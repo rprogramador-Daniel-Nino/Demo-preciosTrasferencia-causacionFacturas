@@ -62,6 +62,7 @@
 
 import { num, egreso } from '../utils/calculations.js';
 import { cifrasDelTexto, cifraApareceEnTexto } from './eeffTextoPdf.js';
+import { contienePalabraConocida, normalizarPalabra } from './vocabularioEeff.js';
 
 /* Una identidad se considera cumplida dentro de una milésima de la escala del estado, con
    un piso de un peso para los estados expresados en unidades pequeñas: los estados
@@ -171,7 +172,21 @@ export function gastosOperativosDe({ ventas: gastosVentas, administracion }) {
  *  · `verificadoContraTexto` — si el documento tenía capa de texto. Con `false`, la
  *                    comprobación anti-alucinación no se pudo hacer y hay que decirlo.
  */
-export function verificarEeff(lectura, { anioEstudio } = {}) {
+export function verificarEeff(lectura, {
+  anioEstudio,
+  /* Rótulos que nombran EN SÍ MISMOS la relación con partes vinculadas (relacionada,
+     vinculada, matriz, subsidiaria, controlante, grupo económico...): aprendidos con el
+     mismo mecanismo que `vocabularioEeff.js` ya usa para detectar ausencia, pero aplicados
+     aquí a una candidata puntual en vez de al texto completo. Es compartido entre TODAS las
+     empresas a propósito: el propio rótulo ya lo dice, no depende de la estructura de
+     ninguna compañía en particular. `{ t_ar: <diccionario>, t_ap: <diccionario> }`. */
+  diccionarioRelacionadaGlobal = {},
+  /* Rótulos GENÉRICOS (sin marcador explícito) que, para ESTA empresa puntual, ya se
+     confirmaron como la cuenta con la vinculada — nunca se comparten entre empresas: el
+     mismo rótulo genérico («Cuentas comerciales por pagar») puede ser la vinculada para una
+     y un tercero normal para otra. `{ t_ar: ['<rótulo normalizado>', ...], t_ap: [...] }`. */
+  rotulosConfirmadosEmpresa = {},
+} = {}) {
   const l = lectura || {};
   const cotejo = l.cotejo || {};
   const rotulos = l.rotulos || {};
@@ -209,6 +224,31 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     });
   }
 
+  /* ── 1.5. Inventarios: la fila propia debe decir "inventario" — no basta con que solo
+     una nota lo reinterprete ──
+     El prompt pide transcribir, no interpretar; pero un estado puede traer una fila con
+     OTRO rótulo (p. ej. "Activos corrientes mantenidos para la venta") que remite a una
+     nota titulada "INVENTARIOS" con la misma cifra, y el modelo la toma como inventario
+     por el título de la nota, no por lo que la fila misma dice — eso es interpretar una
+     nota, no transcribir el estado. Caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26).
+     Decisión explícita del usuario: si la fila propia no confirma el concepto, se descarta
+     y se avisa, igual que si no estuviera — el sistema no completa un campo apoyándose en
+     una nota. */
+  const ROTULO_INVENTARIO_VALIDO = /inventari|existencia|mercanc/i;
+  if (campos.t_inv !== null && campos.t_inv !== 0
+      && rotulos.inventarios && !ROTULO_INVENTARIO_VALIDO.test(rotulos.inventarios)) {
+    advertencias.push({
+      tipo: 'inventario-solo-por-nota',
+      campo: 't_inv',
+      estado: 'no_verificado',
+      mensaje: `«${ETIQUETA.t_inv}»: el valor ${fmtCop(campos.t_inv)} se encontró en una fila `
+        + `rotulada «${rotulos.inventarios}», que no menciona inventarios, existencias ni `
+        + 'mercancías — solo una nota lo confirma. No se completó solo; verifique la nota '
+        + 'correspondiente y escríbalo a mano si corresponde.',
+    });
+    campos.t_inv = null;
+  }
+
   /* ── 2. Los gastos operativos y la utilidad operacional ──
      gastos operativos    = gastos de ventas + gastos de administración
      utilidad operacional = ingresos − costo de ventas − gastos operativos */
@@ -229,6 +269,17 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
      aplicarla; más abajo, para comprobar que el costo o los ingresos no se tomaron de la
      fila equivocada. */
   const utilidadBrutaLeida = num(cotejo.utilidad_bruta);
+
+  /* ── Costo de ventas implícito en cero ──
+     Si la utilidad bruta impresa es igual a los ingresos, el propio documento está
+     afirmando que no hay costo de ventas que restar — no es una ausencia sin explicación,
+     es una cifra de cero que el documento no imprime como fila propia. Caso real: LATV
+     Sucursal Colombia (2026-08-25), Utilidad Bruta == Ingresos exactos, sin línea de Costo
+     de Ventas en ningún lado del documento (ni en sus notas). No se asigna sola: se
+     ofrece como sugerencia y el analista decide (ver Fuera de alcance del spec). */
+  const costoImplicitoCero = costo === null && ventas !== null && utilidadBrutaLeida !== null
+    && cuadra(utilidadBrutaLeida, ventas, ventas);
+
   const puedeVerificarConBruta = utilidadBrutaLeida !== null && gastos !== null;
   const uopCuadraConBruta = puedeVerificarConBruta && uopAnalitico !== null
     && cuadra(utilidadBrutaLeida - gastos, uopAnalitico, utilidadBrutaLeida);
@@ -355,24 +406,191 @@ export function verificarEeff(lectura, { anioEstudio } = {}) {
     { campo: 't_ar', patron: /cobrar|deudor|cliente/i },
   ];
   relacionadas.forEach(({ campo, patron }) => {
-    if (campos[campo] !== null) return;
+    const valor = campos[campo];
+    if (valor !== null && valor !== 0) return;
     const candidatas = noAsignados.filter((r) => patron.test(r.rotulo) && Math.abs(r.valor) > 0);
-    advertencias.push({
-      tipo: 'sin-partida-relacionada',
-      campo,
-      mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
-        + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
-        + (candidatas.length
-          ? ` Las que sí trae son: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
-            + 'Si alguna corresponde a la operación, escríbala a mano.'
-          : ''),
-    });
+
+    /* ── Resolución aprendida, antes de la heurística amplia de más abajo ──
+       Dos fuentes, en este orden, cada una exige una sola candidata sin ambigüedad —igual
+       que la heurística amplia— para aplicarse:
+         1. Un rótulo que ESTA empresa ya confirmó en un estudio anterior (aprendido de una
+            corrección manual del analista): específico de la empresa porque un rótulo
+            genérico («Cuentas comerciales por pagar») puede ser la vinculada para una
+            compañía y un tercero normal para otra.
+         2. Un rótulo que en sí mismo nombra la relación (relacionada, vinculada, matriz,
+            subsidiaria, controlante, grupo económico...): seguro de compartir entre TODAS
+            las empresas porque el propio texto ya lo dice. */
+    const porEmpresaConfirmado = candidatas.filter((r) => (
+      (rotulosConfirmadosEmpresa[campo] || []).includes(normalizarPalabra(r.rotulo))
+    ));
+    const porMarcadorExplicito = candidatas.filter((r) => (
+      contienePalabraConocida(r.rotulo, diccionarioRelacionadaGlobal[campo])
+    ));
+
+    const indexarAprendida = (lista, motivo) => {
+      if (lista.length !== 1) return false;
+      const [candidata] = lista;
+      correcciones.push({
+        campo,
+        etiqueta: ETIQUETA[campo],
+        valorLeido: valor,
+        valorAplicado: candidata.valor,
+        motivo: `${motivo} Se indexó «${candidata.rotulo}» (${fmtCop(candidata.valor)}).`,
+      });
+      campos[campo] = candidata.valor;
+      return true;
+    };
+
+    if (indexarAprendida(
+      porEmpresaConfirmado,
+      'El documento no desglosa esta partida por partes relacionadas, pero esta misma '
+        + 'empresa ya confirmó en un estudio anterior que este rótulo corresponde a la '
+        + 'vinculada.',
+    )) return;
+    if (indexarAprendida(
+      porMarcadorExplicito,
+      'El documento no desglosa esta partida por partes relacionadas, pero una de las cifras '
+        + 'de la tabla principal nombra explícitamente la relación en su propio rótulo.',
+    )) return;
+
+    /* El documento no desglosa esta partida por partes relacionadas (ni con una fila
+       literal, ni con un $0 que la cubra por completo), pero la tabla principal SÍ trae,
+       sin ambigüedad, una única cifra agregada bajo un rótulo emparentado —caso real: NET
+       LOGISTIK COLOMBIA S.A.S. (2026-08-26), «Deudores comerciales y otras cuentas por
+       cobrar» $8.439.325.383 y «Acreedores y otras cuentas por pagar» $3.519.703.689,
+       ninguna desglosada por contraparte—. Por decisión explícita del usuario (2026-08-26)
+       esa cifra SÍ se indexa en el campo: es literal de la tabla principal del balance, no
+       una interpretación de una nota narrativa (eso se descartó a propósito, ver el spec).
+       Mezcla partes relacionadas con terceros normales, así que queda como corrección —
+       visible, con motivo, editable— y no como una lectura silenciosa: el analista debe
+       confirmarla con el cliente antes de radicar el estudio. Con más de una candidata la
+       cifra es ambigua y no se puede indexar sola: se avisa, no se aplica. */
+    if (candidatas.length === 1) {
+      const [candidata] = candidatas;
+      correcciones.push({
+        campo,
+        etiqueta: ETIQUETA[campo],
+        valorLeido: valor,
+        valorAplicado: candidata.valor,
+        motivo: `El documento no desglosa esta partida por partes relacionadas; se indexó `
+          + `«${candidata.rotulo}» (${fmtCop(candidata.valor)}), la única cifra de la tabla `
+          + 'principal del balance emparentada con este rubro. Incluye contrapartes que '
+          + 'pueden no ser la vinculada (proveedores o clientes normales, empleados, '
+          + 'impuestos, etc.): verifique con el cliente qué porción corresponde realmente a '
+          + 'partes relacionadas antes de radicar el estudio.',
+      });
+      campos[campo] = candidata.valor;
+      return;
+    }
+
+    if (valor === null) {
+      advertencias.push({
+        tipo: 'sin-partida-relacionada',
+        campo,
+        /* Estructurada, no solo dentro de `mensaje`: es lo que permite aprender de una
+           corrección manual del analista sin tener que re-parsear el texto del aviso —
+           ver `candidataParaAprender`. */
+        candidatas,
+        estado: 'no_verificado',
+        mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
+          + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
+          + (candidatas.length
+            ? ` Las que sí trae son: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
+              + 'Son varias y ambiguas, así que no se indexó ninguna sola; si alguna '
+              + 'corresponde a la operación, escríbala a mano.'
+            : ''),
+      });
+    } else if (candidatas.length > 1) {
+      advertencias.push({
+        tipo: 'relacionada-en-cero-con-total-mayor',
+        campo,
+        candidatas,
+        estado: 'revisar_total_mayor',
+        mensaje: `«${ETIQUETA[campo]}» quedó en $0: es lo único que el documento desglosa `
+          + 'explícitamente para partes relacionadas. El estado principal también trae, sin '
+          + `desglosar por contraparte, varias cifras emparentadas: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
+          + 'Son ambiguas, así que no se indexó ninguna sola: verifique si alguna corresponde '
+          + 'a la vinculada antes de aceptar el $0.',
+      });
+    }
   });
+
+  /* ── Inventarios, Total Activo Corriente y PP&E: buscar bajo otro rótulo en el detalle
+     de activos, no solo con el nombre exacto que pide el prompt ──
+     Misma filosofía que arriba, aplicada a los otros tres campos del balance (decisión
+     explícita del usuario, 2026-08-26): si el rótulo esperado no aparece, no se rinde en
+     null sin más — busca una fila emparentada en `detalle` (el detalle de activos, que el
+     prompt SÍ transcribe completo, a diferencia de `rubrosNoAsignados`, que solo pide
+     deudores/proveedores/otras cuentas/otros gastos). Si hay una sola candidata sin
+     ambigüedad, se indexa como corrección; con varias o ninguna, no se aplica nada. */
+  const CAMPOS_DESDE_DETALLE_ACTIVOS = [
+    { campo: 't_inv', patron: /inventari|existencia|mercanc/i, soloSubtotal: false, avisarSiFalta: false },
+    { campo: 't_act_curr', patron: /activo.*corriente|corriente.*activo/i, soloSubtotal: true, avisarSiFalta: true },
+    { campo: 't_ppe', patron: /propiedad.*planta.*equipo|activo.*fij|inmuebles.*maquinaria/i, soloSubtotal: false, avisarSiFalta: true },
+  ];
+  CAMPOS_DESDE_DETALLE_ACTIVOS.forEach(({
+    campo, patron, soloSubtotal, avisarSiFalta,
+  }) => {
+    const valor = campos[campo];
+    if (valor !== null && valor !== 0) return;
+    const candidatas = detalle.filter((f) => (
+      patron.test(f.etiqueta) && Math.abs(f.valor) > 0 && (!soloSubtotal || f.esSubtotal)
+    ));
+
+    if (candidatas.length === 1) {
+      const [candidata] = candidatas;
+      correcciones.push({
+        campo,
+        etiqueta: ETIQUETA[campo],
+        valorLeido: valor,
+        valorAplicado: candidata.valor,
+        motivo: `No se encontró bajo el rótulo esperado; se indexó «${candidata.etiqueta}» `
+          + `(${fmtCop(candidata.valor)}) del detalle de activos del documento, la única `
+          + 'fila que corresponde a este rubro con otro nombre. Verifíquela contra el '
+          + 'estado financiero.',
+      });
+      campos[campo] = candidata.valor;
+      return;
+    }
+
+    /* `t_inv` no avisa aquí: si sigue en null, la advertencia 'sin-inventarios' de más
+       abajo ya lo cubre — evita duplicar el mismo aviso dos veces. */
+    if (valor === null && avisarSiFalta) {
+      advertencias.push({
+        tipo: 'campo-no-encontrado-en-detalle',
+        campo,
+        estado: 'no_verificado',
+        mensaje: `«${ETIQUETA[campo]}»: no se encontró ninguna fila del documento que `
+          + 'corresponda a este rubro.'
+          + (candidatas.length
+            ? ` Hay varias posibles y ambiguas: ${candidatas.map((f) => `«${f.etiqueta}» ${fmtCop(f.valor)}`).join(', ')}. `
+              + 'Verifique cuál corresponde y escríbala a mano.'
+            : ' Escríbala a mano si el documento la trae con otro nombre.'),
+      });
+    }
+  });
+
+  if (campos.t_c === null) {
+    advertencias.push({
+      tipo: 'sin-costo-de-ventas',
+      campo: 't_c',
+      estado: costoImplicitoCero ? 'implicito_cero' : 'no_verificado',
+      mensaje: costoImplicitoCero
+        ? `No se leyó una fila de costo de ventas, pero la utilidad bruta que imprime el `
+          + `documento (${fmtCop(utilidadBrutaLeida)}) es igual a los ingresos: el propio `
+          + 'documento implica que el costo de ventas es cero. Puede aceptarlo escribiendo '
+          + '0, o pedir al cliente el detalle si sabe que sí existe.'
+        : 'No se leyó el costo de ventas. Sin él no hay margen operacional ni Índice de '
+          + 'Berry — escríbalo a mano si lo tiene, o verifique si el documento lo '
+          + 'desglosa en otra parte.',
+    });
+  }
 
   if (campos.t_inv === null) {
     advertencias.push({
       tipo: 'sin-inventarios',
       campo: 't_inv',
+      estado: 'no_verificado',
       mensaje: 'No se leyeron inventarios. Si la compañía los tiene, escríbalos: su ajuste '
         + 'de capital de trabajo se está calculando contra cero.',
     });
@@ -412,4 +630,122 @@ export function camposAplicables(campos) {
   return Object.fromEntries(
     Object.entries(campos || {}).filter(([, v]) => v !== null && v !== undefined),
   );
+}
+
+/**
+ * Los campos que hay que limpiar explícitamente en la casilla porque ESTA lectura concluyó
+ * que no hay cifra para ellos (quedaron en `null` tras la verificación) y traen una
+ * advertencia asociada: dejar ahí el valor de una carga o edición anterior contradice el
+ * aviso que se le muestra al analista en este mismo momento. `camposAplicables()` no los
+ * toca a propósito —esa protección es para cuando una lectura simplemente no intenta un
+ * campo—, pero esta ingesta siempre reintenta los mismos campos en cada carga, así que un
+ * `null` con advertencia sí debe borrar lo que hubiera.
+ *
+ * Generaliza lo que antes solo cubría `inventario-solo-por-nota` (commit 203eaa3) a
+ * cualquier advertencia con `campo`: `sin-partida-relacionada`, `campo-no-encontrado-en-detalle`,
+ * `sin-costo-de-ventas`, `sin-inventarios`, `cifra-inexistente`, etc. No toca
+ * `t_activos_detalle` (su advertencia, `activos-detalle-cifra-inexistente`, no lleva `campo`)
+ * ni un campo que quedó en `0` en vez de `null` (p. ej. `relacionada-en-cero-con-total-mayor`):
+ * ese `0` sí es una cifra válida y ya la escribe `camposAplicables()`.
+ */
+export function camposParaLimpiar(campos, advertencias) {
+  return Object.fromEntries(
+    (advertencias || [])
+      .filter((a) => a.campo && (campos || {})[a.campo] === null)
+      .map((a) => [a.campo, '']),
+  );
+}
+
+/**
+ * Fusiona en una lectura los hallazgos de la pasada angosta a notas, para volver a
+ * verificar con `verificarEeff()` — reutiliza todo su cálculo (utilidad operacional,
+ * identidades) en vez de repetirlo aquí. Solo escribe los campos con valor encontrado:
+ * un hallazgo sin valor no debe pisar con `null` lo que ya hubiera. Puro, no muta.
+ */
+export function fusionarHallazgosEnLectura(lectura, hallazgos) {
+  const fusionada = { ...(lectura || {}) };
+  Object.entries(hallazgos || {}).forEach(([campo, hallazgo]) => {
+    if (hallazgo && hallazgo.valor !== null && hallazgo.valor !== undefined) {
+      fusionada[campo] = hallazgo.valor;
+    }
+  });
+  return fusionada;
+}
+
+/**
+ * Marca `confirmado_ausente`, con su cita, las advertencias cuyo campo la pasada angosta
+ * revisó y no encontró en ninguna parte. Las que sí se encontraron no se tocan aquí: al
+ * fusionar el hallazgo y volver a llamar `verificarEeff()`, esa advertencia ya no se
+ * genera. Puro.
+ */
+export function marcarEstadosConHallazgos(advertencias, hallazgos) {
+  if (!hallazgos) return advertencias;
+  return (advertencias || []).map((a) => {
+    const hallazgo = a.campo ? hallazgos[a.campo] : null;
+    if (!hallazgo || (hallazgo.valor !== null && hallazgo.valor !== undefined)) return a;
+    return {
+      ...a,
+      estado: 'confirmado_ausente',
+      mensaje: `${a.mensaje} La IA revisó el documento completo, incluidas sus notas, y `
+        + `confirma que no aparece${hallazgo.cita ? ` (${hallazgo.cita})` : ''}.`,
+    };
+  });
+}
+
+/* Marcadores que, si aparecen en un rótulo, ya nombran EXPLÍCITAMENTE la relación con
+   partes vinculadas — la semilla del diccionario global compartido entre empresas
+   (`t_ar_relacionada` / `t_ap_relacionada` en `vocabularioEeff.js`). Cualquier otro rótulo
+   que resulte ser la cuenta con la vinculada (uno genérico, como «Cuentas comerciales por
+   pagar») es un hecho de ESA empresa, no una regla de lenguaje, y por eso no entra aquí. */
+/* Raíces, no palabras completas, para no depender de la concordancia de género/número con
+   el sustantivo que modifican («cuentas relacionadaS» vs «deudores relacionadOS»). Se
+   normalizan aquí mismo (sin tildes, en minúscula) para compararse contra un rótulo ya
+   normalizado por `normalizarPalabra`. */
+export const MARCADORES_RELACIONADA = [
+  'relacionad', 'vinculad', 'matriz', 'subsidiari', 'controlante', 'compañías del grupo',
+  'grupo económico',
+].map(normalizarPalabra);
+
+/**
+ * A qué diccionario debe alimentarse una candidata que el analista confirmó a mano: al
+ * global (compartido entre empresas) si su rótulo ya nombra explícitamente la relación, o
+ * al de esta empresa (no se comparte: un rótulo genérico puede significar otra cosa para
+ * otra compañía) en cualquier otro caso. Puro: no toca Firestore, solo decide.
+ */
+export function destinoDelAprendizaje(rotulo) {
+  const normalizado = normalizarPalabra(rotulo);
+  return MARCADORES_RELACIONADA.some((m) => normalizado.includes(m)) ? 'global' : 'empresa';
+}
+
+/**
+ * La candidata que corresponde aprender de una corrección manual del analista: entre las
+ * `candidatas` de una advertencia `sin-partida-relacionada` / `relacionada-en-cero-con-total-mayor`,
+ * la única cuyo valor coincide EXACTAMENTE con lo que el analista acaba de escribir. Sin una
+ * coincidencia única no hay nada seguro que aprender —el valor pudo no venir de ninguna fila
+ * del documento, o dos candidatas podrían compartir el mismo valor— y se devuelve `null`.
+ */
+export function candidataParaAprender(candidatas, valorEscrito) {
+  const v = num(valorEscrito);
+  if (v === null) return null;
+  const coincidencias = (candidatas || []).filter((c) => num(c.valor) === v);
+  return coincidencias.length === 1 ? coincidencias[0] : null;
+}
+
+/**
+ * Marca `probable_ausente_por_vocabulario` las advertencias de los campos que el
+ * diccionario compartido (ya maduro) no encontró en el texto del documento — una señal
+ * más débil que `confirmado_ausente`, porque el diccionario pudo simplemente no conocer
+ * el sinónimo que usa esta empresa. Puro.
+ */
+export function marcarProbableAusentePorVocabulario(advertencias, campos) {
+  const objetivo = new Set(campos || []);
+  return (advertencias || []).map((a) => (a.campo && objetivo.has(a.campo)
+    ? {
+      ...a,
+      estado: 'probable_ausente_por_vocabulario',
+      mensaje: `${a.mensaje} No encontramos ninguna palabra relacionada con este rubro en `
+        + 'todo el documento, según lo aprendido de otros estudios similares — puede que '
+        + 'use un término distinto; revíselo manualmente antes de descartarlo.',
+    }
+    : a));
 }

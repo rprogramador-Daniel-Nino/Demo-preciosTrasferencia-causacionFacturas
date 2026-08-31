@@ -35,6 +35,7 @@ import {
   debeRestaurarCribado, bucketAusente, AVISO_STORAGE_APAGADO,
 } from '../services/cribadoStorage';
 import MemoriaRangoModal from './MemoriaRangoModal.jsx';
+import CampoMoneda from './CampoMoneda';
 
 /* Aviso que ocupa el lugar de la actividad económica mientras no se extraiga de los
    adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
@@ -2382,65 +2383,58 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     </select>
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.s}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 's', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 's', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.c}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'c', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'c', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.op}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'op', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'op', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.ar}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'ar', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'ar', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.inv}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'inv', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'inv', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.ap}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'ap', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'ap', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
                   <td className="py-2 px-3 text-right">
-                    <input
-                      type="number"
+                    <CampoMoneda
                       value={row.ppe ?? ''}
                       placeholder="0"
-                      onChange={(e) => handleRowChange(idx, 'ppe', e.target.value)}
+                      onChange={(v) => handleRowChange(idx, 'ppe', v)}
                       className="w-full bg-transparent border-0 border-b border-transparent text-right py-1 font-mono text-zinc-950 dark:text-zinc-100 focus:outline-none"
                     />
                   </td>
