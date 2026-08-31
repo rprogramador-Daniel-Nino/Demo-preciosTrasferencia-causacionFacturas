@@ -58,6 +58,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [editingAct, setEditingAct] = useState(false);
   const [actInput, setActInput] = useState(actividad);
 
+  useEffect(() => {
+    if (study.actividad_especifica) {
+      setActividad(study.actividad_especifica);
+      setActInput(study.actividad_especifica);
+    }
+  }, [study.actividad_especifica]);
+
   // Engine Configuration State
   const [engineConfig, setEngineConfig] = useState(study.motorConfig || {
     nTarget: 12,
@@ -353,8 +360,26 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setCuracionProgreso({ etapa: 'inicio', mensaje: 'Preparando la curación…' });
     try {
       const priorComps = (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [];
+      const kind = study.pli || 'MO';
+      const segExcluido = num(study.seg_excluido) || 0;
+      const tSNum = num(study.t_s);
+      const tOpNum = num(study.t_op);
+      const T = {
+        s: tSNum !== null ? tSNum - segExcluido : null,
+        c: num(study.t_c),
+        op: tOpNum !== null ? tOpNum - segExcluido : null,
+        ar: num(study.t_ar),
+        inv: num(study.t_inv),
+        ap: num(study.t_ap),
+        ppe: num(study.t_ppe),
+      };
+      const tPLI = pliOf(T, kind);
+      const targetProfitability = tPLI !== null ? (tPLI * 100).toFixed(3) : '4.716';
+
       const veredicto = await curateCandidatesWithGemini(candidatas, act, {
         priorComps,
+        targetProfitability,
+        pli: kind,
         fuente: (importMeta && importMeta.archivo) || '',
         veredictoPrevio: forzar ? null : iaMatch,
         onProgress: (info) => {
@@ -1489,7 +1514,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="flex gap-2">
               <button
                 /* el embudo describía una corrida contra la actividad anterior */
-                onClick={() => { setActividad(actInput); setEditingAct(false); setSelectionFunnel(null); setMotorAuditoria(null); }}
+                onClick={() => {
+                  setActividad(actInput);
+                  updateStudy({ actividad_especifica: actInput });
+                  setEditingAct(false);
+                  setSelectionFunnel(null);
+                  setMotorAuditoria(null);
+                }}
                 className="bg-[#0FA3A1] text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
               >
                 Guardar Actividad

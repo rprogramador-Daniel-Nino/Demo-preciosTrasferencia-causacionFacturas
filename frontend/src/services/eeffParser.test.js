@@ -275,6 +275,29 @@ test('el prompt permite sumar renglones de costo, pero solo para costo_ventas', 
     'la regla central para el resto de rubros debe seguir intacta');
 });
 
+/* ══════ Partes relacionadas repartidas en corriente y no corriente ══════ */
+
+test('el prompt permite sumar partes relacionadas repartidas en corriente y no corriente', () => {
+  /* HH Colombia imprime "Cuentas por pagar a vinculadas" dos veces: una en el pasivo
+     corriente (en cero) y otra en el no corriente (con la cifra real). Sin esta excepción
+     el campo se queda en null o toma la fila equivocada — justo el tipo de dato faltante
+     o incorrecto que reportó el analista. La regla central sigue prohibiendo sumar filas
+     para todo lo demás. */
+  const camposConExcepcion = ['cuentas_por_cobrar_relacionadas', 'cuentas_por_pagar_relacionadas'];
+  camposConExcepcion.forEach((campo) => {
+    const inicio = EEFF_PROMPT.indexOf(`· ${campo}:`);
+    assert.ok(inicio !== -1, `no se encontró la definición de ${campo} en EEFF_PROMPT`);
+    const siguiente = EEFF_PROMPT.indexOf('\n·', inicio + 1);
+    const bloque = EEFF_PROMPT.slice(inicio, siguiente === -1 ? inicio + 700 : siguiente);
+    assert.match(bloque, /EXCEPCI[OÓ]N/i,
+      `falta la excepción de suma corriente/no-corriente en la definición de ${campo}`);
+    assert.match(bloque, /corriente/i);
+    assert.match(bloque, /su[mn]a/i);
+  });
+  assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
+    'la regla central para el resto de rubros debe seguir intacta');
+});
+
 /* ══════ El texto del documento ══════ */
 
 test('el bloque de texto se omite cuando el PDF no tiene capa de texto', () => {

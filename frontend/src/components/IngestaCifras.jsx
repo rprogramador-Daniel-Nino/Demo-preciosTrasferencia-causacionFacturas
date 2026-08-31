@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
+import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, FileWarning, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
 import { parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS } from '../services/eeffParser';
 import {
@@ -13,6 +13,7 @@ import {
   leerRotulosConfirmadosPorEmpresa, guardarRotulosConfirmadosPorEmpresa,
 } from '../services/firestoreRepo';
 import { convertPdfToImages } from '../services/pdfRenderer';
+import { RUBROS_EXAMINADA } from '../services/memoriaCalculoRangoOptimo.js';
 import PopupFaltantesEeff from './PopupFaltantesEeff';
 import CampoMoneda from './CampoMoneda';
 
@@ -41,6 +42,20 @@ const RUBROS_BALANCE = [
      lee y se verifica contra el documento como cualquier otra partida del balance. */
   { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
 ];
+
+/* Los seis rubros que el Excel Soporte Motor ya publica (hoja Datos, columna A.V.) pero
+   que hasta ahora ningún punto de la interfaz permitía corregir: solo los escribía la
+   lectura del documento, y esta no los toma (ver `CAMPO_POR_RUBRO` en eeffParser.js), así
+   que quedaban siempre en 0,00. No alimentan la utilidad operacional ni los ajustes de
+   capital de trabajo — solo el Análisis Vertical de la hoja Datos y del ANEXO A/Tabla 10.
+
+   Las etiquetas se toman de `RUBROS_EXAMINADA` y no se repiten aquí a mano: es la misma
+   fila que el Excel escribe, y una etiqueta distinta en los dos sitios confundiría a quien
+   audite el libro contra la pantalla. */
+const CLAVES_BALANCE_ADICIONALES = ['t_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr'];
+const RUBROS_BALANCE_ADICIONALES = CLAVES_BALANCE_ADICIONALES.map(
+  (clave) => RUBROS_EXAMINADA.find((r) => r.clave === clave),
+);
 
 const CLASE_CASILLA = 'bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-[8px] px-[12px] py-[8px] text-sm focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50 focus:border-[#0FA3A1] text-zinc-950 dark:text-zinc-100 font-mono';
 
@@ -100,6 +115,14 @@ export default function IngestaCifras({ study, updateStudy }) {
     }
 
     updateStudy(cambios);
+  };
+
+  /* Elegir una de las candidatas ambiguas que la alerta lista (botón en la caja roja o en
+     el popup): usa la MISMA ruta que si el analista la hubiera escrito a mano, para que
+     dispare el mismo aprendizaje — no hay dos caminos distintos que puedan divergir. */
+  const elegirCandidataRelacionada = (campo, candidata) => {
+    if (!campo || !candidata) return;
+    handleFieldChange(campo, candidata.valor);
   };
 
   /* El detalle completo de la sección ACTIVOS (Tabla 10 / ANEXO A). A diferencia de las
@@ -360,13 +383,48 @@ export default function IngestaCifras({ study, updateStudy }) {
                 {hallazgos.advertencias.map((a, i) => (
                   <li key={i} className="text-[11px] text-rose-900 dark:text-rose-200 leading-snug">
                     {a.mensaje}
+                    {/* Un botón por candidata ambigua: sin esto, la única forma de resolver
+                        la ambigüedad era escribir a mano el número exacto en la casilla de
+                        más abajo, sin ninguna pista de que hacerlo cuenta como confirmación. */}
+                    {Array.isArray(a.candidatas) && a.candidatas.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {a.candidatas.map((c, j) => (
+                          <button
+                            key={j}
+                            type="button"
+                            onClick={() => elegirCandidataRelacionada(a.campo, c)}
+                            className="text-[10px] font-semibold px-2 py-0.5 rounded-full border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 transition-colors"
+                          >
+                            Usar «{c.rotulo}» ({fmt(c.valor)})
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
             </div>
           )}
 
-          {hallazgos && hallazgos.correcciones.length === 0 && hallazgos.advertencias.length === 0 && (
+          {/* `verificadoContraTexto` distingue una lectura que sí se cruzó contra el texto
+              nativo del PDF de una que no tuvo con qué —documento escaneado o con fuentes
+              sin ToUnicode—. Sin este aviso, un documento 100% escaneado que por azar no
+              dispara ninguna advertencia puntual se ve en pantalla igual que una lectura
+              verificada cifra por cifra: el analista no tiene forma de saber que ninguna
+              cifra pudo cotejarse contra el documento. */}
+          {hallazgos && hallazgos.verificadoContraTexto === false && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 text-[11px] text-amber-900 dark:text-amber-200 flex gap-2 items-center">
+              <FileWarning className="w-4 h-4 flex-shrink-0" />
+              <span>
+                Este documento no tiene una capa de texto legible (es un escaneo o sus fuentes
+                no se pueden leer): ninguna cifra pudo cotejarse contra el texto del PDF.
+                Revise el estado financiero a mano antes de confiar en esta lectura.
+              </span>
+            </div>
+          )}
+
+          {hallazgos && hallazgos.correcciones.length === 0 && hallazgos.advertencias.length === 0
+            && hallazgos.verificadoContraTexto && (
             <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 text-[11px] text-emerald-800 dark:text-emerald-300 flex gap-2 items-center">
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               <span>
@@ -496,6 +554,28 @@ export default function IngestaCifras({ study, updateStudy }) {
                 />
               </div>
             ))}
+          </div>
+
+          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
+            <p className="text-xs text-zinc-500 leading-relaxed mb-3">
+              Estos rubros no cambian la utilidad ni los ajustes de capital de trabajo: solo
+              alimentan el Análisis Vertical de la hoja Datos del Excel de soporte y del
+              ANEXO A / Tabla 10. La lectura del documento no los completa todavía —
+              escríbalos a mano si el balance los trae.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {RUBROS_BALANCE_ADICIONALES.map(({ clave, etiqueta }) => (
+                <div key={clave} className="flex flex-col">
+                  <label className="text-xs font-semibold text-zinc-500 mb-1.5">{etiqueta}</label>
+                  <CampoMoneda
+                    value={study[clave] ?? ''}
+                    onChange={(v) => handleFieldChange(clave, v)}
+                    placeholder="COP"
+                    className={CLASE_CASILLA}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -657,6 +737,7 @@ export default function IngestaCifras({ study, updateStudy }) {
         advertencias={popupFaltantes.advertencias}
         conclusion={popupFaltantes.conclusion}
         alCerrar={() => setPopupFaltantes(null)}
+        onElegirCandidata={elegirCandidataRelacionada}
       />
     )}
     </>
