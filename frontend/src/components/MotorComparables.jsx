@@ -200,11 +200,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
   }, [universo, comparables, auditoria]);
 
-  /* Detalle de candidatas rechazadas y en reserva de la última corrida del motor,
-     para el Excel de soporte. Igual que `universo`, NO se persiste con el estudio:
-     puede traer miles de filas y guardarlas revienta la cuota de localStorage. Se
-     recalcula corriendo el motor otra vez. */
-  const [motorAuditoria, setMotorAuditoria] = useState(null); // { rechazadas, reserva } | null
+
 
   useEffect(() => {
     updateStudy({
