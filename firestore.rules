@@ -161,27 +161,43 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
+    /* Nadie puede figurar como editor sin figurar antes como habilitado. Sin esto, la
+       lista de edición sería una segunda puerta capaz de conceder escritura a quien la
+       consulta de «Compartidos conmigo» ni siquiera muestra el estudio. */
+    function editoresHabilitados(d) {
+      return !('editores' in d)
+        || (d.editores.size() == 0)
+        || (('compartidoCon' in d) && d.editores.hasOnly(d.compartidoCon));
+    }
+
     function estudioValido(d) {
       return soloEstosCampos(['ent', 'nit', 'anio', 'clienteNit', 'datos', 'compartidoCon',
-                              'creadoPor', 'creadoPorNombre', 'creadoEn',
+                              'editores', 'creadoPor', 'creadoPorNombre', 'creadoEn',
                               'actualizadoPor', 'actualizadoPorNombre', 'actualizadoEn'])
         && tieneTodos(['ent', 'anio', 'datos', 'creadoPor', 'creadoEn', 'actualizadoEn'])
+        && editoresHabilitados(d)
         && texto(d.ent, 1, 200)
         && textoOpcional(d, 'nit', 30)
         && textoOpcional(d, 'clienteNit', 30)
         && d.anio is number && d.anio >= 2000 && d.anio <= 2100
         && d.datos is map
         && listaOpcional(d, 'compartidoCon', 25)
+        && listaOpcional(d, 'editores', 25)
         && texto(d.creadoPor, 1, 128)
         && nombreCoherente(d, 'creadoPorNombre')
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
     /* ── compartición de un estudio ──
-       Privado por defecto. El dueño puede habilitar a compañeros del dominio uno a uno,
-       y lo que concede es LECTURA: si dos personas pudieran guardar el mismo estudio
-       volvería el problema que este modelo viene a cerrar —un estudio creado por alguien
-       y modificado por otro sin que ninguno lo supiera.
+       Privado por defecto. El dueño habilita a compañeros uno a uno y decide con qué
+       nivel: CONSULTA o EDICIÓN.
+
+       Dos listas y no una de objetos `{correo, rol}`: «Compartidos conmigo» es una
+       consulta de grupo de colecciones con `array-contains` sobre `compartidoCon`, y ese
+       operador exige igualdad exacta del elemento —con objetos habría que conocer el rol
+       de antemano para poder preguntar—. Así `compartidoCon` sigue siendo la lista
+       completa de habilitados, que es lo que la consulta filtra y lo que esta regla
+       comprueba para leer, y `editores` es el subconjunto que además puede escribir.
 
        Se comparte por correo y no por identificador de usuario porque no existe un
        directorio del equipo: nadie puede averiguar el uid de un compañero, mientras que
@@ -192,6 +208,22 @@ service cloud.firestore {
         && 'compartidoCon' in resource.data
         && resource.data.compartidoCon is list
         && request.auth.token.email.lower() in resource.data.compartidoCon;
+    }
+
+    function puedoEditarEsteEstudio() {
+      return esMiembro()
+        && 'editores' in resource.data
+        && resource.data.editores is list
+        && request.auth.token.email.lower() in resource.data.editores;
+    }
+
+    /* Un editor modifica el contenido del estudio, no quién entra. Se le exige devolver
+       las dos listas exactamente como estaban: sin esto podría promoverse solo, retirar
+       a los demás o dejar fuera al propio dueño, que es una escalada de privilegio con
+       una sola escritura. Cambiar accesos sigue siendo del dueño y de nadie más. */
+    function permisosIntactos() {
+      return !request.resource.data.diff(resource.data)
+        .affectedKeys().hasAny(['compartidoCon', 'editores']);
     }
 
     function comparableValida(d) {
@@ -273,14 +305,16 @@ service cloud.firestore {
       // él. Se niega explícitamente para que nadie lo use como almacén sin validar.
       allow read, write: if false;
 
-      /* Lo lee su dueño, y además quien él haya habilitado expresamente. Escribir y
-         borrar siguen siendo solo del dueño: compartir concede lectura, no edición. */
+      /* Lo lee su dueño, y además quien él haya habilitado expresamente. Modificarlo lo
+         puede hacer el dueño y quien esté en `editores`, y ese editor no puede tocar los
+         permisos. Crear y borrar siguen siendo solo del dueño: nadie puede hacer
+         desaparecer un estudio del espacio de otro, porque no hay papelera. */
       match /estudios/{estudioId} {
         allow read: if esDueno(uid) || estudioCompartidoConmigo();
         allow create: if esDueno(uid)
           && estudioValido(request.resource.data)
           && creacionCoherente(request.resource.data);
-        allow update: if esDueno(uid)
+        allow update: if (esDueno(uid) || (puedoEditarEsteEstudio() && permisosIntactos()))
           && estudioValido(request.resource.data)
           && modificacionCoherente(request.resource.data);
         allow delete: if esDueno(uid);

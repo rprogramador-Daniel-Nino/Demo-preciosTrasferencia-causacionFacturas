@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Plus, Trash2, Copy, FileText, Calendar, Sparkles, AlertTriangle } from 'lucide-react';
 import { fmt } from '../utils/calculations';
+import { ROL_EDITOR } from '../services/firestoreModelo';
 
 /* El índice de estudios llega por props desde App: ahora vive en Firestore y lo
    comparte el equipo, así que el tablero ya no lo arma leyendo localStorage. La
@@ -161,14 +162,16 @@ export default function Dashboard({ indice = [], compartidos = [], abrirComparti
       </div>
 
       {/* Estudios que otras personas compartieron. Van en su propia tabla y no
-          mezclados con los propios: no se pueden editar ni borrar, y confundirlos
-          llevaría a intentar trabajar en uno ajeno. */}
+          mezclados con los propios: no son suyos, no se pueden borrar, y algunos solo
+          se pueden consultar. La columna «Acceso» lo dice antes de abrirlos, para no
+          descubrir a mitad de trabajo que ahí no se podía escribir. */}
       {compartidos.length > 0 && (
         <div className="bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
             <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Compartidos conmigo</h3>
             <p className="text-[11px] text-zinc-500">
-              Estudios de otros consultores a los que le dieron acceso. Se abren en solo lectura.
+              Estudios de otros consultores a los que le dieron acceso. Cada uno se abre con el
+              nivel que su dueño concedió.
             </p>
           </div>
           <div className="overflow-x-auto">
@@ -179,6 +182,7 @@ export default function Dashboard({ indice = [], compartidos = [], abrirComparti
                   <th className="py-3 px-4">NIT</th>
                   <th className="py-3 px-4">Año Fiscal</th>
                   <th className="py-3 px-4">Compartido por</th>
+                  <th className="py-3 px-4">Acceso</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-sm">
@@ -195,6 +199,13 @@ export default function Dashboard({ indice = [], compartidos = [], abrirComparti
                     <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 font-mono text-xs">{c.nit}</td>
                     <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400">{c.anio}</td>
                     <td className="py-3 px-4 text-zinc-600 dark:text-zinc-400 text-xs">{c.duenoNombre || '—'}</td>
+                    <td className="py-3 px-4">
+                      <span className={'text-[10.5px] px-1.5 py-0.5 rounded border ' + (c.rol === ROL_EDITOR
+                        ? 'border-[#0FA3A1]/50 text-[#0FA3A1]'
+                        : 'border-zinc-300 dark:border-zinc-700 text-zinc-500')}>
+                        {c.rol === ROL_EDITOR ? 'puede editar' : 'solo consulta'}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
