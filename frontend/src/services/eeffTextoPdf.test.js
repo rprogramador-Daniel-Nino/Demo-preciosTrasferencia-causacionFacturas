@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   agruparEnLineas, cifrasDelTexto, cifraApareceEnTexto, extraerTextoPdf, textoEsConfiable,
-  contarPaginasPdf,
+  contarPaginasPdf, paginasSinTextoUtilizable,
 } from './eeffTextoPdf.js';
 
 /* Los fragmentos como los entrega pdf.js: `transform[4]` es la X y `transform[5]` la Y, y
@@ -325,4 +325,89 @@ test('contarPaginasPdf devuelve 0 si pdf.js no puede abrirlo', async () => {
 
 test('contarPaginasPdf devuelve 0 sin archivo', async () => {
   assert.strictEqual(await contarPaginasPdf(null), 0);
+});
+
+/* ══════ Qué páginas necesitan transcripción ══════
+   El insumo del respaldo por OCR. Hoy un PDF escaneado deja la ingesta sin ninguna red de
+   verificación; esto dice exactamente qué páginas hay que rasterizar, para no mandar el
+   documento entero (caro, y en un documento largo el modelo se salta páginas). */
+
+/* Un documento falso cuyas páginas traen los items que se le indiquen, por número. */
+const docConPaginas = (porPagina) => ({
+  getDocument: () => ({
+    promise: Promise.resolve({
+      numPages: Object.keys(porPagina).length,
+      getPage: async (n) => ({ getTextContent: async () => ({ items: porPagina[n] || [] }) }),
+    }),
+  }),
+});
+
+const pdf = () => ({ type: 'application/pdf', name: 'eeff.pdf', arrayBuffer: async () => new ArrayBuffer(8) });
+
+const FILA_LEGIBLE = [item('TOTAL ACTIVO', 60, 700), item('15.004.112.346', 400, 700)];
+/* Las palabras que `textoEsConfiable` busca: sin al menos dos, el conjunto se descarta. */
+const PAGINA_CONFIABLE = [
+  item('ESTADO DE SITUACIÓN FINANCIERA A 31 DE DICIEMBRE', 60, 720),
+  item('TOTAL ACTIVO', 60, 700), item('15.004.112.346', 400, 700),
+  item('TOTAL PASIVO', 60, 688), item('910.961.004', 400, 688),
+  item('TOTAL PATRIMONIO', 60, 676), item('2.607.405.112', 400, 676),
+];
+
+test('un documento con texto en todas sus páginas no necesita transcripción', async () => {
+  const paginas = await paginasSinTextoUtilizable(pdf(), docConPaginas({
+    1: PAGINA_CONFIABLE, 2: FILA_LEGIBLE,
+  }));
+  assert.deepStrictEqual(paginas, [], 'y así el caso normal no gasta ni rasterizado ni cuota');
+});
+
+test('un documento mixto marca solo las páginas escaneadas', async () => {
+  /* El caso Inoxpa: el balance y el P&G traen texto, las notas están escaneadas. */
+  const paginas = await paginasSinTextoUtilizable(pdf(), docConPaginas({
+    1: PAGINA_CONFIABLE, 2: FILA_LEGIBLE, 3: [], 4: [], 5: FILA_LEGIBLE, 6: [],
+  }));
+  assert.deepStrictEqual(paginas, [3, 4, 6]);
+});
+
+test('una página con solo espacios cuenta como escaneada', async () => {
+  /* pdf.js devuelve fragmentos en blanco en páginas que solo traen una imagen y un marco:
+     contarlas como «con texto» dejaría sin transcribir justo las que hacen falta. */
+  const paginas = await paginasSinTextoUtilizable(pdf(), docConPaginas({
+    1: PAGINA_CONFIABLE, 2: [item('   ', 60, 700), item('  ', 400, 700)],
+  }));
+  assert.deepStrictEqual(paginas, [2]);
+});
+
+test('un documento escaneado por completo marca todas sus páginas', async () => {
+  /* El caso Robertet: 0 de 25 con capa de texto. */
+  const paginas = await paginasSinTextoUtilizable(pdf(), docConPaginas({ 1: [], 2: [], 3: [] }));
+  assert.deepStrictEqual(paginas, [1, 2, 3]);
+});
+
+test('si el texto extraído no es confiable, TODAS las páginas necesitan transcripción', async () => {
+  /* El caso LATV: hay capa de texto, pero las fuentes no traen `ToUnicode` y lo que sale es
+     basura. `extraerTextoPdf` ya devuelve '' para todo el documento, así que para la
+     verificación esas páginas no existen — aunque individualmente tuvieran fragmentos. */
+  const basura = TEXTO_FUENTE_SIN_TOUNICODE.split('\n').map((linea, i) => item(linea, 60, 700 - i * 12));
+  const paginas = await paginasSinTextoUtilizable(pdf(), docConPaginas({ 1: basura, 2: basura }));
+  assert.deepStrictEqual(paginas, [1, 2]);
+});
+
+test('una imagen no tiene páginas que transcribir aparte', async () => {
+  /* La lectura principal ya la manda completa como imagen: rasterizarla de nuevo para
+     transcribirla sería pedirle al mismo modelo la misma imagen dos veces. */
+  const archivo = { type: 'image/png', name: 'balance.png', arrayBuffer: async () => { throw new Error('no debería llegar aquí'); } };
+  assert.deepStrictEqual(await paginasSinTextoUtilizable(archivo), []);
+});
+
+test('un PDF que no se puede abrir no propone transcribir nada', async () => {
+  /* Sin poder abrirlo tampoco se podría rasterizar: el respaldo se salta y la ingesta queda
+     como hoy, con su aviso. */
+  const paginas = await paginasSinTextoUtilizable(pdf(), {
+    getDocument: () => ({ promise: Promise.reject(new Error('formato inválido')) }),
+  });
+  assert.deepStrictEqual(paginas, []);
+});
+
+test('sin archivo no hay páginas', async () => {
+  assert.deepStrictEqual(await paginasSinTextoUtilizable(null), []);
 });

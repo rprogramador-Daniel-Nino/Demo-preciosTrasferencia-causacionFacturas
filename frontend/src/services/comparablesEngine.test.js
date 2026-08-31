@@ -237,6 +237,125 @@ test('sin continuidad el cupo se comporta igual que antes', () => {
   assert.strictEqual(r.reserva.length, 6);
 });
 
+/* ══════════════ Cuota de comparables en pérdida ══════════════
+
+   Por qué existe: `perdidaOp: 'excluir'` viene activo por defecto y rotulado «criterio
+   conservador DIAN», así que toda muestra pierde su extremo bajo y todos los rangos salen
+   empujados hacia arriba. Un contribuyente de margen bajo queda estructuralmente fuera del
+   rango. Las Guías OCDE (cap. III, §3.64-3.65) no admiten rechazar una comparable por estar
+   en pérdida sin analizar la causa.
+
+   `negativasObjetivo` es un objetivo Y un tope, cuenta DENTRO de `nTarget`, y solo se llena
+   con actividad MISMA (decisión del usuario, 2026-08-31). */
+
+/* Candidatas homogéneas salvo por el margen: `op` negativo es la pérdida. `s` igual en todas
+   para que el factor de tamaño no las ordene por otra cosa. */
+const positivas = (n, prefijo = 'POS') => Array.from({ length: n }, (_, i) => ({
+  id: prefijo + i, name: prefijo + ' ' + i, nameKey: nameKey(prefijo + ' ' + i), s: 100, op: 10,
+}));
+const negativas = (n, prefijo = 'NEG') => Array.from({ length: n }, (_, i) => ({
+  id: prefijo + i, name: prefijo + ' ' + i, nameKey: nameKey(prefijo + ' ' + i), s: 100, op: -10,
+}));
+const cuantasNegativas = (lista) => lista.filter((c) => num(c.op) < 0).length;
+
+test('pedir 3 negativas con 5 disponibles da exactamente 3, y la muestra sigue midiendo nTarget', () => {
+  const r = scoreCandidates([...positivas(20), ...negativas(5)],
+    { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 3 }, '', []);
+
+  assert.strictEqual(r.seleccionadas.length, 12, 'las negativas ocupan lugar DENTRO del N, no aparte');
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 3, 'exactamente las pedidas');
+  assert.strictEqual(r.negativasObjetivo, 3);
+  assert.strictEqual(r.negativasIncluidas, 3);
+  assert.strictEqual(r.negativasDisponibles, 5);
+});
+
+test('el objetivo es también un TOPE: las negativas de sobra no se cuelan por puntaje', () => {
+  /* Sin esto, pedir 3 podía devolver 5 —las 3 de la cuota más las que entraran compitiendo—
+     y el número dejaría de significar «las que salen en el informe». */
+  const r = scoreCandidates([...positivas(5), ...negativas(10)],
+    { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 2 }, '', []);
+
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 2, 'ni una más, aunque sobren negativas y falten positivas');
+  /* Y la muestra queda corta antes que rellenarse con negativas de más: 5 positivas + 2. */
+  assert.strictEqual(r.seleccionadas.length, 7);
+  assert.strictEqual(cuantasNegativas(r.reserva), 8, 'las otras 8 quedan en reserva, no descartadas');
+});
+
+test('si hay menos negativas de las pedidas, entran las que haya y se puede avisar cuántas', () => {
+  const r = scoreCandidates([...positivas(20), ...negativas(1)],
+    { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 3 }, '', []);
+
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 1);
+  assert.strictEqual(r.negativasObjetivo, 3);
+  assert.strictEqual(r.negativasIncluidas, 1);
+  assert.strictEqual(r.negativasDisponibles, 1, 'el techo del universo, que es lo que explica el faltante');
+  assert.strictEqual(r.seleccionadas.length, 12, 'el hueco lo llenan positivas: la muestra no se acorta');
+});
+
+test('con perdidaOp en excluir el objetivo se ignora solo', () => {
+  const r = scoreCandidates([...positivas(20), ...negativas(5)],
+    { nTarget: 12, minimo: 0, perdidaOp: 'excluir', negativasObjetivo: 3 }, '', []);
+
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 0, 'el filtro manda: no hay negativas que repartir');
+  assert.strictEqual(r.negativasIncluidas, 0);
+  assert.strictEqual(r.negativasExcluidasPorFiltro, 5,
+    'y se puede decir cuántas está excluyendo el filtro, que es la palanca del diagnóstico');
+});
+
+test('sin objetivo, el comportamiento es exactamente el de antes', () => {
+  /* La cuota es opt-in: `negativasObjetivo` en 0 no debe cambiar nada de lo que ya hacía el
+     motor, ni siquiera el orden de la reserva. */
+  const candidatas = [...positivas(20), ...negativas(5)];
+  const r = scoreCandidates(candidatas, { nTarget: 12, minimo: 0, perdidaOp: 'incluir' }, '', []);
+  assert.strictEqual(r.seleccionadas.length, 12);
+  assert.strictEqual(r.negativasObjetivo, 0);
+  assert.strictEqual(r.negativasIncluidas, 0, 'sin cuota no se reservan cupos para pérdidas');
+});
+
+test('una negativa de continuidad cuenta contra el objetivo', () => {
+  /* El objetivo es «cuántas negativas salen en el informe», no «cuántas nuevas se buscan»:
+     si el estudio anterior aporta una en pérdida y se piden 3, faltan 2. */
+  const previa = [{ id: 'P0', name: 'Previa Cero', nameKey: nameKey('Previa Cero'), s: 100, op: -10 }];
+  const r = scoreCandidates([...previa, ...positivas(20), ...negativas(5)],
+    { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 3 },
+    '', [{ name: 'Previa Cero' }]);
+
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 3, 'la de continuidad más dos nuevas');
+  assert.strictEqual(r.negativasDeContinuidad, 1);
+  assert.strictEqual(r.negativasIncluidas, 3);
+});
+
+test('una negativa de actividad afín no entra a la cuota', () => {
+  /* Solo MISMA: una comparable en pérdida ya obliga a explicar por qué se incluye, y
+     sumarle que su actividad solo es afín es pedir dos justificaciones a la vez. */
+  const afinNegativa = { id: 'AF', name: 'Afin Negativa', desc: 'algo parecido', s: 100, op: -10 };
+  const candidatas = [...positivas(3), afinNegativa];
+  const r = scoreCandidates(candidatas,
+    { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 2 },
+    'actividad concreta',
+    [],
+    { iaMatch: { porId: {
+      ...Object.fromEntries(positivas(3).map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
+      AF: { grado: 'RELACIONADA', perfil: 'SERVICIO' },
+    } } });
+
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 0, 'la afín negativa no llena la cuota');
+  assert.strictEqual(r.negativasDisponibles, 0, 'ni cuenta como disponible');
+  assert.ok(r.reserva.some((c) => c.id === 'AF'), 'queda en reserva con su motivo');
+});
+
+test('la continuidad que este año está en pérdida se nombra, para poder justificar su retiro', () => {
+  /* La pérdida sigue excluyendo incluso a la continuidad —decisión deliberada y probada más
+     arriba—, pero hasta ahora se caía sin un solo aviso: el analista veía la muestra más
+     corta sin saber cuál faltaba. */
+  const previa = [{ id: 'P0', name: 'Previa En Perdida', nameKey: nameKey('Previa En Perdida'), s: 100, op: -10 }];
+  const r = scoreCandidates([...previa, ...positivas(12)],
+    { nTarget: 12, minimo: 0, perdidaOp: 'excluir' }, '', [{ name: 'Previa En Perdida' }]);
+
+  assert.deepEqual(r.continuidadEnPerdida, ['Previa En Perdida']);
+  assert.strictEqual(r.seleccionadas.find((c) => c.id === 'P0'), undefined, 'sigue excluida');
+});
+
 test('la reserva lleva motivo escrito, para poder identificarla en el libro de soporte', () => {
   /* Sin motivo, la columna «Motivo de rechazo» de la hoja «Selección comparables» queda vacía y
      esas compañías solo se localizan combinando dos filtros. Al cotejar a mano el informe de End
