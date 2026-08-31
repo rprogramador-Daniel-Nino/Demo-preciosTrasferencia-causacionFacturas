@@ -102,14 +102,48 @@ test('el prompt no pide "utilidad_operacional" como campo del estudio; la calcul
   assert.match(EEFF_PROMPT, /la calcula como ingresos/i);
 });
 
-test('el prompt exige las partidas de PARTES RELACIONADAS y descarta las comerciales', () => {
-  /* El criterio del estudio: la operación es con la vinculada, así que el capital de
-     trabajo que el ajuste neutraliza es el de esas partidas. Confundirlas metería los
-     6.032.337.879 de deudores comerciales donde van 2.926.256.259. */
-  assert.match(EEFF_PROMPT, /cuentas por cobrar A PARTES RELACIONADAS/i);
-  assert.match(EEFF_PROMPT, /cuentas por pagar A PARTES RELACIONADAS/i);
-  assert.match(EEFF_PROMPT, /NO uses aqu[ií] los deudores comerciales/i);
-  assert.match(EEFF_PROMPT, /NO uses aqu[ií] proveedores de terceros/i);
+test('el prompt exige las partidas COMERCIALES y descarta las de partes relacionadas', () => {
+  /* Criterio del usuario (2026-08-31), que REVIERTE el anterior: entra la fila comercial —o
+     de clientes y proveedores— y no la de la vinculada. El detalle de por qué está junto a
+     `CAMPO_POR_RUBRO` en eeffParser.js. */
+  assert.match(EEFF_PROMPT, /cuentas por cobrar COMERCIALES/i);
+  assert.match(EEFF_PROMPT, /cuentas por pagar COMERCIALES/i);
+  assert.match(EEFF_PROMPT, /cuentas por cobrar a CLIENTES/i);
+  /* Y lo que NO debe entrar, nombrado explícitamente para que el modelo no lo agregue. */
+  assert.match(EEFF_PROMPT, /«Otras cuentas por cobrar».*NO las sumes ni las uses/is);
+  assert.match(EEFF_PROMPT, /«Otras cuentas por pagar».*NO las sumes ni las uses/is);
+});
+
+test('el prompt NO admite sumar filas para las cuentas comerciales', () => {
+  /* La única excepción a «no sumar filas» que queda es la del costo de ventas desglosado
+     (decisión del usuario, 2026-08-31). Antes había otras dos, para sumar la fila corriente
+     con la no corriente de partes relacionadas; se retiraron con el cambio de criterio. */
+  ['cuentas_por_cobrar_comerciales', 'cuentas_por_pagar_comerciales'].forEach((campo) => {
+    const inicio = EEFF_PROMPT.indexOf(`· ${campo}:`);
+    assert.ok(inicio !== -1, `no se encontró la definición de ${campo} en EEFF_PROMPT`);
+    const siguiente = EEFF_PROMPT.indexOf('\n·', inicio + 1);
+    const bloque = EEFF_PROMPT.slice(inicio, siguiente === -1 ? inicio + 900 : siguiente);
+    assert.doesNotMatch(bloque, /EXCEPCI[OÓ]N/i,
+      `${campo} no debe traer excepción de suma: solo costo_ventas la tiene`);
+    assert.match(bloque, /sin sumar nada/i);
+  });
+  /* La del costo sí sigue en pie, y ahora nombra la depreciación. */
+  const costo = EEFF_PROMPT.slice(EEFF_PROMPT.indexOf('· costo_ventas:'));
+  assert.match(costo, /EXCEPCI[OÓ]N/i);
+  assert.match(costo, /Incluye la depreciaci[oó]n en esa suma SOLO si/i);
+  assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
+    'la regla central para el resto de rubros debe seguir intacta');
+});
+
+test('el prompt pide la depreciación y dónde la presenta el documento', () => {
+  /* Se lee como rubro propio para poder VERLA, y con `dentro_del_costo` para que el
+     documento —no el sistema— decida si suma al costo. Es lo que impide contarla dos veces:
+     si va abajo de la utilidad bruta ya la recoge `gastos_operacionales`. */
+  assert.match(EEFF_PROMPT, /· depreciacion:/);
+  assert.match(EEFF_PROMPT, /"dentro_del_costo"/);
+  assert.match(EEFF_PROMPT, /no la sumes t[uú] a ning[uú]n rubro/i);
+  assert.ok(RUBROS_DE_COTEJO.includes('depreciacion'),
+    'depreciacion debe ser rubro de cotejo: no hay campo t_* al que vaya');
 });
 
 test('el prompt del contribuyente pide los quince rubros del estudio', () => {
@@ -167,7 +201,7 @@ test('el prompt admite los sinónimos que usan otros estados para lo que sí pid
   [/ingresos de actividades ordinarias/i, /ventas netas/i,
     /costo de los servicios prestados/i, /existencias/i,
     /gastos de ventas y distribuci[oó]n/i, /gastos administrativos/i,
-    /a vinculados/i, /compa[ñn][ií]as del grupo/i,
+    /deudores comerciales/i, /acreedores comerciales/i, /proveedores/i,
   ].forEach((patron) => assert.match(EEFF_PROMPT, patron));
 });
 
@@ -271,29 +305,6 @@ test('el prompt permite sumar renglones de costo, pero solo para costo_ventas', 
     'la excepción debe estar en la propia definición de costo_ventas, no suelta en el prompt');
   assert.match(bloqueCostoVentas, /su[mn]a/i,
     'falta el permiso de sumar renglones cuando el documento desglosa el costo');
-  assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
-    'la regla central para el resto de rubros debe seguir intacta');
-});
-
-/* ══════ Partes relacionadas repartidas en corriente y no corriente ══════ */
-
-test('el prompt permite sumar partes relacionadas repartidas en corriente y no corriente', () => {
-  /* HH Colombia imprime "Cuentas por pagar a vinculadas" dos veces: una en el pasivo
-     corriente (en cero) y otra en el no corriente (con la cifra real). Sin esta excepción
-     el campo se queda en null o toma la fila equivocada — justo el tipo de dato faltante
-     o incorrecto que reportó el analista. La regla central sigue prohibiendo sumar filas
-     para todo lo demás. */
-  const camposConExcepcion = ['cuentas_por_cobrar_relacionadas', 'cuentas_por_pagar_relacionadas'];
-  camposConExcepcion.forEach((campo) => {
-    const inicio = EEFF_PROMPT.indexOf(`· ${campo}:`);
-    assert.ok(inicio !== -1, `no se encontró la definición de ${campo} en EEFF_PROMPT`);
-    const siguiente = EEFF_PROMPT.indexOf('\n·', inicio + 1);
-    const bloque = EEFF_PROMPT.slice(inicio, siguiente === -1 ? inicio + 700 : siguiente);
-    assert.match(bloque, /EXCEPCI[OÓ]N/i,
-      `falta la excepción de suma corriente/no-corriente en la definición de ${campo}`);
-    assert.match(bloque, /corriente/i);
-    assert.match(bloque, /su[mn]a/i);
-  });
   assert.match(EEFF_PROMPT, /NO sumes varias filas para armar un rubro/i,
     'la regla central para el resto de rubros debe seguir intacta');
 });

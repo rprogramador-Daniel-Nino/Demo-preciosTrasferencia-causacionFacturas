@@ -231,6 +231,107 @@ rasterizado) se captura y devuelve la `verificacion` que ya había — nunca tum
 - No se cambia ningún backend (`server.js`, `functions/index.js`, PHP de cPanel): sigue yendo
   por el proxy genérico `/api/gemini`, sin endpoint propio ni secreto nuevo.
 
+## Lo que cambió al implementarlo (2026-08-31)
+
+Se construyó en la rama `juandev`. Tres decisiones de este diseño **no sobrevivieron al
+contacto con los límites reales** y quedaron distintas en el código. Quien lea este spec sin
+esta sección reimplementaría un diseño que no puede funcionar.
+
+### 1. La llamada única se partió en lotes — el diseño era irrealizable
+
+El diseño mandaba «una sola llamada a `/api/gemini`» con todas las páginas marcadas. Contra los
+topes que ya existen en el repo eso falla siempre:
+
+| Tope | Dónde | Qué pasa con 24-25 páginas |
+|---|---|---|
+| Corte de 50 s a Gemini | `GEMINI_CORTE_MS`, `functions/index.js:120` | Transcribir una página escaneada cuesta del orden de 5-10 s: veinticinco no caben. La función devuelve 504. |
+| 32 MiB de cuerpo | Cloud Run tras el rewrite de Hosting (`express.json({limit:'50mb'})` en local, más permisivo) | Un escaneo en PNG a escala 1.5 pesa 1-3 MB por página; 25 en base64 son decenas de MB. |
+
+Implementado: `PAGINAS_POR_LOTE = 4`, lotes **secuenciales**, y **lo que un lote entrega se
+conserva aunque el siguiente falle** — media transcripción verifica la mitad de las cifras, que
+es más que ninguna. `enLotes` está probada, incluida la guarda contra `tamano = 0`, que habría
+sido un bucle infinito con el navegador congelado.
+
+### 2. El tope de páginas dejó de ser «se salta todo» y pasó a ser un presupuesto
+
+El diseño fijaba `MAX_PAGINAS_OCR_RESPALDO = 30` para «saltar el respaldo por completo» si se
+excedía. Con ese criterio y las páginas reales, **Robertet (25) e Inoxpa (24) quedaban dentro
+del tope y disparaban la petición imposible** de arriba; el tope no protegía de nada.
+
+Implementado: `MAX_PAGINAS_OCR_RESPALDO = 12`, y no es un límite técnico sino de fricción —cada
+lote es una llamada de segundos y el analista espera—. Se transcriben las **primeras** doce, en
+orden de documento, y las que quedan fuera **se nombran** en el mensaje de la ingesta.
+
+Cuesta poco porque en un estado financiero el balance y el estado de resultados van al principio
+y las notas después —así están los seis documentos reales—, y las cifras que la verificación
+necesita son las de esos dos estados. Medido:
+
+| Documento | Sin capa de texto | Transcribe | Lotes | Fuera |
+|---|---|---|---|---|
+| Robertet | 25 de 25 (1-25) | 12 (1-12) | 3 | 13 (notas) |
+| Inoxpa | 24 de 29 (3-19, 23-29) | 12 (3-14) | 3 | 12 (notas) |
+| Aluminios y Vidrios | 5 de 50 (46-50) | 5 (46-50) | 2 | 0 |
+| Inmotion, PFI, HH Colombia | ninguna | — | 0 | — |
+
+Los tres últimos **no gastan nada**: ni rasterizado, ni llamada, ni cuota.
+
+### 3. Corre ANTES de la primera verificación, no después de la pasada a notas
+
+El diseño lo ponía «como paso hermano después de `resolverFaltantesConNotas`». Eso pierde
+trabajo: `resolverFaltantesConNotas` re-verifica desde la lectura **original**
+(`fusionarHallazgosEnLectura(lectura, hallazgos)`, `eeffVerificacion.js:835`), así que una
+re-verificación posterior con el texto del OCR **borraría los campos que las notas acabaran de
+resolver** y también su `conclusionNotas`.
+
+Implementado: el respaldo enriquece la lectura antes de verificar, y las dos pasadas siguientes
+—verificación y fallback de notas— ven el mismo texto. El disparador sigue siendo estructural
+(hay páginas sin texto), no los campos en `null`, que era el punto de esa decisión.
+
+Como consecuencia, el contrato del módulo cambió de forma: en vez de
+`reforzarVerificacionConOcr({...}) → verificacion`, es
+`respaldarLecturaConOcr({file, lectura, alAvanzar}) → {lectura, respaldoOcr}`. No re-verifica:
+devuelve la lectura enriquecida y quien la llama verifica una sola vez.
+
+### 4. El rasterizado del OCR sale en JPEG; el ANEXO A sigue en PNG
+
+No estaba en el diseño. `renderizarPagina(page, escala, formato, calidad)` pinta fondo blanco
+antes de rasterizar a JPEG —sin fondo, el canvas transparente se revela como negro y la página
+sale en negativo—. La pérdida de JPEG se nota en degradados, no en tinta negra sobre papel, y
+recorta el cuerpo de la petición en un orden de magnitud.
+
+### 5. El aviso ámbar NO se apaga en silencio
+
+El diseño decía «ningún cambio de UI: el aviso ámbar se apaga solo cuando `verificadoContraTexto`
+vuelve a `true`». Se implementó distinto a propósito: eso convertiría una verificación de segunda
+en una de primera. `respaldoOcr` viaja en `t_lecturaEeff` hasta la tarjeta de cumplimiento del
+paso 4, que publica la salvedad **en gris y no en ámbar** («las cifras se comprobaron contra una
+transcripción por OCR, no contra la capa de texto del documento»), y la ingesta lo dice también
+en su mensaje de éxito. Bloquear por ello devolvería el estudio al punto de partida; callarlo
+sería afirmar más de lo que se verificó.
+
+La salvedad se apaga cuando el analista digita a mano las tres cifras del margen: esas no
+dependen de ninguna transcripción.
+
+### Lo que se cumplió tal como estaba diseñado
+
+- El texto del OCR **no** se reenvía al prompt de extracción, solo alimenta la verificación.
+- «Documento entero sin `ToUnicode`» marca **todas** las páginas (mismo mecanismo, sin
+  heurística por página).
+- Motor de OCR: Gemini vía `/api/gemini`, sin endpoint ni secreto nuevos, sin tocar los tres
+  backends.
+- Cualquier fallo devuelve lo que ya había; la ingesta nunca queda peor que antes.
+- `paginasSinTextoUtilizable` en `eeffTextoPdf.js` y `rasterizarPaginas` en `pdfRenderer.js`,
+  con `convertPdfToImages` sin cambio observable.
+
+### Alcance que sigue fuera
+
+- **No verifica por columna.** `eeffColumnas.js` distingue el ejercicio de cada cifra por la
+  posición horizontal de su celda, y una transcripción no trae geometría: deducir la columna del
+  orden de las celdas sería la misma inferencia posicional que causaba el defecto original. En
+  las páginas escaneadas el respaldo llega hasta «la cifra está impresa en el documento».
+- **Las notas más allá de la página 12 de un escaneo completo** no se transcriben. Siguen
+  llegando al modelo como imagen en la lectura principal, que es el comportamiento de hoy.
+
 ## Próximo paso
 
 Plan de implementación vía la skill `writing-plans`, a partir de este spec.

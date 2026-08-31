@@ -3,6 +3,7 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { num } from '../utils/calculations.js';
 import { extraerJSON } from './comparablesEngine.js';
 import { extraerTextoPdf } from './eeffTextoPdf.js';
+import { extraerEstructuraPdf, textoAnotado } from './eeffColumnas.js';
 
 /* Dos lecturas del PDF nativo conviven en este archivo y hay que saber cuál es cuál:
    `extraerTextoEstructuradoPdf` (de aquí abajo) lee las FICHAS DE LAS COMPARABLES, que
@@ -22,10 +23,10 @@ if (typeof window !== 'undefined' && !pdfjs.GlobalWorkerOptions.workerSrc) {
  *
  * ── Qué se lee, y por qué (alcance fijado por el usuario, 2026-08-21; ampliado 2026-08-24) ──
  *
- * Del ESTADO DE SITUACIÓN FINANCIERA se toman: cuentas por cobrar y por pagar A PARTES
- * RELACIONADAS (no las comerciales, porque la operación bajo estudio es con la vinculada —
- * el propio estado lo confirma: en su flujo de efectivo, la línea «Aumento / disminución en
- * proveedores» es exactamente la variación de las cuentas por pagar a partes relacionadas),
+ * Del ESTADO DE SITUACIÓN FINANCIERA se toman: cuentas por cobrar y por pagar COMERCIALES
+ * —o de clientes y proveedores; NO las de partes relacionadas, y sin sumarles «otras cuentas
+ * por cobrar/pagar» cuando el documento las lleva en filas aparte (decisión del usuario,
+ * 2026-08-31; ver el detalle y qué criterio revierte junto a `CAMPO_POR_RUBRO`)—,
  * inventarios, el total del activo corriente, el total general de activos y propiedad,
  * planta y equipo — esta última desde el caso de Symtek (2026-08-24): dejarla 100% manual
  * hacía que un PP&E real se tratara como cero por omisión en los ajustes que lo usan, a
@@ -65,11 +66,9 @@ Para CADA campo devuelve un objeto {"valor": <número o null>, "rotulo": "<el te
 El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila que elegiste es la correcta.
 
 ── ESTADO DE SITUACIÓN FINANCIERA ──
-· cuentas_por_cobrar_relacionadas: cuentas por cobrar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí los deudores comerciales, los clientes ni las «otras cuentas por cobrar» con terceros: si el documento solo trae esas, este campo va en null.
-  EXCEPCIÓN a la regla central de no sumar filas, solo para este campo: si el documento reparte las cuentas por cobrar a partes relacionadas en dos filas —una en el activo corriente y otra en el no corriente, con el mismo rótulo o uno equivalente en ambas ("Cuentas por cobrar a vinculadas", por ejemplo)—, suma las dos y devuelve el total; el rótulo cita ambas filas ("Cuentas por cobrar a vinculadas — corriente y no corriente"). Si el documento solo trae una fila, transcríbela tal cual y no sumes nada.
+· cuentas_por_cobrar_comerciales: cuentas por cobrar COMERCIALES, deudores comerciales, o cuentas por cobrar a CLIENTES. Transcribe ESA fila y solo esa, sin sumar nada. Si el documento trae además «Otras cuentas por cobrar», «Cuentas por cobrar a vinculados» o «a partes relacionadas» en filas aparte, NO las sumes ni las uses: son otro concepto. Si en cambio el propio documento publica UNA SOLA fila que ya las agrega ("Cuentas comerciales y otras cuentas por cobrar"), transcríbela tal cual: la suma la hizo el documento, no tú. Si no hay ninguna fila comercial ni de clientes, este campo va en null.
 · inventarios: inventarios, existencias, mercancías.
-· cuentas_por_pagar_relacionadas: cuentas por pagar A PARTES RELACIONADAS, a vinculados, a compañías del grupo, a la matriz o a subsidiarias. NO uses aquí proveedores de terceros, acreedores comerciales ni «otras cuentas por pagar»: si el documento solo trae esas, este campo va en null.
-  EXCEPCIÓN a la regla central de no sumar filas, solo para este campo: si el documento reparte las cuentas por pagar a partes relacionadas en dos filas —una en el pasivo corriente y otra en el no corriente, con el mismo rótulo o uno equivalente en ambas ("Cuentas por pagar a vinculadas", por ejemplo)—, suma las dos y devuelve el total; el rótulo cita ambas filas ("Cuentas por pagar a vinculadas — corriente y no corriente"). Si el documento solo trae una fila, transcríbela tal cual y no sumes nada.
+· cuentas_por_pagar_comerciales: cuentas por pagar COMERCIALES, acreedores comerciales, o proveedores. Transcribe ESA fila y solo esa, sin sumar nada. Si el documento trae además «Otras cuentas por pagar», «Cuentas por pagar a vinculadas» o «a partes relacionadas» en filas aparte, NO las sumes ni las uses. Si en cambio el propio documento publica UNA SOLA fila que ya las agrega ("Cuentas comerciales y otras cuentas por pagar"), transcríbela tal cual. Si no hay ninguna fila comercial ni de proveedores, este campo va en null.
 · total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
 · total_activos: el total general de activos ("Total Activo", "Total de activos", "TOTAL ACTIVOS"), tal como el documento lo imprime.
 · propiedad_planta_equipo: propiedad, planta y equipo, activos fijos, inmuebles maquinaria y equipo — el NETO (después de depreciación acumulada), tal como el documento lo imprime.
@@ -84,9 +83,10 @@ Incluye los subtotales de cada grupo ("Total Activo Corriente", "Total Activo No
 ── ESTADO DE RESULTADOS ──
 · ingresos_operacionales: ingresos de actividades ordinarias, ventas netas, ingresos operacionales, ingresos por servicios.
 · costo_ventas: costo de ventas, costo de los servicios prestados, costo de mercancía vendida.
-  EXCEPCIÓN a la regla central de no sumar filas, solo para este campo: si el documento NO imprime un total consolidado de "Costo de Ventas" y en cambio lo desglosa en varios renglones de costo del giro (por ejemplo "Costo de servicios prestados" + "Costo de venta de mercancía", o con "Costo de producción"), suma esos renglones y devuelve el total en costo_ventas. Esta excepción es SOLO para costo_ventas: si el documento ya imprime un total consolidado, transcríbelo tal cual y no sumes nada; y ningún otro campo de este prompt admite sumar filas.
+  EXCEPCIÓN a la regla central de no sumar filas, solo para este campo: si el documento NO imprime un total consolidado de "Costo de Ventas" y en cambio lo desglosa en varios renglones de costo del giro (por ejemplo "Costo de servicios prestados" + "Costo de venta de mercancía", o con "Costo de producción"), suma esos renglones y devuelve el total en costo_ventas. Incluye la depreciación en esa suma SOLO si el documento la imprime como uno de esos renglones del costo; si la presenta como gasto operativo, déjala fuera. Esta excepción es SOLO para costo_ventas: si el documento ya imprime un total consolidado, transcríbelo tal cual y no sumes nada; y ningún otro campo de este prompt admite sumar filas.
 · gastos_ventas: gastos de ventas, gastos de ventas y distribución, gastos comerciales.
 · gastos_administracion: gastos de administración, gastos administrativos.
+· depreciacion: la depreciación —y la amortización, si van en la misma línea— cuando el documento la imprime como línea propia. Devuelve además "dentro_del_costo": true si la presenta como parte del costo de ventas, es decir ARRIBA de la utilidad bruta, y false si la presenta abajo, como gasto operativo. Ese dato decide si suma al costo o no, así que no la sumes tú a ningún rubro. Si no figura como línea propia, va en null.
 · utilidad_bruta: la utilidad o ganancia bruta, si el documento la imprime como fila propia.
 · utilidad_operacional_impresa: la utilidad, ganancia o resultado operacional, SI el documento la imprime como fila propia (por ejemplo "Utilidad Operacional", "Ganancia Operacional", "Resultado de Actividades de la Operación"). Transcríbela tal cual esté impresa, con su rótulo exacto. NO la calcules ni la deduzcas: si no aparece como fila propia, va en null.
 
@@ -106,9 +106,9 @@ Devuelve SOLO este JSON, sin marcas markdown:
   "periodo": "el año o ejercicio de la columna que leíste",
   "moneda": "COP, USD, etc.",
   "unidad_origen": "unidades|miles|millones",
-  "cuentas_por_cobrar_relacionadas": {"valor": null, "rotulo": ""},
+  "cuentas_por_cobrar_comerciales": {"valor": null, "rotulo": ""},
   "inventarios": {"valor": null, "rotulo": ""},
-  "cuentas_por_pagar_relacionadas": {"valor": null, "rotulo": ""},
+  "cuentas_por_pagar_comerciales": {"valor": null, "rotulo": ""},
   "total_activo_corriente": {"valor": null, "rotulo": ""},
   "total_activos": {"valor": null, "rotulo": ""},
   "propiedad_planta_equipo": {"valor": null, "rotulo": ""},
@@ -116,6 +116,7 @@ Devuelve SOLO este JSON, sin marcas markdown:
   "costo_ventas": {"valor": null, "rotulo": ""},
   "gastos_ventas": {"valor": null, "rotulo": ""},
   "gastos_administracion": {"valor": null, "rotulo": ""},
+  "depreciacion": {"valor": null, "rotulo": "", "dentro_del_costo": false},
   "utilidad_bruta": {"valor": null, "rotulo": ""},
   "utilidad_operacional_impresa": {"valor": null, "rotulo": ""},
   "rubros_no_asignados": [{"rotulo": "", "valor": null}],
@@ -148,11 +149,24 @@ El documento es comparativo y trae más de una columna de ejercicios. Extrae ÚN
  * dígitos exactos. Un PDF escaneado no tiene capa de texto y entonces esto no aporta nada
  * y se omite, quedando la lectura como era antes.
  */
-export function bloqueDeTexto(texto) {
+export function bloqueDeTexto(texto, { anotado = false } = {}) {
   if (!texto || !String(texto).trim()) return null;
-  return `A continuación, la capa de texto del MISMO documento, extraída directamente del PDF. 
-  Los dígitos de aquí son exactos: úsalos para transcribir las cifras, y usa la imagen para entender la disposición de las 
-  columnas y a qué año pertenece cada una. Si el texto y la imagen discrepan, manda el texto.
+
+  /* Con el texto ANOTADO por columna la instrucción cambia de fondo, y es el arreglo: ya no
+     se le pide al modelo que deduzca a qué año pertenece cada columna —era lo que le hacía
+     tomar la del ejercicio anterior— sino que lea la etiqueta que ya viene puesta. Las
+     etiquetas las derivó el sistema de la posición horizontal de cada celda en el propio
+     PDF, así que son un hecho del documento y no una interpretación. */
+  const guia = anotado
+    ? `Cada cifra viene precedida por el EJERCICIO al que pertenece, entre corchetes: «[2025] 1.234.567» significa que 1.234.567 es la cifra del año 2025 en esa fila. Esa etiqueta la calculó el sistema a partir de la posición de la columna en el propio PDF: es un hecho del documento, NO la deduzcas de nuevo ni la contradigas. Toma únicamente las cifras del ejercicio que se te pidió arriba.
+Una celda SIN etiqueta no es una cifra de ningún ejercicio: es el rótulo, el número de una nota al pie o el signo de pesos. NUNCA la uses como valor de un rubro.
+Un «[2025] -» significa que el documento NO reporta ese rubro en 2025; el campo va en null, y NO se sustituye por la cifra de otro año.
+Las líneas «--- SECCIÓN: X ---» delimitan las secciones del estado: no tomes de la sección de PASIVO una cifra que se pide del ACTIVO, ni al contrario.
+Los dígitos de este texto son exactos: úsalos para transcribir. La imagen sirve para entender la disposición general; si el texto y la imagen discrepan en un dígito, manda el texto.`
+    : `Los dígitos de aquí son exactos: úsalos para transcribir las cifras, y usa la imagen para entender la disposición de las columnas y a qué año pertenece cada una. Si el texto y la imagen discrepan, manda el texto.`;
+
+  return `A continuación, la capa de texto del MISMO documento, extraída directamente del PDF.
+${guia}
 
 <texto_del_documento>
 ${texto}
@@ -221,7 +235,7 @@ const ESTADOS_REINTENTABLES = [408, 425, 429, 500, 502, 503, 504];
  * que se queda fuera del rango intercuartil, y el analista solo lo nota si lee la lista de
  * rechazos.
  */
-async function postGeminiWithRetry(payload, maxRetries = 3) {
+export async function postGeminiWithRetry(payload, maxRetries = 3) {
   let ultimo;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -245,25 +259,39 @@ async function postGeminiWithRetry(payload, maxRetries = 3) {
 /* Las cifras que la lectura devuelve y el campo del estudio al que van.
 
    El alcance lo fijó el usuario el 2026-08-21, después de una primera versión que leía los
-   quince rubros del balance: de la situación financiera se toman las partidas de PARTES
-   RELACIONADAS (no las comerciales), el subtotal del activo corriente, el total general de
-   activos y, desde el caso de Symtek (2026-08-24), PP&E — antes 100% manual, lo que dejaba
-   en cero por omisión el PP&E de un estudio con esa partida significativa.
+   quince rubros del balance: de la situación financiera se toman las dos partidas de
+   capital de trabajo, el subtotal del activo corriente, el total general de activos y, desde
+   el caso de Symtek (2026-08-24), PP&E — antes 100% manual, lo que dejaba en cero por
+   omisión el PP&E de un estudio con esa partida significativa.
 
-   La elección de partes relacionadas no es un detalle de nomenclatura. En este estudio la
-   operación vinculada es con la matriz, y el propio estado financiero lo confirma: en su
-   flujo de efectivo, la línea «Aumento / disminución en proveedores» (−135.245.675) es
-   exactamente la variación de CUENTAS POR PAGAR A PARTES RELACIONADAS (5.400.016.795 −
-   5.535.262.470). El proveedor es la vinculada, así que el capital de trabajo que el ajuste
-   debe neutralizar es el de esas partidas y no el de los deudores comerciales con terceros.
+   CUÁL DE LAS DOS CUENTAS SE TOMA: LAS COMERCIALES (decisión del usuario, 2026-08-31).
+   Se toman las cuentas por cobrar y por pagar COMERCIALES —o de clientes y proveedores— y
+   NO las de partes relacionadas. Y no se suma nada: si el documento reparte «Cuentas
+   comerciales» y «Otras cuentas por cobrar/pagar» en filas distintas, entra solo la
+   comercial. La única suma de renglones que este prompt admite sigue siendo la del costo de
+   ventas desglosado.
+
+   Esto REVIERTE el criterio anterior, que tomaba partes relacionadas y sumaba su fila
+   corriente con la no corriente. Aquel criterio se sostenía en el flujo de efectivo de
+   Montachem, donde «Aumento / disminución en proveedores» (−135.245.675) es exactamente la
+   variación de las cuentas por pagar a partes relacionadas (5.400.016.795 − 5.535.262.470),
+   de modo que para esa compañía el proveedor ERA la vinculada. Se cambia porque no
+   generaliza: en los estados que llegan al estudio la fila comercial y la de vinculados son
+   dos filas separadas y explícitas —HH Colombia imprime «Cuentas por cobrar comerciales»
+   36.152.133 y «Cuentas por cobrar vinculados» 6.707.466 una debajo de la otra—, y el
+   criterio del usuario es tomar la comercial.
+
+   Ganancia colateral: los rótulos del informe y del Excel de soporte ya decían «comerciales»
+   (`tablasContribuyente.js` y `RUBROS_EXAMINADA` en `memoriaCalculoRangoOptimo.js`) sobre
+   una cifra que era de partes relacionadas. Con este cambio dejan de contradecir al dato.
 
    Se escribe una sola vez, aquí, y de ella salen el mapeo y la verificación. */
 export const CAMPO_POR_RUBRO = {
   ingresos_operacionales: 't_s',
   costo_ventas: 't_c',
-  cuentas_por_cobrar_relacionadas: 't_ar',
+  cuentas_por_cobrar_comerciales: 't_ar',
   inventarios: 't_inv',
-  cuentas_por_pagar_relacionadas: 't_ap',
+  cuentas_por_pagar_comerciales: 't_ap',
   total_activo_corriente: 't_act_curr',
   /* El total general de activos, aparte de las tres partidas de partes relacionadas: lo
      necesita `verticalSobreActivos()` como denominador del A.V. de la Tabla 10, y no lo
@@ -305,6 +333,13 @@ export const CAMPO_POR_RUBRO = {
 export const RUBROS_DE_COTEJO = [
   'gastos_ventas',
   'gastos_administracion',
+  /* `depreciacion` se lee como rubro de cotejo y NO como campo del estudio (decisión del
+     usuario, 2026-08-31): no hay un `t_*` al que vaya. El documento decide su destino, no el
+     sistema — si la imprime como renglón del costo, el propio prompt ya la incluye en la
+     suma de `costo_ventas`; si la imprime como gasto operativo, la recoge
+     `gastos_operacionales`. Se pide aparte, con su `dentro_del_costo`, para poder VERLA y
+     comprobar que no quedó contada dos veces, que es el único riesgo real de agregarla. */
+  'depreciacion',
   'utilidad_bruta',
   'utilidad_operacional_impresa',
 ];
@@ -317,8 +352,8 @@ export const RUBROS_DE_COTEJO = [
    precedente real y solo gastaría la llamada en vano. */
 export const CAMPOS_CON_FALLBACK_NOTAS = {
   t_c: 'costo de ventas',
-  t_ar: 'cuentas por cobrar a partes relacionadas',
-  t_ap: 'cuentas por pagar a partes relacionadas',
+  t_ar: 'cuentas por cobrar comerciales o a clientes (NO las de partes relacionadas)',
+  t_ap: 'cuentas por pagar comerciales o a proveedores (NO las de partes relacionadas)',
   t_inv: 'inventarios',
 };
 
@@ -436,11 +471,23 @@ export async function parseEeffWithGeminiOCR(file, anioEstudio) {
   const mimeType = mimeDe(file);
   const textoPdf = await extraerTextoPdf(file);
 
+  /* La estructura por columnas del mismo documento. De ella salen dos cosas: el texto que
+     viaja al prompt con cada cifra etiquetada por su ejercicio, y la comprobación de que
+     cada cifra devuelta esté en la fila de su rótulo y en la columna del año pedido — lo
+     que `cifraApareceEnTexto` no puede ver, porque solo pregunta si la cifra está impresa
+     en algún sitio. Sin capa de texto devuelve una estructura vacía y todo degrada al
+     comportamiento anterior. */
+  const estructura = await extraerEstructuraPdf(file);
+  const anotado = textoAnotado(estructura);
+
   const partes = [
     { inline_data: { mime_type: mimeType, data: base64Data } },
     { text: promptEeffContribuyente(anioEstudio) },
   ];
-  const conTexto = bloqueDeTexto(textoPdf);
+  /* El anotado manda cuando existe: es el mismo texto más la columna de cada cifra. */
+  const conTexto = anotado
+    ? bloqueDeTexto(anotado, { anotado: true })
+    : bloqueDeTexto(textoPdf);
   if (conTexto) partes.push({ text: conTexto });
 
   const response = await postGeminiWithRetry({
@@ -469,6 +516,16 @@ export async function parseEeffWithGeminiOCR(file, anioEstudio) {
   [...Object.keys(CAMPO_POR_RUBRO), ...RUBROS_DE_COTEJO].forEach((rubro) => {
     const r = rotuloDeRubro(parsed[rubro]);
     if (r) rotulos[rubro] = r;
+  });
+
+  /* Los mismos rótulos indexados por CAMPO del estudio (`t_ar`, `t_c`…) y no por rubro.
+     `eeffVerificacion.js` recorre `LEIDOS`, que son campos, y hacía `rotulos[clave]` con
+     `clave` = `t_ar`: siempre `undefined`, así que el paréntesis «(la lectura la atribuyó a
+     «X»)» de su advertencia nunca ha aparecido. Y la verificación por columna necesita ese
+     rótulo para saber en qué fila buscar, así que aquí se publica ya indexado. */
+  const rotulosPorCampo = {};
+  Object.entries(CAMPO_POR_RUBRO).forEach(([rubro, campo]) => {
+    if (rotulos[rubro]) rotulosPorCampo[campo] = rotulos[rubro];
   });
 
   return {
@@ -505,6 +562,21 @@ export async function parseEeffWithGeminiOCR(file, anioEstudio) {
     unidadOrigen: String(parsed.unidad_origen || '').trim().toLowerCase(),
     moneda: parsed.moneda,
     textoPdf,
+    rotulosPorCampo,
+    /* La estructura por columnas y el año contra el que hay que verificarla. Van juntos
+       porque `verificarEeff` los necesita a la vez: sin el año no sabe qué columna pedir. */
+    estructura,
+    anioObjetivo: String(anioEstudio || '').trim(),
+    /* Los años que el propio documento declara en sus encabezados. Es lo que permite decirle
+       al analista «el documento trae 2025 y 2024, se extrajo la del 2025» sin que tenga que
+       abrir el PDF, y detectar que el año gravable del estudio no está entre ellos. */
+    aniosDelDocumento: estructura.anios,
+    /* Dónde presenta el documento la depreciación. `true` si es un renglón del costo —y
+       entonces el propio prompt ya la sumó a `costo_ventas`—, `false` si es gasto operativo.
+       Se publica para poder comprobar que no quedó contada dos veces. */
+    depreciacionDentroDelCosto: Boolean(
+      parsed.depreciacion && parsed.depreciacion.dentro_del_costo,
+    ),
     rawJson: parsed,
   };
 }

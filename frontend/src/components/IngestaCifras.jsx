@@ -13,6 +13,8 @@ import {
   leerRotulosConfirmadosPorEmpresa, guardarRotulosConfirmadosPorEmpresa,
 } from '../services/firestoreRepo';
 import { convertPdfToImages } from '../services/pdfRenderer';
+import { resumenDeLectura } from '../services/diagnosticoRango';
+import { respaldarLecturaConOcr } from '../services/eeffOcrRespaldo';
 import { RUBROS_EXAMINADA } from '../services/memoriaCalculoRangoOptimo.js';
 import PopupFaltantesEeff from './PopupFaltantesEeff';
 import CampoMoneda from './CampoMoneda';
@@ -83,8 +85,28 @@ export default function IngestaCifras({ study, updateStudy }) {
      próximo EEFF (de esta empresa, o de cualquiera si el rótulo ya nombra la relación). */
   const CAMPOS_RELACIONADAS_APRENDIBLES = ['t_ar', 't_ap'];
 
+  /* Los campos cuya autoría importa: los que la lectura del documento escribe y sobre los que
+     la verificación puede levantar una advertencia. `t_gastos` entra porque `t_op` se deriva
+     de él. */
+  const CAMPOS_RASTREADOS_A_MANO = [
+    't_s', 't_c', 't_gastos', 't_op', 't_ar', 't_ap', 't_inv',
+    't_act_curr', 't_act_tot', 't_ppe',
+  ];
+
   const handleFieldChange = (key, value) => {
     const cambios = { [key]: value };
+
+    /* Queda anotado que esta casilla la escribió el analista, no la IA. Es lo que permite que
+       el aviso de «lectura no verificada» del paso 4 se apague cuando ya se atendió: sin esto
+       un escaneo dejaría la advertencia encendida para siempre y el panel enseñaría a
+       ignorarla. Los campos del ESF y del P&L bastan; el resto no entra en ningún juicio. */
+    if (CAMPOS_RASTREADOS_A_MANO.includes(key)) {
+      const yaEstaban = Array.isArray(study.t_camposAMano) ? study.t_camposAMano : [];
+      /* `t_op` se deriva de los tres insumos, así que digitar cualquiera de ellos también lo
+         convierte en cifra del analista. */
+      const nuevos = INSUMOS_UTILIDAD.includes(key) ? [key, 't_op'] : [key];
+      cambios.t_camposAMano = [...new Set([...yaEstaban, ...nuevos])];
+    }
 
     if (INSUMOS_UTILIDAD.includes(key)) {
       /* Con la MISMA función que usa la lectura del documento, para que el signo se aplique
@@ -181,12 +203,31 @@ export default function IngestaCifras({ study, updateStudy }) {
         updates.eeffImages = eeffImages;
       }
 
+      /* Respaldo por OCR de las páginas escaneadas, ANTES de verificar. En un documento sin
+         capa de texto la verificación no tiene nada contra qué cotejar y toda cifra entra o
+         se descarta a ciegas (Robertet: 0 de 25 páginas con texto; Inoxpa: 5 de 29). Esto
+         transcribe solo esas páginas y las suma al texto de la lectura, de modo que las dos
+         pasadas siguientes —la verificación y el fallback de notas— vean el mismo texto.
+         Va antes y no después de las notas porque `resolverFaltantesConNotas` re-verifica
+         desde `res`: enriquecerlo después borraría lo que las notas acabaran de resolver.
+         Un fallo aquí devuelve `res` intacto, así que la ingesta nunca queda peor que hoy. */
+      const { lectura, respaldoOcr } = await respaldarLecturaConOcr({
+        file,
+        lectura: res,
+        /* Cada lote es una llamada de varios segundos: sin decir por dónde va, la pantalla
+           queda muda hasta un minuto y parece colgada. */
+        alAvanzar: ({ lote, lotes, paginas }) => setEeffMsg(
+          `🤖 Transcribiendo las páginas escaneadas del documento… lote ${lote} de ${lotes} `
+          + `(página${paginas.length > 1 ? 's' : ''} ${paginas.join(', ')})`,
+        ),
+      });
+
       /* La verificación decide qué entra: calcula la utilidad operacional a partir de los
          ingresos, el costo y los dos gastos del giro —en vez de creerle a una fila rotulada
          «resultado de la operación»— y descarta las cifras que no están impresas en el
          documento. También intenta resolver partes relacionadas ambiguas con lo ya
          aprendido, antes de rendirse y pedirle al analista que lo escriba a mano. */
-      const primeraVerificacion = verificarEeff(res, {
+      const primeraVerificacion = verificarEeff(lectura, {
         anioEstudio: study.anio, diccionarioRelacionadaGlobal, rotulosConfirmadosEmpresa,
       });
 
@@ -198,7 +239,7 @@ export default function IngestaCifras({ study, updateStudy }) {
       try {
         verificacion = await resolverFaltantesConNotas({
           file,
-          lectura: res,
+          lectura,
           diccionarioRelacionadaGlobal,
           rotulosConfirmadosEmpresa,
           verificacion: primeraVerificacion,
@@ -215,7 +256,7 @@ export default function IngestaCifras({ study, updateStudy }) {
          ingesta si falla. */
       aprenderDeLecturaExitosa({
         campos: verificacion.campos,
-        rotulos: res.rotulos,
+        rotulos: lectura.rotulos,
         leerVocabulario: leerVocabularioEeff,
         guardarVocabulario: guardarVocabularioEeff,
       }).catch((err) => console.warn('No se pudo actualizar el diccionario de vocabulario:', err));
@@ -231,6 +272,16 @@ export default function IngestaCifras({ study, updateStudy }) {
       Object.assign(updates, camposParaLimpiar(verificacion.campos, verificacion.advertencias));
 
       updates.t_correcciones = verificacion.correcciones;
+
+      /* Rastro mínimo de esta lectura, para que la tarjeta de cumplimiento del paso 4 pueda
+         decir si el indicador del contribuyente sale de algo verificado. `hallazgos` vive en
+         este componente porque describe UNA lectura, pero el paso 4 se abre sin pasar por
+         aquí cada vez que se retoma un estudio guardado. Solo tipos y campos, sin prosa: el
+         estudio entero tiene que caber en el documento de Firestore.
+         Se reinicia `t_camposAMano`: la lectura acaba de reescribir las casillas, así que lo
+         que el analista había digitado antes ya no está en pantalla. */
+      updates.t_lecturaEeff = resumenDeLectura(verificacion, respaldoOcr);
+      updates.t_camposAMano = [];
 
       updateStudy(updates);
       setHallazgos(verificacion);
@@ -251,11 +302,41 @@ export default function IngestaCifras({ study, updateStudy }) {
          hubiera devuelto un arreglo vacío (falla silenciosa, ver pdfRenderer.js): el
          analista veía "éxito" y solo se enteraba de que el ANEXO A quedó sin imágenes
          al abrir el Word ya generado. */
+      /* Qué columna del estado comparativo se leyó y cuántas cifras se pudieron comprobar en
+         ella. Es informativo y no pide nada: el ejercicio se deriva del año gravable del
+         estudio y aquí solo se dice qué pasó (decisión del usuario: informar sí, pero sin
+         agregar un paso al flujo).
+         Cuando el documento NO trae el año del estudio no se dice nada aquí: su propia
+         advertencia lo explica mejor, y repetirlo en verde al lado sería contradictorio. */
+      const aniosDoc = verificacion.aniosDelDocumento || [];
+      const faltaElAnio = verificacion.advertencias.some((a) => a.tipo === 'anio-ausente-en-documento');
+      const columnas = (aniosDoc.length && !faltaElAnio)
+        ? ` El documento trae las columnas ${aniosDoc.join(' y ')}; se extrajo la del `
+          + `${verificacion.anioVerificado || study.anio}`
+          + (verificacion.verificadasPorColumna
+            ? `, con ${verificacion.verificadasPorColumna} cifra(s) comprobada(s) fila por fila en ella.`
+            : '.')
+        : '';
+
+      /* Que la verificación se apoyó en una transcripción y no en la capa de texto del
+         documento. Es una frase y no un aviso ámbar: la verificación existe —hoy no existía
+         ninguna— pero es más débil, y quien lea el estudio tiene que poder saberlo. */
+      const porOcr = respaldoOcr
+        ? ` ${respaldoOcr.paginasTranscritas} página(s) escaneada(s) se transcribieron por OCR `
+          + 'para poder comprobar las cifras: esa comprobación es contra la transcripción, no '
+          + 'contra la capa de texto del documento.'
+          + (respaldoOcr.paginasOmitidas > 0
+            ? ` Quedaron ${respaldoOcr.paginasOmitidas} página(s) escaneada(s) más sin `
+              + 'transcribir (son las notas; el balance y el estado de resultados van al '
+              + 'principio del documento).'
+            : '')
+        : '';
+
       const paginasAdjuntas = eeffImages ? eeffImages.length : 0;
       if (paginasAdjuntas > 0) {
-        setEeffMsg(`✅ EEFF leídos y ${paginasAdjuntas} página(s) del PDF adjuntadas para el ANEXO A.`);
+        setEeffMsg(`✅ EEFF leídos y ${paginasAdjuntas} página(s) del PDF adjuntadas para el ANEXO A.${columnas}${porOcr}`);
       } else {
-        setEeffMsg('⚠ Se leyeron las cifras, pero no se pudieron adjuntar las páginas del PDF para el ANEXO A (revise que el archivo no esté dañado, o inténtelo de nuevo).');
+        setEeffMsg('⚠ Se leyeron las cifras, pero no se pudieron adjuntar las páginas del PDF para el ANEXO A (revise que el archivo no esté dañado, o inténtelo de nuevo).' + columnas + porOcr);
       }
     } catch (err) {
       console.error("Error procesando EEFF con OCR:", err);

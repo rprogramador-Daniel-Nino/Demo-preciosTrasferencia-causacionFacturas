@@ -26,7 +26,7 @@ import { num } from '../utils/calculations.js';
    salía en su propia línea, deshaciendo justo la asociación rótulo-cifra que hace útil
    este texto. Tres puntos es menos que el interlineado de cualquier estado financiero
    impreso, así que no fusiona filas distintas. */
-const TOLERANCIA_LINEA = 3;
+export const TOLERANCIA_LINEA = 3;
 
 /* Separador entre celdas de una misma línea. Se elige la barra vertical y no el espacio
    porque los rótulos ya llevan espacios («CUENTAS POR PAGAR A PARTES RELACIONADAS») y
@@ -46,7 +46,7 @@ const SEPARADOR_CELDA = ' | ';
    `juandev` para los PDF de las comparables (commit f8ea915, 2026-08-21), que llegó al
    remoto mientras esto se escribía. Al integrar esa rama las dos implementaciones deben
    unificarse en una: son el mismo problema resuelto dos veces. */
-const FACTOR_MISMA_CELDA = 0.6;
+export const FACTOR_MISMA_CELDA = 0.6;
 
 /** Agrupa los fragmentos de una página en líneas por su posición vertical, y ordena
  *  cada línea de izquierda a derecha. Exportada para poder probarla sin un PDF. */
@@ -181,6 +181,65 @@ export async function extraerTextoPdf(file, { getDocument = pdfjs.getDocument } 
   }
 }
 
+/**
+ * Qué páginas del documento no aportan texto utilizable.
+ *
+ * Existe para el respaldo por OCR: hoy un PDF escaneado deja la ingesta sin NINGUNA red de
+ * verificación —`verificarEeff` no tiene contra qué cotejar y descarta o deja pasar a ciegas—
+ * y rasterizar el documento completo para transcribirlo sería caro y, en un documento largo,
+ * arriesgado (el modelo se salta páginas). Esto dice exactamente cuáles hacen falta.
+ *
+ * Dos casos, un mismo mecanismo:
+ *
+ *  · La página no trae fragmentos de texto (`items` vacío o solo blancos). Es el escaneo puro:
+ *    Robertet en sus 25 páginas, Inoxpa en 24 de 29, las últimas 5 de Aluminios y Vidrios.
+ *  · El documento entero no pasa `textoEsConfiable` — hay texto pero es basura porque las
+ *    fuentes no traen `ToUnicode`, y `extraerTextoPdf` ya devuelve `''` para todo. Ahí se
+ *    marcan TODAS las páginas, aunque individualmente tuvieran fragmentos: el criterio de
+ *    confiabilidad es del conjunto y duplicarlo por página sería inventar una heurística para
+ *    un caso que no se ha observado.
+ *
+ * Devuelve los números de página en base 1, en orden. Arreglo vacío cuando todo el documento
+ * trae texto (el caso normal: así no se gasta nada), cuando el archivo es una imagen —ahí no
+ * hay páginas que rasterizar aparte, la lectura principal ya la ve completa— y cuando pdf.js
+ * no puede abrirlo, porque tampoco se podría rasterizar.
+ */
+export async function paginasSinTextoUtilizable(file, { getDocument = pdfjs.getDocument } = {}) {
+  if (!file) return [];
+  if (file.type && file.type.startsWith('image/')) return [];
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const doc = await getDocument({
+      data: new Uint8Array(arrayBuffer),
+      isOffscreenCanvasSupported: false,
+    }).promise;
+
+    const sinTexto = [];
+    const conTexto = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const contenido = await page.getTextContent();
+      const lineas = agruparEnLineas((contenido && contenido.items) || []);
+      if (lineas.length && lineas.join('').trim()) conTexto.push(`--- Página ${n} ---\n${lineas.join('\n')}`);
+      else sinTexto.push(n);
+    }
+
+    /* El mismo juicio que hace `extraerTextoPdf` sobre el texto que va a devolver: si lo que
+       se extrajo no es confiable, para la verificación es como si no existiera, y esas páginas
+       también necesitan transcripción. */
+    if (conTexto.length && !textoEsConfiable(conTexto.join('\n\n'))) {
+      return Array.from({ length: doc.numPages }, (_, i) => i + 1);
+    }
+    return sinTexto;
+  } catch (err) {
+    /* Sin poder abrir el documento no hay nada que rasterizar: el respaldo se salta y la
+       ingesta queda exactamente como hoy. */
+    console.warn('[paginasSinTextoUtilizable] no se pudo abrir el documento:', err && err.message);
+    return [];
+  }
+}
+
 /* Cuando dos o más cifras de una misma fila quedan pegadas sin ningún separador —el hueco
    entre celdas no alcanzó el umbral de `unirTrozos» para este generador de PDF en
    particular—, el bloque de dígitos que arma `agregar()` mezcla los grupos de miles de
@@ -289,7 +348,7 @@ export function cifrasDelTexto(texto) {
  * Para el único uso de esta función —¿está esta cifra impresa en el documento?— admitir
  * las dos lecturas es lo correcto: sigue rechazando lo que no aparece, y no rechaza por
  * haber elegido mal la convención de un documento extranjero. */
-function interpretaciones(crudo) {
+export function interpretaciones(crudo) {
   const salida = [];
   const canonica = num(crudo);
   if (canonica !== null) salida.push(canonica);

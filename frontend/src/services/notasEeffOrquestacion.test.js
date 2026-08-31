@@ -13,7 +13,7 @@ const verificacionBase = () => ({
   correcciones: [],
   advertencias: [
     { tipo: 'sin-costo-de-ventas', campo: 't_c', estado: 'no_verificado', mensaje: 'No se leyó el costo de ventas.' },
-    { tipo: 'sin-partida-relacionada', campo: 't_ar', estado: 'no_verificado', mensaje: 'No se desglosa.' },
+    { tipo: 'sin-partida-comercial', campo: 't_ar', estado: 'no_verificado', mensaje: 'No se desglosa.' },
     { tipo: 'sin-inventarios', campo: 't_inv', estado: 'no_verificado', mensaje: 'No se leyeron inventarios.' },
   ],
   verificadoContraTexto: true,

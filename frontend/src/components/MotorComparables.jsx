@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search
 } from 'lucide-react';
-import { num, pliOf, ratios, pctf, adjustInfo } from '../utils/calculations';
+import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
+import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -69,6 +70,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const [engineConfig, setEngineConfig] = useState(study.motorConfig || {
     nTarget: 12,
     perdidaOp: 'excluir',
+    /* Cuántas comparables en pérdida se quieren en el informe. Cuenta DENTRO de `nTarget` y
+       es también un tope. Solo aplica si la política admite pérdidas: con `excluir` no hay
+       negativas que repartir y el motor lo ignora solo. Los estudios guardados antes de que
+       esto existiera no lo traen, y el motor lo toma como 0. */
+    negativasObjetivo: 0,
     holding: 'excluir',
     /* Independencia (Art. 260-1 E.T.): una comparable con un accionista por encima
        del umbral no es independiente. Los estudios guardados antes de que existiera
@@ -744,6 +750,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            el informe, así que tiene que verse en pantalla y no solo en el detalle por fila. */
         ampliadas: result.ampliadas || 0,
         relacionadasDisponibles: result.relacionadasDisponibles || 0,
+        /* La política de pérdidas y la cuota, con su justificación. Van en el embudo porque es
+           lo único de esta pantalla que se persiste con el estudio y que el informe y el Excel
+           de soporte ya leen: sin esto, una muestra con comparables en pérdida llegaría al
+           documento que se radica sin nada que explique por qué están ahí. */
+        politicaPerdidas: engineConfig.perdidaOp,
+        justificacionPerdida: engineConfig.justificacionPerdida || '',
+        negativasObjetivo: result.negativasObjetivo || 0,
+        negativasIncluidas: result.negativasIncluidas || 0,
+        negativasDisponibles: result.negativasDisponibles || 0,
+        negativasExcluidasPorFiltro: result.negativasExcluidasPorFiltro || 0,
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -752,6 +768,43 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const composicion = deContinuidad
         ? ` (${deContinuidad} del estudio anterior + ${finales.length - deContinuidad} nuevas)`
         : '';
+
+      /* ── La cuota de comparables en pérdida ──
+         Se reporta siempre que se haya pedido alguna, salga o no completa: es una decisión
+         metodológica que el informe tiene que sustentar, y cuando no se completa la cifra que
+         importa es cuántas HABÍA, que es lo que distingue «Capital IQ no tiene más» de «el
+         motor no las buscó». */
+      const negObjetivo = result.negativasObjetivo || 0;
+      const negIncluidas = result.negativasIncluidas || 0;
+      const negDisponibles = result.negativasDisponibles || 0;
+      if (negObjetivo > 0) {
+        if (negIncluidas >= negObjetivo) {
+          anotar(`${negIncluidas} comparable(s) en pérdida en la muestra, como se pidió` +
+            (result.negativasDeContinuidad
+              ? ` (${result.negativasDeContinuidad} viene(n) del estudio anterior)`
+              : '') +
+            `. Del universo había ${negDisponibles} con la misma actividad detectada.`, 'ok');
+        } else {
+          anotar(`Se pidieron ${negObjetivo} comparables en pérdida y solo se incluyeron ` +
+            `${negIncluidas}: el universo de Capital IQ tiene ${negDisponibles} con la misma ` +
+            'actividad detectada que superan los filtros. El resto del cupo lo llenaron ' +
+            'positivas. Amplíe el cribado o revise la actividad detectada si necesita más.', 'aviso');
+        }
+        if (!String(engineConfig.justificacionPerdida || '').trim()) {
+          anotar('Falta la justificación de la política de pérdidas: sin ella, el informe ' +
+            'publica comparables en pérdida sin nada que explique por qué se admitieron. ' +
+            'Escríbala en el paso 2.', 'aviso');
+        }
+      }
+      /* Y las del año anterior que este año están en pérdida: siguen excluidas —la pérdida es
+         un hecho del ejercicio en curso— pero hasta ahora se caían sin un solo aviso. */
+      const previasEnPerdida = result.continuidadEnPerdida || [];
+      if (previasEnPerdida.length) {
+        anotar(`${previasEnPerdida.length} comparable(s) del estudio anterior están en pérdida ` +
+          `este año y el filtro las excluyó: ${previasEnPerdida.join(', ')}. Retirar una ` +
+          'comparable ya aceptada hay que justificarlo en el informe; si quiere conservarlas, ' +
+          'ponga «Incluir» en Pérdidas Operativas.', 'aviso');
+      }
 
       /* La ampliación a actividades afines se dice siempre que ocurre: es una decisión
          metodológica que hay que sustentar en el informe, no un detalle de implementación. */
@@ -1329,6 +1382,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   const adjustment = (stats && tPLI !== null) ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
 
+  /* Por qué no cumple y qué queda por probar. La tarjeta decía «NO CUMPLE (por debajo)» y
+     nada más: ni la brecha, ni el ajuste en pesos que `adjustInfo` ya traía en `capped`, ni
+     cuál de los dos rangos sostenía la conclusión. El servicio prueba cada palanca de verdad
+     —recalcula el rango con ella aplicada— y solo devuelve las que cambian el veredicto.
+     `comparables`, `cmode` y `engineConfig` van del estado local y no de `study` porque el
+     efecto que los persiste corre después del render: el diagnóstico tiene que explicar el
+     rango que se está viendo, no el del render anterior.
+     Se memoriza porque recalcula el rango varias veces (una por palanca) y este componente
+     re-renderiza con cada tecla de los filtros. */
+  const diagnostico = useMemo(() => diagnosticarCumplimiento({
+    estudio: { ...study, comparables, cmode, motorConfig: engineConfig },
+    comparables,
+    cmode,
+    universo,
+  }), [study, comparables, cmode, engineConfig, universo]);
+
   /* Excel de soporte del motor: documenta filtros, comparables (seleccionadas,
      rechazadas y en reserva), el rango intercuartil y el desglose del ajuste de
      capital de trabajo. Solo arma lo que ya está calculado en este componente. */
@@ -1787,6 +1856,38 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </select>
             </div>
 
+            {/* Cuántas comparables en pérdida se quieren en el informe. Cuenta dentro del N
+                objetivo, no aparte, y es también un tope: pedir 3 no puede devolver 5.
+                Deshabilitado mientras la política excluya pérdidas — con «excluir» no hay
+                negativas que repartir, y dejar el campo activo prometería algo que el motor
+                va a ignorar. La UI lo dice en vez de cambiar la política por su cuenta. */}
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold text-zinc-500 mb-1">
+                Negativas objetivo
+              </label>
+              <input
+                type="number"
+                min="0"
+                max={engineConfig.nTarget}
+                disabled={engineConfig.perdidaOp === 'excluir'}
+                value={engineConfig.negativasObjetivo ?? 0}
+                onChange={(e) => cambiarConfig('negativasObjetivo', Math.max(0, Number(e.target.value) || 0))}
+                title={engineConfig.perdidaOp === 'excluir'
+                  ? 'Cambie «Pérdidas Operativas» a Incluir para poder pedir comparables en pérdida'
+                  : 'Cuántas comparables en pérdida debe traer la muestra, dentro del N objetivo'}
+                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+              />
+              {engineConfig.perdidaOp === 'excluir' ? (
+                <span className="text-[10px] text-zinc-400 mt-1">
+                  Ponga «Incluir» para habilitarlo
+                </span>
+              ) : (
+                <span className="text-[10px] text-zinc-400 mt-1">
+                  Dentro de las {engineConfig.nTarget}, misma actividad
+                </span>
+              )}
+            </div>
+
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-zinc-500 mb-1">Sociedades Holding</label>
               <select
@@ -1863,6 +1964,35 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </select>
             </div>
           </div>
+
+          {/* La justificación de admitir comparables en pérdida. Solo aparece cuando de verdad
+              se van a admitir: pedirla siempre la convertiría en un campo que se rellena sin
+              leer. `justificacionPerdida` estaba declarado en `engineConfig` desde antes y no
+              se usaba en ninguna parte; este es su sitio.
+
+              Va al embudo, que se persiste con el estudio y que el informe y el Excel de
+              soporte ya leen: es lo que impide que el documento radicado publique comparables
+              en pérdida sin nada que explique por qué están ahí. */}
+          {(engineConfig.negativasObjetivo ?? 0) > 0 && (
+            <div className="mt-4 flex flex-col">
+              <label className="text-[11px] font-semibold text-zinc-500 mb-1">
+                Justificación de admitir pérdidas
+                {!String(engineConfig.justificacionPerdida || '').trim() && (
+                  <span className="text-amber-600 dark:text-amber-400 font-normal"> · falta, y va al informe</span>
+                )}
+              </label>
+              <textarea
+                rows={2}
+                value={engineConfig.justificacionPerdida || ''}
+                onChange={(e) => cambiarConfig('justificacionPerdida', e.target.value)}
+                placeholder="Ej: Guías OCDE cap. III §3.64-3.65 — las pérdidas de las comparables reflejan condiciones normales del mercado en el año gravable y su exclusión sesgaría el rango al alza."
+                className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+              />
+              <span className="text-[10px] text-zinc-400 mt-1">
+                Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Paso 3: Ejecutar Selección y Curación Gemini AI */}
@@ -2287,7 +2417,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           </div>
         </div>
 
-        <div className="md:col-span-2 bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex items-center justify-between">
+        {/* La tarjeta de cumplimiento. Antes decía solo «NO CUMPLE (por debajo)»: ni a cuánto
+            estaba del límite, ni cuánto sería el ajuste en pesos, ni cuál de los dos rangos
+            sostenía la conclusión, ni qué quedaba por intentar. Todo lo que se pinta aquí lo
+            calcula `diagnosticoRango.js`; este bloque no decide nada. */}
+        <div className="md:col-span-2 bg-white dark:bg-[#0c0c0f] border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm space-y-3">
           <div className="space-y-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Resultado Cumplimiento</span>
             <div>
@@ -2307,7 +2441,123 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <span className="text-sm text-zinc-500">Ingrese cifras y comparables para analizar.</span>
               )}
             </div>
+
+            {/* La brecha y el ajuste: `adjustInfo` ya devolvía `capped` y nadie lo mostraba,
+                así que el analista tenía que abrir el Excel de soporte para saber de cuánto
+                era el ajuste que el informe iba a declarar. */}
+            {!diagnostico.cumple && diagnostico.brecha !== null && (
+              <p className="text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                Faltan <strong>{pctf(diagnostico.brecha)}</strong> para alcanzar el{' '}
+                {diagnostico.dir === 'por debajo' ? 'primer cuartil' : 'tercer cuartil'}
+                {diagnostico.ajuste && diagnostico.ajuste.monto ? (
+                  <>
+                    {' · ajuste a declarar: '}
+                    <strong>COP {fmt(diagnostico.ajuste.monto)}</strong>
+                    {diagnostico.ajuste.topado ? ' (topado por la utilidad disponible)' : ''}
+                  </>
+                ) : null}
+              </p>
+            )}
+            {diagnostico.ajuste && diagnostico.ajuste.improcedente && (
+              <p className="text-[11.5px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                El ajuste resulta improcedente con estas cifras: revise el indicador del
+                contribuyente antes de declararlo.
+              </p>
+            )}
+
+            {/* Cuál de los dos rangos decide. `useadj` lo elegía en silencio, así que no había
+                forma de saber si el rango que se veía era el ajustado o el otro. */}
+            {diagnostico.veredicto && (
+              <p className="text-[11px] text-zinc-500">
+                Decide el rango{' '}
+                {diagnostico.rangos.decide === 'ajustado'
+                  ? 'ajustado por capital de trabajo'
+                  : 'sin ajuste de capital de trabajo'}
+                {diagnostico.rangos.decide === 'ajustado' && diagnostico.rangos.sinAjustar
+                  ? ` · sin ajustar sería ${pctf(diagnostico.rangos.sinAjustar.p25)} - ${pctf(diagnostico.rangos.sinAjustar.p75)}`
+                  : (diagnostico.rangos.ajustado
+                    ? ` · ajustado sería ${pctf(diagnostico.rangos.ajustado.p25)} - ${pctf(diagnostico.rangos.ajustado.p75)}`
+                    : '')}
+              </p>
+            )}
           </div>
+
+          {/* Antes de mover una sola comparable: si el indicador del contribuyente sale de una
+              lectura que no se pudo cotejar contra el documento, ajustar la muestra para
+              alcanzar ese número deteriora el estudio en vez de arreglarlo. */}
+          {diagnostico.confianza.verificado === false && (
+            <div className="rounded-lg border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                  <strong>Antes de ajustar la muestra:</strong> el indicador del contribuyente
+                  {tPLI !== null ? ` (${pctf(tPLI)})` : ''} sale de una lectura que no se pudo
+                  verificar contra el documento. Confírmelo en el paso 3.
+                  <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                    {diagnostico.confianza.motivos.map((m, i) => (
+                      <li key={i}>{m}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* La verificación se hizo, pero contra una transcripción por OCR de las páginas
+              escaneadas. Va en gris y no en ámbar a propósito: donde antes no había ninguna
+              verificación ahora hay una, y bloquear por ella devolvería el estudio al punto de
+              partida. Pero es más débil que cotejar contra la capa de texto del propio PDF, y
+              quien firme el estudio tiene que poder saberlo. */}
+          {diagnostico.confianza.verificado !== false && diagnostico.confianza.viaOcr && (
+            <p className="text-[11px] text-zinc-500 leading-relaxed flex items-start gap-1.5">
+              <FileText className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                Las cifras se comprobaron contra una transcripción por OCR de las páginas
+                escaneadas del documento, no contra su capa de texto. Es una verificación más
+                débil: si el margen decide el cumplimiento, vale confirmarlo a mano en el paso 3.
+              </span>
+            </p>
+          )}
+
+          {/* Las palancas. Cada una se probó de verdad —el servicio recalculó el rango con
+              ella aplicada— y solo está aquí si cambia el veredicto: una lista de sugerencias
+              que no funcionan enseña a ignorar el panel. */}
+          {diagnostico.palancas.length > 0 && (
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#09090b] p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Lightbulb className="w-4 h-4 text-[#0FA3A1]" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                  {diagnostico.palancas.length} vía(s) que sí cambian el veredicto
+                </span>
+              </div>
+              <ul className="space-y-1.5">
+                {diagnostico.palancas.map((p) => (
+                  <li key={p.clave} className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed flex gap-2">
+                    <span className="text-[#0FA3A1] shrink-0">→</span>
+                    <span>{p.texto}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10.5px] text-zinc-500 leading-relaxed">
+                Ninguna se aplica sola: cada una es una decisión metodológica que hay que
+                sustentar en el análisis funcional y dejar escrita en el informe.
+              </p>
+            </div>
+          )}
+
+          {/* No cumple y no hay nada que probar. Es una conclusión legítima y hay que poder
+              decirla: el usuario pidió hacer todo lo posible, no forzar el resultado. */}
+          {diagnostico.veredicto === 'NO CUMPLE' && diagnostico.palancas.length === 0 && (
+            <div className="flex items-start gap-2 text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              <Search className="w-4 h-4 text-zinc-400 mt-0.5 shrink-0" />
+              <span>
+                Se probaron la política de pérdidas, el ajuste de capital de trabajo, los otros
+                indicadores de rentabilidad, los tres ámbitos de muestra y la segmentación:
+                ninguno deja al contribuyente dentro del rango. El estudio no cumple, y el
+                informe debe declararlo con el ajuste correspondiente.
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
