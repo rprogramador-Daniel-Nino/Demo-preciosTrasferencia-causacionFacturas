@@ -215,7 +215,23 @@ export function verificarEeff(lectura, {
   /* De qué sección del estado sale cada campo. Es la comprobación que atrapa «lo toma fuera
      de la declaración de los activos»: un total de activos cuyo rótulo cae en la sección de
      pasivos no es el total de activos, por más que la cifra esté impresa. */
-  const SECCION_ESPERADA = {
+  /* Las tres partidas de capital de trabajo salen del activo y del pasivo CORRIENTES, y el
+   subtotal del corriente también. Lo fijó el usuario el 2026-08-31 y cierra una ambigüedad
+   real: en un balance el mismo rótulo aparece dos veces —«Cuentas comerciales por cobrar» está
+   en el corriente y en el no corriente— y tomar la del bloque equivocado no vacía el campo,
+   lo llena con una cifra creíble del sitio que no es. En Llantas Emotion eso daba 3.697.232.608
+   en vez de 4.003.623.665, y 59.805.002 en vez de 53.708.962.262.
+
+   `t_ppe` y `t_act_tot` no entran: uno vive en el no corriente por definición y el otro es el
+   total general, y ninguno de los dos rótulos se repite. */
+const SUBSECCION_ESPERADA = {
+  t_ar: 'CORRIENTE',
+  t_inv: 'CORRIENTE',
+  t_ap: 'CORRIENTE',
+  t_act_curr: 'CORRIENTE',
+};
+
+const SECCION_ESPERADA = {
     t_s: 'RESULTADOS', t_c: 'RESULTADOS',
     t_ar: 'ACTIVO', t_inv: 'ACTIVO', t_act_curr: 'ACTIVO', t_act_tot: 'ACTIVO', t_ppe: 'ACTIVO',
     t_ap: 'PASIVO',
@@ -260,27 +276,38 @@ export function verificarEeff(lectura, {
       if (v === null || v === 0) return;
       const rotulo = rotuloDe(clave);
 
-      /* Primer filtro, el de siempre: ¿está impresa en el documento? Atrapa la cifra
-         inventada de raíz, que es de otro orden que una mal atribuida. */
-      if (!cifraApareceEnTexto(v, impresas)) {
-        campos[clave] = null;
-        advertencias.push({
-          tipo: 'cifra-inexistente',
-          campo: clave,
-          mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} no aparece impresa en el `
-            + `documento${rotulo ? ` (la lectura la atribuyó a «${rotulo}»)` : ''}. `
-            + 'Se descartó; verifíquela contra el estado financiero y escríbala a mano si corresponde.',
-        });
+      /* PRIMERO LA COLUMNA, DESPUÉS LA PRESENCIA LITERAL, y ese orden importa.
+         Al revés estuvo —el chequeo literal iba delante— y costó un caso real: en Llantas
+         Emotion (2026-08-31) la fila de las cuentas por pagar dice 53.708.962.262 y el modelo
+         leyó ...282, un dígito. El chequeo literal lo rechazaba con razón —esa cifra no está
+         impresa— y la verificación por columna, que sabía exactamente qué dice esa fila en la
+         columna del ejercicio, nunca llegaba a correr. El campo quedaba vacío y el respaldo
+         indexaba la cuenta por pagar NO corriente, 59.805.002 contra 53.708.962.262.
+
+         Con la columna delante, un dígito mal leído se corrige con lo que el documento imprime.
+         El chequeo literal no se debilita: sigue siendo el que atrapa la cifra inventada de
+         raíz, y actúa en todo lo que la columna no puede juzgar. */
+      const donde = (estructura && anioObjetivo && rotulo)
+        ? ubicacionDeCifra(estructura, {
+          rotulo, valor: v, anio: anioObjetivo, subseccion: SUBSECCION_ESPERADA[clave],
+        })
+        : { veredicto: 'sin-verificar' };
+
+      if (donde.veredicto === 'sin-verificar') {
+        /* La columna no puede decir nada —el rótulo no aparece, la página no trae encabezado,
+           no hay estructura—: manda el chequeo de siempre. */
+        if (!cifraApareceEnTexto(v, impresas)) {
+          campos[clave] = null;
+          advertencias.push({
+            tipo: 'cifra-inexistente',
+            campo: clave,
+            mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} no aparece impresa en el `
+              + `documento${rotulo ? ` (la lectura la atribuyó a «${rotulo}»)` : ''}. `
+              + 'Se descartó; verifíquela contra el estado financiero y escríbala a mano si corresponde.',
+          });
+        }
         return;
       }
-
-      /* Segundo filtro: está impresa, pero ¿en la fila de su rótulo y en la columna del
-         ejercicio del estudio? Sin estructura, sin año o sin rótulo no se puede saber, y
-         entonces la lectura queda como quedaba antes de que esto existiera. */
-      if (!estructura || !anioObjetivo || !rotulo) return;
-      const donde = ubicacionDeCifra(estructura, { rotulo, valor: v, anio: anioObjetivo });
-
-      if (donde.veredicto === 'sin-verificar') return;
 
       const esperada = donde.esperado && donde.esperado.texto
         ? ` En esa fila, el ejercicio ${anioObjetivo} dice ${donde.esperado.texto}.`
@@ -304,6 +331,27 @@ export function verificarEeff(lectura, {
         return;
       }
 
+      /* CORREGIR ANTES QUE VACIAR. La fila del rótulo trae otra cifra en la columna del
+         ejercicio del estudio, y esa cifra sale del propio PDF: no hay nada que interpretar.
+         Vaciar el campo costó un caso real (Llantas Emotion, 2026-08-31): se descartó el costo
+         de ventas y el estudio quedó sin margen operacional ni Índice de Berry, que es mucho
+         peor que un número visible y editable con su corrección anotada. */
+      if (donde.veredicto === 'corregible') {
+        campos[clave] = donde.esperado.valor;
+        correcciones.push({
+          campo: clave,
+          etiqueta: ETIQUETA[clave],
+          valorLeido: v,
+          valorAplicado: donde.esperado.valor,
+          motivo: `La lectura atribuyó ${fmtCop(v)} a «${rotulo}», pero en el documento esa `
+            + `fila dice ${donde.esperado.texto} en la columna del ${anioObjetivo}`
+            + `${donde.rotuloReal ? ` (fila «${donde.rotuloReal}»)` : ''}. Se aplicó la cifra `
+            + 'impresa. Verifíquela contra el estado financiero antes de radicar el estudio.',
+        });
+        verificadasPorColumna += 1;
+        return;
+      }
+
       campos[clave] = null;
       if (donde.veredicto === 'otro-anio') {
         advertencias.push({
@@ -316,13 +364,15 @@ export function verificarEeff(lectura, {
         });
         return;
       }
-      if (donde.veredicto === 'otra-fila') {
+      if (donde.veredicto === 'vacio-en-el-anio') {
         advertencias.push({
-          tipo: 'cifra-de-otra-fila',
+          tipo: 'cifra-sin-dato-en-el-anio',
           campo: clave,
           estado: 'no_verificado',
-          mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} pertenece a la fila `
-            + `«${donde.rotuloReal}» del documento, no a «${rotulo}».${esperada} Se descartó.`,
+          mensaje: `«${ETIQUETA[clave]}»: en el documento la fila «${rotulo}» no trae cifra en `
+            + `la columna del ${anioObjetivo} (está en blanco o con un guion), así que `
+            + `${fmtCop(v)} salió de otra parte. Se descartó: si el ejercicio no reporta este `
+            + 'rubro, déjelo vacío.',
         });
         return;
       }
@@ -331,8 +381,9 @@ export function verificarEeff(lectura, {
         campo: clave,
         estado: 'no_verificado',
         mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} no está en ninguna columna de `
-          + `ejercicio de la fila «${rotulo}» — puede ser el número de una nota al pie.`
-          + `${esperada} Se descartó.`,
+          + `ejercicio de la fila «${rotulo}», y esa fila tampoco trae cifra del `
+          + `${anioObjetivo} — puede que el rótulo sea un encabezado de bloque y no una fila de `
+          + 'cifras. Se descartó.',
       });
     });
   } else {

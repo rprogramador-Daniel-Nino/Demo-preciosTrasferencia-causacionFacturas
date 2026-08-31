@@ -45,7 +45,7 @@ const CAMPOS_DEL_MARGEN = ['t_s', 't_c', 't_op'];
    los tres del margen: un documento cuyas columnas se leyeron mal una vez no es de fiar en
    las demás filas tampoco, ni siquiera en las que salieron con veredicto `coincide`. */
 const TIPOS_POR_COLUMNA = [
-  'cifra-de-otro-anio', 'cifra-de-otra-fila',
+  'cifra-de-otro-anio', 'cifra-sin-dato-en-el-anio',
   'cifra-fuera-de-columna', 'cifra-de-otra-seccion',
 ];
 

@@ -219,7 +219,7 @@ test('las cifras descartadas por columna o fila marcan el indicador como no conf
     verificadoContraTexto: true,
     advertencias: [
       { tipo: 'cifra-de-otro-anio', campo: 't_c' },
-      { tipo: 'cifra-de-otra-fila', campo: 't_inv' },
+      { tipo: 'cifra-sin-dato-en-el-anio', campo: 't_inv' },
     ],
     correcciones: [],
   });
@@ -280,7 +280,7 @@ test('un mismo defecto no se cuenta dos veces', () => {
 test('lo que el analista digitó a mano deja de contar contra la confianza', () => {
   const lectura = {
     verificadoContraTexto: true,
-    advertencias: [{ tipo: 'cifra-de-otra-fila', campo: 't_c' }],
+    advertencias: [{ tipo: 'cifra-sin-dato-en-el-anio', campo: 't_c' }],
     correcciones: [],
   };
   assert.strictEqual(confianzaDelIndicador(lectura).verificado, false);
