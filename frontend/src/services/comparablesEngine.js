@@ -414,35 +414,130 @@ export function perfilDe(descripcion) {
    igual: dos copias del mismo criterio acaban divergiendo. */
 export { PERFILES_DETERMINADOS };
 
+/* Los cuatro filtros duros, en el orden de precedencia que manda, y con el motivo con el que
+   el informe los cuenta. Vive en un solo sitio porque de él dependen DOS decisiones distintas
+   que tienen que coincidir: a quién se le paga la curación (`prefiltrar`) y quién entra en la
+   muestra (`scoreCandidates`).
+
+   No coincidían. `prefiltrar` no eximía a las de continuidad del filtro de holding y el motor
+   sí, de modo que una comparable del estudio del año pasado con «Group» en la razón social se
+   caía antes de curarse aunque el motor la habría conservado — y se caía sin un aviso. Y
+   `prefiltrar` miraba `cand.hasLoss` mientras el motor usa `enPerdida`, que además reconoce
+   `op < 0` cuando el flag no viene: esas se curaban, pagando, para descartarlas después.
+
+   Desde que el paso 2 pinta el embudo en vivo con estos mismos predicados, divergir dejó de ser
+   un detalle: el panel prometería un número que el motor no respeta.
+
+   El rigor funcional NO está aquí: depende del perfil, y el perfil lo dictamina la propia
+   curación. Se evalúa después, en `scoreCandidates`. */
+export const FILTROS_DUROS = [
+  {
+    clave: 'controlada',
+    /* El control efectivo (Art. 260-1) es el más duro y NO se exime por continuidad: una
+       participación sobre el umbral dice que la empresa no es independiente HOY, y eso no lo
+       sustenta el estudio anterior. */
+    activo: (cfg) => cfg.control === 'excluir',
+    aplica: (cand, cfg) => esControlada(cand, { umbral: cfg.umbralControl }),
+    eximeContinuidad: false,
+    motivo: (cfg) => `Vinculada: un accionista alcanza o supera el ${cfg.umbralControl} % del capital (Art. 260-1 E.T.).`,
+  },
+  {
+    clave: 'holding',
+    /* La condición de holding se PRESUME de la razón social. Ahí una comparable que ya venía
+       del estudio previo conserva su exención: su inclusión se sustentó en su momento y
+       retirarla ahora rompería la continuidad de la serie. */
+    activo: (cfg) => cfg.holding === 'excluir',
+    aplica: (cand) => tieneSemanticaHolding(cand),
+    eximeContinuidad: true,
+    motivo: () => 'Sociedad holding o de grupo (en Razón Social).',
+  },
+  {
+    clave: 'saldoNegativo',
+    activo: (cfg) => cfg.saldoNegativo === 'excluir',
+    aplica: (cand) => Boolean(cand.hasNegativeBalance),
+    eximeContinuidad: false,
+    motivo: () => 'Saldo negativo en balances (dato no verosímil).',
+  },
+  {
+    clave: 'perdidaOperativa',
+    /* La continuidad NO queda exenta, a diferencia del holding. Es una decisión deliberada y
+       probada: la pérdida es un hecho del ejercicio en curso, no una presunción sobre la razón
+       social, así que el estudio anterior no la sustenta; y desde que existe
+       `negativasObjetivo` el analista tiene una palanca EXPLÍCITA para admitir pérdidas, de
+       modo que eximirla aquí abriría un tercer camino oculto que contradiría su propio ajuste
+       de «excluir». Ver `continuidadEnPerdida` en el retorno de `scoreCandidates`, que es lo
+       que permite nombrarlas en vez de dejarlas caer en silencio. */
+    activo: (cfg) => cfg.perdidaOp === 'excluir',
+    aplica: (cand) => enPerdida(cand),
+    eximeContinuidad: false,
+    motivo: () => 'Pérdida operativa (criterio conservador DIAN).',
+  },
+];
+
+/** La configuración de los filtros duros con sus valores por omisión, en un solo sitio. */
+export function configDeFiltros(config = {}) {
+  return {
+    perdidaOp: config.perdidaOp || 'excluir',
+    holding: config.holding || 'excluir',
+    saldoNegativo: config.saldoNegativo || 'excluir',
+    control: config.control || 'excluir',
+    umbralControl: config.umbralControl === undefined ? 50 : config.umbralControl,
+  };
+}
+
 /**
- * Filtros duros que no dependen de la descripción del negocio: control accionario,
- * holding, saldos negativos y pérdida operativa. Se aplican ANTES de curar para no
- * pagarle a la IA por candidatas que el motor iba a descartar igual — en un cribado
- * real de 2.987 compañías eran ~1.359 evaluaciones tiradas, casi la mitad del gasto
- * de la corrida.
+ * Qué filtro duro descarta a esta candidata, o `null` si ninguno.
  *
- * El rigor funcional NO se aplica aquí: depende del perfil, y el perfil lo dictamina
- * la propia curación. Se evalúa después, en `scoreCandidates`.
+ * El PRIMERO que aplique manda: una candidata puede violar dos a la vez y el informe la cuenta
+ * una sola vez, bajo el motivo de más precedencia.
  *
- * `scoreCandidates` vuelve a aplicar estos mismos filtros —es idempotente— para
- * seguir siendo correcta cuando se la llama suelta con el universo completo. El
- * orden de las ramas es el mismo allá, para que las dos funciones atribuyan cada
- * candidata al mismo motivo.
+ * @returns {{clave:string, motivo:string}|null}
  */
-export function prefiltrar(candidates, config = {}) {
-  const {
-    perdidaOp = 'excluir', holding = 'excluir', saldoNegativo = 'excluir',
-    control = 'excluir', umbralControl = 50,
-  } = config;
+export function filtroQueDescarta(cand, config = {}, esContinuidad = false) {
+  const cfg = configDeFiltros(config);
+  for (const f of FILTROS_DUROS) {
+    if (!f.activo(cfg)) continue;
+    if (f.eximeContinuidad && esContinuidad) continue;
+    if (f.aplica(cand, cfg)) return { clave: f.clave, motivo: f.motivo(cfg) };
+  }
+  return null;
+}
+
+/**
+ * Filtros duros aplicados sobre un universo, con la atribución de cada descarte.
+ *
+ * Se aplican ANTES de curar para no pagarle a la IA por candidatas que el motor iba a descartar
+ * igual — en un cribado real de 2.987 compañías eran ~1.359 evaluaciones tiradas, casi la mitad
+ * del gasto de la corrida.
+ *
+ * `porMotivo` es lo que permite pintar el embudo por control en el paso 2: sin él solo se sabe
+ * cuántas caen, no por cuál, y la pantalla tendría que recalcularlo por su cuenta — que es
+ * exactamente cómo los dos criterios volverían a divergir.
+ *
+ * @param {Array} candidates  el universo.
+ * @param {object} config     los filtros del paso 2.
+ * @param {Array} [previas]   las comparables del estudio anterior, para la exención de holding.
+ * @returns {{validas:Array, rechazadas:Array, porMotivo:Object<string,Array>}}
+ */
+export function prefiltrar(candidates, config = {}, previas = []) {
+  const priorSet = new Set(
+    (previas || []).map((c) => c.nameKey || nameKey(c.name)).filter(Boolean),
+  );
   const validas = [], rechazadas = [];
+  const porMotivo = {};
+  FILTROS_DUROS.forEach((f) => { porMotivo[f.clave] = []; });
+
   (candidates || []).forEach(cand => {
-    if (control === 'excluir' && esControlada(cand, { umbral: umbralControl })) rechazadas.push(cand);
-    else if (holding === 'excluir' && tieneSemanticaHolding(cand)) rechazadas.push(cand);
-    else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) rechazadas.push(cand);
-    else if (perdidaOp === 'excluir' && cand.hasLoss) rechazadas.push(cand);
-    else validas.push(cand);
+    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
+    const fuera = filtroQueDescarta(cand, config, esContinuidad);
+    if (fuera) {
+      rechazadas.push(cand);
+      porMotivo[fuera.clave].push(cand);
+    } else {
+      validas.push(cand);
+    }
   });
-  return { validas, rechazadas };
+  return { validas, rechazadas, porMotivo };
 }
 
 const VACIAS = /^(de|del|la|el|los|las|y|o|para|con|por|the|and|for|with|its|del)$/i;
@@ -586,25 +681,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        holding, en cambio, se presume de la razón social, y ahí una comparable que ya
        venía del estudio previo conserva su exención: su inclusión se sustentó en su
        momento y retirarla ahora rompería la continuidad de la serie. */
-    if (control === 'excluir' && esControlada(cand, { umbral: umbralControl })) {
-      rechazar('filtro', 'controlada',
-        `Vinculada: un accionista alcanza o supera el ${umbralControl} % del capital (Art. 260-1 E.T.).`);
-    } else if (holding === 'excluir' && tieneSemanticaHolding(cand) && !esContinuidad) {
-      rechazar('filtro', 'holding', 'Sociedad holding o de grupo (en Razón Social).');
-    } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
-      rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
-    } else if (perdidaOp === 'excluir' && enPerdida(cand)) {
-      /* La continuidad NO queda exenta de este filtro, a diferencia del holding. Es una
-         decisión deliberada y probada («la pérdida operativa debe seguir excluyendo incluso
-         a las de continuidad»), y se conserva por dos razones: la pérdida es un hecho del
-         ejercicio en curso, no una presunción sobre la razón social, así que el estudio
-         anterior no la sustenta; y desde que existe `negativasObjetivo` el analista tiene una
-         palanca EXPLÍCITA para admitir pérdidas, de modo que eximirla aquí abriría un tercer
-         camino oculto que contradiría su propio ajuste de «excluir».
-         Lo que sí faltaba es decirlo: se caía sin un solo aviso. Ver `continuidadEnPerdida`
-         en el retorno, que es lo que permite nombrarlas en el registro del motor. */
-      rechazar('filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN).');
-    }
+    /* El MISMO juez que usa `prefiltrar` para decidir a quién se le paga la curación. Estaban
+       escritos dos veces y divergían en dos puntos —la exención de continuidad del holding y el
+       reconocimiento de `op < 0` sin flag—, de modo que se pagaba por candidatas que el motor
+       descartaba y se perdían de continuidad que el motor habría conservado. */
+    const fuera = filtroQueDescarta(cand, {
+      perdidaOp, holding, saldoNegativo, control, umbralControl,
+    }, esContinuidad);
+    if (fuera) rechazar('filtro', fuera.clave, fuera.motivo);
 
     /* ── veredicto de la curación por IA ──
        Solo alcanza a las candidatas con identificador: las de otras fuentes no se
@@ -1086,7 +1170,7 @@ export function gradoDeActividad(dictamen) {
 export const CURACION_LOTE = 20;
 export const CURACION_CONCURRENCIA = 3;
 /* Se usa para estimar la espera y avisarla desde el principio. */
-const SEGUNDOS_POR_LOTE = 15;
+export const SEGUNDOS_POR_LOTE = 15;
 
 /* Códigos que merecen otro intento: el borde de Hosting corta a los 60 s (502/504),
    Gemini responde 429 cuando se satura y un despliegue en curso tumba las peticiones

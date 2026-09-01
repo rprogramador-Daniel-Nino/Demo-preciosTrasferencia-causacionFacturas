@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
+import { previsualizarFiltros } from '../services/previsualizarFiltros';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -41,6 +42,70 @@ import CampoMoneda from './CampoMoneda';
 /* Aviso que ocupa el lugar de la actividad económica mientras no se extraiga de los
    adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
 const ACTIVIDAD_SIN_EXTRAER = 'No extraido por favor validar adjuntos';
+
+/* Lo que un filtro está sacando del universo, pegado a su propio control.
+   Es el corazón del rediseño del paso 2: un rótulo sin número es abstracto —«excluye holdings»
+   no dice cuántas— y un embudo aparte obliga a adivinar qué línea corresponde a qué selector.
+   Con el número al lado, el rótulo se vuelve concreto y el embudo deja de necesitar lectura
+   propia.
+
+   El «ver» despliega cinco razones sociales. Cinco y no todas: la lista sirve para VERIFICAR
+   que el filtro no se equivocó —el de holding se presume del nombre y a veces acierta de más—,
+   no para leerla entera. */
+function CostoDelFiltro({ paso, universo, expandido, alExpandir }) {
+  if (!paso || !universo) return null;
+  if (!paso.activo) {
+    return <span className="text-[10px] text-zinc-400 shrink-0" title={paso.queHace}>apagado</span>;
+  }
+  if (paso.saca === 0) {
+    return (
+      <span className="text-[10px] text-zinc-400 shrink-0" title={paso.queHace}>
+        no saca ninguna
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-baseline gap-1.5 shrink-0">
+      <span className="text-[10.5px] text-zinc-500" title={paso.queHace}>
+        saca <b className="text-rose-700 dark:text-rose-400">{paso.saca}</b> de {universo}
+      </span>
+      {paso.ejemplos.length > 0 && (
+        <button
+          type="button"
+          onClick={alExpandir}
+          className="text-[10px] text-[#0B7C7A] dark:text-[#0FA3A1] hover:underline"
+        >
+          {expandido ? 'ocultar' : 'ver'}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/* Los ejemplos del filtro desplegado. Va aparte del control para poder ocupar el ancho
+   completo: cinco razones sociales de Capital IQ no caben en la columna de un selector. */
+function EjemplosDelFiltro({ paso }) {
+  if (!paso || !paso.ejemplos.length) return null;
+  return (
+    <div className="md:col-span-2 rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 p-2.5 -mt-1">
+      <p className="text-[10.5px] text-zinc-500 mb-1.5 leading-relaxed">{paso.queHace}</p>
+      <ul className="text-[11px] text-zinc-700 dark:text-zinc-300 space-y-0.5">
+        {paso.ejemplos.map((nombre) => (
+          <li key={nombre} className="flex gap-1.5">
+            <span className="text-zinc-400 shrink-0">·</span>
+            <span>{nombre}</span>
+          </li>
+        ))}
+      </ul>
+      {paso.masSinNombrar > 0 && (
+        <p className="text-[10px] text-zinc-400 mt-1.5">
+          y {paso.masSinNombrar} más. Se muestran cinco: es para comprobar el criterio, no para
+          revisarlas una por una.
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
@@ -205,6 +270,27 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     if (!Array.isArray(universo) || !universo.length) return null;
     return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
   }, [universo, comparables, auditoria]);
+
+  /* Qué va a pasar con esta configuración, ANTES de correr y de pagar la curación. Los cuatro
+     filtros duros son cálculo local sobre el universo ya cargado, así que esto se puede
+     recalcular con cada tecla sin costar nada — que es justo el punto: el paso 2 se configuraba
+     a ciegas y el efecto solo se veía después de pagar.
+
+     Usa el MISMO juez que el motor (`prefiltrar` / `filtroQueDescarta`), no una copia: un panel
+     que promete un número que `scoreCandidates` no respeta es peor que no mostrar nada. */
+  const previsualizacion = useMemo(() => previsualizarFiltros(universo, engineConfig, {
+    estudio: study,
+    iaMatch,
+    estudioAnterior: estudioAnteriorInfo,
+  }), [universo, engineConfig, study, iaMatch, estudioAnteriorInfo]);
+
+  /* Las afinaciones arrancan plegadas: seis controles en una parrilla plana no dejaban ver
+     cuáles son decisiones de fondo. El costo de lo plegado se muestra en la propia barra, para
+     que esconderlas nunca oculte un descarte. */
+  const [afinacionesAbiertas, setAfinacionesAbiertas] = useState(false);
+  /* Qué filtro tiene desplegados sus ejemplos. Uno a la vez: es para verificar una sospecha,
+     no para leer cuatro listas juntas. */
+  const [filtroExpandido, setFiltroExpandido] = useState(null);
 
 
 
@@ -1823,174 +1909,345 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
           {/* Decir en qué orden se aplican: el reclamo era que la curación y los
               filtros parecían juzgar conjuntos distintos, y así era. */}
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1">
-            Independencia, holding, saldos negativos y pérdidas operativas se aplican <b>antes</b> de curar
-            con IA, así que la curación solo evalúa —y solo se paga por— lo que pasa estos filtros. El rigor
-            funcional se aplica <b>después</b>, sobre el perfil que dictamina la propia curación. El holding
-            se identifica por la razón social, y por eso <b>no</b> retira una comparable que venga del
-            estudio anterior; el control accionario sí, porque es un hecho de la composición societaria.
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1 leading-relaxed">
+            Estos cuatro filtros se aplican <b>antes</b> de curar con IA, así que la curación solo
+            evalúa —y solo se paga por— lo que los pasa. Los números de la derecha de cada control
+            son el efecto real sobre el cribado que ya cargaste: se calculan aquí, sin gastar una
+            sola consulta.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">N Objetivo (Tope 30)</label>
-              <input
-                type="number"
-                min="4"
-                max="30"
-                value={engineConfig.nTarget}
-                onChange={(e) => cambiarConfig('nTarget', Number(e.target.value))}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              />
+          {/* ══ Los avisos: solo cuando lo que dicen es cierto y comprobable ══
+              Un panel que avisa de todo enseña a ignorar los avisos, que es lo que ya le pasó a
+              los del generador antes de que se acotaran. Los emite `previsualizarFiltros`; aquí
+              solo se pintan. */}
+          {previsualizacion.avisos.length > 0 && (
+            <div className="space-y-1.5">
+              {previsualizacion.avisos.map((a) => (
+                <div
+                  key={a.clave}
+                  className={`rounded-lg p-2.5 flex items-start gap-2 text-[11.5px] leading-relaxed border ${a.severidad === 'bloqueo'
+                    ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/50 text-rose-900 dark:text-rose-200'
+                    : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-200'
+                    }`}
+                >
+                  {a.severidad === 'bloqueo'
+                    ? <Ban className="w-4 h-4 mt-px shrink-0" />
+                    : <AlertTriangle className="w-4 h-4 mt-px shrink-0" />}
+                  <span>{a.texto}</span>
+                </div>
+              ))}
             </div>
+          )}
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Pérdidas Operativas</label>
-              <select
-                value={engineConfig.perdidaOp}
-                onChange={(e) => cambiarConfig('perdidaOp', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir (criterio conservador DIAN)</option>
-                <option value="incluir">Incluir (criterio OCDE)</option>
-              </select>
-            </div>
+          {/* ══ Decisiones de método ══
+              Arriba y siempre visibles porque son las que hay que justificar en el informe: la
+              política de pérdidas con su cuota, y la independencia con su umbral. */}
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 space-y-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+              Decisiones de método
+            </span>
 
-            {/* Cuántas comparables en pérdida se quieren en el informe. Cuenta dentro del N
-                objetivo, no aparte, y es también un tope: pedir 3 no puede devolver 5.
-                Deshabilitado mientras la política excluya pérdidas — con «excluir» no hay
-                negativas que repartir, y dejar el campo activo prometería algo que el motor
-                va a ignorar. La UI lo dice en vez de cambiar la política por su cuenta. */}
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">
-                Negativas objetivo
-              </label>
-              <input
-                type="number"
-                min="0"
-                max={engineConfig.nTarget}
-                disabled={engineConfig.perdidaOp === 'excluir'}
-                value={engineConfig.negativasObjetivo ?? 0}
-                onChange={(e) => cambiarConfig('negativasObjetivo', Math.max(0, Number(e.target.value) || 0))}
-                title={engineConfig.perdidaOp === 'excluir'
-                  ? 'Cambie «Pérdidas Operativas» a Incluir para poder pedir comparables en pérdida'
-                  : 'Cuántas comparables en pérdida debe traer la muestra, dentro del N objetivo'}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
-              />
-              {engineConfig.perdidaOp === 'excluir' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col">
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <label className="text-[11px] font-semibold text-zinc-500">Pérdidas Operativas</label>
+                  <CostoDelFiltro
+                    paso={previsualizacion.pasos.find((x) => x.clave === 'perdidaOperativa')}
+                    universo={previsualizacion.universo}
+                    expandido={filtroExpandido === 'perdidaOperativa'}
+                    alExpandir={() => setFiltroExpandido(filtroExpandido === 'perdidaOperativa' ? null : 'perdidaOperativa')}
+                  />
+                </div>
+                <select
+                  value={engineConfig.perdidaOp}
+                  onChange={(e) => cambiarConfig('perdidaOp', e.target.value)}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                >
+                  <option value="excluir">Excluir (criterio conservador DIAN)</option>
+                  <option value="incluir">Incluir (criterio OCDE)</option>
+                </select>
+                {previsualizacion.hayUniverso && (
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    El cribado trae {previsualizacion.enPerdidaEnUniverso} compañía(s) en pérdida.
+                  </span>
+                )}
+              </div>
+
+              {/* Cuántas comparables en pérdida se quieren en el informe. Cuenta dentro del N
+                  objetivo, no aparte, y es también un tope: pedir 3 no puede devolver 5.
+                  Deshabilitado mientras la política excluya pérdidas — con «excluir» no hay
+                  negativas que repartir, y dejar el campo activo prometería algo que el motor
+                  va a ignorar. La UI lo dice en vez de cambiar la política por su cuenta. */}
+              <div className="flex flex-col">
+                <label className="text-[11px] font-semibold text-zinc-500 mb-1">Negativas objetivo</label>
+                <input
+                  type="number"
+                  min="0"
+                  max={engineConfig.nTarget}
+                  disabled={engineConfig.perdidaOp === 'excluir'}
+                  value={engineConfig.negativasObjetivo ?? 0}
+                  onChange={(e) => cambiarConfig('negativasObjetivo', Math.max(0, Number(e.target.value) || 0))}
+                  title={engineConfig.perdidaOp === 'excluir'
+                    ? 'Cambie «Pérdidas Operativas» a Incluir para poder pedir comparables en pérdida'
+                    : 'Cuántas comparables en pérdida debe traer la muestra, dentro del N objetivo'}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+                />
                 <span className="text-[10px] text-zinc-400 mt-1">
-                  Ponga «Incluir» para habilitarlo
+                  {engineConfig.perdidaOp === 'excluir'
+                    ? 'Ponga «Incluir» para habilitarlo'
+                    : `Dentro de las ${engineConfig.nTarget}, misma actividad. Reserva cupo antes del puntaje: sin cuota no entra ninguna.`}
                 </span>
-              ) : (
+              </div>
+
+              <div className="flex flex-col">
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <label className="text-[11px] font-semibold text-zinc-500">Independencia (Art. 260-1)</label>
+                  <CostoDelFiltro
+                    paso={previsualizacion.pasos.find((x) => x.clave === 'controlada')}
+                    universo={previsualizacion.universo}
+                    expandido={filtroExpandido === 'controlada'}
+                    alExpandir={() => setFiltroExpandido(filtroExpandido === 'controlada' ? null : 'controlada')}
+                  />
+                </div>
+                <select
+                  value={engineConfig.control ?? 'excluir'}
+                  onChange={(e) => cambiarConfig('control', e.target.value)}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                >
+                  <option value="excluir">Excluir controladas</option>
+                  <option value="incluir">Incluir</option>
+                </select>
                 <span className="text-[10px] text-zinc-400 mt-1">
-                  Dentro de las {engineConfig.nTarget}, misma actividad
+                  No perdona a las del estudio anterior: no ser independiente es un hecho de hoy.
                 </span>
+              </div>
+
+              {/* El umbral es la palanca de más peso del paso 2 —sobre el cribado de Makita
+                  saca 238 al 50 % y 775 al 25 %— y era un campo mudo. Con el costo al lado,
+                  moverlo deja de ser a ciegas. */}
+              <div className="flex flex-col">
+                <label className="text-[11px] font-semibold text-zinc-500 mb-1">Umbral de control (%)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  value={engineConfig.umbralControl ?? 50}
+                  disabled={(engineConfig.control ?? 'excluir') !== 'excluir'}
+                  onChange={(e) => cambiarConfig('umbralControl', Number(e.target.value))}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40"
+                />
+                <span className="text-[10px] text-zinc-400 mt-1">
+                  Baje el umbral y el filtro se endurece: se ve al instante en el número de arriba.
+                </span>
+              </div>
+
+              {/* Los ejemplos ocupan las dos columnas: cinco razones sociales de Capital IQ no
+                  caben en la columna de un selector. */}
+              {['perdidaOperativa', 'controlada'].includes(filtroExpandido) && (
+                <EjemplosDelFiltro paso={previsualizacion.pasos.find((x) => x.clave === filtroExpandido)} />
               )}
             </div>
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Sociedades Holding</label>
-              <select
-                value={engineConfig.holding}
-                onChange={(e) => cambiarConfig('holding', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir (sin actividad propia)</option>
-                <option value="incluir">Incluir</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Independencia (Art. 260-1)</label>
-              <select
-                value={engineConfig.control ?? 'excluir'}
-                onChange={(e) => cambiarConfig('control', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir controladas</option>
-                <option value="incluir">Incluir</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Umbral de control (%)</label>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                step="1"
-                value={engineConfig.umbralControl ?? 50}
-                disabled={(engineConfig.control ?? 'excluir') !== 'excluir'}
-                onChange={(e) => cambiarConfig('umbralControl', Number(e.target.value))}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40"
-              />
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Saldos Negativos</label>
-              <select
-                value={engineConfig.saldoNegativo}
-                onChange={(e) => cambiarConfig('saldoNegativo', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir (datos no verosímiles)</option>
-                <option value="incluir">Incluir</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Prioridad Geográfica</label>
-              <select
-                value={engineConfig.geo}
-                onChange={(e) => cambiarConfig('geo', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="ninguna">Global</option>
-                <option value="LATAM">América Latina</option>
-                <option value="NORTEAM">Norteamérica</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Rigor Funcional</label>
-              <select
-                value={engineConfig.rigor}
-                onChange={(e) => cambiarConfig('rigor', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="estandar">Estándar (servicios+mixtos)</option>
-                <option value="estricto">Estricto (solo servicios)</option>
-                <option value="amplio">Amplio</option>
-              </select>
-            </div>
+            {/* La justificación de admitir comparables en pérdida. Solo aparece cuando de verdad
+                se van a admitir: pedirla siempre la convertiría en un campo que se rellena sin
+                leer. Va al embudo, que se persiste con el estudio y que el informe y el Excel de
+                soporte ya leen: es lo que impide que el documento radicado publique comparables
+                en pérdida sin nada que explique por qué están ahí. */}
+            {(engineConfig.negativasObjetivo ?? 0) > 0 && (
+              <div className="flex flex-col pt-1">
+                <label className="text-[11px] font-semibold text-zinc-500 mb-1">
+                  Justificación de admitir pérdidas
+                  {!String(engineConfig.justificacionPerdida || '').trim() && (
+                    <span className="text-amber-600 dark:text-amber-400 font-normal"> · falta, y va al informe</span>
+                  )}
+                </label>
+                <textarea
+                  rows={2}
+                  value={engineConfig.justificacionPerdida || ''}
+                  onChange={(e) => cambiarConfig('justificacionPerdida', e.target.value)}
+                  placeholder="Ej: Guías OCDE cap. III §3.64-3.65 — las pérdidas de las comparables reflejan condiciones normales del mercado en el año gravable y su exclusión sesgaría el rango al alza."
+                  className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+                />
+                <span className="text-[10px] text-zinc-400 mt-1">
+                  Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* La justificación de admitir comparables en pérdida. Solo aparece cuando de verdad
-              se van a admitir: pedirla siempre la convertiría en un campo que se rellena sin
-              leer. `justificacionPerdida` estaba declarado en `engineConfig` desde antes y no
-              se usaba en ninguna parte; este es su sitio.
-
-              Va al embudo, que se persiste con el estudio y que el informe y el Excel de
-              soporte ya leen: es lo que impide que el documento radicado publique comparables
-              en pérdida sin nada que explique por qué están ahí. */}
-          {(engineConfig.negativasObjetivo ?? 0) > 0 && (
-            <div className="mt-4 flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">
-                Justificación de admitir pérdidas
-                {!String(engineConfig.justificacionPerdida || '').trim() && (
-                  <span className="text-amber-600 dark:text-amber-400 font-normal"> · falta, y va al informe</span>
-                )}
-              </label>
-              <textarea
-                rows={2}
-                value={engineConfig.justificacionPerdida || ''}
-                onChange={(e) => cambiarConfig('justificacionPerdida', e.target.value)}
-                placeholder="Ej: Guías OCDE cap. III §3.64-3.65 — las pérdidas de las comparables reflejan condiciones normales del mercado en el año gravable y su exclusión sesgaría el rango al alza."
-                className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
-              />
-              <span className="text-[10px] text-zinc-400 mt-1">
-                Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
+          {/* ══ Afinaciones ══
+              Plegadas, con su costo en la propia barra: esconderlas no puede ocultar un
+              descarte. */}
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={() => setAfinacionesAbiertas(!afinacionesAbiertas)}
+              className="w-full flex items-center justify-between gap-2 p-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/40 rounded-lg transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                {afinacionesAbiertas
+                  ? <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                  : <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />}
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Afinaciones
+                </span>
+                <span className="text-[10.5px] text-zinc-500">
+                  N objetivo, holding, saldos negativos, geografía
+                </span>
               </span>
+              {previsualizacion.hayUniverso && (
+                <span className="text-[10.5px] text-zinc-500 shrink-0">
+                  sacan{' '}
+                  <b className="text-zinc-700 dark:text-zinc-300">
+                    {previsualizacion.pasos
+                      .filter((x) => x.clave === 'holding' || x.clave === 'saldoNegativo')
+                      .reduce((n, x) => n + x.saca, 0)}
+                  </b>
+                </span>
+              )}
+            </button>
+
+            {afinacionesAbiertas && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 pt-0">
+                <div className="flex flex-col">
+                  <label className="text-[11px] font-semibold text-zinc-500 mb-1">N Objetivo (Tope 30)</label>
+                  <input
+                    type="number"
+                    min="4"
+                    max="30"
+                    value={engineConfig.nTarget}
+                    onChange={(e) => cambiarConfig('nTarget', Number(e.target.value))}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    Cuántas entran en la muestra. Piso normativo del motor: {MINIMO_COMPARABLES}.
+                  </span>
+                </div>
+
+                <div className="flex flex-col">
+                  <div className="flex items-baseline justify-between gap-2 mb-1">
+                    <label className="text-[11px] font-semibold text-zinc-500">Sociedades Holding</label>
+                    <CostoDelFiltro
+                      paso={previsualizacion.pasos.find((x) => x.clave === 'holding')}
+                      universo={previsualizacion.universo}
+                      expandido={filtroExpandido === 'holding'}
+                      alExpandir={() => setFiltroExpandido(filtroExpandido === 'holding' ? null : 'holding')}
+                    />
+                  </div>
+                  <select
+                    value={engineConfig.holding}
+                    onChange={(e) => cambiarConfig('holding', e.target.value)}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  >
+                    <option value="excluir">Excluir (sin actividad propia)</option>
+                    <option value="incluir">Incluir</option>
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    Se presume de la razón social: revise los ejemplos, por el nombre se acierta de más.
+                  </span>
+                </div>
+
+                <div className="flex flex-col">
+                  <div className="flex items-baseline justify-between gap-2 mb-1">
+                    <label className="text-[11px] font-semibold text-zinc-500">Saldos Negativos</label>
+                    <CostoDelFiltro
+                      paso={previsualizacion.pasos.find((x) => x.clave === 'saldoNegativo')}
+                      universo={previsualizacion.universo}
+                      expandido={filtroExpandido === 'saldoNegativo'}
+                      alExpandir={() => setFiltroExpandido(filtroExpandido === 'saldoNegativo' ? null : 'saldoNegativo')}
+                    />
+                  </div>
+                  <select
+                    value={engineConfig.saldoNegativo}
+                    onChange={(e) => cambiarConfig('saldoNegativo', e.target.value)}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  >
+                    <option value="excluir">Excluir (datos no verosímiles)</option>
+                    <option value="incluir">Incluir</option>
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    Cartera, cuentas por pagar o inventarios en negativo. No son pérdidas.
+                  </span>
+                </div>
+
+                {/* No descarta a nadie, y el rótulo lo dice. Parecía un filtro. */}
+                <div className="flex flex-col">
+                  <label className="text-[11px] font-semibold text-zinc-500 mb-1">Prioridad Geográfica</label>
+                  <select
+                    value={engineConfig.geo}
+                    onChange={(e) => cambiarConfig('geo', e.target.value)}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  >
+                    <option value="ninguna">Global</option>
+                    <option value="LATAM">América Latina</option>
+                    <option value="NORTEAM">Norteamérica</option>
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    {previsualizacion.geografia.texto}
+                  </span>
+                </div>
+
+                {['holding', 'saldoNegativo'].includes(filtroExpandido) && (
+                  <EjemplosDelFiltro paso={previsualizacion.pasos.find((x) => x.clave === filtroExpandido)} />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ══ El cierre: qué queda, qué entra, y qué se va a pagar ══
+              Reencuadra la pantalla: casi nunca manda el filtro, manda el cupo. Y el costo de la
+              curación es el dato que faltaba para no configurar a ciegas. */}
+          {previsualizacion.hayUniverso && (
+            <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11.5px]">
+                <span className="text-zinc-500">
+                  Universo <b className="text-zinc-800 dark:text-zinc-200">{previsualizacion.universo}</b>
+                </span>
+                <span className="text-zinc-400">→</span>
+                <span className="text-zinc-500">
+                  pasan los filtros <b className="text-zinc-800 dark:text-zinc-200">{previsualizacion.quedan}</b>
+                </span>
+                <span className="text-zinc-400">→</span>
+                <span className="text-zinc-500">
+                  entran <b className="text-[#0B7C7A] dark:text-[#0FA3A1]">{previsualizacion.entran}</b>
+                  {previsualizacion.reserva > 0 && (
+                    <span className="text-zinc-400"> · {previsualizacion.reserva} en reserva</span>
+                  )}
+                </span>
+              </div>
+
+              {previsualizacion.curacion.aCurar > 0 ? (
+                <div className="flex items-start gap-1.5 text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  <Clock className="w-3.5 h-3.5 mt-px shrink-0 text-zinc-400" />
+                  <span>
+                    Al ejecutar el paso 3 se curarán{' '}
+                    <b>{previsualizacion.curacion.aCurar}</b> candidatas en{' '}
+                    {previsualizacion.curacion.lotes} lote(s), ~{previsualizacion.curacion.etaMinutos} min
+                    {previsualizacion.curacion.reutilizadas > 0
+                      && ` · ${previsualizacion.curacion.reutilizadas} ya curadas se reutilizan sin volver a pagarse`}
+                    {previsualizacion.curacion.sinDatosParaCurar > 0
+                      && ` · ${previsualizacion.curacion.sinDatosParaCurar} sin descripción del negocio pasan a la heurística, sin costo`}.
+                  </span>
+                </div>
+              ) : (
+                <div className="text-[11px] text-zinc-500">
+                  No hay candidatas nuevas que curar con esta configuración.
+                </div>
+              )}
+
+              {/* Aquí termina lo que se puede afirmar sin la IA, y se dice. */}
+              <div className="text-[10.5px] text-zinc-400 leading-relaxed border-t border-zinc-200 dark:border-zinc-800 pt-2">
+                De aquí en adelante decide la curación: si la actividad de cada candidata coincide
+                con la del contribuyente solo lo sabe el modelo, así que este embudo no lo estima.
+                {previsualizacion.continuidad.total > 0 && (
+                  <> El estudio anterior aporta {previsualizacion.continuidad.total} comparable(s)
+                    {previsualizacion.continuidad.caen.length === 0
+                      ? ', y esta configuración las conserva todas.'
+                      : '.'}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>

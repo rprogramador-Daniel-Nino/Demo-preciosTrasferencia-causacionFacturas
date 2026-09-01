@@ -1895,3 +1895,90 @@ test('consultarGemini deja elegir el modelo, para no divergir del resto del sist
     axios.post = original;
   }
 });
+
+/* ══════ `prefiltrar` y `scoreCandidates` tienen que juzgar IGUAL ══════
+
+   `prefiltrar` decide a quién se le PAGA la curación y `scoreCandidates` decide quién ENTRA
+   en la muestra. El comentario de `prefiltrar` afirma que la segunda «vuelve a aplicar estos
+   mismos filtros — es idempotente», y no era cierto en dos puntos:
+
+     · Holding: `prefiltrar` no eximía a las de continuidad y `scoreCandidates` sí, así que una
+       comparable del estudio del año pasado con «Group» en la razón social se caía ANTES de
+       curarse, aunque el motor la habría conservado. Se perdía sin un aviso.
+     · Pérdida: `prefiltrar` miraba `cand.hasLoss` y `scoreCandidates` usa `enPerdida`, que
+       además reconoce `op < 0` cuando el flag no viene. Una candidata así se curaba —pagando—
+       para que el motor la descartara después.
+
+   Divergir aquí no es un detalle de estilo: el paso 2 va a mostrar el embudo en vivo con estos
+   mismos predicados, y un panel que promete un número que el motor no respeta es peor que no
+   mostrar nada. */
+
+test('el filtro de holding exime a las de continuidad igual que el motor', () => {
+  const candidatas = [
+    { id: 'G', name: 'Alpha Group Ltd', nameKey: nameKey('Alpha Group Ltd'), s: 1000, op: 100, desc: 'x' },
+  ];
+  const previas = [{ name: 'Alpha Group Ltd' }];
+
+  assert.strictEqual(prefiltrar(candidatas, {}).validas.length, 0,
+    'sin estudio anterior se descarta, como siempre');
+  assert.strictEqual(prefiltrar(candidatas, {}, previas).validas.length, 1,
+    'con estudio anterior se conserva: su inclusión ya se sustentó');
+
+  /* Y el motor coincide, que es el punto. */
+  const r = scoreCandidates(candidatas, { nTarget: 12, minimo: 1 }, '', previas);
+  assert.strictEqual(r.rechazadas.filter((c) => c.motivoClave === 'holding').length, 0);
+});
+
+test('el filtro de pérdida reconoce la utilidad negativa aunque falte el flag', () => {
+  /* Capital IQ no siempre trae `hasLoss`: lo calcula la importación, y una candidata que
+     llegue por otra vía (el estudio anterior, una fila a mano) solo trae `op`. */
+  const sinFlag = [{ id: 'P', name: 'Perdida SA', op: -500, s: 1000, desc: 'x' }];
+  assert.strictEqual(prefiltrar(sinFlag, {}).validas.length, 0,
+    'se descarta antes de curar, y no se paga por ella');
+
+  const r = scoreCandidates(sinFlag, { nTarget: 12, minimo: 1 }, '', []);
+  assert.strictEqual(r.rechazadas.filter((c) => c.motivoClave === 'perdidaOperativa').length, 1,
+    'el motor la descartaba igual: lo que cambia es no haber pagado su curación');
+});
+
+test('prefiltrar atribuye cada descarte a su filtro, con el mismo motivo que el motor', () => {
+  /* La atribución es lo que permite pintar el embudo por control. Sin ella `prefiltrar` solo
+     dice cuántas caen, no por cuál, y el panel tendría que recalcularlo por su cuenta —que es
+     exactamente cómo se divergiría otra vez. */
+  const candidatas = [
+    { id: 'H', name: 'Beta Holding SA', nameKey: nameKey('Beta Holding SA'), s: 1000, op: 100, desc: 'x' },
+    { id: 'N', name: 'Negativa SA', nameKey: nameKey('Negativa SA'), hasNegativeBalance: true, s: 1000, op: 100, desc: 'x' },
+    { id: 'P', name: 'Perdida SA', nameKey: nameKey('Perdida SA'), hasLoss: true, s: 1000, op: -50, desc: 'x' },
+    { id: 'OK', name: 'Buena SA', nameKey: nameKey('Buena SA'), s: 1000, op: 100, desc: 'x' },
+  ];
+  const { validas, porMotivo } = prefiltrar(candidatas, {});
+  assert.deepStrictEqual(validas.map((c) => c.id), ['OK']);
+  assert.strictEqual(porMotivo.holding.length, 1);
+  assert.strictEqual(porMotivo.holding[0].id, 'H');
+  assert.strictEqual(porMotivo.saldoNegativo.length, 1);
+  assert.strictEqual(porMotivo.perdidaOperativa.length, 1);
+  assert.strictEqual(porMotivo.controlada.length, 0);
+
+  /* Y el motor atribuye cada una al MISMO motivo. */
+  const r = scoreCandidates(candidatas, { nTarget: 12, minimo: 1 }, '', []);
+  const delMotor = {};
+  r.rechazadas.forEach((c) => { delMotor[c.id] = c.motivoClave; });
+  assert.strictEqual(delMotor.H, 'holding');
+  assert.strictEqual(delMotor.N, 'saldoNegativo');
+  assert.strictEqual(delMotor.P, 'perdidaOperativa');
+});
+
+test('el primer motivo manda, igual que en el motor', () => {
+  /* Una candidata puede violar dos filtros a la vez. El orden de precedencia tiene que ser el
+     mismo en las dos funciones o el embudo del panel no cuadraría con el del informe. */
+  const dosVicios = [{
+    id: 'HP', name: 'Gamma Holding SA', nameKey: nameKey('Gamma Holding SA'),
+    hasLoss: true, s: 1000, op: -50, desc: 'x',
+  }];
+  const { porMotivo } = prefiltrar(dosVicios, {});
+  assert.strictEqual(porMotivo.holding.length, 1, 'holding va antes que pérdida');
+  assert.strictEqual(porMotivo.perdidaOperativa.length, 0);
+
+  const r = scoreCandidates(dosVicios, { nTarget: 12, minimo: 1 }, '', []);
+  assert.strictEqual(r.rechazadas[0].motivoClave, 'holding');
+});
