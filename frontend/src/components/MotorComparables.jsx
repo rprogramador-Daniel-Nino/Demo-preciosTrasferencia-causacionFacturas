@@ -69,6 +69,43 @@ function margenExaminada(study) {
    «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
 const mil = (n) => Number(n || 0).toLocaleString('es-CO');
 
+/* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
+
+   `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
+   Business Description cruda de Capital IQ. El informe publica la primera y cae a la segunda
+   —así lo hacen `anexoBHtml.js:304` y `docxRelleno.js:3676`— pero la tabla no mostraba ninguna
+   de las dos, así que el texto que se radica por cada comparable no se podía leer antes de
+   generarlo (pedido del 2026-09-01).
+
+   Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
+   informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
+function ActividadDeLaComparable({ row }) {
+  const redactada = String(row.descActividad || '').trim();
+  const cruda = String(row.desc || '').trim();
+  const texto = redactada || cruda;
+  if (!texto) {
+    return (
+      <p className="text-[10.5px] text-zinc-400 mt-1 italic">
+        Sin descripción del negocio en el cribado: el informe la publicaría vacía.
+      </p>
+    );
+  }
+  return (
+    <p
+      className="text-[10.5px] text-zinc-500 dark:text-zinc-400 mt-1 leading-snug line-clamp-2"
+      title={redactada
+        ? texto
+        : texto + '  —  Sin redactar: el informe publicaría este texto en inglés, tal como '
+          + 'viene de Capital IQ. Use «Redactar descripciones» para pasarlo a español.'}
+    >
+      {!redactada && (
+        <span className="text-amber-600 dark:text-amber-500 font-semibold">[sin redactar] </span>
+      )}
+      {texto}
+    </p>
+  );
+}
+
 /* El veredicto de actividad de una comparable, para validarlo antes de generar los EEFF.
 
    Cuatro estados y cada uno dice algo distinto:
@@ -3186,6 +3223,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         verificó. El `title` lleva el motivo que escribió la curación, que es lo
                         único que permite validar el veredicto en vez de creerle. */}
                     <InsigniaActividad row={row} />
+                    {/* La actividad en sí, que es lo que el informe publica por comparable. */}
+                    <ActividadDeLaComparable row={row} />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}

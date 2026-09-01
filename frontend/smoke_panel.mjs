@@ -126,6 +126,7 @@ try {
   comprobar('la brecha hasta el cuartil', /Faltan/.test(html2));
   comprobar('dice cuál de los dos rangos decide', /Decide el rango/.test(html2));
   comprobar('la tabla marca el veredicto de actividad por fila', /Misma actividad|Actividad sin verificar/.test(html2));
+  comprobar('y muestra la actividad de cada comparable', /line-clamp-2|Sin descripción del negocio/.test(html2));
 
   const emb = html2.match(/Diferencias funcionales[\s\S]{0,240}?260-4\)/);
   if (emb) console.log('\n  embudo del paso 3:\n   ·', limpio(emb[0]));
