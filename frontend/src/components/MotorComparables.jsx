@@ -69,6 +69,65 @@ function margenExaminada(study) {
    «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
 const mil = (n) => Number(n || 0).toLocaleString('es-CO');
 
+/* El veredicto de actividad de una comparable, para validarlo antes de generar los EEFF.
+
+   Cuatro estados y cada uno dice algo distinto:
+     · MISMA        la curación reconoció la misma actividad. Es lo que se busca.
+     · RELACIONADA  actividad afín, no idéntica. Entra solo si las de misma actividad no llenan
+                    el cupo, y hay que sustentarla en el informe.
+     · DISTINTA     no debería estar en la muestra; si aparece es porque venía del estudio
+                    anterior, que la exime.
+     · sin veredicto  nadie la verificó: agregada a mano, sin identificador, o curación no
+                    corrida. Se marca, porque antes se veía igual que una confirmada. */
+function InsigniaActividad({ row }) {
+  const grado = row.gradoActividad || '';
+  const motivo = row.motivoActividad || '';
+  const clases = 'inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold ';
+
+  if (grado === 'MISMA') {
+    return (
+      <span
+        className={clases + 'bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1]'}
+        title={'Misma actividad económica, según la curación con IA.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Misma actividad
+      </span>
+    );
+  }
+  if (grado === 'RELACIONADA') {
+    return (
+      <span
+        className={clases + 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'}
+        title={'Actividad relacionada, no idéntica'
+          + (row.entroPorAmpliacion ? `. Entró para no bajar de ${MINIMO_COMPARABLES} comparables` : '')
+          + '. Hay que sustentarla en el informe.'
+          + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad relacionada
+      </span>
+    );
+  }
+  if (grado === 'DISTINTA') {
+    return (
+      <span
+        className={clases + 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400'}
+        title={'La curación NO reconoció la actividad. Está en la muestra porque venía del '
+          + 'estudio anterior, que la exime del descarte.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad distinta
+      </span>
+    );
+  }
+  return (
+    <span
+      className={clases + 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'}
+      title="Nadie verificó su actividad: se agregó a mano, no trae identificador de la fuente, o la curación no ha corrido. Revísela antes de radicar."
+    >
+      Actividad sin verificar
+    </span>
+  );
+}
+
 /* Lo que un filtro está sacando del universo, pegado a su propio control.
    Es el corazón del rediseño del paso 2: un rótulo sin número es abstracto —«excluye holdings»
    no dice cuántas— y un embudo aparte obliga a adivinar qué línea corresponde a qué selector.
@@ -3119,18 +3178,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         Continuidad
                       </span>
                     )}
-                    {/* La que no es de la misma actividad sino de una afín, y entró para no bajar
-                        del mínimo. Va marcada en su fila y no solo en el embudo: es la que hay
-                        que mirar una a una y sustentar en el informe. */}
-                    {row.entroPorAmpliacion && (
-                      <span
-                        className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
-                        title={`Actividad relacionada, no idéntica. Entró para no bajar de ${MINIMO_COMPARABLES} comparables.`
-                          + (row.razones ? ' · ' + row.razones : '')}
-                      >
-                        Actividad relacionada
-                      </span>
-                    )}
+                    {/* ══ El veredicto de actividad, fila por fila ══
+                        Pedido el 2026-09-01: poder validar la actividad antes de generar los
+                        EEFF. El motor SÍ la respeta —la DISTINTA se descarta y la cuota de
+                        negativas admite solo MISMA— pero la tabla no lo mostraba: una fila de
+                        misma actividad no llevaba marca y se veía igual que una que nadie
+                        verificó. El `title` lleva el motivo que escribió la curación, que es lo
+                        único que permite validar el veredicto en vez de creerle. */}
+                    <InsigniaActividad row={row} />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}

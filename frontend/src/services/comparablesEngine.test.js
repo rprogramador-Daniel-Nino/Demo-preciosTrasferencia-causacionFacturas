@@ -2503,3 +2503,74 @@ test('el motor publica el criterio, que el informe tiene que escribir', () => {
   const r = correrDebajo(2, [-3, -6, -7]);
   assert.strictEqual(r.criterioNegativas, 'cercania-por-debajo');
 });
+
+/* ══════ El veredicto de actividad viaja a la fila, con el motivo de la IA ══════
+
+   Pedido el 2026-09-01: «¿se están seleccionando las que tienen la misma actividad económica?
+   quisiera que eso también se vea en las seleccionables para que el usuario pueda validar ello
+   antes de generar los EEFF».
+
+   El motor SÍ la respeta —DISTINTA se descarta, RELACIONADA solo entra si las de misma actividad
+   no llenan el cupo, y la cuota de negativas admite únicamente MISMA— pero la tabla no lo
+   mostraba: una fila de misma actividad no llevaba marca y se veía igual que una sin verificar.
+
+   `gradoActividad` ya viajaba. Lo que faltaba es el MOTIVO que escribió la curación, que es lo
+   único que permite validar el veredicto en vez de creerle. */
+
+test('cada candidata lleva el grado de actividad y el motivo de la curación', () => {
+  const universo = [
+    { id: 'M1', name: 'Misma SA', nameKey: nameKey('Misma SA'), s: 1000, c: 600, op: 100, desc: 'distribución de plásticos' },
+    { id: 'R1', name: 'Afin SA', nameKey: nameKey('Afin SA'), s: 1000, c: 600, op: 100, desc: 'transformación de plásticos' },
+    { id: 'D1', name: 'Distinta SA', nameKey: nameKey('Distinta SA'), s: 1000, c: 600, op: 100, desc: 'banca' },
+  ];
+  const iaMatch = {
+    porId: {
+      M1: { grado: 'MISMA', motivo: 'distribuye la misma línea de producto', perfil: 'SERVICIO' },
+      R1: { grado: 'RELACIONADA', motivo: 'transforma, no distribuye', perfil: 'MIXTO' },
+      D1: { grado: 'DISTINTA', motivo: 'servicios financieros, otro sector', perfil: 'SERVICIO' },
+    },
+  };
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 1, perdidaOp: 'incluir',
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'distribución de plásticos', [], { ventasParteExaminada: 1000, iaMatch });
+
+  const todas = [...r.seleccionadas, ...r.rechazadas, ...r.reserva];
+  const porId = Object.fromEntries(todas.map((c) => [c.id, c]));
+
+  assert.strictEqual(porId.M1.gradoActividad, 'MISMA');
+  assert.strictEqual(porId.M1.motivoActividad, 'distribuye la misma línea de producto');
+  assert.strictEqual(porId.R1.gradoActividad, 'RELACIONADA');
+  assert.strictEqual(porId.R1.motivoActividad, 'transforma, no distribuye');
+  assert.strictEqual(porId.D1.gradoActividad, 'DISTINTA');
+  assert.strictEqual(porId.D1.motivoActividad, 'servicios financieros, otro sector');
+});
+
+test('una candidata sin veredicto de la curación no finge tener uno', () => {
+  /* Agregada a mano, o de otra fuente sin identificador: `gradoActividad` vacío es la señal de
+     que NADIE la verificó, y la tabla tiene que poder decirlo en vez de mostrarla igual que una
+     confirmada. */
+  const universo = [
+    { name: 'A mano SA', nameKey: nameKey('A mano SA'), s: 1000, c: 600, op: 100, desc: 'algo' },
+  ];
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 1, perdidaOp: 'incluir',
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'distribución de plásticos', [], { ventasParteExaminada: 1000 });
+  assert.strictEqual(r.seleccionadas[0].gradoActividad, '');
+  assert.strictEqual(r.seleccionadas[0].motivoActividad, '');
+});
+
+test('la DISTINTA se descarta: la actividad no es decorativa', () => {
+  const universo = [
+    { id: 'M1', name: 'Misma SA', nameKey: nameKey('Misma SA'), s: 1000, c: 600, op: 100, desc: 'x' },
+    { id: 'D1', name: 'Distinta SA', nameKey: nameKey('Distinta SA'), s: 1000, c: 600, op: 100, desc: 'y' },
+  ];
+  const iaMatch = { porId: { M1: { grado: 'MISMA' }, D1: { grado: 'DISTINTA', motivo: 'otro sector' } } };
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 1, perdidaOp: 'incluir',
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'x', [], { ventasParteExaminada: 1000, iaMatch });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'D1'), 'la de actividad distinta no entra');
+  assert.ok(r.rechazadas.some((c) => c.id === 'D1' && c.motivoClave === 'actividadDistinta'));
+});

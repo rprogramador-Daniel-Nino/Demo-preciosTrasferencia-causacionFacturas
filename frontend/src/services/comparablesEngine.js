@@ -858,6 +858,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       razones,
       esContinuidad,
       gradoActividad: grado || '',
+      /* El motivo que escribió la curación. Sin él el grado es una etiqueta que hay que creer;
+         con él el analista puede validar el veredicto antes de generar los EEFF, que es para lo
+         que se pidió (2026-09-01). Vacío cuando nadie la curó: agregada a mano, sin
+         identificador, o curación no corrida. */
+      motivoActividad: (ia && ia.motivo) || '',
       esRelacionada,
       descartada,
       motivoRechazo,
