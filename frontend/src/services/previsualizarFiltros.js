@@ -175,6 +175,20 @@ export function previsualizarFiltros(universo, config = {}, contexto = {}) {
      número es el techo. */
   const enPerdidaEnUniverso = lista.filter((c) => enPerdida(c)).length;
 
+  /* Cuántas comparables traen capital de trabajo. Decide si el ajuste puede comparar algo:
+     medido el 2026-09-01, con las comparables en cero el ajuste no es una corrección de
+     comparabilidad sino un corrimiento fijo calculado solo con el capital de trabajo del
+     contribuyente —+2,33 puntos sobre todas—, y si el estudio concluye sobre el rango ajustado
+     entonces la conclusión se apoya en un artefacto. */
+  const conCapitalTrabajo = lista.filter((c) => (
+    num(c.ar) || num(c.inv) || num(c.ap) || num(c.ppe)
+  )).length;
+  const capitalTrabajo = {
+    total: lista.length,
+    conDatos: conCapitalTrabajo,
+    sinDatos: lista.length - conCapitalTrabajo,
+  };
+
   const indicador = indicadorDelContribuyente(estudio);
   const negativasObjetivo = Math.max(0, Math.trunc(Number(config.negativasObjetivo) || 0));
 
@@ -195,9 +209,10 @@ export function previsualizarFiltros(universo, config = {}, contexto = {}) {
       valor: cfg.geo || config.geo || 'ninguna',
       texto: GEOGRAFIA[config.geo] || GEOGRAFIA.ninguna,
     },
+    capitalTrabajo,
     avisos: lista.length ? avisosDe({
       cfg, config, indicador, quedan, nObjetivo, enPerdidaEnUniverso,
-      negativasObjetivo, continuidad,
+      negativasObjetivo, continuidad, capitalTrabajo, estudio,
     }) : [],
   };
 }
@@ -206,8 +221,31 @@ export function previsualizarFiltros(universo, config = {}, contexto = {}) {
    avisa de todo enseña a ignorar los avisos, que es lo que ya le pasó a los del generador. */
 function avisosDe({
   cfg, config, indicador, quedan, nObjetivo, enPerdidaEnUniverso, negativasObjetivo, continuidad,
+  capitalTrabajo, estudio,
 }) {
   const avisos = [];
+
+  /* 0. El ajuste de capital de trabajo sin capital de trabajo.
+        Va primero porque invalida la vara con la que el estudio concluye, y eso pesa más que
+        cualquier ajuste de la muestra. Solo aplica si el estudio de verdad concluye sobre el
+        rango ajustado: sin `useadj` no hay nada que distorsionar. */
+  if (estudio && estudio.useadj && capitalTrabajo && capitalTrabajo.total
+      && capitalTrabajo.conDatos < capitalTrabajo.total) {
+    const cuantas = capitalTrabajo.conDatos === 0
+      ? 'ninguna'
+      : `solo ${capitalTrabajo.conDatos} de ${capitalTrabajo.total}`;
+    avisos.push({
+      clave: 'ajusteSinCapitalTrabajo',
+      severidad: 'bloqueo',
+      texto: `El estudio concluye sobre el rango AJUSTADO por capital de trabajo, y ${cuantas} `
+        + 'de las candidatas del cribado trae esas partidas. Con las comparables en cero el '
+        + 'ajuste deja de comparar: se vuelve un corrimiento fijo calculado solo con el capital '
+        + 'de trabajo del contribuyente, que empuja todo el rango en la misma dirección y hace '
+        + 'más difícil cumplir sin que eso signifique nada. Vuelva a exportar el cribado de '
+        + 'Capital IQ con cuatro columnas más —Accounts Receivable, Inventory, Accounts Payable '
+        + 'y Net PP&E— o concluya sobre el rango sin ajustar.',
+    });
+  }
 
   /* 1. Incumplimiento DEMOSTRABLE, no probable.
         Toda comparable con utilidad >= 0 tiene indicador >= 0, luego el primer cuartil de una

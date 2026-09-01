@@ -97,6 +97,8 @@ try {
   console.log('\n═══ PASO 2 · con pérdidas admitidas y cuota 4 ═══\n');
   comprobar('aparece el campo de justificación', /Justificación de admitir pérdidas/.test(html1b));
   comprobar('avisa que falta y que va al informe', /falta, y va al informe/.test(html1b));
+  comprobar('el asistente pide la causa del sector', /Por qué el sector tuvo pérdidas/.test(html1b));
+  comprobar('y ofrece redactar con IA', /Redactar con IA/.test(html1b));
   (html1b.match(/(Se piden \d+ comparable|El contribuyente está en)[^<]{0,260}/g) || [])
     .forEach((a) => console.log('   ·', limpio(a)));
 

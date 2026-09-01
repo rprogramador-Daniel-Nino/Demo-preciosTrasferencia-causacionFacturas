@@ -389,3 +389,69 @@ test('con negativas disponibles y el filtro puesto, el aviso manda a la polític
   assert.match(aviso.texto, /Pérdidas Operativas/);
   assert.match(aviso.texto, /6/);
 });
+
+/* ══════ El rango ajustado no significa nada sin capital de trabajo en las comparables ══════
+
+   Medido el 2026-09-01 sobre un estudio real. Con un comparable de margen crudo -5,000 % y el
+   contribuyente en -4,595 %:
+
+     capital de trabajo del comparable   ajustado    efecto
+     en cero (lo que traía el cribado)   -2,673 %    +2,33 pts  ← castigo sistemático
+     parecido al del contribuyente       -5,000 %     0,00 pts  ← esto es comparabilidad
+     más pesado                          -9,512 %    -4,51 pts
+
+   Con las comparables en cero el ajuste no compara: es un corrimiento fijo calculado solo con
+   el capital de trabajo del contribuyente. Y si el estudio concluye sobre el rango ajustado
+   —que es la metodología— entonces la conclusión se apoya en un artefacto. Hay que decirlo. */
+
+const candSinWC = (id) => ({
+  id, name: 'Comp ' + id, s: 10000, c: 9200, op: 500, desc: 'x',
+});
+const candConWC = (id) => ({
+  id, name: 'Comp ' + id, s: 10000, c: 9200, op: 500, desc: 'x',
+  ar: 1200, inv: 2100, ap: 1500, ppe: 300,
+});
+const ESTUDIO_AJUSTADO = {
+  t_s: 100000, t_c: 92000, t_op: -4595,
+  t_ar: 12000, t_inv: 21000, t_ap: 15000, t_ppe: 3000,
+  pli: 'MO', useadj: true, prime: 12.5,
+};
+
+test('sin capital de trabajo en el universo y concluyendo sobre el ajustado, se bloquea', () => {
+  const universo = Array.from({ length: 40 }, (_, i) => candSinWC('C' + i));
+  const p = previsualizarFiltros(universo, CONFIG, { estudio: ESTUDIO_AJUSTADO });
+  assert.strictEqual(p.capitalTrabajo.conDatos, 0);
+  assert.strictEqual(p.capitalTrabajo.total, 40);
+  const aviso = p.avisos.find((a) => a.clave === 'ajusteSinCapitalTrabajo');
+  assert.ok(aviso, 'debe avisar');
+  assert.strictEqual(aviso.severidad, 'bloqueo');
+  assert.match(aviso.texto, /Accounts Receivable|Cuentas por cobrar/i, 'y decir qué columnas traer');
+});
+
+test('si el estudio NO concluye sobre el ajustado, el aviso no aplica', () => {
+  /* Sin ajuste no hay nada que el capital de trabajo pueda distorsionar. */
+  const universo = Array.from({ length: 40 }, (_, i) => candSinWC('C' + i));
+  const p = previsualizarFiltros(universo, CONFIG, {
+    estudio: { ...ESTUDIO_AJUSTADO, useadj: false },
+  });
+  assert.strictEqual(p.avisos.find((a) => a.clave === 'ajusteSinCapitalTrabajo'), undefined);
+});
+
+test('con capital de trabajo en el universo el aviso desaparece', () => {
+  const universo = Array.from({ length: 40 }, (_, i) => candConWC('C' + i));
+  const p = previsualizarFiltros(universo, CONFIG, { estudio: ESTUDIO_AJUSTADO });
+  assert.strictEqual(p.capitalTrabajo.conDatos, 40);
+  assert.strictEqual(p.avisos.find((a) => a.clave === 'ajusteSinCapitalTrabajo'), undefined);
+});
+
+test('con capital de trabajo en unas pocas también se avisa, y se dice cuántas', () => {
+  /* Un puñado con datos no salva el ajuste: las demás siguen recibiendo el corrimiento. */
+  const universo = [
+    ...Array.from({ length: 36 }, (_, i) => candSinWC('S' + i)),
+    ...Array.from({ length: 4 }, (_, i) => candConWC('C' + i)),
+  ];
+  const p = previsualizarFiltros(universo, CONFIG, { estudio: ESTUDIO_AJUSTADO });
+  const aviso = p.avisos.find((a) => a.clave === 'ajusteSinCapitalTrabajo');
+  assert.ok(aviso);
+  assert.match(aviso.texto, /4 de 40|4 de las 40/, 'con la cifra real');
+});

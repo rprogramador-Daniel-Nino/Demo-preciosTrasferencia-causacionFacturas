@@ -7,6 +7,7 @@ import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations
 import { analizarRango } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { previsualizarFiltros } from '../services/previsualizarFiltros';
+import { redactarJustificacionPerdidas } from '../services/justificacionPerdidasIA';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -333,6 +334,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   /* Qué filtro tiene desplegados sus ejemplos. Uno a la vez: es para verificar una sospecha,
      no para leer cuatro listas juntas. */
   const [filtroExpandido, setFiltroExpandido] = useState(null);
+  /* El asistente de la justificación. El borrador vive aquí y no en el estudio: solo entra al
+     campo si el analista lo acepta, porque ese texto se radica y conviene leerlo antes. */
+  const [redactando, setRedactando] = useState(false);
+  const [borradorJustificacion, setBorradorJustificacion] = useState(null);
+  const [avisoJustificacion, setAvisoJustificacion] = useState('');
 
 
 
@@ -558,6 +564,46 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     } finally {
       setCurando(false);
       setCuracionProgreso(null);
+    }
+  };
+
+  /* Redacta la justificación de admitir pérdidas con los HECHOS de este estudio más la causa
+     que escribió el analista. La causa es el único insumo que la IA no puede sacar de los datos
+     —las Guías OCDE piden analizar la causa de la pérdida, no solo constatarla— y por eso sin
+     ella no se llama al modelo. */
+  const redactarJustificacion = async () => {
+    const causa = String(study.causaPerdidasSector || '').trim();
+    if (!causa) {
+      setAvisoJustificacion('Escriba primero por qué el sector tuvo pérdidas: es el análisis de '
+        + 'causa que piden las Guías OCDE, y es lo único que la IA no puede deducir de los datos.');
+      return;
+    }
+    setAvisoJustificacion('');
+    setRedactando(true);
+    try {
+      const enPerdidaMuestra = comparables.filter((c) => num(c.op) !== null && num(c.op) < 0);
+      const texto = await redactarJustificacionPerdidas({
+        causa,
+        entidad: study.ent,
+        anio: study.anio,
+        actividad: actividad,
+        metodo: study.pli || 'MO',
+        indicador: margenExaminada(study),
+        enLaMuestra: enPerdidaMuestra.length,
+        deLaMuestra: comparables.length,
+        disponibles: previsualizacion.enPerdidaEnUniverso,
+        margenes: enPerdidaMuestra
+          .map((c) => (num(c.s) ? num(c.op) / num(c.s) : null))
+          .filter((m) => m !== null),
+        criterio: (selectionFunnel && selectionFunnel.criterioNegativas) || 'puntaje',
+      });
+      if (texto) setBorradorJustificacion(texto);
+      else {
+        setAvisoJustificacion('No se pudo redactar en este momento. El campo sigue siendo '
+          + 'editable a mano.');
+      }
+    } finally {
+      setRedactando(false);
     }
   };
 
@@ -2154,6 +2200,80 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <span className="text-[10px] text-zinc-400 mt-1">
                   Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
                 </span>
+
+                {/* ══ El asistente ══
+                    Pide la CAUSA porque es lo único que no está en los datos: las Guías OCDE
+                    (cap. III, §3.64-3.65) no dicen «las pérdidas se admiten», dicen que una
+                    pérdida no descalifica siempre que se analice su causa. El resto —cifras,
+                    fundamento normativo, argumento del sesgo— sale del estudio. */}
+                <div className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 p-2.5 space-y-2">
+                  <label className="text-[11px] font-semibold text-zinc-500 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
+                    ¿Por qué el sector tuvo pérdidas en {study.anio || 'el año gravable'}?
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={study.causaPerdidasSector || ''}
+                    onChange={(e) => updateStudy({ causaPerdidasSector: e.target.value })}
+                    placeholder="Dos líneas bastan: contracción de la demanda, alza de un insumo importado, devaluación, sobreoferta del sector…"
+                    className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={redactarJustificacion}
+                      disabled={redactando}
+                      className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-[#0FA3A1] text-white hover:bg-[#0B7C7A] disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {redactando
+                        ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Redactando…</>
+                        : <><Sparkles className="w-3.5 h-3.5" /> Redactar con IA</>}
+                    </button>
+                    <span className="text-[10px] text-zinc-400">
+                      Usa las cifras reales del estudio y no inventa causas: solo la que escriba arriba.
+                    </span>
+                  </div>
+
+                  {avisoJustificacion && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                      {avisoJustificacion}
+                    </p>
+                  )}
+
+                  {/* El borrador se propone; no pisa lo que haya hasta que se acepte. */}
+                  {borradorJustificacion && (
+                    <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-[#0FA3A1]/40 p-2.5 space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Borrador propuesto
+                      </span>
+                      <p className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {borradorJustificacion}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cambiarConfig('justificacionPerdida', borradorJustificacion);
+                            setBorradorJustificacion(null);
+                          }}
+                          className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                        >
+                          Usar este texto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBorradorJustificacion(null)}
+                          className="text-[11px] px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          Descartar
+                        </button>
+                        <span className="text-[10px] text-zinc-400">
+                          Léalo antes de aceptarlo: se radica.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
