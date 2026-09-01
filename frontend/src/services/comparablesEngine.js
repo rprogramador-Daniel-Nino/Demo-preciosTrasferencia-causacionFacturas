@@ -943,18 +943,44 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     const v = num(margenInyectado(cand));
     return v === null ? margenCrudoDe(cand) : v;
   };
+  /* Y DENTRO de las cercanas, primero las que están POR DEBAJO del contribuyente.
+
+     Reportado el 2026-09-01: «ya son muchas negativas, la idea es que cumpla así ponga pocas».
+     La cercanía a secas elige alrededor del margen del contribuyente, así que la mitad quedan
+     por encima y empujan el primer cuartil hacia arriba. Medido sobre las 37 negativas de un
+     cribado real, con el contribuyente en -4,595 % y muestra de 12:
+
+       cercanas                 hacían falta 7   P25  -4,940 %
+       cercanas POR DEBAJO      hacen falta  4   P25  -4,940 %
+       las más profundas        harían falta 4   P25 -16,460 %  ← rango indefendible
+
+     Por debajo cumple con CUATRO y deja el rango igual de sano. Y sigue siendo comparabilidad y
+     no resultado: «se eligieron comparables cuya rentabilidad es comparable o inferior a la de
+     la parte examinada», que es lo que corresponde cuando la parte examinada está en pérdida.
+
+     Es una PREFERENCIA, no un filtro: si no hay suficientes por debajo se completa con las más
+     cercanas de las que quedan. Y dentro de cada grupo manda la cercanía, no la profundidad —
+     tomar las más hondas daría el rango de -16 % de la tabla. */
   const ordenarNegativas = (lista) => {
     if (pliTP === null) return lista;
-    return [...lista].sort((a, b) => {
+    const porCercania = (a, b) => {
       const da = margenDe(a), db = margenDe(b);
       /* Las que no tienen margen calculable van al final: no se puede afirmar que se parezcan. */
       if (da === null && db === null) return 0;
       if (da === null) return 1;
       if (db === null) return -1;
       return Math.abs(da - pliTP) - Math.abs(db - pliTP);
-    });
+    };
+    const estaDebajo = (c) => {
+      const m = margenDe(c);
+      return m !== null && m <= pliTP;
+    };
+    return [
+      ...lista.filter(estaDebajo).sort(porCercania),
+      ...lista.filter((c) => !estaDebajo(c)).sort(porCercania),
+    ];
   };
-  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-al-contribuyente';
+  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-por-debajo';
 
   const mismasNegativas = ordenarNegativas(mismas.filter(enPerdida));
   const mismasPositivas = mismas.filter((c) => !enPerdida(c));

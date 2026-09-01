@@ -2178,12 +2178,14 @@ test('con el contribuyente muy en pérdida entran las negativas más profundas',
     'las cuatro más cercanas a -9 %, no las de menor pérdida');
 });
 
-test('con el contribuyente apenas en pérdida entran las negativas más suaves', () => {
-  /* Contribuyente en -1,5 %: las cercanas son -10, -20, -30 y -45. El criterio es cercanía,
-     no profundidad — y por eso no ensancha el rango más de lo necesario. */
+test('con el contribuyente apenas en pérdida no se va a las más profundas', () => {
+  /* Contribuyente en -1,5 %. Hay siete negativas por debajo, así que la cuota se llena entera
+     con ellas y la de -1 % —la única por encima— no entra. Dentro de las de abajo manda la
+     cercanía: entran -2 %, -3 %, -4,5 % y -6 %, y NO se va a -12 %, que es lo que distingue este
+     criterio de «las más profundas». */
   const r = correrCercania(-0.015);
   const negativas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => b - a);
-  assert.deepEqual(negativas, [-10, -20, -30, -45]);
+  assert.deepEqual(negativas, [-20, -30, -45, -60]);
 });
 
 test('la cercanía se mide contra el contribuyente, no contra cero', () => {
@@ -2242,7 +2244,7 @@ test('el motor publica el criterio que usó para la cuota', () => {
   /* El informe tiene que poder escribirlo: «se eligieron las comparables cuyo perfil de
      rentabilidad más se parece al de la parte examinada». */
   const r = correrCercania(-0.09);
-  assert.strictEqual(r.criterioNegativas, 'cercania-al-contribuyente');
+  assert.strictEqual(r.criterioNegativas, 'cercania-por-debajo');
   const sinPli = scoreCandidates(
     [...negativasEscalonadas(), ...positivasLlenado()],
     BASE_CERC, 'trading services', [],
@@ -2312,8 +2314,9 @@ test('sin vara inyectada se sigue usando el margen crudo, como antes', () => {
   }, 'trading services', [], {
     ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
   });
-  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
-  assert.deepEqual(elegidas, [-60, -40], 'las dos más cercanas a -5 % en margen crudo');
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => b - a);
+  assert.deepEqual(elegidas, [-60, -80],
+    'las dos más cercanas a -5 % DE LAS QUE ESTÁN POR DEBAJO: -6 % y -8 %, no la de -4 %');
 });
 
 test('el motor dice con qué vara midió', () => {
@@ -2410,4 +2413,93 @@ test('no confunde el costo de ventas con un saldo de balance', () => {
   ['ar', 'inv', 'ap', 'ppe'].forEach((clave) => {
     assert.ok(!columnaDetectada('Cost of Goods Sold', clave));
   });
+});
+
+/* ══════ La cuota prefiere las negativas que están POR DEBAJO del contribuyente ══════
+
+   Reportado el 2026-09-01: «ya son muchas negativas, la idea es que cumpla así ponga pocas».
+   Tenía razón y el defecto era del criterio anterior: «las más cercanas» elige negativas
+   ALREDEDOR del margen del contribuyente, así que la mitad quedan por encima y empujan el P25
+   hacia arriba. Para cruzar hacían falta 7 de 12, una muestra mayoritariamente en pérdida que
+   ningún revisor mira con gusto.
+
+   Medido sobre las 37 negativas del cribado real, contribuyente en -4,595 %, muestra de 12:
+
+     criterio               cuota mínima que cumple   P25 resultante
+     cercanas                       7                  -4,940 %
+     cercanas POR DEBAJO            4                  -4,940 %
+     las más profundas              4                 -16,460 %  ← rango indefendible
+
+   Por debajo cumple con CUATRO y deja el rango igual de sano que con siete. Y sigue siendo un
+   criterio de comparabilidad, no de resultado: «se eligieron comparables cuya rentabilidad es
+   comparable o inferior a la de la parte examinada», que es lo que corresponde cuando la parte
+   examinada está en pérdida.
+
+   Las de arriba no se descartan: si no hay suficientes por debajo, se completa con las más
+   cercanas de las que quedan. Preferencia, no filtro. */
+
+const candDebajo = (nombre, opPct) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: 1000, c: 700, op: (opPct / 100) * 1000,
+  desc: 'trading services', country: 'Japan',
+});
+
+const BASE_DEBAJO = {
+  nTarget: 12, minimo: 10, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+const correrDebajo = (cuota, margenesNeg) => {
+  const negativas = margenesNeg.map((m) => candDebajo('Neg ' + m, m));
+  const positivas = Array.from({ length: 20 }, (_, i) => candDebajo('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  return scoreCandidates(universo, { ...BASE_DEBAJO, negativasObjetivo: cuota }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+  });
+};
+
+test('entran las de POR DEBAJO del contribuyente antes que las de encima', () => {
+  /* Contribuyente en -5 %. Hay negativas a ambos lados y a la misma distancia: -4 % y -6 %
+     empatan en cercanía, pero la que baja el P25 es la de abajo. */
+  const r = correrDebajo(2, [-3, -4, -6, -7]);
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => (c.op / c.s) * 100).sort((a, b) => a - b);
+  assert.deepEqual(elegidas.map((m) => Math.round(m)), [-7, -6],
+    'las dos por debajo, no la de -4 % que empata en distancia');
+});
+
+test('dentro de las de abajo manda la cercanía, no la profundidad', () => {
+  /* No es «las más profundas»: eso dejaría un rango absurdo. De las que están por debajo entran
+     las más parecidas. */
+  const r = correrDebajo(2, [-6, -7, -12, -18]);
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => Math.round((c.op / c.s) * 100)).sort((a, b) => b - a);
+  assert.deepEqual(elegidas, [-6, -7], 'las dos más cercanas de las de abajo');
+});
+
+test('si no hay suficientes por debajo, se completa con las de arriba', () => {
+  /* Preferencia, no filtro: con una sola por debajo y cuota 3, entran las tres que haya. */
+  const r = correrDebajo(3, [-1, -2, -6]);
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 3);
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => Math.round((c.op / c.s) * 100));
+  assert.ok(elegidas.includes(-6), 'la de abajo primero');
+  assert.ok(elegidas.includes(-2), 'y se completa con las más cercanas de arriba');
+});
+
+test('con el contribuyente RENTABLE el criterio sigue teniendo sentido', () => {
+  /* Toda negativa está por debajo de un contribuyente en positivo, así que la preferencia no
+     discrimina y manda la cercanía pura: entran las menos profundas, que es lo correcto. */
+  const negativas = [-2, -5, -9].map((m) => candDebajo('Neg ' + m, m));
+  const positivas = Array.from({ length: 20 }, (_, i) => candDebajo('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, { ...BASE_DEBAJO, negativasObjetivo: 2 }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: 0.04, metodoPli: 'MO',
+  });
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => Math.round((c.op / c.s) * 100)).sort((a, b) => b - a);
+  assert.deepEqual(elegidas, [-2, -5], 'las más cercanas al contribuyente rentable');
+});
+
+test('el motor publica el criterio, que el informe tiene que escribir', () => {
+  const r = correrDebajo(2, [-3, -6, -7]);
+  assert.strictEqual(r.criterioNegativas, 'cercania-por-debajo');
 });
