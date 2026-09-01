@@ -649,6 +649,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 
   const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
   const ventasTP = num(contexto.ventasParteExaminada);
+  /* El margen de la parte examinada, para ordenar la cuota de negativas por cercanía. Puede
+     faltar —un estudio sin cifras cargadas todavía—, y entonces la cuota degrada al orden por
+     puntaje: elegir por cercanía a un número que no existe sería inventar. */
+  const pliTP = num(contexto.pliParteExaminada);
+  const metodoPli = contexto.metodoPli || 'MO';
   /* Veredicto de la curación por IA, por identificador de la fuente. Se aplica
      como filtro duro y, cuando confirma la coincidencia, como factor máximo de
      especialidad. */
@@ -858,7 +863,50 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      qué se incluye; sumarle que su actividad solo es afín es pedir dos justificaciones a la
      vez. */
   const objetivoNegativas = Math.max(0, Math.trunc(Number(negativasObjetivo) || 0));
-  const mismasNegativas = mismas.filter(enPerdida);
+
+  /* ── Cuál de las negativas disponibles entra ──
+     Reportado el 2026-09-01: con la cuota ya funcionando, el rango de un estudio real bajó de
+     3,111-9,173 % a -0,355-4,312 %, y el contribuyente —en -4,595 %— seguía fuera. La cuota
+     tomaba las de mayor PUNTAJE de comparabilidad, que no son las que acercan el rango: entre 37
+     negativas disponibles podía quedarse con cuatro cercanas a cero.
+
+     Decisión del usuario (2026-09-01): dentro de la cuota se prefieren las de margen más CERCANO
+     al del contribuyente. Es a la vez lo más efectivo y lo más defendible, y esa coincidencia no
+     es casual: el principio de comparabilidad pide justamente comparables con un perfil
+     semejante al de la parte examinada. Una compañía en pérdida real comparada con compañías en
+     pérdida es la comparación correcta, no un estiramiento (Guías OCDE cap. III, §3.64-3.65). El
+     criterio que el informe escribe es «se eligieron las comparables cuyo perfil de rentabilidad
+     más se parece al de la parte examinada», y se publica en `criterioNegativas`.
+
+     Dos límites deliberados:
+       · Solo REORDENA dentro de las que ya pasaron todo —filtros, actividad, curación—, así que
+         no admite ninguna que antes no fuera válida.
+       · Solo gobierna LA CUOTA. El llenado con positivas sigue por puntaje: si el margen mandara
+         en toda la muestra, la comparabilidad pasaría a segundo plano en cada fila, y eso es otra
+         cosa y no se pidió.
+
+     Se compara el margen crudo (`pliOf` sobre las cifras de la fuente) y no el PLI ajustado por
+     capital de trabajo, que es el que decide el rango: replicar el motor OCDE aquí encadenaría
+     los dos módulos. Para ordenar por semejanza el margen crudo es la medida correcta —es el
+     perfil de la compañía, no el del escenario de ajuste— y basta. */
+  const margenDe = (cand) => pliOf({
+    s: num(cand.s), c: num(cand.c), op: num(cand.op),
+    ar: num(cand.ar), inv: num(cand.inv), ap: num(cand.ap),
+  }, metodoPli);
+  const ordenarNegativas = (lista) => {
+    if (pliTP === null) return lista;
+    return [...lista].sort((a, b) => {
+      const da = margenDe(a), db = margenDe(b);
+      /* Las que no tienen margen calculable van al final: no se puede afirmar que se parezcan. */
+      if (da === null && db === null) return 0;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return Math.abs(da - pliTP) - Math.abs(db - pliTP);
+    });
+  };
+  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-al-contribuyente';
+
+  const mismasNegativas = ordenarNegativas(mismas.filter(enPerdida));
   const mismasPositivas = mismas.filter((c) => !enPerdida(c));
   /* Las de continuidad ya entraron y cuentan contra el objetivo: si el estudio anterior
      aporta una en pérdida y se piden 3, faltan 2, no 3. El objetivo es «cuántas negativas
@@ -1035,6 +1083,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivo: MOTIVO_DESPLAZADA_POR_CUOTA,
     })),
     continuidadDesplazadaPorCuota: continuidadDesplazadaLista.length,
+    /* Con qué criterio se eligieron las negativas de la cuota. El informe lo escribe: la
+       selección de comparables es una decisión metodológica y su criterio se sustenta. */
+    criterioNegativas,
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,

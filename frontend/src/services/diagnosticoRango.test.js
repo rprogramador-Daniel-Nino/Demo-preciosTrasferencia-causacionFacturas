@@ -97,7 +97,10 @@ test('con la política en «incluir» pero la cuota en cero, la palanca sigue en
   const d = diagnosticar({ motorConfig: { perdidaOp: 'incluir', negativasObjetivo: 0 } }, { universo });
   const p = d.palancas.find((x) => x.clave === 'politicaPerdidas');
   assert.ok(p);
-  assert.match(p.texto, /objetivo de negativas está en 0/, 'y nombra la casilla que hay que mover');
+  /* Dice en cuánto está el objetivo hoy: es la casilla que hay que mover, y sin el valor
+     actual el analista no sabe si ya lo tocó. El texto de a CUÁNTO subirlo lo aporta
+     `cuotaQueCumple`, que se prueba aparte. */
+  assert.match(p.texto, /el objetivo está en 0/, 'y dice en cuánto está hoy');
 });
 
 test('la palanca de pérdidas desaparece cuando las negativas ya están en la muestra', () => {
@@ -400,4 +403,50 @@ test('sin rango calculable no se proponen vías', () => {
   });
   assert.strictEqual(d.veredicto, null);
   assert.deepEqual(d.palancas, []);
+});
+
+test('la palanca de pérdidas dice a CUÁNTO subir la cuota para cumplir', () => {
+  /* Reportado el 2026-09-01: la tarjeta decía «súbalo en el paso 2» sin decir a cuánto, y el
+     analista tenía que ir probando 5, 6, 7 y volver a correr el motor cada vez. El número se
+     puede calcular: se simula el rango con las N negativas más cercanas del universo y se busca
+     la N más pequeña que mete al contribuyente dentro.
+
+     Se da la MÍNIMA a propósito. Con más negativas de las necesarias el rango se ensancha y
+     puede volverse enteramente negativo, que ante un revisor se ve peor que cumplir con lo
+     justo. */
+  const universo = [
+    ...POSITIVAS.map((c, i) => ({ ...c, id: 'P' + i })),
+    /* Negativas repartidas alrededor del contribuyente. */
+    ...[-2, -3, -4, -5, -6, -7, -8].map((m, i) => ({
+      id: 'N' + i, name: 'Neg ' + i, amb: 'Int', s: 1000, c: 0, op: (m / 100) * 1000,
+    })),
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_op: -45, motorConfig: { perdidaOp: 'incluir', negativasObjetivo: 2 } },
+    comparables: POSITIVAS,
+    universo,
+  });
+  const p = d.palancas.find((x) => x.clave === 'politicaPerdidas');
+  assert.ok(p, 'la palanca debe estar');
+  assert.ok(p.cuotaQueCumple > 2, 'y decir a cuánto subir, por encima de la actual');
+  assert.match(p.texto, new RegExp(String(p.cuotaQueCumple)), 'el texto lleva el número');
+});
+
+test('si ninguna cuota alcanza, se dice en vez de prometer', () => {
+  /* Un contribuyente muy por debajo de cualquier negativa del universo: subir la cuota no lo
+     mete, y decir «súbalo a X» sería mandarlo a una vía que no existe. */
+  const universo = [
+    ...POSITIVAS.map((c, i) => ({ ...c, id: 'P' + i })),
+    ...[-1, -2].map((m, i) => ({ id: 'N' + i, name: 'Neg ' + i, amb: 'Int', s: 1000, c: 0, op: (m / 100) * 1000 })),
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_op: -400, motorConfig: { perdidaOp: 'incluir', negativasObjetivo: 1 } },
+    comparables: POSITIVAS,
+    universo,
+  });
+  const p = d.palancas.find((x) => x.clave === 'politicaPerdidas');
+  if (p) {
+    assert.strictEqual(p.cuotaQueCumple, null);
+    assert.match(p.texto, /no alcanza|ninguna cuota/i);
+  }
 });

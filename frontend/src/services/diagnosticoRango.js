@@ -200,6 +200,7 @@ function palancasQueCambianElVeredicto({
      accionable, y el analista lo prueba desde el paso 2. */
   const config = study.motorConfig || {};
   const disponibles = negativasDisponiblesEnUniverso(universo, study);
+  const listaDisponibles = negativasDelUniverso(universo, study);
   const enLaMuestra = muestra.filter(enPerdida).length;
   /* La condición es «hay negativas en el universo que no están en la muestra», y no «el
      filtro está en excluir». Poner la política en «incluir» y dejar la cuota en cero no mete
@@ -207,19 +208,31 @@ function palancasQueCambianElVeredicto({
      positiva mientras haya positivas para llenar el cupo. Quien decide es la cuota. */
   if (disponibles > enLaMuestra) {
     const excluidasPorPolitica = config.perdidaOp === 'excluir';
+    const cuotaActual = Math.max(0, Math.trunc(Number(config.negativasObjetivo) || 0));
+    /* A cuánto subir la cuota, calculado: «súbalo» sin el número obligaba a probar y volver a
+       correr el motor cada vez. */
+    const cuotaQueCumple = cuotaMinimaQueCumple({
+      study, muestra, ambito, indicador,
+      negativasDisponibles: listaDisponibles,
+    });
+    const comoSubir = cuotaQueCumple !== null
+      ? `Pruebe con ${cuotaQueCumple} en «Negativas objetivo»: con esa cuota el contribuyente `
+        + 'queda dentro del rango. Es la más baja que lo consigue — con más de las necesarias el '
+        + 'rango se ensancha y puede volverse enteramente negativo, que se defiende peor.'
+      : 'Ojo: ninguna cuota alcanza con las negativas de este cribado, así que subirla acerca el '
+        + 'rango pero no lo cierra. Amplíe el cribado del paso 1 o revise las otras vías.';
     palancas.push({
       clave: 'politicaPerdidas',
       cuantificado: disponibles - enLaMuestra,
+      cuotaQueCumple,
       texto: `El universo tiene ${disponibles - enLaMuestra} comparable(s) en pérdida con la `
         + 'misma actividad detectada que no están en la muestra. Incluirlas baja el primer '
         + 'cuartil, y es el criterio de las Guías OCDE (cap. III, §3.64-3.65): una pérdida no '
         + 'descalifica por sí sola, hay que analizar su causa. '
         + (excluidasPorPolitica
-          ? 'Hoy el filtro de pérdidas las descarta: cambie la política en el paso 2 y fije '
-            + 'cuántas quiere en la muestra.'
-          : 'La política ya las admite, pero el objetivo de negativas está en '
-            + `${Math.max(0, Math.trunc(Number(config.negativasObjetivo) || 0))}: súbalo en el `
-            + 'paso 2 y vuelva a correr el motor, con la justificación de la política.'),
+          ? 'Hoy el filtro de pérdidas las descarta: cambie la política en el paso 2. '
+          : `La política ya las admite y el objetivo está en ${cuotaActual}. `)
+        + comoSubir,
     });
   }
 
@@ -294,11 +307,77 @@ function palancasQueCambianElVeredicto({
   return palancas;
 }
 
+/**
+ * La cuota de negativas MÁS PEQUEÑA que mete al contribuyente en el rango, o `null` si ninguna
+ * lo consigue.
+ *
+ * Existe porque la palanca decía «súbalo en el paso 2» sin decir a cuánto, y el analista tenía
+ * que probar 5, 6, 7 y volver a correr el motor cada vez. El número se puede calcular: se
+ * simula la muestra con las N negativas más cercanas del universo —el mismo criterio que usa el
+ * motor desde el 2026-09-01— y se busca la N más chica que cumple.
+ *
+ * Se da la MÍNIMA a propósito. Con más negativas de las necesarias el rango se ensancha y puede
+ * volverse enteramente negativo, que ante un revisor se ve peor que cumplir con lo justo.
+ *
+ * Es una SIMULACIÓN, no una promesa: el motor decide con la curación, los filtros y el puntaje,
+ * y aquí solo se sustituyen las últimas N positivas de la muestra por negativas. Sirve para
+ * orientar la cuota, y por eso el texto dice «pruebe con N».
+ */
+function cuotaMinimaQueCumple({ study, muestra, ambito, negativasDisponibles, indicador }) {
+  if (indicador === null || !negativasDisponibles.length || !muestra.length) return null;
+
+  /* Las más cercanas al contribuyente primero: el mismo orden que aplica el motor. */
+  const porCercania = [...negativasDisponibles].sort((a, b) => {
+    const ma = margenCrudo(a), mb = margenCrudo(b);
+    if (ma === null && mb === null) return 0;
+    if (ma === null) return 1;
+    if (mb === null) return -1;
+    return Math.abs(ma - indicador) - Math.abs(mb - indicador);
+  });
+
+  /* Las positivas de la muestra en curso, de mejor a peor: las últimas son las que ceden. */
+  const positivas = muestra.filter((c) => !enPerdida(c));
+  const yaNegativas = muestra.filter((c) => enPerdida(c));
+  const tope = Math.min(porCercania.length, muestra.length - MINIMO_POSITIVAS_EN_MUESTRA);
+
+  for (let n = yaNegativas.length + 1; n <= tope; n += 1) {
+    const conservadas = positivas.slice(0, Math.max(0, muestra.length - n));
+    const simulada = [...conservadas, ...yaNegativas, ...porCercania.slice(0, n - yaNegativas.length)];
+    if (simulada.length < 4) continue;
+    const r = analizarRango({ ...study, comparables: simulada, cmode: ambito });
+    if (r.stats && dentro(r.stats, r.tPLI)) return n;
+  }
+  return null;
+}
+
+/* Cuántas positivas se conservan como piso al simular: una muestra que fuera casi toda pérdida
+   deja de describir el mercado y el rango entero se va a negativo, que es peor que no cumplir. */
+const MINIMO_POSITIVAS_EN_MUESTRA = 2;
+
+/** El margen operacional crudo de una candidata, para ordenar por cercanía. */
+function margenCrudo(cand) {
+  const s = num(cand.s), op = num(cand.op);
+  if (s === null || !s || op === null) return null;
+  return op / s;
+}
+
 /* Cuántas comparables en pérdida hay en el universo con la misma actividad detectada. Es el
    dato que convierte «podría incluir pérdidas» en «hay 5 ahí mismo». Se cuenta sobre el
    veredicto de la curación cuando existe, porque la decisión fue admitir solo actividad
    MISMA; sin curación no se puede afirmar la actividad y se cuentan todas las que estén en
    pérdida, que es el techo. */
+function negativasDelUniverso(universo, study) {
+  const lista = Array.isArray(universo) ? universo : [];
+  if (!lista.length) return [];
+  const porId = (study.iaMatch && study.iaMatch.porId) || null;
+  return lista.filter((c) => {
+    if (!enPerdida(c)) return false;
+    if (!porId) return true;
+    const id = c && c.id ? String(c.id).trim() : '';
+    return gradoDeActividad(porId[id]) === 'MISMA';
+  });
+}
+
 function negativasDisponiblesEnUniverso(universo, study) {
   const lista = Array.isArray(universo) ? universo : [];
   if (!lista.length) return 0;

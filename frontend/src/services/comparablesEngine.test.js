@@ -2126,3 +2126,127 @@ test('el motor dice cuánta continuidad tuvo que retirar la cuota', () => {
   const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
   assert.strictEqual(r.continuidadDesplazadaPorCuota, 8);
 });
+
+/* ══════ La cuota elige las negativas MÁS PARECIDAS a la rentabilidad del contribuyente ══════
+
+   Reportado el 2026-09-01: con la cuota funcionando, el rango bajó de 3,111-9,173 % a
+   -0,355-4,312 %, pero el contribuyente estaba en -4,595 % y seguía fuera por 4,240 %. La
+   cuota tomaba las negativas de mayor PUNTAJE de comparabilidad, que no son las que acercan el
+   rango: entre 37 negativas disponibles podía elegir cuatro cercanas a cero y dejar fuera las
+   que de verdad se parecen al contribuyente.
+
+   Decisión del usuario (2026-09-01): dentro de la cuota se prefieren las de margen más cercano
+   al del contribuyente. Es a la vez lo más efectivo y lo más defendible: acerca el P25 al nivel
+   de la parte examinada, y el criterio que se escribe en el informe es «se eligieron las
+   comparables cuyo perfil de rentabilidad más se parece al de la parte examinada», que es lo que
+   pide el principio de comparabilidad. Una compañía en pérdida real comparada con compañías en
+   pérdida no es un estiramiento: es la comparación correcta (Guías OCDE cap. III, §3.64-3.65).
+
+   Solo reordena DENTRO de las que ya pasaron todo —mismos filtros, misma actividad, misma
+   curación—, así que no entra ninguna que antes no fuera válida. Y solo aplica a la cuota: el
+   llenado con positivas sigue por puntaje. */
+
+const candCerc = (nombre, op, extra = {}) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: 1000, c: 600, op, desc: 'trading services', country: 'Japan', ...extra,
+});
+
+const BASE_CERC = {
+  nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 4,
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+/* Negativas repartidas de -1 % a -12 %, y positivas para llenar el resto del cupo. */
+const negativasEscalonadas = () => [-10, -20, -30, -45, -60, -80, -100, -120]
+  .map((op) => candCerc(`Neg ${String(Math.abs(op)).padStart(3, '0')}`, op));
+const positivasLlenado = () => Array.from({ length: 30 }, (_, i) => candCerc(`Pos ${i}`, 60));
+
+const correrCercania = (pliParteExaminada, config = {}) => {
+  const universo = [...negativasEscalonadas(), ...positivasLlenado()];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  return scoreCandidates(universo, { ...BASE_CERC, ...config }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada, metodoPli: 'MO',
+  });
+};
+
+test('con el contribuyente muy en pérdida entran las negativas más profundas', () => {
+  /* Contribuyente en -9 %: las cercanas son -80, -100, -120 y -60 (−8 %, −10 %, −12 %, −6 %). */
+  const r = correrCercania(-0.09);
+  const negativas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.strictEqual(negativas.length, 4);
+  assert.deepEqual(negativas, [-120, -100, -80, -60],
+    'las cuatro más cercanas a -9 %, no las de menor pérdida');
+});
+
+test('con el contribuyente apenas en pérdida entran las negativas más suaves', () => {
+  /* Contribuyente en -1,5 %: las cercanas son -10, -20, -30 y -45. El criterio es cercanía,
+     no profundidad — y por eso no ensancha el rango más de lo necesario. */
+  const r = correrCercania(-0.015);
+  const negativas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => b - a);
+  assert.deepEqual(negativas, [-10, -20, -30, -45]);
+});
+
+test('la cercanía se mide contra el contribuyente, no contra cero', () => {
+  /* La misma muestra da conjuntos DISTINTOS según dónde esté el contribuyente: es la prueba de
+     que el criterio no es «las más suaves» ni «las más profundas» disfrazado. */
+  const arriba = correrCercania(-0.015).seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  const abajo = correrCercania(-0.09).seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.notDeepEqual(arriba, abajo);
+});
+
+test('sin el PLI del contribuyente se cae al orden por puntaje, sin romperse', () => {
+  /* Un estudio sin cifras cargadas todavía. Degradar es correcto: elegir por cercanía a un
+     número que no existe sería inventar. */
+  const universo = [...negativasEscalonadas(), ...positivasLlenado()];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, BASE_CERC, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch,
+  });
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4, 'la cuota se cumple igual');
+});
+
+test('el criterio NO mete ninguna que antes no fuera válida', () => {
+  /* Solo reordena dentro de las que ya pasaron filtros, actividad y curación. Es lo que hace
+     que el cambio sea de orden y no de admisión. */
+  const universo = [...negativasEscalonadas(), ...positivasLlenado()];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  /* Una negativa que la curación rechaza: no puede aparecer por cercana que sea. */
+  const intrusa = candCerc('Neg 090 DISTINTA', -90);
+  iaMatch.porId[intrusa.id] = { grado: 'DISTINTA', motivo: 'otro sector' };
+  const r = scoreCandidates([...universo, intrusa], BASE_CERC, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.09, metodoPli: 'MO',
+  });
+  assert.ok(!r.seleccionadas.some((c) => c.id === intrusa.id),
+    'la rechazada por actividad no entra aunque su margen sea el más cercano');
+});
+
+test('el llenado con positivas sigue por puntaje, no por cercanía', () => {
+  /* La cercanía es el criterio DE LA CUOTA. Si gobernara también las positivas, el margen
+     mandaría sobre la comparabilidad en toda la muestra, que es otra cosa y no se pidió. */
+  const universo = [
+    ...negativasEscalonadas(),
+    /* Positivas con ventas muy distintas: el factor de tamaño las ordena por puntaje. */
+    ...Array.from({ length: 30 }, (_, i) => candCerc(`Pos ${i}`, 60, { s: 1000 + i * 5000 })),
+  ];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, BASE_CERC, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.09, metodoPli: 'MO',
+  });
+  const positivas = r.seleccionadas.filter((c) => !enPerdida(c));
+  /* Las de ventas más cercanas a 1000 puntúan mejor por tamaño y deben ir primero. */
+  assert.ok(positivas[0].s <= positivas[positivas.length - 1].s,
+    'las positivas siguen ordenadas por puntaje de comparabilidad');
+});
+
+test('el motor publica el criterio que usó para la cuota', () => {
+  /* El informe tiene que poder escribirlo: «se eligieron las comparables cuyo perfil de
+     rentabilidad más se parece al de la parte examinada». */
+  const r = correrCercania(-0.09);
+  assert.strictEqual(r.criterioNegativas, 'cercania-al-contribuyente');
+  const sinPli = scoreCandidates(
+    [...negativasEscalonadas(), ...positivasLlenado()],
+    BASE_CERC, 'trading services', [],
+    { ventasParteExaminada: 1000, iaMatch: { porId: {} } },
+  );
+  assert.strictEqual(sinPli.criterioNegativas, 'puntaje');
+});

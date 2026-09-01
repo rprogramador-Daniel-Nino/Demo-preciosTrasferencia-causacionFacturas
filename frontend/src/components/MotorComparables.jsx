@@ -43,6 +43,27 @@ import CampoMoneda from './CampoMoneda';
    adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
 const ACTIVIDAD_SIN_EXTRAER = 'No extraido por favor validar adjuntos';
 
+/* Las cifras de la parte examinada tal como las espera `pliOf`, con el segmento excluido
+   descontado de ventas y de utilidad. Estaba escrito tres veces en este archivo con el mismo
+   cuerpo; ahora el motor también lo necesita —usa el margen del contribuyente para ordenar la
+   cuota de negativas por cercanía— y una cuarta copia acabaría divergiendo. */
+function cifrasExaminada(study) {
+  const seg = num(study.seg_excluido) || 0;
+  const tS = num(study.t_s);
+  const tOp = num(study.t_op);
+  return {
+    s: tS !== null ? tS - seg : null,
+    c: num(study.t_c),
+    op: tOp !== null ? tOp - seg : null,
+    ar: num(study.t_ar), inv: num(study.t_inv), ap: num(study.t_ap), ppe: num(study.t_ppe),
+  };
+}
+
+/** El margen de la parte examinada con el indicador del estudio, o `null` si faltan cifras. */
+function margenExaminada(study) {
+  return pliOf(cifrasExaminada(study), study.pli || 'MO');
+}
+
 /* Miles con punto, como el resto del embudo del paso 3. Sin esto un universo de 2.987 salía
    «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
 const mil = (n) => Number(n || 0).toLocaleString('es-CO');
@@ -265,10 +286,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const rehecha = scoreCandidates(
       universo, engineConfig, actividad,
       (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
-      { ventasParteExaminada: study.t_s, iaMatch },
+      {
+        ventasParteExaminada: study.t_s, iaMatch,
+        /* Los MISMOS insumos que la corrida real: sin el margen del contribuyente esta
+           reconstrucción ordenaría la cuota por puntaje y la hoja de trazabilidad describiría
+           una selección distinta de la que se radicó. */
+        pliParteExaminada: margenExaminada(study),
+        metodoPli: study.pli || 'MO',
+      },
     );
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
-  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch]);
 
   /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
      —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
@@ -809,6 +837,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
         iaMatch: veredicto,
+        /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
+           rentabilidad más parecido al suyo (decisión del usuario, 2026-09-01). Sin cifras
+           cargadas el motor degrada al orden por puntaje. */
+        pliParteExaminada: margenExaminada(study),
+        metodoPli: study.pli || 'MO',
       });
 
       /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
@@ -2921,7 +2954,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">Inv.</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">CxP</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">PP&amp;E</th>
-                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[12%]">PLI Ajustado</th>
+                {/* Se muestran los DOS y se marca cuál decide. Antes había una sola columna,
+                    la ajustada, mientras el rango podía estar decidiendo sobre la NO ajustada
+                    —lo que `useadj` elige—: el analista contaba negativas en una serie que no
+                    era la que producía el rango. Se reportó exactamente así, con 4 comparables
+                    en pérdida seleccionadas y solo 2 visibles en la columna. */}
+                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[12%]">
+                  PLI{' '}
+                  <span className="font-normal text-zinc-400 normal-case">
+                    ({useAdj ? 'ajustado' : 'sin ajustar'} decide)
+                  </span>
+                </th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[8%]">Acciones</th>
               </tr>
             </thead>
@@ -3030,7 +3073,28 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     />
                   </td>
                   <td className="py-2 px-3 text-center font-bold text-zinc-800 dark:text-zinc-200">
-                    {row.adjustedPli !== null ? pctf(row.adjustedPli) : '—'}
+                    {(() => {
+                      /* El que decide, grande; el otro debajo, en gris. `useadj` es lo único que
+                         elige cuál sostiene la conclusión, y hasta ahora esa elección no se veía
+                         en ninguna parte de la tabla. */
+                      const decide = useAdj ? row.adjustedPli : row.pli;
+                      const otro = useAdj ? row.pli : row.adjustedPli;
+                      return (
+                        <span className="flex flex-col items-center leading-tight">
+                          <span className={decide !== null && decide < 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}>
+                            {decide !== null ? pctf(decide) : '—'}
+                          </span>
+                          {otro !== null && (
+                            <span
+                              className="text-[10px] text-zinc-400"
+                              title={useAdj ? 'Sin ajustar (no decide)' : 'Ajustado por capital de trabajo (no decide)'}
+                            >
+                              {pctf(otro)}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-2 px-3 text-center">
                     <button
