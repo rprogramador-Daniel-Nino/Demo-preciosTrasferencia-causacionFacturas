@@ -136,21 +136,38 @@ export function enPerdida(cand) {
 }
 
 /** Sinónimos por columna, en un solo sitio para poder informar qué se buscó. */
+/* Un encabezado que menciona una partida de balance pero NO es un saldo: una rotación, unos
+   días, un porcentaje, una variación. Las claves de las cuatro partidas de capital de trabajo se
+   ampliaron a raíces —`receivable`, `payable`, `inventor`, `plant`— porque Capital IQ cambia el
+   rótulo entre plantillas, y una raíz se tragaría «Accounts Receivable Turnover»: meter una
+   rotación donde va un saldo es basura con cara de dato. */
+const RATIOS_NO_SON_SALDOS = /turnover|turns|days |ratio|%|growth|per share|margin|change in|outstanding|variation/;
+
+/** ¿Este encabezado nombra un ratio en vez de un saldo? Case-insensitive. */
+export function esRatioYNoSaldo(encabezado) {
+  return RATIOS_NO_SON_SALDOS.test(String(encabezado || '').toLowerCase());
+}
+
 export const COLUMNAS_IQ = {
   name: { etiqueta: 'Compañía', esencial: true, claves: ['company name', 'compañía', 'compania', 'empresa', 'razon social', 'razón social', 'nombre'] },
   s: { etiqueta: 'Ingresos', esencial: true, claves: ['total revenue', 'revenue', 'ventas', 'ingresos'] },
   c: { etiqueta: 'Costo de ventas', esencial: false, claves: ['cost of goods', 'cost of revenue', 'costo de ventas', 'costos'] },
   op: { etiqueta: 'Utilidad operacional', esencial: true, claves: ['operating income', 'operating profit', 'utilidad operacional', 'ebit'] },
-  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, claves: ['accounts receivable', 'cuentas por cobrar', 'cxc'] },
-  inv: { etiqueta: 'Inventarios', esencial: false, claves: ['total inventory', 'inventarios', 'inventario'] },
-  ap: { etiqueta: 'Cuentas por pagar', esencial: false, claves: ['accounts payable', 'cuentas por pagar', 'cxp'] },
+  /* Raíces y no nombres exactos: Capital IQ exporta «Total Receivables» en una plantilla y
+     «Accounts Receivable» en otra, y con la lista cerrada anterior las cuatro partidas de
+     capital de trabajo quedaban sin detectar en cribados reales — con el ajuste calculándose
+     contra ceros. `esRatioYNoSaldo` es lo que impide que la raíz se coma una rotación. */
+  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, esSaldo: true, claves: ['receivable', 'cuentas por cobrar', 'cartera', 'cxc'] },
+  inv: { etiqueta: 'Inventarios', esencial: false, esSaldo: true, claves: ['invent', 'existencias'] },
+  ap: { etiqueta: 'Cuentas por pagar', esencial: false, esSaldo: true, claves: ['payable', 'cuentas por pagar', 'proveedores', 'cxp'] },
   /* PP&E entra por la misma vía que las otras partidas de balance. Sin él, el ajuste
      de propiedad, planta y equipo se calcula contra cero en todas las comparables y
      los escenarios que lo incluyen quedan sin sentido. */
   ppe: {
     etiqueta: 'Propiedad, planta y equipo',
     esencial: false,
-    claves: ['net property plant and equipment', 'property plant and equipment', 'net pp&e', 'pp&e', 'ppe',
+    esSaldo: true,
+    claves: ['plant', 'net pp&e', 'pp&e', 'ppe',
       'propiedad planta y equipo', 'propiedad, planta y equipo', 'propiedades planta y equipo'],
   },
   sic: { etiqueta: 'SIC', esencial: false, claves: ['primary sic', 'sic', 'ciiu'] },
@@ -227,12 +244,21 @@ export async function importCapitalIQExcel(file, onProgress) {
         const headers = (json[filaEncabezados] || []).map(h => String(h || '').trim().toLowerCase());
 
         // Mapeo flexible de encabezados
-        const findCol = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+        /* Para las columnas de SALDO, un encabezado que es un ratio nunca casa por más que
+           contenga la raíz: ver `esRatioYNoSaldo`. Sin esa guarda, ampliar las claves a raíces
+           habría metido «Accounts Receivable Turnover» donde va el saldo de cartera.
+
+           El veto NO es global: la columna del accionista mayoritario se llama «% owned by
+           single holder» y su propio nombre lleva un %, así que un veto para todas la habría
+           dejado sin detectar. */
+        const findCol = (keywords, esSaldo) => headers.findIndex(
+          h => (!esSaldo || !esRatioYNoSaldo(h)) && keywords.some(k => h.includes(k)),
+        );
 
         const idx = {};
         const reconocidas = [], faltantes = [];
         Object.entries(COLUMNAS_IQ).forEach(([clave, def]) => {
-          const i = findCol(def.claves);
+          const i = findCol(def.claves, def.esSaldo);
           idx[clave] = i;
           if (i >= 0) reconocidas.push({ clave, etiqueta: def.etiqueta, columna: i, header: (json[filaEncabezados] || [])[i] });
           else faltantes.push({ clave, etiqueta: def.etiqueta, esencial: def.esencial, claves: def.claves });

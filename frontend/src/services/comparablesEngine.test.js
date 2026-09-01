@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import XLSX from 'xlsx-js-style';
 import {
-  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar, enPerdida,
+  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar, enPerdida, esRatioYNoSaldo,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
@@ -2333,4 +2333,81 @@ test('el motor dice con qué vara midió', () => {
     ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
   });
   assert.strictEqual(cruda.varaDeCercania, 'margen-crudo');
+});
+
+/* ══════ Los nombres reales de Capital IQ para el capital de trabajo ══════
+
+   Reportado el 2026-09-01: el paso 1 seguía marcando en gris «Cuentas por cobrar —»,
+   «Inventarios —», «Cuentas por pagar —» y «Propiedad, planta y equipo —» aunque el cribado se
+   re-exportara. La causa es el matcher: `findCol` exige que el ENCABEZADO CONTENGA la clave, y
+   los nombres por omisión de Capital IQ no contienen las que buscábamos:
+
+     encabezado real                      clave que se buscaba
+     Total Receivables                    accounts receivable      ✗
+     Total Payables                       accounts payable         ✗
+     Net Property, Plant & Equipment      net property plant and equipment  ✗  (coma y &)
+     Inventory                            total inventory          ✗
+
+   Sin esas cuatro columnas el ajuste de capital de trabajo se calcula contra ceros, y como la
+   metodología del estudio concluye sobre el rango ajustado, la conclusión se apoya en un
+   corrimiento fijo. Por eso importa reconocerlas.
+
+   Se amplía con raíces —`receivable`, `payable`, `inventor`, `plant`— y NO con nombres exactos,
+   porque Capital IQ cambia el rótulo entre plantillas. El riesgo de una raíz es tragarse un
+   RATIO («Accounts Receivable Turnover», «Days Inventory») que no es un saldo de balance: eso lo
+   veta `RATIOS_NO_SON_SALDOS`. */
+
+const columnaDetectada = (encabezado, clave) => {
+  const def = COLUMNAS_IQ[clave];
+  const h = String(encabezado).trim().toLowerCase();
+  return def.claves.some((k) => h.includes(k)) && !(def.esSaldo && esRatioYNoSaldo(h));
+};
+
+test('reconoce los nombres por omisión de Capital IQ', () => {
+  const casos = [
+    ['Total Receivables', 'ar'], ['Accounts Receivable', 'ar'], ['Receivables', 'ar'],
+    ['Total Inventory', 'inv'], ['Inventory', 'inv'], ['Inventories', 'inv'],
+    ['Total Payables', 'ap'], ['Accounts Payable', 'ap'],
+    ['Net Property, Plant & Equipment', 'ppe'], ['Net PP&E', 'ppe'],
+    ['Property, Plant and Equipment, Net', 'ppe'],
+  ];
+  casos.forEach(([h, clave]) => {
+    assert.ok(columnaDetectada(h, clave), `«${h}» debería reconocerse como ${clave}`);
+  });
+});
+
+test('sigue reconociendo los nombres en español', () => {
+  [['Cuentas por cobrar', 'ar'], ['Inventarios', 'inv'], ['Cuentas por pagar', 'ap'],
+    ['Propiedad, planta y equipo', 'ppe']].forEach(([h, clave]) => {
+    assert.ok(columnaDetectada(h, clave), `«${h}» debería reconocerse como ${clave}`);
+  });
+});
+
+test('NO se traga los ratios, que no son saldos de balance', () => {
+  /* Tomar «Accounts Receivable Turnover» por el saldo de cartera metería una rotación en pesos
+     al ajuste de capital de trabajo: basura con cara de dato. */
+  const ratios = [
+    'Accounts Receivable Turnover', 'Total Receivables Turnover', 'Days Sales Outstanding',
+    'Inventory Turnover', 'Days Inventory Outstanding', 'Accounts Payable Turnover',
+    'Days Payable Outstanding', 'Inventory Turns', 'Receivables % of Revenue',
+    'Inventory Growth', 'Change in Accounts Payable',
+  ];
+  ratios.forEach((h) => {
+    ['ar', 'inv', 'ap', 'ppe'].forEach((clave) => {
+      assert.ok(!columnaDetectada(h, clave), `«${h}» NO puede pasar por ${clave}`);
+    });
+  });
+});
+
+test('esRatioYNoSaldo se puede usar suelto y es case-insensitive', () => {
+  assert.strictEqual(esRatioYNoSaldo('Inventory Turnover'), true);
+  assert.strictEqual(esRatioYNoSaldo('inventory turnover'), true);
+  assert.strictEqual(esRatioYNoSaldo('Total Inventory'), false);
+});
+
+test('no confunde el costo de ventas con un saldo de balance', () => {
+  /* «Cost of Goods Sold» no debe entrar por `inv` ni por `ap`. */
+  ['ar', 'inv', 'ap', 'ppe'].forEach((clave) => {
+    assert.ok(!columnaDetectada('Cost of Goods Sold', clave));
+  });
 });
