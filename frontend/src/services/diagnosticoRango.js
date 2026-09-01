@@ -49,6 +49,40 @@ const TIPOS_POR_COLUMNA = [
   'cifra-fuera-de-columna', 'cifra-de-otra-seccion',
 ];
 
+/* Los indicadores que dividen por el COSTO y por tanto dependen de que el costo sea creíble.
+   El margen operacional no está: usa utilidad sobre ventas y no toca el costo, que es la razón
+   de que el defecto de abajo se pudiera colar sin que nada lo notara. */
+const INDICADORES_QUE_USAN_COSTO = ['MB', 'Berry', 'CostPlus', 'NCP'];
+
+/* A partir de qué punto un costo deja de ser creíble frente al ingreso.
+
+   Una compañía SÍ puede vender por debajo del costo en un año malo, así que un margen bruto
+   negativo no basta para descartar la fila. Lo que no puede pasar es que el costo sea el doble
+   del ingreso: eso es un problema de unidades, de moneda o de columna, no un resultado.
+
+   Reportado el 2026-09-01: en una muestra real había filas con el costo casi diez veces el
+   ingreso —Formosa 5.586/54.076, Inabata 5.595/50.679, Hangzhou 56/547—, con márgenes brutos de
+   -868 %, -806 % y -877 %. Esos outliers arrastraban el rango de MB hasta contener cualquier
+   cosa, y la tarjeta «recomendaba» MB y Berry sobre esa base: mandaba a cambiar la metodología
+   del estudio por un artefacto. */
+const COSTO_SOBRE_INGRESO_MAXIMO = 2;
+
+/** Las comparables cuyo costo no puede ser cierto frente a su ingreso, con el motivo. */
+export function costosImplausiblesDe(comparables) {
+  return (comparables || []).map((c) => {
+    const s = num(c.s), costo = num(c.c);
+    if (s === null || costo === null || s <= 0) return null;
+    const ratio = costo / s;
+    if (ratio <= COSTO_SOBRE_INGRESO_MAXIMO) return null;
+    return {
+      name: c.name || '(sin nombre)',
+      ratio,
+      motivo: `su costo de ventas es ${ratio.toFixed(1)} veces su ingreso, lo que no puede ser `
+        + 'un resultado: apunta a un problema de unidades, de moneda o de columna en el cribado',
+    };
+  }).filter(Boolean);
+}
+
 /** Los ámbitos de muestra, con el nombre que usa el selector del tablero. */
 const AMBITOS = [
   { valor: 'all', etiqueta: 'todas las comparables' },
@@ -146,9 +180,14 @@ export function diagnosticarCumplimiento({
      proponer: la palanca de segmentación no depende del rango y se colaba sola, de modo que
      la tarjeta decía «1 vía que sí cambia el veredicto» junto a «ingrese cifras y comparables
      para analizar». Prometía algo sobre una conclusión que todavía no existe. */
+  /* Qué comparables traen un costo que no puede ser cierto. Se calcula siempre, aunque el
+     estudio cumpla: es un defecto del cribado y el analista tiene que verlo. */
+  const costosImplausibles = costosImplausiblesDe(muestra);
+
   const hayVeredicto = Boolean(stats) && indicador !== null;
   const palancas = (cumple || !hayVeredicto) ? [] : palancasQueCambianElVeredicto({
     study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+    costosImplausibles,
   });
 
   return {
@@ -172,6 +211,7 @@ export function diagnosticarCumplimiento({
       decide: study.useadj ? 'ajustado' : 'sinAjustar',
     },
     palancas,
+    costosImplausibles,
     /* En vivo se usan los hallazgos de la ingesta de esta sesión; si la tarjeta se abre sin
        haber pasado por el paso 3 —lo normal al retomar un estudio guardado— se cae al
        resumen que la ingesta persistió con el estudio. */
@@ -187,6 +227,7 @@ export function diagnosticarCumplimiento({
    nombra, porque una lista de sugerencias inútiles se deja de leer. */
 function palancasQueCambianElVeredicto({
   study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+  costosImplausibles = [],
 }) {
   const palancas = [];
 
@@ -258,7 +299,30 @@ function palancasQueCambianElVeredicto({
   /* ── 3. El indicador de rentabilidad ──
      Cambiar de MO a MB o a Berry es legítimo si el análisis funcional lo sustenta, y es una
      de las decisiones del método. Se prueba con el mismo motor. */
-  INDICADORES.filter((m) => m !== metodo).forEach((otro) => {
+  /* Con el costo de alguna comparable fuera de toda escala, el rango de MB y de Berry se
+     construye sobre un outlier y puede contener cualquier cosa. Proponer uno de esos
+     indicadores ahí manda a cambiar la metodología del estudio por un artefacto, así que en vez
+     de la palanca se emite el defecto. */
+  const costoNoSirve = costosImplausibles.length > 0;
+  if (costoNoSirve) {
+    const nombres = costosImplausibles.map((c) => c.name).slice(0, 3).join(', ');
+    palancas.push({
+      clave: 'costosImplausibles',
+      cuantificado: costosImplausibles.length,
+      texto: `${costosImplausibles.length} comparable(s) de la muestra traen un costo de ventas `
+        + `que no puede ser cierto frente a su ingreso: ${nombres}`
+        + (costosImplausibles.length > 3 ? ` y ${costosImplausibles.length - 3} más` : '')
+        + '. Mientras eso siga así NO se puede evaluar MB, Berry, Cost Plus ni NCP —todos '
+        + 'dividen por el costo y su rango saldría de un dato imposible—, y el margen '
+        + 'operacional es el único indicador que se sostiene con este cribado, porque no usa el '
+        + 'costo. Revise la columna «Costo de ventas» del Excel de Capital IQ: suele ser un '
+        + 'problema de unidades, de moneda o de columna.',
+    });
+  }
+
+  INDICADORES.filter((m) => m !== metodo)
+    .filter((otro) => !(costoNoSirve && INDICADORES_QUE_USAN_COSTO.includes(otro)))
+    .forEach((otro) => {
     const preparado = estudioParaMotor({ ...study, comparables: muestra, cmode: ambito }, muestra);
     const r = analizarRangoAjustado(preparado, otro, study.useadj ? AJUSTE_DEL_INFORME : 'ninguno');
     const suyo = indicadorDelContribuyente(study, otro);

@@ -450,3 +450,85 @@ test('si ninguna cuota alcanza, se dice en vez de prometer', () => {
     assert.match(p.texto, /no alcanza|ninguna cuota/i);
   }
 });
+
+/* ══════ No recomendar un indicador cuyos insumos son implausibles ══════
+
+   Reportado el 2026-09-01. La tarjeta decía «Con MB como indicador el contribuyente queda
+   dentro del rango» y «Con Berry...», y en la muestra había filas con el COSTO casi diez veces
+   el ingreso: Formosa 5.586/54.076, Inabata 5.595/50.679, Hangzhou 56/547. Sus márgenes brutos
+   son -868 %, -806 % y -877 %, outliers que arrastran el rango de MB hasta contener cualquier
+   cosa. El contribuyente «entraba» en un rango construido con basura.
+
+   El MO no lo nota —usa utilidad sobre ventas y no toca el costo—, así que el defecto solo
+   aparece al proponer MB, Berry, Cost Plus o NCP, que sí dividen por el costo. Recomendar uno de
+   esos sobre datos así es peor que no recomendar nada: manda a cambiar la metodología del
+   estudio por un artefacto. */
+
+const compConCosto = (nombre, ventas, costo, opPct) => ({
+  name: nombre, amb: 'Int', s: ventas, c: costo, op: (opPct / 100) * ventas,
+});
+
+test('una comparable con el costo muy por encima del ingreso se marca implausible', () => {
+  const muestra = [
+    compConCosto('Sana', 1000, 700, 5),
+    compConCosto('Formosa', 5586, 54076, -4.3),
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_c: 700, t_op: -45 }, comparables: muestra,
+  });
+  assert.strictEqual(d.costosImplausibles.length, 1);
+  assert.strictEqual(d.costosImplausibles[0].name, 'Formosa');
+  assert.match(d.costosImplausibles[0].motivo, /costo/i);
+});
+
+test('no se propone MB ni Berry cuando el costo de la muestra es implausible', () => {
+  /* Con costos dispersos y sanos MB sí puede proponerse —hay una prueba aparte—; aquí lo que se
+     fija es que una sola fila con el costo diez veces el ingreso lo impide. */
+  const muestra = [
+    ...POSITIVAS.map((c, i) => ({ ...c, c: 600 + i * 20 })),
+    compConCosto('Formosa', 5586, 54076, -4.3),
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_c: 700, t_op: -45 }, comparables: muestra,
+  });
+  assert.strictEqual(d.palancas.find((x) => x.clave === 'indicador:MB'), undefined,
+    'MB no se propone: su rango sale de un costo que no puede ser');
+  assert.strictEqual(d.palancas.find((x) => x.clave === 'indicador:Berry'), undefined);
+});
+
+test('y se dice por qué, en vez de callar la vía sin explicación', () => {
+  const muestra = [
+    ...POSITIVAS.map((c, i) => ({ ...c, c: 600 + i * 20 })),
+    compConCosto('Formosa', 5586, 54076, -4.3),
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_c: 700, t_op: -45 }, comparables: muestra,
+  });
+  const aviso = d.palancas.find((x) => x.clave === 'costosImplausibles');
+  assert.ok(aviso, 'debe haber una entrada que lo explique');
+  assert.match(aviso.texto, /Formosa/, 'nombrando la comparable');
+  assert.match(aviso.texto, /MB|Berry/, 'y qué indicadores quedan sin sustento');
+});
+
+test('un costo sano no marca nada y MB sigue disponible', () => {
+  const conCosto = POSITIVAS.map((c, i) => ({ ...c, c: 600 + i * 20 }));
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_c: 700 }, comparables: conCosto,
+  });
+  assert.deepEqual(d.costosImplausibles, []);
+  assert.ok(d.palancas.find((x) => x.clave === 'indicador:MB'),
+    'con datos sanos la vía de MB sigue en pie');
+});
+
+test('un margen bruto negativo MODERADO no se marca: pasa de verdad', () => {
+  /* Una compañía puede vender por debajo del costo en un año malo. Lo implausible es el costo
+     multiplicado por diez, no un margen bruto negativo. */
+  const muestra = [
+    ...POSITIVAS.map((c, i) => ({ ...c, c: 600 + i * 20 })),
+    compConCosto('Año malo', 1000, 1150, -20),
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO, t_c: 700, t_op: -45 }, comparables: muestra,
+  });
+  assert.deepEqual(d.costosImplausibles, []);
+});
