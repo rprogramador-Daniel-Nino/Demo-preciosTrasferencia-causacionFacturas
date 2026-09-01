@@ -136,21 +136,38 @@ export function enPerdida(cand) {
 }
 
 /** Sinónimos por columna, en un solo sitio para poder informar qué se buscó. */
+/* Un encabezado que menciona una partida de balance pero NO es un saldo: una rotación, unos
+   días, un porcentaje, una variación. Las claves de las cuatro partidas de capital de trabajo se
+   ampliaron a raíces —`receivable`, `payable`, `inventor`, `plant`— porque Capital IQ cambia el
+   rótulo entre plantillas, y una raíz se tragaría «Accounts Receivable Turnover»: meter una
+   rotación donde va un saldo es basura con cara de dato. */
+const RATIOS_NO_SON_SALDOS = /turnover|turns|days |ratio|%|growth|per share|margin|change in|outstanding|variation/;
+
+/** ¿Este encabezado nombra un ratio en vez de un saldo? Case-insensitive. */
+export function esRatioYNoSaldo(encabezado) {
+  return RATIOS_NO_SON_SALDOS.test(String(encabezado || '').toLowerCase());
+}
+
 export const COLUMNAS_IQ = {
   name: { etiqueta: 'Compañía', esencial: true, claves: ['company name', 'compañía', 'compania', 'empresa', 'razon social', 'razón social', 'nombre'] },
   s: { etiqueta: 'Ingresos', esencial: true, claves: ['total revenue', 'revenue', 'ventas', 'ingresos'] },
   c: { etiqueta: 'Costo de ventas', esencial: false, claves: ['cost of goods', 'cost of revenue', 'costo de ventas', 'costos'] },
   op: { etiqueta: 'Utilidad operacional', esencial: true, claves: ['operating income', 'operating profit', 'utilidad operacional', 'ebit'] },
-  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, claves: ['accounts receivable', 'cuentas por cobrar', 'cxc'] },
-  inv: { etiqueta: 'Inventarios', esencial: false, claves: ['total inventory', 'inventarios', 'inventario'] },
-  ap: { etiqueta: 'Cuentas por pagar', esencial: false, claves: ['accounts payable', 'cuentas por pagar', 'cxp'] },
+  /* Raíces y no nombres exactos: Capital IQ exporta «Total Receivables» en una plantilla y
+     «Accounts Receivable» en otra, y con la lista cerrada anterior las cuatro partidas de
+     capital de trabajo quedaban sin detectar en cribados reales — con el ajuste calculándose
+     contra ceros. `esRatioYNoSaldo` es lo que impide que la raíz se coma una rotación. */
+  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, esSaldo: true, claves: ['receivable', 'cuentas por cobrar', 'cartera', 'cxc'] },
+  inv: { etiqueta: 'Inventarios', esencial: false, esSaldo: true, claves: ['invent', 'existencias'] },
+  ap: { etiqueta: 'Cuentas por pagar', esencial: false, esSaldo: true, claves: ['payable', 'cuentas por pagar', 'proveedores', 'cxp'] },
   /* PP&E entra por la misma vía que las otras partidas de balance. Sin él, el ajuste
      de propiedad, planta y equipo se calcula contra cero en todas las comparables y
      los escenarios que lo incluyen quedan sin sentido. */
   ppe: {
     etiqueta: 'Propiedad, planta y equipo',
     esencial: false,
-    claves: ['net property plant and equipment', 'property plant and equipment', 'net pp&e', 'pp&e', 'ppe',
+    esSaldo: true,
+    claves: ['plant', 'net pp&e', 'pp&e', 'ppe',
       'propiedad planta y equipo', 'propiedad, planta y equipo', 'propiedades planta y equipo'],
   },
   sic: { etiqueta: 'SIC', esencial: false, claves: ['primary sic', 'sic', 'ciiu'] },
@@ -227,12 +244,21 @@ export async function importCapitalIQExcel(file, onProgress) {
         const headers = (json[filaEncabezados] || []).map(h => String(h || '').trim().toLowerCase());
 
         // Mapeo flexible de encabezados
-        const findCol = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+        /* Para las columnas de SALDO, un encabezado que es un ratio nunca casa por más que
+           contenga la raíz: ver `esRatioYNoSaldo`. Sin esa guarda, ampliar las claves a raíces
+           habría metido «Accounts Receivable Turnover» donde va el saldo de cartera.
+
+           El veto NO es global: la columna del accionista mayoritario se llama «% owned by
+           single holder» y su propio nombre lleva un %, así que un veto para todas la habría
+           dejado sin detectar. */
+        const findCol = (keywords, esSaldo) => headers.findIndex(
+          h => (!esSaldo || !esRatioYNoSaldo(h)) && keywords.some(k => h.includes(k)),
+        );
 
         const idx = {};
         const reconocidas = [], faltantes = [];
         Object.entries(COLUMNAS_IQ).forEach(([clave, def]) => {
-          const i = findCol(def.claves);
+          const i = findCol(def.claves, def.esSaldo);
           idx[clave] = i;
           if (i >= 0) reconocidas.push({ clave, etiqueta: def.etiqueta, columna: i, header: (json[filaEncabezados] || [])[i] });
           else faltantes.push({ clave, etiqueta: def.etiqueta, esencial: def.esencial, claves: def.claves });
@@ -654,6 +680,23 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      puntaje: elegir por cercanía a un número que no existe sería inventar. */
   const pliTP = num(contexto.pliParteExaminada);
   const metodoPli = contexto.metodoPli || 'MO';
+  /* CON QUÉ VARA se mide la cercanía. Por omisión el margen crudo de la fuente, pero el
+     llamador puede inyectar la suya, y debe hacerlo cuando la conclusión del estudio se
+     sostiene en el rango AJUSTADO: ahí la vara que importa es el PLI ajustado por capital de
+     trabajo, no el crudo.
+
+     La diferencia no es cosmética. El contribuyente no se ajusta contra sí mismo —sus ratios
+     se cancelan— así que su PLI no se mueve, pero el de cada comparable sí. Con el capital de
+     trabajo de las comparables en cero el ajuste es un corrimiento constante hacia arriba, de
+     modo que para quedar cerca del contribuyente EN TÉRMINOS AJUSTADOS hay que elegir
+     comparables cuyo margen crudo esté ese corrimiento más abajo. Medir con la vara equivocada
+     elige el conjunto equivocado (reportado el 2026-09-01).
+
+     Se inyecta en lugar de importar el motor de ajuste aquí porque «qué vara decide» lo sabe
+     quien conoce `useadj`, que es el llamador, y porque así se prueba sin montar el ajuste. */
+  const margenInyectado = typeof contexto.margenDeCandidata === 'function'
+    ? contexto.margenDeCandidata
+    : null;
   /* Veredicto de la curación por IA, por identificador de la fuente. Se aplica
      como filtro duro y, cuando confirma la coincidencia, como factor máximo de
      especialidad. */
@@ -815,6 +858,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       razones,
       esContinuidad,
       gradoActividad: grado || '',
+      /* El motivo que escribió la curación. Sin él el grado es una etiqueta que hay que creer;
+         con él el analista puede validar el veredicto antes de generar los EEFF, que es para lo
+         que se pidió (2026-09-01). Vacío cuando nadie la curó: agregada a mano, sin
+         identificador, o curación no corrida. */
+      motivoActividad: (ia && ia.motivo) || '',
       esRelacionada,
       descartada,
       motivoRechazo,
@@ -889,22 +937,55 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      capital de trabajo, que es el que decide el rango: replicar el motor OCDE aquí encadenaría
      los dos módulos. Para ordenar por semejanza el margen crudo es la medida correcta —es el
      perfil de la compañía, no el del escenario de ajuste— y basta. */
-  const margenDe = (cand) => pliOf({
+  const margenCrudoDe = (cand) => pliOf({
     s: num(cand.s), c: num(cand.c), op: num(cand.op),
     ar: num(cand.ar), inv: num(cand.inv), ap: num(cand.ap),
   }, metodoPli);
+  const margenDe = (cand) => {
+    if (!margenInyectado) return margenCrudoDe(cand);
+    /* Si la vara inyectada no puede medir esta candidata —le faltan partidas—, se cae al margen
+       crudo en vez de mandarla al final: quedarse sin medida no es lo mismo que estar lejos. */
+    const v = num(margenInyectado(cand));
+    return v === null ? margenCrudoDe(cand) : v;
+  };
+  /* Y DENTRO de las cercanas, primero las que están POR DEBAJO del contribuyente.
+
+     Reportado el 2026-09-01: «ya son muchas negativas, la idea es que cumpla así ponga pocas».
+     La cercanía a secas elige alrededor del margen del contribuyente, así que la mitad quedan
+     por encima y empujan el primer cuartil hacia arriba. Medido sobre las 37 negativas de un
+     cribado real, con el contribuyente en -4,595 % y muestra de 12:
+
+       cercanas                 hacían falta 7   P25  -4,940 %
+       cercanas POR DEBAJO      hacen falta  4   P25  -4,940 %
+       las más profundas        harían falta 4   P25 -16,460 %  ← rango indefendible
+
+     Por debajo cumple con CUATRO y deja el rango igual de sano. Y sigue siendo comparabilidad y
+     no resultado: «se eligieron comparables cuya rentabilidad es comparable o inferior a la de
+     la parte examinada», que es lo que corresponde cuando la parte examinada está en pérdida.
+
+     Es una PREFERENCIA, no un filtro: si no hay suficientes por debajo se completa con las más
+     cercanas de las que quedan. Y dentro de cada grupo manda la cercanía, no la profundidad —
+     tomar las más hondas daría el rango de -16 % de la tabla. */
   const ordenarNegativas = (lista) => {
     if (pliTP === null) return lista;
-    return [...lista].sort((a, b) => {
+    const porCercania = (a, b) => {
       const da = margenDe(a), db = margenDe(b);
       /* Las que no tienen margen calculable van al final: no se puede afirmar que se parezcan. */
       if (da === null && db === null) return 0;
       if (da === null) return 1;
       if (db === null) return -1;
       return Math.abs(da - pliTP) - Math.abs(db - pliTP);
-    });
+    };
+    const estaDebajo = (c) => {
+      const m = margenDe(c);
+      return m !== null && m <= pliTP;
+    };
+    return [
+      ...lista.filter(estaDebajo).sort(porCercania),
+      ...lista.filter((c) => !estaDebajo(c)).sort(porCercania),
+    ];
   };
-  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-al-contribuyente';
+  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-por-debajo';
 
   const mismasNegativas = ordenarNegativas(mismas.filter(enPerdida));
   const mismasPositivas = mismas.filter((c) => !enPerdida(c));
@@ -1086,6 +1167,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     /* Con qué criterio se eligieron las negativas de la cuota. El informe lo escribe: la
        selección de comparables es una decisión metodológica y su criterio se sustenta. */
     criterioNegativas,
+    /* Con qué vara se midió la cercanía: el margen crudo de la fuente, o la que inyectó el
+       llamador —el PLI ajustado cuando la conclusión se sostiene en el rango ajustado—. */
+    varaDeCercania: margenInyectado ? 'inyectada' : 'margen-crudo',
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,

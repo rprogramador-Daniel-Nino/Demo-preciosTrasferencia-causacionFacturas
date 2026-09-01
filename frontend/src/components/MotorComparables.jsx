@@ -7,6 +7,7 @@ import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations
 import { analizarRango } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { previsualizarFiltros } from '../services/previsualizarFiltros';
+import { redactarJustificacionPerdidas } from '../services/justificacionPerdidasIA';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -67,6 +68,102 @@ function margenExaminada(study) {
 /* Miles con punto, como el resto del embudo del paso 3. Sin esto un universo de 2.987 salía
    «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
 const mil = (n) => Number(n || 0).toLocaleString('es-CO');
+
+/* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
+
+   `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
+   Business Description cruda de Capital IQ. El informe publica la primera y cae a la segunda
+   —así lo hacen `anexoBHtml.js:304` y `docxRelleno.js:3676`— pero la tabla no mostraba ninguna
+   de las dos, así que el texto que se radica por cada comparable no se podía leer antes de
+   generarlo (pedido del 2026-09-01).
+
+   Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
+   informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
+function ActividadDeLaComparable({ row }) {
+  const redactada = String(row.descActividad || '').trim();
+  const cruda = String(row.desc || '').trim();
+  const texto = redactada || cruda;
+  if (!texto) {
+    return (
+      <p className="text-[10.5px] text-zinc-400 mt-1 italic">
+        Sin descripción del negocio en el cribado: el informe la publicaría vacía.
+      </p>
+    );
+  }
+  return (
+    <p
+      className="text-[10.5px] text-zinc-500 dark:text-zinc-400 mt-1 leading-snug line-clamp-2"
+      title={redactada
+        ? texto
+        : texto + '  —  Sin redactar: el informe publicaría este texto en inglés, tal como '
+          + 'viene de Capital IQ. Use «Redactar descripciones» para pasarlo a español.'}
+    >
+      {!redactada && (
+        <span className="text-amber-600 dark:text-amber-500 font-semibold">[sin redactar] </span>
+      )}
+      {texto}
+    </p>
+  );
+}
+
+/* El veredicto de actividad de una comparable, para validarlo antes de generar los EEFF.
+
+   Cuatro estados y cada uno dice algo distinto:
+     · MISMA        la curación reconoció la misma actividad. Es lo que se busca.
+     · RELACIONADA  actividad afín, no idéntica. Entra solo si las de misma actividad no llenan
+                    el cupo, y hay que sustentarla en el informe.
+     · DISTINTA     no debería estar en la muestra; si aparece es porque venía del estudio
+                    anterior, que la exime.
+     · sin veredicto  nadie la verificó: agregada a mano, sin identificador, o curación no
+                    corrida. Se marca, porque antes se veía igual que una confirmada. */
+function InsigniaActividad({ row }) {
+  const grado = row.gradoActividad || '';
+  const motivo = row.motivoActividad || '';
+  const clases = 'inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold ';
+
+  if (grado === 'MISMA') {
+    return (
+      <span
+        className={clases + 'bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1]'}
+        title={'Misma actividad económica, según la curación con IA.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Misma actividad
+      </span>
+    );
+  }
+  if (grado === 'RELACIONADA') {
+    return (
+      <span
+        className={clases + 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'}
+        title={'Actividad relacionada, no idéntica'
+          + (row.entroPorAmpliacion ? `. Entró para no bajar de ${MINIMO_COMPARABLES} comparables` : '')
+          + '. Hay que sustentarla en el informe.'
+          + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad relacionada
+      </span>
+    );
+  }
+  if (grado === 'DISTINTA') {
+    return (
+      <span
+        className={clases + 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400'}
+        title={'La curación NO reconoció la actividad. Está en la muestra porque venía del '
+          + 'estudio anterior, que la exime del descarte.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad distinta
+      </span>
+    );
+  }
+  return (
+    <span
+      className={clases + 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'}
+      title="Nadie verificó su actividad: se agregó a mano, no trae identificador de la fuente, o la curación no ha corrido. Revísela antes de radicar."
+    >
+      Actividad sin verificar
+    </span>
+  );
+}
 
 /* Lo que un filtro está sacando del universo, pegado a su propio control.
    Es el corazón del rediseño del paso 2: un rótulo sin número es abstracto —«excluye holdings»
@@ -333,6 +430,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   /* Qué filtro tiene desplegados sus ejemplos. Uno a la vez: es para verificar una sospecha,
      no para leer cuatro listas juntas. */
   const [filtroExpandido, setFiltroExpandido] = useState(null);
+  /* El asistente de la justificación. El borrador vive aquí y no en el estudio: solo entra al
+     campo si el analista lo acepta, porque ese texto se radica y conviene leerlo antes. */
+  const [redactando, setRedactando] = useState(false);
+  const [borradorJustificacion, setBorradorJustificacion] = useState(null);
+  const [avisoJustificacion, setAvisoJustificacion] = useState('');
 
 
 
@@ -558,6 +660,46 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     } finally {
       setCurando(false);
       setCuracionProgreso(null);
+    }
+  };
+
+  /* Redacta la justificación de admitir pérdidas con los HECHOS de este estudio más la causa
+     que escribió el analista. La causa es el único insumo que la IA no puede sacar de los datos
+     —las Guías OCDE piden analizar la causa de la pérdida, no solo constatarla— y por eso sin
+     ella no se llama al modelo. */
+  const redactarJustificacion = async () => {
+    const causa = String(study.causaPerdidasSector || '').trim();
+    if (!causa) {
+      setAvisoJustificacion('Escriba primero por qué el sector tuvo pérdidas: es el análisis de '
+        + 'causa que piden las Guías OCDE, y es lo único que la IA no puede deducir de los datos.');
+      return;
+    }
+    setAvisoJustificacion('');
+    setRedactando(true);
+    try {
+      const enPerdidaMuestra = comparables.filter((c) => num(c.op) !== null && num(c.op) < 0);
+      const texto = await redactarJustificacionPerdidas({
+        causa,
+        entidad: study.ent,
+        anio: study.anio,
+        actividad: actividad,
+        metodo: study.pli || 'MO',
+        indicador: margenExaminada(study),
+        enLaMuestra: enPerdidaMuestra.length,
+        deLaMuestra: comparables.length,
+        disponibles: previsualizacion.enPerdidaEnUniverso,
+        margenes: enPerdidaMuestra
+          .map((c) => (num(c.s) ? num(c.op) / num(c.s) : null))
+          .filter((m) => m !== null),
+        criterio: (selectionFunnel && selectionFunnel.criterioNegativas) || 'puntaje',
+      });
+      if (texto) setBorradorJustificacion(texto);
+      else {
+        setAvisoJustificacion('No se pudo redactar en este momento. El campo sigue siendo '
+          + 'editable a mano.');
+      }
+    } finally {
+      setRedactando(false);
     }
   };
 
@@ -842,6 +984,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            cargadas el motor degrada al orden por puntaje. */
         pliParteExaminada: margenExaminada(study),
         metodoPli: study.pli || 'MO',
+        /* La cercanía se mide sobre el margen NO AJUSTADO, y eso es metodología, no una
+           limitación: la búsqueda de comparables se hace sobre el margen propio de cada
+           compañía y el ajuste por capital de trabajo se aplica DESPUÉS, para leer el
+           cumplimiento (criterio del contador que asesora el estudio, 2026-09-01).
+
+           `margenDeCandidata` queda disponible por si alguna vez se quiere medir con otra vara
+           —`margenQueDecide` la construye— pero NO se inyecta: seleccionar con la vara ajustada
+           elige comparables por el resultado del ajuste y no por su perfil, que es al revés de
+           lo que pide la comparabilidad. */
       });
 
       /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
@@ -2145,6 +2296,80 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <span className="text-[10px] text-zinc-400 mt-1">
                   Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
                 </span>
+
+                {/* ══ El asistente ══
+                    Pide la CAUSA porque es lo único que no está en los datos: las Guías OCDE
+                    (cap. III, §3.64-3.65) no dicen «las pérdidas se admiten», dicen que una
+                    pérdida no descalifica siempre que se analice su causa. El resto —cifras,
+                    fundamento normativo, argumento del sesgo— sale del estudio. */}
+                <div className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 p-2.5 space-y-2">
+                  <label className="text-[11px] font-semibold text-zinc-500 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
+                    ¿Por qué el sector tuvo pérdidas en {study.anio || 'el año gravable'}?
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={study.causaPerdidasSector || ''}
+                    onChange={(e) => updateStudy({ causaPerdidasSector: e.target.value })}
+                    placeholder="Dos líneas bastan: contracción de la demanda, alza de un insumo importado, devaluación, sobreoferta del sector…"
+                    className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={redactarJustificacion}
+                      disabled={redactando}
+                      className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-[#0FA3A1] text-white hover:bg-[#0B7C7A] disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {redactando
+                        ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Redactando…</>
+                        : <><Sparkles className="w-3.5 h-3.5" /> Redactar con IA</>}
+                    </button>
+                    <span className="text-[10px] text-zinc-400">
+                      Usa las cifras reales del estudio y no inventa causas: solo la que escriba arriba.
+                    </span>
+                  </div>
+
+                  {avisoJustificacion && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                      {avisoJustificacion}
+                    </p>
+                  )}
+
+                  {/* El borrador se propone; no pisa lo que haya hasta que se acepte. */}
+                  {borradorJustificacion && (
+                    <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-[#0FA3A1]/40 p-2.5 space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Borrador propuesto
+                      </span>
+                      <p className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {borradorJustificacion}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cambiarConfig('justificacionPerdida', borradorJustificacion);
+                            setBorradorJustificacion(null);
+                          }}
+                          className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                        >
+                          Usar este texto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBorradorJustificacion(null)}
+                          className="text-[11px] px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          Descartar
+                        </button>
+                        <span className="text-[10px] text-zinc-400">
+                          Léalo antes de aceptarlo: se radica.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -2990,18 +3215,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         Continuidad
                       </span>
                     )}
-                    {/* La que no es de la misma actividad sino de una afín, y entró para no bajar
-                        del mínimo. Va marcada en su fila y no solo en el embudo: es la que hay
-                        que mirar una a una y sustentar en el informe. */}
-                    {row.entroPorAmpliacion && (
-                      <span
-                        className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
-                        title={`Actividad relacionada, no idéntica. Entró para no bajar de ${MINIMO_COMPARABLES} comparables.`
-                          + (row.razones ? ' · ' + row.razones : '')}
-                      >
-                        Actividad relacionada
-                      </span>
-                    )}
+                    {/* ══ El veredicto de actividad, fila por fila ══
+                        Pedido el 2026-09-01: poder validar la actividad antes de generar los
+                        EEFF. El motor SÍ la respeta —la DISTINTA se descarta y la cuota de
+                        negativas admite solo MISMA— pero la tabla no lo mostraba: una fila de
+                        misma actividad no llevaba marca y se veía igual que una que nadie
+                        verificó. El `title` lleva el motivo que escribió la curación, que es lo
+                        único que permite validar el veredicto en vez de creerle. */}
+                    <InsigniaActividad row={row} />
+                    {/* La actividad en sí, que es lo que el informe publica por comparable. */}
+                    <ActividadDeLaComparable row={row} />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}

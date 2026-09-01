@@ -38,7 +38,7 @@
    cifras normalizadas. */
 
 import { num, pliOf, adjustInfo } from '../utils/calculations.js';
-import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
+import { analizarRangoAjustado, indicadorAjustado } from './ajusteRangoCapitalTrabajo.js';
 
 /* Ya no hay lista de métodos enrutados: los tres indicadores que ofrece el sistema
    —MO, MB y Berry— pasan por el motor. Un `pli` que el motor no sepa construir
@@ -55,6 +55,39 @@ const SABOR_INFORME = 'aar_aap_inv';
 function aConvenioOCDE(o) {
   const s = num(o.s), c = num(o.c), op = num(o.op);
   return { ...o, op: (s !== null && c !== null && op !== null) ? s - c - op : null };
+}
+
+/**
+ * El margen de una comparable medido con LA MISMA VARA que decide el cumplimiento.
+ *
+ * Vive aquí porque este módulo es el que ya sabe cuál de los dos rangos sostiene la conclusión
+ * —lo elige `useadj`— y cuál es el escenario de ajuste del informe. El motor de selección lo
+ * recibe inyectado: la cuota de negativas ordena por cercanía al contribuyente, y si la
+ * conclusión se sostiene en el rango AJUSTADO, medir la cercanía sobre el margen crudo elige el
+ * conjunto equivocado (reportado el 2026-09-01).
+ *
+ * Recibe la comparable en el convenio del ESTUDIO —`op` es la utilidad operacional, como la
+ * trae Capital IQ— y hace la traducción al convenio OCDE por dentro. Cruzar esa frontera sin
+ * traducir es el error más caro de este sistema, así que no se le pide al llamador.
+ *
+ * @param {object} comp    la comparable, con `op` como UTILIDAD.
+ * @param {object} estudio el estudio: sus cifras, su `pli` y su `useadj`.
+ * @returns {number|null}  el margen que el rango va a medir, o `null` si no se puede calcular.
+ */
+export function margenQueDecide(comp, estudio) {
+  const study = estudio || {};
+  const kind = study.pli || 'MO';
+  const escenario = study.useadj ? SABOR_INFORME : 'ninguno';
+  const seg = num(study.seg_excluido) || 0;
+  const tS = num(study.t_s), tOp = num(study.t_op);
+  const contribuyente = aConvenioOCDE({
+    s: tS !== null ? tS - seg : null,
+    c: num(study.t_c),
+    op: tOp !== null ? tOp - seg : null,
+    ar: num(study.t_ar), inv: num(study.t_inv), ap: num(study.t_ap), ppe: num(study.t_ppe),
+  });
+  const v = indicadorAjustado(aConvenioOCDE(comp), contribuyente, kind, escenario, (num(study.prime) || 0) / 100);
+  return v === null || !isFinite(v) ? null : v;
 }
 
 export function analizarRango(estudio) {

@@ -97,6 +97,8 @@ try {
   console.log('\n═══ PASO 2 · con pérdidas admitidas y cuota 4 ═══\n');
   comprobar('aparece el campo de justificación', /Justificación de admitir pérdidas/.test(html1b));
   comprobar('avisa que falta y que va al informe', /falta, y va al informe/.test(html1b));
+  comprobar('el asistente pide la causa del sector', /Por qué el sector tuvo pérdidas/.test(html1b));
+  comprobar('y ofrece redactar con IA', /Redactar con IA/.test(html1b));
   (html1b.match(/(Se piden \d+ comparable|El contribuyente está en)[^<]{0,260}/g) || [])
     .forEach((a) => console.log('   ·', limpio(a)));
 
@@ -123,6 +125,8 @@ try {
   comprobar('tarjeta de cumplimiento con veredicto', /NO CUMPLE|CUMPLE \(Dentro/.test(html2));
   comprobar('la brecha hasta el cuartil', /Faltan/.test(html2));
   comprobar('dice cuál de los dos rangos decide', /Decide el rango/.test(html2));
+  comprobar('la tabla marca el veredicto de actividad por fila', /Misma actividad|Actividad sin verificar/.test(html2));
+  comprobar('y muestra la actividad de cada comparable', /line-clamp-2|Sin descripción del negocio/.test(html2));
 
   const emb = html2.match(/Diferencias funcionales[\s\S]{0,240}?260-4\)/);
   if (emb) console.log('\n  embudo del paso 3:\n   ·', limpio(emb[0]));

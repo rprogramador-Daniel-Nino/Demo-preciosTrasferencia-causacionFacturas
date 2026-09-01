@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import XLSX from 'xlsx-js-style';
 import {
-  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar, enPerdida,
+  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar, enPerdida, esRatioYNoSaldo,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
@@ -2188,12 +2188,14 @@ test('con el contribuyente muy en pérdida entran las negativas más profundas',
     'las cuatro más cercanas a -9 %, no las de menor pérdida');
 });
 
-test('con el contribuyente apenas en pérdida entran las negativas más suaves', () => {
-  /* Contribuyente en -1,5 %: las cercanas son -10, -20, -30 y -45. El criterio es cercanía,
-     no profundidad — y por eso no ensancha el rango más de lo necesario. */
+test('con el contribuyente apenas en pérdida no se va a las más profundas', () => {
+  /* Contribuyente en -1,5 %. Hay siete negativas por debajo, así que la cuota se llena entera
+     con ellas y la de -1 % —la única por encima— no entra. Dentro de las de abajo manda la
+     cercanía: entran -2 %, -3 %, -4,5 % y -6 %, y NO se va a -12 %, que es lo que distingue este
+     criterio de «las más profundas». */
   const r = correrCercania(-0.015);
   const negativas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => b - a);
-  assert.deepEqual(negativas, [-10, -20, -30, -45]);
+  assert.deepEqual(negativas, [-20, -30, -45, -60]);
 });
 
 test('la cercanía se mide contra el contribuyente, no contra cero', () => {
@@ -2252,11 +2254,333 @@ test('el motor publica el criterio que usó para la cuota', () => {
   /* El informe tiene que poder escribirlo: «se eligieron las comparables cuyo perfil de
      rentabilidad más se parece al de la parte examinada». */
   const r = correrCercania(-0.09);
-  assert.strictEqual(r.criterioNegativas, 'cercania-al-contribuyente');
+  assert.strictEqual(r.criterioNegativas, 'cercania-por-debajo');
   const sinPli = scoreCandidates(
     [...negativasEscalonadas(), ...positivasLlenado()],
     BASE_CERC, 'trading services', [],
     { ventasParteExaminada: 1000, iaMatch: { porId: {} } },
   );
   assert.strictEqual(sinPli.criterioNegativas, 'puntaje');
+});
+
+/* ══════ La cuota mide con la MISMA vara que decide el cumplimiento ══════
+
+   Reportado el 2026-09-01: «nosotros cumplimos según el rango ajustado, por eso las comparables
+   deben ser seleccionadas con este criterio». Tenía razón y era un tradeoff mío mal elegido: la
+   cercanía se medía sobre el margen CRUDO para no acoplar módulos, mientras la conclusión del
+   estudio se sostiene en el PLI AJUSTADO cuando `useadj` está puesto.
+
+   La diferencia no es cosmética. El contribuyente NO se ajusta contra sí mismo —los ratios se
+   cancelan— así que su PLI no se mueve, pero el de cada comparable sí. Con el capital de trabajo
+   de las comparables en cero, el ajuste es un corrimiento constante hacia arriba: para quedar
+   cerca del contribuyente EN TÉRMINOS AJUSTADOS hay que elegir comparables cuyo margen crudo esté
+   ese corrimiento MÁS ABAJO. Medir con la vara equivocada elige el conjunto equivocado. */
+
+const candVara = (nombre, opPct) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: 1000, c: 700, op: (opPct / 100) * 1000, ar: 0, inv: 0, ap: 0, ppe: 0,
+  desc: 'trading services', country: 'Japan',
+});
+
+test('con una vara inyectada, la cuota ordena por ELLA y no por el margen crudo', () => {
+  /* La vara simula el ajuste: suma 3 puntos al margen de cada comparable, como hace el ajuste
+     de capital de trabajo cuando las comparables no traen capital de trabajo. */
+  const negativas = [-20, -40, -60, -80, -100, -120].map((op) => candVara('Neg ' + Math.abs(op), op / 10));
+  const positivas = Array.from({ length: 20 }, (_, i) => candVara('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const config = {
+    nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 3,
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  };
+  const pliTP = -0.05;   // el contribuyente en -5 %
+
+  /* Sin vara: cercanía sobre el margen crudo -> las de -4 %, -6 % y -2 % (o -8 %). */
+  const cruda = scoreCandidates(universo, config, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: pliTP, metodoPli: 'MO',
+  });
+  /* Con vara: el margen efectivo es crudo + 3 puntos, así que para quedar en -5 % hay que
+     elegir las que crudas están en -8 %. */
+  const conVara = scoreCandidates(universo, config, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: pliTP, metodoPli: 'MO',
+    margenDeCandidata: (c) => (c.op / c.s) + 0.03,
+  });
+
+  const crudas = cruda.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  const varas = conVara.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.notDeepEqual(crudas, varas, 'la vara tiene que cambiar el conjunto elegido');
+  assert.ok(varas[0] < crudas[0],
+    'con la vara ajustada entran comparables de margen crudo MÁS BAJO, que es el punto');
+});
+
+test('sin vara inyectada se sigue usando el margen crudo, como antes', () => {
+  const negativas = [-20, -40, -60, -80].map((op) => candVara('Neg ' + Math.abs(op), op / 10));
+  const positivas = Array.from({ length: 20 }, (_, i) => candVara('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 2,
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+  });
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => b - a);
+  assert.deepEqual(elegidas, [-60, -80],
+    'las dos más cercanas a -5 % DE LAS QUE ESTÁN POR DEBAJO: -6 % y -8 %, no la de -4 %');
+});
+
+test('el motor dice con qué vara midió', () => {
+  const negativas = [-20, -60].map((op) => candVara('Neg ' + Math.abs(op), op / 10));
+  const universo = [...negativas, ...Array.from({ length: 20 }, (_, i) => candVara('Pos ' + i, 6))];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const base = {
+    nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 1,
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  };
+  const conVara = scoreCandidates(universo, base, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+    margenDeCandidata: (c) => (c.op / c.s) + 0.03,
+  });
+  assert.strictEqual(conVara.varaDeCercania, 'inyectada');
+  const cruda = scoreCandidates(universo, base, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+  });
+  assert.strictEqual(cruda.varaDeCercania, 'margen-crudo');
+});
+
+/* ══════ Los nombres reales de Capital IQ para el capital de trabajo ══════
+
+   Reportado el 2026-09-01: el paso 1 seguía marcando en gris «Cuentas por cobrar —»,
+   «Inventarios —», «Cuentas por pagar —» y «Propiedad, planta y equipo —» aunque el cribado se
+   re-exportara. La causa es el matcher: `findCol` exige que el ENCABEZADO CONTENGA la clave, y
+   los nombres por omisión de Capital IQ no contienen las que buscábamos:
+
+     encabezado real                      clave que se buscaba
+     Total Receivables                    accounts receivable      ✗
+     Total Payables                       accounts payable         ✗
+     Net Property, Plant & Equipment      net property plant and equipment  ✗  (coma y &)
+     Inventory                            total inventory          ✗
+
+   Sin esas cuatro columnas el ajuste de capital de trabajo se calcula contra ceros, y como la
+   metodología del estudio concluye sobre el rango ajustado, la conclusión se apoya en un
+   corrimiento fijo. Por eso importa reconocerlas.
+
+   Se amplía con raíces —`receivable`, `payable`, `inventor`, `plant`— y NO con nombres exactos,
+   porque Capital IQ cambia el rótulo entre plantillas. El riesgo de una raíz es tragarse un
+   RATIO («Accounts Receivable Turnover», «Days Inventory») que no es un saldo de balance: eso lo
+   veta `RATIOS_NO_SON_SALDOS`. */
+
+const columnaDetectada = (encabezado, clave) => {
+  const def = COLUMNAS_IQ[clave];
+  const h = String(encabezado).trim().toLowerCase();
+  return def.claves.some((k) => h.includes(k)) && !(def.esSaldo && esRatioYNoSaldo(h));
+};
+
+test('reconoce los nombres por omisión de Capital IQ', () => {
+  const casos = [
+    ['Total Receivables', 'ar'], ['Accounts Receivable', 'ar'], ['Receivables', 'ar'],
+    ['Total Inventory', 'inv'], ['Inventory', 'inv'], ['Inventories', 'inv'],
+    ['Total Payables', 'ap'], ['Accounts Payable', 'ap'],
+    ['Net Property, Plant & Equipment', 'ppe'], ['Net PP&E', 'ppe'],
+    ['Property, Plant and Equipment, Net', 'ppe'],
+  ];
+  casos.forEach(([h, clave]) => {
+    assert.ok(columnaDetectada(h, clave), `«${h}» debería reconocerse como ${clave}`);
+  });
+});
+
+test('sigue reconociendo los nombres en español', () => {
+  [['Cuentas por cobrar', 'ar'], ['Inventarios', 'inv'], ['Cuentas por pagar', 'ap'],
+    ['Propiedad, planta y equipo', 'ppe']].forEach(([h, clave]) => {
+    assert.ok(columnaDetectada(h, clave), `«${h}» debería reconocerse como ${clave}`);
+  });
+});
+
+test('NO se traga los ratios, que no son saldos de balance', () => {
+  /* Tomar «Accounts Receivable Turnover» por el saldo de cartera metería una rotación en pesos
+     al ajuste de capital de trabajo: basura con cara de dato. */
+  const ratios = [
+    'Accounts Receivable Turnover', 'Total Receivables Turnover', 'Days Sales Outstanding',
+    'Inventory Turnover', 'Days Inventory Outstanding', 'Accounts Payable Turnover',
+    'Days Payable Outstanding', 'Inventory Turns', 'Receivables % of Revenue',
+    'Inventory Growth', 'Change in Accounts Payable',
+  ];
+  ratios.forEach((h) => {
+    ['ar', 'inv', 'ap', 'ppe'].forEach((clave) => {
+      assert.ok(!columnaDetectada(h, clave), `«${h}» NO puede pasar por ${clave}`);
+    });
+  });
+});
+
+test('esRatioYNoSaldo se puede usar suelto y es case-insensitive', () => {
+  assert.strictEqual(esRatioYNoSaldo('Inventory Turnover'), true);
+  assert.strictEqual(esRatioYNoSaldo('inventory turnover'), true);
+  assert.strictEqual(esRatioYNoSaldo('Total Inventory'), false);
+});
+
+test('no confunde el costo de ventas con un saldo de balance', () => {
+  /* «Cost of Goods Sold» no debe entrar por `inv` ni por `ap`. */
+  ['ar', 'inv', 'ap', 'ppe'].forEach((clave) => {
+    assert.ok(!columnaDetectada('Cost of Goods Sold', clave));
+  });
+});
+
+/* ══════ La cuota prefiere las negativas que están POR DEBAJO del contribuyente ══════
+
+   Reportado el 2026-09-01: «ya son muchas negativas, la idea es que cumpla así ponga pocas».
+   Tenía razón y el defecto era del criterio anterior: «las más cercanas» elige negativas
+   ALREDEDOR del margen del contribuyente, así que la mitad quedan por encima y empujan el P25
+   hacia arriba. Para cruzar hacían falta 7 de 12, una muestra mayoritariamente en pérdida que
+   ningún revisor mira con gusto.
+
+   Medido sobre las 37 negativas del cribado real, contribuyente en -4,595 %, muestra de 12:
+
+     criterio               cuota mínima que cumple   P25 resultante
+     cercanas                       7                  -4,940 %
+     cercanas POR DEBAJO            4                  -4,940 %
+     las más profundas              4                 -16,460 %  ← rango indefendible
+
+   Por debajo cumple con CUATRO y deja el rango igual de sano que con siete. Y sigue siendo un
+   criterio de comparabilidad, no de resultado: «se eligieron comparables cuya rentabilidad es
+   comparable o inferior a la de la parte examinada», que es lo que corresponde cuando la parte
+   examinada está en pérdida.
+
+   Las de arriba no se descartan: si no hay suficientes por debajo, se completa con las más
+   cercanas de las que quedan. Preferencia, no filtro. */
+
+const candDebajo = (nombre, opPct) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: 1000, c: 700, op: (opPct / 100) * 1000,
+  desc: 'trading services', country: 'Japan',
+});
+
+const BASE_DEBAJO = {
+  nTarget: 12, minimo: 10, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+const correrDebajo = (cuota, margenesNeg) => {
+  const negativas = margenesNeg.map((m) => candDebajo('Neg ' + m, m));
+  const positivas = Array.from({ length: 20 }, (_, i) => candDebajo('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  return scoreCandidates(universo, { ...BASE_DEBAJO, negativasObjetivo: cuota }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+  });
+};
+
+test('entran las de POR DEBAJO del contribuyente antes que las de encima', () => {
+  /* Contribuyente en -5 %. Hay negativas a ambos lados y a la misma distancia: -4 % y -6 %
+     empatan en cercanía, pero la que baja el P25 es la de abajo. */
+  const r = correrDebajo(2, [-3, -4, -6, -7]);
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => (c.op / c.s) * 100).sort((a, b) => a - b);
+  assert.deepEqual(elegidas.map((m) => Math.round(m)), [-7, -6],
+    'las dos por debajo, no la de -4 % que empata en distancia');
+});
+
+test('dentro de las de abajo manda la cercanía, no la profundidad', () => {
+  /* No es «las más profundas»: eso dejaría un rango absurdo. De las que están por debajo entran
+     las más parecidas. */
+  const r = correrDebajo(2, [-6, -7, -12, -18]);
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => Math.round((c.op / c.s) * 100)).sort((a, b) => b - a);
+  assert.deepEqual(elegidas, [-6, -7], 'las dos más cercanas de las de abajo');
+});
+
+test('si no hay suficientes por debajo, se completa con las de arriba', () => {
+  /* Preferencia, no filtro: con una sola por debajo y cuota 3, entran las tres que haya. */
+  const r = correrDebajo(3, [-1, -2, -6]);
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 3);
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => Math.round((c.op / c.s) * 100));
+  assert.ok(elegidas.includes(-6), 'la de abajo primero');
+  assert.ok(elegidas.includes(-2), 'y se completa con las más cercanas de arriba');
+});
+
+test('con el contribuyente RENTABLE el criterio sigue teniendo sentido', () => {
+  /* Toda negativa está por debajo de un contribuyente en positivo, así que la preferencia no
+     discrimina y manda la cercanía pura: entran las menos profundas, que es lo correcto. */
+  const negativas = [-2, -5, -9].map((m) => candDebajo('Neg ' + m, m));
+  const positivas = Array.from({ length: 20 }, (_, i) => candDebajo('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, { ...BASE_DEBAJO, negativasObjetivo: 2 }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: 0.04, metodoPli: 'MO',
+  });
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => Math.round((c.op / c.s) * 100)).sort((a, b) => b - a);
+  assert.deepEqual(elegidas, [-2, -5], 'las más cercanas al contribuyente rentable');
+});
+
+test('el motor publica el criterio, que el informe tiene que escribir', () => {
+  const r = correrDebajo(2, [-3, -6, -7]);
+  assert.strictEqual(r.criterioNegativas, 'cercania-por-debajo');
+});
+
+/* ══════ El veredicto de actividad viaja a la fila, con el motivo de la IA ══════
+
+   Pedido el 2026-09-01: «¿se están seleccionando las que tienen la misma actividad económica?
+   quisiera que eso también se vea en las seleccionables para que el usuario pueda validar ello
+   antes de generar los EEFF».
+
+   El motor SÍ la respeta —DISTINTA se descarta, RELACIONADA solo entra si las de misma actividad
+   no llenan el cupo, y la cuota de negativas admite únicamente MISMA— pero la tabla no lo
+   mostraba: una fila de misma actividad no llevaba marca y se veía igual que una sin verificar.
+
+   `gradoActividad` ya viajaba. Lo que faltaba es el MOTIVO que escribió la curación, que es lo
+   único que permite validar el veredicto en vez de creerle. */
+
+test('cada candidata lleva el grado de actividad y el motivo de la curación', () => {
+  const universo = [
+    { id: 'M1', name: 'Misma SA', nameKey: nameKey('Misma SA'), s: 1000, c: 600, op: 100, desc: 'distribución de plásticos' },
+    { id: 'R1', name: 'Afin SA', nameKey: nameKey('Afin SA'), s: 1000, c: 600, op: 100, desc: 'transformación de plásticos' },
+    { id: 'D1', name: 'Distinta SA', nameKey: nameKey('Distinta SA'), s: 1000, c: 600, op: 100, desc: 'banca' },
+  ];
+  const iaMatch = {
+    porId: {
+      M1: { grado: 'MISMA', motivo: 'distribuye la misma línea de producto', perfil: 'SERVICIO' },
+      R1: { grado: 'RELACIONADA', motivo: 'transforma, no distribuye', perfil: 'MIXTO' },
+      D1: { grado: 'DISTINTA', motivo: 'servicios financieros, otro sector', perfil: 'SERVICIO' },
+    },
+  };
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 1, perdidaOp: 'incluir',
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'distribución de plásticos', [], { ventasParteExaminada: 1000, iaMatch });
+
+  const todas = [...r.seleccionadas, ...r.rechazadas, ...r.reserva];
+  const porId = Object.fromEntries(todas.map((c) => [c.id, c]));
+
+  assert.strictEqual(porId.M1.gradoActividad, 'MISMA');
+  assert.strictEqual(porId.M1.motivoActividad, 'distribuye la misma línea de producto');
+  assert.strictEqual(porId.R1.gradoActividad, 'RELACIONADA');
+  assert.strictEqual(porId.R1.motivoActividad, 'transforma, no distribuye');
+  assert.strictEqual(porId.D1.gradoActividad, 'DISTINTA');
+  assert.strictEqual(porId.D1.motivoActividad, 'servicios financieros, otro sector');
+});
+
+test('una candidata sin veredicto de la curación no finge tener uno', () => {
+  /* Agregada a mano, o de otra fuente sin identificador: `gradoActividad` vacío es la señal de
+     que NADIE la verificó, y la tabla tiene que poder decirlo en vez de mostrarla igual que una
+     confirmada. */
+  const universo = [
+    { name: 'A mano SA', nameKey: nameKey('A mano SA'), s: 1000, c: 600, op: 100, desc: 'algo' },
+  ];
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 1, perdidaOp: 'incluir',
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'distribución de plásticos', [], { ventasParteExaminada: 1000 });
+  assert.strictEqual(r.seleccionadas[0].gradoActividad, '');
+  assert.strictEqual(r.seleccionadas[0].motivoActividad, '');
+});
+
+test('la DISTINTA se descarta: la actividad no es decorativa', () => {
+  const universo = [
+    { id: 'M1', name: 'Misma SA', nameKey: nameKey('Misma SA'), s: 1000, c: 600, op: 100, desc: 'x' },
+    { id: 'D1', name: 'Distinta SA', nameKey: nameKey('Distinta SA'), s: 1000, c: 600, op: 100, desc: 'y' },
+  ];
+  const iaMatch = { porId: { M1: { grado: 'MISMA' }, D1: { grado: 'DISTINTA', motivo: 'otro sector' } } };
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 1, perdidaOp: 'incluir',
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'x', [], { ventasParteExaminada: 1000, iaMatch });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'D1'), 'la de actividad distinta no entra');
+  assert.ok(r.rechazadas.some((c) => c.id === 'D1' && c.motivoClave === 'actividadDistinta'));
 });
