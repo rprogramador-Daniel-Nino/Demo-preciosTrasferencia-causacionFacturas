@@ -1327,6 +1327,16 @@ test('extraerJSON aguanta prosa alrededor y vallas de markdown', () => {
   assert.throws(() => extraerJSON('{"a": 1'), /incompleto/);
 });
 
+test('extraerJSON tolera una comilla doble sin escapar incrustada en un valor de texto', () => {
+  const texto = '{"motivo": "el comparable usa "cloud computing" como línea de negocio"}';
+  assert.deepStrictEqual(extraerJSON(texto), { motivo: 'el comparable usa "cloud computing" como línea de negocio' });
+});
+
+test('extraerJSON no confunde una coma de puntuación tras una frase citada con el fin de la cadena', () => {
+  const texto = '{"motivo": "el sector vive un "boom", según el analista"}';
+  assert.deepStrictEqual(extraerJSON(texto), { motivo: 'el sector vive un "boom", según el analista' });
+});
+
 /* ══════ num: los separadores de miles falseaban los márgenes ══════ */
 test('num respeta los formatos numéricos que usan los analistas', () => {
   assert.strictEqual(num('2.761.202.249'), 2761202249, 'miles con punto; antes daba 2,761');

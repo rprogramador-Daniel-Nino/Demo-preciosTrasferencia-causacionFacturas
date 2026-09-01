@@ -30,6 +30,22 @@ test('extraerJSON lanza si no hay ninguna llave de apertura', () => {
   assert.throws(() => extraerJSON('sin json aquí'), /no contiene un objeto JSON/);
 });
 
+test('extraerJSON tolera una comilla doble sin escapar incrustada en un valor de texto', () => {
+  const texto = '{"colombia": "<p>El país adoptó el término "nearshoring" en su discurso oficial.</p>"}';
+  const obj = extraerJSON(texto);
+  assert.strictEqual(obj.colombia, '<p>El país adoptó el término "nearshoring" en su discurso oficial.</p>');
+});
+
+test('extraerJSON no confunde una coma de puntuación tras una frase citada con el fin de la cadena', () => {
+  const texto = '{"colombia": "<p>La inflación vive un "repunte", según el Banco de la República.</p>"}';
+  const obj = extraerJSON(texto);
+  assert.strictEqual(obj.colombia, '<p>La inflación vive un "repunte", según el Banco de la República.</p>');
+});
+
+test('extraerJSON sigue lanzando cuando el JSON está genuinamente incompleto', () => {
+  assert.throws(() => extraerJSON('{"colombia": "<p>texto</p>"'), /llaves sin cerrar/);
+});
+
 test('construirPromptBusqueda pide las 8 series y la ventana de 4 años', () => {
   const prompt = construirPromptBusqueda(2026);
   SERIES_MACRO.forEach((s) => assert.ok(prompt.includes(s.clave), 'falta la serie ' + s.clave));

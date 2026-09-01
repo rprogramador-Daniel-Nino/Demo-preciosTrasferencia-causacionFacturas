@@ -11,22 +11,55 @@ const { esUrlBloqueada } = require('./urlsBloqueadas');
 /* Mismo puerto de extraerJSONDeRespuestaIA que usa analisisMercadoPrompts.js
    (index.html:1994-2012) — se duplica aquí por la misma razón que allá: este
    módulo no comparte código con index.html ni con frontend/src. */
+/* Con apartados de cientos de palabras (III.C pide hasta 450 mínimo por
+   bloque) es común que el modelo cite un término entre comillas dobles rectas
+   sin escaparlas (`"...adoptó "cloud computing" para..."`). Antes, cualquier
+   `"` sin backslash delante se tomaba como cierre de cadena, así que el resto
+   del HTML se leía como estructura JSON y `JSON.parse` reventaba a mitad de
+   una respuesta por lo demás completa (2026-09-01, posición >13.000). La
+   comilla de cierre real de JSON está casi siempre seguida (tras espacios) de
+   `:`, `}`, `]` o el fin de la respuesta; una coma es ambigua en español
+   (puede ser la puntuación de la frase citada) y solo cuenta si además le
+   sigue una `"` — el inicio de la siguiente clave/elemento. Cualquier otro
+   caso es texto suelto: la cadena sigue abierta y esa comilla se escapa en el
+   buffer que se le pasa a JSON.parse, en vez de cortarla ahí. */
 function extraerJSON(texto) {
   const s = String(texto || '');
   const inicio = s.indexOf('{');
   if (inicio < 0) throw new Error('La respuesta no contiene un objeto JSON.');
-  let profundidad = 0, enCadena = false, escapado = false;
+  let profundidad = 0, enCadena = false, escapado = false, saneado = '';
   for (let i = inicio; i < s.length; i++) {
     const c = s[i];
     if (enCadena) {
-      if (escapado) escapado = false;
-      else if (c === '\\') escapado = true;
-      else if (c === '"') enCadena = false;
+      if (escapado) {
+        escapado = false;
+      } else if (c === '\\') {
+        escapado = true;
+      } else if (c === '"') {
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        const siguiente = s[j];
+        let cierreReal = siguiente === undefined || siguiente === ':' || siguiente === '}' || siguiente === ']';
+        if (!cierreReal && siguiente === ',') {
+          let k = j + 1;
+          while (k < s.length && /\s/.test(s[k])) k++;
+          cierreReal = k >= s.length || s[k] === '"';
+        }
+        if (cierreReal) enCadena = false;
+        else saneado += '\\';
+      }
+      saneado += c;
       continue;
     }
-    if (c === '"') { enCadena = true; continue; }
+    if (c === '"') { enCadena = true; saneado += c; continue; }
     if (c === '{') profundidad++;
-    else if (c === '}') { profundidad--; if (profundidad === 0) return JSON.parse(s.slice(inicio, i + 1)); }
+    else if (c === '}') {
+      profundidad--;
+      saneado += c;
+      if (profundidad === 0) return JSON.parse(saneado);
+      continue;
+    }
+    saneado += c;
   }
   throw new Error('El JSON de la respuesta de la IA quedó incompleto (llaves sin cerrar).');
 }
@@ -146,7 +179,9 @@ function construirPromptBusquedaSector(actividad, year) {
     'AAAA, si la página solo muestra el mes o el año). SI LA PÁGINA NO MUESTRA FECHA DE PUBLICACIÓN, ' +
     'DEVUELVE "" — no la deduzcas, no la estimes y no uses la fecha de hoy: el informe escribe ' +
     '"(s.f.)" cuando no consta, que es correcto, mientras una fecha inventada es una cita falsa ' +
-    'ante la DIAN. Lo mismo para "fuenteTitulo": si no puedes leer el titular, devuelve "".'
+    'ante la DIAN. Lo mismo para "fuenteTitulo": si no puedes leer el titular, devuelve "".\n' +
+    '8. Si "fuenteTitulo" trae comillas dobles rectas en el titular original, escápalas como \\" — ' +
+    'nunca las dejes sueltas dentro del valor, rompen el JSON de la respuesta.'
   );
 }
 
@@ -291,6 +326,9 @@ function construirPromptRedaccionSector(datos, actividad, year) {
     'importante" sin el dato detrás no sirve; "generó 250.000 empleos, un incremento del 13,7%" sí).\n' +
     '- Cada apartado (excepto tituloSector) en HTML, como párrafos <p>...</p>, sin encabezados ni ' +
     'tablas (la tabla de datos clave se arma aparte, no la repitas).\n' +
+    '- Si necesitas citar un término o una frase textualmente, usa comillas angulares («») o ' +
+    'comillas simples (\' \'), nunca comillas dobles rectas ("") dentro del HTML: rompen el JSON de ' +
+    'la respuesta. Si aun así usas una comilla doble dentro de un valor, escápala como \\".\n' +
     '- Responde ÚNICAMENTE con un objeto JSON (sin marcas markdown) con esta forma exacta:\n' +
     '{ "tituloSector": "...", "introduccion": "<p>...</p>", "comportamiento": "<p>...</p>", "comercioExterior": "<p>...</p>", ' +
     '"proyeccion": "<p>...</p>", "conclusiones": "<p>...</p>", "fuentesCitadas": [{"titulo":"...","url":"..."}] }'
