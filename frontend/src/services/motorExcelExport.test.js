@@ -300,3 +300,52 @@ test('las correcciones de la ingesta llegan al libro también por la ruta del Mo
   assert.strictEqual(fila[1], -2986236031);
   assert.strictEqual(fila[2], -1095055781);
 });
+
+/* ══════════ La categoría «rigor» se llama igual en todo el libro ══════════
+
+   El filtro de rigor funcional se retiró del motor el 2026-08-10 y su selector salió del paso 2
+   el 2026-09-01. La CATEGORÍA `rigor` sigue muy viva, pero significa otra cosa: todo lo que
+   supera los cuatro filtros objetivos, pasa la curación y simplemente no integra la muestra.
+   Ante la DIAN eso son «diferencias funcionales» (Art. 260-4), y así lo llaman ya la Tabla 16
+   del informe y la hoja del embudo de este mismo libro.
+
+   La hoja «Candidatas rechazadas» seguía llamándola «Rigor funcional», de modo que el mismo
+   archivo se contradecía entre dos hojas y nombraba un control que ya no existe. Quien audite el
+   libro contra el informe no puede encontrar «Rigor funcional» en ninguna parte de la norma. */
+
+test('la hoja de rechazadas llama «Diferencias funcionales» a lo que el embudo llama igual', () => {
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    auditoria: {
+      rechazadas: [
+        { name: 'Alfa SA', id: '1', categoriaRechazo: 'rigor', motivoRechazo: 'No integra la muestra' },
+        { name: 'Beta SA', id: '2', categoriaRechazo: 'filtro', motivoRechazo: 'Holding' },
+        { name: 'Gamma SA', id: '3', categoriaRechazo: 'ia', motivoRechazo: 'Actividad distinta' },
+      ],
+    },
+  });
+  assert.ok(libro.SheetNames.includes('Candidatas rechazadas'), 'la hoja debe existir');
+  const filas = XLSX.utils.sheet_to_json(libro.Sheets['Candidatas rechazadas'], { header: 1, raw: true });
+  const porNombre = Object.fromEntries(filas.slice(1).map((f) => [f[0], f[4]]));
+
+  assert.strictEqual(porNombre['Alfa SA'], 'Diferencias funcionales (Art. 260-4)');
+  assert.strictEqual(porNombre['Beta SA'], 'Filtro (holding/saldo negativo/pérdida)',
+    'las otras dos categorías no cambian');
+  assert.strictEqual(porNombre['Gamma SA'], 'Curación IA');
+});
+
+test('ninguna hoja del libro nombra el rigor funcional retirado', () => {
+  /* Una etiqueta que nombra un control inexistente manda al auditor a buscar un criterio que no
+     puede encontrar ni en el informe ni en la norma. */
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    auditoria: {
+      rechazadas: [{ name: 'Alfa SA', id: '1', categoriaRechazo: 'rigor', motivoRechazo: 'x' }],
+    },
+  });
+  assert.ok(libro.SheetNames.includes('Candidatas rechazadas'), 'la hoja debe existir');
+  libro.SheetNames.forEach((nombre) => {
+    const texto = XLSX.utils.sheet_to_csv(libro.Sheets[nombre]);
+    assert.doesNotMatch(texto, /Rigor funcional/i, `la hoja «${nombre}» todavía lo nombra`);
+  });
+});

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import XLSX from 'xlsx-js-style';
 import {
-  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
+  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar, enPerdida,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
@@ -1904,4 +1904,359 @@ test('consultarGemini deja elegir el modelo, para no divergir del resto del sist
   } finally {
     axios.post = original;
   }
+});
+
+/* ══════ `prefiltrar` y `scoreCandidates` tienen que juzgar IGUAL ══════
+
+   `prefiltrar` decide a quién se le PAGA la curación y `scoreCandidates` decide quién ENTRA
+   en la muestra. El comentario de `prefiltrar` afirma que la segunda «vuelve a aplicar estos
+   mismos filtros — es idempotente», y no era cierto en dos puntos:
+
+     · Holding: `prefiltrar` no eximía a las de continuidad y `scoreCandidates` sí, así que una
+       comparable del estudio del año pasado con «Group» en la razón social se caía ANTES de
+       curarse, aunque el motor la habría conservado. Se perdía sin un aviso.
+     · Pérdida: `prefiltrar` miraba `cand.hasLoss` y `scoreCandidates` usa `enPerdida`, que
+       además reconoce `op < 0` cuando el flag no viene. Una candidata así se curaba —pagando—
+       para que el motor la descartara después.
+
+   Divergir aquí no es un detalle de estilo: el paso 2 va a mostrar el embudo en vivo con estos
+   mismos predicados, y un panel que promete un número que el motor no respeta es peor que no
+   mostrar nada. */
+
+test('el filtro de holding exime a las de continuidad igual que el motor', () => {
+  const candidatas = [
+    { id: 'G', name: 'Alpha Group Ltd', nameKey: nameKey('Alpha Group Ltd'), s: 1000, op: 100, desc: 'x' },
+  ];
+  const previas = [{ name: 'Alpha Group Ltd' }];
+
+  assert.strictEqual(prefiltrar(candidatas, {}).validas.length, 0,
+    'sin estudio anterior se descarta, como siempre');
+  assert.strictEqual(prefiltrar(candidatas, {}, previas).validas.length, 1,
+    'con estudio anterior se conserva: su inclusión ya se sustentó');
+
+  /* Y el motor coincide, que es el punto. */
+  const r = scoreCandidates(candidatas, { nTarget: 12, minimo: 1 }, '', previas);
+  assert.strictEqual(r.rechazadas.filter((c) => c.motivoClave === 'holding').length, 0);
+});
+
+test('el filtro de pérdida reconoce la utilidad negativa aunque falte el flag', () => {
+  /* Capital IQ no siempre trae `hasLoss`: lo calcula la importación, y una candidata que
+     llegue por otra vía (el estudio anterior, una fila a mano) solo trae `op`. */
+  const sinFlag = [{ id: 'P', name: 'Perdida SA', op: -500, s: 1000, desc: 'x' }];
+  assert.strictEqual(prefiltrar(sinFlag, {}).validas.length, 0,
+    'se descarta antes de curar, y no se paga por ella');
+
+  const r = scoreCandidates(sinFlag, { nTarget: 12, minimo: 1 }, '', []);
+  assert.strictEqual(r.rechazadas.filter((c) => c.motivoClave === 'perdidaOperativa').length, 1,
+    'el motor la descartaba igual: lo que cambia es no haber pagado su curación');
+});
+
+test('prefiltrar atribuye cada descarte a su filtro, con el mismo motivo que el motor', () => {
+  /* La atribución es lo que permite pintar el embudo por control. Sin ella `prefiltrar` solo
+     dice cuántas caen, no por cuál, y el panel tendría que recalcularlo por su cuenta —que es
+     exactamente cómo se divergiría otra vez. */
+  const candidatas = [
+    { id: 'H', name: 'Beta Holding SA', nameKey: nameKey('Beta Holding SA'), s: 1000, op: 100, desc: 'x' },
+    { id: 'N', name: 'Negativa SA', nameKey: nameKey('Negativa SA'), hasNegativeBalance: true, s: 1000, op: 100, desc: 'x' },
+    { id: 'P', name: 'Perdida SA', nameKey: nameKey('Perdida SA'), hasLoss: true, s: 1000, op: -50, desc: 'x' },
+    { id: 'OK', name: 'Buena SA', nameKey: nameKey('Buena SA'), s: 1000, op: 100, desc: 'x' },
+  ];
+  const { validas, porMotivo } = prefiltrar(candidatas, {});
+  assert.deepStrictEqual(validas.map((c) => c.id), ['OK']);
+  assert.strictEqual(porMotivo.holding.length, 1);
+  assert.strictEqual(porMotivo.holding[0].id, 'H');
+  assert.strictEqual(porMotivo.saldoNegativo.length, 1);
+  assert.strictEqual(porMotivo.perdidaOperativa.length, 1);
+  assert.strictEqual(porMotivo.controlada.length, 0);
+
+  /* Y el motor atribuye cada una al MISMO motivo. */
+  const r = scoreCandidates(candidatas, { nTarget: 12, minimo: 1 }, '', []);
+  const delMotor = {};
+  r.rechazadas.forEach((c) => { delMotor[c.id] = c.motivoClave; });
+  assert.strictEqual(delMotor.H, 'holding');
+  assert.strictEqual(delMotor.N, 'saldoNegativo');
+  assert.strictEqual(delMotor.P, 'perdidaOperativa');
+});
+
+test('el primer motivo manda, igual que en el motor', () => {
+  /* Una candidata puede violar dos filtros a la vez. El orden de precedencia tiene que ser el
+     mismo en las dos funciones o el embudo del panel no cuadraría con el del informe. */
+  const dosVicios = [{
+    id: 'HP', name: 'Gamma Holding SA', nameKey: nameKey('Gamma Holding SA'),
+    hasLoss: true, s: 1000, op: -50, desc: 'x',
+  }];
+  const { porMotivo } = prefiltrar(dosVicios, {});
+  assert.strictEqual(porMotivo.holding.length, 1, 'holding va antes que pérdida');
+  assert.strictEqual(porMotivo.perdidaOperativa.length, 0);
+
+  const r = scoreCandidates(dosVicios, { nTarget: 12, minimo: 1 }, '', []);
+  assert.strictEqual(r.rechazadas[0].motivoClave, 'holding');
+});
+
+/* ══════ La cuota de negativas cede sitio quitando continuidad ══════
+
+   Caso real reportado el 2026-09-01: 16 comparables del estudio anterior, todas rentables,
+   N objetivo 12 y cuota de 4 negativas con 41 disponibles en el universo. La muestra salió con
+   16 comparables y CERO negativas.
+
+   La causa era `cupoRestante = max(0, cupo − continuidad) = max(0, 12 − 16) = 0`: la continuidad
+   llenaba y desbordaba el cupo, y la cuota se quedaba sin espacio en silencio. Peor, los tres
+   avisos que sí dispararon mandaban en direcciones distintas y dos eran falsos («el resto del
+   cupo lo llenaron positivas» — ninguna entró; «suba el objetivo de negativas» — no puede servir
+   con cupo 0).
+
+   Decisión del usuario: la cuota MANDA y desplaza continuidad, hasta respetar el N exacto. Se
+   retiran las de MENOR puntaje, y hay que nombrarlas: retirar una comparable aceptada el año
+   anterior se justifica en el informe, así que el motor no puede quitarlas en silencio.
+
+   Con la cuota en 0 el comportamiento NO cambia: la continuidad sigue entrando entera aunque
+   desborde el N, que es la decisión anterior y sigue en pie. */
+
+/* El puntaje lo calcula el motor; el orden se induce con las ventas, que es uno de sus
+   factores, para no depender de un `score` inyectado que el motor recalcula igual. */
+const candCuota = (nombre, op, ventas) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: ventas, c: 600, op, desc: 'trading services', country: 'Japan',
+});
+
+function universoDelCaso({ nContinuidad = 16, nNegativas = 41, nPositivas = 200 } = {}) {
+  /* Continuidad con ventas decrecientes: la última es la de menor puntaje y cede primero. */
+  const continuidad = Array.from({ length: nContinuidad }, (_, i) =>
+    candCuota('Continuidad ' + String(i).padStart(2, '0'), 50, 1000 - i * 10));
+  const negativas = Array.from({ length: nNegativas }, (_, i) =>
+    candCuota('Negativa ' + String(i).padStart(2, '0'), -20 - i, 1000));
+  const positivas = Array.from({ length: nPositivas }, (_, i) =>
+    candCuota('Positiva ' + String(i).padStart(2, '0'), 60, 1000));
+  return {
+    universo: [...continuidad, ...negativas, ...positivas],
+    previas: continuidad.map((c) => ({ name: c.name })),
+  };
+}
+
+/** Curación que da MISMA actividad a todas, para aislar el defecto del cupo. */
+const curacionTotal = (universo) => ({
+  porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
+});
+
+const BASE_CUOTA = {
+  nTarget: 12, minimo: 10, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+const correrCaso = (config, opciones = {}) => {
+  const { universo, previas } = universoDelCaso(opciones);
+  return scoreCandidates(universo, config, 'trading services', previas, {
+    ventasParteExaminada: 1000, iaMatch: curacionTotal(universo),
+  });
+};
+
+test('la cuota de negativas se cumple aunque la continuidad desborde el N', () => {
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  assert.strictEqual(r.seleccionadas.length, 12, 'la muestra respeta el N exacto');
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4, 'y trae las 4 pedidas');
+  assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 8,
+    'la continuidad cede sitios: 12 − 4 = 8 se quedan');
+  assert.strictEqual(r.negativasIncluidas, 4);
+});
+
+test('las comparables de continuidad retiradas se nombran, con su motivo', () => {
+  /* Retirar una aceptada el año anterior se justifica en el informe: el motor no puede
+     quitarlas en silencio. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  assert.strictEqual(r.continuidadDesplazada.length, 8);
+  r.continuidadDesplazada.forEach((c) => {
+    assert.ok(c.name, 'cada una con nombre');
+    assert.match(c.motivo, /cuota|p[ée]rdida/i, 'y con el motivo del desplazamiento');
+  });
+});
+
+test('ceden las de MENOR puntaje, no las primeras que aparezcan', () => {
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  const quedan = r.seleccionadas.filter((c) => c.esContinuidad).map((c) => c.name);
+  const ceden = r.continuidadDesplazada.map((c) => c.name);
+  assert.ok(quedan.includes('Continuidad 00'), 'la de mayor puntaje se queda');
+  assert.ok(ceden.includes('Continuidad 15'), 'y la de menor cede');
+  assert.strictEqual(quedan.filter((n) => ceden.includes(n)).length, 0, 'sin solaparse');
+});
+
+test('las desplazadas van a la RESERVA, no a rechazadas', () => {
+  /* `rechazadasPorMotivo` cuenta sobre `rechazadas` y el informe suma la reserva aparte:
+     meterlas en las dos listas descuadraría la tabla contra el universo. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  const enReservaN = r.reserva.map((c) => c.name);
+  const enRechazadasN = r.rechazadas.map((c) => c.name);
+  r.continuidadDesplazada.forEach((c) => {
+    assert.ok(enReservaN.includes(c.name), c.name + ' debe quedar en reserva');
+    assert.ok(!enRechazadasN.includes(c.name), c.name + ' NO puede estar en rechazadas');
+  });
+});
+
+test('con la cuota en 0 no se retira ninguna continuidad: la decisión anterior sigue en pie', () => {
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 0 });
+  assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 16);
+  assert.strictEqual(r.seleccionadas.length, 16, 'la muestra sigue desbordando el N, como antes');
+  assert.deepEqual(r.continuidadDesplazada, []);
+  assert.strictEqual(r.continuidadExcedeObjetivo, true, 'lo que se conserva es el aviso');
+});
+
+test('solo cede lo que la cuota necesita de verdad', () => {
+  /* Si el universo tiene menos negativas que la cuota, no se retira continuidad por unas
+     negativas que no existen. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 }, { nNegativas: 1 });
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 1);
+  assert.strictEqual(r.continuidadDesplazada.length, 5, '16 − (12 − 1) = 5');
+  assert.strictEqual(r.seleccionadas.length, 12);
+});
+
+test('sin desbordar el N, la continuidad no cede nada', () => {
+  /* 8 de continuidad, N 12, cuota 4: caben las 8 + 4 negativas exactamente. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 }, { nContinuidad: 8 });
+  assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 8);
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4);
+  assert.strictEqual(r.seleccionadas.length, 12);
+  assert.deepEqual(r.continuidadDesplazada, []);
+});
+
+test('una negativa que ya venía del estudio anterior descuenta de la cuota', () => {
+  const { universo, previas } = universoDelCaso({ nContinuidad: 16 });
+  const conNegativa = universo.map((c) => (
+    c.name === 'Continuidad 15' ? { ...c, op: -30 } : c
+  ));
+  const r = scoreCandidates(conNegativa, { ...BASE_CUOTA, negativasObjetivo: 4 }, 'trading services', previas, {
+    ventasParteExaminada: 1000, iaMatch: curacionTotal(conNegativa),
+  });
+  assert.strictEqual(r.negativasDeContinuidad, 1);
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4, 'cuatro en total, no cinco');
+  assert.strictEqual(r.seleccionadas.length, 12);
+});
+
+test('el motor dice cuánta continuidad tuvo que retirar la cuota', () => {
+  /* Es el dato que faltaba: los avisos decían «el resto del cupo lo llenaron positivas» y
+     «suba el objetivo», los dos falsos. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  assert.strictEqual(r.continuidadDesplazadaPorCuota, 8);
+});
+
+/* ══════ La cuota elige las negativas MÁS PARECIDAS a la rentabilidad del contribuyente ══════
+
+   Reportado el 2026-09-01: con la cuota funcionando, el rango bajó de 3,111-9,173 % a
+   -0,355-4,312 %, pero el contribuyente estaba en -4,595 % y seguía fuera por 4,240 %. La
+   cuota tomaba las negativas de mayor PUNTAJE de comparabilidad, que no son las que acercan el
+   rango: entre 37 negativas disponibles podía elegir cuatro cercanas a cero y dejar fuera las
+   que de verdad se parecen al contribuyente.
+
+   Decisión del usuario (2026-09-01): dentro de la cuota se prefieren las de margen más cercano
+   al del contribuyente. Es a la vez lo más efectivo y lo más defendible: acerca el P25 al nivel
+   de la parte examinada, y el criterio que se escribe en el informe es «se eligieron las
+   comparables cuyo perfil de rentabilidad más se parece al de la parte examinada», que es lo que
+   pide el principio de comparabilidad. Una compañía en pérdida real comparada con compañías en
+   pérdida no es un estiramiento: es la comparación correcta (Guías OCDE cap. III, §3.64-3.65).
+
+   Solo reordena DENTRO de las que ya pasaron todo —mismos filtros, misma actividad, misma
+   curación—, así que no entra ninguna que antes no fuera válida. Y solo aplica a la cuota: el
+   llenado con positivas sigue por puntaje. */
+
+const candCerc = (nombre, op, extra = {}) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: 1000, c: 600, op, desc: 'trading services', country: 'Japan', ...extra,
+});
+
+const BASE_CERC = {
+  nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 4,
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+/* Negativas repartidas de -1 % a -12 %, y positivas para llenar el resto del cupo. */
+const negativasEscalonadas = () => [-10, -20, -30, -45, -60, -80, -100, -120]
+  .map((op) => candCerc(`Neg ${String(Math.abs(op)).padStart(3, '0')}`, op));
+const positivasLlenado = () => Array.from({ length: 30 }, (_, i) => candCerc(`Pos ${i}`, 60));
+
+const correrCercania = (pliParteExaminada, config = {}) => {
+  const universo = [...negativasEscalonadas(), ...positivasLlenado()];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  return scoreCandidates(universo, { ...BASE_CERC, ...config }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada, metodoPli: 'MO',
+  });
+};
+
+test('con el contribuyente muy en pérdida entran las negativas más profundas', () => {
+  /* Contribuyente en -9 %: las cercanas son -80, -100, -120 y -60 (−8 %, −10 %, −12 %, −6 %). */
+  const r = correrCercania(-0.09);
+  const negativas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.strictEqual(negativas.length, 4);
+  assert.deepEqual(negativas, [-120, -100, -80, -60],
+    'las cuatro más cercanas a -9 %, no las de menor pérdida');
+});
+
+test('con el contribuyente apenas en pérdida entran las negativas más suaves', () => {
+  /* Contribuyente en -1,5 %: las cercanas son -10, -20, -30 y -45. El criterio es cercanía,
+     no profundidad — y por eso no ensancha el rango más de lo necesario. */
+  const r = correrCercania(-0.015);
+  const negativas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => b - a);
+  assert.deepEqual(negativas, [-10, -20, -30, -45]);
+});
+
+test('la cercanía se mide contra el contribuyente, no contra cero', () => {
+  /* La misma muestra da conjuntos DISTINTOS según dónde esté el contribuyente: es la prueba de
+     que el criterio no es «las más suaves» ni «las más profundas» disfrazado. */
+  const arriba = correrCercania(-0.015).seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  const abajo = correrCercania(-0.09).seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.notDeepEqual(arriba, abajo);
+});
+
+test('sin el PLI del contribuyente se cae al orden por puntaje, sin romperse', () => {
+  /* Un estudio sin cifras cargadas todavía. Degradar es correcto: elegir por cercanía a un
+     número que no existe sería inventar. */
+  const universo = [...negativasEscalonadas(), ...positivasLlenado()];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, BASE_CERC, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch,
+  });
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4, 'la cuota se cumple igual');
+});
+
+test('el criterio NO mete ninguna que antes no fuera válida', () => {
+  /* Solo reordena dentro de las que ya pasaron filtros, actividad y curación. Es lo que hace
+     que el cambio sea de orden y no de admisión. */
+  const universo = [...negativasEscalonadas(), ...positivasLlenado()];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  /* Una negativa que la curación rechaza: no puede aparecer por cercana que sea. */
+  const intrusa = candCerc('Neg 090 DISTINTA', -90);
+  iaMatch.porId[intrusa.id] = { grado: 'DISTINTA', motivo: 'otro sector' };
+  const r = scoreCandidates([...universo, intrusa], BASE_CERC, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.09, metodoPli: 'MO',
+  });
+  assert.ok(!r.seleccionadas.some((c) => c.id === intrusa.id),
+    'la rechazada por actividad no entra aunque su margen sea el más cercano');
+});
+
+test('el llenado con positivas sigue por puntaje, no por cercanía', () => {
+  /* La cercanía es el criterio DE LA CUOTA. Si gobernara también las positivas, el margen
+     mandaría sobre la comparabilidad en toda la muestra, que es otra cosa y no se pidió. */
+  const universo = [
+    ...negativasEscalonadas(),
+    /* Positivas con ventas muy distintas: el factor de tamaño las ordena por puntaje. */
+    ...Array.from({ length: 30 }, (_, i) => candCerc(`Pos ${i}`, 60, { s: 1000 + i * 5000 })),
+  ];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, BASE_CERC, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.09, metodoPli: 'MO',
+  });
+  const positivas = r.seleccionadas.filter((c) => !enPerdida(c));
+  /* Las de ventas más cercanas a 1000 puntúan mejor por tamaño y deben ir primero. */
+  assert.ok(positivas[0].s <= positivas[positivas.length - 1].s,
+    'las positivas siguen ordenadas por puntaje de comparabilidad');
+});
+
+test('el motor publica el criterio que usó para la cuota', () => {
+  /* El informe tiene que poder escribirlo: «se eligieron las comparables cuyo perfil de
+     rentabilidad más se parece al de la parte examinada». */
+  const r = correrCercania(-0.09);
+  assert.strictEqual(r.criterioNegativas, 'cercania-al-contribuyente');
+  const sinPli = scoreCandidates(
+    [...negativasEscalonadas(), ...positivasLlenado()],
+    BASE_CERC, 'trading services', [],
+    { ventasParteExaminada: 1000, iaMatch: { porId: {} } },
+  );
+  assert.strictEqual(sinPli.criterioNegativas, 'puntaje');
 });

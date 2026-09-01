@@ -117,11 +117,23 @@ function celdasDeTrozos(trozos) {
  * El encabezado que declara los ejercicios de un estado comparativo, con la posición de
  * cada año y la tolerancia con la que se le puede atribuir una cifra.
  *
- * Se exigen AL MENOS DOS años en la fila, y que sean la mitad o más de sus celdas. Lo
- * primero descarta el año suelto de un título; lo segundo descarta una frase como «POR LOS
- * AÑOS TERMINADOS AL 31 DE DICIEMBRE 2025 Y 2024» cuando el maquetado la parte en celdas:
- * ahí los años son dos de ocho o nueve. Sin esas dos guardas se tomaría por encabezado una
- * línea de prosa y TODAS las columnas quedarían corridas, que es peor que no anotar nada.
+ * Se exigen AL MENOS DOS años en la fila, y que ninguna OTRA celda de esa fila tenga forma de
+ * cifra. Lo primero descarta el año suelto de un título. Lo segundo descarta una frase como
+ * «POR LOS AÑOS TERMINADOS AL 31 DE DICIEMBRE 2025 Y 2024» cuando el maquetado la parte en
+ * celdas: ahí aparece «31» como celda propia y la delata.
+ *
+ * NO se exige que los años sean la mitad o más de las celdas, y esa guarda —que sí estuvo
+ * aquí— costó un caso real: el estado de resultados de Llantas Emotion (2026-08-31) encabeza
+ * con `Notas | 2025 | 2024 | VARIACION | %`, dos años de cinco celdas, así que se rechazaba y
+ * la página entera quedaba sin columnas. Un encabezado de verdad puede traer tantas columnas
+ * de contexto como quiera; la proporción no dice nada sobre si es un encabezado.
+ *
+ * LO QUE SÍ LO DICE ES LA PROPIA GEOMETRÍA. Un encabezado real tiene cifras alineadas debajo
+ * de sus años; un título con dos años sueltos no. Por eso cada candidata se PRUEBA contra las
+ * filas que vienen después: se cuenta cuántas celdas con forma de cifra caen dentro de su
+ * tolerancia, y gana la que más explica. Es una comprobación contra el documento, no una
+ * heurística sobre el texto, y es lo que permite aflojar la guarda anterior sin volver a
+ * arriesgar que un título corra todas las columnas.
  *
  * La tolerancia no es un número fijo: sale de la mitad de la distancia entre dos columnas
  * contiguas del propio documento. Así se calibra sola —una hoja apretada y una holgada no
@@ -131,26 +143,69 @@ function celdasDeTrozos(trozos) {
  * @returns {{y:number, columnas:Array<{anio:string, derecha:number}>, tolerancia:number}|null}
  */
 export function encabezadoDeAnios(filas) {
-  for (const fila of filas || []) {
-    const celdas = fila.celdas || [];
-    const anios = celdas
-      .filter((c) => RX_ANIO_CELDA.test(c.texto))
-      .map((c) => ({ anio: c.texto, derecha: c.derecha }));
-    if (anios.length < 2) continue;
-    if (anios.length * 2 < celdas.length) continue;
+  const lista = filas || [];
+  let mejor = null;
 
-    const ordenadas = [...anios].sort((a, b) => a.derecha - b.derecha);
-    let hueco = Infinity;
-    for (let i = 1; i < ordenadas.length; i += 1) {
-      hueco = Math.min(hueco, ordenadas[i].derecha - ordenadas[i - 1].derecha);
-    }
-    /* Hueco nulo o negativo: dos años en la misma posición. No se puede distinguir la
-       columna, y afirmar cualquiera sería inventar. */
-    if (!Number.isFinite(hueco) || hueco <= 0) continue;
-
-    return { y: fila.y, columnas: ordenadas, tolerancia: hueco / 2 };
+  for (let i = 0; i < lista.length; i += 1) {
+    const candidata = encabezadoDeFila(lista[i]);
+    if (!candidata) continue;
+    /* Cuántas cifras de las filas siguientes explica esta candidata. El encabezado va arriba
+       de sus datos, así que solo cuentan las de abajo. */
+    const respaldo = cifrasExplicadas(lista.slice(i + 1), candidata);
+    if (!mejor || respaldo > mejor.respaldo) mejor = { candidata, respaldo };
   }
-  return null;
+
+  if (!mejor) return null;
+  /* Sin ninguna cifra alineada debajo no hay nada que sostenga que esto es un encabezado de
+     columnas: puede ser un título, un pie de página o una referencia en prosa. Anotar con él
+     correría TODAS las columnas del documento, que es peor que no anotar nada. */
+  if (mejor.respaldo < MINIMO_CIFRAS_QUE_RESPALDAN) return null;
+  return mejor.candidata;
+}
+
+/* Cuántas cifras hacen falta debajo para creerle a un encabezado. Dos: una sola podría caer
+   por casualidad cerca de un año de un título, dos alineadas en columnas distintas ya no. */
+const MINIMO_CIFRAS_QUE_RESPALDAN = 2;
+
+/** La fila leída COMO encabezado, o `null` si no puede serlo. Sin mirar el resto del documento. */
+function encabezadoDeFila(fila) {
+  const celdas = (fila && fila.celdas) || [];
+  const anios = [];
+  let otraCifra = false;
+  celdas.forEach((c) => {
+    if (RX_ANIO_CELDA.test(c.texto)) anios.push({ anio: c.texto, derecha: c.derecha });
+    else if (esCeldaDeCifra(c.texto)) otraCifra = true;
+  });
+  if (anios.length < 2) return null;
+  /* Una celda con forma de cifra que no es un año delata una fila de datos o una frase con un
+     día del mes suelto («AL 31 DE DICIEMBRE 2025 Y 2024»). */
+  if (otraCifra) return null;
+
+  const ordenadas = [...anios].sort((a, b) => a.derecha - b.derecha);
+  let hueco = Infinity;
+  for (let i = 1; i < ordenadas.length; i += 1) {
+    hueco = Math.min(hueco, ordenadas[i].derecha - ordenadas[i - 1].derecha);
+  }
+  /* Hueco nulo o negativo: dos años en la misma posición. No se puede distinguir la columna,
+     y afirmar cualquiera sería inventar. */
+  if (!Number.isFinite(hueco) || hueco <= 0) return null;
+
+  return { y: fila.y, columnas: ordenadas, tolerancia: hueco / 2 };
+}
+
+/* Cuántas celdas con forma de cifra de estas filas caen en alguna columna del encabezado
+   candidato. Se cuentan por columna distinta y no en bruto, para que una fila con cinco
+   números pegados a un mismo año no infle el respaldo. */
+function cifrasExplicadas(filas, encabezado) {
+  const porColumna = new Set();
+  let total = 0;
+  (filas || []).forEach((fila) => {
+    const anios = asignarAnios(fila, encabezado);
+    anios.forEach((anio) => { porColumna.add(anio); total += 1; });
+  });
+  /* Exige que se expliquen cifras en AL MENOS DOS columnas distintas: un título cuyo primer
+     año caiga por azar cerca de una columna de cifras no llega a dos. */
+  return porColumna.size >= 2 ? total : 0;
 }
 
 /* Una celda con FORMA de cifra: dígitos con sus separadores, con signo o entre paréntesis,
@@ -221,6 +276,23 @@ const SECCIONES = [
   },
 ];
 
+/* CORRIENTE y NO CORRIENTE, que es la distinción que decide de cuál fila sale cada partida
+   de capital de trabajo. Lo confirmó el usuario el 2026-08-31: las cuentas por cobrar, las
+   por pagar y los inventarios se toman del activo y del pasivo CORRIENTES.
+
+   Sin esto la elección quedaba al azar del orden del documento. En Llantas Emotion
+   «Cuentas comerciales por cobrar» aparece dos veces —4.003.623.665 en el corriente y
+   3.697.232.608 en el no corriente— y «Cuentas comerciales por pagar» también
+   —53.708.962.262 y 59.805.002—. Tomar la equivocada no vacía el campo: lo llena con una
+   cifra creíble del sitio equivocado, y eso no se nota al revisar.
+
+   NO CORRIENTE va primero en la lista porque «no corrientes» también satisface el patrón de
+   «corrientes» si se prueba al revés. */
+const SUBSECCIONES = [
+  { nombre: 'NO CORRIENTE', rx: /^(no\s+corriente|activos?\s+no\s+corriente|pasivos?\s+no\s+corriente)/ },
+  { nombre: 'CORRIENTE', rx: /^(corriente|activos?\s+corriente|pasivos?\s+corriente)/ },
+];
+
 /** La sección que abre esta fila, o `null` si no abre ninguna. */
 export function seccionQueAbre(fila) {
   const primera = ((fila && fila.celdas) || [])[0];
@@ -230,13 +302,34 @@ export function seccionQueAbre(fila) {
   return hallada ? hallada.nombre : null;
 }
 
-/** La sección en la que cae cada fila, arrastrando la última que se abrió. */
+/**
+ * La subsección —CORRIENTE o NO CORRIENTE— que abre esta fila.
+ *
+ * Se mira en TODAS las celdas y no solo en la primera, porque el balance de dos paneles pone
+ * «CORRIENTES» a la izquierda para el activo y otra vez a la derecha para el pasivo, en la
+ * misma fila: la de Llantas Emotion es literalmente `CORRIENTES | CORRIENTES`.
+ */
+export function subseccionQueAbre(fila) {
+  for (const celda of (fila && fila.celdas) || []) {
+    const clave = normalizarPalabra(celda.texto);
+    const hallada = SUBSECCIONES.find((x) => x.rx.test(clave));
+    if (hallada) return hallada.nombre;
+  }
+  return null;
+}
+
+/** La sección y la subsección en las que cae cada fila, arrastrando las últimas que se abrieron. */
 export function seccionesDeFilas(filas) {
   let actual = null;
+  let sub = null;
   return (filas || []).map((fila) => {
     const abre = seccionQueAbre(fila);
-    if (abre) actual = abre;
-    return { fila, seccion: actual };
+    /* Una sección nueva reinicia la subsección: el «CORRIENTES» del activo no rige sobre el
+       pasivo cuando el estado los pone uno debajo del otro. */
+    if (abre && abre !== actual) { actual = abre; sub = null; }
+    const abreSub = subseccionQueAbre(fila);
+    if (abreSub) sub = abreSub;
+    return { fila, seccion: actual, subseccion: sub };
   });
 }
 
@@ -345,19 +438,30 @@ function cifraDelAnioEnFila(fila, encabezado, anio) {
  * Veredictos:
  *   `coincide`          está en la fila del rótulo y en la columna del año objetivo.
  *   `otro-anio`         está en esa fila pero en la columna de otro ejercicio.
- *   `otra-fila`         está en la columna del año objetivo, pero de OTRA fila, cuyo rótulo
- *                       se nombra: es el caso de «la cifra de una fila más arriba».
- *   `fuera-de-columna`  no está en ninguna columna de ejercicio de la fila del rótulo (puede
- *                       ser el número de una nota o el de otra parte del documento).
+ *   `corregible`        la fila de su rótulo trae OTRA cifra en la columna del año objetivo, y
+ *                       esa cifra viene en `esperado`. No se descarta: se corrige con lo que el
+ *                       documento imprime, que es información del propio PDF.
+ *   `vacio-en-el-anio`  la fila existe y su columna del año objetivo está en blanco o en «-»:
+ *                       el ejercicio no reporta ese rubro. Es el caso de HH Colombia
+ *                       («Intangible | 8 | - | 4.146»), donde la cifra que se leyó era de 2024.
+ *   `fuera-de-columna`  no está en ninguna columna de ejercicio de la fila del rótulo y esa
+ *                       fila tampoco trae cifra en el año pedido.
  *   `sin-verificar`     no se puede afirmar nada: el rótulo no aparece —la lectura lo
  *                       parafraseó, o cita dos filas a la vez—, la página no trae encabezado
  *                       de ejercicios, o no hay capa de texto. Se degrada al chequeo por
  *                       documento de siempre, que es el comportamiento actual.
  *
+ * NO EXISTE UN VEREDICTO QUE BUSQUE LA CIFRA POR TODO EL DOCUMENTO, y esa ausencia es
+ * deliberada. Lo hubo —`otra-fila`, que barría las páginas hasta encontrar el número y
+ * declaraba a qué fila pertenecía— y descartó una cifra CORRECTA en Llantas Emotion
+ * (2026-08-31): en un estado de 49 páginas cada cifra del estado aparece otra vez en su nota,
+ * así que el barrido siempre encuentra «otra fila» y siempre acusa. La única fila que puede
+ * decir algo sobre una cifra es la del rótulo que la lectura citó.
+ *
  * @returns {{veredicto:string, anioHallado?:string, seccion?:string, rotuloReal?:string,
  *            esperado?:{texto:string, valor:number|null}|null}}
  */
-export function ubicacionDeCifra(estructura, { rotulo, valor, anio }) {
+export function ubicacionDeCifra(estructura, { rotulo, valor, anio, subseccion }) {
   const objetivo = Math.abs(Number(valor));
   const clave = normalizarPalabra(rotulo);
   const anioObjetivo = String(anio || '').trim();
@@ -369,13 +473,30 @@ export function ubicacionDeCifra(estructura, { rotulo, valor, anio }) {
   const candidatas = [];
   paginas.forEach((pagina) => {
     if (!pagina.encabezado) return;
-    (pagina.conSeccion || []).forEach(({ fila, seccion }) => {
+    (pagina.conSeccion || []).forEach(({ fila, seccion, subseccion: sub }) => {
+      /* La propia fila del encabezado no es una fila de datos. Sin esta guarda entraba como
+         candidata y producía avisos absurdos: se vio en pruebas un «en esa fila, el ejercicio
+         2025 dice 2025», porque su celda de la columna 2025 contiene el texto «2025». */
+      if (fila.y === pagina.encabezado.y) return;
       if (!normalizarPalabra(textoDeFila(fila)).includes(clave)) return;
-      candidatas.push({ fila, seccion, encabezado: pagina.encabezado });
+      candidatas.push({ fila, seccion, subseccion: sub, encabezado: pagina.encabezado });
     });
   });
 
   if (!candidatas.length) return { veredicto: 'sin-verificar' };
+
+  /* Cuando el mismo rótulo aparece en el corriente y en el no corriente, manda el que pidió
+     quien llama. No es un filtro sino una preferencia: si no hay ninguna candidata en esa
+     subsección se sigue con todas, porque descartar por esto dejaría el campo vacío cuando el
+     documento simplemente no rotula sus bloques. */
+  const preferida = String(subseccion || '').trim().toUpperCase();
+  if (preferida) {
+    const enSubseccion = candidatas.filter((c) => c.subseccion === preferida);
+    if (enSubseccion.length) {
+      candidatas.length = 0;
+      candidatas.push(...enSubseccion);
+    }
+  }
 
   /* 1. ¿Está en la columna pedida de alguna fila del rótulo? Si sí, la lectura acertó, y no
         importa que el mismo rótulo aparezca en otra parte del documento. */
@@ -407,32 +528,51 @@ export function ubicacionDeCifra(estructura, { rotulo, valor, anio }) {
     }
   }
 
-  /* 3. ¿Está en la columna pedida, pero de otra fila? Ahí se puede nombrar el rubro al que
-        de verdad pertenece, que es lo que hace corregible el aviso. */
-  const primera = candidatas[0];
-  for (const pagina of paginas) {
-    if (!pagina.encabezado) continue;
-    for (const fila of pagina.filas || []) {
-      const anios = asignarAnios(fila, pagina.encabezado);
-      for (const celda of fila.celdas || []) {
-        if (anios.get(celda) !== anioObjetivo) continue;
-        if (!celdaTraeCifra(celda, objetivo)) continue;
-        return {
-          veredicto: 'otra-fila',
-          anioHallado: anioObjetivo,
-          seccion: primera.seccion,
-          rotuloReal: rotuloDeFila(fila, pagina.encabezado),
-          esperado: cifraDelAnioEnFila(primera.fila, primera.encabezado, anioObjetivo),
-        };
-      }
-    }
+  /* 3. La cifra leída no está en la fila de su rótulo. Lo que se hace entonces NO es buscarla
+        por el documento —eso acusaba en falso, ver la nota del bloque de arriba— sino mirar qué
+        dice esa fila en la columna del año pedido, que es la única cifra con derecho a estar en
+        ese campo.
+
+        Se prefiere la candidata que SÍ trae cifra en el año objetivo: el mismo rótulo puede
+        aparecer dos veces —en Llantas Emotion «Cuentas comerciales por cobrar» está en el
+        corriente y en el no corriente— y quedarse con la primera sería jugar a los dados. */
+  const conCifra = candidatas
+    .map((c) => ({ ...c, esperado: cifraDelAnioEnFila(c.fila, c.encabezado, anioObjetivo) }))
+    .filter((c) => c.esperado);
+  const elegida = conCifra.find((c) => c.esperado.valor !== null) || conCifra[0] || null;
+
+  if (elegida && elegida.esperado.valor !== null) {
+    /* Hay una cifra en esa fila y esa columna, y no es la que la lectura trajo. Se ofrece la
+       del documento en vez de vaciar el campo: descartar dejaba el estudio sin costo de ventas
+       —y por tanto sin margen ni Índice de Berry—, mientras corregir deja el número bueno,
+       visible y editable. Sale del propio PDF, no de una interpretación. */
+    return {
+      veredicto: 'corregible',
+      anioHallado: anioObjetivo,
+      seccion: elegida.seccion,
+      rotuloReal: rotuloDeFila(elegida.fila, elegida.encabezado),
+      esperado: elegida.esperado,
+    };
   }
 
-  /* 4. No está en ninguna columna de ejercicio. */
+  if (elegida) {
+    /* La fila existe y su columna del año objetivo está vacía o en «-»: el ejercicio no
+       reporta ese rubro, y la cifra que se leyó salió de otra parte. */
+    return {
+      veredicto: 'vacio-en-el-anio',
+      anioHallado: anioObjetivo,
+      seccion: elegida.seccion,
+      esperado: elegida.esperado,
+    };
+  }
+
+  /* 4. La fila del rótulo existe pero no tiene ninguna celda en las columnas de ejercicio: no
+        es una fila de cifras comparativas (un encabezado de bloque, una nota al pie). */
+  const primera = candidatas[0];
   return {
     veredicto: 'fuera-de-columna',
     seccion: primera.seccion,
-    esperado: cifraDelAnioEnFila(primera.fila, primera.encabezado, anioObjetivo),
+    esperado: null,
   };
 }
 

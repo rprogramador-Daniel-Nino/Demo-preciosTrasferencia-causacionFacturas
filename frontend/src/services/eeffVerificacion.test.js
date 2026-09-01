@@ -1020,3 +1020,92 @@ test('marcarProbableAusentePorVocabulario marca solo los campos indicados', () =
   assert.strictEqual(marcadas.find((a) => a.campo === 't_inv').estado, 'probable_ausente_por_vocabulario');
   assert.strictEqual(marcadas.find((a) => a.campo === 't_c').estado, 'no_verificado');
 });
+
+/* ══════════ El orden de los dos filtros ══════════
+
+   Caso real de Llantas Emotion (2026-08-31). Su balance es de dos paneles —ACTIVOS a la
+   izquierda, PASIVOS a la derecha, en las mismas filas— y la fila de las cuentas por pagar
+   dice 53.708.962.262. El modelo leyó 53.708.962.282: un dígito.
+
+   El filtro de presencia literal lo rechazó con razón —esa cifra no está impresa— pero corría
+   ANTES de la verificación por columna, que sí sabía qué dice esa fila en la columna de 2025.
+   Resultado: el campo quedaba vacío y el respaldo indexaba la cuenta por pagar NO corriente
+   (59.805.002), tres órdenes de magnitud abajo, que es la cifra equivocada para el ajuste de
+   capital de trabajo.
+
+   Con la columna consultada primero, un dígito mal leído se corrige con lo que el documento
+   imprime, que es exactamente lo que hay que hacer con él. */
+
+const celdaV = (texto, derecha, ancho = 60) => ({ x: derecha - ancho, derecha, texto });
+const filaV = (y, celdas) => ({ y, celdas });
+
+/* La estructura del balance de dos paneles, con el rótulo y la cifra buena. */
+const ESTRUCTURA_DOS_PANELES = {
+  anios: ['2025', '2024'],
+  paginas: [{
+    numero: 1,
+    encabezado: {
+      y: 700,
+      columnas: [{ anio: '2025', derecha: 300 }, { anio: '2024', derecha: 420 }],
+      tolerancia: 60,
+    },
+    filas: [
+      filaV(700, [celdaV('2025', 300, 26), celdaV('2024', 420, 26)]),
+      filaV(680, [
+        celdaV('Cuentas comerciales por pagar', 180, 160), celdaV('16', 215, 12),
+        celdaV('53.708.962.262', 300, 70), celdaV('61.794.969.229', 420, 70),
+      ]),
+    ],
+    conSeccion: [
+      { fila: filaV(700, [celdaV('2025', 300, 26), celdaV('2024', 420, 26)]), seccion: null },
+      {
+        fila: filaV(680, [
+          celdaV('Cuentas comerciales por pagar', 180, 160), celdaV('16', 215, 12),
+          celdaV('53.708.962.262', 300, 70), celdaV('61.794.969.229', 420, 70),
+        ]),
+        seccion: 'PASIVO',
+      },
+    ],
+  }],
+};
+
+const lecturaConDigitoMalLeido = () => ({
+  t_ap: 53708962282,
+  textoPdf: '--- Página 1 ---\nCuentas comerciales por pagar | 16 | 53.708.962.262 | 61.794.969.229',
+  estructura: ESTRUCTURA_DOS_PANELES,
+  anioObjetivo: '2025',
+  aniosDelDocumento: ['2025', '2024'],
+  rotulosPorCampo: { t_ap: 'Cuentas comerciales por pagar' },
+  rotulos: {},
+  cotejo: {},
+});
+
+test('un dígito mal leído se corrige con la cifra de la fila, no se descarta el campo', () => {
+  const r = verificarEeff(lecturaConDigitoMalLeido(), { anioEstudio: 2025 });
+  assert.equal(r.campos.t_ap, 53708962262, 'entra la cifra impresa en el documento');
+  const c = r.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c, 'y queda como corrección visible, no como una lectura silenciosa');
+  assert.equal(c.valorLeido, 53708962282);
+  assert.equal(c.valorAplicado, 53708962262);
+  assert.match(c.motivo, /2025/, 'el motivo nombra la columna de la que salió');
+});
+
+test('la corrección por columna no deja advertencia de cifra inexistente', () => {
+  /* Antes salían dos avisos por el mismo hecho —«no aparece impresa» y luego el del
+     respaldo—, y el campo quedaba mal. */
+  const r = verificarEeff(lecturaConDigitoMalLeido(), { anioEstudio: 2025 });
+  assert.equal(r.advertencias.find((a) => a.tipo === 'cifra-inexistente'), undefined);
+});
+
+test('una cifra inventada cuyo rótulo NO existe en el documento se sigue descartando', () => {
+  /* El filtro de presencia literal no se debilita: solo cede el paso cuando la verificación
+     por columna tiene algo mejor que decir. Sin rótulo reconocible no lo tiene. */
+  const lectura = {
+    ...lecturaConDigitoMalLeido(),
+    t_ap: 44177669,
+    rotulosPorCampo: { t_ap: 'Provisiones diversas que el documento no trae' },
+  };
+  const r = verificarEeff(lectura, { anioEstudio: 2025 });
+  assert.equal(r.campos.t_ap, null);
+  assert.ok(r.advertencias.some((a) => a.tipo === 'cifra-inexistente'));
+});

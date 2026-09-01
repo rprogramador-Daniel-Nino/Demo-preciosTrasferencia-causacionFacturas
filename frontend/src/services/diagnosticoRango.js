@@ -45,9 +45,43 @@ const CAMPOS_DEL_MARGEN = ['t_s', 't_c', 't_op'];
    los tres del margen: un documento cuyas columnas se leyeron mal una vez no es de fiar en
    las demás filas tampoco, ni siquiera en las que salieron con veredicto `coincide`. */
 const TIPOS_POR_COLUMNA = [
-  'cifra-de-otro-anio', 'cifra-de-otra-fila',
+  'cifra-de-otro-anio', 'cifra-sin-dato-en-el-anio',
   'cifra-fuera-de-columna', 'cifra-de-otra-seccion',
 ];
+
+/* Los indicadores que dividen por el COSTO y por tanto dependen de que el costo sea creíble.
+   El margen operacional no está: usa utilidad sobre ventas y no toca el costo, que es la razón
+   de que el defecto de abajo se pudiera colar sin que nada lo notara. */
+const INDICADORES_QUE_USAN_COSTO = ['MB', 'Berry', 'CostPlus', 'NCP'];
+
+/* A partir de qué punto un costo deja de ser creíble frente al ingreso.
+
+   Una compañía SÍ puede vender por debajo del costo en un año malo, así que un margen bruto
+   negativo no basta para descartar la fila. Lo que no puede pasar es que el costo sea el doble
+   del ingreso: eso es un problema de unidades, de moneda o de columna, no un resultado.
+
+   Reportado el 2026-09-01: en una muestra real había filas con el costo casi diez veces el
+   ingreso —Formosa 5.586/54.076, Inabata 5.595/50.679, Hangzhou 56/547—, con márgenes brutos de
+   -868 %, -806 % y -877 %. Esos outliers arrastraban el rango de MB hasta contener cualquier
+   cosa, y la tarjeta «recomendaba» MB y Berry sobre esa base: mandaba a cambiar la metodología
+   del estudio por un artefacto. */
+const COSTO_SOBRE_INGRESO_MAXIMO = 2;
+
+/** Las comparables cuyo costo no puede ser cierto frente a su ingreso, con el motivo. */
+export function costosImplausiblesDe(comparables) {
+  return (comparables || []).map((c) => {
+    const s = num(c.s), costo = num(c.c);
+    if (s === null || costo === null || s <= 0) return null;
+    const ratio = costo / s;
+    if (ratio <= COSTO_SOBRE_INGRESO_MAXIMO) return null;
+    return {
+      name: c.name || '(sin nombre)',
+      ratio,
+      motivo: `su costo de ventas es ${ratio.toFixed(1)} veces su ingreso, lo que no puede ser `
+        + 'un resultado: apunta a un problema de unidades, de moneda o de columna en el cribado',
+    };
+  }).filter(Boolean);
+}
 
 /** Los ámbitos de muestra, con el nombre que usa el selector del tablero. */
 const AMBITOS = [
@@ -142,8 +176,18 @@ export function diagnosticarCumplimiento({
     ? (indicador < stats.p25 ? stats.p25 - indicador : indicador - stats.p75)
     : null;
 
-  const palancas = cumple ? [] : palancasQueCambianElVeredicto({
+  /* Sin rango calculable no hay veredicto que cambiar, así que tampoco hay vías que
+     proponer: la palanca de segmentación no depende del rango y se colaba sola, de modo que
+     la tarjeta decía «1 vía que sí cambia el veredicto» junto a «ingrese cifras y comparables
+     para analizar». Prometía algo sobre una conclusión que todavía no existe. */
+  /* Qué comparables traen un costo que no puede ser cierto. Se calcula siempre, aunque el
+     estudio cumpla: es un defecto del cribado y el analista tiene que verlo. */
+  const costosImplausibles = costosImplausiblesDe(muestra);
+
+  const hayVeredicto = Boolean(stats) && indicador !== null;
+  const palancas = (cumple || !hayVeredicto) ? [] : palancasQueCambianElVeredicto({
     study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+    costosImplausibles,
   });
 
   return {
@@ -167,6 +211,7 @@ export function diagnosticarCumplimiento({
       decide: study.useadj ? 'ajustado' : 'sinAjustar',
     },
     palancas,
+    costosImplausibles,
     /* En vivo se usan los hallazgos de la ingesta de esta sesión; si la tarjeta se abre sin
        haber pasado por el paso 3 —lo normal al retomar un estudio guardado— se cae al
        resumen que la ingesta persistió con el estudio. */
@@ -182,6 +227,7 @@ export function diagnosticarCumplimiento({
    nombra, porque una lista de sugerencias inútiles se deja de leer. */
 function palancasQueCambianElVeredicto({
   study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+  costosImplausibles = [],
 }) {
   const palancas = [];
 
@@ -195,6 +241,7 @@ function palancasQueCambianElVeredicto({
      accionable, y el analista lo prueba desde el paso 2. */
   const config = study.motorConfig || {};
   const disponibles = negativasDisponiblesEnUniverso(universo, study);
+  const listaDisponibles = negativasDelUniverso(universo, study);
   const enLaMuestra = muestra.filter(enPerdida).length;
   /* La condición es «hay negativas en el universo que no están en la muestra», y no «el
      filtro está en excluir». Poner la política en «incluir» y dejar la cuota en cero no mete
@@ -202,19 +249,31 @@ function palancasQueCambianElVeredicto({
      positiva mientras haya positivas para llenar el cupo. Quien decide es la cuota. */
   if (disponibles > enLaMuestra) {
     const excluidasPorPolitica = config.perdidaOp === 'excluir';
+    const cuotaActual = Math.max(0, Math.trunc(Number(config.negativasObjetivo) || 0));
+    /* A cuánto subir la cuota, calculado: «súbalo» sin el número obligaba a probar y volver a
+       correr el motor cada vez. */
+    const cuotaQueCumple = cuotaMinimaQueCumple({
+      study, muestra, ambito, indicador,
+      negativasDisponibles: listaDisponibles,
+    });
+    const comoSubir = cuotaQueCumple !== null
+      ? `Pruebe con ${cuotaQueCumple} en «Negativas objetivo»: con esa cuota el contribuyente `
+        + 'queda dentro del rango. Es la más baja que lo consigue — con más de las necesarias el '
+        + 'rango se ensancha y puede volverse enteramente negativo, que se defiende peor.'
+      : 'Ojo: ninguna cuota alcanza con las negativas de este cribado, así que subirla acerca el '
+        + 'rango pero no lo cierra. Amplíe el cribado del paso 1 o revise las otras vías.';
     palancas.push({
       clave: 'politicaPerdidas',
       cuantificado: disponibles - enLaMuestra,
+      cuotaQueCumple,
       texto: `El universo tiene ${disponibles - enLaMuestra} comparable(s) en pérdida con la `
         + 'misma actividad detectada que no están en la muestra. Incluirlas baja el primer '
         + 'cuartil, y es el criterio de las Guías OCDE (cap. III, §3.64-3.65): una pérdida no '
         + 'descalifica por sí sola, hay que analizar su causa. '
         + (excluidasPorPolitica
-          ? 'Hoy el filtro de pérdidas las descarta: cambie la política en el paso 2 y fije '
-            + 'cuántas quiere en la muestra.'
-          : 'La política ya las admite, pero el objetivo de negativas está en '
-            + `${Math.max(0, Math.trunc(Number(config.negativasObjetivo) || 0))}: súbalo en el `
-            + 'paso 2 y vuelva a correr el motor, con la justificación de la política.'),
+          ? 'Hoy el filtro de pérdidas las descarta: cambie la política en el paso 2. '
+          : `La política ya las admite y el objetivo está en ${cuotaActual}. `)
+        + comoSubir,
     });
   }
 
@@ -240,7 +299,30 @@ function palancasQueCambianElVeredicto({
   /* ── 3. El indicador de rentabilidad ──
      Cambiar de MO a MB o a Berry es legítimo si el análisis funcional lo sustenta, y es una
      de las decisiones del método. Se prueba con el mismo motor. */
-  INDICADORES.filter((m) => m !== metodo).forEach((otro) => {
+  /* Con el costo de alguna comparable fuera de toda escala, el rango de MB y de Berry se
+     construye sobre un outlier y puede contener cualquier cosa. Proponer uno de esos
+     indicadores ahí manda a cambiar la metodología del estudio por un artefacto, así que en vez
+     de la palanca se emite el defecto. */
+  const costoNoSirve = costosImplausibles.length > 0;
+  if (costoNoSirve) {
+    const nombres = costosImplausibles.map((c) => c.name).slice(0, 3).join(', ');
+    palancas.push({
+      clave: 'costosImplausibles',
+      cuantificado: costosImplausibles.length,
+      texto: `${costosImplausibles.length} comparable(s) de la muestra traen un costo de ventas `
+        + `que no puede ser cierto frente a su ingreso: ${nombres}`
+        + (costosImplausibles.length > 3 ? ` y ${costosImplausibles.length - 3} más` : '')
+        + '. Mientras eso siga así NO se puede evaluar MB, Berry, Cost Plus ni NCP —todos '
+        + 'dividen por el costo y su rango saldría de un dato imposible—, y el margen '
+        + 'operacional es el único indicador que se sostiene con este cribado, porque no usa el '
+        + 'costo. Revise la columna «Costo de ventas» del Excel de Capital IQ: suele ser un '
+        + 'problema de unidades, de moneda o de columna.',
+    });
+  }
+
+  INDICADORES.filter((m) => m !== metodo)
+    .filter((otro) => !(costoNoSirve && INDICADORES_QUE_USAN_COSTO.includes(otro)))
+    .forEach((otro) => {
     const preparado = estudioParaMotor({ ...study, comparables: muestra, cmode: ambito }, muestra);
     const r = analizarRangoAjustado(preparado, otro, study.useadj ? AJUSTE_DEL_INFORME : 'ninguno');
     const suyo = indicadorDelContribuyente(study, otro);
@@ -289,11 +371,77 @@ function palancasQueCambianElVeredicto({
   return palancas;
 }
 
+/**
+ * La cuota de negativas MÁS PEQUEÑA que mete al contribuyente en el rango, o `null` si ninguna
+ * lo consigue.
+ *
+ * Existe porque la palanca decía «súbalo en el paso 2» sin decir a cuánto, y el analista tenía
+ * que probar 5, 6, 7 y volver a correr el motor cada vez. El número se puede calcular: se
+ * simula la muestra con las N negativas más cercanas del universo —el mismo criterio que usa el
+ * motor desde el 2026-09-01— y se busca la N más chica que cumple.
+ *
+ * Se da la MÍNIMA a propósito. Con más negativas de las necesarias el rango se ensancha y puede
+ * volverse enteramente negativo, que ante un revisor se ve peor que cumplir con lo justo.
+ *
+ * Es una SIMULACIÓN, no una promesa: el motor decide con la curación, los filtros y el puntaje,
+ * y aquí solo se sustituyen las últimas N positivas de la muestra por negativas. Sirve para
+ * orientar la cuota, y por eso el texto dice «pruebe con N».
+ */
+function cuotaMinimaQueCumple({ study, muestra, ambito, negativasDisponibles, indicador }) {
+  if (indicador === null || !negativasDisponibles.length || !muestra.length) return null;
+
+  /* Las más cercanas al contribuyente primero: el mismo orden que aplica el motor. */
+  const porCercania = [...negativasDisponibles].sort((a, b) => {
+    const ma = margenCrudo(a), mb = margenCrudo(b);
+    if (ma === null && mb === null) return 0;
+    if (ma === null) return 1;
+    if (mb === null) return -1;
+    return Math.abs(ma - indicador) - Math.abs(mb - indicador);
+  });
+
+  /* Las positivas de la muestra en curso, de mejor a peor: las últimas son las que ceden. */
+  const positivas = muestra.filter((c) => !enPerdida(c));
+  const yaNegativas = muestra.filter((c) => enPerdida(c));
+  const tope = Math.min(porCercania.length, muestra.length - MINIMO_POSITIVAS_EN_MUESTRA);
+
+  for (let n = yaNegativas.length + 1; n <= tope; n += 1) {
+    const conservadas = positivas.slice(0, Math.max(0, muestra.length - n));
+    const simulada = [...conservadas, ...yaNegativas, ...porCercania.slice(0, n - yaNegativas.length)];
+    if (simulada.length < 4) continue;
+    const r = analizarRango({ ...study, comparables: simulada, cmode: ambito });
+    if (r.stats && dentro(r.stats, r.tPLI)) return n;
+  }
+  return null;
+}
+
+/* Cuántas positivas se conservan como piso al simular: una muestra que fuera casi toda pérdida
+   deja de describir el mercado y el rango entero se va a negativo, que es peor que no cumplir. */
+const MINIMO_POSITIVAS_EN_MUESTRA = 2;
+
+/** El margen operacional crudo de una candidata, para ordenar por cercanía. */
+function margenCrudo(cand) {
+  const s = num(cand.s), op = num(cand.op);
+  if (s === null || !s || op === null) return null;
+  return op / s;
+}
+
 /* Cuántas comparables en pérdida hay en el universo con la misma actividad detectada. Es el
    dato que convierte «podría incluir pérdidas» en «hay 5 ahí mismo». Se cuenta sobre el
    veredicto de la curación cuando existe, porque la decisión fue admitir solo actividad
    MISMA; sin curación no se puede afirmar la actividad y se cuentan todas las que estén en
    pérdida, que es el techo. */
+function negativasDelUniverso(universo, study) {
+  const lista = Array.isArray(universo) ? universo : [];
+  if (!lista.length) return [];
+  const porId = (study.iaMatch && study.iaMatch.porId) || null;
+  return lista.filter((c) => {
+    if (!enPerdida(c)) return false;
+    if (!porId) return true;
+    const id = c && c.id ? String(c.id).trim() : '';
+    return gradoDeActividad(porId[id]) === 'MISMA';
+  });
+}
+
 function negativasDisponiblesEnUniverso(universo, study) {
   const lista = Array.isArray(universo) ? universo : [];
   if (!lista.length) return 0;
