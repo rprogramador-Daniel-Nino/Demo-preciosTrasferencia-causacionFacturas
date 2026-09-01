@@ -1275,23 +1275,55 @@ export function enriquecerUniverso(universo, comparables = [], auditoria = null)
  * añade una frase después del objeto, y entonces la curación se descartaba
  * entera. Aquí se escanean llaves balanceadas respetando las cadenas, que es lo
  * que hacía `extraerJSONDeRespuestaIA` en el monolito `index.html`, ya retirado.
+ *
+ * Además, dentro de una cadena, una `"` sin backslash delante no siempre es el
+ * cierre: el modelo a veces cita un término entre comillas dobles rectas sin
+ * escaparlas (mismo defecto reportado el 2026-09-01 en analisisSectorPrompts.js
+ * — mantener esta heurística sincronizada con la de ese archivo y con la de
+ * analisisMercadoPrompts.js si cambia). La comilla de cierre real de JSON está
+ * casi siempre seguida (tras espacios) de `:`, `}`, `]` o el fin de la
+ * respuesta; una coma es ambigua en español y solo cuenta si además le sigue
+ * una `"` — el inicio de la siguiente clave/elemento. Cualquier otro caso es
+ * texto suelto: la cadena sigue abierta y esa comilla se escapa en el buffer
+ * que se le pasa a JSON.parse, en vez de cortarla ahí.
  */
 export function extraerJSON(texto) {
   const s = String(texto || '');
   const inicio = s.indexOf('{');
   if (inicio < 0) throw new Error('La respuesta no contiene ningún objeto JSON.');
-  let nivel = 0, enCadena = false, escapado = false;
+  let nivel = 0, enCadena = false, escapado = false, saneado = '';
   for (let i = inicio; i < s.length; i++) {
     const ch = s[i];
-    if (escapado) { escapado = false; continue; }
-    if (ch === '\\') { escapado = true; continue; }
-    if (ch === '"') { enCadena = !enCadena; continue; }
-    if (enCadena) continue;
+    if (enCadena) {
+      if (escapado) {
+        escapado = false;
+      } else if (ch === '\\') {
+        escapado = true;
+      } else if (ch === '"') {
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        const siguiente = s[j];
+        let cierreReal = siguiente === undefined || siguiente === ':' || siguiente === '}' || siguiente === ']';
+        if (!cierreReal && siguiente === ',') {
+          let k = j + 1;
+          while (k < s.length && /\s/.test(s[k])) k++;
+          cierreReal = k >= s.length || s[k] === '"';
+        }
+        if (cierreReal) enCadena = false;
+        else saneado += '\\';
+      }
+      saneado += ch;
+      continue;
+    }
+    if (ch === '"') { enCadena = true; saneado += ch; continue; }
     if (ch === '{') nivel++;
     else if (ch === '}') {
       nivel--;
-      if (nivel === 0) return JSON.parse(s.slice(inicio, i + 1));
+      saneado += ch;
+      if (nivel === 0) return JSON.parse(saneado);
+      continue;
     }
+    saneado += ch;
   }
   throw new Error('El objeto JSON de la respuesta quedó incompleto.');
 }

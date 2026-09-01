@@ -68,7 +68,12 @@ export function leerSesionUi(almacen = almacenPorDefecto()) {
     const estudioId = typeof datos?.estudioId === 'string' ? datos.estudioId.trim() : '';
     if (!estudioId) return null;
     const tab = tabConocida(datos?.tab) ? tabCanonica(datos.tab) : 'contribuyente';
-    return { estudioId, tab };
+    /* De quién es el estudio, cuando no es propio. Es lo que permite reabrirlo: un
+       compartido se lee por la ruta de su dueño, y sin este dato la restauración lo
+       buscaría en el espacio de quien recarga y no lo encontraría. Solo se incluye si
+       está, para que un estudio propio siga siendo `{estudioId, tab}` a secas. */
+    const duenoUid = typeof datos?.duenoUid === 'string' ? datos.duenoUid.trim() : '';
+    return duenoUid ? { estudioId, tab, duenoUid } : { estudioId, tab };
   } catch {
     return null;
   }
@@ -77,14 +82,21 @@ export function leerSesionUi(almacen = almacenPorDefecto()) {
 /**
  * Anota dónde está el usuario. Solo con un estudio abierto: sin él no hay nada que
  * restaurar, y el tablero ya es el punto de partida.
+ *
+ * `duenoUid` se guarda cuando el estudio es de otra persona. Antes estos no se
+ * recordaban y recargar devolvía al tablero: quien trabajaba en un estudio compartido
+ * con permiso de edición perdía de vista lo que estaba haciendo cada vez que el
+ * navegador descartaba la pestaña.
  */
-export function guardarSesionUi({ estudioId, tab }, almacen = almacenPorDefecto()) {
+export function guardarSesionUi({ estudioId, tab, duenoUid }, almacen = almacenPorDefecto()) {
   if (!almacen) return false;
   if (!estudioId) return false;
   try {
+    const dueno = typeof duenoUid === 'string' ? duenoUid.trim() : '';
     almacen.setItem(CLAVE_SESION_UI, JSON.stringify({
       estudioId: String(estudioId),
       tab: tabConocida(tab) ? tabCanonica(tab) : 'contribuyente',
+      ...(dueno ? { duenoUid: dueno } : {}),
     }));
     return true;
   } catch {
@@ -104,13 +116,15 @@ export function guardarSesionUi({ estudioId, tab }, almacen = almacenPorDefecto(
  * que es justo lo que se quería evitar. Hasta que la restauración se haya intentado, no se
  * escribe ni se borra nada.
  *
- * Los estudios que otro compartió no se recuerdan: se abren por otra vía, que necesita el
- * identificador de su dueño, y restaurarlos por la normal falla contra las reglas.
+ * Los estudios que otro compartió también se recuerdan, junto al uid de su dueño. Antes
+ * quedaban fuera porque restaurarlos por la vía normal —`leerEstudio`, en el espacio de
+ * quien recarga— fallaba contra las reglas; con el uid del dueño se abren por la suya, y
+ * dejarlos fuera penalizaba justo a quien tiene permiso de edición: recargar le devolvía
+ * al tablero en mitad del trabajo.
  */
-export function accionSobreElRecuerdo({ restauracionIntentada, estudioId, estudioAjeno } = {}) {
+export function accionSobreElRecuerdo({ restauracionIntentada, estudioId } = {}) {
   if (!restauracionIntentada) return 'nada';
-  if (estudioId && !estudioAjeno) return 'guardar';
-  return 'limpiar';
+  return estudioId ? 'guardar' : 'limpiar';
 }
 
 /** Olvida dónde estaba: al cerrar el estudio o al borrarlo. */

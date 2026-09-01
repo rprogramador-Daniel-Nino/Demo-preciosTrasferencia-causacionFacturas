@@ -255,38 +255,50 @@ export default function App() {
   /* `tabInicial` existe para la restauración al arrancar: abrir un estudio a mano empieza
      por el primer paso, pero volver tras una recarga tiene que dejar al usuario en el paso
      donde estaba. */
+  /* Completa lo que llega de la nube con lo que vive en este navegador: el veredicto de
+     la curación (localStorage) y las imágenes de los anexos A y B (IndexedDB). Nada de
+     eso cabe en el documento de Firestore —ver CAMPOS_SOLO_LOCALES—, así que el estudio
+     llega sin ello y hay que volver a pegarlo aquí.
+
+     Es la misma función para un estudio propio y para uno compartido, y esa es la
+     corrección: cuando abrir un compartido era un camino aparte que no leía nada de
+     esto, la pantalla de estados financieros abría vacía aunque el editor ya hubiera
+     cargado el PDF, y al cargar un formato nuevo `updates.eeffImages` reemplazaba la
+     lista entera —dejando solo lo nuevo y perdiendo lo que ni siquiera se había leído. */
+  const conRecursosLocales = async (id, datos) => {
+    const crudo = localStorage.getItem(claveIaMatch(id));
+    const iaMatch = crudo ? JSON.parse(crudo) : null;
+    /* Las páginas del ANEXO A: sin esto el informe saldría sin los estados financieros
+       adjuntos, que es lo que inserta docxRelleno.js. */
+    let eeffImages = [];
+    try {
+      eeffImages = await leerAnexoEeff(id);
+    } catch (err) {
+      console.error('[anexo EEFF] no se pudieron leer las páginas guardadas', err);
+    }
+    /* Mismo motivo, pero las imágenes del EEFF de cada comparable para el ANEXO B.
+       La lectura recorta y vuelve a guardar las que quedaron como hoja completa: no
+       se deja al autoguardado porque abrir un estudio no lo dispara
+       (`cargando.current`), y el informe se generaría con la página en blanco. */
+    const eeffImagenesComparables = await recortarImagenesGuardadas(id);
+    return {
+      ...(datos || {}),
+      ...(iaMatch ? { iaMatch } : {}),
+      ...(eeffImages && eeffImages.length ? { eeffImages } : {}),
+      ...(eeffImagenesComparables && Object.keys(eeffImagenesComparables).length ? { eeffImagenesComparables } : {}),
+      /* Sello del estudio del que salieron estos datos: el autoguardado no escribe si
+         no coincide con el estudio activo. Ver SELLO_ESTUDIO. */
+      [SELLO_ESTUDIO]: id,
+    };
+  };
+
   const selectStudy = async (id, { tabInicial = 'contribuyente' } = {}) => {
     try {
       const datos = await leerEstudio(id, usuario);
       cargando.current = true;
       setEstudioAjeno(null);
       setActiveStudyId(id);
-      /* El veredicto de la curación se reincorpora desde el navegador: no viaja a la
-         nube, así que el estudio llega sin él y hay que volver a pegarlo aquí. */
-      const crudo = localStorage.getItem(claveIaMatch(id));
-      const iaMatch = crudo ? JSON.parse(crudo) : null;
-      /* Y las páginas del ANEXO A desde IndexedDB: sin esto el informe saldría sin los
-         estados financieros adjuntos, que es lo que inserta docxRelleno.js. */
-      let eeffImages = [];
-      try {
-        eeffImages = await leerAnexoEeff(id);
-      } catch (err) {
-        console.error('[anexo EEFF] no se pudieron leer las páginas guardadas', err);
-      }
-      /* Mismo motivo, pero las imágenes del EEFF de cada comparable para el ANEXO B.
-         La lectura recorta y vuelve a guardar las que quedaron como hoja completa: no
-         se deja al autoguardado porque abrir un estudio no lo dispara
-         (`cargando.current`), y el informe se generaría con la página en blanco. */
-      const eeffImagenesComparables = await recortarImagenesGuardadas(id);
-      setStudy({
-        ...(datos || {}),
-        ...(iaMatch ? { iaMatch } : {}),
-        ...(eeffImages && eeffImages.length ? { eeffImages } : {}),
-        ...(eeffImagenesComparables && Object.keys(eeffImagenesComparables).length ? { eeffImagenesComparables } : {}),
-        /* Sello del estudio del que salieron estos datos: el autoguardado no escribe si
-           no coincide con el estudio activo. Ver SELLO_ESTUDIO. */
-        [SELLO_ESTUDIO]: id,
-      });
+      setStudy(await conRecursosLocales(id, datos));
       setActiveTab(tabCanonica(tabInicial));
       return true;
     } catch (err) {
@@ -314,7 +326,14 @@ export default function App() {
     if (!anterior) { setRestauracionIntentada(true); return; }
     setRestaurandoSesion(true);
     (async () => {
-      const abierto = await selectStudy(anterior.estudioId, { tabInicial: anterior.tab });
+      /* Un estudio de otra persona se reabre por la ruta de su dueño. Es lo que hace
+         que recargar no eche del estudio a quien tiene permiso de edición. */
+      const abierto = anterior.duenoUid
+        ? await abrirCompartido(
+          { duenoUid: anterior.duenoUid, id: anterior.estudioId },
+          { tabInicial: anterior.tab }
+        )
+        : await selectStudy(anterior.estudioId, { tabInicial: anterior.tab });
       if (!abierto) limpiarSesionUi();
       setRestaurandoSesion(false);
       setRestauracionIntentada(true);
@@ -332,15 +351,19 @@ export default function App() {
      este arreglo venía a evitar: recargar devolvía al tablero con el estudio cerrado. Hasta
      que la restauración se haya intentado, aquí no se escribe ni se borra nada.
 
-     Los estudios que otro compartió quedan fuera: se abren con `leerEstudioCompartido`, que
-     necesita el uid del dueño, y restaurarlos con `leerEstudio` fallaría contra las reglas.
-     El usuario vería un «no se pudo abrir el estudio» al arrancar sin haber pedido nada. */
+     Los estudios que otro compartió se recuerdan junto al uid de su dueño, que es lo que
+     `leerEstudioCompartido` necesita para reabrirlos. Antes quedaban fuera —restaurarlos
+     con `leerEstudio` fallaba contra las reglas—, y eso echaba del estudio a quien tenía
+     permiso de edición cada vez que recargaba. */
   useEffect(() => {
-    const accion = accionSobreElRecuerdo({
-      restauracionIntentada, estudioId: activeStudyId, estudioAjeno,
-    });
-    if (accion === 'guardar') guardarSesionUi({ estudioId: activeStudyId, tab: activeTab });
-    else if (accion === 'limpiar') limpiarSesionUi();
+    const accion = accionSobreElRecuerdo({ restauracionIntentada, estudioId: activeStudyId });
+    if (accion === 'guardar') {
+      guardarSesionUi({
+        estudioId: activeStudyId,
+        tab: activeTab,
+        duenoUid: estudioAjeno ? estudioAjeno.duenoUid : '',
+      });
+    } else if (accion === 'limpiar') limpiarSesionUi();
   }, [activeStudyId, activeTab, estudioAjeno, restauracionIntentada]);
 
   /* Qué pantallas del estudio quedan montadas. Se acumulan a medida que se visitan y no
@@ -349,31 +372,37 @@ export default function App() {
     setVistasMontadas(prev => acumularVistaMontada(prev, { estudioId: activeStudyId, tab: activeTab }));
   }, [activeStudyId, activeTab]);
 
-  /* Abre un estudio que otra persona compartió, con el nivel que su dueño concedió, y
-     sin tocar los recursos locales: las imágenes de su ANEXO A están en el navegador del
-     dueño, así que aquí no hay nada que leer de IndexedDB.
+  /* Abre un estudio que otra persona compartió, con el nivel que su dueño concedió y con
+     los mismos recursos locales que uno propio: quien tiene permiso de edición trabaja
+     ahí de verdad, y abrirlo a medias hacía que el trabajo se perdiera al recargar.
+
+     Lo que sigue sin poder traerse son los anexos que cargó el DUEÑO: viven en la
+     IndexedDB de su navegador y no viajan a ninguna parte. Los que cargue el editor sí
+     quedan aquí y se recuperan al reabrir.
 
      El rol se toma de la lectura y no de la fila del tablero: esa puede llevar minutos
      en memoria y el acceso haber cambiado entretanto. */
-  const abrirCompartido = async (compartido) => {
+  const abrirCompartido = async (compartido, { tabInicial = 'contribuyente' } = {}) => {
     try {
       const leido = await leerEstudioCompartido(compartido.duenoUid, compartido.id, usuario);
       if (!leido) {
         setAvisoSesion('Ese estudio ya no está disponible: puede que su dueño le haya retirado el acceso.');
-        return;
+        return false;
       }
       cargando.current = true;
       setEstudioAjeno({
         duenoUid: compartido.duenoUid,
-        duenoNombre: compartido.duenoNombre || 'otro consultor',
+        duenoNombre: compartido.duenoNombre || leido.duenoNombre || 'otro consultor',
         rol: leido.rol,
       });
       setActiveStudyId(compartido.id);
-      setStudy({ ...(leido.datos || {}), [SELLO_ESTUDIO]: compartido.id });
-      setActiveTab('contribuyente');
+      setStudy(await conRecursosLocales(compartido.id, leido.datos));
+      setActiveTab(tabCanonica(tabInicial));
+      return true;
     } catch (err) {
       console.error('[compartidos] no se pudo abrir', err);
       setAvisoSesion('No se pudo abrir el estudio compartido: ' + (err && err.message ? err.message : 'error desconocido'));
+      return false;
     }
   };
 
