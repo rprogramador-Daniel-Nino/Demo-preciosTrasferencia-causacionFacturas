@@ -633,8 +633,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     umbralControl = 50,
     saldoNegativo = 'excluir',
     geo = 'ninguna',
-    /* `rigor` sigue llegando en la configuración y se conserva en el estudio, pero ya
-       no descarta a nadie: ver la nota del bloque «rigor funcional» más abajo. */
+    /* `rigor` puede seguir llegando en estudios guardados antes del 2026-09-01. Se acepta y se
+       ignora a propósito: su filtro se retiró el 2026-08-10 —ver la nota del bloque «rigor
+       funcional» más abajo— y desde entonces no descarta a nadie. No se destructura porque nada
+       lo usa; destructurarlo sin usarlo haría creer que sí. */
   } = config;
 
   const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
@@ -931,6 +933,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       perdidaOperativa: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,
       sinDescripcion: rechazadas.filter(c => c.motivoClave === 'sinDescripcion').length,
       actividadDistinta: rechazadas.filter(c => c.motivoClave === 'actividadDistinta').length,
+      /* Vale 0 desde que el filtro de rigor funcional se retiró (2026-08-10): nada asigna ya
+         ese motivo. NO es un contador roto y no se retira, porque `rigorFuncional` es la clave
+         con la que el informe nombra su fila de diferencias funcionales —`filasRazonesRechazo`
+         le suma ahí la reserva y los motivos de `FUNDIDOS_EN_RIGOR`—, así que la fila de la
+         Tabla 16 sale con su cifra real aunque este componente aporte cero. */
       rigorFuncional: rechazadas.filter(c => c.motivoClave === 'rigorFuncional').length,
     },
     totalValidas: validas.length,

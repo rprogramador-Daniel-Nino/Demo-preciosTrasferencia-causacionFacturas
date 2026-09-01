@@ -149,7 +149,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     umbralControl: 50,
     saldoNegativo: 'excluir',
     geo: 'ninguna',
-    rigor: 'estandar',
+    /* `rigor` estuvo aquí hasta el 2026-09-01. Su filtro se retiró del motor el 2026-08-10 y su
+       selector salió del paso 2, y desde entonces nada lo leía: dejar una clave inerte en la
+       configuración invita a volver a cablearla. Los estudios guardados que la traigan siguen
+       cargando sin problema — el motor la acepta y la ignora. */
     justificacionPerdida: ''
   });
 
@@ -779,9 +782,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       anotar(`Evaluando ${universo.length} candidatas del universo…`);
 
       /* El veredicto de la curación entra como uno de los filtros del motor, junto
-         con holding, saldos negativos, pérdida operativa y rigor funcional. Si no se
-         curó —sin actividad detectada o sin descripciones— el motor sigue con las
-         palabras clave, no descarta a nadie por omisión.
+         con holding, saldos negativos y pérdida operativa. Si no se curó —sin actividad
+         detectada o sin descripciones— el motor sigue con las palabras clave, no
+         descarta a nadie por omisión.
 
          Se cura siempre aquí, pero `curarValidas` reutiliza por identificador lo ya
          dictaminado para esta misma actividad: reejecutar tras cambiar un filtro no
@@ -800,8 +803,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
          una expresión regular sobre `motivoRechazo` y el embudo mezclaba etapas. */
       const cat = result.rechazadasPorCategoria;
+      /* `cat.rigor` NO son descartes por rigor funcional: ese filtro se retiró el 2026-08-10.
+         Son las que superan los filtros objetivos, pasan la curación y no alcanzan el cupo —
+         diferencias funcionales (Art. 260-4), que es como ya las nombran la Tabla 16 del informe
+         y la hoja del embudo del Excel. */
       anotar(`${result.totalValidas} pasaron todos los criterios; ${result.rechazadas.length} descartadas ` +
-        `(${cat.filtro} por los filtros del paso 2, ${cat.ia} por la curación con IA, ${cat.rigor} por el rigor funcional)`);
+        `(${cat.filtro} por los filtros del paso 2, ${cat.ia} por la curación con IA, ${cat.rigor} por diferencias funcionales)`);
       if (!result.ventasParteExaminada) {
         anotar('Sin ventas de la parte examinada: el factor de tamaño queda neutro. Diligéncielas en la tarjeta de cifras.', 'aviso');
       }
@@ -828,7 +835,6 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         reutilizadas: veredicto ? (veredicto.reutilizadas || 0) : 0,
         rechazadasIA: cat.ia,
         rechazadasRigor: cat.rigor,
-        rigor: engineConfig.rigor,
         seleccionadas: finales.length,
         objetivo: nTarget,
         reserva: result.reserva.length,
@@ -2300,12 +2306,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   ) : null}
                 </div>
                 <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{(selectionFunnel.rechazadasIA ?? 0).toLocaleString('es-CO')}</b></div>
+                {/* «Diferencias funcionales» y no «rigor»: el filtro de rigor funcional se
+                    retiró del motor el 2026-08-10 y su selector salió del paso 2 el 2026-09-01,
+                    pero esta casilla seguía llamándose por él y hasta mostraba su valor entre
+                    paréntesis. El número nunca fue suyo: son las que superan los filtros
+                    objetivos, pasan la curación y no alcanzan el cupo. Así las nombran ya la
+                    Tabla 16 del informe y la hoja del embudo del Excel de soporte, y la pantalla
+                    tiene que coincidir con lo que se radica. */}
                 <div>
-                  Rechazadas por el rigor{' '}
+                  Diferencias funcionales{' '}
                   <b className={'tabular-nums ' + ((selectionFunnel.rechazadasRigor ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
                     {(selectionFunnel.rechazadasRigor ?? 0).toLocaleString('es-CO')}
                   </b>
-                  {selectionFunnel.rigor ? <span className="text-zinc-400"> ({selectionFunnel.rigor})</span> : null}
+                  <span className="text-zinc-400" title="Superan los filtros objetivos y la curación, pero no alcanzan el cupo de la muestra (Art. 260-4)"> (Art. 260-4)</span>
                 </div>
                 <div>Válidas <b className="tabular-nums">{selectionFunnel.validas.toLocaleString('es-CO')}</b></div>
                 <div>

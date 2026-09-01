@@ -23,8 +23,9 @@ No son cuatro problemas: son uno. **Ningún control decía lo que cuesta.**
 
 - **`Rigor Funcional` se retira del panel.** Dejó de descartar en agosto de 2026; el perfil sigue
   pesando en el puntaje y publicándose en la trazabilidad. Un control que no hace nada enseña a
-  desconfiar de los que sí. La clave `rigor` **permanece** en `engineConfig` y en el payload del
-  Excel: retirar el control no debe alterar los estudios guardados.
+  desconfiar de los que sí. La clave `rigor` se retiró también del `engineConfig` por omisión —ver
+  «El pendiente, resuelto» al final—; los estudios guardados que la traigan siguen cargando, porque
+  el motor la acepta y la ignora.
 - **El panel avisa, no configura.** Nada se aplica solo. Una configuración elegida por su
   resultado es difícil de defender ante un revisor; cada cambio queda como decisión del analista,
   con su justificación.
@@ -140,8 +141,38 @@ dice **dónde termina la certeza**: de ahí en adelante decide la curación.
 - `npm test` completo, `npm run build`, `npm run lint --prefix frontend`.
 - Verificación manual en el navegador, que en esta aplicación es la única funcional.
 
-## Pendiente
+## El pendiente, resuelto el mismo día — y mal planteado de origen
 
-- El selector `Rigor Funcional` se retiró de la pantalla; la clave `rigor` sigue en la
-  configuración. Si se decide que no vuelve, hay que limpiar `rigorFuncional` de los conteos de
-  rechazo y de la hoja de trazabilidad, que hoy siempre reportan cero por ese motivo.
+Este spec dejó escrito que «hay que limpiar `rigorFuncional` de los conteos de rechazo y de la
+hoja de trazabilidad, que hoy siempre reportan cero por ese motivo». **Eso era falso**, y hacerlo
+habría roto el informe. Al ir a ejecutarlo se encontró que hay DOS cosas con nombre parecido:
+
+- **La categoría `rigor`** está muy viva y es, con frecuencia, el cubo más grande del embudo
+  (1.389 compañías en el informe de End Game 2025). La asigna `enReserva` y significa: todo lo que
+  supera los cuatro filtros objetivos, pasa la curación y simplemente no alcanza el cupo. Ante la
+  DIAN eso son **diferencias funcionales (Art. 260-4)**.
+- **El motivo `rigorFuncional`** es la clave con la que el informe **nombra esa fila** de la Tabla
+  16. `filasRazonesRechazo` le suma ahí la reserva y los motivos de `FUNDIDOS_EN_RIGOR`
+  (`actividadDistinta`, `sinDescripcion`), así que la fila sale con su cifra real aunque el
+  contador del motor aporte cero. Retirarla habría dejado la Tabla 16 sin sumar el universo.
+
+**El defecto real era la etiqueta**, no el conteo: tres sitios llamaban «rigor funcional» a ese
+número, nombrando un control retirado y atribuyéndole una cifra que nunca fue suya.
+
+| Dónde | Decía | Dice |
+|---|---|---|
+| Excel, hoja «Candidatas rechazadas» | `Rigor funcional` | `Diferencias funcionales (Art. 260-4)` |
+| Tarjeta del embudo, paso 3 | `Rechazadas por el rigor (estandar)` | `Diferencias funcionales (Art. 260-4)` |
+| Registro de la corrida | `N por el rigor funcional` | `N por diferencias funcionales` |
+
+El caso más serio era el Excel: **el mismo libro se contradecía entre dos de sus hojas** —la del
+embudo ya publicaba «(−) Diferencias funcionales»— y quien lo auditara contra el informe buscaría
+un criterio que no existe ni en la Tabla 16 ni en la norma. La tarjeta, además, mostraba entre
+paréntesis el valor del selector retirado (`estandar`) como si explicara el número.
+
+También se retiró `rigor: 'estandar'` del `engineConfig` por omisión: ya nada lo leía, y una clave
+inerte en la configuración invita a volver a cablearla. Los estudios guardados que la traigan
+siguen cargando — el motor la acepta y la ignora, y así está documentado en su destructuración.
+
+Cubierto por dos pruebas en `motorExcelExport.test.js`, una de las cuales recorre **las once hojas
+del libro** verificando que ninguna nombre el control retirado.
