@@ -71,8 +71,8 @@ const LECTURA = {
     utilidad_bruta: 1891180250,
   },
   rotulos: {
-    cuentas_por_cobrar_relacionadas: 'CUENTAS POR COBRAR A PARTES RELACIONADAS',
-    cuentas_por_pagar_relacionadas: 'CUENTAS POR PAGAR A PARTES RELACIONADAS',
+    cuentas_por_cobrar_comerciales: 'CUENTAS POR COBRAR COMERCIALES',
+    cuentas_por_pagar_comerciales: 'CUENTAS POR PAGAR COMERCIALES',
   },
   rubrosNoAsignados: [
     { rotulo: 'DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR', valor: 6032337879 },
@@ -83,6 +83,15 @@ const LECTURA = {
   unidadOrigen: 'unidades',
   textoPdf: TEXTO_PDF,
 };
+
+/* Dos filas comerciales agregadas, las dos admisibles bajo el criterio de comerciales
+   (2026-08-31): es lo que vuelve ambigua la resolución. Salen del caso real de NET LOGISTIK.
+   Antes bastaba el «OTRAS CUENTAS POR PAGAR» del fixture más una, pero ese cajón residual
+   ya está vetado y por sí solo no es candidata de nada. */
+const DOS_COMERCIALES_CXP = [
+  { rotulo: 'ACREEDORES Y OTRAS CUENTAS POR PAGAR', valor: 3519703689 },
+  { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 },
+];
 
 const verificar = (extra = {}) => verificarEeff({ ...LECTURA, ...extra }, { anioEstudio: 2025 });
 
@@ -210,30 +219,44 @@ test('no toca ningún otro campo con nombre del balance', () => {
     .forEach((clave) => assert.ok(!(clave in aplicables), `${clave} no debería escribirse`));
 });
 
-test('si falta una partida de partes relacionadas y hay una sola cifra mayor sin desglosar, se indexa como corrección', () => {
+test('el cajón residual «Otras cuentas por pagar» NO se indexa', () => {
+  /* Criterio del usuario (2026-08-31): entra la fila comercial y solo esa. «Otras cuentas
+     por pagar» es el cajón de lo que no cupo en ninguna parte, así que indexarlo metería en
+     el capital de trabajo una cifra que no es la comercial. Antes de ese cambio esta misma
+     lectura SÍ lo indexaba, y es justo lo que se viene a cerrar. */
   const sinCxp = verificar({ t_ap: null });
-  const c = sinCxp.correcciones.find((x) => x.campo === 't_ap');
-  assert.ok(c, 'debe indexar la única cifra agregada emparentada');
-  assert.strictEqual(c.valorLeido, null);
-  assert.strictEqual(c.valorAplicado, 658293893);
-  assert.match(c.motivo, /OTRAS CUENTAS POR PAGAR/);
-  assert.match(c.motivo, /cliente/i);
-  assert.strictEqual(sinCxp.campos.t_ap, 658293893, 'se aplica al campo, no solo se sugiere');
-  assert.strictEqual(
-    sinCxp.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap'),
-    undefined,
-    'ya no queda como advertencia sin resolver: se resolvió con la corrección',
-  );
+  assert.strictEqual(sinCxp.correcciones.find((x) => x.campo === 't_ap'), undefined);
+  assert.strictEqual(sinCxp.campos.t_ap, null);
+  const a = sinCxp.advertencias.find((x) => x.tipo === 'sin-partida-comercial' && x.campo === 't_ap');
+  assert.ok(a, 'y se avisa de que la partida comercial no está');
+  assert.strictEqual(a.candidatas.length, 0, 'el residual no cuenta ni como candidata');
+});
+
+test('una única fila comercial agregada por el propio documento SÍ se indexa', () => {
+  /* Caso real de NET LOGISTIK: el documento no trae una fila «Cuentas por pagar
+     comerciales» a secas, sino «Acreedores y otras cuentas por pagar», que ya es una suma
+     que ÉL hizo. Esa entra —como corrección visible y editable—, porque la agregación no es
+     nuestra. Se veta por EMPEZAR por «Otras», no por contener la palabra. */
+  const r = verificar({
+    t_ap: null,
+    rubrosNoAsignados: [{ rotulo: 'ACREEDORES Y OTRAS CUENTAS POR PAGAR', valor: 3519703689 }],
+  });
+  const c = r.correcciones.find((x) => x.campo === 't_ap');
+  assert.ok(c, 'debe indexar la única cifra comercial');
+  assert.strictEqual(c.valorAplicado, 3519703689);
+  assert.match(c.motivo, /ACREEDORES Y OTRAS CUENTAS POR PAGAR/);
+  assert.match(c.motivo, /puede incluir otras contrapartes/i);
+  assert.strictEqual(r.campos.t_ap, 3519703689);
 });
 
 test('si hay varias cifras mayores emparentadas y ambiguas, no se indexa ninguna sola', () => {
   const r = verificar({
     t_ap: null,
-    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+    rubrosNoAsignados: DOS_COMERCIALES_CXP,
   });
   assert.strictEqual(r.campos.t_ap, null, 'ambiguo: no se aplica ninguna');
   assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ap'), undefined);
-  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
+  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-comercial' && x.campo === 't_ap');
   assert.ok(a);
   assert.match(a.mensaje, /OTRAS CUENTAS POR PAGAR/);
   assert.match(a.mensaje, /PROVEEDORES DEL EXTERIOR/);
@@ -393,12 +416,11 @@ test('una cifra que no aparece en el documento se descarta y se reporta', () => 
   const a = advertencias.find((x) => x.tipo === 'cifra-inexistente' && x.campo === 't_ap');
   assert.ok(a);
   assert.match(a.mensaje, /44\.177\.669/);
-  /* Descartada la cifra inventada, campos.t_ap vuelve a null — y como sigue habiendo una
-     única cifra agregada sin ambigüedad en la tabla principal, se indexa en su lugar (ver
-     el siguiente bloque de pruebas). */
-  const c = correcciones.find((x) => x.campo === 't_ap');
-  assert.ok(c);
-  assert.strictEqual(campos.t_ap, 658293893);
+  /* Descartada la cifra inventada, `campos.t_ap` vuelve a null y AHÍ SE QUEDA: lo único que
+     el fixture deja sin asignar para ese campo es «OTRAS CUENTAS POR PAGAR», el cajón
+     residual, que el criterio de comerciales veta. Antes se indexaba en su lugar. */
+  assert.strictEqual(correcciones.find((x) => x.campo === 't_ap'), undefined);
+  assert.strictEqual(campos.t_ap, null);
 });
 
 test('una cifra descartada no se cuela en el cálculo de la utilidad', () => {
@@ -462,10 +484,10 @@ test('camposAplicables no propaga los nulos, para no borrar lo escrito a mano', 
    Generaliza lo que antes solo limpiaba `inventario-solo-por-nota` (commit 203eaa3) a
    cualquier advertencia con `campo` cuyo valor verificado en esta lectura quedó en null. */
 
-test('sin-partida-relacionada (varias candidatas ambiguas) limpia la casilla', () => {
+test('sin-partida-comercial (varias candidatas ambiguas) limpia la casilla', () => {
   const r = verificar({
     t_ap: null,
-    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+    rubrosNoAsignados: DOS_COMERCIALES_CXP,
   });
   const limpiar = camposParaLimpiar(r.campos, r.advertencias);
   assert.strictEqual(limpiar.t_ap, '');
@@ -494,7 +516,7 @@ test('inventario-solo-por-nota sigue limpiando la casilla (no regresión de 203e
   assert.strictEqual(limpiar.t_inv, '');
 });
 
-test('relacionada-en-cero-con-total-mayor NO limpia: el $0 es una cifra válida', () => {
+test('comercial-en-cero-con-total-mayor NO limpia: el $0 es una cifra válida', () => {
   const r = verificar({
     t_ar: 0,
     rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'CLIENTES DEL EXTERIOR', valor: 900000000 }],
@@ -520,21 +542,25 @@ test('una advertencia sin campo (activos-detalle-cifra-inexistente) no limpia na
    significar otra cosa para otra compañía) y un rótulo que en sí mismo nombra la relación
    (ese sí se comparte, porque el propio texto ya lo dice). */
 
-test('con varias candidatas ambiguas, un rótulo ya confirmado para esta empresa se indexa solo', () => {
-  const r = verificarEeff({ ...LECTURA, t_ap: null,
-    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }] },
-  {
-    anioEstudio: 2025,
-    rotulosConfirmadosEmpresa: { t_ap: ['otras cuentas por pagar'] },
-  });
-  assert.strictEqual(r.campos.t_ap, 658293893, 'se aplicó la candidata confirmada, no una ambigüedad');
-  const c = r.correcciones.find((x) => x.campo === 't_ap');
-  assert.ok(c);
-  assert.match(c.motivo, /estudio anterior/);
-  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada'), undefined);
+test('un rótulo confirmado que apunta al cajón residual ya no resuelve nada', () => {
+  /* Estas dos rutas aprendidas se construyeron para PESCAR la fila de la vinculada cuando el
+     documento no la desglosaba. Con el criterio de comerciales quedan inertes: el filtro de
+     candidatas veta antes cualquier rótulo que ellas reconocerían. Se prueba que están
+     inertes, no que funcionan — si algún día vuelven a hacer algo, esta prueba lo delata. */
+  const r = verificarEeff({ ...LECTURA, t_ap: null, rubrosNoAsignados: DOS_COMERCIALES_CXP },
+    {
+      anioEstudio: 2025,
+      rotulosConfirmadosEmpresa: { t_ap: ['otras cuentas por pagar'] },
+    });
+  assert.strictEqual(r.campos.t_ap, null, 'sigue ambiguo entre las dos comerciales');
+  assert.strictEqual(r.correcciones.find((x) => x.campo === 't_ap'), undefined);
+  assert.ok(r.advertencias.find((x) => x.tipo === 'sin-partida-comercial' && x.campo === 't_ap'));
 });
 
-test('con varias candidatas ambiguas, un rótulo que ya nombra la relación se indexa solo', () => {
+test('la fila de la vinculada NO se indexa, ni con el diccionario de relación cargado', () => {
+  /* Lo contrario de lo que hacía antes, y el corazón del cambio: aunque el diccionario
+     reconozca «vinculada» y esa sea la única fila que nombra la relación, no entra. Lo que
+     entra es la comercial, que aquí es única y por tanto no ambigua. */
   const r = verificarEeff({ ...LECTURA, t_ap: null,
     rubrosNoAsignados: [
       { rotulo: 'CUENTAS POR PAGAR A COMPAÑÍAS VINCULADAS', valor: 300000000 },
@@ -544,31 +570,30 @@ test('con varias candidatas ambiguas, un rótulo que ya nombra la relación se i
     anioEstudio: 2025,
     diccionarioRelacionadaGlobal: { t_ap: { palabras: ['vinculada'], estudiosSinPalabraNueva: 0 } },
   });
-  assert.strictEqual(r.campos.t_ap, 300000000);
+  assert.strictEqual(r.campos.t_ap, 500000000, 'entró la comercial, no la de vinculadas');
   const c = r.correcciones.find((x) => x.campo === 't_ap');
   assert.ok(c);
-  assert.match(c.motivo, /nombra explícitamente/);
-  assert.strictEqual(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada'), undefined);
+  assert.match(c.motivo, /PROVEEDORES DEL EXTERIOR/);
 });
 
 test('un rótulo confirmado de otra empresa, o un marcador que no matchea, no resuelve nada', () => {
   const r = verificarEeff({ ...LECTURA, t_ap: null,
-    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }] },
+    rubrosNoAsignados: DOS_COMERCIALES_CXP },
   {
     anioEstudio: 2025,
     rotulosConfirmadosEmpresa: { t_ap: ['una frase que no aparece en ninguna candidata'] },
     diccionarioRelacionadaGlobal: { t_ap: { palabras: ['inexistente'], estudiosSinPalabraNueva: 0 } },
   });
   assert.strictEqual(r.campos.t_ap, null, 'sigue ambiguo: el comportamiento actual no cambia');
-  assert.ok(r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap'));
+  assert.ok(r.advertencias.find((x) => x.tipo === 'sin-partida-comercial' && x.campo === 't_ap'));
 });
 
-test('sin-partida-relacionada expone las candidatas como dato, no solo dentro del mensaje', () => {
+test('sin-partida-comercial expone las candidatas como dato, no solo dentro del mensaje', () => {
   const r = verificar({
     t_ap: null,
-    rubrosNoAsignados: [...LECTURA.rubrosNoAsignados, { rotulo: 'PROVEEDORES DEL EXTERIOR', valor: 500000000 }],
+    rubrosNoAsignados: DOS_COMERCIALES_CXP,
   });
-  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === 't_ap');
+  const a = r.advertencias.find((x) => x.tipo === 'sin-partida-comercial' && x.campo === 't_ap');
   assert.strictEqual(a.candidatas.length, 2);
   assert.ok(a.candidatas.some((c) => c.rotulo === 'PROVEEDORES DEL EXTERIOR' && c.valor === 500000000));
 });
@@ -878,12 +903,12 @@ test('el costo implícito en cero NO se asigna solo: t_c sigue en null', () => {
 
 /* ══════ Estado por campo en las advertencias ya existentes ══════ */
 
-test('las advertencias de partes relacionadas e inventarios llevan estado "no_verificado" por defecto', () => {
+test('las advertencias de partidas comerciales e inventarios llevan estado "no_verificado" por defecto', () => {
   const r = verificar({
     t_ap: null, t_ar: null, t_inv: null, rubrosNoAsignados: [], activosDetalle: [],
   });
   ['t_ap', 't_ar'].forEach((campo) => {
-    const a = r.advertencias.find((x) => x.tipo === 'sin-partida-relacionada' && x.campo === campo);
+    const a = r.advertencias.find((x) => x.tipo === 'sin-partida-comercial' && x.campo === campo);
     assert.strictEqual(a.estado, 'no_verificado');
   });
   const inv = r.advertencias.find((x) => x.tipo === 'sin-inventarios');
@@ -907,10 +932,10 @@ test('con el campo en $0 y una única cifra mayor sin desglosar, se indexa como 
   assert.strictEqual(c.valorLeido, 0);
   assert.strictEqual(c.valorAplicado, 6032337879);
   assert.match(c.motivo, /DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);
-  assert.match(c.motivo, /cliente/i);
+  assert.match(c.motivo, /puede incluir otras contrapartes/i);
   assert.strictEqual(r.campos.t_ar, 6032337879, 'se aplica al campo, no solo se sugiere');
   assert.strictEqual(
-    r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor'),
+    r.advertencias.find((x) => x.tipo === 'comercial-en-cero-con-total-mayor'),
     undefined,
     'se resolvió con la corrección, ya no queda como advertencia sin resolver',
   );
@@ -930,7 +955,7 @@ test('con el campo en $0 y varias cifras mayores ambiguas, advierte pero no inde
   });
   assert.strictEqual(r.campos.t_ar, 0, 'ambiguo: no se aplica ninguna, el $0 queda tal cual');
   assert.strictEqual(r.correcciones.find((c) => c.campo === 't_ar'), undefined);
-  const a = r.advertencias.find((x) => x.tipo === 'relacionada-en-cero-con-total-mayor' && x.campo === 't_ar');
+  const a = r.advertencias.find((x) => x.tipo === 'comercial-en-cero-con-total-mayor' && x.campo === 't_ar');
   assert.ok(a);
   assert.strictEqual(a.estado, 'revisar_total_mayor');
   assert.match(a.mensaje, /DEUDORES COMERCIALES Y OTRAS CUENTAS POR COBRAR/);

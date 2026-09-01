@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Upload, FileText, CheckCircle, AlertTriangle, Loader2, Users, FileCheck } from 'lucide-react';
 import axios from 'axios';
 import { parseAccionistasWithGeminiOCR } from '../services/accionistasParser';
+import { mensajeAccionistas, mensajeDocumentoIdentidad } from '../services/mensajesIngesta';
 import { resolverComposicionAccionaria } from '../services/tablasContribuyente';
 import { fmt } from '../utils/calculations';
 
@@ -20,11 +21,24 @@ export default function DatosContribuyente({ study, updateStudy }) {
     updateStudy({ [key]: value });
   };
 
+  /* TODA lectura termina en un mensaje, y el mensaje lo decide `mensajesIngesta.js`.
+     Antes esto solo hablaba en dos ramas —éxito con datos, o excepción— y dejaba muda la
+     tercera: se leyó el archivo y no salió ningún campo. En esa rama el texto de «Analizando
+     documento…» se quedaba en pantalla y parecía que seguía trabajando. Y cuando sí había
+     respuesta pero vacía, cantaba «✅ RUT extraído con éxito» sin haber llenado una casilla. */
   const processFile = (file, apiEndpoint, loadingSetter) => {
     loadingSetter(true);
     setExtractionMsg('Analizando documento con Inteligencia Artificial...');
+    const tipoDoc = apiEndpoint.includes('rut') ? 'rut' : 'camara';
 
     const reader = new FileReader();
+    /* Sin esto, un FileReader que falla deja `onload` sin correr: ni el mensaje ni el spinner
+       se apagaban nunca, y ese sí era un cuelgue de verdad. */
+    reader.onerror = () => {
+      console.error('Error leyendo el archivo:', reader.error);
+      setExtractionMsg(mensajeDocumentoIdentidad(tipoDoc, null, reader.error || new Error('FileReader')).texto);
+      loadingSetter(false);
+    };
     reader.readAsDataURL(file);
     reader.onload = async () => {
       try {
@@ -34,28 +48,29 @@ export default function DatosContribuyente({ study, updateStudy }) {
           tipo: file.type
         });
 
-        const data = response.data;
-        if (data) {
-          const updates = {};
-          if (apiEndpoint.includes('rut')) {
-            if (data.razon_social) updates.ent = data.razon_social;
-            if (data.nit) updates.nit = data.nit;
-            if (data.ciiu) updates.ciiu = data.ciiu;
-            if (data.direccion) updates.direccion = data.direccion;
-            if (data.representante_legal) updates.representante = data.representante_legal;
-            setExtractionMsg('✅ RUT extraído con éxito.');
-          } else {
-            if (data.razon_social) updates.ent = data.razon_social;
-            if (data.nit) updates.nit = data.nit;
-            if (data.objeto_social) updates.objeto = data.objeto_social;
-            if (data.representante_legal) updates.representante = data.representante_legal;
-            setExtractionMsg('✅ Cámara de Comercio extraída con éxito.');
-          }
-          updateStudy(updates);
+        const data = response.data || {};
+        const updates = {};
+        if (tipoDoc === 'rut') {
+          if (data.razon_social) updates.ent = data.razon_social;
+          if (data.nit) updates.nit = data.nit;
+          if (data.ciiu) updates.ciiu = data.ciiu;
+          if (data.direccion) updates.direccion = data.direccion;
+          if (data.representante_legal) updates.representante = data.representante_legal;
+        } else {
+          if (data.razon_social) updates.ent = data.razon_social;
+          if (data.nit) updates.nit = data.nit;
+          if (data.objeto_social) updates.objeto = data.objeto_social;
+          if (data.representante_legal) updates.representante = data.representante_legal;
         }
+
+        const aviso = mensajeDocumentoIdentidad(tipoDoc, updates);
+        setExtractionMsg(aviso.texto);
+        /* Solo se escribe si de verdad hay algo: un objeto vacío no debe disparar un guardado
+           ni pisar lo que el analista ya tenía. */
+        if (aviso.aplicar) updateStudy(updates);
       } catch (err) {
         console.error("Error extracting document:", err);
-        setExtractionMsg('⚠ Error al procesar el archivo. Por favor ingrese los datos manualmente.');
+        setExtractionMsg(mensajeDocumentoIdentidad(tipoDoc, null, err).texto);
       } finally {
         loadingSetter(false);
       }
@@ -70,17 +85,24 @@ export default function DatosContribuyente({ study, updateStudy }) {
 
     try {
       const data = await parseAccionistasWithGeminiOCR(file);
-      if (data && data.accionistas && data.accionistas.length > 0) {
+      /* El mensaje SIEMPRE se reemplaza, incluso cuando la lectura salió bien y no encontró
+         accionistas. Ese era el hueco: se cargó un dictamen de revisor fiscal en esta casilla,
+         el modelo devolvió una lista vacía —correcto, un dictamen no los lista—, no hubo
+         excepción, y como no había rama para ese caso el texto se quedaba en «🤖 Leyendo
+         Certificado…». El spinner sí se apagaba, pero en pantalla parecía un cuelgue. */
+      const aviso = mensajeAccionistas(data);
+      setAccionistasMsg(aviso.texto);
+      /* Una lista vacía no pisa la que el analista ya tuviera cargada. */
+      if (aviso.aplicar) {
         updateStudy({
           accionistas: data.accionistas,
           capital_pagado: data.capital_pagado,
           total_acciones: data.total_acciones
         });
-        setAccionistasMsg(`✅ ${data.accionistas.length} accionista(s) extraído(s) con éxito.`);
       }
     } catch (err) {
       console.error("Error al extraer composición accionaria:", err);
-      setAccionistasMsg('⚠ No se pudo procesar el certificado con OCR.');
+      setAccionistasMsg(mensajeAccionistas(null, err).texto);
     } finally {
       setLoadingAccionistas(false);
     }
@@ -373,10 +395,18 @@ export default function DatosContribuyente({ study, updateStudy }) {
                 </div>
               )}
             </div>
+            {/* Se colorea por el prefijo del mensaje, igual que el bloque de RUT/Camara de
+                abajo: un aviso de «no encontro accionistas» en verde y con un visto seguiria
+                leyendose como exito, que es la mitad del defecto que esto vino a cerrar. */}
             {accionistasMsg && (
-              <div className="text-[11px] font-medium text-[#0FA3A1] bg-[#0FA3A1]/10 p-2 rounded-lg flex items-center gap-1.5">
-                <FileCheck className="w-3.5 h-3.5" />
-                {accionistasMsg}
+              <div className={`text-[11px] font-medium p-2 rounded-lg flex items-start gap-1.5 leading-relaxed ${accionistasMsg.includes('\u26a0')
+                ? 'text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50'
+                : 'text-[#0FA3A1] bg-[#0FA3A1]/10'
+                }`}>
+                {accionistasMsg.includes('\u26a0')
+                  ? <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
+                  : <FileCheck className="w-3.5 h-3.5 mt-px shrink-0" />}
+                <span>{accionistasMsg}</span>
               </div>
             )}
           </div>

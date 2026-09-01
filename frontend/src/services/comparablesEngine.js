@@ -525,6 +525,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        aplicación nunca lo pasa: usa el de siempre. */
     minimo = MINIMO_COMPARABLES,
     perdidaOp = 'excluir',
+    /* Cuántas comparables en pérdida se quieren en la muestra final. Es un OBJETIVO y a la
+       vez un TOPE: si hay más disponibles no entran de más, y si hay menos entran las que
+       haya y se reporta cuántas faltaron. Cuenta DENTRO de `nTarget`, no aparte: pedir 12
+       con 3 negativas da una muestra de 12, no de 15 (mismo criterio que la continuidad, que
+       ya se corrigió una vez por esto). Solo se llena con actividad `MISMA`, por decisión
+       del usuario (2026-08-31). Con `perdidaOp: 'excluir'` no hay negativas que repartir y
+       el objetivo se ignora solo. */
+    negativasObjetivo = 0,
     holding = 'excluir',
     control = 'excluir',
     umbralControl = 50,
@@ -586,6 +594,15 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     } else if (saldoNegativo === 'excluir' && cand.hasNegativeBalance) {
       rechazar('filtro', 'saldoNegativo', 'Saldo negativo en balances (dato no verosímil).');
     } else if (perdidaOp === 'excluir' && enPerdida(cand)) {
+      /* La continuidad NO queda exenta de este filtro, a diferencia del holding. Es una
+         decisión deliberada y probada («la pérdida operativa debe seguir excluyendo incluso
+         a las de continuidad»), y se conserva por dos razones: la pérdida es un hecho del
+         ejercicio en curso, no una presunción sobre la razón social, así que el estudio
+         anterior no la sustenta; y desde que existe `negativasObjetivo` el analista tiene una
+         palanca EXPLÍCITA para admitir pérdidas, de modo que eximirla aquí abriría un tercer
+         camino oculto que contradiría su propio ajuste de «excluir».
+         Lo que sí faltaba es decirlo: se caía sin un solo aviso. Ver `continuidadEnPerdida`
+         en el retorno, que es lo que permite nombrarlas en el registro del motor. */
       rechazar('filtro', 'perdidaOperativa', 'Pérdida operativa (criterio conservador DIAN).');
     }
 
@@ -734,11 +751,36 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const mismas = otrasValidas.filter(c => !c.esRelacionada);
   const afines = otrasValidas.filter(c => c.esRelacionada);
 
-  const deMisma = mismas.slice(0, cupoRestante);
-  const faltan = Math.max(0, cupoRestante - deMisma.length);
-  const deAmpliacion = afines.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
+  /* ── Cuota de comparables en pérdida ──
+     El objetivo se reserva ANTES de llenar con positivas, porque si no las positivas —que
+     casi siempre son muchas más— se llevarían todo el cupo y la cuota no se cumpliría nunca.
 
-  const seleccionadas = [...continuidadIncluidas, ...deMisma, ...deAmpliacion];
+     Y es también un TOPE: las negativas que no ganan cupo NO compiten después en el llenado
+     de positivas, se van a la reserva. Sin eso, pedir 3 podía devolver 5 —las 3 de la cuota
+     más las que entraran por puntaje— y el número dejaría de significar «las que salen en el
+     informe», que es lo que el usuario pidió.
+
+     Solo de actividad MISMA: las afines nunca aportan negativas. Es la decisión del usuario
+     y además lo más defendible, porque una comparable en pérdida ya obliga a explicar por
+     qué se incluye; sumarle que su actividad solo es afín es pedir dos justificaciones a la
+     vez. */
+  const objetivoNegativas = Math.max(0, Math.trunc(Number(negativasObjetivo) || 0));
+  const mismasNegativas = mismas.filter(enPerdida);
+  const mismasPositivas = mismas.filter((c) => !enPerdida(c));
+  /* Las de continuidad ya entraron y cuentan contra el objetivo: si el estudio anterior
+     aporta una en pérdida y se piden 3, faltan 2, no 3. El objetivo es «cuántas negativas
+     salen en el informe», no «cuántas nuevas se buscan». */
+  const negativasDeContinuidad = continuidadIncluidas.filter(enPerdida).length;
+  const porCubrir = Math.max(0, objetivoNegativas - negativasDeContinuidad);
+  const deNegativas = mismasNegativas.slice(0, Math.min(porCubrir, cupoRestante));
+
+  const cupoParaPositivas = Math.max(0, cupoRestante - deNegativas.length);
+  const deMisma = mismasPositivas.slice(0, cupoParaPositivas);
+  const faltan = Math.max(0, cupoParaPositivas - deMisma.length);
+  const afinesPositivas = afines.filter((c) => !enPerdida(c));
+  const deAmpliacion = afinesPositivas.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
+
+  const seleccionadas = [...continuidadIncluidas, ...deNegativas, ...deMisma, ...deAmpliacion];
 
   /* MOTIVO ESCRITO PARA LA RESERVA (2026-08-20, a pedido del usuario).
 
@@ -772,9 +814,15 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 
   /* Las afines que no hicieron falta vuelven a la reserva, detrás de las de misma actividad:
      si el analista sube el N objetivo, se echa mano primero de las idénticas. */
+  /* Las positivas de misma actividad van primero: si el analista sube el N objetivo, el cupo
+     nuevo lo llena una positiva, porque la cuota de negativas ya está satisfecha. Detrás las
+     negativas que no cupieron, y al final las afines —de las que primero las positivas—,
+     igual que antes: se echa mano de las idénticas antes que de las afines. */
   const reserva = [
-    ...mismas.slice(deMisma.length).map(enReserva),
-    ...afines.slice(deAmpliacion.length).map(enReserva),
+    ...mismasPositivas.slice(deMisma.length).map(enReserva),
+    ...mismasNegativas.slice(deNegativas.length).map(enReserva),
+    ...afinesPositivas.slice(deAmpliacion.length).map(enReserva),
+    ...afines.filter(enPerdida).map(enReserva),
   ];
 
   return {
@@ -812,6 +860,30 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        pone el universo o el cupo. */
     ampliadas: deAmpliacion.length,
     relacionadasDisponibles: afines.length,
+
+    /* ── La cuota de negativas, en tres cifras ──
+       Las tres hacen falta para poder decir la verdad en pantalla y en el informe:
+         · lo que se pidió,
+         · lo que se consiguió —continuidad en pérdida incluida, porque también sale en el
+           informe—,
+         · y el techo real del universo cargado, que es lo que distingue «no hay más en
+           Capital IQ» de «el motor no las buscó». Sin la tercera, el aviso de que solo
+           entraron 2 de 3 no se puede escribir sin adivinar por qué. */
+    negativasObjetivo: objetivoNegativas,
+    negativasIncluidas: deNegativas.length + negativasDeContinuidad,
+    negativasDisponibles: mismasNegativas.length + negativasDeContinuidad,
+    /* Las que el filtro de pérdidas dejó fuera. Con `perdidaOp: 'excluir'` es el número que
+       le permite al diagnóstico del rango decir «hay N negativas que el filtro está
+       excluyendo, incluirlas bajaría el P25» en vez de una sugerencia genérica. */
+    negativasExcluidasPorFiltro: rechazadas.filter(c => c.motivoClave === 'perdidaOperativa').length,
+    negativasDeContinuidad,
+    /* Las comparables del estudio anterior que ESTE año están en pérdida y por eso el filtro
+       las dejó fuera. Se publican por su nombre porque retirar una comparable ya aceptada hay
+       que justificarlo en el informe, y hasta ahora se caían sin un solo aviso: el analista
+       veía la muestra más corta y no tenía cómo saber cuál faltaba ni por qué. */
+    continuidadEnPerdida: rechazadas
+      .filter(c => c.esContinuidad && c.motivoClave === 'perdidaOperativa')
+      .map(c => c.name),
     /* El cupo de verdad aplicado, que no tiene por qué ser el N que el usuario escribió: por
        debajo de `MINIMO_COMPARABLES` no se baja. */
     cupo,

@@ -915,6 +915,47 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     });
     sel.push([]);
 
+    /* ─── Política de pérdidas operativas ───
+       Va ANTES del embudo y no como una nota al pie, porque es la decisión metodológica que
+       explica por qué la muestra tiene comparables en pérdida —o por qué no las tiene—, y es
+       lo primero que un fiscalizador va a preguntar al ver un rango con el extremo bajo
+       poblado. Se publican las cuatro cifras y la justificación tal como la escribió el
+       analista: si no la escribió, se dice que falta, en vez de dejar el hueco en blanco.
+       Solo se imprime si el estudio trae la política, para no llenar de filas vacías el libro
+       de un estudio corrido antes de que esto existiera. */
+    const perdidas = seleccion.perdidas || null;
+    if (perdidas && perdidas.politica) {
+      sel.push([cTxt('POLÍTICA DE PÉRDIDAS OPERATIVAS (Guías OCDE cap. III, §3.64-3.65)')]);
+      sel.push([
+        cTxt('Criterio aplicado'),
+        cTxt(perdidas.politica === 'excluir'
+          ? 'Excluir las comparables en pérdida'
+          : 'Admitir comparables en pérdida'),
+      ]);
+      if (perdidas.politica !== 'excluir') {
+        sel.push([cTxt('Comparables en pérdida solicitadas'), cNum(perdidas.objetivo, '0')]);
+        sel.push([cTxt('Comparables en pérdida en la muestra'), cNum(perdidas.incluidas, '0')]);
+        sel.push([
+          cTxt('Disponibles en el universo (misma actividad)'),
+          cNum(perdidas.disponibles, '0'),
+          cTxt(perdidas.incluidas < perdidas.objetivo
+            ? 'Entraron menos de las solicitadas: el universo no tenía más'
+            : ''),
+        ]);
+      } else if (perdidas.excluidasPorFiltro) {
+        sel.push([
+          cTxt('Comparables en pérdida excluidas por el filtro'),
+          cNum(perdidas.excluidasPorFiltro, '0'),
+        ]);
+      }
+      sel.push([
+        cTxt('Justificación'),
+        cTxt(String(perdidas.justificacion || '').trim()
+          || 'PENDIENTE — el estudio no registró la justificación de esta política.'),
+      ]);
+      sel.push([]);
+    }
+
     /* Embudo con fórmulas COUNTIF sobre la columna «Motivo de rechazo», que es la
        que escribe el motor. Antes se contaba sobre las columnas de flags, que
        replicaban la precedencia de los filtros en fórmulas de Excel: dos

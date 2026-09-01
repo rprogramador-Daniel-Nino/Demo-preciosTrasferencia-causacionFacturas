@@ -110,7 +110,27 @@ export function construirLibroSoporte(datos) {
     ]
   } : null);
 
-  const hojasOptimas = hojasMemoriaRangoOptimo(estudioNorm, seleccion);
+  /* La política de pérdidas y la cuota de negativas viajan con la selección. Salen del
+     embudo, que es lo que se persiste con el estudio, así que llegan igual por la ruta del
+     Motor de Comparables y por la del modal de memoria de cálculo — que es justo el reparto
+     que el diseño de 2026-08-11 vino a garantizar. Sin esto, el libro publicaría comparables
+     en pérdida sin nada que explique por qué se admitieron. */
+  const embudo = (datos.filtros && datos.filtros.selectionFunnel) || null;
+  const conPerdidas = seleccion && embudo
+    ? {
+      ...seleccion,
+      perdidas: {
+        politica: embudo.politicaPerdidas || null,
+        justificacion: embudo.justificacionPerdida || '',
+        objetivo: embudo.negativasObjetivo || 0,
+        incluidas: embudo.negativasIncluidas || 0,
+        disponibles: embudo.negativasDisponibles || 0,
+        excluidasPorFiltro: embudo.negativasExcluidasPorFiltro || 0,
+      },
+    }
+    : seleccion;
+
+  const hojasOptimas = hojasMemoriaRangoOptimo(estudioNorm, conPerdidas);
 
   hojasOptimas.forEach(({ nombre, celdas, filas, cols, rows, merges, autofiltro }) => {
     const hoja = XLSX.utils.aoa_to_sheet(celdas || filas);

@@ -244,16 +244,113 @@ export function quitarCompartido(lista, correo) {
   return (lista || []).map(normalizarCorreo).filter(c => c && c !== limpio);
 }
 
+/* ── roles de acceso ──
+   Dos niveles: consultar y modificar. Se guardan en DOS listas y no en una lista de
+   objetos `{correo, rol}` a propósito: «Compartidos conmigo» es una consulta de grupo
+   de colecciones con `array-contains` sobre `compartidoCon`, y `array-contains` exige
+   igualdad exacta del elemento —con objetos habría que conocer el rol de antemano para
+   poder preguntar, y la consulta dejaría de encontrar a nadie—. Así `compartidoCon`
+   sigue siendo la lista completa de habilitados, el índice de grupo ya desplegado sirve
+   sin cambios, y `editores` es el subconjunto que además puede escribir. */
+export const ROL_LECTOR = 'lector';
+export const ROL_EDITOR = 'editor';
+
+export function esRolValido(rol) {
+  return rol === ROL_LECTOR || rol === ROL_EDITOR;
+}
+
+/** Rol de un correo en un estudio, o null si no tiene acceso concedido. */
+export function rolEnEstudio(datos, correo) {
+  const limpio = normalizarCorreo(correo);
+  if (!limpio) return null;
+  const habilitados = ((datos && datos.compartidoCon) || []).map(normalizarCorreo);
+  if (!habilitados.includes(limpio)) return null;
+  const editores = ((datos && datos.editores) || []).map(normalizarCorreo);
+  return editores.includes(limpio) ? ROL_EDITOR : ROL_LECTOR;
+}
+
+/**
+ * ¿Puede este correo modificar el estudio? Es la misma condición que comprueban las
+ * reglas antes de aceptar la escritura: aquí sirve para no intentar un guardado que la
+ * base va a rechazar, no como control de acceso —ese vive en `firestore.rules`.
+ */
+export function puedeEditarEstudio(datos, correo) {
+  return rolEnEstudio(datos, correo) === ROL_EDITOR;
+}
+
+/** Los accesos concedidos hoy, en el orden en que se fueron dando. */
+export function accesosDe(datos) {
+  const habilitados = [...new Set(((datos && datos.compartidoCon) || []).map(normalizarCorreo).filter(Boolean))];
+  return habilitados.map(correo => ({ correo, rol: rolEnEstudio(datos, correo) }));
+}
+
+/**
+ * Concede, cambia o retira el acceso de una persona. Devuelve las dos listas
+ * resultantes y el motivo si no se pudo.
+ *
+ * Cambiar el rol de quien ya está habilitado NO es un error —es la operación normal de
+ * pasar a alguien de consulta a edición—, así que solo se rechaza cuando el rol pedido
+ * es el que ya tenía.
+ */
+export function aplicarAcceso(accesos, correo, { rol = ROL_LECTOR, quitar = false, correoPropio } = {}) {
+  const habilitados = (((accesos && accesos.compartidoCon) || [])).map(normalizarCorreo).filter(Boolean);
+  const editores = (((accesos && accesos.editores) || [])).map(normalizarCorreo).filter(Boolean);
+  const limpio = normalizarCorreo(correo);
+
+  /* Retirar limpia las dos listas: quien pierde el acceso no puede quedarse en la de
+     edición, o volvería a entrar con permiso de escritura si se le vuelve a compartir. */
+  if (quitar) {
+    return {
+      compartidoCon: quitarCompartido(habilitados, limpio),
+      editores: quitarCompartido(editores, limpio),
+      error: null,
+    };
+  }
+
+  if (!esRolValido(rol)) {
+    return { compartidoCon: habilitados, editores, error: 'Ese nivel de acceso no existe.' };
+  }
+
+  const yaEstaba = habilitados.includes(limpio);
+  const eraEditor = editores.includes(limpio);
+  const seraEditor = rol === ROL_EDITOR;
+
+  if (yaEstaba && eraEditor === seraEditor) {
+    return {
+      compartidoCon: habilitados,
+      editores,
+      error: seraEditor ? 'Ya puede editar este estudio.' : 'Ya puede consultar este estudio.',
+    };
+  }
+
+  let listaNueva = habilitados;
+  if (!yaEstaba) {
+    /* La forma del correo, el tope y el «no consigo mismo» los sigue resolviendo
+       `agregarCompartido`: es la misma puerta de entrada de antes. */
+    const resultado = agregarCompartido(habilitados, limpio, { correoPropio });
+    if (resultado.error) return { compartidoCon: habilitados, editores, error: resultado.error };
+    listaNueva = resultado.lista;
+  }
+
+  return {
+    compartidoCon: listaNueva,
+    editores: seraEditor ? [...editores, limpio] : quitarCompartido(editores, limpio),
+    error: null,
+  };
+}
+
 /**
  * Documento de `estudios`. `previo` es el documento que ya estaba en la nube: si
  * existe, se conserva su rastro de creación, porque las reglas lo exigen inmutable.
  *
- * `compartidoCon` viaja aparte del resto del estudio, en `opciones`: no es un dato del
- * informe sino un permiso, y quien edita el estudio no debería poder alterarlo sin
- * querer. Si no se pasa, se conserva el que ya tuviera el documento —así un guardado
- * normal no retira accesos concedidos antes.
+ * `compartidoCon` y `editores` viajan aparte del resto del estudio, en `opciones`: no
+ * son datos del informe sino permisos, y quien edita el estudio no debería poder
+ * alterarlos sin querer. Si no se pasan, se conserva lo que ya tuviera el documento
+ * —así un guardado normal no retira accesos concedidos antes. Esto es lo que permite
+ * que un editor guarde: reescribe el documento entero conservando ambas listas, que es
+ * justo lo que las reglas le exigen dejar intacto.
  */
-export function docEstudio({ study, usuario, previo = null, marcaDeTiempo, compartidoCon }) {
+export function docEstudio({ study, usuario, previo = null, marcaDeTiempo, compartidoCon, editores }) {
   const { nube } = separarEstudio(study);
   const nit = String(nube.nit || '').trim();
   const doc = {
@@ -275,6 +372,16 @@ export function docEstudio({ study, usuario, previo = null, marcaDeTiempo, compa
   const habilitados = (compartidoCon !== undefined ? compartidoCon : (previo && previo.compartidoCon)) || [];
   const limpios = [...new Set(habilitados.map(normalizarCorreo).filter(Boolean))].slice(0, TOPE_COMPARTIDO);
   if (limpios.length) doc.compartidoCon = limpios;
+
+  /* Quiénes de ellos pueden además modificarlo. Se filtra contra `limpios` para que la
+     lista de edición no pueda nombrar a nadie que no tenga acceso: si se retira a una
+     persona y el mismo guardado la dejara en `editores`, las reglas seguirían viéndola
+     como editora aunque «Compartidos conmigo» ya no le muestre el estudio. */
+  const conEdicion = (editores !== undefined ? editores : (previo && previo.editores)) || [];
+  const editoresLimpios = [...new Set(conEdicion.map(normalizarCorreo).filter(Boolean))]
+    .filter(correo => limpios.includes(correo));
+  if (editoresLimpios.length) doc.editores = editoresLimpios;
+
   /* El nombre solo se escribe si el proveedor lo entregó: las reglas lo comparan con
      el del token, y un valor inventado hace fallar la escritura entera. */
   if (usuario.nombre) doc.actualizadoPorNombre = usuario.nombre.slice(0, 120);

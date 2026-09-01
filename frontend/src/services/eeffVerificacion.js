@@ -13,17 +13,19 @@
 
    Del ESTADO DE SITUACIÓN FINANCIERA:
 
-     t_ar        ← cuentas por cobrar A PARTES RELACIONADAS
+     t_ar        ← cuentas por cobrar COMERCIALES (o a clientes)
      t_inv       ← inventarios
-     t_ap        ← cuentas por pagar A PARTES RELACIONADAS
+     t_ap        ← cuentas por pagar COMERCIALES (o a proveedores)
      t_act_curr  ← total del activo corriente
      t_ppe       ← propiedad, planta y equipo
 
-   Las dos de capital de trabajo son las de partes relacionadas y no las comerciales
-   porque la operación bajo estudio es con la vinculada. El propio estado lo confirma: en
-   su flujo de efectivo, la línea «Aumento / disminución en proveedores» (−135.245.675) es
-   exactamente la variación de las cuentas por pagar a partes relacionadas
-   (5.400.016.795 − 5.535.262.470). Para esta compañía el proveedor ES la vinculada.
+   Las dos de capital de trabajo son las COMERCIALES y no las de partes relacionadas
+   (decisión del usuario, 2026-08-31), y no se les suma «otras cuentas por cobrar/pagar»
+   cuando el documento las lleva en filas aparte: entra solo la comercial. El fundamento del
+   cambio y qué criterio revierte están junto a `CAMPO_POR_RUBRO` en `eeffParser.js`; aquí
+   basta saber que el fallback de más abajo, que antes existía para PESCAR la fila de
+   vinculados cuando el documento no la desglosaba, hace ahora lo contrario: veta las de
+   «otras» y las de partes relacionadas.
    `t_ppe` se lee y se verifica igual que las demás desde el caso de Symtek: dejarlo 100%
    manual (el diseño original) trataba como cero, por omisión, el PP&E de una compañía que
    sí lo tiene — el caso que fijó ese diseño (Montachem) lo tenía en cero por depreciación
@@ -62,6 +64,7 @@
 
 import { num, egreso } from '../utils/calculations.js';
 import { cifrasDelTexto, cifraApareceEnTexto } from './eeffTextoPdf.js';
+import { ubicacionDeCifra } from './eeffColumnas.js';
 import { contienePalabraConocida, normalizarPalabra } from './vocabularioEeff.js';
 
 /* Una identidad se considera cumplida dentro de una milésima de la escala del estado, con
@@ -91,9 +94,9 @@ const ETIQUETA = {
   t_s: 'Ingresos de actividades ordinarias',
   t_c: 'Costo de ventas',
   t_op: 'Utilidad operacional',
-  t_ar: 'Cuentas por cobrar a partes relacionadas',
+  t_ar: 'Cuentas por cobrar comerciales',
   t_inv: 'Inventarios',
-  t_ap: 'Cuentas por pagar a partes relacionadas',
+  t_ap: 'Cuentas por pagar comerciales',
   t_act_curr: 'Total, Activo corriente',
   t_act_tot: 'Total, Activos',
   t_ppe: 'Propiedad, planta y equipo',
@@ -201,18 +204,135 @@ export function verificarEeff(lectura, {
      texto; un escaneo no la tiene y entonces no se afirma haberla hecho. */
   const verificadoContraTexto = Boolean(l.textoPdf && String(l.textoPdf).trim());
   const impresas = verificadoContraTexto ? cifrasDelTexto(l.textoPdf) : null;
+
+  /* Los rótulos indexados por CAMPO, que es como se recorren aquí. `rotulos` viene indexado
+     por rubro (`cuentas_por_cobrar_comerciales`), así que `rotulos[clave]` con `clave` =
+     `t_ar` era siempre `undefined` y el paréntesis «(la lectura la atribuyó a…)» de la
+     advertencia de abajo nunca llegó a aparecer. `eeffParser` publica ahora el mapa por
+     campo; se conserva `rotulos` como respaldo para una lectura anterior a ese cambio. */
+  const rotuloDe = (clave) => (l.rotulosPorCampo || {})[clave] || rotulos[clave] || '';
+
+  /* De qué sección del estado sale cada campo. Es la comprobación que atrapa «lo toma fuera
+     de la declaración de los activos»: un total de activos cuyo rótulo cae en la sección de
+     pasivos no es el total de activos, por más que la cifra esté impresa. */
+  const SECCION_ESPERADA = {
+    t_s: 'RESULTADOS', t_c: 'RESULTADOS',
+    t_ar: 'ACTIVO', t_inv: 'ACTIVO', t_act_curr: 'ACTIVO', t_act_tot: 'ACTIVO', t_ppe: 'ACTIVO',
+    t_ap: 'PASIVO',
+  };
+
+  const estructura = l.estructura || null;
+  const anioObjetivo = String(l.anioObjetivo || anioEstudio || '').trim();
+  /* Cuántas cifras se pudieron comprobar por columna, para poder decirlo en pantalla: no es
+     lo mismo una lectura verificada fila a fila que una que solo pasó el chequeo de «está
+     impresa en algún sitio». */
+  let verificadasPorColumna = 0;
+
+  /* ── El documento no trae el ejercicio del estudio ──
+     Se comprueba ANTES de mirar campo por campo. Sin esto cada uno caería por su cuenta en
+     `fuera-de-columna` y el analista recibiría ocho advertencias distintas para una sola
+     causa, ninguna de las cuales nombra el problema real: cargó el estado financiero de
+     otro año. Las cifras no entran —la doctrina del módulo es descartar lo que no se puede
+     verificar, y una cifra creíble del ejercicio equivocado no se nota al revisar— y el
+     mensaje dice qué años SÍ trae el documento, que es lo accionable. */
+  const aniosDelDocumento = Array.isArray(l.aniosDelDocumento) ? l.aniosDelDocumento : [];
+  const documentoSinElAnio = Boolean(
+    anioObjetivo && aniosDelDocumento.length && !aniosDelDocumento.includes(anioObjetivo),
+  );
+  if (documentoSinElAnio) {
+    LEIDOS.forEach((clave) => { campos[clave] = null; });
+    advertencias.push({
+      tipo: 'anio-ausente-en-documento',
+      estado: 'no_verificado',
+      mensaje: `El documento trae las columnas ${aniosDelDocumento.join(' y ')}, y el estudio `
+        + `es del año gravable ${anioObjetivo}. No se extrajo ninguna cifra, para no publicar `
+        + 'las de otro ejercicio: cargue el estado financiero de ese año, o corrija el año '
+        + 'gravable en el paso 1.',
+    });
+  }
+
   if (verificadoContraTexto) {
-    LEIDOS.forEach((clave) => {
+    /* Con el ejercicio ausente no hay nada que comprobar campo por campo: ya se descartaron
+       todos arriba y la advertencia única lo explica. El `else` de más abajo sigue siendo
+       solo para el documento SIN capa de texto, que es otro caso. */
+    if (!documentoSinElAnio) LEIDOS.forEach((clave) => {
       const v = campos[clave];
       if (v === null || v === 0) return;
-      if (cifraApareceEnTexto(v, impresas)) return;
+      const rotulo = rotuloDe(clave);
+
+      /* Primer filtro, el de siempre: ¿está impresa en el documento? Atrapa la cifra
+         inventada de raíz, que es de otro orden que una mal atribuida. */
+      if (!cifraApareceEnTexto(v, impresas)) {
+        campos[clave] = null;
+        advertencias.push({
+          tipo: 'cifra-inexistente',
+          campo: clave,
+          mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} no aparece impresa en el `
+            + `documento${rotulo ? ` (la lectura la atribuyó a «${rotulo}»)` : ''}. `
+            + 'Se descartó; verifíquela contra el estado financiero y escríbala a mano si corresponde.',
+        });
+        return;
+      }
+
+      /* Segundo filtro: está impresa, pero ¿en la fila de su rótulo y en la columna del
+         ejercicio del estudio? Sin estructura, sin año o sin rótulo no se puede saber, y
+         entonces la lectura queda como quedaba antes de que esto existiera. */
+      if (!estructura || !anioObjetivo || !rotulo) return;
+      const donde = ubicacionDeCifra(estructura, { rotulo, valor: v, anio: anioObjetivo });
+
+      if (donde.veredicto === 'sin-verificar') return;
+
+      const esperada = donde.esperado && donde.esperado.texto
+        ? ` En esa fila, el ejercicio ${anioObjetivo} dice ${donde.esperado.texto}.`
+        : '';
+
+      if (donde.veredicto === 'coincide') {
+        const seccionEsperada = SECCION_ESPERADA[clave];
+        if (donde.seccion && seccionEsperada && donde.seccion !== seccionEsperada) {
+          campos[clave] = null;
+          advertencias.push({
+            tipo: 'cifra-de-otra-seccion',
+            campo: clave,
+            estado: 'no_verificado',
+            mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} se tomó de la fila `
+              + `«${rotulo}», que en el documento cae en la sección ${donde.seccion}, y este `
+              + `rubro se lee de ${seccionEsperada}. Se descartó; verifique de qué fila debe salir.`,
+          });
+          return;
+        }
+        verificadasPorColumna += 1;
+        return;
+      }
+
       campos[clave] = null;
+      if (donde.veredicto === 'otro-anio') {
+        advertencias.push({
+          tipo: 'cifra-de-otro-anio',
+          campo: clave,
+          estado: 'no_verificado',
+          mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} está impresa en el documento, `
+            + `pero en la columna del ejercicio ${donde.anioHallado}, no del ${anioObjetivo}.`
+            + `${esperada} Se descartó para no publicar una cifra de otro año.`,
+        });
+        return;
+      }
+      if (donde.veredicto === 'otra-fila') {
+        advertencias.push({
+          tipo: 'cifra-de-otra-fila',
+          campo: clave,
+          estado: 'no_verificado',
+          mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} pertenece a la fila `
+            + `«${donde.rotuloReal}» del documento, no a «${rotulo}».${esperada} Se descartó.`,
+        });
+        return;
+      }
       advertencias.push({
-        tipo: 'cifra-inexistente',
+        tipo: 'cifra-fuera-de-columna',
         campo: clave,
-        mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} no aparece impresa en el `
-          + `documento${rotulos[clave] ? ` (la lectura la atribuyó a «${rotulos[clave]}»)` : ''}. `
-          + 'Se descartó; verifíquela contra el estado financiero y escríbala a mano si corresponde.',
+        estado: 'no_verificado',
+        mensaje: `«${ETIQUETA[clave]}»: la cifra ${fmtCop(v)} no está en ninguna columna de `
+          + `ejercicio de la fila «${rotulo}» — puede ser el número de una nota al pie.`
+          + `${esperada} Se descartó.`,
       });
     });
   } else {
@@ -401,14 +521,47 @@ export function verificarEeff(lectura, {
      Las tres partidas del balance sostienen el ajuste de capital de trabajo: sin una, su
      ajuste se calcula contra cero y nada lo advierte en el libro. */
   const noAsignados = Array.isArray(l.rubrosNoAsignados) ? l.rubrosNoAsignados : [];
-  const relacionadas = [
+
+  /* QUÉ PUEDE ENTRAR POR ESTE CAMINO bajo el criterio de comerciales (2026-08-31).
+
+     Este fallback nació para lo contrario: cuando el documento no desglosaba las cuentas de
+     PARTES RELACIONADAS, pescaba de `rubrosNoAsignados` la única fila emparentada. Con el
+     criterio nuevo la fila comercial YA la toma el prompt, así que lo que queda sin asignar
+     es precisamente «Otras cuentas por cobrar» y «Cuentas por cobrar a vinculados» — o sea
+     que sin este veto el fallback indexaría justo las dos cosas que el usuario dijo no usar.
+
+     Tres reglas, y las tres hacen falta:
+       · debe nombrar algo comercial (comercial, cliente, proveedor, acreedor, deudor);
+       · no puede nombrar la relación con la vinculada;
+       · no puede ser el cajón residual, o sea empezar por «Otras/Otros». Se veta por el
+         PRINCIPIO y no por contener la palabra, porque «Deudores comerciales y otras cuentas
+         por cobrar» es una fila agregada que el documento publica como una sola y que sí
+         entra: la suma la hizo el documento.
+
+     Efecto de borde deliberado: con este filtro arriba, las dos rutas aprendidas de más
+     abajo —la del rótulo confirmado por empresa y la del marcador explícito de relación—
+     quedan INERTES, porque cualquier rótulo que ellas reconocerían ya está vetado. Se dejan
+     en pie en vez de arrancarlas: su API la importan `notasEeffOrquestacion.js` y la ingesta,
+     y retirarlas es una limpieza aparte, no algo que hacer de paso en este cambio. */
+  const RX_ES_COMERCIAL = /comercial|cliente|proveedor|acreedor|deudor/i;
+  const RX_NO_COMERCIAL = /vinculad|relacionad|matriz|subsidiari|controlante|grupo\s+econom/i;
+  const RX_RESIDUAL = /^\s*otr[ao]s?\b/i;
+  const esCandidataComercial = (rotulo) => {
+    const t = String(rotulo || '');
+    if (RX_NO_COMERCIAL.test(t) || RX_RESIDUAL.test(t)) return false;
+    return RX_ES_COMERCIAL.test(t);
+  };
+
+  const comerciales = [
     { campo: 't_ap', patron: /pagar|proveedor|acreedor/i },
     { campo: 't_ar', patron: /cobrar|deudor|cliente/i },
   ];
-  relacionadas.forEach(({ campo, patron }) => {
+  comerciales.forEach(({ campo, patron }) => {
     const valor = campos[campo];
     if (valor !== null && valor !== 0) return;
-    const candidatas = noAsignados.filter((r) => patron.test(r.rotulo) && Math.abs(r.valor) > 0);
+    const candidatas = noAsignados.filter((r) => (
+      patron.test(r.rotulo) && esCandidataComercial(r.rotulo) && Math.abs(r.valor) > 0
+    ));
 
     /* ── Resolución aprendida, antes de la heurística amplia de más abajo ──
        Dos fuentes, en este orden, cada una exige una sola candidata sin ambigüedad —igual
@@ -441,30 +594,33 @@ export function verificarEeff(lectura, {
       return true;
     };
 
+    /* Las dos rutas aprendidas quedan INERTES con el criterio de comerciales: reconocen
+       rótulos que nombran la relación con la vinculada, y `esCandidataComercial` ya los vetó
+       antes de llegar aquí. Se conservan en pie —no se arrancan— porque su API la importan
+       `notasEeffOrquestacion.js` y la ingesta, y retirarlas es una limpieza aparte. */
     if (indexarAprendida(
       porEmpresaConfirmado,
-      'El documento no desglosa esta partida por partes relacionadas, pero esta misma '
-        + 'empresa ya confirmó en un estudio anterior que este rótulo corresponde a la '
-        + 'vinculada.',
+      'Esta misma empresa ya confirmó en un estudio anterior que este rótulo corresponde a '
+        + 'la partida que se busca.',
     )) return;
     if (indexarAprendida(
       porMarcadorExplicito,
-      'El documento no desglosa esta partida por partes relacionadas, pero una de las cifras '
-        + 'de la tabla principal nombra explícitamente la relación en su propio rótulo.',
+      'Una de las cifras de la tabla principal nombra explícitamente este concepto en su '
+        + 'propio rótulo.',
     )) return;
 
-    /* El documento no desglosa esta partida por partes relacionadas (ni con una fila
-       literal, ni con un $0 que la cubra por completo), pero la tabla principal SÍ trae,
-       sin ambigüedad, una única cifra agregada bajo un rótulo emparentado —caso real: NET
-       LOGISTIK COLOMBIA S.A.S. (2026-08-26), «Deudores comerciales y otras cuentas por
-       cobrar» $8.439.325.383 y «Acreedores y otras cuentas por pagar» $3.519.703.689,
-       ninguna desglosada por contraparte—. Por decisión explícita del usuario (2026-08-26)
-       esa cifra SÍ se indexa en el campo: es literal de la tabla principal del balance, no
-       una interpretación de una nota narrativa (eso se descartó a propósito, ver el spec).
-       Mezcla partes relacionadas con terceros normales, así que queda como corrección —
-       visible, con motivo, editable— y no como una lectura silenciosa: el analista debe
-       confirmarla con el cliente antes de radicar el estudio. Con más de una candidata la
-       cifra es ambigua y no se puede indexar sola: se avisa, no se aplica. */
+    /* El documento no trae una fila comercial con el rótulo que el prompt espera, pero la
+       tabla principal SÍ trae, sin ambigüedad, una única cifra bajo un rótulo comercial
+       agregado —caso real: NET LOGISTIK COLOMBIA S.A.S. (2026-08-26), «Deudores comerciales
+       y otras cuentas por cobrar» $8.439.325.383 y «Acreedores y otras cuentas por pagar»
+       $3.519.703.689—. Esa cifra SÍ se indexa: es literal de la tabla principal del balance,
+       y es una fila que el propio documento ya agregó, no una suma nuestra.
+
+       Lo que NO puede entrar es el cajón residual («Otras cuentas por pagar») ni la fila de
+       vinculados: los veta `esCandidataComercial` más arriba. Queda como corrección —visible,
+       con motivo, editable— y no como una lectura silenciosa, porque una fila agregada mezcla
+       contrapartes y el analista debe confirmarla antes de radicar. Con más de una candidata
+       la cifra es ambigua y no se indexa ninguna: se avisa, no se aplica. */
     if (candidatas.length === 1) {
       const [candidata] = candidatas;
       correcciones.push({
@@ -472,12 +628,11 @@ export function verificarEeff(lectura, {
         etiqueta: ETIQUETA[campo],
         valorLeido: valor,
         valorAplicado: candidata.valor,
-        motivo: `El documento no desglosa esta partida por partes relacionadas; se indexó `
-          + `«${candidata.rotulo}» (${fmtCop(candidata.valor)}), la única cifra de la tabla `
-          + 'principal del balance emparentada con este rubro. Incluye contrapartes que '
-          + 'pueden no ser la vinculada (proveedores o clientes normales, empleados, '
-          + 'impuestos, etc.): verifique con el cliente qué porción corresponde realmente a '
-          + 'partes relacionadas antes de radicar el estudio.',
+        motivo: `El documento no trae esta partida con el rótulo esperado; se indexó `
+          + `«${candidata.rotulo}» (${fmtCop(candidata.valor)}), la única cifra comercial de `
+          + 'la tabla principal del balance. Es una fila que el propio documento ya agrega, '
+          + 'así que puede incluir otras contrapartes: verifíquela contra el estado '
+          + 'financiero antes de radicar el estudio.',
       });
       campos[campo] = candidata.valor;
       return;
@@ -485,32 +640,32 @@ export function verificarEeff(lectura, {
 
     if (valor === null) {
       advertencias.push({
-        tipo: 'sin-partida-relacionada',
+        tipo: 'sin-partida-comercial',
         campo,
         /* Estructurada, no solo dentro de `mensaje`: es lo que permite aprender de una
            corrección manual del analista sin tener que re-parsear el texto del aviso —
            ver `candidataParaAprender`. */
         candidatas,
         estado: 'no_verificado',
-        mensaje: `«${ETIQUETA[campo]}»: el documento no desglosa esa partida con partes `
-          + 'relacionadas, así que su ajuste de capital de trabajo quedará en cero.'
+        mensaje: `«${ETIQUETA[campo]}»: el documento no trae esa partida comercial, así que `
+          + 'su ajuste de capital de trabajo quedará en cero.'
           + (candidatas.length
-            ? ` Las que sí trae son: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
+            ? ` Las cifras comerciales que sí trae son: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
               + 'Son varias y ambiguas, así que no se indexó ninguna sola; si alguna '
-              + 'corresponde a la operación, escríbala a mano.'
+              + 'corresponde, escríbala a mano.'
             : ''),
       });
     } else if (candidatas.length > 1) {
       advertencias.push({
-        tipo: 'relacionada-en-cero-con-total-mayor',
+        tipo: 'comercial-en-cero-con-total-mayor',
         campo,
         candidatas,
         estado: 'revisar_total_mayor',
-        mensaje: `«${ETIQUETA[campo]}» quedó en $0: es lo único que el documento desglosa `
-          + 'explícitamente para partes relacionadas. El estado principal también trae, sin '
-          + `desglosar por contraparte, varias cifras emparentadas: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
+        mensaje: `«${ETIQUETA[campo]}» quedó en $0: es lo que el documento imprime bajo el `
+          + 'rótulo esperado. El estado principal también trae varias cifras comerciales '
+          + `agregadas: ${candidatas.map((r) => `«${r.rotulo}» ${fmtCop(r.valor)}`).join(', ')}. `
           + 'Son ambiguas, así que no se indexó ninguna sola: verifique si alguna corresponde '
-          + 'a la vinculada antes de aceptar el $0.',
+          + 'antes de aceptar el $0.',
       });
     }
   });
@@ -619,7 +774,22 @@ export function verificarEeff(lectura, {
     });
   }
 
-  return { campos, correcciones, advertencias, verificadoContraTexto };
+  return {
+    campos,
+    correcciones,
+    advertencias,
+    verificadoContraTexto,
+    /* Cuántas cifras se comprobaron por fila y columna, y contra qué ejercicio. No es lo
+       mismo una lectura verificada así que una que solo pasó el chequeo de «está impresa en
+       algún sitio del documento»: la segunda no puede distinguir la columna del año anterior.
+       La ingesta lo dice en pantalla, y `diagnosticoRango` lo usa para decidir si el
+       indicador del contribuyente es confiable. */
+    verificadasPorColumna,
+    anioVerificado: anioObjetivo || null,
+    /* Los ejercicios que el propio documento declara en sus encabezados, para poder decir
+       «el documento trae 2025 y 2024, se extrajo la del 2025» sin abrir el PDF. */
+    aniosDelDocumento: Array.isArray(l.aniosDelDocumento) ? l.aniosDelDocumento : [],
+  };
 }
 
 /**
@@ -642,10 +812,10 @@ export function camposAplicables(campos) {
  * `null` con advertencia sí debe borrar lo que hubiera.
  *
  * Generaliza lo que antes solo cubría `inventario-solo-por-nota` (commit 203eaa3) a
- * cualquier advertencia con `campo`: `sin-partida-relacionada`, `campo-no-encontrado-en-detalle`,
+ * cualquier advertencia con `campo`: `sin-partida-comercial`, `campo-no-encontrado-en-detalle`,
  * `sin-costo-de-ventas`, `sin-inventarios`, `cifra-inexistente`, etc. No toca
  * `t_activos_detalle` (su advertencia, `activos-detalle-cifra-inexistente`, no lleva `campo`)
- * ni un campo que quedó en `0` en vez de `null` (p. ej. `relacionada-en-cero-con-total-mayor`):
+ * ni un campo que quedó en `0` en vez de `null` (p. ej. `comercial-en-cero-con-total-mayor`):
  * ese `0` sí es una cifra válida y ya la escribe `camposAplicables()`.
  */
 export function camposParaLimpiar(campos, advertencias) {
@@ -719,7 +889,7 @@ export function destinoDelAprendizaje(rotulo) {
 
 /**
  * La candidata que corresponde aprender de una corrección manual del analista: entre las
- * `candidatas` de una advertencia `sin-partida-relacionada` / `relacionada-en-cero-con-total-mayor`,
+ * `candidatas` de una advertencia `sin-partida-comercial` / `comercial-en-cero-con-total-mayor`,
  * la única cuyo valor coincide EXACTAMENTE con lo que el analista acaba de escribir. Sin una
  * coincidencia única no hay nada seguro que aprender —el valor pudo no venir de ninguna fila
  * del documento, o dos candidatas podrían compartir el mismo valor— y se devuelve `null`.

@@ -31,7 +31,8 @@ import { montoOperacion } from '../utils/calculations';
 import {
   docEstudio, docCliente, docEeff, idEeff, normalizarNit, anioValido, aNumero,
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
-  verificarTamano, agregarCompartido, quitarCompartido, rastroPropio,
+  verificarTamano, rastroPropio,
+  aplicarAcceso, accesosDe, rolEnEstudio, puedeEditarEstudio, ROL_LECTOR,
 } from './firestoreModelo';
 import { diccionarioVacio } from './vocabularioEeff';
 
@@ -69,7 +70,41 @@ function recordarMeta(uid, nombre, id, datos) {
     creadoPor: datos.creadoPor,
     creadoEn: datos.creadoEn,
     creadoPorNombre: datos.creadoPorNombre,
+    /* Los permisos también se recuerdan, y no por ahorrar lecturas: `docEstudio`
+       conserva las listas de acceso tomándolas de `previo`, y `previo` es justo esto.
+       Sin ellas aquí, el primer autoguardado tras compartir reescribía el documento sin
+       `compartidoCon` y el estudio se descompartía solo, sin que nadie tocara nada. */
+    compartidoCon: datos.compartidoCon,
+    editores: datos.editores,
   });
+}
+
+/* Última modificación conocida por esta pestaña, en milisegundos y por documento. Es lo
+   que permite ver que otra persona escribió el estudio entre lo que aquí se leyó y lo
+   que se va a guardar. Hace falta desde que se puede conceder edición: el autoguardado
+   reescribe el documento entero, así que sin esta comprobación el último en guardar
+   borra el trabajo del otro y ninguno de los dos se entera. */
+const marcaConocida = new Map();
+
+const marcaDe = (datos) => (datos && datos.actualizadoEn && datos.actualizadoEn.toMillis
+  ? datos.actualizadoEn.toMillis()
+  : 0);
+
+function recordarMarca(clave, datos) {
+  marcaConocida.set(clave, marcaDe(datos));
+}
+
+/* Tras escribir, la marca buena solo la sabe el servidor —`serverTimestamp()` es un
+   centinela—, así que se relee. Si la relectura falla no se rompe nada: la siguiente
+   escritura verá que el último en guardar fue este mismo usuario y no la tomará por
+   una modificación ajena. */
+async function refrescarMarca(clave, referencia) {
+  try {
+    const instantanea = await getDoc(referencia);
+    if (instantanea.exists()) recordarMarca(clave, instantanea.data());
+  } catch (err) {
+    console.warn('[estudios] no se pudo releer la marca de ' + clave, err);
+  }
 }
 
 /**
@@ -94,26 +129,82 @@ export function usuarioDeSesion(user) {
 
 /* ══════════════════════ estudios ══════════════════════ */
 
+/**
+ * Escribe el estudio comprobando, dentro de la misma transacción, que nadie lo modificó
+ * desde la última vez que esta pestaña lo leyó o lo guardó.
+ *
+ * Si otra persona se adelantó no se escribe nada y se devuelve quién fue. Pisarla sería
+ * lo peor que puede pasar aquí: el documento se reescribe entero, así que su trabajo
+ * desaparecería sin dejar rastro y sin que ninguno de los dos lo notara hasta mucho
+ * después. Perder el último cambio propio se nota y se repite; borrar el ajeno no.
+ *
+ * Que el último en escribir haya sido uno mismo no es conflicto: puede ser el guardado
+ * anterior de esta misma pestaña cuya marca no se pudo releer.
+ */
+async function escribirEstudioSinPisar({ referencia, duenoUid, id, study, usuario, exigirEdicion = false }) {
+  const clave = claveCache(duenoUid, ESTUDIOS, id);
+  const marcaBase = marcaConocida.get(clave) || 0;
+  const resultado = await runTransaction(db, async (tx) => {
+    const instantanea = await tx.get(referencia);
+    if (!instantanea.exists()) {
+      return { error: 'El estudio ya no está en la nube: puede que su dueño lo haya borrado.' };
+    }
+    const enLaNube = instantanea.data();
+    if (exigirEdicion && !puedeEditarEstudio(enLaNube, usuario.correo)) {
+      return { error: 'Su acceso a este estudio es de solo consulta: no se guardaron los cambios.' };
+    }
+    const marcaNube = marcaDe(enLaNube);
+    if (marcaBase && marcaNube && marcaNube !== marcaBase && enLaNube.actualizadoPor !== usuario.uid) {
+      return { conflicto: true, quien: enLaNube.actualizadoPorNombre || 'otra persona' };
+    }
+    /* `previo` es el documento real de la nube, así que las dos listas de acceso se
+       reescriben tal como estaban. Es también lo que las reglas exigen de un editor:
+       puede cambiar el contenido, no quién entra. */
+    const documentoNuevo = docEstudio({ study, usuario, previo: enLaNube, marcaDeTiempo: serverTimestamp() });
+    verificarTamano(documentoNuevo);
+    tx.set(referencia, documentoNuevo);
+    return { conflicto: false, previo: enLaNube };
+  });
+  if (resultado.previo) {
+    recordarMeta(duenoUid, ESTUDIOS, id, resultado.previo);
+    await refrescarMarca(clave, referencia);
+  }
+  return resultado;
+}
+
 export async function guardarEstudio(id, study, usuario) {
+  const uid = uidDe(usuario);
+  const referencia = documento(usuario, ESTUDIOS, id);
   const previo = await metaPrevia(usuario, ESTUDIOS, id);
+
+  /* Con editores habilitados, otra persona puede estar escribiendo el mismo documento:
+     se pasa por la transacción que lo comprueba. Sin ellos nadie más puede, y el
+     guardado va directo —el autoguardado dispara con cada cambio y la lectura extra se
+     pagaría en todos los estudios, que en su mayoría no se comparten. */
+  if (previo && (previo.editores || []).length) {
+    return escribirEstudioSinPisar({ referencia, duenoUid: uid, id, study, usuario });
+  }
+
   const documentoNuevo = docEstudio({ study, usuario, previo, marcaDeTiempo: serverTimestamp() });
   /* Antes de gastar la escritura: si excede el máximo, el error explica qué campo lo
      hace pesar. Firestore solo dice cuánto pesa, y con decenas de campos eso no basta
      para saber qué sacar. */
   verificarTamano(documentoNuevo);
-  await setDoc(documento(usuario, ESTUDIOS, id), documentoNuevo);
+  await setDoc(referencia, documentoNuevo);
   /* Se recuerda con lo que ya había: `serverTimestamp()` es un centinela, no una
      fecha, y guardarlo en el caché haría fallar la comparación de inmutabilidad en
      el guardado siguiente. */
-  if (previo) recordarMeta(uidDe(usuario), ESTUDIOS, id, { ...previo });
-  return id;
+  if (previo) recordarMeta(uid, ESTUDIOS, id, { ...previo });
+  return { id, conflicto: false };
 }
 
 export async function leerEstudio(id, usuario) {
   const instantanea = await getDoc(documento(usuario, ESTUDIOS, id));
   if (!instantanea.exists()) return null;
   const datos = instantanea.data();
-  recordarMeta(uidDe(usuario), ESTUDIOS, id, datos);
+  const uid = uidDe(usuario);
+  recordarMeta(uid, ESTUDIOS, id, datos);
+  recordarMarca(claveCache(uid, ESTUDIOS, id), datos);
   return datos.datos || {};
 }
 
@@ -150,39 +241,33 @@ export async function borrarEstudio(id, usuario) {
 
 /* ══════════════════════ compartir un estudio ══════════════════════ */
 
-/** Con quiénes está compartido hoy este estudio. Lista de correos, o vacía. */
-export async function leerCompartidoCon(id, usuario) {
+/** Quién tiene acceso hoy a este estudio y con qué nivel: `[{correo, rol}]`. */
+export async function leerAccesos(id, usuario) {
   const instantanea = await getDoc(documento(usuario, ESTUDIOS, id));
   if (!instantanea.exists()) return [];
-  return instantanea.data().compartidoCon || [];
+  return accesosDe(instantanea.data());
 }
 
 /**
- * Habilita o retira a una persona en un estudio. Devuelve la lista resultante, o el
- * motivo por el que no se pudo.
+ * Habilita, cambia de nivel o retira a una persona en un estudio. Devuelve los accesos
+ * resultantes, o el motivo por el que no se pudo.
  *
  * Se escribe con transacción y no con el estudio en memoria: el permiso no es un dato
  * del informe, y un autoguardado disparado a la vez no debe poder pisar la lista de
  * accesos ni al contrario.
  */
-export async function cambiarCompartido(id, correo, usuario, { quitar = false } = {}) {
+export async function cambiarCompartido(id, correo, usuario, { quitar = false, rol = ROL_LECTOR } = {}) {
   const referencia = documento(usuario, ESTUDIOS, id);
   try {
     return await runTransaction(db, async (tx) => {
       const instantanea = await tx.get(referencia);
       if (!instantanea.exists()) return { error: 'El estudio no existe en la nube todavía.' };
       const datos = instantanea.data();
-      const actuales = datos.compartidoCon || [];
 
-      let lista, error = null;
-      if (quitar) {
-        lista = quitarCompartido(actuales, correo);
-      } else {
-        const resultado = agregarCompartido(actuales, correo, { correoPropio: usuario.correo });
-        lista = resultado.lista;
-        error = resultado.error;
-      }
-      if (error) return { error, lista: actuales };
+      const cambio = aplicarAcceso(datos, correo, { rol, quitar, correoPropio: usuario.correo });
+      const lista = cambio.compartidoCon;
+      const editores = cambio.editores;
+      if (cambio.error) return { error: cambio.error, accesos: accesosDe(datos) };
 
       const documentoNuevo = docEstudio({
         /* `datos.datos` es el estudio tal como está en la nube: se reescribe igual, y
@@ -193,9 +278,13 @@ export async function cambiarCompartido(id, correo, usuario, { quitar = false } 
         previo: datos,
         marcaDeTiempo: serverTimestamp(),
         compartidoCon: lista,
+        editores,
       });
       tx.set(referencia, documentoNuevo);
-      return { lista, error: null };
+      /* El caché tiene que quedarse con las listas nuevas: es de donde las toma el
+         autoguardado siguiente para conservarlas. */
+      recordarMeta(uidDe(usuario), ESTUDIOS, id, { ...datos, compartidoCon: lista, editores });
+      return { accesos: accesosDe(documentoNuevo), error: null };
     });
   } catch (err) {
     console.error('[compartir] no se pudo cambiar el acceso de ' + id, err);
@@ -235,6 +324,9 @@ export async function listarEstudiosCompartidosConmigo(usuario, tope = 100) {
         nit: datos.nit || '—',
         anio: datos.anio || '—',
         duenoNombre: datos.creadoPorNombre || '',
+        /* Con qué nivel me lo compartieron. El tablero lo anuncia antes de abrirlo: si
+           solo se supiera al entrar, el consultor no sabría si puede trabajar ahí. */
+        rol: rolEnEstudio(datos, correo),
         monto: montoOperacion(datos.datos) || 0,
         updated: datos.actualizadoEn ? datos.actualizadoEn.toMillis() : 0,
       };
@@ -259,12 +351,58 @@ export async function listarEstudiosCompartidosConmigo(usuario, tope = 100) {
   }
 }
 
-/** Lee un estudio que otra persona compartió. Solo lectura: no se cachea su rastro. */
-export async function leerEstudioCompartido(duenoUid, id) {
+/**
+ * Lee un estudio que otra persona compartió, junto con el nivel de acceso concedido.
+ *
+ * Devuelve `{ datos, rol }`: el rol se resuelve aquí y no en la pantalla porque sale del
+ * documento recién leído, que es la única fuente al día —el del tablero puede llevar
+ * minutos en memoria y el dueño haber cambiado el acceso entretanto.
+ */
+export async function leerEstudioCompartido(duenoUid, id, usuario) {
   if (!duenoUid || !id) return null;
-  const instantanea = await getDoc(doc(db, 'usuarios', duenoUid, ESTUDIOS, id));
+  const referencia = doc(db, 'usuarios', duenoUid, ESTUDIOS, id);
+  const instantanea = await getDoc(referencia);
   if (!instantanea.exists()) return null;
-  return instantanea.data().datos || {};
+  const datos = instantanea.data();
+  /* El rastro de creación y la marca sí se recuerdan ahora: con acceso de edición este
+     documento se puede llegar a escribir, y ambas cosas hacen falta para hacerlo sin
+     pisar a nadie. */
+  recordarMeta(duenoUid, ESTUDIOS, id, datos);
+  recordarMarca(claveCache(duenoUid, ESTUDIOS, id), datos);
+  return {
+    datos: datos.datos || {},
+    rol: rolEnEstudio(datos, usuario && usuario.correo),
+    /* De quién es. Hace falta al restaurar tras una recarga: ahí no se viene del tablero
+       y no hay ninguna fila de la que sacar el nombre para la barra de estado. */
+    duenoNombre: datos.creadoPorNombre || '',
+  };
+}
+
+/**
+ * Guarda un estudio ajeno sobre el que se tiene acceso de edición. Escribe en el espacio
+ * del dueño —`usuarios/{duenoUid}/estudios/{id}`—, no en el propio: el estudio sigue
+ * siendo suyo y no se duplica.
+ *
+ * Devuelve `{ conflicto, quien }` o `{ error }`; nunca lanza por permisos, para que el
+ * autoguardado pueda avisar en la barra en lugar de romperse en cada tecla.
+ */
+export async function guardarEstudioCompartido(duenoUid, id, study, usuario) {
+  if (!duenoUid || !id) return { error: 'No se sabe de quién es este estudio.' };
+  const referencia = doc(db, 'usuarios', duenoUid, ESTUDIOS, id);
+  try {
+    return await escribirEstudioSinPisar({
+      referencia, duenoUid, id, study, usuario, exigirEdicion: true,
+    });
+  } catch (err) {
+    console.error('[compartidos] no se pudo guardar el estudio ' + id, err);
+    if (esSinPermiso(err)) {
+      return {
+        error: 'La nube rechazó el cambio: puede que le hayan retirado el acceso de edición, ' +
+          'o que falte desplegar firestore.rules.',
+      };
+    }
+    return { error: (err && err.message) || 'No se pudo guardar el estudio compartido.' };
+  }
 }
 
 /* ══════════════════════ clientes ══════════════════════ */
