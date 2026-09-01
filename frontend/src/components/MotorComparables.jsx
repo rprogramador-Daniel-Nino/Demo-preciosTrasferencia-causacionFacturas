@@ -43,6 +43,10 @@ import CampoMoneda from './CampoMoneda';
    adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
 const ACTIVIDAD_SIN_EXTRAER = 'No extraido por favor validar adjuntos';
 
+/* Miles con punto, como el resto del embudo del paso 3. Sin esto un universo de 2.987 salía
+   «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
+const mil = (n) => Number(n || 0).toLocaleString('es-CO');
+
 /* Lo que un filtro está sacando del universo, pegado a su propio control.
    Es el corazón del rediseño del paso 2: un rótulo sin número es abstracto —«excluye holdings»
    no dice cuántas— y un embudo aparte obliga a adivinar qué línea corresponde a qué selector.
@@ -67,7 +71,7 @@ function CostoDelFiltro({ paso, universo, expandido, alExpandir }) {
   return (
     <span className="flex items-baseline gap-1.5 shrink-0">
       <span className="text-[10.5px] text-zinc-500" title={paso.queHace}>
-        saca <b className="text-rose-700 dark:text-rose-400">{paso.saca}</b> de {universo}
+        saca <b className="text-rose-700 dark:text-rose-400">{mil(paso.saca)}</b> de {mil(universo)}
       </span>
       {paso.ejemplos.length > 0 && (
         <button
@@ -1974,7 +1978,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 </select>
                 {previsualizacion.hayUniverso && (
                   <span className="text-[10px] text-zinc-400 mt-1">
-                    El cribado trae {previsualizacion.enPerdidaEnUniverso} compañía(s) en pérdida.
+                    El cribado trae {mil(previsualizacion.enPerdidaEnUniverso)} compañía(s) en pérdida.
                   </span>
                 )}
               </div>
@@ -2106,9 +2110,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <span className="text-[10.5px] text-zinc-500 shrink-0">
                   sacan{' '}
                   <b className="text-zinc-700 dark:text-zinc-300">
-                    {previsualizacion.pasos
+                    {mil(previsualizacion.pasos
                       .filter((x) => x.clave === 'holding' || x.clave === 'saldoNegativo')
-                      .reduce((n, x) => n + x.saca, 0)}
+                      .reduce((n, x) => n + x.saca, 0))}
                   </b>
                 </span>
               )}
@@ -2208,17 +2212,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11.5px]">
                 <span className="text-zinc-500">
-                  Universo <b className="text-zinc-800 dark:text-zinc-200">{previsualizacion.universo}</b>
+                  Universo <b className="text-zinc-800 dark:text-zinc-200">{mil(previsualizacion.universo)}</b>
                 </span>
                 <span className="text-zinc-400">→</span>
                 <span className="text-zinc-500">
-                  pasan los filtros <b className="text-zinc-800 dark:text-zinc-200">{previsualizacion.quedan}</b>
+                  pasan los filtros <b className="text-zinc-800 dark:text-zinc-200">{mil(previsualizacion.quedan)}</b>
                 </span>
                 <span className="text-zinc-400">→</span>
                 <span className="text-zinc-500">
-                  entran <b className="text-[#0B7C7A] dark:text-[#0FA3A1]">{previsualizacion.entran}</b>
+                  entran <b className="text-[#0B7C7A] dark:text-[#0FA3A1]">{mil(previsualizacion.entran)}</b>
                   {previsualizacion.reserva > 0 && (
-                    <span className="text-zinc-400"> · {previsualizacion.reserva} en reserva</span>
+                    <span className="text-zinc-400"> · {mil(previsualizacion.reserva)} en reserva</span>
                   )}
                 </span>
               </div>
@@ -2228,12 +2232,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   <Clock className="w-3.5 h-3.5 mt-px shrink-0 text-zinc-400" />
                   <span>
                     Al ejecutar el paso 3 se curarán{' '}
-                    <b>{previsualizacion.curacion.aCurar}</b> candidatas en{' '}
+                    <b>{mil(previsualizacion.curacion.aCurar)}</b> candidatas en{' '}
                     {previsualizacion.curacion.lotes} lote(s), ~{previsualizacion.curacion.etaMinutos} min
                     {previsualizacion.curacion.reutilizadas > 0
-                      && ` · ${previsualizacion.curacion.reutilizadas} ya curadas se reutilizan sin volver a pagarse`}
+                      && ` · ${mil(previsualizacion.curacion.reutilizadas)} ya curadas se reutilizan sin volver a pagarse`}
                     {previsualizacion.curacion.sinDatosParaCurar > 0
-                      && ` · ${previsualizacion.curacion.sinDatosParaCurar} sin descripción del negocio pasan a la heurística, sin costo`}.
+                      && ` · ${mil(previsualizacion.curacion.sinDatosParaCurar)} sin descripción del negocio pasan a la heurística, sin costo`}.
                   </span>
                 </div>
               ) : (
