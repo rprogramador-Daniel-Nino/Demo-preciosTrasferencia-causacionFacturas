@@ -608,6 +608,14 @@ function medianaDe(valores) {
    corridos antes de este cambio tienen la reserva sin motivo, y su libro de soporte se genera en
    el momento de descargarlo, así que etiquetarla también al enriquecer es lo que permite
    auditar un informe ya radicado sin volver a ejecutar el motor. */
+/* El motivo de una comparable del año anterior que la cuota de negativas dejó fuera. Se
+   distingue del motivo general de reserva a propósito: no es que no alcanzara el puntaje, es que
+   el analista pidió negativas y el N no daba para las dos cosas. El informe tiene que poder
+   decir eso exactamente. */
+export const MOTIVO_DESPLAZADA_POR_CUOTA = 'Venía del estudio anterior y se retiró para dar '
+  + 'cupo a las comparables en pérdida que se pidieron en el paso 2. Retirarla del estudio hay '
+  + 'que justificarlo: revise si conviene subir el N objetivo en lugar de perder la continuidad.';
+
 export const CLAVE_RESERVA = 'actividadDistinta';
 export const MOTIVO_RESERVA = 'Supera los filtros objetivos pero no integra la muestra: '
   + 'menor grado de comparabilidad funcional frente a la parte examinada (Art. 260-4 E.T.).';
@@ -822,13 +830,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      así que pedir 12 con 7 de continuidad devolvía 19 comparables: el número que el
      usuario escribe es el tamaño de la muestra final, no el de las candidatas nuevas.
      El cupo se completa con las mejores del resto. */
-  const continuidadIncluidas = validas.filter(c => c.esContinuidad);
+  const continuidadTodas = validas.filter(c => c.esContinuidad);
   const otrasValidas = validas.filter(c => !c.esContinuidad);
 
   /* El N del paso 2 manda cuando pide más que el mínimo; por debajo de `MINIMO_COMPARABLES` no
      se baja. Poner 6 en el paso 2 no puede producir una muestra de 6. */
   const cupo = Math.max(minimo, nTarget);
-  const cupoRestante = Math.max(0, cupo - continuidadIncluidas.length);
 
   /* Dos filas, y la segunda solo se toca si la primera no llena el cupo: primero las de misma
      actividad, y las de actividad afín después. Es la ampliación del criterio de búsqueda que
@@ -856,8 +863,40 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   /* Las de continuidad ya entraron y cuentan contra el objetivo: si el estudio anterior
      aporta una en pérdida y se piden 3, faltan 2, no 3. El objetivo es «cuántas negativas
      salen en el informe», no «cuántas nuevas se buscan». */
-  const negativasDeContinuidad = continuidadIncluidas.filter(enPerdida).length;
+  /* Las de continuidad que YA están en pérdida van al frente y no ceden nunca: satisfacen la
+     cuota, y retirar una negativa para meter otra negativa sería absurdo. */
+  const continuidadOrdenada = [
+    ...continuidadTodas.filter(enPerdida),
+    ...continuidadTodas.filter((c) => !enPerdida(c)),
+  ];
+  const negativasDeContinuidad = continuidadTodas.filter(enPerdida).length;
   const porCubrir = Math.max(0, objetivoNegativas - negativasDeContinuidad);
+  /* Cuántas negativas nuevas hay DE VERDAD: no se retira continuidad por unas que no existen. */
+  const negativasAUsar = Math.min(porCubrir, mismasNegativas.length);
+
+  /* ── La continuidad cede sitio a la cuota ──
+     Reportado el 2026-09-01 sobre un estudio real: 16 comparables del año anterior, todas
+     rentables, N objetivo 12 y cuota de 4 con 41 negativas disponibles. La muestra salió con 16
+     y CERO negativas, porque `cupoRestante = max(0, 12 − 16) = 0` dejaba a la cuota sin espacio
+     en silencio.
+
+     Decisión del usuario (2026-09-01): la cuota MANDA. Se retiran las de MENOR puntaje hasta
+     respetar el N exacto, y quedan NOMBRADAS en `continuidadDesplazada` — retirar una comparable
+     aceptada el año anterior se justifica en el informe, así que no puede desaparecer en
+     silencio. Van a la reserva, no a `rechazadas`: el informe suma la reserva aparte y meterlas
+     en las dos listas descuadraría la tabla contra el universo.
+
+     Con la cuota en 0 NO se retira ninguna: esa es la decisión anterior —«no se descarta ninguna,
+     porque retirar una ya aceptada hay que justificarlo»— y sigue en pie, con su aviso
+     `continuidadExcedeObjetivo`. Lo que cambia es solo el caso en que el analista pide negativas
+     de forma explícita. */
+  const topeContinuidad = objetivoNegativas > 0
+    ? Math.max(negativasDeContinuidad, cupo - negativasAUsar)
+    : continuidadOrdenada.length;
+  const continuidadIncluidas = continuidadOrdenada.slice(0, topeContinuidad);
+  const continuidadDesplazadaLista = continuidadOrdenada.slice(topeContinuidad);
+
+  const cupoRestante = Math.max(0, cupo - continuidadIncluidas.length);
   const deNegativas = mismasNegativas.slice(0, Math.min(porCubrir, cupoRestante));
 
   const cupoParaPositivas = Math.max(0, cupoRestante - deNegativas.length);
@@ -905,6 +944,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      negativas que no cupieron, y al final las afines —de las que primero las positivas—,
      igual que antes: se echa mano de las idénticas antes que de las afines. */
   const reserva = [
+    ...continuidadDesplazadaLista.map((c) => ({
+      ...c,
+      motivoClave: CLAVE_RESERVA,
+      motivoRechazo: MOTIVO_DESPLAZADA_POR_CUOTA,
+      categoriaRechazo: 'rigor',
+    })),
     ...mismasPositivas.slice(deMisma.length).map(enReserva),
     ...mismasNegativas.slice(deNegativas.length).map(enReserva),
     ...afinesPositivas.slice(deAmpliacion.length).map(enReserva),
@@ -983,6 +1028,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        exige justificarlo en el informe— y la muestra queda por encima de lo pedido. */
     continuidad: continuidadIncluidas.length,
     continuidadExcedeObjetivo: continuidadIncluidas.length > cupo,
+    /* Las del año anterior que la cuota de negativas obligó a retirar, con nombre y motivo:
+       el informe tiene que justificar cada una. Arreglo vacío cuando no se retiró ninguna. */
+    continuidadDesplazada: continuidadDesplazadaLista.map((c) => ({
+      name: c.name,
+      motivo: MOTIVO_DESPLAZADA_POR_CUOTA,
+    })),
+    continuidadDesplazadaPorCuota: continuidadDesplazadaLista.length,
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,

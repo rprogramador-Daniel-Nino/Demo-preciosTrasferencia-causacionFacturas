@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import XLSX from 'xlsx-js-style';
 import {
-  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar,
+  scoreCandidates, curateCandidatesWithGemini, nameKey, prefiltrar, enPerdida,
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
@@ -1981,4 +1981,148 @@ test('el primer motivo manda, igual que en el motor', () => {
 
   const r = scoreCandidates(dosVicios, { nTarget: 12, minimo: 1 }, '', []);
   assert.strictEqual(r.rechazadas[0].motivoClave, 'holding');
+});
+
+/* ══════ La cuota de negativas cede sitio quitando continuidad ══════
+
+   Caso real reportado el 2026-09-01: 16 comparables del estudio anterior, todas rentables,
+   N objetivo 12 y cuota de 4 negativas con 41 disponibles en el universo. La muestra salió con
+   16 comparables y CERO negativas.
+
+   La causa era `cupoRestante = max(0, cupo − continuidad) = max(0, 12 − 16) = 0`: la continuidad
+   llenaba y desbordaba el cupo, y la cuota se quedaba sin espacio en silencio. Peor, los tres
+   avisos que sí dispararon mandaban en direcciones distintas y dos eran falsos («el resto del
+   cupo lo llenaron positivas» — ninguna entró; «suba el objetivo de negativas» — no puede servir
+   con cupo 0).
+
+   Decisión del usuario: la cuota MANDA y desplaza continuidad, hasta respetar el N exacto. Se
+   retiran las de MENOR puntaje, y hay que nombrarlas: retirar una comparable aceptada el año
+   anterior se justifica en el informe, así que el motor no puede quitarlas en silencio.
+
+   Con la cuota en 0 el comportamiento NO cambia: la continuidad sigue entrando entera aunque
+   desborde el N, que es la decisión anterior y sigue en pie. */
+
+/* El puntaje lo calcula el motor; el orden se induce con las ventas, que es uno de sus
+   factores, para no depender de un `score` inyectado que el motor recalcula igual. */
+const candCuota = (nombre, op, ventas) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: ventas, c: 600, op, desc: 'trading services', country: 'Japan',
+});
+
+function universoDelCaso({ nContinuidad = 16, nNegativas = 41, nPositivas = 200 } = {}) {
+  /* Continuidad con ventas decrecientes: la última es la de menor puntaje y cede primero. */
+  const continuidad = Array.from({ length: nContinuidad }, (_, i) =>
+    candCuota('Continuidad ' + String(i).padStart(2, '0'), 50, 1000 - i * 10));
+  const negativas = Array.from({ length: nNegativas }, (_, i) =>
+    candCuota('Negativa ' + String(i).padStart(2, '0'), -20 - i, 1000));
+  const positivas = Array.from({ length: nPositivas }, (_, i) =>
+    candCuota('Positiva ' + String(i).padStart(2, '0'), 60, 1000));
+  return {
+    universo: [...continuidad, ...negativas, ...positivas],
+    previas: continuidad.map((c) => ({ name: c.name })),
+  };
+}
+
+/** Curación que da MISMA actividad a todas, para aislar el defecto del cupo. */
+const curacionTotal = (universo) => ({
+  porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
+});
+
+const BASE_CUOTA = {
+  nTarget: 12, minimo: 10, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+const correrCaso = (config, opciones = {}) => {
+  const { universo, previas } = universoDelCaso(opciones);
+  return scoreCandidates(universo, config, 'trading services', previas, {
+    ventasParteExaminada: 1000, iaMatch: curacionTotal(universo),
+  });
+};
+
+test('la cuota de negativas se cumple aunque la continuidad desborde el N', () => {
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  assert.strictEqual(r.seleccionadas.length, 12, 'la muestra respeta el N exacto');
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4, 'y trae las 4 pedidas');
+  assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 8,
+    'la continuidad cede sitios: 12 − 4 = 8 se quedan');
+  assert.strictEqual(r.negativasIncluidas, 4);
+});
+
+test('las comparables de continuidad retiradas se nombran, con su motivo', () => {
+  /* Retirar una aceptada el año anterior se justifica en el informe: el motor no puede
+     quitarlas en silencio. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  assert.strictEqual(r.continuidadDesplazada.length, 8);
+  r.continuidadDesplazada.forEach((c) => {
+    assert.ok(c.name, 'cada una con nombre');
+    assert.match(c.motivo, /cuota|p[ée]rdida/i, 'y con el motivo del desplazamiento');
+  });
+});
+
+test('ceden las de MENOR puntaje, no las primeras que aparezcan', () => {
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  const quedan = r.seleccionadas.filter((c) => c.esContinuidad).map((c) => c.name);
+  const ceden = r.continuidadDesplazada.map((c) => c.name);
+  assert.ok(quedan.includes('Continuidad 00'), 'la de mayor puntaje se queda');
+  assert.ok(ceden.includes('Continuidad 15'), 'y la de menor cede');
+  assert.strictEqual(quedan.filter((n) => ceden.includes(n)).length, 0, 'sin solaparse');
+});
+
+test('las desplazadas van a la RESERVA, no a rechazadas', () => {
+  /* `rechazadasPorMotivo` cuenta sobre `rechazadas` y el informe suma la reserva aparte:
+     meterlas en las dos listas descuadraría la tabla contra el universo. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  const enReservaN = r.reserva.map((c) => c.name);
+  const enRechazadasN = r.rechazadas.map((c) => c.name);
+  r.continuidadDesplazada.forEach((c) => {
+    assert.ok(enReservaN.includes(c.name), c.name + ' debe quedar en reserva');
+    assert.ok(!enRechazadasN.includes(c.name), c.name + ' NO puede estar en rechazadas');
+  });
+});
+
+test('con la cuota en 0 no se retira ninguna continuidad: la decisión anterior sigue en pie', () => {
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 0 });
+  assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 16);
+  assert.strictEqual(r.seleccionadas.length, 16, 'la muestra sigue desbordando el N, como antes');
+  assert.deepEqual(r.continuidadDesplazada, []);
+  assert.strictEqual(r.continuidadExcedeObjetivo, true, 'lo que se conserva es el aviso');
+});
+
+test('solo cede lo que la cuota necesita de verdad', () => {
+  /* Si el universo tiene menos negativas que la cuota, no se retira continuidad por unas
+     negativas que no existen. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 }, { nNegativas: 1 });
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 1);
+  assert.strictEqual(r.continuidadDesplazada.length, 5, '16 − (12 − 1) = 5');
+  assert.strictEqual(r.seleccionadas.length, 12);
+});
+
+test('sin desbordar el N, la continuidad no cede nada', () => {
+  /* 8 de continuidad, N 12, cuota 4: caben las 8 + 4 negativas exactamente. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 }, { nContinuidad: 8 });
+  assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 8);
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4);
+  assert.strictEqual(r.seleccionadas.length, 12);
+  assert.deepEqual(r.continuidadDesplazada, []);
+});
+
+test('una negativa que ya venía del estudio anterior descuenta de la cuota', () => {
+  const { universo, previas } = universoDelCaso({ nContinuidad: 16 });
+  const conNegativa = universo.map((c) => (
+    c.name === 'Continuidad 15' ? { ...c, op: -30 } : c
+  ));
+  const r = scoreCandidates(conNegativa, { ...BASE_CUOTA, negativasObjetivo: 4 }, 'trading services', previas, {
+    ventasParteExaminada: 1000, iaMatch: curacionTotal(conNegativa),
+  });
+  assert.strictEqual(r.negativasDeContinuidad, 1);
+  assert.strictEqual(r.seleccionadas.filter(enPerdida).length, 4, 'cuatro en total, no cinco');
+  assert.strictEqual(r.seleccionadas.length, 12);
+});
+
+test('el motor dice cuánta continuidad tuvo que retirar la cuota', () => {
+  /* Es el dato que faltaba: los avisos decían «el resto del cupo lo llenaron positivas» y
+     «suba el objetivo», los dos falsos. */
+  const r = correrCaso({ ...BASE_CUOTA, negativasObjetivo: 4 });
+  assert.strictEqual(r.continuidadDesplazadaPorCuota, 8);
 });

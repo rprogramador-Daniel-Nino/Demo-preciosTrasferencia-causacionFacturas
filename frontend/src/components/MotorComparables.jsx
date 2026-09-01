@@ -58,8 +58,15 @@ const mil = (n) => Number(n || 0).toLocaleString('es-CO');
    no para leerla entera. */
 function CostoDelFiltro({ paso, universo, expandido, alExpandir }) {
   if (!paso || !universo) return null;
+  /* Un filtro en «incluir» no descarta a nadie, y decir «apagado» ahí se leía como que el
+     control estuviera roto —se reportó exactamente así sobre «Pérdidas Operativas» puesto en
+     Incluir—. Lo que importa es el efecto, no el estado del interruptor. */
   if (!paso.activo) {
-    return <span className="text-[10px] text-zinc-400 shrink-0" title={paso.queHace}>apagado</span>;
+    return (
+      <span className="text-[10px] text-zinc-400 shrink-0" title={paso.queHace}>
+        no descarta
+      </span>
+    );
   }
   if (paso.saca === 0) {
     return (
@@ -881,10 +888,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               : '') +
             `. Del universo había ${negDisponibles} con la misma actividad detectada.`, 'ok');
         } else {
-          anotar(`Se pidieron ${negObjetivo} comparables en pérdida y solo se incluyeron ` +
-            `${negIncluidas}: el universo de Capital IQ tiene ${negDisponibles} con la misma ` +
-            'actividad detectada que superan los filtros. El resto del cupo lo llenaron ' +
-            'positivas. Amplíe el cribado o revise la actividad detectada si necesita más.', 'aviso');
+          /* La causa importa y antes se afirmaba una sola —«el resto del cupo lo llenaron
+             positivas»— que era falsa cuando la continuidad se había llevado el cupo entero.
+             Se reportó sobre un caso real con 16 de continuidad y 41 negativas disponibles:
+             entraron 0 y el aviso mandaba a ampliar un cribado que estaba bien. */
+          const causa = negDisponibles < negObjetivo
+            ? `el universo de Capital IQ solo tiene ${negDisponibles} con la misma actividad `
+              + 'detectada que superen los filtros. Amplíe el cribado del paso 1, o revise la '
+              + 'actividad detectada si cree que debería reconocer más.'
+            : `el universo tiene ${negDisponibles} con la misma actividad detectada, así que no `
+              + 'faltan candidatas: lo que faltó fue cupo. Suba el N objetivo en el paso 2.';
+          anotar(`Se pidieron ${negObjetivo} comparables en pérdida y solo se incluyeron `
+            + `${negIncluidas}: ${causa}`, 'aviso');
         }
         if (!String(engineConfig.justificacionPerdida || '').trim()) {
           anotar('Falta la justificación de la política de pérdidas: sin ella, el informe ' +
@@ -909,6 +924,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         anotar(`${ampliadas} entraron por actividad relacionada, no idéntica, para no bajar de ` +
           `${MINIMO_COMPARABLES} comparables. Revíselas una a una: hay que justificar en el informe ` +
           'la ampliación del criterio de búsqueda.', 'aviso');
+      }
+
+      /* La continuidad que la cuota obligó a retirar. Va en su propio aviso y con los
+         nombres: retirar una comparable aceptada el año anterior se justifica en el informe, y
+         antes desaparecían sin que nada lo dijera. */
+      const desplazadas = result.continuidadDesplazada || [];
+      if (desplazadas.length) {
+        const nombres = desplazadas.map((c) => c.name).filter(Boolean);
+        const muestra3 = nombres.slice(0, 3).join(', ');
+        anotar(`La cuota de ${negObjetivo} comparable(s) en pérdida obligó a retirar `
+          + `${desplazadas.length} del estudio anterior, las de menor puntaje`
+          + (muestra3 ? `: ${muestra3}${nombres.length > 3 ? ` y ${nombres.length - 3} más` : ''}` : '')
+          + `. Cada retiro hay que justificarlo en el informe. Si prefiere conservar la serie, `
+          + `suba el N objetivo a ${result.continuidad + desplazadas.length + negIncluidas} y `
+          + 'vuelva a correr: caben las dos cosas.', 'aviso');
       }
 
       if (result.continuidadExcedeObjetivo) {
@@ -2317,10 +2347,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     objetivos, pasan la curación y no alcanzan el cupo. Así las nombran ya la
                     Tabla 16 del informe y la hoja del embudo del Excel de soporte, y la pantalla
                     tiene que coincidir con lo que se radica. */}
+                {/* Cuenta la RESERVA y no `rechazadasRigor`: las de reserva no pasan por
+                    `rechazadas` —el informe las suma aparte y meterlas en las dos listas
+                    descuadraría la tabla contra el universo—, así que esta casilla mostraba 0
+                    con 738 en reserva. Se reportó exactamente así. */}
                 <div>
                   Diferencias funcionales{' '}
-                  <b className={'tabular-nums ' + ((selectionFunnel.rechazadasRigor ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
-                    {(selectionFunnel.rechazadasRigor ?? 0).toLocaleString('es-CO')}
+                  <b className={'tabular-nums ' + ((selectionFunnel.reserva ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
+                    {(selectionFunnel.reserva ?? 0).toLocaleString('es-CO')}
                   </b>
                   <span className="text-zinc-400" title="Superan los filtros objetivos y la curación, pero no alcanzan el cupo de la muestra (Art. 260-4)"> (Art. 260-4)</span>
                 </div>
