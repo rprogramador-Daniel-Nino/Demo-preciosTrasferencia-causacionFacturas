@@ -23,7 +23,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 import { num, pliOf, adjustInfo, segmentacionDesajuste } from '../utils/calculations.js';
-import { analizarRango } from './rangoIntercuartil.js';
+import { analizarRango, margenQueDecide } from './rangoIntercuartil.js';
 import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
 import { enPerdida, gradoDeActividad } from './comparablesEngine.js';
 
@@ -390,9 +390,12 @@ function palancasQueCambianElVeredicto({
 function cuotaMinimaQueCumple({ study, muestra, ambito, negativasDisponibles, indicador }) {
   if (indicador === null || !negativasDisponibles.length || !muestra.length) return null;
 
-  /* Las más cercanas al contribuyente primero: el mismo orden que aplica el motor. */
+  /* Las más cercanas al contribuyente primero, con la MISMA vara que aplica el motor: el PLI
+     que decide el cumplimiento, ajustado o no según `useadj`. Con la vara cruda este cálculo
+     devolvía una cuota que no cumplía —el motor elegía otro conjunto— y la tarjeta mandaba a
+     probar un número equivocado. */
   const porCercania = [...negativasDisponibles].sort((a, b) => {
-    const ma = margenCrudo(a), mb = margenCrudo(b);
+    const ma = margenParaCercania(a, study), mb = margenParaCercania(b, study);
     if (ma === null && mb === null) return 0;
     if (ma === null) return 1;
     if (mb === null) return -1;
@@ -418,8 +421,12 @@ function cuotaMinimaQueCumple({ study, muestra, ambito, negativasDisponibles, in
    deja de describir el mercado y el rango entero se va a negativo, que es peor que no cumplir. */
 const MINIMO_POSITIVAS_EN_MUESTRA = 2;
 
-/** El margen operacional crudo de una candidata, para ordenar por cercanía. */
-function margenCrudo(cand) {
+/* La vara con que se ordena la cercanía: la misma que decide el cumplimiento. Si el ajuste no
+   se puede calcular para esa candidata —le faltan partidas— se cae al margen crudo, porque
+   quedarse sin medida no es lo mismo que estar lejos. */
+function margenParaCercania(cand, study) {
+  const ajustado = margenQueDecide(cand, study);
+  if (ajustado !== null) return ajustado;
   const s = num(cand.s), op = num(cand.op);
   if (s === null || !s || op === null) return null;
   return op / s;

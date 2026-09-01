@@ -2250,3 +2250,87 @@ test('el motor publica el criterio que usó para la cuota', () => {
   );
   assert.strictEqual(sinPli.criterioNegativas, 'puntaje');
 });
+
+/* ══════ La cuota mide con la MISMA vara que decide el cumplimiento ══════
+
+   Reportado el 2026-09-01: «nosotros cumplimos según el rango ajustado, por eso las comparables
+   deben ser seleccionadas con este criterio». Tenía razón y era un tradeoff mío mal elegido: la
+   cercanía se medía sobre el margen CRUDO para no acoplar módulos, mientras la conclusión del
+   estudio se sostiene en el PLI AJUSTADO cuando `useadj` está puesto.
+
+   La diferencia no es cosmética. El contribuyente NO se ajusta contra sí mismo —los ratios se
+   cancelan— así que su PLI no se mueve, pero el de cada comparable sí. Con el capital de trabajo
+   de las comparables en cero, el ajuste es un corrimiento constante hacia arriba: para quedar
+   cerca del contribuyente EN TÉRMINOS AJUSTADOS hay que elegir comparables cuyo margen crudo esté
+   ese corrimiento MÁS ABAJO. Medir con la vara equivocada elige el conjunto equivocado. */
+
+const candVara = (nombre, opPct) => ({
+  id: nombre, name: nombre, nameKey: nameKey(nombre),
+  s: 1000, c: 700, op: (opPct / 100) * 1000, ar: 0, inv: 0, ap: 0, ppe: 0,
+  desc: 'trading services', country: 'Japan',
+});
+
+test('con una vara inyectada, la cuota ordena por ELLA y no por el margen crudo', () => {
+  /* La vara simula el ajuste: suma 3 puntos al margen de cada comparable, como hace el ajuste
+     de capital de trabajo cuando las comparables no traen capital de trabajo. */
+  const negativas = [-20, -40, -60, -80, -100, -120].map((op) => candVara('Neg ' + Math.abs(op), op / 10));
+  const positivas = Array.from({ length: 20 }, (_, i) => candVara('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const config = {
+    nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 3,
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  };
+  const pliTP = -0.05;   // el contribuyente en -5 %
+
+  /* Sin vara: cercanía sobre el margen crudo -> las de -4 %, -6 % y -2 % (o -8 %). */
+  const cruda = scoreCandidates(universo, config, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: pliTP, metodoPli: 'MO',
+  });
+  /* Con vara: el margen efectivo es crudo + 3 puntos, así que para quedar en -5 % hay que
+     elegir las que crudas están en -8 %. */
+  const conVara = scoreCandidates(universo, config, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: pliTP, metodoPli: 'MO',
+    margenDeCandidata: (c) => (c.op / c.s) + 0.03,
+  });
+
+  const crudas = cruda.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  const varas = conVara.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.notDeepEqual(crudas, varas, 'la vara tiene que cambiar el conjunto elegido');
+  assert.ok(varas[0] < crudas[0],
+    'con la vara ajustada entran comparables de margen crudo MÁS BAJO, que es el punto');
+});
+
+test('sin vara inyectada se sigue usando el margen crudo, como antes', () => {
+  const negativas = [-20, -40, -60, -80].map((op) => candVara('Neg ' + Math.abs(op), op / 10));
+  const positivas = Array.from({ length: 20 }, (_, i) => candVara('Pos ' + i, 6));
+  const universo = [...negativas, ...positivas];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const r = scoreCandidates(universo, {
+    nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 2,
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+  });
+  const elegidas = r.seleccionadas.filter(enPerdida).map((c) => c.op).sort((a, b) => a - b);
+  assert.deepEqual(elegidas, [-60, -40], 'las dos más cercanas a -5 % en margen crudo');
+});
+
+test('el motor dice con qué vara midió', () => {
+  const negativas = [-20, -60].map((op) => candVara('Neg ' + Math.abs(op), op / 10));
+  const universo = [...negativas, ...Array.from({ length: 20 }, (_, i) => candVara('Pos ' + i, 6))];
+  const iaMatch = { porId: Object.fromEntries(universo.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])) };
+  const base = {
+    nTarget: 12, minimo: 10, perdidaOp: 'incluir', negativasObjetivo: 1,
+    holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  };
+  const conVara = scoreCandidates(universo, base, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+    margenDeCandidata: (c) => (c.op / c.s) + 0.03,
+  });
+  assert.strictEqual(conVara.varaDeCercania, 'inyectada');
+  const cruda = scoreCandidates(universo, base, 'trading services', [], {
+    ventasParteExaminada: 1000, iaMatch, pliParteExaminada: -0.05, metodoPli: 'MO',
+  });
+  assert.strictEqual(cruda.varaDeCercania, 'margen-crudo');
+});

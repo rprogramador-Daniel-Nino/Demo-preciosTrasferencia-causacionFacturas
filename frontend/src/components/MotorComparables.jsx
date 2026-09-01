@@ -4,7 +4,7 @@ import {
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { analizarRango } from '../services/rangoIntercuartil';
+import { analizarRango, margenQueDecide } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { previsualizarFiltros } from '../services/previsualizarFiltros';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
@@ -293,6 +293,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            una selección distinta de la que se radicó. */
         pliParteExaminada: margenExaminada(study),
         metodoPli: study.pli || 'MO',
+        margenDeCandidata: (c) => margenQueDecide(c, study),
       },
     );
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
@@ -842,6 +843,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            cargadas el motor degrada al orden por puntaje. */
         pliParteExaminada: margenExaminada(study),
         metodoPli: study.pli || 'MO',
+        /* Y con la MISMA vara que decide el cumplimiento: si la conclusión del estudio se
+           sostiene en el rango ajustado, la cercanía se mide sobre el PLI ajustado. Medirla
+           sobre el margen crudo elegía el conjunto equivocado — el contribuyente no se ajusta
+           contra sí mismo, así que su PLI no se mueve pero el de las comparables sí. */
+        margenDeCandidata: (c) => margenQueDecide(c, study),
       });
 
       /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era

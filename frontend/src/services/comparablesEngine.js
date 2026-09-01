@@ -654,6 +654,23 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      puntaje: elegir por cercanía a un número que no existe sería inventar. */
   const pliTP = num(contexto.pliParteExaminada);
   const metodoPli = contexto.metodoPli || 'MO';
+  /* CON QUÉ VARA se mide la cercanía. Por omisión el margen crudo de la fuente, pero el
+     llamador puede inyectar la suya, y debe hacerlo cuando la conclusión del estudio se
+     sostiene en el rango AJUSTADO: ahí la vara que importa es el PLI ajustado por capital de
+     trabajo, no el crudo.
+
+     La diferencia no es cosmética. El contribuyente no se ajusta contra sí mismo —sus ratios
+     se cancelan— así que su PLI no se mueve, pero el de cada comparable sí. Con el capital de
+     trabajo de las comparables en cero el ajuste es un corrimiento constante hacia arriba, de
+     modo que para quedar cerca del contribuyente EN TÉRMINOS AJUSTADOS hay que elegir
+     comparables cuyo margen crudo esté ese corrimiento más abajo. Medir con la vara equivocada
+     elige el conjunto equivocado (reportado el 2026-09-01).
+
+     Se inyecta en lugar de importar el motor de ajuste aquí porque «qué vara decide» lo sabe
+     quien conoce `useadj`, que es el llamador, y porque así se prueba sin montar el ajuste. */
+  const margenInyectado = typeof contexto.margenDeCandidata === 'function'
+    ? contexto.margenDeCandidata
+    : null;
   /* Veredicto de la curación por IA, por identificador de la fuente. Se aplica
      como filtro duro y, cuando confirma la coincidencia, como factor máximo de
      especialidad. */
@@ -889,10 +906,17 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      capital de trabajo, que es el que decide el rango: replicar el motor OCDE aquí encadenaría
      los dos módulos. Para ordenar por semejanza el margen crudo es la medida correcta —es el
      perfil de la compañía, no el del escenario de ajuste— y basta. */
-  const margenDe = (cand) => pliOf({
+  const margenCrudoDe = (cand) => pliOf({
     s: num(cand.s), c: num(cand.c), op: num(cand.op),
     ar: num(cand.ar), inv: num(cand.inv), ap: num(cand.ap),
   }, metodoPli);
+  const margenDe = (cand) => {
+    if (!margenInyectado) return margenCrudoDe(cand);
+    /* Si la vara inyectada no puede medir esta candidata —le faltan partidas—, se cae al margen
+       crudo en vez de mandarla al final: quedarse sin medida no es lo mismo que estar lejos. */
+    const v = num(margenInyectado(cand));
+    return v === null ? margenCrudoDe(cand) : v;
+  };
   const ordenarNegativas = (lista) => {
     if (pliTP === null) return lista;
     return [...lista].sort((a, b) => {
@@ -1086,6 +1110,9 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     /* Con qué criterio se eligieron las negativas de la cuota. El informe lo escribe: la
        selección de comparables es una decisión metodológica y su criterio se sustenta. */
     criterioNegativas,
+    /* Con qué vara se midió la cercanía: el margen crudo de la fuente, o la que inyectó el
+       llamador —el PLI ajustado cuando la conclusión se sostiene en el rango ajustado—. */
+    varaDeCercania: margenInyectado ? 'inyectada' : 'margen-crudo',
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,
