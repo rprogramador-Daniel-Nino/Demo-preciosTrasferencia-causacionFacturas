@@ -2584,3 +2584,133 @@ test('la DISTINTA se descarta: la actividad no es decorativa', () => {
   assert.ok(!r.seleccionadas.some((c) => c.id === 'D1'), 'la de actividad distinta no entra');
   assert.ok(r.rechazadas.some((c) => c.id === 'D1' && c.motivoClave === 'actividadDistinta'));
 });
+
+/* ══════════════════ ALTERNATIVAS DE SELECCIÓN, NUMERADAS Y REPRODUCIBLES ══════════════════
+
+   Pedido el 2026-09-02: «es importante que cada ejecución seleccione comparables distintas, o
+   que coloquemos una reejecución para que siempre se seleccionen distintas».
+
+   POR QUÉ NO ES ALEATORIO. La selección de este motor es determinista a propósito: mismo cribado
+   y misma configuración dan siempre la misma muestra. Eso es lo que permite responderle a un
+   revisor «estas doce, porque son las de mayor puntaje según estos criterios» en vez de «salieron
+   esas». Con azar el estudio deja de ser reproducible —ni el propio despacho podría volver a
+   obtener la muestra que radicó— y una reejecución hasta que cumpla es selección por resultado.
+
+   ASÍ QUE SE EXPLORA SIN PERDER ESO: la alternativa N conserva las mejores por puntaje y
+   sustituye las últimas por las siguientes de la reserva. La alternativa 3 de hoy es la
+   alternativa 3 de dentro de un año, así que la muestra sigue siendo reconstruible desde el
+   cribado y el número de alternativa, y el informe puede declarar cuál se usó.
+
+   LA CUOTA DE NEGATIVAS NO SE TOCA. Se elige por un criterio declarado —las más cercanas por
+   debajo del contribuyente— y variar entre ellas contradiría ese criterio. Lo que varía son las
+   POSITIVAS, que se eligen por puntaje y donde hay muchas equivalentes. */
+
+const cAlt = (id, score) => ({
+  id, name: 'Alt ' + id, nameKey: nameKey('Alt ' + id),
+  s: 10000, c: 6000, op: 1000 + score, desc: 'x',
+});
+
+const CFG_ALT = {
+  nTarget: 5, minimo: 1, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+/* Un universo de 10 positivas con puntajes separados, para que el orden no dependa de empates. */
+const UNIVERSO_ALT = Array.from({ length: 10 }, (_, i) => cAlt('A' + i, (10 - i) * 100));
+
+const nombres = (r) => r.seleccionadas.map((c) => c.id).sort().join(',');
+
+test('la alternativa 1 es EXACTAMENTE el comportamiento de siempre', () => {
+  /* LA PRUEBA QUE PROTEGE LO QUE YA FUNCIONA. Si la alternativa por defecto se desviara aunque
+     fuera en una comparable, todos los estudios ya radicados dejarían de ser reproducibles. */
+  const sinPedirNada = scoreCandidates(UNIVERSO_ALT, CFG_ALT, 'x', [], { ventasParteExaminada: 10000 });
+  const pidiendoLa1 = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: 1 }, 'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(nombres(pidiendoLa1), nombres(sinPedirNada));
+  assert.strictEqual(sinPedirNada.alternativa, 1, 'y se declara cuál se usó');
+});
+
+test('la alternativa 2 conserva las mejores y sustituye la última', () => {
+  const a1 = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: 1 }, 'x', [], { ventasParteExaminada: 10000 });
+  const a2 = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: 2 }, 'x', [], { ventasParteExaminada: 10000 });
+
+  assert.strictEqual(a2.seleccionadas.length, a1.seleccionadas.length, 'el N no cambia');
+  assert.notStrictEqual(nombres(a2), nombres(a1), 'y la muestra SÍ cambia');
+
+  const en1 = new Set(a1.seleccionadas.map((c) => c.id));
+  const en2 = new Set(a2.seleccionadas.map((c) => c.id));
+  const salieron = [...en1].filter((x) => !en2.has(x));
+  const entraron = [...en2].filter((x) => !en1.has(x));
+  assert.strictEqual(salieron.length, 1, 'sale exactamente una');
+  assert.strictEqual(entraron.length, 1, 'y entra exactamente una');
+});
+
+test('cada alternativa es reproducible: la misma da la misma muestra siempre', () => {
+  /* Es lo que sostiene la defensa del estudio, y lo que el azar rompía. */
+  for (const alt of [1, 2, 3, 4]) {
+    const a = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: alt }, 'x', [], { ventasParteExaminada: 10000 });
+    const b = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: alt }, 'x', [], { ventasParteExaminada: 10000 });
+    assert.strictEqual(nombres(a), nombres(b), 'la alternativa ' + alt + ' es estable');
+  }
+});
+
+test('alternativas distintas dan muestras distintas', () => {
+  const vistas = new Set();
+  for (const alt of [1, 2, 3, 4]) {
+    const r = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: alt }, 'x', [], { ventasParteExaminada: 10000 });
+    vistas.add(nombres(r));
+  }
+  assert.strictEqual(vistas.size, 4, 'las cuatro son distintas entre sí');
+});
+
+test('dice cuántas alternativas hay de verdad, según lo que da la reserva', () => {
+  /* Un botón que ofrece alternativas que no existen devuelve la misma muestra y parece roto. */
+  const r = scoreCandidates(UNIVERSO_ALT, CFG_ALT, 'x', [], { ventasParteExaminada: 10000 });
+  /* 5 de cupo y 10 candidatas: se pueden sustituir hasta 5, así que 6 alternativas contando la 1. */
+  assert.strictEqual(r.alternativasDisponibles, 6);
+
+  /* Sin reserva no hay nada que sustituir: una sola alternativa. */
+  const justas = scoreCandidates(UNIVERSO_ALT.slice(0, 5), CFG_ALT, 'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(justas.alternativasDisponibles, 1);
+});
+
+test('una alternativa que no existe se topa en la última, no devuelve una muestra corta', () => {
+  const r = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: 99 }, 'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(r.seleccionadas.length, 5, 'el N se respeta igual');
+  const ultima = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: r.alternativasDisponibles }, 'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(nombres(r), nombres(ultima), 'se topa en la última que existe');
+});
+
+test('la cuota de negativas NO se altera entre alternativas', () => {
+  /* Las negativas se eligen por un criterio declarado —las más cercanas por debajo del
+     contribuyente— y variar entre ellas contradiría ese criterio, que es lo que el informe
+     declara. Lo que varía son las positivas. */
+  const universo = [
+    ...Array.from({ length: 8 }, (_, i) => cAlt('P' + i, (10 - i) * 100)),
+    ...Array.from({ length: 4 }, (_, i) => ({
+      ...cAlt('N' + i, 50 - i), op: -500 - i * 100, hasLoss: true,
+    })),
+  ];
+  const cfg = { ...CFG_ALT, nTarget: 6, negativasObjetivo: 2 };
+  const a1 = scoreCandidates(universo, { ...cfg, alternativa: 1 }, 'x', [], { ventasParteExaminada: 10000 });
+  const a3 = scoreCandidates(universo, { ...cfg, alternativa: 3 }, 'x', [], { ventasParteExaminada: 10000 });
+
+  const negs = (r) => r.seleccionadas.filter((c) => c.op < 0).map((c) => c.id).sort().join(',');
+  assert.strictEqual(negs(a3), negs(a1), 'las mismas negativas en las dos alternativas');
+  assert.strictEqual(a1.negativasIncluidas, 2);
+  assert.strictEqual(a3.negativasIncluidas, 2);
+});
+
+test('la continuidad tampoco cede por una alternativa', () => {
+  /* Retirar una comparable aceptada el año anterior hay que justificarlo en el informe: no puede
+     pasar porque el analista pulsó «otra combinación». */
+  const universo = Array.from({ length: 10 }, (_, i) => cAlt('A' + i, (10 - i) * 100));
+  const previas = [{ name: 'Alt A9' }];  // la de PEOR puntaje, la primera que cedería
+  const a4 = scoreCandidates(universo, { ...CFG_ALT, alternativa: 4 }, 'x', previas, { ventasParteExaminada: 10000 });
+  assert.ok(a4.seleccionadas.some((c) => c.id === 'A9'), 'la de continuidad sigue dentro');
+});
+
+test('el número de alternativa viaja en el resultado para que el informe lo declare', () => {
+  const r = scoreCandidates(UNIVERSO_ALT, { ...CFG_ALT, alternativa: 3 }, 'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(r.alternativa, 3);
+  assert.ok(r.alternativasDisponibles >= 3);
+});

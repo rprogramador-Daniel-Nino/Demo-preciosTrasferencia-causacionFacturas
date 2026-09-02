@@ -1029,7 +1029,45 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const deNegativas = mismasNegativas.slice(0, Math.min(porCubrir, cupoRestante));
 
   const cupoParaPositivas = Math.max(0, cupoRestante - deNegativas.length);
-  const deMisma = mismasPositivas.slice(0, cupoParaPositivas);
+
+  /* ── ALTERNATIVAS DE SELECCION, NUMERADAS Y REPRODUCIBLES ──
+     Pedido el 2026-09-02: poder reejecutar y obtener comparables distintas.
+
+     NO es aleatorio, y la diferencia importa. La seleccion de este motor es determinista a
+     proposito: mismo cribado y misma configuracion dan siempre la misma muestra, y eso es lo
+     que permite responderle a un revisor «estas doce, porque son las de mayor puntaje segun
+     estos criterios» en vez de «salieron esas». Con azar el estudio deja de ser reproducible
+     —ni el propio despacho podria volver a obtener la muestra que radico— y reejecutar hasta
+     que cumpla es seleccion por resultado, que es justo lo que un revisor busca.
+
+     Asi que se explora sin perder eso: la alternativa N conserva las mejores por puntaje y
+     sustituye las ultimas N-1 por las siguientes de la reserva. La alternativa 3 de hoy es la
+     alternativa 3 de dentro de un anio, de modo que la muestra se reconstruye desde el cribado
+     mas el numero de alternativa, y el informe puede declarar cual se uso.
+
+     SOLO VARIAN LAS POSITIVAS. La cuota de negativas se elige por un criterio declarado —las
+     mas cercanas por debajo del contribuyente— y variar entre ellas contradiria ese criterio.
+     La continuidad tampoco cede: retirar una comparable aceptada el anio anterior hay que
+     justificarlo en el informe, y no puede pasar porque alguien pulso «otra combinacion».
+
+     El desplazamiento se topa en lo que la reserva permite de verdad: una alternativa que no
+     existe devolveria la misma muestra y el boton pareceria roto, asi que se satura en la
+     ultima y `alternativasDisponibles` dice cuantas hay. */
+  const sustituiblesPositivas = Math.min(
+    cupoParaPositivas,
+    Math.max(0, mismasPositivas.length - cupoParaPositivas),
+  );
+  const alternativasDisponibles = 1 + sustituiblesPositivas;
+  const alternativaPedida = Math.max(1, Math.trunc(Number(config.alternativa) || 1));
+  const alternativa = Math.min(alternativaPedida, alternativasDisponibles);
+  const sustituciones = alternativa - 1;
+
+  const deMisma = sustituciones > 0
+    ? [
+      ...mismasPositivas.slice(0, cupoParaPositivas - sustituciones),
+      ...mismasPositivas.slice(cupoParaPositivas, cupoParaPositivas + sustituciones),
+    ]
+    : mismasPositivas.slice(0, cupoParaPositivas);
   const faltan = Math.max(0, cupoParaPositivas - deMisma.length);
   const afinesPositivas = afines.filter((c) => !enPerdida(c));
   const deAmpliacion = afinesPositivas.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
@@ -1079,7 +1117,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivoRechazo: MOTIVO_DESPLAZADA_POR_CUOTA,
       categoriaRechazo: 'rigor',
     })),
-    ...mismasPositivas.slice(deMisma.length).map(enReserva),
+    /* Por IDENTIDAD y no por «slice(deMisma.length)»: la alternativa rompe el supuesto de que
+       las seleccionadas son un prefijo de la lista ordenada. Con la alternativa 3, `deMisma`
+       tiene el mismo tamanio pero NO son las primeras, asi que cortar por longitud dejaba a dos
+       seleccionadas TAMBIEN en la reserva —contadas dos veces en el embudo, que entonces deja de
+       cuadrar contra el universo— y perdia de vista a las desplazadas, que es justo lo que el
+       informe tiene que poder nombrar. */
+    ...mismasPositivas.filter((c) => !deMisma.includes(c)).map(enReserva),
     ...mismasNegativas.slice(deNegativas.length).map(enReserva),
     ...afinesPositivas.slice(deAmpliacion.length).map(enReserva),
     ...afines.filter(enPerdida).map(enReserva),
@@ -1089,6 +1133,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     evaluadas: evaluated.length,
     seleccionadas,
     rechazadas,
+    /* Cual de las combinaciones se uso y cuantas hay. Viaja en el resultado —y de ahi al
+       `selectionFunnel` que se persiste con el estudio— porque es lo que hace reproducible la
+       muestra: con el cribado y este numero se reconstruye exactamente la misma seleccion. */
+    alternativa,
+    alternativasDisponibles,
     /* Conteo por etapa, calculado aquí y no en la UI: son categorías del motor y
        deducirlas del texto del motivo obligaba a mantener una expresión regular en
        el componente, que se desincronizaba en cuanto cambiaba una redacción. */

@@ -141,6 +141,14 @@ export function construirLibroSoporte(datos) {
         disponibles: embudo.negativasDisponibles || 0,
         excluidasPorFiltro: embudo.negativasExcluidasPorFiltro || 0,
       },
+      /* Cual de las combinaciones equivalentes se uso. Se publica porque es lo que hace la
+         muestra REPRODUCIBLE: con el cribado y este numero se vuelve a obtener exactamente la
+         misma seleccion. Sin declararlo, la reproducibilidad existe en el codigo pero no en el
+         soporte, y es en el soporte donde un revisor la comprueba. */
+      combinacion: {
+        usada: embudo.alternativa || 1,
+        disponibles: embudo.alternativasDisponibles || 1,
+      },
     }
     : seleccion;
 

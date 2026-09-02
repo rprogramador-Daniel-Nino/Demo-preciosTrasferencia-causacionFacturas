@@ -349,3 +349,69 @@ test('ninguna hoja del libro nombra el rigor funcional retirado', () => {
     assert.doesNotMatch(texto, /Rigor funcional/i, `la hoja «${nombre}» todavía lo nombra`);
   });
 });
+
+/* ══════════ La combinación de selección, declarada en el soporte ══════════
+
+   El motor recorre combinaciones equivalentes numeradas —«Otra combinación» del paso 2— y cada
+   una es reproducible: la misma da siempre la misma muestra. Pero la reproducibilidad tiene que
+   quedar EN EL SOPORTE, no solo en el código: es en el libro donde un revisor la comprueba, y
+   una muestra que no son las doce de mayor puntaje sin nada que lo explique parece arbitraria.
+
+   Solo se declara cuando NO es la primera: en la 1 la muestra son directamente las de mayor
+   puntaje y una fila que lo dijera solo añadiría ruido. */
+
+const hojaSeleccion = (libro) => {
+  assert.ok(libro.SheetNames.includes('Selección comparables'),
+    'la hoja debe existir, o la aserción de abajo pasaría en vacío');
+  return XLSX.utils.sheet_to_csv(libro.Sheets['Selección comparables']);
+};
+
+test('la hoja de selección declara qué combinación se usó y que no es aleatoria', () => {
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    filtros: {
+      ...(PAYLOAD.filtros || {}),
+      selectionFunnel: {
+        ...((PAYLOAD.filtros && PAYLOAD.filtros.selectionFunnel) || {}),
+        alternativa: 3,
+        alternativasDisponibles: 13,
+      },
+    },
+  });
+  const texto = hojaSeleccion(libro);
+  assert.match(texto, /COMBINACIÓN DE SELECCIÓN/);
+  assert.match(texto, /3 de 13/);
+  assert.match(texto, /no es aleatoria/,
+    'lo que responde a «¿por qué estas doce?»: el criterio, no el azar');
+  assert.match(texto, /sustituye las 2 de menor puntaje/,
+    'cuántas cedieron, que es lo que reconstruye la muestra');
+});
+
+test('con la primera combinación no se imprime la fila', () => {
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    filtros: {
+      ...(PAYLOAD.filtros || {}),
+      selectionFunnel: {
+        ...((PAYLOAD.filtros && PAYLOAD.filtros.selectionFunnel) || {}),
+        alternativa: 1,
+        alternativasDisponibles: 13,
+      },
+    },
+  });
+  assert.doesNotMatch(hojaSeleccion(libro), /COMBINACIÓN DE SELECCIÓN/);
+});
+
+test('un estudio corrido antes de que esto existiera no rompe el libro', () => {
+  /* El caso real de un estudio guardado antes: SÍ trae embudo —por eso la hoja se genera— pero
+     no trae el campo `alternativa`, porque no existía cuando se corrió. La hoja tiene que salir
+     igual y sin la fila. */
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    filtros: {
+      ...(PAYLOAD.filtros || {}),
+      selectionFunnel: { evaluadas: 40, validas: 30, politicaPerdidas: 'excluir' },
+    },
+  });
+  assert.doesNotMatch(hojaSeleccion(libro), /COMBINACIÓN DE SELECCIÓN/);
+});

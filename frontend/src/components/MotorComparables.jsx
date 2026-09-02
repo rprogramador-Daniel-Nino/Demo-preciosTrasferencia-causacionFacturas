@@ -310,6 +310,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
        negativas que repartir y el motor lo ignora solo. Los estudios guardados antes de que
        esto existiera no lo traen, y el motor lo toma como 0. */
     negativasObjetivo: 0,
+    /* Cual de las combinaciones equivalentes se usa. 1 son las de mayor puntaje —el
+       comportamiento de siempre— y cada numero siguiente sustituye una mas por la siguiente de
+       la reserva. NO es azar: el mismo numero da siempre la misma muestra, que es lo que
+       mantiene el estudio reproducible (2026-09-02). Los estudios guardados antes de que esto
+       existiera no lo traen y el motor lo toma como 1. */
+    alternativa: 1,
     holding: 'excluir',
     /* Independencia (Art. 260-1 E.T.): una comparable con un accionista por encima
        del umbral no es independiente. Los estudios guardados antes de que existiera
@@ -988,7 +994,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   };
 
   // Run Motor TOP-N Selection & AI Curation
-  const runEngineSelection = async () => {
+  const runEngineSelection = async (alternativaForzada = null) => {
     if (!universo || universo.length === 0) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
@@ -1017,7 +1023,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         veredicto = (await curarValidas()) || veredicto;
       }
 
-      const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
+      /* La forzada manda sobre la del estado por lo dicho en `otraCombinacion`: en la misma
+         vuelta el estado todavia trae la anterior. */
+      const configDeEstaCorrida = alternativaForzada === null
+        ? engineConfig
+        : { ...engineConfig, alternativa: alternativaForzada };
+      const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
         iaMatch: veredicto,
         /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
@@ -1088,6 +1099,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         negativasIncluidas: result.negativasIncluidas || 0,
         negativasDisponibles: result.negativasDisponibles || 0,
         negativasExcluidasPorFiltro: result.negativasExcluidasPorFiltro || 0,
+        /* Cual de las combinaciones equivalentes se uso. Es lo que hace la muestra
+           reconstruible: con el cribado y este numero se vuelve a obtener exactamente la misma
+           seleccion, y por eso viaja al estudio guardado y no solo a la pantalla. */
+        alternativa: result.alternativa || 1,
+        alternativasDisponibles: result.alternativasDisponibles || 1,
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -1188,6 +1204,24 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setLoadingSelection(false);
     }
   };
+
+  /* «Otra combinacion»: la siguiente alternativa de seleccion, y vuelta a correr.
+
+     Da la vuelta al llegar a la ultima para que el boton nunca quede muerto, y NO gasta
+     curacion: el veredicto de actividad de cada candidata ya esta pagado y `scoreCandidates`
+     reutiliza el `iaMatch` en memoria, asi que recorrer combinaciones es gratis.
+
+     La alternativa se le pasa al motor por argumento en lugar de leerla del estado: `useState`
+     no es sincrono y correr en la misma vuelta usaria la anterior, de modo que el boton
+     mostraria siempre una combinacion de retraso. */
+  const otraCombinacion = () => {
+    const total = (selectionFunnel && selectionFunnel.alternativasDisponibles) || 1;
+    const actual = (selectionFunnel && selectionFunnel.alternativa) || 1;
+    const siguiente = total <= 1 ? 1 : (actual % total) + 1;
+    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente }));
+    runEngineSelection(siguiente);
+  };
+
 
   /* Vuelca en una fila las cifras leídas de un documento. Devuelve el arreglo
      nuevo; no toca el estado, para poder aplicar varias de una sola vez. */
@@ -2615,6 +2649,36 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     : 'Ejecutar Selección Automática'}
               </span>
             </button>
+
+            {/* ── OTRA COMBINACIÓN ──
+                Pedido el 2026-09-02: poder reejecutar y obtener comparables distintas. Recorre
+                combinaciones NUMERADAS, no aleatorias: la alternativa 3 es siempre la misma
+                muestra, así que el estudio sigue siendo reproducible y el informe puede
+                declarar cuál se usó. Con azar la respuesta a «¿por qué estas doce?» sería
+                «salieron esas», y ni el propio despacho podría volver a obtener lo que radicó.
+
+                Solo aparece cuando ya se corrió y hay reserva de la que sacar: ofrecer
+                combinaciones que no existen devolvería la misma muestra y el botón parecería
+                roto. No gasta curación —el veredicto de actividad ya está pagado y se
+                reutiliza—, así que explorar es gratis. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1 && (
+              <button
+                onClick={otraCombinacion}
+                disabled={loadingSelection || curando}
+                className={'flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold border transition-colors '
+                  + (loadingSelection || curando
+                    ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                    : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer')}
+                title={'Sustituye las comparables de menor puntaje por las siguientes de la '
+                  + 'reserva. Cada combinación está numerada y es reproducible: la misma '
+                  + 'siempre da la misma muestra. No vuelve a pagar la curación.'}
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>
+                  Otra combinación ({selectionFunnel.alternativa || 1}/{selectionFunnel.alternativasDisponibles})
+                </span>
+              </button>
+            )}
 
           </div>
 
