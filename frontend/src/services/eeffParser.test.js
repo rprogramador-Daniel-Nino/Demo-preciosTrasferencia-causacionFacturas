@@ -7,6 +7,7 @@ import {
   CAMPO_POR_RUBRO, RUBROS_DE_COTEJO, extraerTextoEstructuradoPdf,
   verifyAccountingEqualities,
   CAMPOS_CON_FALLBACK_NOTAS, promptFaltantesEnNotas, buscarFaltantesEnNotas,
+  repararMilesComoDecimal,
 } from './eeffParser.js';
 import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 
@@ -226,6 +227,38 @@ test('valorDeRubro acepta las tres formas en que responde el modelo', () => {
   assert.strictEqual(valorDeRubro(337546138), 337546138);
   assert.strictEqual(valorDeRubro({ valor: '337.546.138' }), 337546138);
   assert.strictEqual(valorDeRubro('337.546.138,00'), 337546138);
+});
+
+test('valorDeRubro rescata la cifra cuyo separador de miles llegó como punto decimal', () => {
+  /* El defecto que dejó la Tabla 10 con «4» donde el documento imprime 4.064.393: JSON no
+     admite el punto de miles, el modelo conserva el primero y `fmt()` redondea el resto. */
+  assert.strictEqual(valorDeRubro({ valor: 4.064393 }), 4064393);
+  assert.strictEqual(valorDeRubro({ valor: 4.064 }), 4064);
+  assert.strictEqual(valorDeRubro({ valor: 51.512 }), 51512);
+  assert.strictEqual(valorDeRubro({ valor: 687.123456 }), 687123456);
+  assert.strictEqual(valorDeRubro({ valor: -4.064 }), -4064);
+  /* La cadena con sus puntos ya la resolvía `num()`, y sigue igual. */
+  assert.strictEqual(valorDeRubro({ valor: '4.064.393' }), 4064393);
+});
+
+test('repararMilesComoDecimal deja en paz lo que sí es decimal', () => {
+  /* Céntimos: una o dos cifras tras el punto no son un grupo de miles. */
+  assert.strictEqual(repararMilesComoDecimal(1234.56), 1234.56);
+  assert.strictEqual(repararMilesComoDecimal(21.85), 21.85);
+  assert.strictEqual(repararMilesComoDecimal(1.5), 1.5);
+  /* Un primer grupo de más de tres dígitos no puede venir de un separador de miles. */
+  assert.strictEqual(repararMilesComoDecimal(21850.187), 21850.187);
+  /* Ningún separador de miles abre con un grupo «0». */
+  assert.strictEqual(repararMilesComoDecimal(0.123), 0.123);
+  /* Los enteros y lo que no es número pasan tal cual. */
+  assert.strictEqual(repararMilesComoDecimal(4064393), 4064393);
+  assert.strictEqual(repararMilesComoDecimal(0), 0);
+  assert.strictEqual(repararMilesComoDecimal(null), null);
+});
+
+test('el prompt prohíbe el separador de miles dentro del JSON', () => {
+  /* Sin esta regla el modelo transcribe «dígito por dígito» y deja el primer punto. */
+  assert.match(EEFF_PROMPT, /separador de miles NO va en el JSON/);
 });
 
 test('valorDeRubro distingue el cero de la ausencia', () => {

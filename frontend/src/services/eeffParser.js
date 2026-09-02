@@ -99,6 +99,7 @@ Tampoco se piden «otros gastos» ni «otros ingresos»: quedan fuera de los gas
 ── REGLAS DE TRANSCRIPCIÓN ──
 · Si una cifra aparece entre paréntesis o con signo negativo, devuélvela con signo negativo, tal como está impresa.
 · Una raya, un guion o una celda vacía significan que no hay cifra: eso es null, no cero. Un cero explícito impreso sí es 0.
+· El separador de miles NO va en el JSON: "4.064.393" se devuelve como 4064393, y "51.512" como 51512. JSON no admite un número con puntos de miles, y dejar el primero —4.064393— convierte cuatro millones en cuatro. El punto en un número JSON es SIEMPRE decimal: úsalo solo si el documento imprime decimales de verdad, y entonces con los dígitos que imprima ("1.234,56" → 1234.56).
 · Regla de escala, obligatoria y sin excepción: cada cifra numérica va EXACTAMENTE como aparece impresa en el documento, dígito por dígito — NUNCA la multipliques ni la conviertas tú, así el documento diga "en miles" o "en millones" en el encabezado. Si el documento imprime "28,81" en una columna rotulada "millones", el campo lleva 28.81 — NO 28810000. "unidad_origen" solo describe esa escala impresa para que otra parte del sistema decida qué hacer con ella; no es una instrucción para que tú calcules nada.
 
 Devuelve SOLO este JSON, sin marcas markdown:
@@ -444,8 +445,37 @@ export async function buscarFaltantesEnNotas(file, faltantes) {
  */
 export function valorDeRubro(rubro) {
   if (rubro === null || rubro === undefined) return null;
-  if (typeof rubro === 'object') return num(rubro.valor);
-  return num(rubro);
+  const valor = typeof rubro === 'object' ? num(rubro.valor) : num(rubro);
+  return repararMilesComoDecimal(valor);
+}
+
+/* Un separador de miles que el modelo dejó colado como punto decimal.
+
+   JSON no admite `4.064.393` como número, así que al transcribir «dígito por dígito» una
+   cifra colombiana el modelo tiene que elegir: o quita los puntos —correcto— o conserva el
+   primero, y entonces devuelve 4.064393, que son cuatro unidades y pico en vez de cuatro
+   millones. `num()` no puede rescatarlo: su lógica de miles solo actúa sobre cadenas, y esto
+   llega ya como número, así que pasa intacto hasta `fmt()`, que redondea y publica «4».
+
+   Caso real (2026-09-02): la Tabla 10 de un informe salió con las once filas del activo
+   reducidas a su primer grupo de dígitos —4.064 impreso, «4» publicado— y el A.V. de
+   «Total, Activos» dio 0,100 % en vez de 100 %, exactamente mil veces menor. En la ingesta
+   no se veía: `CampoMoneda` descarta todo lo que no sea dígito y vuelve a poner los puntos
+   de miles, así que la casilla mostraba la cifra correcta sobre un valor roto.
+
+   Se reconoce por la FORMA, no por el rubro ni por la compañía: un punto, un primer grupo
+   de uno a tres dígitos que no empieza en cero —ningún separador de miles abre con un grupo
+   «0»— y una parte decimal que suma grupos exactos de tres. Eso deja fuera lo que sí es
+   decimal: «1234.56» son céntimos y «21.85» también. Y si aun así la lectura fuera la
+   equivocada, `eeffVerificacion.js` la atrapa después, porque la cifra corregida tiene que
+   aparecer impresa en el documento. */
+const RX_MILES_COMO_DECIMAL = /^(-?[1-9]\d{0,2})\.(\d+)$/;
+
+export function repararMilesComoDecimal(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n) || Number.isInteger(n)) return n;
+  const m = RX_MILES_COMO_DECIMAL.exec(String(n));
+  if (!m || m[2].length % 3 !== 0) return n;
+  return Number(m[1] + m[2]);
 }
 
 /** El rótulo literal con que el documento imprimió ese rubro, si vino. */
