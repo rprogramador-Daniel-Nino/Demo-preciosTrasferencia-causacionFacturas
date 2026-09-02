@@ -816,10 +816,9 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          frase mandaba a un auditor a cotejar la conclusión contra una columna que el informe no
          usó. Mismo defecto de fondo que el reportado el 2026-09-02 en la memoria del rango
          —dar por hecho que el ajustado siempre manda— en otro sitio del mismo libro. */
-      dg.push([cTxt(study.useadj
-        ? 'El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),'
-        : 'El informe NO aplica ajuste de capital de trabajo: concluye sobre el rango sin ajustar. '
-          + 'El escenario «CxC+CxP+Inv» (columna W) es el que se usaría si se activara,')]);
+      /* Siempre «CxC+CxP+Inv»: el informe concluye sobre el rango ajustado en todo estudio
+         (2026-09-02). La variante que miraba `useadj` duro unas horas y ya no aplica. */
+      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
       dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
     }
 

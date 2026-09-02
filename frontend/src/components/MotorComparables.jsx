@@ -1703,7 +1703,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   // Calculations for Interquartile Range
   const kind = study.pli || 'MO';
-  const useAdj = study.useadj || false;
+  /* El cumplimiento se decide con el rango AJUSTADO en todo estudio (2026-09-02): «el MO sin
+     ajuste solo nos ayuda a escoger las comparables, pero como sabemos si cumple es con el rango
+     ajustado». La casilla ya no lo elige, asi que esta constante deja de leerla. Se conserva el
+     nombre para no tocar los seis sitios que la usan. */
+  const useAdj = true;
   const interestRate = (num(study.prime) || 0) / 100;
 
   // Ingreso/gasto de una operación no controlada (ej. proyecto CoCrea) ajeno a la
@@ -3177,6 +3181,26 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </p>
             )}
           </div>
+
+          {/* ── LA TASA EN CERO ANULA EL AJUSTE ──
+              Va PRIMERO, antes de cualquier otra cosa: el cumplimiento se concluye sobre el
+              rango ajustado, y sin tasa ese ajuste es nulo, de modo que el veredicto que se lee
+              arriba sale del rango sin ajustar. Es el aviso de más alcance de esta tarjeta
+              porque no habla de la muestra sino de la vara con la que se mide. */}
+          {diagnostico.ajusteAnulado && (
+            <div className="rounded-lg border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                  <strong>La tasa de interés está en cero.</strong> El cumplimiento se concluye
+                  sobre el rango ajustado por capital de trabajo, y ese ajuste se calcula con la
+                  tasa: en cero, el ajuste de cada comparable es nulo y el rango ajustado
+                  coincide con el rango sin ajustar. El veredicto de arriba sale entonces del
+                  rango que no debería decidir. Fije la tasa (Prime Rate) en el paso 3.
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Cuando ninguna palanca alcanza, esto es lo único accionable: qué buscar en el
               paso 1. Va antes de las palancas porque ampliar el cribado sostiene mejor el

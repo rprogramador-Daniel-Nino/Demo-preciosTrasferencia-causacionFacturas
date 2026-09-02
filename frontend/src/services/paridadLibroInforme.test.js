@@ -242,7 +242,13 @@ test('el informe y el libro coinciden en los tres indicadores del sistema, con a
       const estudio = { ...ESTUDIO_INFORME, pli, useadj };
       const delInforme = analizarRango(estudio);
       const norm = obtenerEstudioNormalizadoParaParche(estudio);
-      const idx = useadj ? IDX_SABOR_INFORME : IDX_SIN_AJUSTE;
+      /* SIEMPRE la columna del escenario ajustado, con la casilla encendida o apagada:
+         El cumplimiento se decide SIEMPRE con el rango ajustado desde el 2026-09-02
+     («el MO sin ajuste solo nos ayuda a escoger las comparables, pero como sabemos si
+     cumple es con el rango ajustado»). `useadj` dejo de elegirlo.
+         La prueba conserva lo que vino a cerrar —que el rango del informe sea exactamente el
+         de una columna del libro, estadistico por estadistico— y solo cambia cual columna. */
+      const idx = IDX_SABOR_INFORME;
       const delLibro = estadisticaDelLibro(norm, pli, idx);
       const donde = `${pli}, useadj=${useadj}`;
       assert.ok(delInforme.stats, `${donde}: el informe publica rango`);

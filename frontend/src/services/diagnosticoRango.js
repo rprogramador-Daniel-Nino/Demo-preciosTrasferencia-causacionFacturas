@@ -195,7 +195,10 @@ export function diagnosticarCumplimiento({
 
   const hayVeredicto = Boolean(stats) && indicador !== null;
   const palancas = (cumple || !hayVeredicto) ? [] : palancasQueCambianElVeredicto({
-    study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+    /* `conAjuste` ya no viaja: es el rango que DECIDE (2026-09-02), y la palanca del ajuste
+       solo necesita el otro para decir si el ajuste es lo que deja fuera al contribuyente.
+       Pasarlo sin usarlo invitaba a volver a compararlo consigo mismo. */
+    study, muestra, ambito, metodo, indicador, universo, sinAjuste,
     costosImplausibles,
   });
 
@@ -207,9 +210,24 @@ export function diagnosticarCumplimiento({
     estudio: study, tamanoMuestra: muestra.length, indicador, universo,
   });
 
+  /* ── LA TASA EN CERO ANULA EL AJUSTE, Y CON EL LA VARA QUE DECIDE ──
+     El cumplimiento se concluye sobre el rango ajustado (2026-09-02), y ese ajuste se calcula
+     con la tasa del paso 3. Con la tasa en cero cada ajuste sale nulo, el rango ajustado
+     COLAPSA al crudo y el veredicto pasa a salir del rango que la metodologia del despacho
+     descarta — sin que nada en la pantalla lo diga. Medido sobre el caso reportado: decidia con
+     un P25 de 1,364 % (CUMPLE) en vez de 6,232 % (NO CUMPLE).
+
+     Va en el diagnostico y no solo en la memoria del rango porque es AQUI donde se lee el
+     veredicto; el modal hay que abrirlo. */
+  const tasaAjuste = num(study.prime) || 0;
+  const ajusteAnulado = !tasaAjuste;
+
   return {
     cumple,
     colchon,
+    /* `true` cuando el rango ajustado no puede ajustar nada. La pantalla lo pinta como aviso,
+       porque invalida la vara con la que se concluye. */
+    ajusteAnulado,
     requisito,
     /* `null` cuando no hay rango o no hay indicador: es distinto de «no cumple», y la
        pantalla tiene que poder decir «faltan datos» en vez de un veredicto. */
@@ -227,7 +245,10 @@ export function diagnosticarCumplimiento({
     rangos: {
       ajustado: conAjuste.stats,
       sinAjustar: sinAjuste.stats,
-      decide: study.useadj ? 'ajustado' : 'sinAjustar',
+      /* Siempre el ajustado (2026-09-02): es el que sostiene la conclusion. Se conserva el
+         campo porque la tarjeta lo pinta y porque publicar los dos rangos sigue siendo util
+         —el sin ajustar es la vara con que se eligieron las comparables—. */
+      decide: 'ajustado',
     },
     palancas,
     costosImplausibles,
@@ -245,7 +266,7 @@ export function diagnosticarCumplimiento({
    la lista si el contribuyente pasa a estar dentro. Lo que no cambia el veredicto no se
    nombra, porque una lista de sugerencias inútiles se deja de leer. */
 function palancasQueCambianElVeredicto({
-  study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+  study, muestra, ambito, metodo, indicador, universo, sinAjuste,
   costosImplausibles = [],
 }) {
   const palancas = [];
@@ -296,22 +317,25 @@ function palancasQueCambianElVeredicto({
     });
   }
 
-  /* ── 2. El ajuste de capital de trabajo ──
-     Está calculado siempre; lo único que `useadj` decide es cuál de los dos sostiene la
-     conclusión. Si el que NO decide sí contiene al contribuyente, eso es información: es una
-     decisión metodológica del estudio, no un cambio en la muestra. */
-  const decideAjustado = Boolean(study.useadj);
-  const elOtro = decideAjustado ? sinAjuste : conAjuste;
-  if (elOtro && dentro(elOtro.stats, indicador)) {
+  /* ── 2. El rango sin ajustar ──
+     El cumplimiento lo decide el AJUSTADO en todo estudio (2026-09-02), asi que esto ya no es
+     una palanca que el analista pueda accionar: no hay casilla que cambie la conclusion. Sigue
+     siendo informacion —y por eso se reporta— porque dice DONDE esta el problema: si sin el
+     ajuste el contribuyente si queda dentro, lo que lo saca es el ajuste, y entonces lo que hay
+     que revisar es el capital de trabajo de las comparables (o el propio), no la muestra.
+
+     Se emite como observacion y NO se promete que cambie el veredicto, que es la regla de esta
+     lista: proponer «apague el ajuste» seria proponer concluir con el rango que la metodologia
+     del despacho descarta. */
+  if (sinAjuste && dentro(sinAjuste.stats, indicador)) {
     palancas.push({
       clave: 'ajusteCapitalTrabajo',
       cuantificado: null,
-      texto: decideAjustado
-        ? 'Sin el ajuste de capital de trabajo el contribuyente SÍ queda dentro del rango. '
-          + 'Hoy la conclusión la sostiene el rango ajustado porque la casilla está activada.'
-        : 'Con el ajuste de capital de trabajo activado el contribuyente SÍ queda dentro del '
-          + 'rango. Está calculado y el Excel de soporte ya lo publica; solo falta que la '
-          + 'casilla del paso 3 lo haga decidir.',
+      accionable: false,
+      texto: 'Sin el ajuste de capital de trabajo el contribuyente SÍ quedaría dentro del rango: '
+        + 'lo que lo deja fuera es el ajuste. El cumplimiento se concluye sobre el rango ajustado, '
+        + 'así que esto no se resuelve apagando nada — revise el capital de trabajo de las '
+        + 'comparables y el de la parte examinada, que es lo que el ajuste compara.',
     });
   }
 
@@ -343,7 +367,10 @@ function palancasQueCambianElVeredicto({
     .filter((otro) => !(costoNoSirve && INDICADORES_QUE_USAN_COSTO.includes(otro)))
     .forEach((otro) => {
     const preparado = estudioParaMotor({ ...study, comparables: muestra, cmode: ambito }, muestra);
-    const r = analizarRangoAjustado(preparado, otro, study.useadj ? AJUSTE_DEL_INFORME : 'ninguno');
+    /* Con el escenario del informe siempre: el cumplimiento se concluye sobre el ajustado
+       (2026-09-02), asi que probar el indicador alterno sobre el crudo prometeria un
+       cumplimiento que la tarjeta no iba a confirmar. */
+    const r = analizarRangoAjustado(preparado, otro, AJUSTE_DEL_INFORME);
     const suyo = indicadorDelContribuyente(study, otro);
     if (dentro(r.stats, suyo)) {
       palancas.push({

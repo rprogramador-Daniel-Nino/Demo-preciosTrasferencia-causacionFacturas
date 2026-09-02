@@ -354,7 +354,13 @@ test('la memoria dice cuál de los dos rangos está explicando', () => {
       compMem('Gama', 0.08, { ar: 0, inv: 0, ap: 0 }),
     ],
   };
-  assert.strictEqual(construirMemoriaRango({ ...base, useadj: false }).serieQueDecide, 'noAjustado');
+  /* El cumplimiento se decide SIEMPRE con el rango ajustado desde el 2026-09-02
+     («el MO sin ajuste solo nos ayuda a escoger las comparables, pero como sabemos si
+     cumple es con el rango ajustado»). `useadj` dejo de elegirlo.
+     Esta prueba se escribio horas antes del cambio de criterio, cuando la memoria SI debia
+     seguir la casilla. Lo que fijaba de fondo sigue en pie: la memoria explica el rango que
+     decide y lo declara. Lo que cambio es cual decide. */
+  assert.strictEqual(construirMemoriaRango({ ...base, useadj: false }).serieQueDecide, 'ajustado');
   assert.strictEqual(construirMemoriaRango({ ...base, useadj: true }).serieQueDecide, 'ajustado');
 });
 

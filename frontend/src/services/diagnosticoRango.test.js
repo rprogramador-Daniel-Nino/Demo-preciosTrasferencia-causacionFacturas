@@ -54,7 +54,12 @@ test('cuando no cumple, dice a cuánto está del límite y cuánto sería el aju
 test('publica los dos rangos y cuál de ellos decide', () => {
   const d = diagnosticar();
   assert.ok(d.rangos.sinAjustar, 'el rango sin ajustar siempre está calculado');
-  assert.strictEqual(d.rangos.decide, 'sinAjustar', 'con useadj apagado decide el sin ajustar');
+  /* El cumplimiento se decide SIEMPRE con el rango ajustado desde el 2026-09-02
+     («el MO sin ajuste solo nos ayuda a escoger las comparables, pero como sabemos si
+     cumple es con el rango ajustado»). `useadj` dejo de elegirlo.
+     El sin ajustar se sigue publicando porque es la vara con que se eligieron las comparables,
+     pero no es el que concluye. */
+  assert.strictEqual(d.rangos.decide, 'ajustado', 'con la casilla apagada TAMBIEN decide el ajustado');
   const conUseadj = diagnosticar({ useadj: true });
   assert.strictEqual(conUseadj.rangos.decide, 'ajustado');
 });
@@ -674,4 +679,74 @@ test('cuando no cumple, el diagnóstico trae el requisito del cribado', () => {
 test('cuando cumple no se calcula requisito: no hay nada que traer', () => {
   const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: MUESTRA_QUE_CUMPLE, universo: [] });
   assert.strictEqual(d.requisito, null);
+});
+
+/* ══════ LA TASA EN CERO ANULA EL AJUSTE, Y SE DICE ══════
+
+   El cumplimiento se concluye sobre el rango ajustado (2026-09-02), y ese ajuste se calcula con
+   la tasa del paso 3. Con la tasa en cero cada ajuste sale nulo, el rango ajustado COLAPSA al
+   crudo, y el veredicto pasa a salir del rango que la metodologia del despacho descarta.
+
+   ESTE HUECO CASI SE COLO. Al hacer que el ajustado decidiera siempre, el campo de la tasa
+   seguia escondido detras de la casilla `useadj`: con la casilla apagada no habia forma de
+   fijar la tasa, asi que el ajuste era nulo y el estudio seguia concluyendo con el rango crudo
+   —P25 1,364 %, CUMPLE— en vez del ajustado —P25 6,232 %, NO CUMPLE—. El cambio no habria
+   tenido ningun efecto en un estudio real. Se cerro sacando la tasa de detras de la casilla y
+   avisando cuando esta en cero. */
+
+const compTasa = (m) => ({
+  name: 'C', amb: 'Int', s: 10000, c: 8000, op: m * 10000,
+  ar: 300, inv: 400, ap: 900, ppe: 200,
+});
+const ESTUDIO_TASA = {
+  pli: 'MO', cmode: 'all',
+  t_s: 100000, t_c: 87796, t_op: 6204,
+  t_ar: 18000, t_inv: 26000, t_ap: 4000, t_ppe: 9000,
+};
+const MUESTRA_TASA = [0.04884, 0.00026, 0.09688, 0.10512, 0.03994, 0.10747,
+  0.01497, 0.00248, 0.15826, 0.12063, 0.0159, 0.00964].map(compTasa);
+
+test('el diagnóstico marca cuando la tasa en cero anula el ajuste', () => {
+  const sinTasa = diagnosticarCumplimiento({
+    estudio: ESTUDIO_TASA, comparables: MUESTRA_TASA, universo: [],
+  });
+  assert.strictEqual(sinTasa.ajusteAnulado, true,
+    'sin tasa el ajuste no puede ajustar nada y hay que decirlo donde se lee el veredicto');
+
+  const conTasa = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_TASA, prime: 12.5 }, comparables: MUESTRA_TASA, universo: [],
+  });
+  assert.strictEqual(conTasa.ajusteAnulado, false);
+});
+
+test('el rango ajustado decide con la casilla encendida Y apagada', () => {
+  /* La regla del 2026-09-02: «el MO sin ajuste solo nos ayuda a escoger las comparables, pero
+     cómo sabemos si cumple es con el rango ajustado». La casilla dejó de elegirlo. */
+  for (const useadj of [false, true]) {
+    const d = diagnosticarCumplimiento({
+      estudio: { ...ESTUDIO_TASA, useadj, prime: 12.5 },
+      comparables: MUESTRA_TASA,
+      universo: [],
+    });
+    assert.strictEqual(d.rangos.decide, 'ajustado', `con useadj=${useadj} debe decidir el ajustado`);
+    /* Y el veredicto sale de ese rango, no del otro: con estas comparables el ajustado deja
+       fuera al contribuyente y el crudo no. */
+    assert.strictEqual(d.cumple, false,
+      `con useadj=${useadj} el ajustado deja fuera al contribuyente`);
+  }
+});
+
+test('la palanca del ajuste dice dónde está el problema, sin prometer apagarlo', () => {
+  /* Antes proponía «active/desactive la casilla», que ahora sería proponer concluir con el
+     rango que la metodología descarta. Sigue reportándose porque señala la causa: si sin el
+     ajuste el contribuyente sí entra, lo que lo saca es el capital de trabajo. */
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_TASA, prime: 12.5 }, comparables: MUESTRA_TASA, universo: [],
+  });
+  const p = d.palancas.find((x) => x.clave === 'ajusteCapitalTrabajo');
+  if (p) {
+    assert.strictEqual(p.accionable, false, 'no es una palanca que el analista pueda accionar');
+    assert.doesNotMatch(p.texto, /casilla/, 'y no manda a tocar ninguna casilla');
+    assert.match(p.texto, /capital de trabajo/, 'sino a revisar lo que el ajuste compara');
+  }
 });

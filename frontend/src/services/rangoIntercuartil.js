@@ -77,7 +77,11 @@ function aConvenioOCDE(o) {
 export function margenQueDecide(comp, estudio) {
   const study = estudio || {};
   const kind = study.pli || 'MO';
-  const escenario = study.useadj ? SABOR_INFORME : 'ninguno';
+  /* La vara del CUMPLIMIENTO, que desde el 2026-09-02 es siempre la ajustada: la usan
+     `cuotaMinimaQueCumple` y `requisitoDeCribado` para medir cuanto falta para cumplir, y medir
+     eso con el margen crudo apuntaria a un nivel que no es el que se compara.
+     La SELECCION es otra cosa y sigue con el crudo: ver la nota de `reportado` mas abajo. */
+  const escenario = SABOR_INFORME;
   const seg = num(study.seg_excluido) || 0;
   const tS = num(study.t_s), tOp = num(study.t_op);
   const contribuyente = aConvenioOCDE({
@@ -148,11 +152,27 @@ function porMetodologiaOCDE(study, kind) {
   const conAjuste = analizarRangoAjustado(preparado, kind, SABOR_INFORME);
   const sinAjuste = analizarRangoAjustado(preparado, kind, 'ninguno');
 
-  /* `useadj` sigue decidiendo UNA cosa: cuál de los dos rangos sostiene la conclusión de
-     cumplimiento. Eso es metodología del estudio —si el análisis ajusta o no por capital
-     de trabajo— y no le corresponde a una tabla. Lo que la casilla ya no decide es si el
-     documento muestra un número que tiene calculado. */
-  const reportado = study.useadj ? conAjuste : sinAjuste;
+  /* ── EL CUMPLIMIENTO SE DECIDE SIEMPRE CON EL RANGO AJUSTADO ──
+     Metodologia del despacho, del 2026-09-02: «el MO sin ajuste solo nos ayuda a escoger las
+     comparables, pero como sabemos si cumple es con el rango ajustado». Es la misma regla que
+     ya habia dado su contador el 2026-09-01 para la seleccion.
+
+     ASI QUE HAY DOS VARAS Y CADA UNA TIENE SU OFICIO:
+       · el margen SIN AJUSTAR elige las comparables (el motor ordena la cuota de negativas con
+         el crudo, y por eso `scoreCandidates` no recibe la vara ajustada);
+       · el rango AJUSTADO decide si el estudio cumple, y es el que publica el informe.
+
+     `useadj` DEJO DE DECIDIRLO. Era un interruptor, y un estudio podia concluir con el rango
+     equivocado por tenerlo olvidado en apagado: fue exactamente lo que paso en el caso que
+     motivo este cambio —el sin ajustar decia CUMPLE con el P25 en 1,364 % mientras el ajustado
+     lo dejaba fuera con el P25 en 12,197 %, y el informe se iba a radicar con el primero—.
+
+     CUIDADO CON EL AJUSTE SIN DATOS. Si las comparables no traen capital de trabajo, sus ratios
+     valen cero y el ajuste degenera en un desplazamiento uniforme del rango en vez de una
+     correccion de comparabilidad. Eso NO se arregla escondiendo el ajuste: se avisa, y de eso
+     se encarga `ajusteSinCapitalTrabajo` en `previsualizarFiltros.js`, que ya no depende de
+     `useadj` por esta misma razon. */
+  const reportado = conAjuste;
 
   return {
     stats: reportado.stats,

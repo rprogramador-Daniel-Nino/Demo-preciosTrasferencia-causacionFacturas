@@ -77,7 +77,10 @@ export function construirMemoriaRango(estudio) {
      primer cuartil estaba en 1,364 %— y juntas se contradecian: puesto asi, cualquiera concluye
      que el estudio no cumple. Este modal existe para explicar el numero de la tarjeta; si
      calcula sobre otra serie, explica un numero que nadie ve. */
-  const margenQueManda = (f) => (useAdj ? f.ajustado : f.noAjustado);
+  /* Siempre el ajustado (2026-09-02): es el que decide el cumplimiento, y esta memoria
+     existe para explicar ese numero. `useAdj` ya no elige aqui; sigue leyendose para el aviso
+     de tasa en cero y para informar `ajuste.aplicado`. */
+  const margenQueManda = (f) => f.ajustado;
 
   const comparables = filas.map((f) => {
     const decide = margenQueManda(f);
@@ -161,10 +164,15 @@ export function construirMemoriaRango(estudio) {
       'debajo de ese número la sección del rango sale sin cifras.'
     );
   }
-  if (useAdj && !tasa) {
+  /* Ya no depende de la casilla: el cumplimiento se decide con el rango ajustado en todo
+     estudio (2026-09-02), asi que una tasa en cero anula el ajuste de todos y hace que el rango
+     ajustado colapse al crudo. Eso cambia la conclusion sin decirlo, y es lo mas grave que
+     puede pasarle a esta memoria en silencio. */
+  if (!tasa) {
     advertencias.push(
-      'El ajuste de capital de trabajo está activado pero la tasa de interés está en cero, ' +
-      'así que el ajuste de cada comparable es nulo.'
+      'La tasa de interés está en cero, así que el ajuste de capital de trabajo de cada ' +
+      'comparable es nulo y el rango ajustado —el que decide el cumplimiento— coincide con el ' +
+      'rango sin ajustar. Fije la tasa en el paso 3 para que el ajuste tenga efecto.'
     );
   }
 
@@ -242,7 +250,7 @@ export function construirMemoriaRango(estudio) {
     /* Cual de las dos series sostiene los cuartiles de arriba. La pantalla lo dice al lado del
        rango: con las dos columnas a la vista hay que declarar cual manda, o el lector vuelve a
        comparar el indicador contra la que no decide, que es justo lo que paso. */
-    serieQueDecide: useAdj ? 'ajustado' : 'noAjustado',
+    serieQueDecide: 'ajustado',
     ajuste: {
       /* Berry dejó de estar exceptuado: con la definición del motor —utilidad bruta
          sobre gastos operativos— sí admite el ajuste, y la hoja Berry del Excel ya
@@ -273,10 +281,43 @@ export function construirMemoriaRango(estudio) {
     serie,
     cuartiles,
     stats,
+    /* LOS DOS VEREDICTOS, no solo el que decide.
+       Pedido el 2026-09-02 tras cargar los EEFF de las comparables: esos datos cambian el
+       capital de trabajo y con el el rango AJUSTADO, asi que el veredicto puede voltearse sin
+       que nada mas del estudio se mueva. En el caso reportado el sin ajustar CUMPLE (P25
+       1,364 %) y el ajustado NO (P25 12,197 %), con el contribuyente en 6,204 %. Publicar solo
+       uno obliga a abrir el Excel para saber que paso con el otro.
+
+       Se calculan los dos siempre, como ya hace `rangoIntercuartil.js`, y se dice cual sostiene
+       la conclusion. */
+    veredictos: (() => {
+      const de = (campo) => {
+        const s = comparables
+          .filter((c) => entra(c.amb, modo) && c[campo] !== null)
+          .map((c) => c[campo])
+          .sort((a, b) => a - b);
+        if (!s.length) return null;
+        const st = {
+          p25: cuartilInterpolado(s, 0.25),
+          med: cuartilInterpolado(s, 0.5),
+          p75: cuartilInterpolado(s, 0.75),
+        };
+        return {
+          stats: st,
+          n: s.length,
+          cumple: pliContribuyente === null ? null : cumpleElRango(st, pliContribuyente),
+        };
+      };
+      return { noAjustado: de('noAjustado'), ajustado: de('ajustado') };
+    })(),
     resultado: {
       pli: pliContribuyente,
       dentro,
-      dir: dentro === false && stats ? (pliContribuyente < stats.p25 ? 'por debajo' : 'por encima') : '',
+      /* Con el criterio de «por encima del P25» (2026-09-02) el incumplimiento solo puede ser
+         por debajo: sobre el tercer cuartil se cumple. Se conserva el campo porque lo leen el
+         modal y el Excel, pero ya no puede valer 'por encima'. */
+      dir: dentro === false ? 'por debajo' : '',
+      sobreP75: Boolean(stats && pliContribuyente !== null && pliContribuyente > stats.p75),
       ajustePropuesto: dentro === false && stats && pliContribuyente !== null
         ? (stats.med - pliContribuyente) * (T.s || 0)
         : null,
