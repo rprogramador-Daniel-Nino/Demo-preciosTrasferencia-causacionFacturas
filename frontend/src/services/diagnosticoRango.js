@@ -33,7 +33,12 @@ import { enPerdida, gradoDeActividad } from './comparablesEngine.js';
 const AJUSTE_DEL_INFORME = 'aar_aap_inv';
 
 /** Los indicadores que el sistema ofrece, para poder decir «con MB sí cumpliría». */
-const INDICADORES = ['MO', 'MB', 'Berry'];
+/* Los cinco indicadores que el sistema sabe calcular de punta a punta: `pliOf` da el del
+   contribuyente y `analizarRangoAjustado` el de cada comparable con sus siete escenarios de
+   ajuste. NCP y Cost Plus se sumaron el 2026-09-02: estaban en el motor de ajuste y en el Excel
+   desde antes, pero sin el indicador del contribuyente no se podian proponer, asi que esta
+   lista descartaba dos vias legitimas de cumplimiento sin decirlo. */
+const INDICADORES = ['MO', 'MB', 'Berry', 'NCP', 'CostPlus'];
 
 /* Las tres cifras con las que se calcula el margen del contribuyente. Solo lo que las toca
    pone en duda el indicador: una corrección sobre inventarios o sobre PP&E es un hallazgo
@@ -97,6 +102,62 @@ const AMBITOS = [
    alterno no discrimina sobre esta muestra (por ejemplo MB con el costo de ventas en cero en
    todas las comparables: sale 100 % para todas y para el contribuyente). Proponerlo como
    palanca sería prometer un cumplimiento que ningún revisor sostendría. */
+/* ── CAPITAL DE TRABAJO QUE NO PUEDE SER CIERTO ──
+   Reportado el 2026-09-02 sobre el Excel de soporte de un estudio real: la parte examinada
+   traia cuentas por cobrar por 138.758.822.124 contra ventas de 85.880.665.653, o sea el
+   161,6 % de las ventas — DIECINUEVE MESES de cartera—. Ese solo numero empujaba el primer
+   cuartil del rango ajustado +10,8 puntos por encima del contribuyente, porque el ajuste
+   concluye que las comparables cargan mucha menos cartera y les sube el margen.
+
+   El mismo balance traia un error probado —«Total Activo corriente» y «Total Activos NO
+   corrientes» con la misma cifra, cuando el total de activos es la suma del corriente mas
+   PP&E—, asi que la lectura ya habia fallado una vez.
+
+   EL UMBRAL SON DOCE MESES de venta en una sola partida. No es que sea imposible en todo
+   negocio —hay operaciones de proyecto con cartera alta— sino que a partir de ahi la cifra
+   tiene que estar verificada, porque manda sobre las cuatro formulas de ajuste. Se reporta en
+   MESES ademas de en porcentaje: es la unidad en la que un contador reconoce el disparate de
+   un golpe.
+
+   No descarta nada ni pide nada: avisa donde se lee el veredicto. */
+const MESES_MAXIMOS_DE_PARTIDA = 12;
+
+const PARTIDAS_CAPITAL_TRABAJO = [
+  { campo: 't_ar', etiqueta: 'Cuentas por cobrar' },
+  { campo: 't_inv', etiqueta: 'Inventarios' },
+  { campo: 't_ap', etiqueta: 'Cuentas por pagar' },
+  { campo: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
+];
+
+/**
+ * Las partidas de capital de trabajo del contribuyente que no caben en un año de ventas.
+ * `null` cuando no hay ninguna o cuando faltan las ventas, que son la base del ratio.
+ */
+export function capitalTrabajoImplausibleDe(estudio) {
+  const e = estudio || {};
+  const ventas = num(e.t_s);
+  if (ventas === null || ventas <= 0) return null;
+  const partidas = PARTIDAS_CAPITAL_TRABAJO.map(({ campo, etiqueta }) => {
+    const v = num(e[campo]);
+    if (v === null) return null;
+    const ratio = Math.abs(v) / ventas;
+    return ratio > 1 ? { campo, etiqueta, valor: v, ratio, meses: ratio * MESES_MAXIMOS_DE_PARTIDA } : null;
+  }).filter(Boolean);
+  return partidas.length ? { partidas, ventas } : null;
+}
+
+/** Las comparables cuyo capital de trabajo tampoco puede ser cierto: error de escala del cribado. */
+export function comparablesConCapitalImplausibleDe(comparables) {
+  return (Array.isArray(comparables) ? comparables : []).filter((c) => {
+    const s = num(c && c.s);
+    if (s === null || s <= 0) return false;
+    return ['ar', 'inv', 'ap', 'ppe'].some((k) => {
+      const v = num(c[k]);
+      return v !== null && Math.abs(v) / s > 1;
+    });
+  });
+}
+
 function dentro(stats, indicador) {
   if (!stats || indicador === null || indicador === undefined) return false;
   if (!(stats.p75 > stats.p25)) return false;
@@ -253,6 +314,11 @@ export function diagnosticarCumplimiento({
     /* `true` cuando el rango ajustado no puede ajustar nada. La pantalla lo pinta como aviso,
        porque invalida la vara con la que se concluye. */
     ajusteAnulado,
+    /* Partidas del contribuyente que no caben en un año de ventas, y comparables con el mismo
+       problema. Manda sobre las cuatro formulas de ajuste, asi que una cifra mal leida aqui
+       hace fallar el estudio por un motivo que no es economico. */
+    capitalTrabajoImplausible: capitalTrabajoImplausibleDe(study),
+    comparablesConCapitalImplausible: comparablesConCapitalImplausibleDe(muestra),
     /* Si el ajuste tenia con que ajustar, y en cuantas comparables. Lo pinta la tarjeta: una
        conclusion sobre el rango sin ajustar hay que sustentarla, y el sustento es este. */
     ajusteTieneDatos: rango.ajusteTieneDatos,

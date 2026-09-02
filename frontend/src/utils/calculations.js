@@ -210,6 +210,36 @@ export function pliOf(o, kind) {
     const opex = s - c - op;
     return opex !== 0 ? utilidadBruta / opex : null;
   }
+
+  /* ── NCP y Cost Plus, con las definiciones del modelo canónico de S&P Global Market
+     Intelligence («Formulas for Transfer Pricing Model», compartido el 2026-09-02):
+
+       NCP       = Operating Profit / (COGS + Total Operating Expenses)
+       Cost Plus = Gross Profit / COGS
+
+     Los dos YA estaban en el motor de ajuste (`BASES` de `ajusteRangoCapitalTrabajo.js`:
+     `NCP: 'costos'`, `CostPlus: 'cogs'`) y el Excel de soporte YA publica sus siete escenarios
+     con el denominador depurado que pide S&P —(COGS − CxP) + opex para NCP, (COGS − CxP) para
+     Cost Plus—. Lo único que faltaba era esto: sin el indicador del contribuyente los dos
+     métodos quedaban inalcanzables, así que la pantalla ofrecía tres de los cinco que el
+     sistema sabe calcular y el diagnóstico probaba tres palancas de las cuatro que existen.
+
+     Con `op` como UTILIDAD, que es el convenio del estudio:
+       COGS + TotalOpex = c + (s − c − op) = s − op
+     de modo que NCP = op / (s − op): la utilidad operacional sobre los costos totales. */
+  if (kind === 'NCP') {
+    const c = egreso(o.c);
+    const op = num(o.op);
+    if (c === null || op === null) return null;
+    const costosTotales = s - op;
+    return costosTotales !== 0 ? op / costosTotales : null;
+  }
+  if (kind === 'CostPlus') {
+    const c = egreso(o.c);
+    if (c === null || c === 0) return null;
+    return (s - c) / c;
+  }
+
   return null;
 }
 

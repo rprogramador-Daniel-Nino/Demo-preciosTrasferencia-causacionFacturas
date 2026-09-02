@@ -766,6 +766,12 @@ export default function IngestaCifras({ study, updateStudy }) {
               <option value="MO">Margen Operacional (MO = Utilidad Op / Ventas)</option>
               <option value="MB">Margen Bruto (MB = Utilidad Bruta / Ventas)</option>
               <option value="Berry">Índice de Berry (Utilidad Bruta / Gastos Operativos)</option>
+              {/* NCP y Cost Plus, con las definiciones del modelo canónico de S&P Global Market
+                  Intelligence. Los dos estaban implementados en el motor de ajuste y publicados
+                  en el Excel de soporte desde antes; lo que faltaba era el indicador del
+                  contribuyente (`pliOf`), sin el cual no se podían elegir. */}
+              <option value="NCP">Costo Neto Adicionado (NCP = Utilidad Op. / Costos totales)</option>
+              <option value="CostPlus">Costo Adicionado (Cost Plus = Utilidad Bruta / Costo de ventas)</option>
             </select>
           </div>
 

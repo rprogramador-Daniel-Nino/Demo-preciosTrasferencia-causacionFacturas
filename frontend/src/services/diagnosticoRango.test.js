@@ -824,3 +824,96 @@ test('el diagnóstico trae la banda cuando no cumple, y no cuando cumple', () =>
   assert.ok(d.banda, 'trae la banda para el screening');
   assert.ok(d.banda.piso < d.banda.techo, 'y es una banda, no un punto');
 });
+
+/* ══════ CAPITAL DE TRABAJO IMPLAUSIBLE EN LA PARTE EXAMINADA ══════
+
+   Reportado el 2026-09-02 con el Excel de soporte real de un estudio (Fiberhome sucursal
+   Colombia). El estudio no cumplia y la causa no estaba en las comparables:
+
+     Ventas netas         85.880.665.653
+     Cuentas por cobrar  138.758.822.124  →  161,6 % de las ventas = 19,4 MESES de venta
+     Inventarios          39.062.476.887  →   45,5 %                =  5,5 meses
+     Cuentas por pagar     3.700.194.871  →    4,3 %
+
+   Una cartera de diecinueve meses no es capital de trabajo operativo. Y ese solo numero era el
+   que empujaba el primer cuartil del rango ajustado +10,8 puntos por encima del contribuyente:
+   el ajuste dice «estas comparables cargan mucha menos cartera que tu, asi que sus margenes hay
+   que subirlos», y con la cartera mal leida sube de mas.
+
+   EL MISMO BALANCE TRAIA UN ERROR PROBADO: «Total Activo corriente» y «Total Activos NO
+   corrientes» con la MISMA cifra (211.372.303.311), cuando «Total Activos» es la suma del
+   corriente mas PP&E. Es decir, la lectura del balance ya habia fallado al menos una vez, lo
+   que resta credibilidad al resto de sus partidas.
+
+   El sistema YA detecta el costo implausible de una comparable (`costosImplausiblesDe`, con
+   COSTO_SOBRE_INGRESO_MAXIMO = 2) y suprime las palancas que se apoyarian en el. No habia nada
+   equivalente para el capital de trabajo, ni de las comparables ni —sobre todo— del propio
+   contribuyente, que es el que entra en las cuatro formulas de ajuste.
+
+   NO DESCARTA NADA Y NO PIDE NADA: avisa donde se lee el veredicto, con la cifra en meses, que
+   es la unidad en que un contador reconoce el disparate. Hay negocios de proyecto con cartera
+   alta; lo que no puede pasar es que el estudio falle por una cifra que nadie miro. */
+
+const ESTUDIO_WC = {
+  pli: 'MO', cmode: 'all', prime: 7.37,
+  t_s: 85880665653, t_c: -74145859892, t_op: 5327751909,
+  t_ar: 138758822124, t_inv: 39062476887, t_ap: 3700194871, t_ppe: 285229663,
+};
+const MUESTRA_WC = [0.02, 0.04, 0.06, 0.09, 0.12].map((m, i) => ({
+  name: 'C' + i, amb: 'Int', s: 1000, c: 800, op: m * 1000,
+  ar: 200, inv: 150, ap: 90, ppe: 60,
+}));
+
+test('avisa cuando una partida del contribuyente no cabe en un año de ventas', () => {
+  const d = diagnosticarCumplimiento({
+    estudio: ESTUDIO_WC, comparables: MUESTRA_WC, universo: [],
+  });
+  assert.ok(d.capitalTrabajoImplausible, 'lo detecta');
+  const partidas = d.capitalTrabajoImplausible.partidas.map((p) => p.campo);
+  assert.ok(partidas.includes('t_ar'), 'la cartera de 19,4 meses');
+  assert.ok(!partidas.includes('t_inv'), 'el inventario de 5,5 meses NO se marca: es alto pero posible');
+  assert.ok(!partidas.includes('t_ap'), 'ni las cuentas por pagar de medio mes');
+});
+
+test('dice cuántos meses de venta representa, que es como se reconoce el disparate', () => {
+  const d = diagnosticarCumplimiento({
+    estudio: ESTUDIO_WC, comparables: MUESTRA_WC, universo: [],
+  });
+  const ar = d.capitalTrabajoImplausible.partidas.find((p) => p.campo === 't_ar');
+  assert.ok(Math.abs(ar.meses - 19.39) < 0.05, `19,4 meses, no ${ar.meses}`);
+  assert.ok(Math.abs(ar.ratio - 1.6157) < 0.001);
+});
+
+test('con capital de trabajo normal no avisa nada', () => {
+  /* La regla de estos avisos: uno que aparece siempre se deja de leer. */
+  const normal = {
+    ...ESTUDIO_WC,
+    t_ar: 85880665653 * 0.20, t_inv: 85880665653 * 0.15, t_ap: 85880665653 * 0.10,
+  };
+  const d = diagnosticarCumplimiento({ estudio: normal, comparables: MUESTRA_WC, universo: [] });
+  assert.strictEqual(d.capitalTrabajoImplausible, null);
+});
+
+test('sin ventas no se afirma nada sobre las partidas', () => {
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_WC, t_s: null }, comparables: MUESTRA_WC, universo: [],
+  });
+  assert.strictEqual(d.capitalTrabajoImplausible, null,
+    'sin la base no hay ratio que juzgar, y adivinarlo seria peor que callar');
+});
+
+test('detecta también la comparable con capital de trabajo imposible', () => {
+  /* Tongding, del caso real: inventario 30,8 veces sus ventas. Es un error de escala del
+     cribado, y en la muestra desplaza los cuartiles. */
+  const conMala = [
+    ...MUESTRA_WC,
+    { name: 'Tongding', amb: 'Int', s: 3413, c: 2786, op: 627, ar: 16274, inv: 105166, ap: 46618, ppe: 5854 },
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_WC, t_ar: 85880665653 * 0.2, t_inv: 85880665653 * 0.15, t_ap: 85880665653 * 0.1 },
+    comparables: conMala,
+    universo: [],
+  });
+  assert.ok(d.comparablesConCapitalImplausible.length >= 1, 'la nombra');
+  assert.strictEqual(d.comparablesConCapitalImplausible[0].name, 'Tongding');
+});

@@ -3250,6 +3250,63 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               rango ajustado, y sin tasa ese ajuste es nulo, de modo que el veredicto que se lee
               arriba sale del rango sin ajustar. Es el aviso de más alcance de esta tarjeta
               porque no habla de la muestra sino de la vara con la que se mide. */}
+          {/* ── UNA CIFRA DEL CONTRIBUYENTE QUE NO PUEDE SER CIERTA ──
+              Va PRIMERO, antes que cualquier via de cumplimiento: estas cuatro partidas mandan
+              sobre las cuatro formulas del ajuste, y el ajuste decide. Reportado el 2026-09-02
+              sobre un estudio real cuya parte examinada traia cartera por el 161,6 % de las
+              ventas —diecinueve meses—, y ese solo numero empujaba el primer cuartil +10,8
+              puntos por encima del contribuyente. Buscar mas comparables no arregla eso. */}
+          {diagnostico.capitalTrabajoImplausible && (
+            <div className="rounded-lg border border-rose-300 dark:border-rose-800/60 bg-rose-50 dark:bg-rose-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-rose-900 dark:text-rose-200 leading-relaxed">
+                  <strong>Antes de buscar más comparables: revise estas cifras del paso 3.</strong>
+                  {' '}No caben en un año de ventas, y son las que mandan sobre el ajuste de
+                  capital de trabajo, que es el que decide el cumplimiento.
+                  <ul className="mt-1.5 space-y-0.5">
+                    {diagnostico.capitalTrabajoImplausible.partidas.map((p) => (
+                      <li key={p.campo}>
+                        <strong>{p.etiqueta}</strong>: {fmt(p.valor)} ={' '}
+                        <strong>{pctf(p.ratio)}</strong> de las ventas, o{' '}
+                        <strong>{p.meses.toLocaleString('es-CO', { maximumFractionDigits: 1 })} meses</strong>
+                        {' '}de venta
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-1.5 text-rose-800/80 dark:text-rose-300/70">
+                    Si la cifra es correcta —hay operaciones de proyecto con cartera alta—, el
+                    estudio se sostiene y esto queda como constancia. Si viene de una lectura del
+                    balance, corregirla cambia el rango que decide.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Comparables con el mismo problema: es un error de escala del cribado, y en la
+              muestra desplaza los cuartiles. */}
+          {diagnostico.comparablesConCapitalImplausible
+            && diagnostico.comparablesConCapitalImplausible.length > 0 && (
+            <div className="rounded-lg border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                  <strong>
+                    {diagnostico.comparablesConCapitalImplausible.length} comparable(s) con
+                    capital de trabajo que no puede ser cierto
+                  </strong>
+                  {': '}
+                  {diagnostico.comparablesConCapitalImplausible.slice(0, 3).map((c) => c.name).join(', ')}
+                  {diagnostico.comparablesConCapitalImplausible.length > 3 ? '…' : ''}.
+                  {' '}Alguna de sus partidas supera sus ventas anuales, lo que suele ser un error
+                  de escala del cribado. Entran igual al rango y desplazan los cuartiles: revíselas
+                  o retírelas.
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── POR QUE CONCLUYE SOBRE EL RANGO SIN AJUSTAR ──
               Reportado el 2026-09-02 con la tabla a la vista: las doce comparables traian CxC,
               Inventario, CxP y PP&E en cero, porque la exportacion de Capital IQ no incluye esas

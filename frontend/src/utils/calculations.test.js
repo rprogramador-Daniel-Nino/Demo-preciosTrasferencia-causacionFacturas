@@ -4,6 +4,7 @@ import {
   montoOperacion, num, fmt, pctf, egreso, pliOf, ratios, adjustInfo, cumpleElRango,
 } from './calculations.js';
 import { analizarRango } from '../services/rangoIntercuartil.js';
+import { diagnosticarCumplimiento } from '../services/diagnosticoRango.js';
 
 /* ══════ montoOperacion ══════
    El monto de las operaciones con vinculados se guarda en más de un campo y cada
@@ -229,4 +230,83 @@ test('el veredicto que publica el informe usa la misma regla', () => {
   const abajo = analizarRango({ pli: 'MO', cmode: 'all', t_s: 1000, t_c: 995, t_op: 5, comparables });
   assert.ok(abajo.tPLI < abajo.stats.p25);
   assert.strictEqual(abajo.cumple, 'NO CUMPLE');
+});
+
+/* ══════ NCP Y COST PLUS: dos indicadores que el motor ya calculaba y la pantalla no ofrecia ══════
+
+   El 2026-09-02 el usuario compartio el modelo canonico de S&P Global Market Intelligence
+   («Formulas for Transfer Pricing Model»), que define:
+
+     NCP       = Operating Profit / (COGS + Total Operating Expenses)
+     Cost Plus = Gross Profit / COGS
+
+   Y ahi se vio el hueco: `BASES` de `ajusteRangoCapitalTrabajo.js` YA tenia los dos
+   —`NCP: 'costos'`, `CostPlus: 'cogs'`—, el Excel de soporte YA publica sus siete escenarios de
+   ajuste con el denominador depurado que pide S&P, pero `pliOf` devolvia `null` para ambos, asi
+   que el indicador del contribuyente no se podia calcular y los dos metodos quedaban
+   inalcanzables desde la pantalla.
+
+   Habilitarlos no agrega ningun proceso: son dos varas mas para el analisis funcional y dos
+   palancas mas que `diagnosticoRango` prueba solo. Con `op` como UTILIDAD, que es el convenio
+   del estudio:
+
+     COGS + TotalOpex = c + (s − c − op) = s − op    →  NCP = op / (s − op)
+     Cost Plus        = (s − c) / c */
+
+test('NCP es la utilidad operacional sobre los costos totales', () => {
+  /* S&P: Operating Profit / (COGS + Total Operating Expenses). Con ventas 1000, costo 600 y
+     utilidad 100, los gastos operativos son 300 y los costos totales 900. */
+  assert.ok(Math.abs(pliOf({ s: 1000, c: 600, op: 100 }, 'NCP') - (100 / 900)) < 1e-12);
+  /* Y equivale a op / (ventas − utilidad), que es la forma en que se calcula. */
+  assert.ok(Math.abs(pliOf({ s: 1000, c: 600, op: 100 }, 'NCP') - (100 / 900)) < 1e-12);
+});
+
+test('Cost Plus es la utilidad bruta sobre el costo de ventas', () => {
+  /* S&P: Gross Profit / COGS. Con ventas 1000 y costo 600, la utilidad bruta es 400. */
+  assert.ok(Math.abs(pliOf({ s: 1000, c: 600, op: 100 }, 'CostPlus') - (400 / 600)) < 1e-12);
+});
+
+test('los dos leen el costo con el signo del documento', () => {
+  /* `egreso` normaliza el costo venga positivo o negativo, igual que en MB y Berry: un estado
+     financiero que trae los costos en negativo no puede dar un indicador con el signo al reves. */
+  assert.strictEqual(
+    pliOf({ s: 1000, c: -600, op: 100 }, 'CostPlus'),
+    pliOf({ s: 1000, c: 600, op: 100 }, 'CostPlus'),
+  );
+  assert.strictEqual(
+    pliOf({ s: 1000, c: -600, op: 100 }, 'NCP'),
+    pliOf({ s: 1000, c: 600, op: 100 }, 'NCP'),
+  );
+});
+
+test('sin cifras no inventan un indicador', () => {
+  assert.strictEqual(pliOf({ s: 0, c: 600, op: 100 }, 'NCP'), null, 'sin ventas');
+  assert.strictEqual(pliOf({ s: 1000, c: 600, op: null }, 'NCP'), null, 'sin utilidad');
+  assert.strictEqual(pliOf({ s: 1000, c: null, op: 100 }, 'CostPlus'), null, 'sin costo');
+  assert.strictEqual(pliOf({ s: 1000, c: 0, op: 100 }, 'CostPlus'), null,
+    'con costo en cero Cost Plus no es calculable: dividiria por cero');
+  assert.strictEqual(pliOf({ s: 100, c: 600, op: 100 }, 'NCP'), null,
+    'con utilidad igual a las ventas los costos totales son cero');
+});
+
+test('el diagnóstico prueba los cinco indicadores como palanca, no tres', () => {
+  /* `INDICADORES` listaba MO, MB y Berry. NCP y Cost Plus estaban implementados en el motor de
+     ajuste y en el Excel, asi que no probarlos descartaba dos vias legitimas de cumplimiento
+     sin decirlo. */
+  const muestra = [0.02, 0.05, 0.09, 0.14].map((m, i) => ({
+    name: 'C' + i, amb: 'Int', s: 1000, c: 700, op: m * 1000,
+  }));
+  const d = diagnosticarCumplimiento({
+    estudio: { pli: 'MO', cmode: 'all', t_s: 1000, t_c: 700, t_op: 5 },
+    comparables: muestra,
+    universo: [],
+  });
+  /* No se afirma que alguna palanca aparezca —depende de las cifras—, sino que si aparece una de
+     indicador, puede ser cualquiera de los cuatro alternos y no solo de los dos de antes. */
+  const deIndicador = d.palancas.filter((p) => p.clave.startsWith('indicador:'));
+  deIndicador.forEach((p) => {
+    const otro = p.clave.slice('indicador:'.length);
+    assert.ok(['MB', 'Berry', 'NCP', 'CostPlus'].includes(otro),
+      `la palanca propone «${otro}», que no es uno de los indicadores del sistema`);
+  });
 });
