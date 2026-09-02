@@ -42,6 +42,10 @@ import {
    informe el correcto. Dos procedencias para el mismo dato, que es el defecto que el
    diseño de 2026-08-11 retira. */
 import { num } from '../utils/calculations.js';
+/* Para preguntarle CUAL escenario concluye. No se vuelve a razonar aqui: la regla vive en
+   `analizarRango` y este libro ya se contradijo con el informe dos veces el 2026-09-02 por tener
+   su propia copia del criterio. */
+import { analizarRango } from './rangoIntercuartil.js';
 import { traducirCriterio } from './criteriosScreeningEs.js';
 
 /* Métodos y su configuración de fórmulas. `base` indica sobre qué se calcula el
@@ -402,6 +406,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        justo la desviación que esta tarea viene a cerrar. */
     const porSabor = AJUSTES.map((aj) => analizarRangoAjustado(study, M.hoja, aj.clave));
 
+
     const celdas = [];
     celdas.push([cTxt(`${M.nombre} — fórmulas vivas y trazables`)]);
     // encabezado de columnas
@@ -679,6 +684,21 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
           st ? porSabor[k].cumple : ''));
       });
       celdas.push(fila);
+
+      /* ── POR QUE NO VA AQUI UNA FILA DE «ESCENARIO QUE GOBIERNA» ──
+         La fila de Conclusión concluye COLUMNA POR COLUMNA, y eso es correcto: cada escenario
+         dice lo que diría si fuera el que se reporta. Falta decir CUÁL gobierna, porque sin eso
+         leer la hoja invita a fijarse en la columna equivocada —reportado el 2026-09-02: «no
+         cumple en el ajustado, ¿ejecuto la IA de nuevo?», mirando CxC+CxP+Inv cuando el informe
+         concluía sobre «Sin ajuste», y no había nada que reejecutar—.
+
+         Pero NO puede ir como una fila más de esta hoja: la hoja Resumen referencia las celdas
+         de aquí por número de fila, así que insertar una las corre todas y el Resumen empieza a
+         apuntar a la celda de al lado. Lo detectó la prueba de que cada celda del Resumen trae
+         el mismo valor que la celda de método que referencia.
+
+         Va entonces en la hoja de DIAGNÓSTICO DE DATOS, que es única y no tiene referencias
+         entrantes, y ahí se dice además POR QUÉ gobierna ese —lo que una celda no cabría—. */
     }
 
     /* `porSabor` viaja a infoMetodos porque la hoja Resumen se arma después de este
@@ -707,6 +727,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const cd = (L) => `Datos!$${L}$${filaComp0}:$${L}$${filaCompN}`;
     const VEN = cd('B'), COS = cd('C'), GAS = cd('D');
     const CXC = cd('E'), INV = cd('F'), CXP = cd('G'), PPE = cd('H');
+
+    /* CUÁL escenario sostiene la conclusión. Esta hoja es única —no va por método— así que
+       se pide con el `pli` del estudio, que es el que el informe publica. Se le pregunta a
+       `analizarRango`, el único sitio donde se elige, en vez de recalcular la regla: este libro
+       ya se contradijo con el informe dos veces el 2026-09-02 por tener su propia copia. */
+    const rangoDelInforme = analizarRango(study);
 
     const dg = [];
     dg.push([cTxt('DIAGNÓSTICO DE DATOS — comprobaciones por fórmula sobre la hoja «Datos»')]);
@@ -816,10 +842,24 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
          frase mandaba a un auditor a cotejar la conclusión contra una columna que el informe no
          usó. Mismo defecto de fondo que el reportado el 2026-09-02 en la memoria del rango
          —dar por hecho que el ajustado siempre manda— en otro sitio del mismo libro. */
-      /* Siempre «CxC+CxP+Inv»: el informe concluye sobre el rango ajustado en todo estudio
-         (2026-09-02). La variante que miraba `useadj` duro unas horas y ya no aplica. */
-      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
-      dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+      /* CUAL escenario concluye DE VERDAD. Afirmarlo sin condicion mandaba a un auditor a
+         cotejar la conclusion del informe contra una columna que el informe no uso: cuando la
+         mayoria de las comparables no trae capital de trabajo, el informe concluye sobre el
+         rango SIN AJUSTAR y las columnas ajustadas son un desplazamiento constante. */
+      if (rangoDelInforme.ajusteTieneDatos) {
+        dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
+        dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+      } else {
+        dg.push([cTxt('El informe concluye sobre «Sin ajuste», NO sobre «CxC+CxP+Inv»: solo '
+          + `${rangoDelInforme.comparablesConCapitalTrabajo} de ${rangoDelInforme.comparablesEnElRango} `
+          + 'comparables traen cuentas por cobrar, inventarios o cuentas por pagar.')]);
+        dg.push([cTxt('Un ajuste por diferencias de capital de trabajo exige conocer el de las dos partes. '
+          + 'Con el de las comparables en cero, cada ajuste se reduce al mismo valor para todas —sale '
+          + 'del balance de la parte examinada— y desplaza el rango sin corregir ninguna diferencia '
+          + 'de comparabilidad, así que no puede sostener la conclusión.')]);
+        dg.push([cTxt('Las columnas ajustadas quedan calculadas y a la vista para dejar constancia de '
+          + 'la magnitud de ese desplazamiento.')]);
+      }
     }
 
     /* Las correcciones que la verificación de la ingesta aplicó a las cifras leídas del
