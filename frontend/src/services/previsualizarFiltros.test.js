@@ -455,3 +455,70 @@ test('con capital de trabajo en unas pocas también se avisa, y se dice cuántas
   assert.ok(aviso);
   assert.match(aviso.texto, /4 de 40|4 de las 40/, 'con la cifra real');
 });
+
+/* ══════════ El requisito del cribado, antes de pagar la curación ══════════
+
+   «En otra compañía las comparables que selecciona no alcanzan a estar por encima de este P25»
+   (2026-09-02). Los otros avisos dicen que el estudio no va a cumplir; este dice QUÉ TRAER para
+   que cumpla, y tiene que decirlo ANTES de correr: después de la curación el remedio ya cuesta
+   otra corrida. */
+
+const conMargen = (id, margen) => cand(id, { s: 10000, c: 8000, op: margen * 10000 });
+
+test('el paso 2 dice cuántas comparables faltan y con qué margen, antes de correr', () => {
+  const universo = [
+    ...Array.from({ length: 12 }, (_, i) => conMargen(`P${i}`, 0.02 + i * 0.005)),
+    conMargen('N1', -0.012), conMargen('N2', -0.025), conMargen('N3', -0.038),
+  ];
+  const p = previsualizarFiltros(universo, { ...CONFIG, perdidaOp: 'incluir', negativasObjetivo: 3 }, {
+    estudio: ESTUDIO_EN_PERDIDA,
+  });
+  const a = p.avisos.find((x) => x.clave === 'cribadoInsuficiente');
+  assert.ok(a, 'el aviso aparece');
+  assert.match(a.texto, /hacen falta 4 comparable/, 'el número exacto que pide la aritmética del cuartil');
+  assert.match(a.texto, /la más cercana/, 'cuán lejos está el cribado de servir');
+  assert.match(a.texto, /paso 1/, 'manda al screening, que es donde se resuelve');
+  assert.match(a.texto, /en pérdida/, 'con margen negativo avisa que habrá que justificarlas');
+});
+
+test('con el cribado suficiente el aviso no aparece', () => {
+  /* La regla de este servicio: un panel que avisa de todo enseña a ignorar los avisos. */
+  const universo = [
+    ...Array.from({ length: 12 }, (_, i) => conMargen(`P${i}`, 0.02 + i * 0.005)),
+    ...Array.from({ length: 5 }, (_, i) => conMargen(`N${i}`, -0.06)),
+  ];
+  const p = previsualizarFiltros(universo, { ...CONFIG, perdidaOp: 'incluir', negativasObjetivo: 4 }, {
+    estudio: ESTUDIO_EN_PERDIDA,
+  });
+  assert.strictEqual(p.avisos.find((x) => x.clave === 'cribadoInsuficiente'), undefined);
+});
+
+test('con las pérdidas excluidas manda el aviso de imposibilidad, no el del cribado', () => {
+  /* Ahí el remedio es cambiar la política de esta pantalla, no ampliar el cribado: dar los dos
+     avisos a la vez mandaría a gastar un screening que no hacía falta. */
+  const universo = [
+    ...Array.from({ length: 12 }, (_, i) => conMargen(`P${i}`, 0.02 + i * 0.005)),
+    conMargen('N1', -0.06),
+  ];
+  const p = previsualizarFiltros(universo, { ...CONFIG, perdidaOp: 'excluir' }, {
+    estudio: ESTUDIO_EN_PERDIDA,
+  });
+  assert.ok(p.avisos.some((x) => x.clave === 'imposibleCumplir'));
+  assert.strictEqual(p.avisos.find((x) => x.clave === 'cribadoInsuficiente'), undefined);
+});
+
+test('el requisito se cuenta sobre las que PASARON los filtros, no sobre el cribado crudo', () => {
+  /* Si se contara sobre el cribado completo, el panel prometería comparables que sus propios
+     filtros ya descartaron, y el analista ampliaría el screening creyendo que le sobran. */
+  const universo = [
+    ...Array.from({ length: 12 }, (_, i) => conMargen(`P${i}`, 0.02 + i * 0.005)),
+    /* Cuatro en el nivel, pero todas con saldo negativo: el filtro las saca. */
+    ...Array.from({ length: 4 }, (_, i) => ({ ...conMargen(`N${i}`, -0.06), hasNegativeBalance: true })),
+  ];
+  const p = previsualizarFiltros(universo, { ...CONFIG, perdidaOp: 'incluir', negativasObjetivo: 4 }, {
+    estudio: ESTUDIO_EN_PERDIDA,
+  });
+  const a = p.avisos.find((x) => x.clave === 'cribadoInsuficiente');
+  assert.ok(a, 'el aviso aparece: las cuatro del nivel no sobrevivieron los filtros');
+  assert.match(a.texto, /tiene 0/, 'ninguna valida esta en el nivel');
+});

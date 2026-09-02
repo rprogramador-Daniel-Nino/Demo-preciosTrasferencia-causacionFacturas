@@ -69,6 +69,47 @@ function margenExaminada(study) {
    «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
 const mil = (n) => Number(n || 0).toLocaleString('es-CO');
 
+/* QUÉ HAY QUE TRAER DEL CRIBADO para que el primer cuartil no deje fuera al contribuyente.
+
+   Cuando ninguna palanca alcanza, el problema no es la selección sino el universo cargado: no
+   existen ahí las compañías que harían falta. Medido sobre un caso real con 3 negativas y
+   ninguna honda, contra un contribuyente en -4,595 %, la cuota completa deja el P25 en 1,275 %,
+   bajar la muestra al piso de 10 lo deja en -0,375 % y quitar las cuatro positivas más altas en
+   -1,525 %. Ninguna cierra.
+
+   Ahí decir «NO CUMPLE» no le sirve al analista: ya lo sabe. Lo que le sirve es el criterio de
+   rentabilidad que tiene que agregar al screening del paso 1, y eso `requisitoDeCribado` lo
+   calcula exacto sobre la posición del primer cuartil. */
+function RequisitoDelCribado({ requisito, indicador }) {
+  if (!requisito) return null;
+  const { necesita, hay, faltan, laMasCercana, exigeNegativas, tamanoMuestra } = requisito;
+  if (faltan <= 0) return null;
+
+  return (
+    <div className="rounded-lg border border-sky-300 dark:border-sky-800/60 bg-sky-50 dark:bg-sky-950/30 p-3">
+      <div className="flex items-start gap-2">
+        <Search className="w-4 h-4 text-sky-600 dark:text-sky-400 mt-0.5 shrink-0" />
+        <div className="text-[11.5px] text-sky-900 dark:text-sky-200 leading-relaxed">
+          <strong>Qué falta en el cribado para cumplir.</strong>{' '}
+          Con una muestra de {tamanoMuestra} el primer cuartil cae entre la{' '}
+          {Math.ceil((tamanoMuestra - 1) / 4)}.ª y la {Math.ceil((tamanoMuestra - 1) / 4) + 1}.ª
+          comparable, así que para que quede en su nivel hacen falta{' '}
+          <strong>{necesita} comparables con margen igual o menor a {pctf(indicador)}</strong>
+          {' '}y el cribado tiene {hay === 0 ? 'ninguna' : <strong>{hay}</strong>}
+          {laMasCercana !== null ? <> (la más cercana, {pctf(laMasCercana)})</> : null}.
+          {' '}Faltan <strong>{faltan}</strong>.
+          <div className="mt-2 pt-2 border-t border-sky-200 dark:border-sky-800/60">
+            Agregue al screening del paso 1 un criterio de rentabilidad que las traiga
+            {exigeNegativas
+              ? ' — al ser un margen negativo, entrarán compañías en pérdida y habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), que es lo que hace el asistente del paso 2.'
+              : ' — no hace falta que estén en pérdida: basta con que sean poco rentables.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
 
    `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
@@ -3024,6 +3065,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 ) : null}
               </p>
             )}
+            {/* Si cumple, POR CUÁNTO. Un cumplimiento por tres milésimas se sostiene igual de
+                mal que uno que no cumple en cuanto una cifra se corrija, y eso no se veía. */}
+            {diagnostico.cumple && diagnostico.colchon !== null && (
+              <p className="text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                Cumple con <strong>{pctf(diagnostico.colchon)}</strong> de holgura sobre el primer
+                cuartil
+                {diagnostico.colchon < 0.005
+                  ? <span className="text-amber-700 dark:text-amber-400"> · queda al filo: una corrección de cifras puede sacarlo del rango</span>
+                  : null}
+              </p>
+            )}
             {diagnostico.ajuste && diagnostico.ajuste.improcedente && (
               <p className="text-[11.5px] text-amber-700 dark:text-amber-400 leading-relaxed">
                 El ajuste resulta improcedente con estas cifras: revise el indicador del
@@ -3047,6 +3099,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </p>
             )}
           </div>
+
+          {/* Cuando ninguna palanca alcanza, esto es lo único accionable: qué buscar en el
+              paso 1. Va antes de las palancas porque ampliar el cribado sostiene mejor el
+              estudio —más comparables reales— que apretar la selección de las pocas que hay. */}
+          <RequisitoDelCribado requisito={diagnostico.requisito} indicador={diagnostico.indicador} />
 
           {/* Antes de mover una sola comparable: si el indicador del contribuyente sale de una
               lectura que no se pudo cotejar contra el documento, ajustar la muestra para

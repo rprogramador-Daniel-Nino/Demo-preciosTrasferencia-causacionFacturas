@@ -184,14 +184,29 @@ export function diagnosticarCumplimiento({
      estudio cumpla: es un defecto del cribado y el analista tiene que verlo. */
   const costosImplausibles = costosImplausiblesDe(muestra);
 
+  /* Cuanto sobra entre el indicador y el limite inferior, cuando cumple. Un cumplimiento por
+     tres milesimas se sostiene igual de mal que uno que no cumple si una cifra se corrige, y
+     eso hay que poder verlo sin recalcular a mano. */
+  const colchon = (cumple && stats && indicador !== null) ? indicador - stats.p25 : null;
+
   const hayVeredicto = Boolean(stats) && indicador !== null;
   const palancas = (cumple || !hayVeredicto) ? [] : palancasQueCambianElVeredicto({
     study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
     costosImplausibles,
   });
 
+  /* Que hay que traer del cribado para que el primer cuartil no lo deje fuera. Solo cuando NO
+     cumple: si cumple no hay nada que buscar. Se calcula aunque alguna palanca alcance, porque
+     ampliar el cribado es la via que sostiene mejor el estudio -mas comparables reales- frente a
+     apretar la seleccion de las pocas que hay. */
+  const requisito = (cumple || !hayVeredicto) ? null : requisitoDeCribado({
+    estudio: study, tamanoMuestra: muestra.length, indicador, universo,
+  });
+
   return {
     cumple,
+    colchon,
+    requisito,
     /* `null` cuando no hay rango o no hay indicador: es distinto de «no cumple», y la
        pantalla tiene que poder decir «faltan datos» en vez de un veredicto. */
     veredicto: (!stats || indicador === null) ? null : (cumple ? 'CUMPLE' : 'NO CUMPLE'),
@@ -459,6 +474,98 @@ function negativasDisponiblesEnUniverso(universo, study) {
     const id = c && c.id ? String(c.id).trim() : '';
     return gradoDeActividad(porId[id]) === 'MISMA';
   }).length;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   QUÉ HAY QUE TRAER DEL CRIBADO PARA QUE EL ESTUDIO CUMPLA
+
+   Cuando ninguna palanca alcanza, el problema no es la selección: es el cribado. Medido sobre un
+   caso real con solo 3 negativas y ninguna honda, contra un contribuyente en -4,595 %: la cuota
+   completa deja el P25 en 1,275 %, bajar la muestra al piso de 10 lo deja en -0,375 %, y quitar
+   las cuatro positivas más altas en -1,525 %. Ninguna cierra, ni todas juntas — porque en el
+   universo cargado no existen las compañías que harían falta.
+
+   Ahí el sistema tiene que dejar de decir «no cumple» y decir QUÉ BUSCAR, que es lo único
+   accionable: un criterio de rentabilidad para el screening del paso 1.
+
+   NO SE SIMULA, SE CALCULA. `cuartilInterpolado` es QUARTILE.INC: sobre n valores ordenados el
+   primer cuartil cae en la posición (n-1)/4 (base 0). Para que el P25 quede en el nivel del
+   contribuyente o por debajo basta con que el valor de la posición ceil((n-1)/4) ya esté en ese
+   nivel, y para eso hacen falta ceil((n-1)/4) + 1 comparables contándolo. La aritmética se
+   valida contra `analizarRango` tamaño por tamaño en las pruebas, porque un requisito de más
+   manda a buscar compañías innecesarias y uno de menos hace pagar un cribado que sigue fallando.
+
+   EL REQUISITO SE EXPRESA EN MARGEN, NO EN PÉRDIDAS. Con el contribuyente en utilidad baja lo
+   que falta son comparables poco rentables, y ninguna tiene que estar en pérdida; hablar de
+   pérdidas ahí mandaría a buscar lo que no hace falta y a justificar una inclusión que el
+   estudio no necesita. `exigeNegativas` dice cuál de los dos casos es.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Las comparables del universo cuyo margen está en el nivel dado o por debajo.
+ *
+ * Se mide con `margenParaCercania`, que es la MISMA vara que decide el cumplimiento —ajustada o
+ * no según `useadj`—. Contar con el margen crudo mientras el rango decide con el ajustado haría
+ * que el requisito apuntara a un nivel que no es el que se compara: es el defecto que ya costó
+ * una cuota equivocada en `cuotaMinimaQueCumple`.
+ */
+export function comparablesEnOPorDebajoDe(universo, study, nivel) {
+  const lista = Array.isArray(universo) ? universo : [];
+  if (nivel === null || nivel === undefined || Number.isNaN(nivel)) return [];
+  return lista.filter((c) => {
+    const m = margenParaCercania(c, study || {});
+    return m !== null && m <= nivel;
+  });
+}
+
+/**
+ * Cuántas comparables en el nivel del contribuyente o por debajo hacen falta para que el primer
+ * cuartil no lo deje fuera, cuántas de esas hay en el cribado, y cuántas faltan por traer.
+ *
+ * @param {object} p
+ * @param {object} p.estudio        las cifras del contribuyente (para la vara del margen).
+ * @param {number} p.tamanoMuestra  cuántas comparables va a tener la muestra.
+ * @param {number} p.indicador      el margen de la parte examinada, en tanto por uno.
+ * @param {Array}  p.universo       el cribado del paso 1.
+ * @returns {object|null} `null` si no hay indicador o la muestra es demasiado corta: sin eso no
+ *   se puede afirmar un requisito, y un número inventado mandaría a buscar mal.
+ */
+export function requisitoDeCribado({ estudio, tamanoMuestra, indicador, universo } = {}) {
+  const n = Math.trunc(Number(tamanoMuestra) || 0);
+  if (indicador === null || indicador === undefined || Number.isNaN(indicador)) return null;
+  if (n < 4) return null;
+
+  /* La posición del primer cuartil en QUARTILE.INC, base 0. */
+  const posicion = (n - 1) / 4;
+  const necesita = Math.ceil(posicion) + 1;
+
+  const enNivel = comparablesEnOPorDebajoDe(universo, estudio || {}, indicador);
+  const hay = enNivel.length;
+
+  /* La más cercana POR ENCIMA del nivel: es la que dice cuán lejos está el cribado de servir.
+     «La más honda que tienes es -3,8 % y necesitas -4,6 %» es accionable; «no hay» no lo es. */
+  let laMasCercana = null;
+  (Array.isArray(universo) ? universo : []).forEach((c) => {
+    const m = margenParaCercania(c, estudio || {});
+    if (m === null || m <= indicador) return;
+    if (laMasCercana === null || m < laMasCercana) laMasCercana = m;
+  });
+
+  return {
+    necesita,
+    hay,
+    faltan: Math.max(0, necesita - hay),
+    alcanza: hay >= necesita,
+    /* El margen que deben tener las que falten. Es el del contribuyente exacto: el mínimo que
+       cumple, sin colchón añadido por cuenta del sistema. El colchón que quede se reporta
+       aparte, para que se vea si el estudio quedó al filo. */
+    margenObjetivo: indicador,
+    laMasCercana,
+    /* Si el nivel es negativo, lo que falta son comparables en pérdida y hay que justificarlas
+       (Guías OCDE cap. III §3.64-3.65). Si es positivo, basta con poco rentables. */
+    exigeNegativas: indicador < 0,
+    tamanoMuestra: n,
+  };
 }
 
 /**

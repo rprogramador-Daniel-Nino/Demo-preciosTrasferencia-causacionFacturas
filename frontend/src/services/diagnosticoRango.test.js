@@ -11,7 +11,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   diagnosticarCumplimiento, confianzaDelIndicador, resumenDeLectura,
+  requisitoDeCribado, comparablesEnOPorDebajoDe,
 } from './diagnosticoRango.js';
+import { analizarRango } from './rangoIntercuartil.js';
 
 /* Una comparable con el margen operacional que se le pida. `op` es UTILIDAD, que es el
    convenio del estudio: el diagnóstico lo traduce a gastos para el motor por su cuenta. */
@@ -531,4 +533,145 @@ test('un margen bruto negativo MODERADO no se marca: pasa de verdad', () => {
     estudio: { ...ESTUDIO, t_c: 700, t_op: -45 }, comparables: muestra,
   });
   assert.deepEqual(d.costosImplausibles, []);
+});
+
+/* ══════════════════ QUÉ HAY QUE TRAER DEL CRIBADO PARA CUMPLIR ══════════════════
+
+   Pedido el 2026-09-02: «nos pasa que en otra compañía las comparables que selecciona no
+   alcanzan a estar por encima de este p25».
+
+   Medido sobre un cribado pobre —3 negativas, ninguna honda— NINGUNA palanca alcanza: la cuota
+   completa deja el P25 en 1,275 %, bajar la muestra a 10 lo deja en -0,375 %, y quitar las
+   cuatro positivas más altas en -1,525 %, contra un contribuyente en -4,595 %. Cuando eso pasa
+   el problema no es la selección sino EL CRIBADO, y el sistema tenía que dejar de decir «no
+   cumple» para decir qué hay que traer de Capital IQ.
+
+   NO SE SIMULA: SE CALCULA. Con QUARTILE.INC el primer cuartil de n valores ordenados cae en la
+   posición (n-1)/4, así que para que el P25 quede en o por debajo del margen del contribuyente
+   hacen falta ceil((n-1)/4) + 1 comparables en ese nivel o por debajo. La primera prueba valida
+   esa aritmética contra el motor de rango de verdad, tamaño por tamaño: si la fórmula se
+   desviara, el sistema mandaría a buscar un número equivocado de compañías.
+
+   Y EL REQUISITO NO ES «NEGATIVAS», ES «MARGEN <= EL DEL CONTRIBUYENTE». Con un contribuyente en
+   utilidad baja se cumple con comparables poco rentables y ninguna en pérdida; hablar de
+   pérdidas ahí mandaría a buscar lo que no hace falta. */
+
+const compReq = (margen, extra = {}) => ({
+  name: 'C', amb: 'Int', s: 10000, c: 8000, op: margen * 10000, ...extra,
+});
+const ESTUDIO_REQ = { t_s: 100000, t_c: 92000, t_op: -4595, pli: 'MO', cmode: 'all' };
+
+test('la aritmética del requisito coincide con el motor de rango, tamaño por tamaño', () => {
+  /* LA PRUEBA QUE SOSTIENE TODO LO DEMÁS. Para cada n se arma una muestra con exactamente el
+     número de comparables que la fórmula pide en el nivel del contribuyente, y se comprueba
+     contra `analizarRango` que el P25 quedó en ese nivel o por debajo; y con UNA MENOS, que no.
+     Si la fórmula pidiera de más, el sistema mandaría a buscar compañías innecesarias; si
+     pidiera de menos, el analista pagaría un cribado que sigue sin cumplir. */
+  const TP = -0.04595;
+  for (let n = 4; n <= 25; n += 1) {
+    const k = requisitoDeCribado({
+      estudio: ESTUDIO_REQ, tamanoMuestra: n, indicador: TP, universo: [],
+    }).necesita;
+
+    const conK = [
+      ...Array.from({ length: k }, () => compReq(TP)),
+      ...Array.from({ length: n - k }, (_, i) => compReq(0.02 + i * 0.01)),
+    ];
+    const rK = analizarRango({ ...ESTUDIO_REQ, comparables: conK });
+    assert.ok(rK.stats.p25 <= TP + 1e-12,
+      'n=' + n + ': con ' + k + ' en el nivel el P25 quedo en ' + rK.stats.p25);
+
+    const conMenos = [
+      ...Array.from({ length: k - 1 }, () => compReq(TP)),
+      ...Array.from({ length: n - k + 1 }, (_, i) => compReq(0.02 + i * 0.01)),
+    ];
+    const rM = analizarRango({ ...ESTUDIO_REQ, comparables: conMenos });
+    assert.ok(rM.stats.p25 > TP,
+      'n=' + n + ': con ' + (k - 1) + ' ya cumplia, asi que ' + k + ' pide una de mas');
+  }
+});
+
+test('cuenta cuántas hay en el cribado en o por debajo del margen, y la más cercana', () => {
+  const universo = [compReq(-0.06), compReq(-0.05), compReq(-0.038), compReq(-0.012), compReq(0.03)];
+  const r = requisitoDeCribado({
+    estudio: ESTUDIO_REQ, tamanoMuestra: 12, indicador: -0.04595, universo,
+  });
+  assert.strictEqual(r.necesita, 4, 'ceil(11/4) + 1');
+  assert.strictEqual(r.hay, 2, 'solo -0,06 y -0,05 estan en el nivel o por debajo');
+  assert.strictEqual(r.faltan, 2);
+  assert.ok(Math.abs(r.laMasCercana - (-0.038)) < 1e-9,
+    'la mas cercana POR ENCIMA del nivel: dice cuan lejos esta el cribado');
+});
+
+test('con el cribado suficiente no pide nada', () => {
+  const universo = Array.from({ length: 6 }, () => compReq(-0.06));
+  const r = requisitoDeCribado({
+    estudio: ESTUDIO_REQ, tamanoMuestra: 12, indicador: -0.04595, universo,
+  });
+  assert.strictEqual(r.faltan, 0);
+  assert.strictEqual(r.alcanza, true);
+});
+
+test('el requisito se expresa en margen, no en pérdidas: un contribuyente rentable no necesita negativas', () => {
+  /* Con el contribuyente en 2 % y el rango arrancando más arriba, lo que falta son comparables
+     POCO RENTABLES, no en pérdida. Decir «pérdidas» ahí mandaría a buscar lo que no hace falta
+     y a justificar una inclusión que el estudio no necesita. */
+  const rentable = { t_s: 100000, t_c: 90000, t_op: 2000, pli: 'MO', cmode: 'all' };
+  const universo = [compReq(0.005), compReq(0.012), compReq(0.018), compReq(0.04), compReq(0.06)];
+  const r = requisitoDeCribado({
+    estudio: rentable, tamanoMuestra: 12, indicador: 0.02, universo,
+  });
+  assert.strictEqual(r.hay, 3, 'las tres de margen bajo cuentan, y ninguna esta en perdida');
+  assert.strictEqual(r.exigeNegativas, false);
+  assert.strictEqual(r.faltan, 1);
+});
+
+test('sin indicador no inventa un requisito', () => {
+  assert.strictEqual(requisitoDeCribado({
+    estudio: ESTUDIO_REQ, tamanoMuestra: 12, indicador: null, universo: [],
+  }), null);
+});
+
+test('el margen se mide con la misma vara que decide el cumplimiento', () => {
+  /* Si aquí se contara con el margen crudo y el rango decidiera con el ajustado, el requisito
+     apuntaría a un nivel que no es el que se compara. Es el error que ya costó una cuota
+     equivocada en `cuotaMinimaQueCumple`. */
+  const conAjuste = { ...ESTUDIO_REQ, useadj: true, t_ar: 12000, t_inv: 21000, t_ap: 15000, prime: 12.5 };
+  const universo = [compReq(-0.06, { ar: 1200, inv: 2100, ap: 1500 })];
+  const cruda = comparablesEnOPorDebajoDe(universo, ESTUDIO_REQ, -0.04595);
+  const ajustada = comparablesEnOPorDebajoDe(universo, conAjuste, -0.04595);
+  assert.ok(Array.isArray(cruda) && Array.isArray(ajustada),
+    'cada una usa su propia vara, sin lanzar y devolviendo el mismo tipo');
+});
+
+/* ══════════════ El colchón: si cumple, por cuánto ══════════════ */
+
+const MUESTRA_QUE_CUMPLE = [
+  -0.06, -0.055, -0.05, -0.048, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09,
+].map((m) => compReq(m));
+
+test('el diagnóstico dice por cuánto cumple, no solo que cumple', () => {
+  /* Pedido en la misma conversación: saber si el estudio quedó al filo. Un cumplimiento por
+     tres milésimas se sostiene igual de mal que uno que no cumple, si una cifra se corrige. */
+  const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: MUESTRA_QUE_CUMPLE, universo: [] });
+  assert.strictEqual(d.cumple, true);
+  assert.ok(d.colchon > 0, 'los puntos que sobran entre el indicador y el P25');
+  assert.ok(Math.abs(d.colchon - (d.indicador - d.stats.p25)) < 1e-12);
+});
+
+test('cuando no cumple, el diagnóstico trae el requisito del cribado', () => {
+  const muestra = Array.from({ length: 12 }, (_, i) => compReq(0.02 + i * 0.005));
+  const universo = [compReq(-0.012), compReq(-0.025), compReq(-0.038)];
+  const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: muestra, universo });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.requisito, 'trae el requisito');
+  assert.strictEqual(d.requisito.necesita, 4);
+  assert.strictEqual(d.requisito.hay, 0, 'ninguna de las tres llega al nivel del contribuyente');
+  assert.strictEqual(d.requisito.faltan, 4);
+  assert.strictEqual(d.colchon, null, 'no hay colchon cuando no cumple');
+});
+
+test('cuando cumple no se calcula requisito: no hay nada que traer', () => {
+  const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: MUESTRA_QUE_CUMPLE, universo: [] });
+  assert.strictEqual(d.requisito, null);
 });
