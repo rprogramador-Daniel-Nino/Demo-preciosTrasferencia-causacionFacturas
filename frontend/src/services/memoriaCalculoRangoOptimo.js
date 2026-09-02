@@ -1023,38 +1023,27 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sel.push([]);
     }
 
-    const perdidas = seleccion.perdidas || null;
-    if (perdidas && perdidas.politica) {
-      sel.push([cTxt('POLÍTICA DE PÉRDIDAS OPERATIVAS (Guías OCDE cap. III, §3.64-3.65)')]);
-      sel.push([
-        cTxt('Criterio aplicado'),
-        cTxt(perdidas.politica === 'excluir'
-          ? 'Excluir las comparables en pérdida'
-          : 'Admitir comparables en pérdida'),
-      ]);
-      if (perdidas.politica !== 'excluir') {
-        sel.push([cTxt('Comparables en pérdida solicitadas'), cNum(perdidas.objetivo, '0')]);
-        sel.push([cTxt('Comparables en pérdida en la muestra'), cNum(perdidas.incluidas, '0')]);
-        sel.push([
-          cTxt('Disponibles en el universo (misma actividad)'),
-          cNum(perdidas.disponibles, '0'),
-          cTxt(perdidas.incluidas < perdidas.objetivo
-            ? 'Entraron menos de las solicitadas: el universo no tenía más'
-            : ''),
-        ]);
-      } else if (perdidas.excluidasPorFiltro) {
-        sel.push([
-          cTxt('Comparables en pérdida excluidas por el filtro'),
-          cNum(perdidas.excluidasPorFiltro, '0'),
-        ]);
-      }
-      sel.push([
-        cTxt('Justificación'),
-        cTxt(String(perdidas.justificacion || '').trim()
-          || 'PENDIENTE — el estudio no registró la justificación de esta política.'),
-      ]);
-      sel.push([]);
-    }
+    /* ─── POR QUE AQUI NO VA LA POLITICA DE PERDIDAS OPERATIVAS ───
+       Retirada el 2026-09-02 por decision del despacho, consultada con su contador: «quitalo,
+       tenga o no tenga negativas o de perdidas no deben salir en el excel, ya que no lo
+       necesitan».
+
+       Publicaba el criterio aplicado, los conteos de negativas —solicitadas, incluidas y
+       disponibles en el universo— y el texto de justificacion. Antes de retirarla se ajusto para
+       que solo saliera cuando decia algo, porque con la politica en «excluir» y cero descartadas
+       imprimia una fila «PENDIENTE» que inventaba una obligacion inexistente; el despacho pidio
+       retirarla completa.
+
+       LO QUE ESTO DEJA SIN PUBLICAR: `justificacionPerdida` no aparece en ningun otro
+       documento —se verifico: no llega al .docx del informe—, asi que el texto que el analista
+       escribe en el paso 2, o que le redacta el asistente de IA, queda guardado con el estudio
+       pero sin publicarse en ninguna parte. Si alguna vez hace falta sustentar la inclusion de
+       comparables en perdida ante un revisor (Guias OCDE cap. III, §3.64-3.65), el sitio natural
+       es el informe y no este libro.
+
+       Los datos SIGUEN VIAJANDO en `seleccion.perdidas`: solo se dejo de imprimir. Volver a
+       publicarlos es reponer este bloque, no recalcular nada. */
+
 
     /* Embudo con fórmulas COUNTIF sobre la columna «Motivo de rechazo», que es la
        que escribe el motor. Antes se contaba sobre las columnas de flags, que

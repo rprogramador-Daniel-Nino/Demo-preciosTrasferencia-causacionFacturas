@@ -415,3 +415,81 @@ test('un estudio corrido antes de que esto existiera no rompe el libro', () => {
   });
   assert.doesNotMatch(hojaSeleccion(libro), /COMBINACIÓN DE SELECCIÓN/);
 });
+
+/* ══════ LA POLITICA DE PERDIDAS NO SE PUBLICA EN EL LIBRO ══════
+
+   Retirada el 2026-09-02 por decision del despacho, consultada con su contador: «quitalo, tenga
+   o no tenga negativas o de perdidas no deben salir en el excel, ya que no lo necesitan».
+
+   El reclamo empezo por una fila concreta: con la politica en «excluir» el libro imprimia
+   «Justificacion: PENDIENTE — el estudio no registro la justificacion de esta politica», que
+   inventaba una obligacion inexistente —ese campo sustenta la INCLUSION de comparables en
+   perdida (Guias OCDE cap. III, §3.64-3.65), y al excluirlas no hay nada que sustentar—. El
+   arreglo intermedio fue imprimirla solo cuando decia algo; el despacho pidio retirarla completa.
+
+   LO QUE ESTAS PRUEBAS PROTEGEN: que no vuelva por descuido en ninguno de los cuatro estados de
+   la politica, porque cada uno imprimia filas distintas y basta con que uno se reponga para que
+   el libro vuelva a mostrarla. */
+
+const hojaSelPol = (libro) => {
+  assert.ok(libro.SheetNames.includes('Selección comparables'),
+    'la hoja debe existir, o las aserciones de abajo pasarian en vacio');
+  return XLSX.utils.sheet_to_csv(libro.Sheets['Selección comparables']);
+};
+const libroConEmbudo = (extra) => construirLibroSoporte({
+  ...PAYLOAD,
+  filtros: {
+    ...(PAYLOAD.filtros || {}),
+    selectionFunnel: {
+      ...((PAYLOAD.filtros && PAYLOAD.filtros.selectionFunnel) || {}),
+      ...extra,
+    },
+  },
+});
+
+test('la política de pérdidas no sale en el libro, en ninguno de sus cuatro estados', () => {
+  const estados = [
+    ['excluyendo, sin descartar nada', { politicaPerdidas: 'excluir', negativasExcluidasPorFiltro: 0 }],
+    ['excluyendo y descartando 37', { politicaPerdidas: 'excluir', negativasExcluidasPorFiltro: 37 }],
+    ['admitiendo, con justificación', {
+      politicaPerdidas: 'incluir', negativasObjetivo: 4, negativasIncluidas: 4,
+      negativasDisponibles: 41, justificacionPerdida: 'Contracción de la demanda del sector.',
+    }],
+    ['admitiendo, sin justificación', {
+      politicaPerdidas: 'incluir', negativasObjetivo: 4, negativasIncluidas: 4,
+      negativasDisponibles: 41,
+    }],
+  ];
+  estados.forEach(([etq, extra]) => {
+    const texto = hojaSelPol(libroConEmbudo(extra));
+    assert.doesNotMatch(texto, /POLÍTICA DE PÉRDIDAS OPERATIVAS/, etq);
+    assert.doesNotMatch(texto, /PENDIENTE/, etq + ': ni el pendiente que motivó el reclamo');
+    assert.doesNotMatch(texto, /Criterio aplicado/, etq);
+    assert.doesNotMatch(texto, /Contracción de la demanda/, etq + ': ni la justificación escrita');
+  });
+});
+
+test('ninguna hoja del libro publica la justificación de pérdidas', () => {
+  /* Se comprueba en TODAS las hojas y no solo en la de selección: el texto podría reaparecer
+     por otra ruta, y el despacho pidió que no salga del libro. */
+  const libro = libroConEmbudo({
+    politicaPerdidas: 'incluir', negativasIncluidas: 4,
+    justificacionPerdida: 'Contracción de la demanda del sector.',
+  });
+  libro.SheetNames.forEach((nombre) => {
+    const texto = XLSX.utils.sheet_to_csv(libro.Sheets[nombre]);
+    assert.doesNotMatch(texto, /Contracción de la demanda/, `la hoja «${nombre}» la publica`);
+  });
+});
+
+test('retirarla no rompe lo que sí se publica junto a ella', () => {
+  /* La sección vivía entre la combinación de selección y el embudo. Se comprueba que las dos
+     siguen saliendo: un corte mal hecho se habría llevado alguna. */
+  const libro = libroConEmbudo({
+    politicaPerdidas: 'excluir', alternativa: 3, alternativasDisponibles: 13,
+    anclaRentabilidad: 'parteExaminada',
+  });
+  const texto = hojaSelPol(libro);
+  assert.match(texto, /COMBINACIÓN DE SELECCIÓN/, 'la combinación sigue');
+  assert.match(texto, /CRITERIO DE CERCANÍA DE RENTABILIDAD/, 'y el ancla de rentabilidad');
+});
