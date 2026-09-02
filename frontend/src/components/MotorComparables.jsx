@@ -3250,6 +3250,35 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               rango ajustado, y sin tasa ese ajuste es nulo, de modo que el veredicto que se lee
               arriba sale del rango sin ajustar. Es el aviso de más alcance de esta tarjeta
               porque no habla de la muestra sino de la vara con la que se mide. */}
+          {/* ── POR QUE CONCLUYE SOBRE EL RANGO SIN AJUSTAR ──
+              Reportado el 2026-09-02 con la tabla a la vista: las doce comparables traian CxC,
+              Inventario, CxP y PP&E en cero, porque la exportacion de Capital IQ no incluye esas
+              columnas. Con el ratio de la comparable en cero, cada ajuste se reduce a
+              «−ratio_contribuyente × factor»: el mismo valor para todas. Medido en el caso real,
+              de +4,401 a +4,711 pt en las once, amplitud 0,310 pt. Es una constante que sale del
+              balance del contribuyente y no compara nada, asi que no puede decidir. */}
+          {diagnostico.ajusteTieneDatos === false && diagnostico.comparablesEnElRango > 0 && (
+            <div className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900/40 p-3">
+              <div className="flex items-start gap-2">
+                <FileText className="w-4 h-4 text-zinc-500 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed">
+                  <strong>Se concluye sobre el rango sin ajustar</strong>, y esta es la razón:
+                  solo {diagnostico.comparablesConCapitalTrabajo} de{' '}
+                  {diagnostico.comparablesEnElRango} comparables traen cuentas por cobrar,
+                  inventarios o cuentas por pagar. Un ajuste por diferencias de capital de trabajo
+                  exige conocer el de las dos partes; con el de las comparables en cero, el ajuste
+                  se reduce al mismo valor para todas —sale de su propio balance— y desplaza el
+                  rango sin corregir ninguna diferencia de comparabilidad.
+                  <div className="mt-1.5 text-zinc-500">
+                    Para que el ajuste decida, el cribado del paso 1 tiene que traer esas cuatro
+                    columnas. El rango ajustado sigue calculado y publicado en el informe y en el
+                    Excel de soporte.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {diagnostico.ajusteAnulado && (
             <div className="rounded-lg border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3">
               <div className="flex items-start gap-2">

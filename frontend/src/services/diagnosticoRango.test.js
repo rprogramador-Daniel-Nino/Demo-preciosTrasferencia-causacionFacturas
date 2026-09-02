@@ -54,14 +54,27 @@ test('cuando no cumple, dice a cuánto está del límite y cuánto sería el aju
 test('publica los dos rangos y cuál de ellos decide', () => {
   const d = diagnosticar();
   assert.ok(d.rangos.sinAjustar, 'el rango sin ajustar siempre está calculado');
-  /* El cumplimiento se decide SIEMPRE con el rango ajustado desde el 2026-09-02
-     («el MO sin ajuste solo nos ayuda a escoger las comparables, pero como sabemos si
-     cumple es con el rango ajustado»). `useadj` dejo de elegirlo.
-     El sin ajustar se sigue publicando porque es la vara con que se eligieron las comparables,
-     pero no es el que concluye. */
-  assert.strictEqual(d.rangos.decide, 'ajustado', 'con la casilla apagada TAMBIEN decide el ajustado');
-  const conUseadj = diagnosticar({ useadj: true });
-  assert.strictEqual(conUseadj.rangos.decide, 'ajustado');
+  /* CUAL DECIDE, y la casilla `useadj` no interviene en ninguno de los dos casos:
+
+       · el AJUSTADO cuando la mayoria de la muestra trae capital de trabajo —«el MO sin ajuste
+         solo nos ayuda a escoger las comparables, pero como sabemos si cumple es con el rango
+         ajustado», 2026-09-02—;
+       · el SIN AJUSTAR cuando no lo trae, porque ahi cada ajuste se reduce a
+         «−ratio_contribuyente × factor», el mismo valor para todas: un desplazamiento constante
+         que sale del balance del contribuyente y no compara nada. Medido en el caso reportado:
+         de +4,401 a +4,711 pt en las once comparables, amplitud 0,310 pt.
+
+     Las comparables de este fixture no traen esas partidas, asi que aqui manda el crudo. */
+  assert.strictEqual(d.rangos.decide, 'sinAjustar',
+    'sin capital de trabajo en la muestra, el ajuste no puede concluir');
+  assert.strictEqual(diagnosticar({ useadj: true }).rangos.decide, 'sinAjustar',
+    'y la casilla no lo cambia: dejo de elegir el 2026-09-02');
+
+  /* Con capital de trabajo en la muestra, el ajustado recupera el mando. */
+  const conCapital = diagnosticar({}, {
+    comparables: POSITIVAS.map((c) => ({ ...c, ar: 120, inv: 90, ap: 40 })),
+  });
+  assert.strictEqual(conCapital.rangos.decide, 'ajustado');
 });
 
 test('cuando cumple no propone ninguna palanca', () => {

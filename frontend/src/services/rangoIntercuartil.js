@@ -111,7 +111,13 @@ export function analizarRango(estudio) {
   };
   const tPLI = pliOf(T, kind);
 
-  const { filas, stats, statsNoAjustado, statsAjustado } = porMetodologiaOCDE(study, kind);
+  const {
+    filas, stats, statsNoAjustado, statsAjustado,
+    /* Si el ajuste tenia con que ajustar. Se propaga porque de ello depende cual de los dos
+       rangos es `stats` —el que concluye—, y tanto la pantalla como el informe tienen que poder
+       declarar por que concluyeron sobre uno o sobre el otro. */
+    ajusteTieneDatos, comparablesConCapitalTrabajo, comparablesEnElRango,
+  } = porMetodologiaOCDE(study, kind);
 
   const adj = stats && tPLI !== null ? adjustInfo(T, tPLI, stats, T.s || 0, 1, study.egreso) : null;
   /* 'CUMPLE' cuando no hay ajuste es comportamiento heredado, no un descuido.
@@ -122,7 +128,10 @@ export function analizarRango(estudio) {
      de (X)»— y hasta ahora no había forma de que esa cifra se actualizara: no existía campo
      para el indicador de la parte examinada, así que la frase se radicaba con el del
      contribuyente anterior. Ya se calculaba aquí; solo faltaba publicarlo. */
-  return { stats, statsNoAjustado, statsAjustado, tPLI, adj, cumple, filas };
+  return {
+    stats, statsNoAjustado, statsAjustado, tPLI, adj, cumple, filas,
+    ajusteTieneDatos, comparablesConCapitalTrabajo, comparablesEnElRango,
+  };
 }
 
 /* Ruta unificada: el mismo motor que emite las fórmulas del Excel de soporte.
@@ -172,9 +181,53 @@ function porMetodologiaOCDE(study, kind) {
      correccion de comparabilidad. Eso NO se arregla escondiendo el ajuste: se avisa, y de eso
      se encarga `ajusteSinCapitalTrabajo` en `previsualizarFiltros.js`, que ya no depende de
      `useadj` por esta misma razon. */
-  const reportado = conAjuste;
+  /* ── UN AJUSTE SIN DATOS NO ES UN AJUSTE ──
+     Reportado el 2026-09-02 con la tabla de comparables a la vista: las doce traian CxC,
+     Inventario, CxP y PP&E en CERO, porque la exportacion de Capital IQ no incluye esas
+     columnas (ya avisado el 2026-09-01: «Columnas no encontradas: Cuentas por cobrar,
+     Inventarios, Cuentas por pagar, Propiedad, planta y equipo»).
+
+     Cada ajuste es `(ratio_comparable − ratio_contribuyente) × factor`. Con el ratio de la
+     comparable en cero el termino se reduce a `−ratio_contribuyente × factor`: el MISMO valor
+     para todas. Medido sobre el caso real, el desplazamiento fue de +4,401 a +4,711 pt en las
+     once —amplitud 0,310 pt—. Es una CONSTANTE que sale entera del balance del contribuyente y
+     no compara nada.
+
+     Y esa constante mueve el primer cuartil —el que decide— sin corregir ninguna diferencia de
+     comparabilidad: en el caso reportado empujaba el P25 de 1,363 % a 13,962 % y dejaba fuera a
+     un contribuyente que en 6,204 % si estaba en rango.
+
+     LA REGLA: el rango ajustado concluye solo cuando hay datos con que ajustar. No es una
+     concesion para que el estudio cumpla — es que un ajuste por diferencias de capital de
+     trabajo exige conocer el capital de trabajo de LAS DOS partes, y ningun revisor sostendria
+     lo contrario. Sin el de las comparables, la conclusion se toma sobre el rango sin ajustar y
+     el informe dice por que.
+
+     EL UMBRAL ES LA MAYORIA, y no «todas». Exigir todas volcaba al rango crudo cualquier
+     estudio al que le faltara una sola comparable, y ahi el ajuste si estaba comparando algo
+     real en las demas; exigir «al menos una» dejaria decidir a un rango que es artefacto en once
+     de doce. Con la mayoria de la muestra ajustable, los cuartiles los mueven ajustes de verdad
+     y no la constante — y cuando la mayoria esta en cero, lo que mueve el rango es el balance
+     del contribuyente, que no es comparabilidad.
+
+     Con datos parciales por debajo de esa mayoria sigue ademas el aviso de bloqueo
+     `ajusteSinCapitalTrabajo` del paso 2, que nombra cuantas faltan.
+
+     Es AUTOMATICA y general: no agrega un paso, ni una casilla, ni una decision al analista.
+     Cuando los datos esten, el ajuste vuelve a decidir solo. */
+  const filasDelRango = (conAjuste.filas || []).filter((f) => f.valor !== null);
+  const conCapitalTrabajo = filasDelRango.filter((f) => f.tieneCapitalTrabajo).length;
+  const ajusteTieneDatos = filasDelRango.length > 0
+    && conCapitalTrabajo * 2 > filasDelRango.length;
+  const reportado = ajusteTieneDatos ? conAjuste : sinAjuste;
 
   return {
+    /* Por que concluye sobre uno o sobre el otro. La pantalla lo pinta y el informe lo
+       declara: concluir sobre el rango sin ajustar hay que sustentarlo, y el sustento es que no
+       habia con que ajustar. */
+    ajusteTieneDatos,
+    comparablesConCapitalTrabajo: conCapitalTrabajo,
+    comparablesEnElRango: filasDelRango.length,
     stats: reportado.stats,
     statsNoAjustado: sinAjuste.stats,
     statsAjustado: conAjuste.stats,

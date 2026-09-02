@@ -64,7 +64,7 @@ export function construirMemoriaRango(estudio) {
   const tasa = (num(study.prime) || 0) / 100;
 
   /* Las filas salen de `analizarRango`: mismo margen y mismo ajuste que el informe. */
-  const { filas } = analizarRango(study);
+  const { filas, ajusteTieneDatos } = analizarRango(study);
 
   /* CUAL DE LOS DOS MARGENES SOSTIENE LA CONCLUSION.
      `useadj` lo decide, igual que en `rangoIntercuartil.js:80`, y esta memoria tiene que
@@ -77,10 +77,16 @@ export function construirMemoriaRango(estudio) {
      primer cuartil estaba en 1,364 %— y juntas se contradecian: puesto asi, cualquiera concluye
      que el estudio no cumple. Este modal existe para explicar el numero de la tarjeta; si
      calcula sobre otra serie, explica un numero que nadie ve. */
-  /* Siempre el ajustado (2026-09-02): es el que decide el cumplimiento, y esta memoria
-     existe para explicar ese numero. `useAdj` ya no elige aqui; sigue leyendose para el aviso
-     de tasa en cero y para informar `ajuste.aplicado`. */
-  const margenQueManda = (f) => f.ajustado;
+  /* CUAL DECIDE lo dice `analizarRango`, y esta memoria no lo vuelve a razonar: existe para
+     explicar el numero de la tarjeta, asi que preguntarselo es lo unico que garantiza que
+     explique el mismo. Ya divergio una vez por tener su propio criterio (2026-09-02, con la
+     serie ajustada frente a un veredicto que salia del crudo).
+
+     El ajustado decide salvo que la mayoria de las comparables no traiga capital de trabajo: sin
+     esos datos el ajuste degenera en un desplazamiento constante que sale del balance del
+     contribuyente, y entonces concluye el rango sin ajustar. `useAdj` ya no elige nada aqui;
+     sigue leyendose para el aviso de tasa en cero y para informar `ajuste.aplicado`. */
+  const margenQueManda = (f) => (ajusteTieneDatos ? f.ajustado : f.noAjustado);
 
   const comparables = filas.map((f) => {
     const decide = margenQueManda(f);
@@ -250,7 +256,9 @@ export function construirMemoriaRango(estudio) {
     /* Cual de las dos series sostiene los cuartiles de arriba. La pantalla lo dice al lado del
        rango: con las dos columnas a la vista hay que declarar cual manda, o el lector vuelve a
        comparar el indicador contra la que no decide, que es justo lo que paso. */
-    serieQueDecide: 'ajustado',
+    serieQueDecide: ajusteTieneDatos ? 'ajustado' : 'noAjustado',
+    /* Y por que: una conclusion sobre el rango sin ajustar hay que sustentarla. */
+    ajusteTieneDatos,
     ajuste: {
       /* Berry dejó de estar exceptuado: con la definición del motor —utilidad bruta
          sobre gastos operativos— sí admite el ajuste, y la hoja Berry del Excel ya

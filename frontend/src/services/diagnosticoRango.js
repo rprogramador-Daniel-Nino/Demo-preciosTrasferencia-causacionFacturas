@@ -253,6 +253,11 @@ export function diagnosticarCumplimiento({
     /* `true` cuando el rango ajustado no puede ajustar nada. La pantalla lo pinta como aviso,
        porque invalida la vara con la que se concluye. */
     ajusteAnulado,
+    /* Si el ajuste tenia con que ajustar, y en cuantas comparables. Lo pinta la tarjeta: una
+       conclusion sobre el rango sin ajustar hay que sustentarla, y el sustento es este. */
+    ajusteTieneDatos: rango.ajusteTieneDatos,
+    comparablesConCapitalTrabajo: rango.comparablesConCapitalTrabajo,
+    comparablesEnElRango: rango.comparablesEnElRango,
     /* Cuanto mueve el ajuste el primer cuartil, y si es eso lo que deja fuera al contribuyente. */
     desplazamientoAjuste,
     elAjusteEsElProblema,
@@ -283,7 +288,11 @@ export function diagnosticarCumplimiento({
       /* Siempre el ajustado (2026-09-02): es el que sostiene la conclusion. Se conserva el
          campo porque la tarjeta lo pinta y porque publicar los dos rangos sigue siendo util
          —el sin ajustar es la vara con que se eligieron las comparables—. */
-      decide: 'ajustado',
+      /* Cual concluye. El ajustado, salvo que la mayoria de la muestra no traiga capital de
+         trabajo: sin esos datos el ajuste es un desplazamiento constante que sale del balance
+         del contribuyente y no compara nada, asi que concluye el crudo. Lo decide
+         `analizarRango`, que es el unico sitio donde se elige. */
+      decide: rango.ajusteTieneDatos ? 'ajustado' : 'sinAjustar',
     },
     palancas,
     costosImplausibles,

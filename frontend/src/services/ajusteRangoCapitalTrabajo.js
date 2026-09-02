@@ -363,11 +363,24 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
       ? valor
       : indicadorAjustado(comp, contribuyente, kind, 'ninguno', tasaEstudio);
     const amb = comp && comp.amb === 'Nac' ? 'Nac' : 'Int';
+    /* Si esta comparable trae con que ajustarla. Va en la fila y no se recalcula fuera porque
+       aqui esta `comp` con sus partidas: quien decida si el ajuste puede concluir necesita
+       saberlo, y derivarlo despues obligaria a volver a cruzar filas con comparables.
+
+       Con las tres en cero —el caso de una exportacion de Capital IQ sin esas columnas— el
+       ajuste de esta fila se reduce a `−ratio_contribuyente × factor`, el mismo valor para
+       todas: deja de comparar y pasa a ser un desplazamiento constante. */
+    const cw = cifras(comp);
+    const tieneCapitalTrabajo = Boolean(
+      (cw.ar !== null && cw.ar !== 0) || (cw.inv !== null && cw.inv !== 0)
+      || (cw.ap !== null && cw.ap !== 0),
+    );
     return {
       nombre: String((comp && comp.name) || '').trim(),
       amb,
       valor,
       noAjustado,
+      tieneCapitalTrabajo,
       incluida: entraPorAmbito(amb, modo) && valor !== null && Number.isFinite(valor),
     };
   });
