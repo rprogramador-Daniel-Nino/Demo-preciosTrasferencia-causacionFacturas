@@ -33,7 +33,12 @@ import { enPerdida, gradoDeActividad } from './comparablesEngine.js';
 const AJUSTE_DEL_INFORME = 'aar_aap_inv';
 
 /** Los indicadores que el sistema ofrece, para poder decir «con MB sí cumpliría». */
-const INDICADORES = ['MO', 'MB', 'Berry'];
+/* Los cinco indicadores que el sistema sabe calcular de punta a punta: `pliOf` da el del
+   contribuyente y `analizarRangoAjustado` el de cada comparable con sus siete escenarios de
+   ajuste. NCP y Cost Plus se sumaron el 2026-09-02: estaban en el motor de ajuste y en el Excel
+   desde antes, pero sin el indicador del contribuyente no se podian proponer, asi que esta
+   lista descartaba dos vias legitimas de cumplimiento sin decirlo. */
+const INDICADORES = ['MO', 'MB', 'Berry', 'NCP', 'CostPlus'];
 
 /* Las tres cifras con las que se calcula el margen del contribuyente. Solo lo que las toca
    pone en duda el indicador: una corrección sobre inventarios o sobre PP&E es un hallazgo
