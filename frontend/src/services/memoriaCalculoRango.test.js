@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { construirMemoriaRango, nombreArchivoMemoria } from './memoriaCalculoRango.js';
+import { analizarRango } from './rangoIntercuartil.js';
 
 /* Cuatro comparables con margen 10 %, 13 %, 10 % y 13 %, y un contribuyente al 7,5 %.
    Números redondos a propósito: la memoria tiene que poder rehacerse a mano, y un test
@@ -263,4 +264,122 @@ test('el nombre del archivo lleva contribuyente y año, sin caracteres prohibido
 
 test('sin razón social el archivo sigue teniendo nombre', () => {
   assert.match(nombreArchivoMemoria({}), /^Memoria rango intercuartil - estudio\.xlsx$/);
+});
+
+/* El fixture de las pruebas del rango que decide: cifras del contribuyente y comparables a las
+   que se les pone el capital de trabajo a mano, porque el desplazamiento del ajuste es justo lo
+   que separa las dos series. */
+const ESTUDIO_BASE = {
+  ent: 'ACME COLOMBIA S.A.S', nit: '900123456-7', anio: 2025, pli: 'MO', cmode: 'all',
+  t_s: 100000, t_c: 92000, t_op: 6204,
+};
+const compMem = (nombre, margen, wc) => ({
+  name: nombre, amb: 'Int', s: 10000, c: 8000, op: margen * 10000, ...wc,
+});
+
+/* ══════════ LA MEMORIA TIENE QUE EXPLICAR EL RANGO QUE DECIDE, NO OTRO ══════════
+
+   Reportado el 2026-09-02 con dos capturas del mismo estudio, una al lado de la otra:
+
+     Memoria del rango:  13,962 % – 22,250 % · mediana 16,297 % · MO del contribuyente 6,204 %
+     Tarjeta:            CUMPLE, con 4,840 % de holgura sobre el primer cuartil
+
+   Las dos eran ciertas y juntas se contradecían. La tarjeta decide con el rango SIN ajustar
+   —`useadj` estaba apagado, y ella misma lo decía— cuyo primer cuartil es 1,364 %; la memoria
+   publicaba el AJUSTADO, doce puntos más arriba, junto al indicador del contribuyente. Puesto
+   así, cualquiera concluye que el estudio no cumple.
+
+   La causa: `memoriaCalculoRango.js` armaba la serie con `c.ajustado` SIEMPRE, sin consultar
+   `useadj`. Su propio `useAdj` existía y solo se usaba para un aviso y para informar
+   `ajuste.aplicado`, nunca para elegir la serie. El modal existe para explicar el número de la
+   tarjeta: si calcula sobre otra serie, explica un número que nadie ve. */
+
+test('con el ajuste apagado, la memoria calcula sobre el margen SIN ajustar', () => {
+  /* El caso reportado: comparables cuyo ajuste desplaza el rango varios puntos. Con `useadj`
+     apagado la memoria tiene que publicar el rango que la tarjeta usa para concluir. */
+  const estudio = {
+    ...ESTUDIO_BASE,
+    useadj: false,
+    prime: 12.5,
+    t_ar: 5000, t_inv: 9000, t_ap: 3000,
+    comparables: [
+      compMem('Alfa', 0.02, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Beta', 0.05, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Gama', 0.08, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Delta', 0.11, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Epsilon', 0.14, { ar: 0, inv: 0, ap: 0 }),
+    ],
+  };
+  const m = construirMemoriaRango(estudio);
+  const r = analizarRango(estudio);
+
+  assert.ok(m.cuartiles, 'hay cuartiles');
+  assert.ok(Math.abs(m.cuartiles.p25.valor - r.stats.p25) < 1e-12,
+    `la memoria dice P25 ${m.cuartiles.p25.valor} y el que decide es ${r.stats.p25}`);
+  assert.ok(Math.abs(m.cuartiles.p75.valor - r.stats.p75) < 1e-12, 'y el P75 igual');
+  assert.ok(Math.abs(m.cuartiles.mediana.valor - r.stats.med) < 1e-12, 'y la mediana');
+});
+
+test('con el ajuste encendido, la memoria calcula sobre el ajustado', () => {
+  /* La otra mitad de la regla: no se trata de dejar de usar el ajustado, sino de usar el que
+     manda. Con `useadj` encendido el que manda es el ajustado. */
+  const estudio = {
+    ...ESTUDIO_BASE,
+    useadj: true,
+    prime: 12.5,
+    t_ar: 5000, t_inv: 9000, t_ap: 3000,
+    comparables: [
+      compMem('Alfa', 0.02, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Beta', 0.05, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Gama', 0.08, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Delta', 0.11, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Epsilon', 0.14, { ar: 0, inv: 0, ap: 0 }),
+    ],
+  };
+  const m = construirMemoriaRango(estudio);
+  const r = analizarRango(estudio);
+  assert.ok(Math.abs(m.cuartiles.p25.valor - r.stats.p25) < 1e-12,
+    `la memoria dice P25 ${m.cuartiles.p25.valor} y el que decide es ${r.stats.p25}`);
+});
+
+test('la memoria dice cuál de los dos rangos está explicando', () => {
+  /* Con las dos columnas a la vista —sin ajustar y ajustado— hay que decir cuál sostiene la
+     conclusión, o el lector vuelve a comparar el indicador contra la que no manda, que es
+     exactamente lo que pasó. */
+  const base = {
+    ...ESTUDIO_BASE, prime: 12.5, t_ar: 5000, t_inv: 9000, t_ap: 3000,
+    comparables: [
+      compMem('Alfa', 0.02, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Beta', 0.05, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Gama', 0.08, { ar: 0, inv: 0, ap: 0 }),
+    ],
+  };
+  assert.strictEqual(construirMemoriaRango({ ...base, useadj: false }).serieQueDecide, 'noAjustado');
+  assert.strictEqual(construirMemoriaRango({ ...base, useadj: true }).serieQueDecide, 'ajustado');
+});
+
+test('el veredicto de la memoria coincide con el de la tarjeta', () => {
+  /* LA PRUEBA QUE CIERRA EL DEFECTO: el contribuyente en 6,204 % contra un rango ajustado que
+     arranca en 13,962 % pero un rango sin ajustar que arranca por debajo. La memoria y la
+     tarjeta tienen que concluir lo MISMO. */
+  const estudio = {
+    ...ESTUDIO_BASE,
+    useadj: false, prime: 12.5,
+    t_s: 100000, t_c: 88000, t_op: 6204,
+    t_ar: 5000, t_inv: 9000, t_ap: 3000,
+    comparables: [
+      compMem('Alfa', 0.005, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Beta', 0.02, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Gama', 0.05, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Delta', 0.09, { ar: 0, inv: 0, ap: 0 }),
+      compMem('Epsilon', 0.13, { ar: 0, inv: 0, ap: 0 }),
+    ],
+  };
+  const m = construirMemoriaRango(estudio);
+  const r = analizarRango(estudio);
+  const dentroEnLaMemoria = m.cuartiles
+    && m.parteExaminada.pli >= m.cuartiles.p25.valor
+    && m.parteExaminada.pli <= m.cuartiles.p75.valor;
+  assert.strictEqual(dentroEnLaMemoria, r.cumple === 'CUMPLE',
+    'la memoria concluye lo mismo que la tarjeta sobre el mismo estudio');
 });

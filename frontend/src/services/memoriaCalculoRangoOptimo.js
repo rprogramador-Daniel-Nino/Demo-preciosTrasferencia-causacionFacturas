@@ -806,7 +806,15 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         ]);
       }
       dg.push([]);
-      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
+      /* CUAL escenario reporta el informe DE VERDAD. Esto afirmaba «CxC+CxP+Inv» sin mirar
+         `useadj`, y con el ajuste apagado el informe concluye sobre el rango SIN ajustar: la
+         frase mandaba a un auditor a cotejar la conclusión contra una columna que el informe no
+         usó. Mismo defecto de fondo que el reportado el 2026-09-02 en la memoria del rango
+         —dar por hecho que el ajustado siempre manda— en otro sitio del mismo libro. */
+      dg.push([cTxt(study.useadj
+        ? 'El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),'
+        : 'El informe NO aplica ajuste de capital de trabajo: concluye sobre el rango sin ajustar. '
+          + 'El escenario «CxC+CxP+Inv» (columna W) es el que se usaría si se activara,')]);
       dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
     }
 

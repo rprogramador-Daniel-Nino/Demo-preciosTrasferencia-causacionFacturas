@@ -66,10 +66,24 @@ export function construirMemoriaRango(estudio) {
   /* Las filas salen de `analizarRango`: mismo margen y mismo ajuste que el informe. */
   const { filas } = analizarRango(study);
 
+  /* CUAL DE LOS DOS MARGENES SOSTIENE LA CONCLUSION.
+     `useadj` lo decide, igual que en `rangoIntercuartil.js:80`, y esta memoria tiene que
+     calcular sobre el MISMO. Antes tomaba `ajustado` siempre, y con el ajuste apagado publicaba
+     un rango que no era el del veredicto.
+
+     Reportado el 2026-09-02 con dos capturas del mismo estudio: la memoria mostraba
+     13,962 % - 22,250 % junto a un contribuyente en 6,204 %, y la tarjeta decia CUMPLE con
+     4,840 % de holgura. Las dos eran ciertas —la tarjeta decidia con el rango sin ajustar, cuyo
+     primer cuartil estaba en 1,364 %— y juntas se contradecian: puesto asi, cualquiera concluye
+     que el estudio no cumple. Este modal existe para explicar el numero de la tarjeta; si
+     calcula sobre otra serie, explica un numero que nadie ve. */
+  const margenQueManda = (f) => (useAdj ? f.ajustado : f.noAjustado);
+
   const comparables = filas.map((f) => {
-    const incluida = entra(f.amb, modo) && f.ajustado !== null;
+    const decide = margenQueManda(f);
+    const incluida = entra(f.amb, modo) && decide !== null;
     let excluida = '';
-    if (f.ajustado === null) excluida = 'sin estados financieros cargados';
+    if (decide === null) excluida = 'sin estados financieros cargados';
     else if (!entra(f.amb, modo)) excluida = 'fuera del filtro de ámbito';
     return {
       nombre: f.nombre,
@@ -79,12 +93,15 @@ export function construirMemoriaRango(estudio) {
          con las otras dos y no puede desviarse de lo que se sumó de verdad. */
       ajuste: f.ajustado === null || f.noAjustado === null ? null : f.ajustado - f.noAjustado,
       ajustado: f.ajustado,
+      /* El de esta fila que entra al cuartil, para que la tabla se pueda rehacer a mano contra
+         la serie sin tener que saber cual de las dos columnas se uso. */
+      queDecide: decide,
       incluida,
       excluida,
     };
   });
 
-  const serie = comparables.filter((c) => c.incluida).map((c) => c.ajustado).sort((a, b) => a - b);
+  const serie = comparables.filter((c) => c.incluida).map((c) => c.queDecide).sort((a, b) => a - b);
   const n = serie.length;
 
   /* Cuartiles por interpolación lineal —QUARTILE.INC—, los mismos que calculan el
@@ -219,6 +236,10 @@ export function construirMemoriaRango(estudio) {
     indicador: { clave, ...indicador },
     ambito: { modo, etiqueta: AMBITOS[modo] || AMBITOS.all },
     parteExaminada: { cifras: T, pli: pliContribuyente, razones: razonesT },
+    /* Cual de las dos series sostiene los cuartiles de arriba. La pantalla lo dice al lado del
+       rango: con las dos columnas a la vista hay que declarar cual manda, o el lector vuelve a
+       comparar el indicador contra la que no decide, que es justo lo que paso. */
+    serieQueDecide: useAdj ? 'ajustado' : 'noAjustado',
     ajuste: {
       /* Berry dejó de estar exceptuado: con la definición del motor —utilidad bruta
          sobre gastos operativos— sí admite el ajuste, y la hoja Berry del Excel ya
