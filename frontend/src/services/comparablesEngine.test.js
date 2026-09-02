@@ -2714,3 +2714,125 @@ test('el número de alternativa viaja en el resultado para que el informe lo dec
   assert.strictEqual(r.alternativa, 3);
   assert.ok(r.alternativasDisponibles >= 3);
 });
+
+/* ══════════ COMPARABILIDAD POR INTENSIDAD DE CAPITAL DE TRABAJO ══════════
+
+   Pedido el 2026-09-02: «me gustaría que hiciéramos todo lo posible por hacer cumplir esta
+   empresa».
+
+   LO QUE SE MIDIO ANTES DE CONSTRUIRLO. En el caso reportado el ajuste de capital de trabajo le
+   SUBE el margen a las doce comparables entre 8,6 y 12,6 puntos —todas en la misma direccion—,
+   porque la parte examinada tiene mucho mas CxC e inventario que ellas. Eso empuja el primer
+   cuartil del rango ajustado —el que decide— muy por encima del contribuyente. Medido sobre el
+   mismo cribado, variando solo la intensidad de capital de trabajo de las comparables:
+
+     comparables como las de hoy (WC bajo)        desplazamiento +4,45 pt
+     con la mitad de la intensidad del TP         +2,37 pt
+     con intensidad parecida (±10 %)              +0,24 pt
+     con la misma intensidad                      +0,00 pt
+
+   ES MEJOR METODOLOGIA, NO PEOR. La intensidad de capital de trabajo es un factor de
+   comparabilidad legitimo (Art. 260-4 E.T.; Guias OCDE cap. III), y el ajuste existe justamente
+   para corregir diferencias residuales: un ajuste de diez puntos es en si mismo la senal de que
+   las comparables no eran comparables en esa dimension. Preferir las que necesitan poco ajuste
+   produce un estudio mas solido, y de paso lo acerca al cumplimiento.
+
+   ES UNA PREFERENCIA, NO UN FILTRO. Descartar por capital de trabajo dejaria fuera a compañias
+   de la misma actividad por una dimension secundaria, y en un cribado sin esos datos vaciaria la
+   muestra. Pondera el puntaje, como la geografia y el tamaño. */
+
+const conWC = (id, margen, ratios) => ({
+  id,
+  name: 'WC ' + id,
+  nameKey: nameKey('WC ' + id),
+  s: 10000, c: 8000, op: margen * 10000,
+  ar: 10000 * ratios.ar, inv: 10000 * ratios.inv, ap: 10000 * ratios.ap,
+  desc: 'x',
+});
+
+/* La parte examinada del caso: CxC 18 % de ventas, inventario 26 %, CxP 4 %. */
+const TP_WC = {
+  ventasParteExaminada: 100000,
+  capitalTrabajoParteExaminada: { ar: 0.18, inv: 0.26, ap: 0.04 },
+};
+const CFG_WC = {
+  nTarget: 2, minimo: 1, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+test('entre dos candidatas iguales, gana la de capital de trabajo parecido al del contribuyente', () => {
+  /* Mismo margen, mismo tamaño, misma actividad: lo unico que las separa es la intensidad de
+     capital de trabajo. La parecida necesita menos ajuste, asi que es mas comparable. */
+  const universo = [
+    conWC('LEJOS', 0.05, { ar: 0.01, inv: 0.01, ap: 0.01 }),
+    conWC('CERCA', 0.05, { ar: 0.18, inv: 0.26, ap: 0.04 }),
+  ];
+  const r = scoreCandidates(universo, { ...CFG_WC, nTarget: 2 }, 'x', [], TP_WC);
+  const cerca = r.seleccionadas.find((c) => c.id === 'CERCA');
+  const lejos = r.seleccionadas.find((c) => c.id === 'LEJOS');
+  assert.ok(cerca && lejos, 'las dos entran: es preferencia, no filtro');
+  assert.ok(cerca.score > lejos.score,
+    `la parecida debe puntuar mas alto: cerca ${cerca.score} vs lejos ${lejos.score}`);
+  assert.ok(cerca.factores.capitalTrabajo > lejos.factores.capitalTrabajo,
+    'y el factor lo refleja');
+});
+
+test('el factor vale 1 cuando la intensidad coincide', () => {
+  const universo = [conWC('IGUAL', 0.05, { ar: 0.18, inv: 0.26, ap: 0.04 })];
+  const r = scoreCandidates(universo, CFG_WC, 'x', [], TP_WC);
+  assert.ok(Math.abs(r.seleccionadas[0].factores.capitalTrabajo - 1) < 1e-9,
+    'sin diferencia de intensidad no hay ajuste que hacer: comparabilidad plena en esa dimension');
+});
+
+test('sin datos de capital de trabajo el factor es neutro, no castiga', () => {
+  /* Un cribado sin esas columnas no puede quedar con toda la muestra penalizada: no saber no es
+     lo mismo que ser distinta. Neutro = el punto medio, para no premiar ni castigar. */
+  const universo = [{
+    id: 'SIN', name: 'Sin WC', nameKey: nameKey('Sin WC'),
+    s: 10000, c: 8000, op: 500, desc: 'x',
+  }];
+  const r = scoreCandidates(universo, CFG_WC, 'x', [], TP_WC);
+  const f = r.seleccionadas[0].factores.capitalTrabajo;
+  assert.ok(f > 0 && f < 1, `neutro, no cero ni uno: ${f}`);
+});
+
+test('sin capital de trabajo del contribuyente no se puntúa la dimensión', () => {
+  /* Sin la vara no hay nada que comparar, y penalizar a las comparables por eso seria castigar
+     a la muestra por un dato que falta del lado del contribuyente. */
+  const universo = [
+    conWC('A', 0.05, { ar: 0.01, inv: 0.01, ap: 0.01 }),
+    conWC('B', 0.05, { ar: 0.18, inv: 0.26, ap: 0.04 }),
+  ];
+  const r = scoreCandidates(universo, { ...CFG_WC, nTarget: 2 }, 'x', [],
+    { ventasParteExaminada: 100000 });
+  const a = r.seleccionadas.find((c) => c.id === 'A');
+  const b = r.seleccionadas.find((c) => c.id === 'B');
+  assert.strictEqual(a.factores.capitalTrabajo, b.factores.capitalTrabajo,
+    'sin vara, las dos puntuan igual en esta dimension');
+});
+
+test('la preferencia NO desplaza la cuota de negativas ni la continuidad', () => {
+  /* La cuota se elige por un criterio declarado y la continuidad se sustento el año anterior:
+     una preferencia de comparabilidad no puede pasar por encima de ninguna de las dos. */
+  const universo = [
+    conWC('N1', -0.05, { ar: 0.01, inv: 0.01, ap: 0.01 }),   // negativa, WC lejano
+    conWC('P1', 0.05, { ar: 0.18, inv: 0.26, ap: 0.04 }),    // positiva, WC ideal
+    conWC('P2', 0.06, { ar: 0.18, inv: 0.26, ap: 0.04 }),
+  ];
+  const r = scoreCandidates(universo, { ...CFG_WC, nTarget: 2, negativasObjetivo: 1 }, 'x', [], TP_WC);
+  assert.ok(r.seleccionadas.some((c) => c.id === 'N1'),
+    'la negativa entra por la cuota aunque su capital de trabajo sea el peor');
+  assert.strictEqual(r.negativasIncluidas, 1);
+});
+
+test('el motor reporta el desplazamiento que el ajuste le mete a la muestra', () => {
+  /* El numero que explica por que el estudio no cumple: si el ajuste mueve el rango diez puntos,
+     el problema no es la muestra sino la comparabilidad en capital de trabajo. */
+  const universo = [0.02, 0.04, 0.06, 0.08].map((m, i) =>
+    conWC('C' + i, m, { ar: 0.01, inv: 0.01, ap: 0.01 }));
+  const r = scoreCandidates(universo, { ...CFG_WC, nTarget: 4 }, 'x', [], TP_WC);
+  assert.ok(r.capitalTrabajo, 'lo reporta');
+  assert.strictEqual(r.capitalTrabajo.conDatos, 4);
+  assert.ok(r.capitalTrabajo.intensidadMediaMuestra < r.capitalTrabajo.intensidadParteExaminada,
+    'y dice que la muestra tiene menos intensidad que el contribuyente');
+});

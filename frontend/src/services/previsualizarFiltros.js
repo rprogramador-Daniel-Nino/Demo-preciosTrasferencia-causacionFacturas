@@ -237,7 +237,10 @@ function avisosDe({
         Va primero porque invalida la vara con la que el estudio concluye, y eso pesa más que
         cualquier ajuste de la muestra. Solo aplica si el estudio de verdad concluye sobre el
         rango ajustado: sin `useadj` no hay nada que distorsionar. */
-  if (estudio && estudio.useadj && capitalTrabajo && capitalTrabajo.total
+  /* Ya no depende de `useadj`: desde el 2026-09-02 el cumplimiento se decide SIEMPRE con el
+     rango ajustado, asi que el ajuste sin datos distorsiona la conclusion de todo estudio y no
+     solo la de los que tenian el interruptor encendido. */
+  if (capitalTrabajo && capitalTrabajo.total
       && capitalTrabajo.conDatos < capitalTrabajo.total) {
     const cuantas = capitalTrabajo.conDatos === 0
       ? 'ninguna'

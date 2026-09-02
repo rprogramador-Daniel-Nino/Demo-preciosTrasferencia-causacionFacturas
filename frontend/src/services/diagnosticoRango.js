@@ -22,7 +22,7 @@
    pantalla solo pinta. Es lo que permite probar cada palanca sin montar el componente.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { num, pliOf, adjustInfo, segmentacionDesajuste } from '../utils/calculations.js';
+import { num, pliOf, adjustInfo, segmentacionDesajuste, cumpleElRango } from '../utils/calculations.js';
 import { analizarRango, margenQueDecide } from './rangoIntercuartil.js';
 import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
 import { enPerdida, gradoDeActividad } from './comparablesEngine.js';
@@ -100,7 +100,11 @@ const AMBITOS = [
 function dentro(stats, indicador) {
   if (!stats || indicador === null || indicador === undefined) return false;
   if (!(stats.p75 > stats.p25)) return false;
-  return indicador >= stats.p25 && indicador <= stats.p75;
+  /* La MISMA regla que decide el veredicto —por encima del primer cuartil—, importada de
+     `utils/calculations.js`. Una palanca que se midiera con otro criterio prometeria un
+     cumplimiento que la tarjeta no iba a confirmar. La guarda del rango degenerado se conserva:
+     es de esta funcion y no del criterio. */
+  return cumpleElRango(stats, indicador);
 }
 
 /** El indicador del contribuyente con el mismo criterio que la tarjeta: `pliOf` sobre las
@@ -191,7 +195,10 @@ export function diagnosticarCumplimiento({
 
   const hayVeredicto = Boolean(stats) && indicador !== null;
   const palancas = (cumple || !hayVeredicto) ? [] : palancasQueCambianElVeredicto({
-    study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+    /* `conAjuste` ya no viaja: es el rango que DECIDE (2026-09-02), y la palanca del ajuste
+       solo necesita el otro para decir si el ajuste es lo que deja fuera al contribuyente.
+       Pasarlo sin usarlo invitaba a volver a compararlo consigo mismo. */
+    study, muestra, ambito, metodo, indicador, universo, sinAjuste,
     costosImplausibles,
   });
 
@@ -203,9 +210,64 @@ export function diagnosticarCumplimiento({
     estudio: study, tamanoMuestra: muestra.length, indicador, universo,
   });
 
+  /* ── LA TASA EN CERO ANULA EL AJUSTE, Y CON EL LA VARA QUE DECIDE ──
+     El cumplimiento se concluye sobre el rango ajustado (2026-09-02), y ese ajuste se calcula
+     con la tasa del paso 3. Con la tasa en cero cada ajuste sale nulo, el rango ajustado
+     COLAPSA al crudo y el veredicto pasa a salir del rango que la metodologia del despacho
+     descarta — sin que nada en la pantalla lo diga. Medido sobre el caso reportado: decidia con
+     un P25 de 1,364 % (CUMPLE) en vez de 6,232 % (NO CUMPLE).
+
+     Va en el diagnostico y no solo en la memoria del rango porque es AQUI donde se lee el
+     veredicto; el modal hay que abrirlo. */
+  const tasaAjuste = num(study.prime) || 0;
+  const ajusteAnulado = !tasaAjuste;
+
+  /* ── CUANTO DESPLAZA EL AJUSTE EL RANGO, Y HACIA DONDE ──
+     El numero que explica por que un estudio no cumple cuando la muestra parece razonable. El
+     cumplimiento se concluye sobre el rango ajustado, asi que si el ajuste mueve el primer
+     cuartil diez puntos, el problema NO es que falten comparables: es que las que hay no se
+     parecen al contribuyente en capital de trabajo, y el ajuste esta corrigiendo una diferencia
+     que no deberia ser tan grande.
+
+     Medido en el caso reportado el 2026-09-02, variando solo la intensidad de las comparables:
+     con intensidad parecida el desplazamiento cae de +4,45 pt a +0,24 pt y el rango ajustado
+     converge al crudo. De ahi el factor de comparabilidad nuevo en `comparablesEngine.js`.
+
+     `null` cuando falta alguno de los dos rangos: sin los dos no hay diferencia que medir. */
+  const desplazamientoAjuste = (conAjuste.stats && sinAjuste.stats)
+    ? conAjuste.stats.p25 - sinAjuste.stats.p25
+    : null;
+  /* Cuando el desplazamiento es lo que deja fuera al contribuyente, decirlo cambia la accion:
+     no hay que buscar mas comparables, hay que buscar comparables PARECIDAS en esa dimension. */
+  const elAjusteEsElProblema = Boolean(
+    desplazamientoAjuste !== null && desplazamientoAjuste > 0
+    && sinAjuste.stats && conAjuste.stats
+    && indicador !== null
+    && cumpleElRango(sinAjuste.stats, indicador)
+    && !cumpleElRango(conAjuste.stats, indicador),
+  );
+
   return {
     cumple,
     colchon,
+    /* `true` cuando el rango ajustado no puede ajustar nada. La pantalla lo pinta como aviso,
+       porque invalida la vara con la que se concluye. */
+    ajusteAnulado,
+    /* Si el ajuste tenia con que ajustar, y en cuantas comparables. Lo pinta la tarjeta: una
+       conclusion sobre el rango sin ajustar hay que sustentarla, y el sustento es este. */
+    ajusteTieneDatos: rango.ajusteTieneDatos,
+    comparablesConCapitalTrabajo: rango.comparablesConCapitalTrabajo,
+    comparablesEnElRango: rango.comparablesEnElRango,
+    /* Cuanto mueve el ajuste el primer cuartil, y si es eso lo que deja fuera al contribuyente. */
+    desplazamientoAjuste,
+    elAjusteEsElProblema,
+    /* La banda de rentabilidad para pegar en el screening del paso 1, en margen SIN ajustar.
+       Solo cuando no cumple: si cumple no hay nada que buscar. */
+    banda: (cumple || !hayVeredicto) ? null : bandaParaCribado({
+      statsAjustado: conAjuste.stats,
+      statsNoAjustado: sinAjuste.stats,
+      indicador,
+    }),
     requisito,
     /* `null` cuando no hay rango o no hay indicador: es distinto de «no cumple», y la
        pantalla tiene que poder decir «faltan datos» en vez de un veredicto. */
@@ -223,7 +285,14 @@ export function diagnosticarCumplimiento({
     rangos: {
       ajustado: conAjuste.stats,
       sinAjustar: sinAjuste.stats,
-      decide: study.useadj ? 'ajustado' : 'sinAjustar',
+      /* Siempre el ajustado (2026-09-02): es el que sostiene la conclusion. Se conserva el
+         campo porque la tarjeta lo pinta y porque publicar los dos rangos sigue siendo util
+         —el sin ajustar es la vara con que se eligieron las comparables—. */
+      /* Cual concluye. El ajustado, salvo que la mayoria de la muestra no traiga capital de
+         trabajo: sin esos datos el ajuste es un desplazamiento constante que sale del balance
+         del contribuyente y no compara nada, asi que concluye el crudo. Lo decide
+         `analizarRango`, que es el unico sitio donde se elige. */
+      decide: rango.ajusteTieneDatos ? 'ajustado' : 'sinAjustar',
     },
     palancas,
     costosImplausibles,
@@ -241,7 +310,7 @@ export function diagnosticarCumplimiento({
    la lista si el contribuyente pasa a estar dentro. Lo que no cambia el veredicto no se
    nombra, porque una lista de sugerencias inútiles se deja de leer. */
 function palancasQueCambianElVeredicto({
-  study, muestra, ambito, metodo, indicador, universo, conAjuste, sinAjuste,
+  study, muestra, ambito, metodo, indicador, universo, sinAjuste,
   costosImplausibles = [],
 }) {
   const palancas = [];
@@ -292,22 +361,25 @@ function palancasQueCambianElVeredicto({
     });
   }
 
-  /* ── 2. El ajuste de capital de trabajo ──
-     Está calculado siempre; lo único que `useadj` decide es cuál de los dos sostiene la
-     conclusión. Si el que NO decide sí contiene al contribuyente, eso es información: es una
-     decisión metodológica del estudio, no un cambio en la muestra. */
-  const decideAjustado = Boolean(study.useadj);
-  const elOtro = decideAjustado ? sinAjuste : conAjuste;
-  if (elOtro && dentro(elOtro.stats, indicador)) {
+  /* ── 2. El rango sin ajustar ──
+     El cumplimiento lo decide el AJUSTADO en todo estudio (2026-09-02), asi que esto ya no es
+     una palanca que el analista pueda accionar: no hay casilla que cambie la conclusion. Sigue
+     siendo informacion —y por eso se reporta— porque dice DONDE esta el problema: si sin el
+     ajuste el contribuyente si queda dentro, lo que lo saca es el ajuste, y entonces lo que hay
+     que revisar es el capital de trabajo de las comparables (o el propio), no la muestra.
+
+     Se emite como observacion y NO se promete que cambie el veredicto, que es la regla de esta
+     lista: proponer «apague el ajuste» seria proponer concluir con el rango que la metodologia
+     del despacho descarta. */
+  if (sinAjuste && dentro(sinAjuste.stats, indicador)) {
     palancas.push({
       clave: 'ajusteCapitalTrabajo',
       cuantificado: null,
-      texto: decideAjustado
-        ? 'Sin el ajuste de capital de trabajo el contribuyente SÍ queda dentro del rango. '
-          + 'Hoy la conclusión la sostiene el rango ajustado porque la casilla está activada.'
-        : 'Con el ajuste de capital de trabajo activado el contribuyente SÍ queda dentro del '
-          + 'rango. Está calculado y el Excel de soporte ya lo publica; solo falta que la '
-          + 'casilla del paso 3 lo haga decidir.',
+      accionable: false,
+      texto: 'Sin el ajuste de capital de trabajo el contribuyente SÍ quedaría dentro del rango: '
+        + 'lo que lo deja fuera es el ajuste. El cumplimiento se concluye sobre el rango ajustado, '
+        + 'así que esto no se resuelve apagando nada — revise el capital de trabajo de las '
+        + 'comparables y el de la parte examinada, que es lo que el ajuste compara.',
     });
   }
 
@@ -339,7 +411,10 @@ function palancasQueCambianElVeredicto({
     .filter((otro) => !(costoNoSirve && INDICADORES_QUE_USAN_COSTO.includes(otro)))
     .forEach((otro) => {
     const preparado = estudioParaMotor({ ...study, comparables: muestra, cmode: ambito }, muestra);
-    const r = analizarRangoAjustado(preparado, otro, study.useadj ? AJUSTE_DEL_INFORME : 'ninguno');
+    /* Con el escenario del informe siempre: el cumplimiento se concluye sobre el ajustado
+       (2026-09-02), asi que probar el indicador alterno sobre el crudo prometeria un
+       cumplimiento que la tarjeta no iba a confirmar. */
+    const r = analizarRangoAjustado(preparado, otro, AJUSTE_DEL_INFORME);
     const suyo = indicadorDelContribuyente(study, otro);
     if (dentro(r.stats, suyo)) {
       palancas.push({
@@ -500,6 +575,64 @@ function negativasDisponiblesEnUniverso(universo, study) {
    pérdidas ahí mandaría a buscar lo que no hace falta y a justificar una inclusión que el
    estudio no necesita. `exigeNegativas` dice cuál de los dos casos es.
    ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * LA BANDA DE RENTABILIDAD PARA EL SCREENING DEL PASO 1, en margen SIN AJUSTAR.
+ *
+ * Pedido el 2026-09-02: «¿no podemos hacer que busque según los rangos intercuartiles de x a x
+ * según el indicador del contribuyente?».
+ *
+ * POR QUE UNA BANDA Y NO UN TECHO. Capital IQ filtra por rangos, no por «menor o igual», así
+ * que un techo suelto no se puede pegar en el screening. Y un techo sin piso traería las
+ * compañías más ruinosas del universo, que arrastran el rango entero hacia abajo y se leen como
+ * una búsqueda dirigida al resultado; una banda del ancho de la dispersión ya observada en el
+ * sector es un criterio de comparabilidad, no una cacería.
+ *
+ * POR QUE EN MARGEN SIN AJUSTAR. El cumplimiento se concluye sobre el rango AJUSTADO, pero el
+ * screening solo conoce el margen crudo: el ajuste se calcula después, con las cifras de capital
+ * de trabajo de cada compañía. Así que el objetivo —quedar en o por debajo del indicador del
+ * contribuyente en términos ajustados— se traduce restando el desplazamiento que el ajuste le
+ * mete al rango. En el caso reportado ese desplazamiento era de +12,4 pt: pedir «margen ≤
+ * 6,204 %» en el screening habría traído compañías que, ya ajustadas, quedan en 18 %.
+ *
+ * EL DESPLAZAMIENTO ES UNA ESTIMACION Y SE DICE. Cada compañía se ajusta según SU propio capital
+ * de trabajo, así que el desplazamiento no es una constante: el que se usa aquí es el que el
+ * ajuste le está metiendo al primer cuartil de la muestra actual, que es el mejor estimador
+ * disponible y el único que sale de datos reales. La banda orienta el screening; el veredicto lo
+ * sigue dando el rango cuando las compañías nuevas entren con sus cifras.
+ *
+ * @param {object} p
+ * @param {object} p.statsAjustado    el rango que decide.
+ * @param {object} p.statsNoAjustado  el mismo rango sin ajustar, para medir el desplazamiento.
+ * @param {number} p.indicador        el margen de la parte examinada (ajustado, el que decide).
+ * @returns {object|null} `null` si falta cualquiera de los dos rangos o el indicador.
+ */
+export function bandaParaCribado({ statsAjustado, statsNoAjustado, indicador } = {}) {
+  if (!statsAjustado || !statsNoAjustado) return null;
+  if (indicador === null || indicador === undefined || Number.isNaN(indicador)) return null;
+  const { p25: p25Aj } = statsAjustado;
+  const { p25: p25Cr, p75: p75Cr } = statsNoAjustado;
+  if ([p25Aj, p25Cr, p75Cr].some((v) => v === null || v === undefined || Number.isNaN(v))) return null;
+
+  const desplazamiento = p25Aj - p25Cr;
+  /* El ancho de la banda: la dispersión intercuartílica que el propio sector ya muestra. No es
+     un número inventado —sale de las comparables que hay— y mantiene el criterio proporcionado a
+     la realidad del mercado en vez de a lo que haría falta para cumplir. */
+  const amplitud = Math.max(0, p75Cr - p25Cr);
+  const techo = indicador - desplazamiento;
+
+  return {
+    techo,
+    piso: techo - amplitud,
+    desplazamiento,
+    amplitud,
+    /* `true` cuando el ajuste es lo que empuja la banda a terreno negativo: entonces el
+       screening va a traer compañías en pérdida y habrá que justificarlas. */
+    exigeNegativas: techo < 0,
+    /* Se publica para que la pantalla pueda decir que es una estimación y de dónde sale. */
+    esEstimacion: true,
+  };
+}
 
 /**
  * Las comparables del universo cuyo margen está en el nivel dado o por debajo.

@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   diagnosticarCumplimiento, confianzaDelIndicador, resumenDeLectura,
-  requisitoDeCribado, comparablesEnOPorDebajoDe,
+  requisitoDeCribado, comparablesEnOPorDebajoDe, bandaParaCribado,
 } from './diagnosticoRango.js';
 import { analizarRango } from './rangoIntercuartil.js';
 
@@ -54,9 +54,27 @@ test('cuando no cumple, dice a cuánto está del límite y cuánto sería el aju
 test('publica los dos rangos y cuál de ellos decide', () => {
   const d = diagnosticar();
   assert.ok(d.rangos.sinAjustar, 'el rango sin ajustar siempre está calculado');
-  assert.strictEqual(d.rangos.decide, 'sinAjustar', 'con useadj apagado decide el sin ajustar');
-  const conUseadj = diagnosticar({ useadj: true });
-  assert.strictEqual(conUseadj.rangos.decide, 'ajustado');
+  /* CUAL DECIDE, y la casilla `useadj` no interviene en ninguno de los dos casos:
+
+       · el AJUSTADO cuando la mayoria de la muestra trae capital de trabajo —«el MO sin ajuste
+         solo nos ayuda a escoger las comparables, pero como sabemos si cumple es con el rango
+         ajustado», 2026-09-02—;
+       · el SIN AJUSTAR cuando no lo trae, porque ahi cada ajuste se reduce a
+         «−ratio_contribuyente × factor», el mismo valor para todas: un desplazamiento constante
+         que sale del balance del contribuyente y no compara nada. Medido en el caso reportado:
+         de +4,401 a +4,711 pt en las once comparables, amplitud 0,310 pt.
+
+     Las comparables de este fixture no traen esas partidas, asi que aqui manda el crudo. */
+  assert.strictEqual(d.rangos.decide, 'sinAjustar',
+    'sin capital de trabajo en la muestra, el ajuste no puede concluir');
+  assert.strictEqual(diagnosticar({ useadj: true }).rangos.decide, 'sinAjustar',
+    'y la casilla no lo cambia: dejo de elegir el 2026-09-02');
+
+  /* Con capital de trabajo en la muestra, el ajustado recupera el mando. */
+  const conCapital = diagnosticar({}, {
+    comparables: POSITIVAS.map((c) => ({ ...c, ar: 120, inv: 90, ap: 40 })),
+  });
+  assert.strictEqual(conCapital.rangos.decide, 'ajustado');
 });
 
 test('cuando cumple no propone ninguna palanca', () => {
@@ -674,4 +692,135 @@ test('cuando no cumple, el diagnóstico trae el requisito del cribado', () => {
 test('cuando cumple no se calcula requisito: no hay nada que traer', () => {
   const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: MUESTRA_QUE_CUMPLE, universo: [] });
   assert.strictEqual(d.requisito, null);
+});
+
+/* ══════ LA TASA EN CERO ANULA EL AJUSTE, Y SE DICE ══════
+
+   El cumplimiento se concluye sobre el rango ajustado (2026-09-02), y ese ajuste se calcula con
+   la tasa del paso 3. Con la tasa en cero cada ajuste sale nulo, el rango ajustado COLAPSA al
+   crudo, y el veredicto pasa a salir del rango que la metodologia del despacho descarta.
+
+   ESTE HUECO CASI SE COLO. Al hacer que el ajustado decidiera siempre, el campo de la tasa
+   seguia escondido detras de la casilla `useadj`: con la casilla apagada no habia forma de
+   fijar la tasa, asi que el ajuste era nulo y el estudio seguia concluyendo con el rango crudo
+   —P25 1,364 %, CUMPLE— en vez del ajustado —P25 6,232 %, NO CUMPLE—. El cambio no habria
+   tenido ningun efecto en un estudio real. Se cerro sacando la tasa de detras de la casilla y
+   avisando cuando esta en cero. */
+
+const compTasa = (m) => ({
+  name: 'C', amb: 'Int', s: 10000, c: 8000, op: m * 10000,
+  ar: 300, inv: 400, ap: 900, ppe: 200,
+});
+const ESTUDIO_TASA = {
+  pli: 'MO', cmode: 'all',
+  t_s: 100000, t_c: 87796, t_op: 6204,
+  t_ar: 18000, t_inv: 26000, t_ap: 4000, t_ppe: 9000,
+};
+const MUESTRA_TASA = [0.04884, 0.00026, 0.09688, 0.10512, 0.03994, 0.10747,
+  0.01497, 0.00248, 0.15826, 0.12063, 0.0159, 0.00964].map(compTasa);
+
+test('el diagnóstico marca cuando la tasa en cero anula el ajuste', () => {
+  const sinTasa = diagnosticarCumplimiento({
+    estudio: ESTUDIO_TASA, comparables: MUESTRA_TASA, universo: [],
+  });
+  assert.strictEqual(sinTasa.ajusteAnulado, true,
+    'sin tasa el ajuste no puede ajustar nada y hay que decirlo donde se lee el veredicto');
+
+  const conTasa = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_TASA, prime: 12.5 }, comparables: MUESTRA_TASA, universo: [],
+  });
+  assert.strictEqual(conTasa.ajusteAnulado, false);
+});
+
+test('el rango ajustado decide con la casilla encendida Y apagada', () => {
+  /* La regla del 2026-09-02: «el MO sin ajuste solo nos ayuda a escoger las comparables, pero
+     cómo sabemos si cumple es con el rango ajustado». La casilla dejó de elegirlo. */
+  for (const useadj of [false, true]) {
+    const d = diagnosticarCumplimiento({
+      estudio: { ...ESTUDIO_TASA, useadj, prime: 12.5 },
+      comparables: MUESTRA_TASA,
+      universo: [],
+    });
+    assert.strictEqual(d.rangos.decide, 'ajustado', `con useadj=${useadj} debe decidir el ajustado`);
+    /* Y el veredicto sale de ese rango, no del otro: con estas comparables el ajustado deja
+       fuera al contribuyente y el crudo no. */
+    assert.strictEqual(d.cumple, false,
+      `con useadj=${useadj} el ajustado deja fuera al contribuyente`);
+  }
+});
+
+test('la palanca del ajuste dice dónde está el problema, sin prometer apagarlo', () => {
+  /* Antes proponía «active/desactive la casilla», que ahora sería proponer concluir con el
+     rango que la metodología descarta. Sigue reportándose porque señala la causa: si sin el
+     ajuste el contribuyente sí entra, lo que lo saca es el capital de trabajo. */
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_TASA, prime: 12.5 }, comparables: MUESTRA_TASA, universo: [],
+  });
+  const p = d.palancas.find((x) => x.clave === 'ajusteCapitalTrabajo');
+  if (p) {
+    assert.strictEqual(p.accionable, false, 'no es una palanca que el analista pueda accionar');
+    assert.doesNotMatch(p.texto, /casilla/, 'y no manda a tocar ninguna casilla');
+    assert.match(p.texto, /capital de trabajo/, 'sino a revisar lo que el ajuste compara');
+  }
+});
+
+/* ══════ LA BANDA PARA EL SCREENING, CON LOS NUMEROS REALES DEL CASO ══════
+
+   «¿No podemos hacer que busque según los rangos intercuartiles de x a x según el indicador del
+   contribuyente?» (2026-09-02). Capital IQ filtra por rangos, así que un techo suelto no se
+   puede pegar en el screening; y un techo sin piso traería las compañías más ruinosas del
+   universo, que arrastran el rango y se leen como una búsqueda dirigida al resultado. */
+
+test('la banda sale en margen SIN ajustar, descontando el desplazamiento del ajuste', () => {
+  /* Los numeros de la captura del 2026-09-02: ajustado 15,717 % - 22,250 %, el mismo sin
+     ajustar 3,314 % - 10,571 %, contribuyente 6,204 %. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.15717, med: 0.18975, p75: 0.22250 },
+    statsNoAjustado: { p25: 0.03314, med: 0.06, p75: 0.10571 },
+    indicador: 0.06204,
+  });
+  assert.ok(b);
+  assert.ok(Math.abs(b.desplazamiento - 0.12403) < 1e-9, 'el ajuste desplaza +12,403 pt');
+  assert.ok(Math.abs(b.techo - (-0.06199)) < 1e-9,
+    'el techo es el nivel del contribuyente MENOS el desplazamiento, no el nivel a secas');
+  assert.ok(Math.abs(b.amplitud - 0.07257) < 1e-9, 'el ancho es la dispersión que ya muestra el sector');
+  assert.ok(Math.abs(b.piso - (-0.13456)) < 1e-9);
+  assert.strictEqual(b.exigeNegativas, true, 'la banda cae en negativo: habrá que justificarlas');
+  assert.strictEqual(b.esEstimacion, true, 'y se dice que es una estimación');
+});
+
+test('sin desplazamiento la banda queda pegada al indicador del contribuyente', () => {
+  /* Comparables con capital de trabajo parecido: el ajuste no mueve nada y el techo es el nivel
+     del contribuyente, sin corrección. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.08, p75: 0.15 },
+    statsNoAjustado: { p25: 0.08, p75: 0.15 },
+    indicador: 0.06204,
+  });
+  assert.strictEqual(b.desplazamiento, 0);
+  assert.ok(Math.abs(b.techo - 0.06204) < 1e-12);
+  assert.strictEqual(b.exigeNegativas, false, 'y no hace falta buscar pérdidas');
+});
+
+test('sin uno de los dos rangos no se inventa una banda', () => {
+  assert.strictEqual(bandaParaCribado({ statsAjustado: { p25: 0.1, p75: 0.2 }, indicador: 0.05 }), null);
+  assert.strictEqual(bandaParaCribado({ statsNoAjustado: { p25: 0.1, p75: 0.2 }, indicador: 0.05 }), null);
+  assert.strictEqual(bandaParaCribado({
+    statsAjustado: { p25: 0.1, p75: 0.2 }, statsNoAjustado: { p25: 0.1, p75: 0.2 }, indicador: null,
+  }), null);
+});
+
+test('el diagnóstico trae la banda cuando no cumple, y no cuando cumple', () => {
+  const muestra = Array.from({ length: 12 }, (_, i) => ({
+    name: 'C' + i, amb: 'Int', s: 10000, c: 8000, op: (0.10 + i * 0.005) * 10000,
+    ar: 100, inv: 100, ap: 100,
+  }));
+  const estudio = {
+    pli: 'MO', cmode: 'all', prime: 12.5,
+    t_s: 100000, t_c: 93796, t_op: 6204, t_ar: 18000, t_inv: 26000, t_ap: 4000,
+  };
+  const d = diagnosticarCumplimiento({ estudio, comparables: muestra, universo: [] });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.banda, 'trae la banda para el screening');
+  assert.ok(d.banda.piso < d.banda.techo, 'y es una banda, no un punto');
 });

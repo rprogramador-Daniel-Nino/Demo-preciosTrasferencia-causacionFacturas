@@ -354,8 +354,30 @@ test('la memoria dice cuál de los dos rangos está explicando', () => {
       compMem('Gama', 0.08, { ar: 0, inv: 0, ap: 0 }),
     ],
   };
+  /* Lo que esta prueba fija de fondo no ha cambiado: la memoria explica el rango que DECIDE y
+     lo declara. Lo que decide si, dos veces el mismo dia:
+
+       · antes del 2026-09-02 lo elegia la casilla `useadj`;
+       · ese dia paso a ser SIEMPRE el ajustado («el MO sin ajuste solo nos ayuda a escoger las
+         comparables, pero como sabemos si cumple es con el rango ajustado»);
+       · y esa misma tarde, al ver que las doce comparables del caso traian capital de trabajo en
+         CERO, paso a ser el ajustado SALVO que la mayoria de la muestra no tenga con que
+         ajustarse: ahi el ajuste es un desplazamiento constante que sale del balance del
+         contribuyente y no compara nada, asi que concluye el rango sin ajustar.
+
+     Las comparables de `base` no traen capital de trabajo, asi que aqui manda el crudo — con la
+     casilla encendida o apagada, que es lo que la prueba comprueba. */
   assert.strictEqual(construirMemoriaRango({ ...base, useadj: false }).serieQueDecide, 'noAjustado');
-  assert.strictEqual(construirMemoriaRango({ ...base, useadj: true }).serieQueDecide, 'ajustado');
+  assert.strictEqual(construirMemoriaRango({ ...base, useadj: true }).serieQueDecide, 'noAjustado');
+
+  /* Y con capital de trabajo en la mayoria de la muestra, el ajustado recupera el mando. */
+  const conDatos = {
+    ...base,
+    comparables: base.comparables.map((c, i) => (
+      i === 0 ? c : { ...c, ar: 1200, inv: 900, ap: 400 }
+    )),
+  };
+  assert.strictEqual(construirMemoriaRango(conDatos).serieQueDecide, 'ajustado');
 });
 
 test('el veredicto de la memoria coincide con el de la tarjeta', () => {

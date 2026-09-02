@@ -38,7 +38,7 @@
    con END GAME al quinto decimal.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { num, egreso } from '../utils/calculations.js';
+import { num, egreso, cumpleElRango } from '../utils/calculations.js';
 
 /* Los seis ajustes del modelo, en el mismo orden y con las mismas etiquetas que
    las columnas de las hojas de método del Excel. 'ninguno' es el rango sin ajuste
@@ -363,11 +363,24 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
       ? valor
       : indicadorAjustado(comp, contribuyente, kind, 'ninguno', tasaEstudio);
     const amb = comp && comp.amb === 'Nac' ? 'Nac' : 'Int';
+    /* Si esta comparable trae con que ajustarla. Va en la fila y no se recalcula fuera porque
+       aqui esta `comp` con sus partidas: quien decida si el ajuste puede concluir necesita
+       saberlo, y derivarlo despues obligaria a volver a cruzar filas con comparables.
+
+       Con las tres en cero —el caso de una exportacion de Capital IQ sin esas columnas— el
+       ajuste de esta fila se reduce a `−ratio_contribuyente × factor`, el mismo valor para
+       todas: deja de comparar y pasa a ser un desplazamiento constante. */
+    const cw = cifras(comp);
+    const tieneCapitalTrabajo = Boolean(
+      (cw.ar !== null && cw.ar !== 0) || (cw.inv !== null && cw.inv !== 0)
+      || (cw.ap !== null && cw.ap !== 0),
+    );
     return {
       nombre: String((comp && comp.name) || '').trim(),
       amb,
       valor,
       noAjustado,
+      tieneCapitalTrabajo,
       incluida: entraPorAmbito(amb, modo) && valor !== null && Number.isFinite(valor),
     };
   });
@@ -412,7 +425,9 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
 
   let cumple = 'CUMPLE'; // comportamiento heredado: sin rango, CUMPLE
   if (stats && sujeto !== null) {
-    cumple = sujeto >= stats.p25 && sujeto <= stats.p75 ? 'CUMPLE' : 'NO CUMPLE';
+    /* La MISMA regla que `adjustInfo`, importada y no recopiada: por encima del primer
+       cuartil. Ver `cumpleElRango` en `utils/calculations.js`. */
+    cumple = cumpleElRango(stats, sujeto) ? 'CUMPLE' : 'NO CUMPLE';
   }
 
   return { stats, filas, cumple, sujeto, metodo: kind, ajuste: tipo };

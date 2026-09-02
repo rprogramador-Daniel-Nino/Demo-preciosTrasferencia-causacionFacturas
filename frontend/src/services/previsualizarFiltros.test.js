@@ -428,13 +428,23 @@ test('sin capital de trabajo en el universo y concluyendo sobre el ajustado, se 
   assert.match(aviso.texto, /Accounts Receivable|Cuentas por cobrar/i, 'y decir qué columnas traer');
 });
 
-test('si el estudio NO concluye sobre el ajustado, el aviso no aplica', () => {
-  /* Sin ajuste no hay nada que el capital de trabajo pueda distorsionar. */
+test('el aviso aplica aunque la casilla de ajuste esté apagada', () => {
+  /* Antes esta prueba fijaba lo contrario —«si el estudio NO concluye sobre el ajustado, el
+     aviso no aplica»— y era correcto mientras `useadj` elegía el rango que concluía.
+
+     Desde el 2026-09-02 el cumplimiento se decide SIEMPRE con el rango ajustado («el MO sin
+     ajuste solo nos ayuda a escoger las comparables, pero cómo sabemos si cumple es con el
+     rango ajustado»), así que el ajuste corre en todo estudio y un ajuste sin datos distorsiona
+     la conclusión de todos, no solo la de los que tenían la casilla encendida. La casilla ya no
+     exime del aviso. */
   const universo = Array.from({ length: 40 }, (_, i) => candSinWC('C' + i));
   const p = previsualizarFiltros(universo, CONFIG, {
     estudio: { ...ESTUDIO_AJUSTADO, useadj: false },
   });
-  assert.strictEqual(p.avisos.find((a) => a.clave === 'ajusteSinCapitalTrabajo'), undefined);
+  const aviso = p.avisos.find((a) => a.clave === 'ajusteSinCapitalTrabajo');
+  assert.ok(aviso, 'el aviso aparece: el ajuste decide igual');
+  assert.strictEqual(aviso.severidad, 'bloqueo',
+    'y sigue siendo bloqueo: invalida la vara con la que el estudio concluye');
 });
 
 test('con capital de trabajo en el universo el aviso desaparece', () => {
