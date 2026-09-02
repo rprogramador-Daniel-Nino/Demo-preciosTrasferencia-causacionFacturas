@@ -2836,3 +2836,85 @@ test('el motor reporta el desplazamiento que el ajuste le mete a la muestra', ()
   assert.ok(r.capitalTrabajo.intensidadMediaMuestra < r.capitalTrabajo.intensidadParteExaminada,
     'y dice que la muestra tiene menos intensidad que el contribuyente');
 });
+
+/* ══════ EL ANCLA DE LA RENTABILIDAD: LA PARTE EXAMINADA, NO LA MEDIANA DEL POOL ══════
+
+   «Quiero es que cumpla en ambos rangos buscando comparables dentro de su mismo rango» y «tomar
+   comparables que encajen con el indicador de nuestra compañia, hacemos ese dato dinamico para
+   que sirva para todas las compañias» (2026-09-02).
+
+   `fRent` premiaba la cercania a la MEDIANA DEL POOL —el comportamiento central del universo
+   cribado—, asi que la muestra se centraba en la industria y no en la parte examinada. En el
+   caso reportado el pool estaba cerca del 10 % y el contribuyente en 6,204 %: el puntaje
+   empujaba justo hacia las que lo dejaban fuera.
+
+   Anclarlo en el indicador de la parte examinada es criterio de comparabilidad del Art. 260-4:
+   un nivel de rentabilidad semejante suele reflejar funciones y riesgos semejantes. Y es
+   DINAMICO por construccion —sale del propio estudio, no de un parametro— asi que sirve para
+   todas las compañias sin configurar nada.
+
+   SE CAE A LA MEDIANA DEL POOL cuando no hay indicador del contribuyente: sin ancla propia, el
+   comportamiento anterior es mejor que ninguno.
+
+   LO QUE NO CAMBIA: el ancla se mide con el margen SIN AJUSTAR, que es la vara con la que el
+   contador manda buscar («primero buscamos las comparables con el no ajustado»). El
+   cumplimiento se sigue concluyendo sobre el ajustado. */
+
+const cAnc = (id, margen) => ({
+  id, name: 'A' + id, nameKey: nameKey('A' + id),
+  s: 10000, c: 8000, op: margen * 10000, desc: 'x',
+});
+const CFG_ANC = {
+  nTarget: 3, minimo: 1, perdidaOp: 'incluir',
+  holding: 'excluir', saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+};
+
+test('el factor de rentabilidad se ancla en el indicador de la parte examinada', () => {
+  /* Universo con la mediana en 10 % y un contribuyente en 3 %: la candidata del 3 % tiene que
+     puntuar mas alto en rentabilidad que la del 10 %, que es la que ganaba antes. */
+  const universo = [0.03, 0.10, 0.17].map((m, i) => cAnc(i, m));
+  const r = scoreCandidates(universo, { ...CFG_ANC, nTarget: 3 }, 'x', [], {
+    ventasParteExaminada: 10000,
+    pliParteExaminada: 0.03,
+  });
+  const por = Object.fromEntries(r.seleccionadas.map((c) => [c.id, c]));
+  assert.ok(por['0'].factores.rentabilidad > por['1'].factores.rentabilidad,
+    'la del nivel del contribuyente gana a la de la mediana del pool');
+  assert.ok(Math.abs(por['0'].factores.rentabilidad - 1) < 1e-9,
+    'y al coincidir con el contribuyente el factor es 1');
+});
+
+test('sin indicador de la parte examinada se cae a la mediana del pool', () => {
+  /* El comportamiento anterior: sin ancla propia es mejor que ninguna. */
+  const universo = [0.03, 0.10, 0.17].map((m, i) => cAnc(i, m));
+  const r = scoreCandidates(universo, { ...CFG_ANC, nTarget: 3 }, 'x', [], {
+    ventasParteExaminada: 10000,
+  });
+  const por = Object.fromEntries(r.seleccionadas.map((c) => [c.id, c]));
+  assert.ok(por['1'].factores.rentabilidad > por['0'].factores.rentabilidad,
+    'manda la mediana del pool, que es la del 10 %');
+});
+
+test('el ancla se declara en el resultado, para que el informe la sustente', () => {
+  /* Centrar la muestra en la rentabilidad del contribuyente es lo que un revisor mira mas de
+     cerca, asi que no puede quedar implicito. */
+  const universo = [0.03, 0.10].map((m, i) => cAnc(i, m));
+  const conAncla = scoreCandidates(universo, CFG_ANC, 'x', [], {
+    ventasParteExaminada: 10000, pliParteExaminada: 0.03,
+  });
+  assert.strictEqual(conAncla.anclaRentabilidad, 'parteExaminada');
+  const sinAncla = scoreCandidates(universo, CFG_ANC, 'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(sinAncla.anclaRentabilidad, 'medianaPool');
+});
+
+test('la política de pérdidas sigue mandando sobre el ancla', () => {
+  /* Con `preferir`, el factor de rentabilidad premia la pérdida y el ancla no interviene: es
+     una decisión explícita del analista y no puede quedar por debajo de una preferencia. */
+  const universo = [{ ...cAnc('P', -0.05), hasLoss: true }, cAnc('R', 0.03)];
+  const r = scoreCandidates(universo, { ...CFG_ANC, perdidaOp: 'preferir' }, 'x', [], {
+    ventasParteExaminada: 10000, pliParteExaminada: 0.03,
+  });
+  const por = Object.fromEntries([...r.seleccionadas, ...r.reserva].map((c) => [c.id, c]));
+  assert.strictEqual(por.P.factores.rentabilidad, 1, 'la negativa se premia');
+  assert.strictEqual(por.R.factores.rentabilidad, 0.4, 'y la rentable no, aunque coincida con el ancla');
+});

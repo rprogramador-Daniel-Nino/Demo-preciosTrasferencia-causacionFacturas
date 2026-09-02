@@ -149,6 +149,10 @@ export function construirLibroSoporte(datos) {
         usada: embudo.alternativa || 1,
         disponibles: embudo.alternativasDisponibles || 1,
       },
+      /* Contra qué se midió la cercanía de rentabilidad de cada candidata. Es un criterio de
+         comparabilidad (Art. 260-4) que hay que sustentar, y es lo que un revisor mira más de
+         cerca: dejarlo implícito en un puntaje no sirve de sustento. */
+      anclaRentabilidad: embudo.anclaRentabilidad || 'medianaPool',
     }
     : seleccion;
 

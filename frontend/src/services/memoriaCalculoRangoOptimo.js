@@ -1000,6 +1000,29 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
       sel.push([]);
     }
 
+    /* ─── Cómo se midió la cercanía de rentabilidad ───
+       El puntaje premia a la candidata cuya rentabilidad se aproxima a un nivel de referencia, y
+       cuál sea ese nivel es una decisión de comparabilidad: la rentabilidad de la parte examinada
+       (Art. 260-4 E.T., un nivel semejante suele reflejar funciones y riesgos semejantes) o el
+       comportamiento central del universo cribado. Se publica porque es lo que un revisor mira
+       más de cerca, y dejarlo implícito en un puntaje no sirve de sustento. */
+    if (seleccion.anclaRentabilidad) {
+      sel.push([cTxt('CRITERIO DE CERCANÍA DE RENTABILIDAD')]);
+      sel.push([
+        cTxt('Nivel de referencia'),
+        cTxt(seleccion.anclaRentabilidad === 'parteExaminada'
+          ? 'La rentabilidad de la parte examinada. El puntaje prefiere las candidatas cuyo '
+            + 'indicador se aproxima al suyo, por ser un factor de comparabilidad del artículo '
+            + '260-4 del Estatuto Tributario: un nivel de rentabilidad semejante suele reflejar '
+            + 'funciones desempeñadas y riesgos asumidos semejantes. Se mide sobre el margen sin '
+            + 'ajustar, que es la vara de la búsqueda; el cumplimiento se concluye sobre el rango '
+            + 'ajustado.'
+          : 'El comportamiento central del universo cribado (mediana del margen operacional). Se '
+            + 'usa cuando el estudio no tiene todavía el indicador de la parte examinada.'),
+      ]);
+      sel.push([]);
+    }
+
     const perdidas = seleccion.perdidas || null;
     if (perdidas && perdidas.politica) {
       sel.push([cTxt('POLÍTICA DE PÉRDIDAS OPERATIVAS (Guías OCDE cap. III, §3.64-3.65)')]);
