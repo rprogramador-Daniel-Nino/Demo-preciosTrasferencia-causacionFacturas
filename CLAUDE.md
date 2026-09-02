@@ -19,9 +19,18 @@ npm run dev  --prefix frontend    # Vite dev server del gestor de reportes, prox
 npm run lint --prefix frontend    # oxlint (única herramienta de lint del repo)
 npm test               # corre la suite de pruebas unitarias sobre scripts/lib/, frontend/src/services/, frontend/src/utils/ y functions/
 firebase deploy        # hosting + functions; el predeploy dispara `npm run build`
+node frontend/smoke_panel.mjs     # render de los componentes con datos reales (SSR con Vite)
 ```
 
-**La aplicación tiene pruebas unitarias integradas.** `npm test` ejecuta los casos de prueba sobre `scripts/lib/`, los servicios puros en `frontend/src/services/` (por ejemplo, el motor de rango, cálculos, parser y vocabulario de plantillas), las utilidades en `frontend/src/utils/` y las funciones de Firebase en `functions/` (con un total de ~895 pruebas). Para un cambio en estos servicios, la suite debe quedar al 100 % en verde. Para cambios puramente visuales, la verificación sigue siendo manual en el navegador.
+**Verificación de la interfaz sin navegador.** `frontend/smoke_panel.mjs` carga los componentes
+reales con el SSR de Vite y los renderiza con el cribado de Capital IQ y las cifras de un EEFF
+real, comprobando lo que sale en el HTML. No sustituye al navegador —no hay eventos, ni CSS, ni
+sesión de Firebase— pero sí atrapa lo que ni el build ni `npm test` ven: un error en la ruta de
+render, un símbolo que no resuelve, un número sin formato. Encontró exactamente eso al escribirse
+(cifras del paso 2 sin separador de miles). Si el cribado de Drive no está a mano, cae a un
+universo sintético del mismo tamaño y corre igual.
+
+**La aplicación tiene pruebas unitarias integradas.** `npm test` ejecuta los casos de prueba sobre `scripts/lib/`, los servicios puros en `frontend/src/services/` (por ejemplo, el motor de rango, cálculos, parser y vocabulario de plantillas), las utilidades en `frontend/src/utils/` y las funciones de Firebase en `functions/` (~2.480 pruebas al 2026-09-01). Para un cambio en estos servicios, la suite debe quedar al 100 % en verde. Para cambios puramente visuales, la verificación sigue siendo manual en el navegador.
 
 ## Arquitectura
 

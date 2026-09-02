@@ -806,7 +806,15 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         ]);
       }
       dg.push([]);
-      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
+      /* CUAL escenario reporta el informe DE VERDAD. Esto afirmaba «CxC+CxP+Inv» sin mirar
+         `useadj`, y con el ajuste apagado el informe concluye sobre el rango SIN ajustar: la
+         frase mandaba a un auditor a cotejar la conclusión contra una columna que el informe no
+         usó. Mismo defecto de fondo que el reportado el 2026-09-02 en la memoria del rango
+         —dar por hecho que el ajustado siempre manda— en otro sitio del mismo libro. */
+      dg.push([cTxt(study.useadj
+        ? 'El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),'
+        : 'El informe NO aplica ajuste de capital de trabajo: concluye sobre el rango sin ajustar. '
+          + 'El escenario «CxC+CxP+Inv» (columna W) es el que se usaría si se activara,')]);
       dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
     }
 
@@ -923,6 +931,31 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        analista: si no la escribió, se dice que falta, en vez de dejar el hueco en blanco.
        Solo se imprime si el estudio trae la política, para no llenar de filas vacías el libro
        de un estudio corrido antes de que esto existiera. */
+    /* ─── Combinación de selección usada ───
+       El motor es determinista: mismo cribado y misma configuración dan siempre la misma
+       muestra. Cuando el analista recorre combinaciones equivalentes —«Otra combinación» del
+       paso 2, que sustituye las de menor puntaje por las siguientes de la reserva— la muestra
+       cambia, y entonces el número de combinación es parte de lo que hace falta para
+       reconstruirla. Se publica solo si NO es la primera: en la 1 la muestra son directamente
+       las de mayor puntaje y una fila que lo dijera solo añadiría ruido al libro. */
+    const combinacion = seleccion.combinacion || null;
+    if (combinacion && combinacion.usada > 1) {
+      sel.push([cTxt('COMBINACIÓN DE SELECCIÓN')]);
+      sel.push([
+        cTxt('Combinación usada'),
+        cTxt(`${combinacion.usada} de ${combinacion.disponibles}`),
+      ]);
+      sel.push([
+        cTxt('Criterio'),
+        cTxt('La selección es determinista y se ordena por puntaje de comparabilidad. Esta '
+          + 'combinación conserva las de mayor puntaje y sustituye las '
+          + `${combinacion.usada - 1} de menor puntaje por las siguientes de la reserva. `
+          + 'La misma combinación reproduce siempre la misma muestra a partir del mismo '
+          + 'cribado: la selección no es aleatoria.'),
+      ]);
+      sel.push([]);
+    }
+
     const perdidas = seleccion.perdidas || null;
     if (perdidas && perdidas.politica) {
       sel.push([cTxt('POLÍTICA DE PÉRDIDAS OPERATIVAS (Guías OCDE cap. III, §3.64-3.65)')]);

@@ -138,6 +138,16 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
               {memoria.stats ? `${pctf(memoria.stats.p25)} – ${pctf(memoria.stats.p75)}` : 'sin rango'}
               {' · '}mediana {memoria.stats ? pctf(memoria.stats.med) : '—'}
               {' · '}{memoria.indicador.clave} del contribuyente {pct(r.pli)}
+              {/* CUAL de los dos rangos se esta explicando. Con las dos columnas a la vista en la
+                  pestana de comparables, no decirlo dejaba comparar el indicador contra la que
+                  no manda: reportado el 2026-09-02, la memoria mostraba el ajustado y la tarjeta
+                  concluia con el otro. */}
+              {' · '}
+              <span className="text-zinc-400">
+                {memoria.serieQueDecide === 'ajustado'
+                  ? 'rango ajustado por capital de trabajo'
+                  : 'rango sin ajuste de capital de trabajo'}
+              </span>
             </p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">

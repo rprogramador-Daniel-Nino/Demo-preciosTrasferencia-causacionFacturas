@@ -3,7 +3,21 @@ import { hojasMemoriaRangoOptimo, CLAVES_RUBROS_EXAMINADA } from './memoriaCalcu
 import { obtenerEstudioNormalizadoParaParche } from './estudioNormalizado.js';
 import { pctf } from '../utils/calculations.js';
 
-const CATEGORIA_RECHAZO = { filtro: 'Filtro (holding/saldo negativo/pérdida)', ia: 'Curación IA', rigor: 'Rigor funcional' };
+/* Cómo se nombra cada categoría de rechazo en la hoja «Candidatas rechazadas».
+
+   `rigor` NO es el filtro de rigor funcional: ese se retiró del motor el 2026-08-10 y su
+   selector salió del paso 2 el 2026-09-01. La categoría sigue viva y significa otra cosa —todo
+   lo que supera los cuatro filtros objetivos, pasa la curación y no integra la muestra— y ante
+   la DIAN eso son diferencias funcionales (Art. 260-4).
+
+   Se llamaba «Rigor funcional» y con eso este libro se contradecía entre dos de sus propias
+   hojas: la del embudo ya publica «(−) Diferencias funcionales». Quien audite el libro contra el
+   informe no puede encontrar «rigor funcional» ni en la Tabla 16 ni en la norma. */
+const CATEGORIA_RECHAZO = {
+  filtro: 'Filtro (holding/saldo negativo/pérdida)',
+  ia: 'Curación IA',
+  rigor: 'Diferencias funcionales (Art. 260-4)',
+};
 const puntaje = (v) => (typeof v === 'number' ? pctf(v) : '—');
 
 function hojaRechazadas(rechazadas) {
@@ -126,6 +140,14 @@ export function construirLibroSoporte(datos) {
         incluidas: embudo.negativasIncluidas || 0,
         disponibles: embudo.negativasDisponibles || 0,
         excluidasPorFiltro: embudo.negativasExcluidasPorFiltro || 0,
+      },
+      /* Cual de las combinaciones equivalentes se uso. Se publica porque es lo que hace la
+         muestra REPRODUCIBLE: con el cribado y este numero se vuelve a obtener exactamente la
+         misma seleccion. Sin declararlo, la reproducibilidad existe en el codigo pero no en el
+         soporte, y es en el soporte donde un revisor la comprueba. */
+      combinacion: {
+        usada: embudo.alternativa || 1,
+        disponibles: embudo.alternativasDisponibles || 1,
       },
     }
     : seleccion;

@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
+import { previsualizarFiltros } from '../services/previsualizarFiltros';
+import { redactarJustificacionPerdidas } from '../services/justificacionPerdidasIA';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -42,6 +44,239 @@ import CampoMoneda from './CampoMoneda';
    adjuntos. No es un dato del contribuyente y no debe guardarse como tal. */
 const ACTIVIDAD_SIN_EXTRAER = 'No extraido por favor validar adjuntos';
 
+/* Las cifras de la parte examinada tal como las espera `pliOf`, con el segmento excluido
+   descontado de ventas y de utilidad. Estaba escrito tres veces en este archivo con el mismo
+   cuerpo; ahora el motor también lo necesita —usa el margen del contribuyente para ordenar la
+   cuota de negativas por cercanía— y una cuarta copia acabaría divergiendo. */
+function cifrasExaminada(study) {
+  const seg = num(study.seg_excluido) || 0;
+  const tS = num(study.t_s);
+  const tOp = num(study.t_op);
+  return {
+    s: tS !== null ? tS - seg : null,
+    c: num(study.t_c),
+    op: tOp !== null ? tOp - seg : null,
+    ar: num(study.t_ar), inv: num(study.t_inv), ap: num(study.t_ap), ppe: num(study.t_ppe),
+  };
+}
+
+/** El margen de la parte examinada con el indicador del estudio, o `null` si faltan cifras. */
+function margenExaminada(study) {
+  return pliOf(cifrasExaminada(study), study.pli || 'MO');
+}
+
+/* Miles con punto, como el resto del embudo del paso 3. Sin esto un universo de 2.987 salía
+   «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
+const mil = (n) => Number(n || 0).toLocaleString('es-CO');
+
+/* QUÉ HAY QUE TRAER DEL CRIBADO para que el primer cuartil no deje fuera al contribuyente.
+
+   Cuando ninguna palanca alcanza, el problema no es la selección sino el universo cargado: no
+   existen ahí las compañías que harían falta. Medido sobre un caso real con 3 negativas y
+   ninguna honda, contra un contribuyente en -4,595 %, la cuota completa deja el P25 en 1,275 %,
+   bajar la muestra al piso de 10 lo deja en -0,375 % y quitar las cuatro positivas más altas en
+   -1,525 %. Ninguna cierra.
+
+   Ahí decir «NO CUMPLE» no le sirve al analista: ya lo sabe. Lo que le sirve es el criterio de
+   rentabilidad que tiene que agregar al screening del paso 1, y eso `requisitoDeCribado` lo
+   calcula exacto sobre la posición del primer cuartil. */
+function RequisitoDelCribado({ requisito, indicador }) {
+  if (!requisito) return null;
+  const { necesita, hay, faltan, laMasCercana, exigeNegativas, tamanoMuestra } = requisito;
+  if (faltan <= 0) return null;
+
+  return (
+    <div className="rounded-lg border border-sky-300 dark:border-sky-800/60 bg-sky-50 dark:bg-sky-950/30 p-3">
+      <div className="flex items-start gap-2">
+        <Search className="w-4 h-4 text-sky-600 dark:text-sky-400 mt-0.5 shrink-0" />
+        <div className="text-[11.5px] text-sky-900 dark:text-sky-200 leading-relaxed">
+          <strong>Qué falta en el cribado para cumplir.</strong>{' '}
+          Con una muestra de {tamanoMuestra} el primer cuartil cae entre la{' '}
+          {Math.ceil((tamanoMuestra - 1) / 4)}.ª y la {Math.ceil((tamanoMuestra - 1) / 4) + 1}.ª
+          comparable, así que para que quede en su nivel hacen falta{' '}
+          <strong>{necesita} comparables con margen igual o menor a {pctf(indicador)}</strong>
+          {' '}y el cribado tiene {hay === 0 ? 'ninguna' : <strong>{hay}</strong>}
+          {laMasCercana !== null ? <> (la más cercana, {pctf(laMasCercana)})</> : null}.
+          {' '}Faltan <strong>{faltan}</strong>.
+          <div className="mt-2 pt-2 border-t border-sky-200 dark:border-sky-800/60">
+            Agregue al screening del paso 1 un criterio de rentabilidad que las traiga
+            {exigeNegativas
+              ? ' — al ser un margen negativo, entrarán compañías en pérdida y habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), que es lo que hace el asistente del paso 2.'
+              : ' — no hace falta que estén en pérdida: basta con que sean poco rentables.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
+
+   `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
+   Business Description cruda de Capital IQ. El informe publica la primera y cae a la segunda
+   —así lo hacen `anexoBHtml.js:304` y `docxRelleno.js:3676`— pero la tabla no mostraba ninguna
+   de las dos, así que el texto que se radica por cada comparable no se podía leer antes de
+   generarlo (pedido del 2026-09-01).
+
+   Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
+   informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
+function ActividadDeLaComparable({ row }) {
+  const redactada = String(row.descActividad || '').trim();
+  const cruda = String(row.desc || '').trim();
+  const texto = redactada || cruda;
+  if (!texto) {
+    return (
+      <p className="text-[10.5px] text-zinc-400 mt-1 italic">
+        Sin descripción del negocio en el cribado: el informe la publicaría vacía.
+      </p>
+    );
+  }
+  return (
+    <p
+      className="text-[10.5px] text-zinc-500 dark:text-zinc-400 mt-1 leading-snug line-clamp-2"
+      title={redactada
+        ? texto
+        : texto + '  —  Sin redactar: el informe publicaría este texto en inglés, tal como '
+          + 'viene de Capital IQ. Use «Redactar descripciones» para pasarlo a español.'}
+    >
+      {!redactada && (
+        <span className="text-amber-600 dark:text-amber-500 font-semibold">[sin redactar] </span>
+      )}
+      {texto}
+    </p>
+  );
+}
+
+/* El veredicto de actividad de una comparable, para validarlo antes de generar los EEFF.
+
+   Cuatro estados y cada uno dice algo distinto:
+     · MISMA        la curación reconoció la misma actividad. Es lo que se busca.
+     · RELACIONADA  actividad afín, no idéntica. Entra solo si las de misma actividad no llenan
+                    el cupo, y hay que sustentarla en el informe.
+     · DISTINTA     no debería estar en la muestra; si aparece es porque venía del estudio
+                    anterior, que la exime.
+     · sin veredicto  nadie la verificó: agregada a mano, sin identificador, o curación no
+                    corrida. Se marca, porque antes se veía igual que una confirmada. */
+function InsigniaActividad({ row }) {
+  const grado = row.gradoActividad || '';
+  const motivo = row.motivoActividad || '';
+  const clases = 'inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold ';
+
+  if (grado === 'MISMA') {
+    return (
+      <span
+        className={clases + 'bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1]'}
+        title={'Misma actividad económica, según la curación con IA.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Misma actividad
+      </span>
+    );
+  }
+  if (grado === 'RELACIONADA') {
+    return (
+      <span
+        className={clases + 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'}
+        title={'Actividad relacionada, no idéntica'
+          + (row.entroPorAmpliacion ? `. Entró para no bajar de ${MINIMO_COMPARABLES} comparables` : '')
+          + '. Hay que sustentarla en el informe.'
+          + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad relacionada
+      </span>
+    );
+  }
+  if (grado === 'DISTINTA') {
+    return (
+      <span
+        className={clases + 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400'}
+        title={'La curación NO reconoció la actividad. Está en la muestra porque venía del '
+          + 'estudio anterior, que la exime del descarte.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad distinta
+      </span>
+    );
+  }
+  return (
+    <span
+      className={clases + 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'}
+      title="Nadie verificó su actividad: se agregó a mano, no trae identificador de la fuente, o la curación no ha corrido. Revísela antes de radicar."
+    >
+      Actividad sin verificar
+    </span>
+  );
+}
+
+/* Lo que un filtro está sacando del universo, pegado a su propio control.
+   Es el corazón del rediseño del paso 2: un rótulo sin número es abstracto —«excluye holdings»
+   no dice cuántas— y un embudo aparte obliga a adivinar qué línea corresponde a qué selector.
+   Con el número al lado, el rótulo se vuelve concreto y el embudo deja de necesitar lectura
+   propia.
+
+   El «ver» despliega cinco razones sociales. Cinco y no todas: la lista sirve para VERIFICAR
+   que el filtro no se equivocó —el de holding se presume del nombre y a veces acierta de más—,
+   no para leerla entera. */
+function CostoDelFiltro({ paso, universo, expandido, alExpandir }) {
+  if (!paso || !universo) return null;
+  /* Un filtro en «incluir» no descarta a nadie, y decir «apagado» ahí se leía como que el
+     control estuviera roto —se reportó exactamente así sobre «Pérdidas Operativas» puesto en
+     Incluir—. Lo que importa es el efecto, no el estado del interruptor. */
+  if (!paso.activo) {
+    return (
+      <span className="text-[10px] text-zinc-400 shrink-0" title={paso.queHace}>
+        no descarta
+      </span>
+    );
+  }
+  if (paso.saca === 0) {
+    return (
+      <span className="text-[10px] text-zinc-400 shrink-0" title={paso.queHace}>
+        no saca ninguna
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-baseline gap-1.5 shrink-0">
+      <span className="text-[10.5px] text-zinc-500" title={paso.queHace}>
+        saca <b className="text-rose-700 dark:text-rose-400">{mil(paso.saca)}</b> de {mil(universo)}
+      </span>
+      {paso.ejemplos.length > 0 && (
+        <button
+          type="button"
+          onClick={alExpandir}
+          className="text-[10px] text-[#0B7C7A] dark:text-[#0FA3A1] hover:underline"
+        >
+          {expandido ? 'ocultar' : 'ver'}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/* Los ejemplos del filtro desplegado. Va aparte del control para poder ocupar el ancho
+   completo: cinco razones sociales de Capital IQ no caben en la columna de un selector. */
+function EjemplosDelFiltro({ paso }) {
+  if (!paso || !paso.ejemplos.length) return null;
+  return (
+    <div className="md:col-span-2 rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 p-2.5 -mt-1">
+      <p className="text-[10.5px] text-zinc-500 mb-1.5 leading-relaxed">{paso.queHace}</p>
+      <ul className="text-[11px] text-zinc-700 dark:text-zinc-300 space-y-0.5">
+        {paso.ejemplos.map((nombre) => (
+          <li key={nombre} className="flex gap-1.5">
+            <span className="text-zinc-400 shrink-0">·</span>
+            <span>{nombre}</span>
+          </li>
+        ))}
+      </ul>
+      {paso.masSinNombrar > 0 && (
+        <p className="text-[10px] text-zinc-400 mt-1.5">
+          y {paso.masSinNombrar} más. Se muestran cinco: es para comprobar el criterio, no para
+          revisarlas una por una.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
@@ -75,6 +310,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
        negativas que repartir y el motor lo ignora solo. Los estudios guardados antes de que
        esto existiera no lo traen, y el motor lo toma como 0. */
     negativasObjetivo: 0,
+    /* Cual de las combinaciones equivalentes se usa. 1 son las de mayor puntaje —el
+       comportamiento de siempre— y cada numero siguiente sustituye una mas por la siguiente de
+       la reserva. NO es azar: el mismo numero da siempre la misma muestra, que es lo que
+       mantiene el estudio reproducible (2026-09-02). Los estudios guardados antes de que esto
+       existiera no lo traen y el motor lo toma como 1. */
+    alternativa: 1,
     holding: 'excluir',
     /* Independencia (Art. 260-1 E.T.): una comparable con un accionista por encima
        del umbral no es independiente. Los estudios guardados antes de que existiera
@@ -84,7 +325,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     umbralControl: 50,
     saldoNegativo: 'excluir',
     geo: 'ninguna',
-    rigor: 'estandar',
+    /* `rigor` estuvo aquí hasta el 2026-09-01. Su filtro se retiró del motor el 2026-08-10 y su
+       selector salió del paso 2, y desde entonces nada lo leía: dejar una clave inerte en la
+       configuración invita a volver a cablearla. Los estudios guardados que la traigan siguen
+       cargando sin problema — el motor la acepta y la ignora. */
     justificacionPerdida: ''
   });
 
@@ -186,10 +430,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const rehecha = scoreCandidates(
       universo, engineConfig, actividad,
       (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
-      { ventasParteExaminada: study.t_s, iaMatch },
+      {
+        ventasParteExaminada: study.t_s, iaMatch,
+        /* Los MISMOS insumos que la corrida real: sin el margen del contribuyente esta
+           reconstrucción ordenaría la cuota por puntaje y la hoja de trazabilidad describiría
+           una selección distinta de la que se radicó. */
+        pliParteExaminada: margenExaminada(study),
+        metodoPli: study.pli || 'MO',
+      },
     );
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
-  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study.t_s, iaMatch]);
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch]);
 
   /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
      —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
@@ -205,6 +456,32 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     if (!Array.isArray(universo) || !universo.length) return null;
     return matrizDeRechazo(enriquecerUniverso(universo, comparables, auditoria));
   }, [universo, comparables, auditoria]);
+
+  /* Qué va a pasar con esta configuración, ANTES de correr y de pagar la curación. Los cuatro
+     filtros duros son cálculo local sobre el universo ya cargado, así que esto se puede
+     recalcular con cada tecla sin costar nada — que es justo el punto: el paso 2 se configuraba
+     a ciegas y el efecto solo se veía después de pagar.
+
+     Usa el MISMO juez que el motor (`prefiltrar` / `filtroQueDescarta`), no una copia: un panel
+     que promete un número que `scoreCandidates` no respeta es peor que no mostrar nada. */
+  const previsualizacion = useMemo(() => previsualizarFiltros(universo, engineConfig, {
+    estudio: study,
+    iaMatch,
+    estudioAnterior: estudioAnteriorInfo,
+  }), [universo, engineConfig, study, iaMatch, estudioAnteriorInfo]);
+
+  /* Las afinaciones arrancan plegadas: seis controles en una parrilla plana no dejaban ver
+     cuáles son decisiones de fondo. El costo de lo plegado se muestra en la propia barra, para
+     que esconderlas nunca oculte un descarte. */
+  const [afinacionesAbiertas, setAfinacionesAbiertas] = useState(false);
+  /* Qué filtro tiene desplegados sus ejemplos. Uno a la vez: es para verificar una sospecha,
+     no para leer cuatro listas juntas. */
+  const [filtroExpandido, setFiltroExpandido] = useState(null);
+  /* El asistente de la justificación. El borrador vive aquí y no en el estudio: solo entra al
+     campo si el analista lo acepta, porque ese texto se radica y conviene leerlo antes. */
+  const [redactando, setRedactando] = useState(false);
+  const [borradorJustificacion, setBorradorJustificacion] = useState(null);
+  const [avisoJustificacion, setAvisoJustificacion] = useState('');
 
 
 
@@ -430,6 +707,46 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     } finally {
       setCurando(false);
       setCuracionProgreso(null);
+    }
+  };
+
+  /* Redacta la justificación de admitir pérdidas con los HECHOS de este estudio más la causa
+     que escribió el analista. La causa es el único insumo que la IA no puede sacar de los datos
+     —las Guías OCDE piden analizar la causa de la pérdida, no solo constatarla— y por eso sin
+     ella no se llama al modelo. */
+  const redactarJustificacion = async () => {
+    const causa = String(study.causaPerdidasSector || '').trim();
+    if (!causa) {
+      setAvisoJustificacion('Escriba primero por qué el sector tuvo pérdidas: es el análisis de '
+        + 'causa que piden las Guías OCDE, y es lo único que la IA no puede deducir de los datos.');
+      return;
+    }
+    setAvisoJustificacion('');
+    setRedactando(true);
+    try {
+      const enPerdidaMuestra = comparables.filter((c) => num(c.op) !== null && num(c.op) < 0);
+      const texto = await redactarJustificacionPerdidas({
+        causa,
+        entidad: study.ent,
+        anio: study.anio,
+        actividad: actividad,
+        metodo: study.pli || 'MO',
+        indicador: margenExaminada(study),
+        enLaMuestra: enPerdidaMuestra.length,
+        deLaMuestra: comparables.length,
+        disponibles: previsualizacion.enPerdidaEnUniverso,
+        margenes: enPerdidaMuestra
+          .map((c) => (num(c.s) ? num(c.op) / num(c.s) : null))
+          .filter((m) => m !== null),
+        criterio: (selectionFunnel && selectionFunnel.criterioNegativas) || 'puntaje',
+      });
+      if (texto) setBorradorJustificacion(texto);
+      else {
+        setAvisoJustificacion('No se pudo redactar en este momento. El campo sigue siendo '
+          + 'editable a mano.');
+      }
+    } finally {
+      setRedactando(false);
     }
   };
 
@@ -677,7 +994,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   };
 
   // Run Motor TOP-N Selection & AI Curation
-  const runEngineSelection = async () => {
+  const runEngineSelection = async (alternativaForzada = null) => {
     if (!universo || universo.length === 0) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
@@ -693,9 +1010,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       anotar(`Evaluando ${universo.length} candidatas del universo…`);
 
       /* El veredicto de la curación entra como uno de los filtros del motor, junto
-         con holding, saldos negativos, pérdida operativa y rigor funcional. Si no se
-         curó —sin actividad detectada o sin descripciones— el motor sigue con las
-         palabras clave, no descarta a nadie por omisión.
+         con holding, saldos negativos y pérdida operativa. Si no se curó —sin actividad
+         detectada o sin descripciones— el motor sigue con las palabras clave, no
+         descarta a nadie por omisión.
 
          Se cura siempre aquí, pero `curarValidas` reutiliza por identificador lo ya
          dictaminado para esta misma actividad: reejecutar tras cambiar un filtro no
@@ -706,16 +1023,39 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         veredicto = (await curarValidas()) || veredicto;
       }
 
-      const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
+      /* La forzada manda sobre la del estado por lo dicho en `otraCombinacion`: en la misma
+         vuelta el estado todavia trae la anterior. */
+      const configDeEstaCorrida = alternativaForzada === null
+        ? engineConfig
+        : { ...engineConfig, alternativa: alternativaForzada };
+      const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
         iaMatch: veredicto,
+        /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
+           rentabilidad más parecido al suyo (decisión del usuario, 2026-09-01). Sin cifras
+           cargadas el motor degrada al orden por puntaje. */
+        pliParteExaminada: margenExaminada(study),
+        metodoPli: study.pli || 'MO',
+        /* La cercanía se mide sobre el margen NO AJUSTADO, y eso es metodología, no una
+           limitación: la búsqueda de comparables se hace sobre el margen propio de cada
+           compañía y el ajuste por capital de trabajo se aplica DESPUÉS, para leer el
+           cumplimiento (criterio del contador que asesora el estudio, 2026-09-01).
+
+           `margenDeCandidata` queda disponible por si alguna vez se quiere medir con otra vara
+           —`margenQueDecide` la construye— pero NO se inyecta: seleccionar con la vara ajustada
+           elige comparables por el resultado del ajuste y no por su perfil, que es al revés de
+           lo que pide la comparabilidad. */
       });
 
       /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
          una expresión regular sobre `motivoRechazo` y el embudo mezclaba etapas. */
       const cat = result.rechazadasPorCategoria;
+      /* `cat.rigor` NO son descartes por rigor funcional: ese filtro se retiró el 2026-08-10.
+         Son las que superan los filtros objetivos, pasan la curación y no alcanzan el cupo —
+         diferencias funcionales (Art. 260-4), que es como ya las nombran la Tabla 16 del informe
+         y la hoja del embudo del Excel. */
       anotar(`${result.totalValidas} pasaron todos los criterios; ${result.rechazadas.length} descartadas ` +
-        `(${cat.filtro} por los filtros del paso 2, ${cat.ia} por la curación con IA, ${cat.rigor} por el rigor funcional)`);
+        `(${cat.filtro} por los filtros del paso 2, ${cat.ia} por la curación con IA, ${cat.rigor} por diferencias funcionales)`);
       if (!result.ventasParteExaminada) {
         anotar('Sin ventas de la parte examinada: el factor de tamaño queda neutro. Diligéncielas en la tarjeta de cifras.', 'aviso');
       }
@@ -742,7 +1082,6 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         reutilizadas: veredicto ? (veredicto.reutilizadas || 0) : 0,
         rechazadasIA: cat.ia,
         rechazadasRigor: cat.rigor,
-        rigor: engineConfig.rigor,
         seleccionadas: finales.length,
         objetivo: nTarget,
         reserva: result.reserva.length,
@@ -760,6 +1099,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         negativasIncluidas: result.negativasIncluidas || 0,
         negativasDisponibles: result.negativasDisponibles || 0,
         negativasExcluidasPorFiltro: result.negativasExcluidasPorFiltro || 0,
+        /* Cual de las combinaciones equivalentes se uso. Es lo que hace la muestra
+           reconstruible: con el cribado y este numero se vuelve a obtener exactamente la misma
+           seleccion, y por eso viaja al estudio guardado y no solo a la pantalla. */
+        alternativa: result.alternativa || 1,
+        alternativasDisponibles: result.alternativasDisponibles || 1,
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -785,10 +1129,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               : '') +
             `. Del universo había ${negDisponibles} con la misma actividad detectada.`, 'ok');
         } else {
-          anotar(`Se pidieron ${negObjetivo} comparables en pérdida y solo se incluyeron ` +
-            `${negIncluidas}: el universo de Capital IQ tiene ${negDisponibles} con la misma ` +
-            'actividad detectada que superan los filtros. El resto del cupo lo llenaron ' +
-            'positivas. Amplíe el cribado o revise la actividad detectada si necesita más.', 'aviso');
+          /* La causa importa y antes se afirmaba una sola —«el resto del cupo lo llenaron
+             positivas»— que era falsa cuando la continuidad se había llevado el cupo entero.
+             Se reportó sobre un caso real con 16 de continuidad y 41 negativas disponibles:
+             entraron 0 y el aviso mandaba a ampliar un cribado que estaba bien. */
+          const causa = negDisponibles < negObjetivo
+            ? `el universo de Capital IQ solo tiene ${negDisponibles} con la misma actividad `
+              + 'detectada que superen los filtros. Amplíe el cribado del paso 1, o revise la '
+              + 'actividad detectada si cree que debería reconocer más.'
+            : `el universo tiene ${negDisponibles} con la misma actividad detectada, así que no `
+              + 'faltan candidatas: lo que faltó fue cupo. Suba el N objetivo en el paso 2.';
+          anotar(`Se pidieron ${negObjetivo} comparables en pérdida y solo se incluyeron `
+            + `${negIncluidas}: ${causa}`, 'aviso');
         }
         if (!String(engineConfig.justificacionPerdida || '').trim()) {
           anotar('Falta la justificación de la política de pérdidas: sin ella, el informe ' +
@@ -815,6 +1167,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           'la ampliación del criterio de búsqueda.', 'aviso');
       }
 
+      /* La continuidad que la cuota obligó a retirar. Va en su propio aviso y con los
+         nombres: retirar una comparable aceptada el año anterior se justifica en el informe, y
+         antes desaparecían sin que nada lo dijera. */
+      const desplazadas = result.continuidadDesplazada || [];
+      if (desplazadas.length) {
+        const nombres = desplazadas.map((c) => c.name).filter(Boolean);
+        const muestra3 = nombres.slice(0, 3).join(', ');
+        anotar(`La cuota de ${negObjetivo} comparable(s) en pérdida obligó a retirar `
+          + `${desplazadas.length} del estudio anterior, las de menor puntaje`
+          + (muestra3 ? `: ${muestra3}${nombres.length > 3 ? ` y ${nombres.length - 3} más` : ''}` : '')
+          + `. Cada retiro hay que justificarlo en el informe. Si prefiere conservar la serie, `
+          + `suba el N objetivo a ${result.continuidad + desplazadas.length + negIncluidas} y `
+          + 'vuelva a correr: caben las dos cosas.', 'aviso');
+      }
+
       if (result.continuidadExcedeObjetivo) {
         anotar(`El estudio anterior aporta ${deContinuidad} comparables, más que las ${nTarget} pedidas: ` +
           'no se descarta ninguna, porque retirar una comparable ya aceptada hay que justificarlo en el informe. ' +
@@ -837,6 +1204,24 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setLoadingSelection(false);
     }
   };
+
+  /* «Otra combinacion»: la siguiente alternativa de seleccion, y vuelta a correr.
+
+     Da la vuelta al llegar a la ultima para que el boton nunca quede muerto, y NO gasta
+     curacion: el veredicto de actividad de cada candidata ya esta pagado y `scoreCandidates`
+     reutiliza el `iaMatch` en memoria, asi que recorrer combinaciones es gratis.
+
+     La alternativa se le pasa al motor por argumento en lugar de leerla del estado: `useState`
+     no es sincrono y correr en la misma vuelta usaria la anterior, de modo que el boton
+     mostraria siempre una combinacion de retraso. */
+  const otraCombinacion = () => {
+    const total = (selectionFunnel && selectionFunnel.alternativasDisponibles) || 1;
+    const actual = (selectionFunnel && selectionFunnel.alternativa) || 1;
+    const siguiente = total <= 1 ? 1 : (actual % total) + 1;
+    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente }));
+    runEngineSelection(siguiente);
+  };
+
 
   /* Vuelca en una fila las cifras leídas de un documento. Devuelve el arreglo
      nuevo; no toca el estado, para poder aplicar varias de una sola vez. */
@@ -1823,174 +2208,419 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
           {/* Decir en qué orden se aplican: el reclamo era que la curación y los
               filtros parecían juzgar conjuntos distintos, y así era. */}
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1">
-            Independencia, holding, saldos negativos y pérdidas operativas se aplican <b>antes</b> de curar
-            con IA, así que la curación solo evalúa —y solo se paga por— lo que pasa estos filtros. El rigor
-            funcional se aplica <b>después</b>, sobre el perfil que dictamina la propia curación. El holding
-            se identifica por la razón social, y por eso <b>no</b> retira una comparable que venga del
-            estudio anterior; el control accionario sí, porque es un hecho de la composición societaria.
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1 leading-relaxed">
+            Estos cuatro filtros se aplican <b>antes</b> de curar con IA, así que la curación solo
+            evalúa —y solo se paga por— lo que los pasa. Los números de la derecha de cada control
+            son el efecto real sobre el cribado que ya cargaste: se calculan aquí, sin gastar una
+            sola consulta.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">N Objetivo (Tope 30)</label>
-              <input
-                type="number"
-                min="4"
-                max="30"
-                value={engineConfig.nTarget}
-                onChange={(e) => cambiarConfig('nTarget', Number(e.target.value))}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              />
+          {/* ══ Los avisos: solo cuando lo que dicen es cierto y comprobable ══
+              Un panel que avisa de todo enseña a ignorar los avisos, que es lo que ya le pasó a
+              los del generador antes de que se acotaran. Los emite `previsualizarFiltros`; aquí
+              solo se pintan. */}
+          {previsualizacion.avisos.length > 0 && (
+            <div className="space-y-1.5">
+              {previsualizacion.avisos.map((a) => (
+                <div
+                  key={a.clave}
+                  className={`rounded-lg p-2.5 flex items-start gap-2 text-[11.5px] leading-relaxed border ${a.severidad === 'bloqueo'
+                    ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/50 text-rose-900 dark:text-rose-200'
+                    : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-200'
+                    }`}
+                >
+                  {a.severidad === 'bloqueo'
+                    ? <Ban className="w-4 h-4 mt-px shrink-0" />
+                    : <AlertTriangle className="w-4 h-4 mt-px shrink-0" />}
+                  <span>{a.texto}</span>
+                </div>
+              ))}
             </div>
+          )}
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Pérdidas Operativas</label>
-              <select
-                value={engineConfig.perdidaOp}
-                onChange={(e) => cambiarConfig('perdidaOp', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir (criterio conservador DIAN)</option>
-                <option value="incluir">Incluir (criterio OCDE)</option>
-              </select>
-            </div>
+          {/* ══ Decisiones de método ══
+              Arriba y siempre visibles porque son las que hay que justificar en el informe: la
+              política de pérdidas con su cuota, y la independencia con su umbral. */}
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 space-y-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+              Decisiones de método
+            </span>
 
-            {/* Cuántas comparables en pérdida se quieren en el informe. Cuenta dentro del N
-                objetivo, no aparte, y es también un tope: pedir 3 no puede devolver 5.
-                Deshabilitado mientras la política excluya pérdidas — con «excluir» no hay
-                negativas que repartir, y dejar el campo activo prometería algo que el motor
-                va a ignorar. La UI lo dice en vez de cambiar la política por su cuenta. */}
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">
-                Negativas objetivo
-              </label>
-              <input
-                type="number"
-                min="0"
-                max={engineConfig.nTarget}
-                disabled={engineConfig.perdidaOp === 'excluir'}
-                value={engineConfig.negativasObjetivo ?? 0}
-                onChange={(e) => cambiarConfig('negativasObjetivo', Math.max(0, Number(e.target.value) || 0))}
-                title={engineConfig.perdidaOp === 'excluir'
-                  ? 'Cambie «Pérdidas Operativas» a Incluir para poder pedir comparables en pérdida'
-                  : 'Cuántas comparables en pérdida debe traer la muestra, dentro del N objetivo'}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
-              />
-              {engineConfig.perdidaOp === 'excluir' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col">
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <label className="text-[11px] font-semibold text-zinc-500">Pérdidas Operativas</label>
+                  <CostoDelFiltro
+                    paso={previsualizacion.pasos.find((x) => x.clave === 'perdidaOperativa')}
+                    universo={previsualizacion.universo}
+                    expandido={filtroExpandido === 'perdidaOperativa'}
+                    alExpandir={() => setFiltroExpandido(filtroExpandido === 'perdidaOperativa' ? null : 'perdidaOperativa')}
+                  />
+                </div>
+                <select
+                  value={engineConfig.perdidaOp}
+                  onChange={(e) => cambiarConfig('perdidaOp', e.target.value)}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                >
+                  <option value="excluir">Excluir (criterio conservador DIAN)</option>
+                  <option value="incluir">Incluir (criterio OCDE)</option>
+                </select>
+                {previsualizacion.hayUniverso && (
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    El cribado trae {mil(previsualizacion.enPerdidaEnUniverso)} compañía(s) en pérdida.
+                  </span>
+                )}
+              </div>
+
+              {/* Cuántas comparables en pérdida se quieren en el informe. Cuenta dentro del N
+                  objetivo, no aparte, y es también un tope: pedir 3 no puede devolver 5.
+                  Deshabilitado mientras la política excluya pérdidas — con «excluir» no hay
+                  negativas que repartir, y dejar el campo activo prometería algo que el motor
+                  va a ignorar. La UI lo dice en vez de cambiar la política por su cuenta. */}
+              <div className="flex flex-col">
+                <label className="text-[11px] font-semibold text-zinc-500 mb-1">Negativas objetivo</label>
+                <input
+                  type="number"
+                  min="0"
+                  max={engineConfig.nTarget}
+                  disabled={engineConfig.perdidaOp === 'excluir'}
+                  value={engineConfig.negativasObjetivo ?? 0}
+                  onChange={(e) => cambiarConfig('negativasObjetivo', Math.max(0, Number(e.target.value) || 0))}
+                  title={engineConfig.perdidaOp === 'excluir'
+                    ? 'Cambie «Pérdidas Operativas» a Incluir para poder pedir comparables en pérdida'
+                    : 'Cuántas comparables en pérdida debe traer la muestra, dentro del N objetivo'}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+                />
                 <span className="text-[10px] text-zinc-400 mt-1">
-                  Ponga «Incluir» para habilitarlo
+                  {engineConfig.perdidaOp === 'excluir'
+                    ? 'Ponga «Incluir» para habilitarlo'
+                    : `Dentro de las ${engineConfig.nTarget}, misma actividad. Reserva cupo antes del puntaje: sin cuota no entra ninguna.`}
                 </span>
-              ) : (
+              </div>
+
+              <div className="flex flex-col">
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <label className="text-[11px] font-semibold text-zinc-500">Independencia (Art. 260-1)</label>
+                  <CostoDelFiltro
+                    paso={previsualizacion.pasos.find((x) => x.clave === 'controlada')}
+                    universo={previsualizacion.universo}
+                    expandido={filtroExpandido === 'controlada'}
+                    alExpandir={() => setFiltroExpandido(filtroExpandido === 'controlada' ? null : 'controlada')}
+                  />
+                </div>
+                <select
+                  value={engineConfig.control ?? 'excluir'}
+                  onChange={(e) => cambiarConfig('control', e.target.value)}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                >
+                  <option value="excluir">Excluir controladas</option>
+                  <option value="incluir">Incluir</option>
+                </select>
                 <span className="text-[10px] text-zinc-400 mt-1">
-                  Dentro de las {engineConfig.nTarget}, misma actividad
+                  No perdona a las del estudio anterior: no ser independiente es un hecho de hoy.
                 </span>
+              </div>
+
+              {/* El umbral es la palanca de más peso del paso 2 —sobre el cribado de Makita
+                  saca 238 al 50 % y 775 al 25 %— y era un campo mudo. Con el costo al lado,
+                  moverlo deja de ser a ciegas. */}
+              <div className="flex flex-col">
+                <label className="text-[11px] font-semibold text-zinc-500 mb-1">Umbral de control (%)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  value={engineConfig.umbralControl ?? 50}
+                  disabled={(engineConfig.control ?? 'excluir') !== 'excluir'}
+                  onChange={(e) => cambiarConfig('umbralControl', Number(e.target.value))}
+                  className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40"
+                />
+                <span className="text-[10px] text-zinc-400 mt-1">
+                  Baje el umbral y el filtro se endurece: se ve al instante en el número de arriba.
+                </span>
+              </div>
+
+              {/* Los ejemplos ocupan las dos columnas: cinco razones sociales de Capital IQ no
+                  caben en la columna de un selector. */}
+              {['perdidaOperativa', 'controlada'].includes(filtroExpandido) && (
+                <EjemplosDelFiltro paso={previsualizacion.pasos.find((x) => x.clave === filtroExpandido)} />
               )}
             </div>
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Sociedades Holding</label>
-              <select
-                value={engineConfig.holding}
-                onChange={(e) => cambiarConfig('holding', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir (sin actividad propia)</option>
-                <option value="incluir">Incluir</option>
-              </select>
-            </div>
+            {/* La justificación de admitir comparables en pérdida. Solo aparece cuando de verdad
+                se van a admitir: pedirla siempre la convertiría en un campo que se rellena sin
+                leer. Va al embudo, que se persiste con el estudio y que el informe y el Excel de
+                soporte ya leen: es lo que impide que el documento radicado publique comparables
+                en pérdida sin nada que explique por qué están ahí. */}
+            {(engineConfig.negativasObjetivo ?? 0) > 0 && (
+              <div className="flex flex-col pt-1">
+                <label className="text-[11px] font-semibold text-zinc-500 mb-1">
+                  Justificación de admitir pérdidas
+                  {!String(engineConfig.justificacionPerdida || '').trim() && (
+                    <span className="text-amber-600 dark:text-amber-400 font-normal"> · falta, y va al informe</span>
+                  )}
+                </label>
+                <textarea
+                  rows={2}
+                  value={engineConfig.justificacionPerdida || ''}
+                  onChange={(e) => cambiarConfig('justificacionPerdida', e.target.value)}
+                  placeholder="Ej: Guías OCDE cap. III §3.64-3.65 — las pérdidas de las comparables reflejan condiciones normales del mercado en el año gravable y su exclusión sesgaría el rango al alza."
+                  className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+                />
+                <span className="text-[10px] text-zinc-400 mt-1">
+                  Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
+                </span>
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Independencia (Art. 260-1)</label>
-              <select
-                value={engineConfig.control ?? 'excluir'}
-                onChange={(e) => cambiarConfig('control', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir controladas</option>
-                <option value="incluir">Incluir</option>
-              </select>
-            </div>
+                {/* ══ El asistente ══
+                    Pide la CAUSA porque es lo único que no está en los datos: las Guías OCDE
+                    (cap. III, §3.64-3.65) no dicen «las pérdidas se admiten», dicen que una
+                    pérdida no descalifica siempre que se analice su causa. El resto —cifras,
+                    fundamento normativo, argumento del sesgo— sale del estudio. */}
+                <div className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 p-2.5 space-y-2">
+                  <label className="text-[11px] font-semibold text-zinc-500 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
+                    ¿Por qué el sector tuvo pérdidas en {study.anio || 'el año gravable'}?
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={study.causaPerdidasSector || ''}
+                    onChange={(e) => updateStudy({ causaPerdidasSector: e.target.value })}
+                    placeholder="Dos líneas bastan: contracción de la demanda, alza de un insumo importado, devaluación, sobreoferta del sector…"
+                    className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={redactarJustificacion}
+                      disabled={redactando}
+                      className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-[#0FA3A1] text-white hover:bg-[#0B7C7A] disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {redactando
+                        ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Redactando…</>
+                        : <><Sparkles className="w-3.5 h-3.5" /> Redactar con IA</>}
+                    </button>
+                    <span className="text-[10px] text-zinc-400">
+                      Usa las cifras reales del estudio y no inventa causas: solo la que escriba arriba.
+                    </span>
+                  </div>
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Umbral de control (%)</label>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                step="1"
-                value={engineConfig.umbralControl ?? 50}
-                disabled={(engineConfig.control ?? 'excluir') !== 'excluir'}
-                onChange={(e) => cambiarConfig('umbralControl', Number(e.target.value))}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none disabled:opacity-40"
-              />
-            </div>
+                  {avisoJustificacion && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                      {avisoJustificacion}
+                    </p>
+                  )}
 
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Saldos Negativos</label>
-              <select
-                value={engineConfig.saldoNegativo}
-                onChange={(e) => cambiarConfig('saldoNegativo', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="excluir">Excluir (datos no verosímiles)</option>
-                <option value="incluir">Incluir</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Prioridad Geográfica</label>
-              <select
-                value={engineConfig.geo}
-                onChange={(e) => cambiarConfig('geo', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="ninguna">Global</option>
-                <option value="LATAM">América Latina</option>
-                <option value="NORTEAM">Norteamérica</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">Rigor Funcional</label>
-              <select
-                value={engineConfig.rigor}
-                onChange={(e) => cambiarConfig('rigor', e.target.value)}
-                className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
-              >
-                <option value="estandar">Estándar (servicios+mixtos)</option>
-                <option value="estricto">Estricto (solo servicios)</option>
-                <option value="amplio">Amplio</option>
-              </select>
-            </div>
+                  {/* El borrador se propone; no pisa lo que haya hasta que se acepte. */}
+                  {borradorJustificacion && (
+                    <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-[#0FA3A1]/40 p-2.5 space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Borrador propuesto
+                      </span>
+                      <p className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {borradorJustificacion}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cambiarConfig('justificacionPerdida', borradorJustificacion);
+                            setBorradorJustificacion(null);
+                          }}
+                          className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                        >
+                          Usar este texto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBorradorJustificacion(null)}
+                          className="text-[11px] px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          Descartar
+                        </button>
+                        <span className="text-[10px] text-zinc-400">
+                          Léalo antes de aceptarlo: se radica.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* La justificación de admitir comparables en pérdida. Solo aparece cuando de verdad
-              se van a admitir: pedirla siempre la convertiría en un campo que se rellena sin
-              leer. `justificacionPerdida` estaba declarado en `engineConfig` desde antes y no
-              se usaba en ninguna parte; este es su sitio.
-
-              Va al embudo, que se persiste con el estudio y que el informe y el Excel de
-              soporte ya leen: es lo que impide que el documento radicado publique comparables
-              en pérdida sin nada que explique por qué están ahí. */}
-          {(engineConfig.negativasObjetivo ?? 0) > 0 && (
-            <div className="mt-4 flex flex-col">
-              <label className="text-[11px] font-semibold text-zinc-500 mb-1">
-                Justificación de admitir pérdidas
-                {!String(engineConfig.justificacionPerdida || '').trim() && (
-                  <span className="text-amber-600 dark:text-amber-400 font-normal"> · falta, y va al informe</span>
-                )}
-              </label>
-              <textarea
-                rows={2}
-                value={engineConfig.justificacionPerdida || ''}
-                onChange={(e) => cambiarConfig('justificacionPerdida', e.target.value)}
-                placeholder="Ej: Guías OCDE cap. III §3.64-3.65 — las pérdidas de las comparables reflejan condiciones normales del mercado en el año gravable y su exclusión sesgaría el rango al alza."
-                className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
-              />
-              <span className="text-[10px] text-zinc-400 mt-1">
-                Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
+          {/* ══ Afinaciones ══
+              Plegadas, con su costo en la propia barra: esconderlas no puede ocultar un
+              descarte. */}
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={() => setAfinacionesAbiertas(!afinacionesAbiertas)}
+              className="w-full flex items-center justify-between gap-2 p-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/40 rounded-lg transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                {afinacionesAbiertas
+                  ? <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                  : <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />}
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Afinaciones
+                </span>
+                <span className="text-[10.5px] text-zinc-500">
+                  N objetivo, holding, saldos negativos, geografía
+                </span>
               </span>
+              {previsualizacion.hayUniverso && (
+                <span className="text-[10.5px] text-zinc-500 shrink-0">
+                  sacan{' '}
+                  <b className="text-zinc-700 dark:text-zinc-300">
+                    {mil(previsualizacion.pasos
+                      .filter((x) => x.clave === 'holding' || x.clave === 'saldoNegativo')
+                      .reduce((n, x) => n + x.saca, 0))}
+                  </b>
+                </span>
+              )}
+            </button>
+
+            {afinacionesAbiertas && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 pt-0">
+                <div className="flex flex-col">
+                  <label className="text-[11px] font-semibold text-zinc-500 mb-1">N Objetivo (Tope 30)</label>
+                  <input
+                    type="number"
+                    min="4"
+                    max="30"
+                    value={engineConfig.nTarget}
+                    onChange={(e) => cambiarConfig('nTarget', Number(e.target.value))}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    Cuántas entran en la muestra. Piso normativo del motor: {MINIMO_COMPARABLES}.
+                  </span>
+                </div>
+
+                <div className="flex flex-col">
+                  <div className="flex items-baseline justify-between gap-2 mb-1">
+                    <label className="text-[11px] font-semibold text-zinc-500">Sociedades Holding</label>
+                    <CostoDelFiltro
+                      paso={previsualizacion.pasos.find((x) => x.clave === 'holding')}
+                      universo={previsualizacion.universo}
+                      expandido={filtroExpandido === 'holding'}
+                      alExpandir={() => setFiltroExpandido(filtroExpandido === 'holding' ? null : 'holding')}
+                    />
+                  </div>
+                  <select
+                    value={engineConfig.holding}
+                    onChange={(e) => cambiarConfig('holding', e.target.value)}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  >
+                    <option value="excluir">Excluir (sin actividad propia)</option>
+                    <option value="incluir">Incluir</option>
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    Se presume de la razón social: revise los ejemplos, por el nombre se acierta de más.
+                  </span>
+                </div>
+
+                <div className="flex flex-col">
+                  <div className="flex items-baseline justify-between gap-2 mb-1">
+                    <label className="text-[11px] font-semibold text-zinc-500">Saldos Negativos</label>
+                    <CostoDelFiltro
+                      paso={previsualizacion.pasos.find((x) => x.clave === 'saldoNegativo')}
+                      universo={previsualizacion.universo}
+                      expandido={filtroExpandido === 'saldoNegativo'}
+                      alExpandir={() => setFiltroExpandido(filtroExpandido === 'saldoNegativo' ? null : 'saldoNegativo')}
+                    />
+                  </div>
+                  <select
+                    value={engineConfig.saldoNegativo}
+                    onChange={(e) => cambiarConfig('saldoNegativo', e.target.value)}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  >
+                    <option value="excluir">Excluir (datos no verosímiles)</option>
+                    <option value="incluir">Incluir</option>
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    Cartera, cuentas por pagar o inventarios en negativo. No son pérdidas.
+                  </span>
+                </div>
+
+                {/* No descarta a nadie, y el rótulo lo dice. Parecía un filtro. */}
+                <div className="flex flex-col">
+                  <label className="text-[11px] font-semibold text-zinc-500 mb-1">Prioridad Geográfica</label>
+                  <select
+                    value={engineConfig.geo}
+                    onChange={(e) => cambiarConfig('geo', e.target.value)}
+                    className="bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none"
+                  >
+                    <option value="ninguna">Global</option>
+                    <option value="LATAM">América Latina</option>
+                    <option value="NORTEAM">Norteamérica</option>
+                  </select>
+                  <span className="text-[10px] text-zinc-400 mt-1">
+                    {previsualizacion.geografia.texto}
+                  </span>
+                </div>
+
+                {['holding', 'saldoNegativo'].includes(filtroExpandido) && (
+                  <EjemplosDelFiltro paso={previsualizacion.pasos.find((x) => x.clave === filtroExpandido)} />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ══ El cierre: qué queda, qué entra, y qué se va a pagar ══
+              Reencuadra la pantalla: casi nunca manda el filtro, manda el cupo. Y el costo de la
+              curación es el dato que faltaba para no configurar a ciegas. */}
+          {previsualizacion.hayUniverso && (
+            <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11.5px]">
+                <span className="text-zinc-500">
+                  Universo <b className="text-zinc-800 dark:text-zinc-200">{mil(previsualizacion.universo)}</b>
+                </span>
+                <span className="text-zinc-400">→</span>
+                <span className="text-zinc-500">
+                  pasan los filtros <b className="text-zinc-800 dark:text-zinc-200">{mil(previsualizacion.quedan)}</b>
+                </span>
+                <span className="text-zinc-400">→</span>
+                <span className="text-zinc-500">
+                  entran <b className="text-[#0B7C7A] dark:text-[#0FA3A1]">{mil(previsualizacion.entran)}</b>
+                  {previsualizacion.reserva > 0 && (
+                    <span className="text-zinc-400"> · {mil(previsualizacion.reserva)} en reserva</span>
+                  )}
+                </span>
+              </div>
+
+              {previsualizacion.curacion.aCurar > 0 ? (
+                <div className="flex items-start gap-1.5 text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  <Clock className="w-3.5 h-3.5 mt-px shrink-0 text-zinc-400" />
+                  <span>
+                    Al ejecutar el paso 3 se curarán{' '}
+                    <b>{mil(previsualizacion.curacion.aCurar)}</b> candidatas en{' '}
+                    {previsualizacion.curacion.lotes} lote(s), ~{previsualizacion.curacion.etaMinutos} min
+                    {previsualizacion.curacion.reutilizadas > 0
+                      && ` · ${mil(previsualizacion.curacion.reutilizadas)} ya curadas se reutilizan sin volver a pagarse`}
+                    {previsualizacion.curacion.sinDatosParaCurar > 0
+                      && ` · ${mil(previsualizacion.curacion.sinDatosParaCurar)} sin descripción del negocio pasan a la heurística, sin costo`}.
+                  </span>
+                </div>
+              ) : (
+                <div className="text-[11px] text-zinc-500">
+                  No hay candidatas nuevas que curar con esta configuración.
+                </div>
+              )}
+
+              {/* Aquí termina lo que se puede afirmar sin la IA, y se dice. */}
+              <div className="text-[10.5px] text-zinc-400 leading-relaxed border-t border-zinc-200 dark:border-zinc-800 pt-2">
+                De aquí en adelante decide la curación: si la actividad de cada candidata coincide
+                con la del contribuyente solo lo sabe el modelo, así que este embudo no lo estima.
+                {previsualizacion.continuidad.total > 0 && (
+                  <> El estudio anterior aporta {previsualizacion.continuidad.total} comparable(s)
+                    {previsualizacion.continuidad.caen.length === 0
+                      ? ', y esta configuración las conserva todas.'
+                      : '.'}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -2020,6 +2650,36 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </span>
             </button>
 
+            {/* ── OTRA COMBINACIÓN ──
+                Pedido el 2026-09-02: poder reejecutar y obtener comparables distintas. Recorre
+                combinaciones NUMERADAS, no aleatorias: la alternativa 3 es siempre la misma
+                muestra, así que el estudio sigue siendo reproducible y el informe puede
+                declarar cuál se usó. Con azar la respuesta a «¿por qué estas doce?» sería
+                «salieron esas», y ni el propio despacho podría volver a obtener lo que radicó.
+
+                Solo aparece cuando ya se corrió y hay reserva de la que sacar: ofrecer
+                combinaciones que no existen devolvería la misma muestra y el botón parecería
+                roto. No gasta curación —el veredicto de actividad ya está pagado y se
+                reutiliza—, así que explorar es gratis. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1 && (
+              <button
+                onClick={otraCombinacion}
+                disabled={loadingSelection || curando}
+                className={'flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold border transition-colors '
+                  + (loadingSelection || curando
+                    ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                    : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer')}
+                title={'Sustituye las comparables de menor puntaje por las siguientes de la '
+                  + 'reserva. Cada combinación está numerada y es reproducible: la misma '
+                  + 'siempre da la misma muestra. No vuelve a pagar la curación.'}
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>
+                  Otra combinación ({selectionFunnel.alternativa || 1}/{selectionFunnel.alternativasDisponibles})
+                </span>
+              </button>
+            )}
+
           </div>
 
           {/* Embudo de depuración: cada etapa con lo que dejó fuera. Antes eran
@@ -2043,12 +2703,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   ) : null}
                 </div>
                 <div>Rechazadas por la IA <b className={'tabular-nums ' + ((selectionFunnel.rechazadasIA ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>{(selectionFunnel.rechazadasIA ?? 0).toLocaleString('es-CO')}</b></div>
+                {/* «Diferencias funcionales» y no «rigor»: el filtro de rigor funcional se
+                    retiró del motor el 2026-08-10 y su selector salió del paso 2 el 2026-09-01,
+                    pero esta casilla seguía llamándose por él y hasta mostraba su valor entre
+                    paréntesis. El número nunca fue suyo: son las que superan los filtros
+                    objetivos, pasan la curación y no alcanzan el cupo. Así las nombran ya la
+                    Tabla 16 del informe y la hoja del embudo del Excel de soporte, y la pantalla
+                    tiene que coincidir con lo que se radica. */}
+                {/* Cuenta la RESERVA y no `rechazadasRigor`: las de reserva no pasan por
+                    `rechazadas` —el informe las suma aparte y meterlas en las dos listas
+                    descuadraría la tabla contra el universo—, así que esta casilla mostraba 0
+                    con 738 en reserva. Se reportó exactamente así. */}
                 <div>
-                  Rechazadas por el rigor{' '}
-                  <b className={'tabular-nums ' + ((selectionFunnel.rechazadasRigor ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
-                    {(selectionFunnel.rechazadasRigor ?? 0).toLocaleString('es-CO')}
+                  Diferencias funcionales{' '}
+                  <b className={'tabular-nums ' + ((selectionFunnel.reserva ?? 0) > 0 ? 'text-amber-600 dark:text-amber-400' : '')}>
+                    {(selectionFunnel.reserva ?? 0).toLocaleString('es-CO')}
                   </b>
-                  {selectionFunnel.rigor ? <span className="text-zinc-400"> ({selectionFunnel.rigor})</span> : null}
+                  <span className="text-zinc-400" title="Superan los filtros objetivos y la curación, pero no alcanzan el cupo de la muestra (Art. 260-4)"> (Art. 260-4)</span>
                 </div>
                 <div>Válidas <b className="tabular-nums">{selectionFunnel.validas.toLocaleString('es-CO')}</b></div>
                 <div>
@@ -2458,6 +3129,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 ) : null}
               </p>
             )}
+            {/* Si cumple, POR CUÁNTO. Un cumplimiento por tres milésimas se sostiene igual de
+                mal que uno que no cumple en cuanto una cifra se corrija, y eso no se veía. */}
+            {diagnostico.cumple && diagnostico.colchon !== null && (
+              <p className="text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                Cumple con <strong>{pctf(diagnostico.colchon)}</strong> de holgura sobre el primer
+                cuartil
+                {diagnostico.colchon < 0.005
+                  ? <span className="text-amber-700 dark:text-amber-400"> · queda al filo: una corrección de cifras puede sacarlo del rango</span>
+                  : null}
+              </p>
+            )}
             {diagnostico.ajuste && diagnostico.ajuste.improcedente && (
               <p className="text-[11.5px] text-amber-700 dark:text-amber-400 leading-relaxed">
                 El ajuste resulta improcedente con estas cifras: revise el indicador del
@@ -2481,6 +3163,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </p>
             )}
           </div>
+
+          {/* Cuando ninguna palanca alcanza, esto es lo único accionable: qué buscar en el
+              paso 1. Va antes de las palancas porque ampliar el cribado sostiene mejor el
+              estudio —más comparables reales— que apretar la selección de las pocas que hay. */}
+          <RequisitoDelCribado requisito={diagnostico.requisito} indicador={diagnostico.indicador} />
 
           {/* Antes de mover una sola comparable: si el indicador del contribuyente sale de una
               lectura que no se pudo cotejar contra el documento, ajustar la muestra para
@@ -2613,7 +3300,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">Inv.</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">CxP</th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-right w-[8%]">PP&amp;E</th>
-                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[12%]">PLI Ajustado</th>
+                {/* Se muestran los DOS y se marca cuál decide. Antes había una sola columna,
+                    la ajustada, mientras el rango podía estar decidiendo sobre la NO ajustada
+                    —lo que `useadj` elige—: el analista contaba negativas en una serie que no
+                    era la que producía el rango. Se reportó exactamente así, con 4 comparables
+                    en pérdida seleccionadas y solo 2 visibles en la columna. */}
+                <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[12%]">
+                  PLI{' '}
+                  <span className="font-normal text-zinc-400 normal-case">
+                    ({useAdj ? 'ajustado' : 'sin ajustar'} decide)
+                  </span>
+                </th>
                 <th className="py-3 px-3 border-b border-zinc-200 dark:border-zinc-800 text-center w-[8%]">Acciones</th>
               </tr>
             </thead>
@@ -2639,18 +3336,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         Continuidad
                       </span>
                     )}
-                    {/* La que no es de la misma actividad sino de una afín, y entró para no bajar
-                        del mínimo. Va marcada en su fila y no solo en el embudo: es la que hay
-                        que mirar una a una y sustentar en el informe. */}
-                    {row.entroPorAmpliacion && (
-                      <span
-                        className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
-                        title={`Actividad relacionada, no idéntica. Entró para no bajar de ${MINIMO_COMPARABLES} comparables.`
-                          + (row.razones ? ' · ' + row.razones : '')}
-                      >
-                        Actividad relacionada
-                      </span>
-                    )}
+                    {/* ══ El veredicto de actividad, fila por fila ══
+                        Pedido el 2026-09-01: poder validar la actividad antes de generar los
+                        EEFF. El motor SÍ la respeta —la DISTINTA se descarta y la cuota de
+                        negativas admite solo MISMA— pero la tabla no lo mostraba: una fila de
+                        misma actividad no llevaba marca y se veía igual que una que nadie
+                        verificó. El `title` lleva el motivo que escribió la curación, que es lo
+                        único que permite validar el veredicto en vez de creerle. */}
+                    <InsigniaActividad row={row} />
+                    {/* La actividad en sí, que es lo que el informe publica por comparable. */}
+                    <ActividadDeLaComparable row={row} />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}
@@ -2722,7 +3417,28 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     />
                   </td>
                   <td className="py-2 px-3 text-center font-bold text-zinc-800 dark:text-zinc-200">
-                    {row.adjustedPli !== null ? pctf(row.adjustedPli) : '—'}
+                    {(() => {
+                      /* El que decide, grande; el otro debajo, en gris. `useadj` es lo único que
+                         elige cuál sostiene la conclusión, y hasta ahora esa elección no se veía
+                         en ninguna parte de la tabla. */
+                      const decide = useAdj ? row.adjustedPli : row.pli;
+                      const otro = useAdj ? row.pli : row.adjustedPli;
+                      return (
+                        <span className="flex flex-col items-center leading-tight">
+                          <span className={decide !== null && decide < 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}>
+                            {decide !== null ? pctf(decide) : '—'}
+                          </span>
+                          {otro !== null && (
+                            <span
+                              className="text-[10px] text-zinc-400"
+                              title={useAdj ? 'Sin ajustar (no decide)' : 'Ajustado por capital de trabajo (no decide)'}
+                            >
+                              {pctf(otro)}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-2 px-3 text-center">
                     <button

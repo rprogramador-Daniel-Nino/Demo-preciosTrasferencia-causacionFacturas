@@ -300,3 +300,118 @@ test('las correcciones de la ingesta llegan al libro también por la ruta del Mo
   assert.strictEqual(fila[1], -2986236031);
   assert.strictEqual(fila[2], -1095055781);
 });
+
+/* ══════════ La categoría «rigor» se llama igual en todo el libro ══════════
+
+   El filtro de rigor funcional se retiró del motor el 2026-08-10 y su selector salió del paso 2
+   el 2026-09-01. La CATEGORÍA `rigor` sigue muy viva, pero significa otra cosa: todo lo que
+   supera los cuatro filtros objetivos, pasa la curación y simplemente no integra la muestra.
+   Ante la DIAN eso son «diferencias funcionales» (Art. 260-4), y así lo llaman ya la Tabla 16
+   del informe y la hoja del embudo de este mismo libro.
+
+   La hoja «Candidatas rechazadas» seguía llamándola «Rigor funcional», de modo que el mismo
+   archivo se contradecía entre dos hojas y nombraba un control que ya no existe. Quien audite el
+   libro contra el informe no puede encontrar «Rigor funcional» en ninguna parte de la norma. */
+
+test('la hoja de rechazadas llama «Diferencias funcionales» a lo que el embudo llama igual', () => {
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    auditoria: {
+      rechazadas: [
+        { name: 'Alfa SA', id: '1', categoriaRechazo: 'rigor', motivoRechazo: 'No integra la muestra' },
+        { name: 'Beta SA', id: '2', categoriaRechazo: 'filtro', motivoRechazo: 'Holding' },
+        { name: 'Gamma SA', id: '3', categoriaRechazo: 'ia', motivoRechazo: 'Actividad distinta' },
+      ],
+    },
+  });
+  assert.ok(libro.SheetNames.includes('Candidatas rechazadas'), 'la hoja debe existir');
+  const filas = XLSX.utils.sheet_to_json(libro.Sheets['Candidatas rechazadas'], { header: 1, raw: true });
+  const porNombre = Object.fromEntries(filas.slice(1).map((f) => [f[0], f[4]]));
+
+  assert.strictEqual(porNombre['Alfa SA'], 'Diferencias funcionales (Art. 260-4)');
+  assert.strictEqual(porNombre['Beta SA'], 'Filtro (holding/saldo negativo/pérdida)',
+    'las otras dos categorías no cambian');
+  assert.strictEqual(porNombre['Gamma SA'], 'Curación IA');
+});
+
+test('ninguna hoja del libro nombra el rigor funcional retirado', () => {
+  /* Una etiqueta que nombra un control inexistente manda al auditor a buscar un criterio que no
+     puede encontrar ni en el informe ni en la norma. */
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    auditoria: {
+      rechazadas: [{ name: 'Alfa SA', id: '1', categoriaRechazo: 'rigor', motivoRechazo: 'x' }],
+    },
+  });
+  assert.ok(libro.SheetNames.includes('Candidatas rechazadas'), 'la hoja debe existir');
+  libro.SheetNames.forEach((nombre) => {
+    const texto = XLSX.utils.sheet_to_csv(libro.Sheets[nombre]);
+    assert.doesNotMatch(texto, /Rigor funcional/i, `la hoja «${nombre}» todavía lo nombra`);
+  });
+});
+
+/* ══════════ La combinación de selección, declarada en el soporte ══════════
+
+   El motor recorre combinaciones equivalentes numeradas —«Otra combinación» del paso 2— y cada
+   una es reproducible: la misma da siempre la misma muestra. Pero la reproducibilidad tiene que
+   quedar EN EL SOPORTE, no solo en el código: es en el libro donde un revisor la comprueba, y
+   una muestra que no son las doce de mayor puntaje sin nada que lo explique parece arbitraria.
+
+   Solo se declara cuando NO es la primera: en la 1 la muestra son directamente las de mayor
+   puntaje y una fila que lo dijera solo añadiría ruido. */
+
+const hojaSeleccion = (libro) => {
+  assert.ok(libro.SheetNames.includes('Selección comparables'),
+    'la hoja debe existir, o la aserción de abajo pasaría en vacío');
+  return XLSX.utils.sheet_to_csv(libro.Sheets['Selección comparables']);
+};
+
+test('la hoja de selección declara qué combinación se usó y que no es aleatoria', () => {
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    filtros: {
+      ...(PAYLOAD.filtros || {}),
+      selectionFunnel: {
+        ...((PAYLOAD.filtros && PAYLOAD.filtros.selectionFunnel) || {}),
+        alternativa: 3,
+        alternativasDisponibles: 13,
+      },
+    },
+  });
+  const texto = hojaSeleccion(libro);
+  assert.match(texto, /COMBINACIÓN DE SELECCIÓN/);
+  assert.match(texto, /3 de 13/);
+  assert.match(texto, /no es aleatoria/,
+    'lo que responde a «¿por qué estas doce?»: el criterio, no el azar');
+  assert.match(texto, /sustituye las 2 de menor puntaje/,
+    'cuántas cedieron, que es lo que reconstruye la muestra');
+});
+
+test('con la primera combinación no se imprime la fila', () => {
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    filtros: {
+      ...(PAYLOAD.filtros || {}),
+      selectionFunnel: {
+        ...((PAYLOAD.filtros && PAYLOAD.filtros.selectionFunnel) || {}),
+        alternativa: 1,
+        alternativasDisponibles: 13,
+      },
+    },
+  });
+  assert.doesNotMatch(hojaSeleccion(libro), /COMBINACIÓN DE SELECCIÓN/);
+});
+
+test('un estudio corrido antes de que esto existiera no rompe el libro', () => {
+  /* El caso real de un estudio guardado antes: SÍ trae embudo —por eso la hoja se genera— pero
+     no trae el campo `alternativa`, porque no existía cuando se corrió. La hoja tiene que salir
+     igual y sin la fila. */
+  const libro = construirLibroSoporte({
+    ...PAYLOAD,
+    filtros: {
+      ...(PAYLOAD.filtros || {}),
+      selectionFunnel: { evaluadas: 40, validas: 30, politicaPerdidas: 'excluir' },
+    },
+  });
+  assert.doesNotMatch(hojaSeleccion(libro), /COMBINACIÓN DE SELECCIÓN/);
+});

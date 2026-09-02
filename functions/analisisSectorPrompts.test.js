@@ -13,10 +13,32 @@ const {
   construirPromptRedaccionSector,
   parsearRespuestaRedaccionSector,
   armarEntradaAnio,
+  extraerJSON,
 } = require('./analisisSectorPrompts');
 const { URLS_BLOQUEADAS } = require('./urlsBloqueadas');
 
 const URL_BLOQUEADA = [...URLS_BLOQUEADAS][0];
+
+test('extraerJSON tolera una comilla doble sin escapar incrustada en un valor de texto', () => {
+  const texto = '{"tituloSector": "de las telecomunicaciones", '
+    + '"comportamiento": "<p>La empresa adoptó herramientas de "cloud computing" para operar.</p>"}';
+  const obj = extraerJSON(texto);
+  assert.strictEqual(obj.tituloSector, 'de las telecomunicaciones');
+  assert.strictEqual(obj.comportamiento, '<p>La empresa adoptó herramientas de "cloud computing" para operar.</p>');
+});
+
+test('extraerJSON no confunde una coma de puntuación tras una frase citada con el fin de la cadena', () => {
+  const texto = '{"comportamiento": "<p>El sector vive un "boom", según analistas del gremio.</p>"}';
+  const obj = extraerJSON(texto);
+  assert.strictEqual(obj.comportamiento, '<p>El sector vive un "boom", según analistas del gremio.</p>');
+});
+
+test('extraerJSON sigue lanzando cuando el JSON está genuinamente incompleto', () => {
+  assert.throws(
+    () => extraerJSON('{"tituloSector": "de las telecomunicaciones"'),
+    /llaves sin cerrar/
+  );
+});
 
 test('normalizarActividad ignora tildes, mayúsculas y espacios de sobra', () => {
   assert.strictEqual(

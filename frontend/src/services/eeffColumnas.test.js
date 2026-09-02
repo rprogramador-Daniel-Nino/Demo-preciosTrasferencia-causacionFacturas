@@ -76,7 +76,10 @@ test('una frase con dos años entre muchas celdas tampoco lo es', () => {
 });
 
 test('asignarAnios etiqueta las cifras y deja la columna de notas fuera', () => {
-  const enc = encabezadoDeAnios([PFI_ENCABEZADO]);
+  /* El encabezado se valida contra las cifras que trae debajo (ver `cifrasExplicadas`), así
+     que se le pasa la fila de datos junto con él: una fila de años sin nada alineado abajo no
+     se acepta, y con razón — podría ser un título. */
+  const enc = encabezadoDeAnios([PFI_ENCABEZADO, PFI_INVENTARIOS]);
   const anios = asignarAnios(PFI_INVENTARIOS, enc);
   const porTexto = new Map([...anios].map(([c, a]) => [c.texto, a]));
   assert.equal(porTexto.get('7,636,521,401'), '2025');
@@ -88,7 +91,7 @@ test('asignarAnios etiqueta las cifras y deja la columna de notas fuera', () => 
 test('en una fila de subtotal, sin nota, el valor del ejercicio sigue siendo el del ejercicio', () => {
   /* Es el defecto que hacía fallar la lectura: aquí el valor de 2025 está en la celda 1 y en
      la fila de arriba en la celda 2. Por posición no se puede resolver; por columna sí. */
-  const enc = encabezadoDeAnios([PFI_ENCABEZADO]);
+  const enc = encabezadoDeAnios([PFI_ENCABEZADO, PFI_TOTAL_CORRIENTE]);
   const anios = asignarAnios(PFI_TOTAL_CORRIENTE, enc);
   const porTexto = new Map([...anios].map(([c, a]) => [c.texto, a]));
   assert.equal(porTexto.get('14,099,264,924'), '2025');
@@ -194,21 +197,75 @@ test('la cifra del ejercicio ANTERIOR se detecta y se dice cuál era la correcta
   assert.equal(r.esperado.texto, '7,636,521,401');
 });
 
-test('la cifra de la fila vecina se detecta y se nombra el rubro al que pertenece', () => {
+test('la cifra de la fila vecina se corrige con la que dice la fila del rótulo', () => {
+  /* 906.935.410 es el valor de «Otras cuentas por cobrar», la fila de arriba. Antes esto
+     devolvía «otra-fila» y se DESCARTABA el campo; ahora se corrige con lo que el documento
+     imprime en la fila de Inventarios y en la columna de 2025. Vaciar el campo dejaba el
+     estudio sin el dato; corregirlo lo deja bueno, visible y editable, y sale del propio PDF. */
   const r = ubicacionDeCifra(estructuraPFI(), {
     rotulo: 'Inventarios', valor: 906935410, anio: '2025',
   });
-  assert.equal(r.veredicto, 'otra-fila');
-  assert.match(r.rotuloReal, /Otras cuentas por cobrar/);
+  assert.equal(r.veredicto, 'corregible');
+  assert.equal(r.esperado.valor, 7636521401, 'la cifra que sí corresponde');
   assert.equal(r.esperado.texto, '7,636,521,401');
+  assert.match(r.rotuloReal, /Inventarios/, 'y se nombra la fila que la sostiene');
 });
 
-test('el número de una nota no pasa por cifra del rubro', () => {
+test('el número de una nota se corrige con la cifra del rubro', () => {
+  /* 19 es el número de la nota, no una cifra. La fila de Inventarios sí trae su valor de 2025:
+     esa es la que vale. */
   const r = ubicacionDeCifra(estructuraPFI(), {
     rotulo: 'Inventarios', valor: 19, anio: '2025',
   });
-  assert.equal(r.veredicto, 'fuera-de-columna');
-  assert.equal(r.esperado.texto, '7,636,521,401');
+  assert.equal(r.veredicto, 'corregible');
+  assert.equal(r.esperado.valor, 7636521401);
+});
+
+test('con la columna del año en «-» no se corrige: el ejercicio no reporta ese rubro', () => {
+  /* El caso de HH Colombia, «Intangible | 8 | - | 4.146»: 2025 está vacío y 4.146 es de 2024.
+     Aquí NO hay cifra que aplicar, y ponerle la de 2024 sería exactamente el defecto original. */
+  const estructura = estructuraDeFilas([{
+    numero: 1,
+    filas: [
+      fila(700, [celda('2025', 348), celda('2024', 420)]),
+      fila(680, [
+        celda('Inventarios', 180, 120), celda('8', 250, 10),
+        celda('-', 348, 6), celda('4.146', 420, 40),
+      ]),
+      fila(660, [
+        celda('Total activo', 200, 120),
+        celda('9.000', 348, 40), celda('8.000', 420, 40),
+      ]),
+    ],
+  }]);
+  const r = ubicacionDeCifra(estructura, { rotulo: 'Inventarios', valor: 4146, anio: '2025' });
+  assert.equal(r.veredicto, 'otro-anio', 'está en esa fila, pero en la columna de 2024');
+  assert.equal(r.esperado.valor, null, 'y no hay cifra de 2025 con que reemplazarla');
+});
+
+test('un rótulo repetido: manda la fila que sí trae cifra en el año pedido', () => {
+  /* En Llantas Emotion «Cuentas comerciales por cobrar» aparece dos veces —en el activo
+     corriente y en el no corriente—. Quedarse con la primera que aparezca es jugar a los
+     dados; se prefiere la que tiene cifra en la columna del ejercicio. */
+  const estructura = estructuraDeFilas([{
+    numero: 1,
+    filas: [
+      fila(700, [celda('2025', 348), celda('2024', 420)]),
+      fila(680, [
+        celda('Cuentas comerciales por cobrar', 200, 160),
+        celda('-', 348, 6), celda('-', 420, 6),
+      ]),
+      fila(660, [
+        celda('Cuentas comerciales por cobrar', 200, 160),
+        celda('4.003.623.665', 348, 70), celda('3.900.000.000', 420, 70),
+      ]),
+    ],
+  }]);
+  const r = ubicacionDeCifra(estructura, {
+    rotulo: 'Cuentas comerciales por cobrar', valor: 777, anio: '2025',
+  });
+  assert.equal(r.veredicto, 'corregible');
+  assert.equal(r.esperado.valor, 4003623665);
 });
 
 test('un rótulo que la lectura parafraseó no se puede verificar, y no se descarta nada', () => {
@@ -266,4 +323,236 @@ test('dos líneas base separadas por más que la tolerancia son dos filas', () =
   assert.equal(filas.length, 2);
   /* De arriba abajo: en el sistema de coordenadas del PDF la Y crece hacia arriba. */
   assert.deepEqual(filas.map((f) => f.celdas[0].texto), ['Inventarios', 'Efectivo']);
+});
+
+/* ══════════ Llantas Emotion: el encabezado con columnas de más ══════════
+
+   Caso real, 2026-08-31, y el que destapó dos defectos que se componían. Su estado de
+   resultados encabeza con `Notas | 2025 | 2024 | VARIACION | %`: cinco celdas y dos años.
+   La guarda «los años son la mitad o más de las celdas» lo rechazaba —2 × 2 < 5—, así que la
+   página entera quedaba sin columnas y la fila buena de COSTO DE VENTAS nunca era candidata.
+   Después, el barrido por las 49 páginas encontraba la misma cifra en una nota y declaraba que
+   pertenecía a otra fila: se descartaba una cifra CORRECTA, comprobable contra la identidad del
+   propio estado (35.850.121.412 − 33.136.894.215 − 9.457.526.064 = −6.744.298.867).
+
+   Las posiciones son las medidas en el PDF, incluida la desalineación del encabezado: el
+   rótulo «2025» cierra en 259 y sus cifras en 284. */
+const EMOTION_ENCABEZADO = fila(660, [
+  celda('Notas', 211, 30), celda('2025', 259, 26), celda('2024', 385, 26),
+  celda('VARIACION', 512, 60), celda('%', 560, 10),
+]);
+const EMOTION_INGRESOS = fila(640, [
+  celda('INGRESOS DE ACTIVIDADES ORDINARIAS', 176, 170), celda('23', 205, 12),
+  celda('35.850.121.412', 284, 70), celda('41.116.461.229', 412, 70),
+  celda('-', 456, 6), celda('5.266.339.817', 525, 65),
+]);
+const EMOTION_COSTO = fila(620, [
+  celda('COSTO DE VENTAS', 98, 90), celda('24', 205, 12),
+  celda('33.136.894.215', 284, 70), celda('37.270.742.614', 412, 70),
+  celda('-', 456, 6), celda('4.133.848.399', 525, 65),
+]);
+
+test('un encabezado con columnas de más (Notas, VARIACION, %) SÍ es un encabezado', () => {
+  /* La guarda de proporción rechazaba este encabezado real y con él toda la página. */
+  const enc = encabezadoDeAnios([EMOTION_ENCABEZADO, EMOTION_INGRESOS, EMOTION_COSTO]);
+  assert.ok(enc, 'debe reconocerse');
+  assert.deepEqual(enc.columnas.map((c) => c.anio), ['2025', '2024']);
+});
+
+test('las cifras se atribuyen bien aunque el rótulo del año no esté alineado con ellas', () => {
+  /* «2025» cierra en 259 y sus cifras en 284: 25 puntos de desfase, dentro de la tolerancia
+     que sale de la propia separación entre columnas. */
+  const enc = encabezadoDeAnios([EMOTION_ENCABEZADO, EMOTION_INGRESOS, EMOTION_COSTO]);
+  const anios = asignarAnios(EMOTION_COSTO, enc);
+  const porTexto = new Map([...anios].map(([c, a]) => [c.texto, a]));
+  assert.equal(porTexto.get('33.136.894.215'), '2025');
+  assert.equal(porTexto.get('37.270.742.614'), '2024');
+  assert.equal(porTexto.get('24'), undefined, 'el número de la nota no es cifra del ejercicio');
+  assert.equal(porTexto.get('4.133.848.399'), undefined, 'ni la columna de variación');
+});
+
+test('el costo de ventas de Llantas Emotion se verifica en su fila, no se descarta', () => {
+  const estructura = estructuraDeFilas([{
+    numero: 2,
+    filas: [
+      fila(700, [celda('ESTADO DE RESULTADOS', 359, 140)]),
+      EMOTION_ENCABEZADO, EMOTION_INGRESOS, EMOTION_COSTO,
+    ],
+  }]);
+  const u = ubicacionDeCifra(estructura, {
+    rotulo: 'COSTO DE VENTAS', valor: 33136894215, anio: 2025,
+  });
+  assert.equal(u.veredicto, 'coincide');
+});
+
+test('la misma cifra repetida en una nota NO convierte la lectura buena en «otra fila»', () => {
+  /* El barrido por todo el documento encontraba 33.136.894.215 en la nota 24 —donde el
+     maquetado usa comas— y con eso descartaba la cifra del estado de resultados. En un
+     documento de 49 páginas cada cifra del estado aparece también en su nota: buscar el
+     número por todo el archivo no puede decidir nada. */
+  const estructura = estructuraDeFilas([
+    {
+      numero: 2,
+      filas: [EMOTION_ENCABEZADO, EMOTION_INGRESOS, EMOTION_COSTO],
+    },
+    {
+      /* La nota, con su propio encabezado y la cifra desglosada bajo otro rótulo. */
+      numero: 24,
+      filas: [
+        fila(660, [celda('2025', 300, 26), celda('2024', 420, 26)]),
+        fila(640, [
+          celda('Compras de mercancía', 150, 130),
+          celda('33,136,894,215', 300, 70), celda('37,270,742,614', 420, 70),
+        ]),
+      ],
+    },
+  ]);
+  const u = ubicacionDeCifra(estructura, {
+    rotulo: 'COSTO DE VENTAS', valor: 33136894215, anio: 2025,
+  });
+  assert.equal(u.veredicto, 'coincide', 'manda la fila de su propio rótulo');
+});
+
+test('el encabezado no puede ser candidato a fila de datos', () => {
+  /* Se vio en pruebas: el aviso decía «en esa fila, el ejercicio 2025 dice 2025». La fila del
+     encabezado entraba como candidata y su celda de la columna 2025 contiene el texto «2025». */
+  const estructura = estructuraDeFilas([{
+    numero: 2, filas: [EMOTION_ENCABEZADO, EMOTION_INGRESOS, EMOTION_COSTO],
+  }]);
+  const u = ubicacionDeCifra(estructura, { rotulo: '2025', valor: 2025, anio: 2025 });
+  assert.equal(u.veredicto, 'sin-verificar', 'no se afirma nada sobre el propio encabezado');
+});
+
+test('cuando la fila del rótulo dice otra cifra, se ofrece la del documento en vez de descartar', () => {
+  /* Descartar deja el campo vacío y el estudio sin margen; corregir con lo que el documento
+     imprime en esa fila y esa columna deja el número bueno, visible y editable. Es información
+     del propio PDF, no una interpretación. */
+  const estructura = estructuraDeFilas([{
+    numero: 2, filas: [EMOTION_ENCABEZADO, EMOTION_INGRESOS, EMOTION_COSTO],
+  }]);
+  const u = ubicacionDeCifra(estructura, {
+    rotulo: 'COSTO DE VENTAS', valor: 99999999999, anio: 2025,
+  });
+  assert.equal(u.veredicto, 'corregible');
+  assert.equal(u.esperado.valor, 33136894215, 'y trae la cifra que sí está en esa fila');
+});
+
+test('una fila de años sin cifras alineadas debajo NO se toma por encabezado', () => {
+  /* Es lo que sustituye a la guarda de proporción: en vez de contar celdas, se comprueba
+     contra el propio documento. Un título con dos años y nada alineado debajo no explica
+     ninguna cifra, y anotar con él correría todas las columnas. */
+  const soloAnios = fila(700, [celda('2025', 348), celda('2024', 420)]);
+  assert.equal(encabezadoDeAnios([soloAnios]), null);
+});
+
+test('entre dos filas de años gana la que explica las cifras del documento', () => {
+  /* Caso real de riesgo: un título que menciona los ejercicios ANTES del encabezado de la
+     tabla. Antes mandaba el primero que apareciera; ahora manda el que cuadra con las cifras. */
+  const tituloConAnios = fila(760, [celda('2025', 120, 26), celda('2024', 170, 26)]);
+  const enc = encabezadoDeAnios([tituloConAnios, PFI_ENCABEZADO, PFI_INVENTARIOS, PFI_TOTAL_CORRIENTE]);
+  assert.ok(enc);
+  assert.equal(enc.y, PFI_ENCABEZADO.y, 'el encabezado de la tabla, no el del título');
+  assert.equal(enc.columnas[0].derecha, 348);
+});
+
+/* ══════════ Corriente y no corriente ══════════
+
+   Lo fijó el usuario el 2026-08-31: las cuentas por cobrar, las por pagar y los inventarios
+   se toman del activo y del pasivo CORRIENTES. Es la distinción que decide entre dos filas
+   con el MISMO rótulo, y equivocarse no vacía el campo: lo llena con una cifra creíble del
+   bloque que no es, que no se nota al revisar. */
+
+/* El balance de dos paneles de Llantas Emotion, reducido a lo que importa: el rótulo repetido
+   en corriente y en no corriente. La fila «CORRIENTES | CORRIENTES» es literal del documento
+   —una para el activo y otra para el pasivo, en la misma línea—. */
+const estructuraDosBloques = () => estructuraDeFilas([{
+  numero: 1,
+  filas: [
+    fila(720, [celda('ACTIVOS', 120, 60), celda('2025', 300, 26), celda('2024', 420, 26)]),
+    fila(700, [celda('CORRIENTES', 130, 70)]),
+    fila(680, [
+      celda('Cuentas comerciales por cobrar', 200, 160),
+      celda('4.003.623.665', 300, 70), celda('6.847.838.474', 420, 70),
+    ]),
+    fila(660, [celda('NO CORRIENTES', 150, 90)]),
+    fila(640, [
+      celda('Cuentas comerciales por cobrar', 200, 160),
+      celda('3.697.232.608', 300, 70), celda('4.713.236.712', 420, 70),
+    ]),
+  ],
+}]);
+
+test('con el rótulo repetido, la subsección pedida decide cuál fila manda', () => {
+  const est = estructuraDosBloques();
+  const corriente = ubicacionDeCifra(est, {
+    rotulo: 'Cuentas comerciales por cobrar', valor: 1, anio: '2025', subseccion: 'CORRIENTE',
+  });
+  assert.equal(corriente.veredicto, 'corregible');
+  assert.equal(corriente.esperado.valor, 4003623665, 'la del activo corriente');
+
+  const noCorriente = ubicacionDeCifra(est, {
+    rotulo: 'Cuentas comerciales por cobrar', valor: 1, anio: '2025', subseccion: 'NO CORRIENTE',
+  });
+  assert.equal(noCorriente.esperado.valor, 3697232608, 'y la otra si se pide la otra');
+});
+
+test('la cifra del bloque corriente se acepta y la del no corriente se corrige', () => {
+  const est = estructuraDosBloques();
+  const buena = ubicacionDeCifra(est, {
+    rotulo: 'Cuentas comerciales por cobrar', valor: 4003623665, anio: '2025', subseccion: 'CORRIENTE',
+  });
+  assert.equal(buena.veredicto, 'coincide');
+  /* Y la del no corriente, atribuida al campo de capital de trabajo, se corrige en vez de
+     colarse: es exactamente lo que pasaba antes en Llantas Emotion. */
+  const mala = ubicacionDeCifra(est, {
+    rotulo: 'Cuentas comerciales por cobrar', valor: 3697232608, anio: '2025', subseccion: 'CORRIENTE',
+  });
+  assert.equal(mala.veredicto, 'corregible');
+  assert.equal(mala.esperado.valor, 4003623665);
+});
+
+test('sin subsección pedida no se filtra nada', () => {
+  const u = ubicacionDeCifra(estructuraDosBloques(), {
+    rotulo: 'Cuentas comerciales por cobrar', valor: 3697232608, anio: '2025',
+  });
+  assert.equal(u.veredicto, 'coincide', 'las dos filas siguen siendo válidas');
+});
+
+test('si el documento no rotula sus bloques, la preferencia no descarta la fila', () => {
+  /* Es una preferencia, no un filtro: exigirla dejaría el campo vacío en todo estado que no
+     imprima «CORRIENTES», que son muchos. */
+  const est = estructuraDeFilas([{
+    numero: 1,
+    filas: [
+      fila(720, [celda('ACTIVOS', 120, 60), celda('2025', 300, 26), celda('2024', 420, 26)]),
+      fila(680, [
+        celda('Inventarios', 200, 120),
+        celda('21.381.500.956', 300, 70), celda('22.101.221.597', 420, 70),
+      ]),
+    ],
+  }]);
+  const u = ubicacionDeCifra(est, {
+    rotulo: 'Inventarios', valor: 21381500956, anio: '2025', subseccion: 'CORRIENTE',
+  });
+  assert.equal(u.veredicto, 'coincide');
+});
+
+test('una sección nueva reinicia la subsección', () => {
+  /* En un balance vertical el «CORRIENTES» del activo no puede seguir rigiendo cuando empieza
+     el pasivo: si lo hiciera, una cuenta por pagar del bloque no corriente quedaría marcada
+     como corriente. */
+  const est = estructuraDeFilas([{
+    numero: 1,
+    filas: [
+      fila(760, [celda('ACTIVOS', 120, 60), celda('2025', 300, 26), celda('2024', 420, 26)]),
+      fila(740, [celda('CORRIENTES', 130, 70)]),
+      fila(720, [celda('Inventarios', 200, 120), celda('100', 300, 30), celda('90', 420, 30)]),
+      fila(700, [celda('PASIVOS', 120, 60)]),
+      fila(680, [celda('Cuentas comerciales por pagar', 200, 160), celda('50', 300, 30), celda('40', 420, 30)]),
+    ],
+  }]);
+  const filas = est.paginas[0].conSeccion;
+  const pagar = filas.find((f) => /pagar/i.test(f.fila.celdas[0].texto));
+  assert.equal(pagar.seccion, 'PASIVO');
+  assert.equal(pagar.subseccion, null, 'el CORRIENTES del activo no se arrastra al pasivo');
 });
