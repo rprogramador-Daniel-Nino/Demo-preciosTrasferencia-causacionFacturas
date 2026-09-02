@@ -481,18 +481,28 @@ test('la fórmula de cada fila de estadística apunta a su propia columna y a su
       revisadas++;
     });
 
-    /* La Conclusión: el contribuyente dentro del rango, con el P25 abajo y el P75 arriba,
-       en esa dirección y sobre la columna de su propio sabor. */
+    /* La Conclusión: el contribuyente POR ENCIMA de su propio P25, sobre la columna de su
+       propio sabor.
+
+       El criterio cambió el 2026-09-02, por decisión del despacho con su contador: cumple
+       quien está sobre el primer cuartil, sin techo. Antes la fórmula exigía AND(>=P25, <=P75),
+       y con el indicador sobre el tercer cuartil la celda decía «NO CUMPLE» — el ajuste de
+       precios de transferencia solo procede cuando el contribuyente declaró MENOS utilidad de
+       la que corresponde, así que por encima no hay nada que declarar.
+
+       Esta prueba se conserva palabra por palabra en lo demás: sigue verificando que cada
+       columna apunte a SUS celdas y no a las del sabor de al lado, que es el defecto que vino
+       a cerrar. Lo único que cambia es el criterio, y tiene que cambiar aquí también porque el
+       libro no puede contradecir al informe que sustenta. */
     const filaTested = filaDe('Indicador del contribuyente');
     const filaP25 = filaDe('P25 (cuartil inferior)');
-    const filaP75 = filaDe('P75 (cuartil superior)');
     LETRAS_SERIE.forEach((L, k) => {
       const rango = `${L}${primera}:${L}${ultima}`;
-      const esperada = `IF(COUNT(${rango})<3,"",IF(AND(${L}${filaTested}>=${L}${filaP25},`
-        + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE"))`;
+      const esperada = `IF(COUNT(${rango})<3,"",IF(${L}${filaTested}>=${L}${filaP25},`
+        + '"CUMPLE","NO CUMPLE"))';
       assert.strictEqual(celdaDe('Conclusión', k).f, esperada,
         `${metodo}/${SABORES[k]}: la fórmula de la Conclusión no compara el contribuyente `
-        + 'contra su propio P25 y P75');
+        + 'contra su propio P25');
       revisadas++;
     });
   });

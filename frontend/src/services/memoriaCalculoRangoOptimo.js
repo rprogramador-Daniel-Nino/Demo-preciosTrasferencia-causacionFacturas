@@ -668,9 +668,14 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
            única celda donde el libro y el informe difieren a propósito, y la prueba de
            paridad entre ambos la excluye por este motivo. */
         const st = porSabor[k].stats;
+        /* EL CRITERIO ES ESTAR POR ENCIMA DEL PRIMER CUARTIL, y la formula del libro tiene que
+           ser la misma que aplica el codigo (`cumpleElRango` en utils/calculations.js).
+           Antes exigia AND(>=P25, <=P75): con el indicador sobre el tercer cuartil la celda
+           decia «NO CUMPLE» mientras el informe —tras el cambio de criterio del 2026-09-02—
+           dice «CUMPLE», y el soporte contradeciria al documento que sustenta. El ajuste solo
+           procede cuando el contribuyente declaro MENOS utilidad de la que corresponde. */
         fila.push(cForT(conGuarda(L,
-          `IF(AND(${L}${filaTested}>=${L}${filaP25},`
-          + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE")`),
+          `IF(${L}${filaTested}>=${L}${filaP25},"CUMPLE","NO CUMPLE")`),
           st ? porSabor[k].cumple : ''));
       });
       celdas.push(fila);

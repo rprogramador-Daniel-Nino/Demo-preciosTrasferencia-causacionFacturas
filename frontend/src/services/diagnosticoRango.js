@@ -22,7 +22,7 @@
    pantalla solo pinta. Es lo que permite probar cada palanca sin montar el componente.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { num, pliOf, adjustInfo, segmentacionDesajuste } from '../utils/calculations.js';
+import { num, pliOf, adjustInfo, segmentacionDesajuste, cumpleElRango } from '../utils/calculations.js';
 import { analizarRango, margenQueDecide } from './rangoIntercuartil.js';
 import { analizarRangoAjustado } from './ajusteRangoCapitalTrabajo.js';
 import { enPerdida, gradoDeActividad } from './comparablesEngine.js';
@@ -100,7 +100,11 @@ const AMBITOS = [
 function dentro(stats, indicador) {
   if (!stats || indicador === null || indicador === undefined) return false;
   if (!(stats.p75 > stats.p25)) return false;
-  return indicador >= stats.p25 && indicador <= stats.p75;
+  /* La MISMA regla que decide el veredicto —por encima del primer cuartil—, importada de
+     `utils/calculations.js`. Una palanca que se midiera con otro criterio prometeria un
+     cumplimiento que la tarjeta no iba a confirmar. La guarda del rango degenerado se conserva:
+     es de esta funcion y no del criterio. */
+  return cumpleElRango(stats, indicador);
 }
 
 /** El indicador del contribuyente con el mismo criterio que la tarjeta: `pliOf` sobre las

@@ -38,7 +38,7 @@
    con END GAME al quinto decimal.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { num, egreso } from '../utils/calculations.js';
+import { num, egreso, cumpleElRango } from '../utils/calculations.js';
 
 /* Los seis ajustes del modelo, en el mismo orden y con las mismas etiquetas que
    las columnas de las hojas de método del Excel. 'ninguno' es el rango sin ajuste
@@ -412,7 +412,9 @@ export function analizarRangoAjustado(estudio, metodo, ajuste) {
 
   let cumple = 'CUMPLE'; // comportamiento heredado: sin rango, CUMPLE
   if (stats && sujeto !== null) {
-    cumple = sujeto >= stats.p25 && sujeto <= stats.p75 ? 'CUMPLE' : 'NO CUMPLE';
+    /* La MISMA regla que `adjustInfo`, importada y no recopiada: por encima del primer
+       cuartil. Ver `cumpleElRango` en `utils/calculations.js`. */
+    cumple = cumpleElRango(stats, sujeto) ? 'CUMPLE' : 'NO CUMPLE';
   }
 
   return { stats, filas, cumple, sujeto, metodo: kind, ajuste: tipo };

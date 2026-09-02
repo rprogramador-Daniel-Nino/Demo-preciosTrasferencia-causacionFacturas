@@ -3100,12 +3100,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 adjustment.within ? (
                   <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold text-lg">
                     <ShieldCheck className="w-5 h-5" />
-                    CUMPLE (Dentro del rango)
+                    {/* El criterio es estar SOBRE el primer cuartil, sin techo (2026-09-02), así
+                        que «Dentro del rango» ya no describe todos los casos que cumplen: un
+                        indicador sobre el tercer cuartil cumple y NO está dentro. Decir «dentro»
+                        ahí seria falso en la propia pantalla que lo calcula. */}
+                    {adjustment.sobreP75
+                      ? 'CUMPLE (sobre el tercer cuartil)'
+                      : 'CUMPLE (dentro del rango)'}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-red-600 dark:text-rose-400 font-bold text-lg">
                     <ShieldAlert className="w-5 h-5" />
-                    NO CUMPLE ({adjustment.dir})
+                    NO CUMPLE (por debajo del primer cuartil)
                   </div>
                 )
               ) : (
@@ -3135,6 +3141,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               <p className="text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
                 Cumple con <strong>{pctf(diagnostico.colchon)}</strong> de holgura sobre el primer
                 cuartil
+                {/* Sobre el tercer cuartil no hay ajuste que declarar, pero conviene mirar el
+                    metodo: un margen muy por encima del mercado comparable puede senalar que la
+                    parte examinada o el indicador no son los adecuados. No es incumplimiento. */}
+                {adjustment && adjustment.sobreP75 && diagnostico.stats
+                  ? <span className="text-zinc-500">{' '}· queda por encima del tercer cuartil
+                    ({pctf(diagnostico.stats.p75)}): no hay ajuste que declarar, pero vale
+                    revisar si el indicador y la parte examinada son los adecuados</span>
+                  : null}
                 {diagnostico.colchon < 0.005
                   ? <span className="text-amber-700 dark:text-amber-400"> · queda al filo: una corrección de cifras puede sacarlo del rango</span>
                   : null}

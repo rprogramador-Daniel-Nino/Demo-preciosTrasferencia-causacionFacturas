@@ -235,10 +235,39 @@ export function ratios(o) {
    sobre la misma serie los dos publicaban números distintos. Se retiró al quedarse sin
    llamadores para que no haya dos definiciones del rango intercuartil. */
 
+/**
+ * EL CRITERIO DE CUMPLIMIENTO: el indicador por encima del primer cuartil.
+ *
+ * Decision del despacho, con su contador, el 2026-09-02: «el modo de decidir que esta
+ * cumpliendo es que este por encima del p25». Antes se exigia estar DENTRO del rango
+ * (P25 <= PLI <= P75), de modo que un contribuyente por encima del tercer cuartil salia como
+ * «NO CUMPLE (por encima)».
+ *
+ * POR QUE ES COHERENTE CON LO QUE EL SISTEMA YA CALCULABA. El ajuste de precios de
+ * transferencia solo procede cuando el contribuyente declaro MENOS utilidad de la que
+ * corresponde: por encima del rango no hay nada que cobrarle al contribuyente. Y `adjustInfo`
+ * ya lo trataba asi —con el indicador sobre la mediana, `raw` sale negativo y el ajuste queda
+ * marcado improcedente con monto cero—, asi que el sistema ya concluia que no habia ajuste que
+ * declarar mientras la etiqueta decia lo contrario. Lo que cambio es la etiqueta.
+ *
+ * VIVE AQUI Y SE IMPORTA. Habia CINCO copias de la condicion —esta, `analizarRangoAjustado`,
+ * el `dentro` del diagnostico, el de la memoria del rango y una formula de Excel—, y el
+ * 2026-09-02 ya se pago un defecto por dos definiciones que divergieron. Con la regla en un
+ * solo sitio no pueden volver a decir cosas distintas.
+ */
+export function cumpleElRango(st, indicador) {
+  if (!st || indicador === null || indicador === undefined || Number.isNaN(indicador)) return false;
+  if (st.p25 === null || st.p25 === undefined) return false;
+  return indicador >= st.p25;
+}
+
 export function adjustInfo(T, tPLI, st, base, unitMult, egresoValue = null) {
   if (!st || tPLI === null) return null;
-  const within = tPLI >= st.p25 && tPLI <= st.p75;
-  if (within) return { within: true, raw: 0, capped: 0, flag: false };
+  /* Sobre el tercer cuartil NO es incumplimiento, pero si es informativo: puede indicar que el
+     metodo o la parte examinada no son los adecuados. Se reporta como observacion. */
+  const sobreP75 = st.p75 !== null && st.p75 !== undefined && tPLI > st.p75;
+  const within = cumpleElRango(st, tPLI);
+  if (within) return { within: true, raw: 0, capped: 0, flag: false, sobreP75 };
   
   let raw = (st.med - tPLI) * base * unitMult;
   /* Renombrado desde `egreso` para no sombrear el helper del mismo nombre que
@@ -258,6 +287,7 @@ export function adjustInfo(T, tPLI, st, base, unitMult, egresoValue = null) {
   }
   return {
     within: false,
+    sobreP75,
     raw,
     capped,
     flag,

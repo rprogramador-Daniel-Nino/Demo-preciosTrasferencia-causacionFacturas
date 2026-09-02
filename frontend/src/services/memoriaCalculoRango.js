@@ -12,7 +12,7 @@
    produciría una memoria de cálculo que no explica el número que se está mostrando, que
    es peor que no tener memoria. */
 
-import { num, pliOf, ratios } from '../utils/calculations.js';
+import { num, pliOf, ratios, cumpleElRango } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
 import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 
@@ -129,8 +129,11 @@ export function construirMemoriaRango(estudio) {
     ? { p25: cuartiles.p25.valor, med: cuartiles.mediana.valor, p75: cuartiles.p75.valor }
     : null;
 
+  /* La MISMA regla que la tarjeta y el informe, importada de `utils/calculations.js`: por
+     encima del primer cuartil. Con su propia copia, esta memoria ya habia divergido una vez
+     (2026-09-02, por la serie ajustada), y el modal existe para explicar el veredicto. */
   const dentro = stats && pliContribuyente !== null
-    ? pliContribuyente >= stats.p25 && pliContribuyente <= stats.p75
+    ? cumpleElRango(stats, pliContribuyente)
     : null;
 
   const advertencias = [];
