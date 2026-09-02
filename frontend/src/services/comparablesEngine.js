@@ -646,6 +646,53 @@ export const CLAVE_RESERVA = 'actividadDistinta';
 export const MOTIVO_RESERVA = 'Supera los filtros objetivos pero no integra la muestra: '
   + 'menor grado de comparabilidad funcional frente a la parte examinada (Art. 260-4 E.T.).';
 
+/* ── INTENSIDAD DE CAPITAL DE TRABAJO ──
+   Cuanto capital de trabajo mueve una compañia por peso de venta:
+   (CxC + Inventario − CxP) / ventas.
+
+   POR QUE ES UN FACTOR DE COMPARABILIDAD. El ajuste de capital de trabajo existe para corregir
+   diferencias residuales en esta dimension, y su tamaño mide cuanto habia que corregir: un
+   ajuste de diez puntos es la señal de que las comparables no eran comparables ahi. Medido en
+   el caso reportado el 2026-09-02, sobre el mismo cribado y variando SOLO esta intensidad:
+
+     comparables con intensidad muy baja     el ajuste desplaza el rango  +4,45 pt
+     con la mitad de la del contribuyente                                 +2,37 pt
+     con intensidad parecida (±10 %)                                      +0,24 pt
+     con la misma intensidad                                              +0,00 pt
+
+   Asi que preferir las que necesitan poco ajuste no es elegir por resultado: es elegir las que
+   de verdad se parecen (Art. 260-4 E.T.; Guias OCDE cap. III), y produce un estudio que se
+   sostiene mejor ante un revisor que uno con un ajuste enorme.
+
+   ES UNA PREFERENCIA, NO UN FILTRO: pondera el puntaje, como la geografia y el tamaño.
+   Descartar por capital de trabajo dejaria fuera compañias de la misma actividad por una
+   dimension secundaria, y en un cribado sin esas columnas vaciaria la muestra.
+
+   `null` cuando faltan las tres partidas: no saber no es lo mismo que ser distinta. */
+function intensidadCapitalTrabajo(o) {
+  const s = num(o && o.s);
+  if (s === null || !s) return null;
+  const ar = num(o.ar), inv = num(o.inv), ap = num(o.ap);
+  if (ar === null && inv === null && ap === null) return null;
+  return ((ar || 0) + (inv || 0) - (ap || 0)) / s;
+}
+
+/* Cuanto pesa esta dimension en el puntaje. Menos que la actividad y el perfil funcional —los
+   que la norma nombra primero— y del orden del tamaño y la geografia, que son los otros dos
+   factores de circunstancias economicas. */
+const PESO_CAPITAL_TRABAJO = 0.10;
+
+/* Con que brecha de intensidad el factor llega a cero. Media vuelta de venta (0,5) es mucho: a
+   partir de ahi el ajuste que haria falta es tan grande que la comparable ya no describe la
+   misma realidad economica. */
+const INTENSIDAD_MAXIMA_TOLERADA = 0.5;
+
+/* Lo que recibe quien no trae los datos: el punto medio. Penalizarla castigaria a toda la
+   muestra en un cribado sin esas columnas —el caso de la exportacion de Capital IQ del
+   2026-09-01, que no traia ninguna de las cuatro—; premiarla la pondria por delante de una que
+   si se pudo verificar. */
+const FACTOR_CAPITAL_TRABAJO_SIN_DATOS = 0.5;
+
 export function scoreCandidates(candidates, config, companyActivity = '', priorComps = [], contexto = {}) {
   const {
     nTarget = 12,
@@ -675,6 +722,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 
   const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
   const ventasTP = num(contexto.ventasParteExaminada);
+  /* La intensidad de capital de trabajo del contribuyente: la vara del factor nuevo. Llega como
+     ratios ya calculados y no como saldos, porque el llamador tiene las cifras del estudio y
+     aqui solo se comparan; asi este motor no necesita saber que campo del estudio es cual.
+     `null` cuando el llamador no la manda, y entonces la dimension no puntua. */
+  const ctTP = contexto.capitalTrabajoParteExaminada || null;
+  const intensidadTP = ctTP
+    ? ((num(ctTP.ar) || 0) + (num(ctTP.inv) || 0) - (num(ctTP.ap) || 0))
+    : null;
   /* El margen de la parte examinada, para ordenar la cuota de negativas por cercanía. Puede
      faltar —un estudio sin cifras cargadas todavía—, y entonces la cuota degrada al orden por
      puntaje: elegir por cercanía a un número que no existe sería inventar. */
@@ -826,17 +881,32 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       fRent = Math.max(0, 1 - Math.min(1, Math.abs(pli - medianaPool) / 0.5));
     }
 
+    /* ── capital de trabajo: cuanto ajuste haria falta para poder compararla ── */
+    const intensidadCand = intensidadCapitalTrabajo(cand);
+    let fCapTrabajo = FACTOR_CAPITAL_TRABAJO_SIN_DATOS;
+    if (intensidadTP !== null && intensidadCand !== null) {
+      const brecha = Math.abs(intensidadCand - intensidadTP);
+      fCapTrabajo = Math.max(0, 1 - Math.min(1, brecha / INTENSIDAD_MAXIMA_TOLERADA));
+    }
+
     /* Pesos dinámicos: con actividad detectada el nicho manda. */
     const hayAct = act.hayActividad;
-    const wPerfil = hayAct ? 0.20 : 0.35;
-    const wEspecialidad = hayAct ? 0.40 : 0.15;
-    const wGeo = hayAct ? 0.10 : 0.15;
-    const wTamano = hayAct ? 0.15 : 0.20;
-    const wRent = 0.15;
+    /* Los cinco pesos de siempre, REESCALADOS para dejarle sitio al capital de trabajo sin que
+       la suma pase de 1. Sin reescalar, agregar un factor subiria el puntaje de todas y el tope
+       de `Math.min(1, ...)` empezaria a aplanar a las mejores, que es como se pierde la
+       capacidad de ordenar justo en la cabeza de la lista. El reparto RELATIVO entre los cinco
+       no cambia, asi que el orden que producian entre ellos se conserva. */
+    const escala = 1 - PESO_CAPITAL_TRABAJO;
+    const wPerfil = (hayAct ? 0.20 : 0.35) * escala;
+    const wEspecialidad = (hayAct ? 0.40 : 0.15) * escala;
+    const wGeo = (hayAct ? 0.10 : 0.15) * escala;
+    const wTamano = (hayAct ? 0.15 : 0.20) * escala;
+    const wRent = 0.15 * escala;
 
     const score = Math.min(1,
       wPerfil * fPerfil + wEspecialidad * fEspecialidad + wGeo * fGeo +
-      wTamano * fTamano + wRent * fRent + (esContinuidad ? 0.08 : 0)
+      wTamano * fTamano + wRent * fRent + PESO_CAPITAL_TRABAJO * fCapTrabajo +
+      (esContinuidad ? 0.08 : 0)
     );
 
     const razones = [
@@ -854,7 +924,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       perfilFuncional: perfil,
       perfilOrigen,
       score,
-      factores: { perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano, rentabilidad: fRent },
+      factores: {
+        perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano,
+        rentabilidad: fRent, capitalTrabajo: fCapTrabajo,
+      },
+      /* La intensidad medida, para que la tabla la muestre al lado del factor: el numero explica
+         el factor, y sin el hay que creerselo. */
+      intensidadCapitalTrabajo: intensidadCand,
       razones,
       esContinuidad,
       gradoActividad: grado || '',
@@ -1138,6 +1214,22 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        muestra: con el cribado y este numero se reconstruye exactamente la misma seleccion. */
     alternativa,
     alternativasDisponibles,
+    /* ── LA DIMENSION QUE EXPLICA EL AJUSTE ──
+       Si el ajuste desplaza el rango diez puntos, el problema del estudio no es la muestra: es
+       que las comparables no se parecen al contribuyente en capital de trabajo. Estos numeros
+       permiten decirlo con evidencia en vez de sospecharlo. */
+    capitalTrabajo: (() => {
+      const conDatos = seleccionadas.filter((c) => intensidadCapitalTrabajo(c) !== null);
+      const media = conDatos.length
+        ? conDatos.reduce((a, c) => a + intensidadCapitalTrabajo(c), 0) / conDatos.length
+        : null;
+      return {
+        conDatos: conDatos.length,
+        total: seleccionadas.length,
+        intensidadMediaMuestra: media,
+        intensidadParteExaminada: intensidadTP,
+      };
+    })(),
     /* Conteo por etapa, calculado aquí y no en la UI: son categorías del motor y
        deducirlas del texto del motivo obligaba a mantener una expresión regular en
        el componente, que se desincronizaba en cuanto cambiaba una redacción. */

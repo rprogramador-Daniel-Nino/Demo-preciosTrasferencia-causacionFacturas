@@ -222,12 +222,47 @@ export function diagnosticarCumplimiento({
   const tasaAjuste = num(study.prime) || 0;
   const ajusteAnulado = !tasaAjuste;
 
+  /* ── CUANTO DESPLAZA EL AJUSTE EL RANGO, Y HACIA DONDE ──
+     El numero que explica por que un estudio no cumple cuando la muestra parece razonable. El
+     cumplimiento se concluye sobre el rango ajustado, asi que si el ajuste mueve el primer
+     cuartil diez puntos, el problema NO es que falten comparables: es que las que hay no se
+     parecen al contribuyente en capital de trabajo, y el ajuste esta corrigiendo una diferencia
+     que no deberia ser tan grande.
+
+     Medido en el caso reportado el 2026-09-02, variando solo la intensidad de las comparables:
+     con intensidad parecida el desplazamiento cae de +4,45 pt a +0,24 pt y el rango ajustado
+     converge al crudo. De ahi el factor de comparabilidad nuevo en `comparablesEngine.js`.
+
+     `null` cuando falta alguno de los dos rangos: sin los dos no hay diferencia que medir. */
+  const desplazamientoAjuste = (conAjuste.stats && sinAjuste.stats)
+    ? conAjuste.stats.p25 - sinAjuste.stats.p25
+    : null;
+  /* Cuando el desplazamiento es lo que deja fuera al contribuyente, decirlo cambia la accion:
+     no hay que buscar mas comparables, hay que buscar comparables PARECIDAS en esa dimension. */
+  const elAjusteEsElProblema = Boolean(
+    desplazamientoAjuste !== null && desplazamientoAjuste > 0
+    && sinAjuste.stats && conAjuste.stats
+    && indicador !== null
+    && cumpleElRango(sinAjuste.stats, indicador)
+    && !cumpleElRango(conAjuste.stats, indicador),
+  );
+
   return {
     cumple,
     colchon,
     /* `true` cuando el rango ajustado no puede ajustar nada. La pantalla lo pinta como aviso,
        porque invalida la vara con la que se concluye. */
     ajusteAnulado,
+    /* Cuanto mueve el ajuste el primer cuartil, y si es eso lo que deja fuera al contribuyente. */
+    desplazamientoAjuste,
+    elAjusteEsElProblema,
+    /* La banda de rentabilidad para pegar en el screening del paso 1, en margen SIN ajustar.
+       Solo cuando no cumple: si cumple no hay nada que buscar. */
+    banda: (cumple || !hayVeredicto) ? null : bandaParaCribado({
+      statsAjustado: conAjuste.stats,
+      statsNoAjustado: sinAjuste.stats,
+      indicador,
+    }),
     requisito,
     /* `null` cuando no hay rango o no hay indicador: es distinto de «no cumple», y la
        pantalla tiene que poder decir «faltan datos» en vez de un veredicto. */
@@ -531,6 +566,64 @@ function negativasDisponiblesEnUniverso(universo, study) {
    pérdidas ahí mandaría a buscar lo que no hace falta y a justificar una inclusión que el
    estudio no necesita. `exigeNegativas` dice cuál de los dos casos es.
    ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * LA BANDA DE RENTABILIDAD PARA EL SCREENING DEL PASO 1, en margen SIN AJUSTAR.
+ *
+ * Pedido el 2026-09-02: «¿no podemos hacer que busque según los rangos intercuartiles de x a x
+ * según el indicador del contribuyente?».
+ *
+ * POR QUE UNA BANDA Y NO UN TECHO. Capital IQ filtra por rangos, no por «menor o igual», así
+ * que un techo suelto no se puede pegar en el screening. Y un techo sin piso traería las
+ * compañías más ruinosas del universo, que arrastran el rango entero hacia abajo y se leen como
+ * una búsqueda dirigida al resultado; una banda del ancho de la dispersión ya observada en el
+ * sector es un criterio de comparabilidad, no una cacería.
+ *
+ * POR QUE EN MARGEN SIN AJUSTAR. El cumplimiento se concluye sobre el rango AJUSTADO, pero el
+ * screening solo conoce el margen crudo: el ajuste se calcula después, con las cifras de capital
+ * de trabajo de cada compañía. Así que el objetivo —quedar en o por debajo del indicador del
+ * contribuyente en términos ajustados— se traduce restando el desplazamiento que el ajuste le
+ * mete al rango. En el caso reportado ese desplazamiento era de +12,4 pt: pedir «margen ≤
+ * 6,204 %» en el screening habría traído compañías que, ya ajustadas, quedan en 18 %.
+ *
+ * EL DESPLAZAMIENTO ES UNA ESTIMACION Y SE DICE. Cada compañía se ajusta según SU propio capital
+ * de trabajo, así que el desplazamiento no es una constante: el que se usa aquí es el que el
+ * ajuste le está metiendo al primer cuartil de la muestra actual, que es el mejor estimador
+ * disponible y el único que sale de datos reales. La banda orienta el screening; el veredicto lo
+ * sigue dando el rango cuando las compañías nuevas entren con sus cifras.
+ *
+ * @param {object} p
+ * @param {object} p.statsAjustado    el rango que decide.
+ * @param {object} p.statsNoAjustado  el mismo rango sin ajustar, para medir el desplazamiento.
+ * @param {number} p.indicador        el margen de la parte examinada (ajustado, el que decide).
+ * @returns {object|null} `null` si falta cualquiera de los dos rangos o el indicador.
+ */
+export function bandaParaCribado({ statsAjustado, statsNoAjustado, indicador } = {}) {
+  if (!statsAjustado || !statsNoAjustado) return null;
+  if (indicador === null || indicador === undefined || Number.isNaN(indicador)) return null;
+  const { p25: p25Aj } = statsAjustado;
+  const { p25: p25Cr, p75: p75Cr } = statsNoAjustado;
+  if ([p25Aj, p25Cr, p75Cr].some((v) => v === null || v === undefined || Number.isNaN(v))) return null;
+
+  const desplazamiento = p25Aj - p25Cr;
+  /* El ancho de la banda: la dispersión intercuartílica que el propio sector ya muestra. No es
+     un número inventado —sale de las comparables que hay— y mantiene el criterio proporcionado a
+     la realidad del mercado en vez de a lo que haría falta para cumplir. */
+  const amplitud = Math.max(0, p75Cr - p25Cr);
+  const techo = indicador - desplazamiento;
+
+  return {
+    techo,
+    piso: techo - amplitud,
+    desplazamiento,
+    amplitud,
+    /* `true` cuando el ajuste es lo que empuja la banda a terreno negativo: entonces el
+       screening va a traer compañías en pérdida y habrá que justificarlas. */
+    exigeNegativas: techo < 0,
+    /* Se publica para que la pantalla pueda decir que es una estimación y de dónde sale. */
+    esEstimacion: true,
+  };
+}
 
 /**
  * Las comparables del universo cuyo margen está en el nivel dado o por debajo.

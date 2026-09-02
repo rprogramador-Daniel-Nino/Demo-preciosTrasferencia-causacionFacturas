@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   diagnosticarCumplimiento, confianzaDelIndicador, resumenDeLectura,
-  requisitoDeCribado, comparablesEnOPorDebajoDe,
+  requisitoDeCribado, comparablesEnOPorDebajoDe, bandaParaCribado,
 } from './diagnosticoRango.js';
 import { analizarRango } from './rangoIntercuartil.js';
 
@@ -749,4 +749,65 @@ test('la palanca del ajuste dice dónde está el problema, sin prometer apagarlo
     assert.doesNotMatch(p.texto, /casilla/, 'y no manda a tocar ninguna casilla');
     assert.match(p.texto, /capital de trabajo/, 'sino a revisar lo que el ajuste compara');
   }
+});
+
+/* ══════ LA BANDA PARA EL SCREENING, CON LOS NUMEROS REALES DEL CASO ══════
+
+   «¿No podemos hacer que busque según los rangos intercuartiles de x a x según el indicador del
+   contribuyente?» (2026-09-02). Capital IQ filtra por rangos, así que un techo suelto no se
+   puede pegar en el screening; y un techo sin piso traería las compañías más ruinosas del
+   universo, que arrastran el rango y se leen como una búsqueda dirigida al resultado. */
+
+test('la banda sale en margen SIN ajustar, descontando el desplazamiento del ajuste', () => {
+  /* Los numeros de la captura del 2026-09-02: ajustado 15,717 % - 22,250 %, el mismo sin
+     ajustar 3,314 % - 10,571 %, contribuyente 6,204 %. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.15717, med: 0.18975, p75: 0.22250 },
+    statsNoAjustado: { p25: 0.03314, med: 0.06, p75: 0.10571 },
+    indicador: 0.06204,
+  });
+  assert.ok(b);
+  assert.ok(Math.abs(b.desplazamiento - 0.12403) < 1e-9, 'el ajuste desplaza +12,403 pt');
+  assert.ok(Math.abs(b.techo - (-0.06199)) < 1e-9,
+    'el techo es el nivel del contribuyente MENOS el desplazamiento, no el nivel a secas');
+  assert.ok(Math.abs(b.amplitud - 0.07257) < 1e-9, 'el ancho es la dispersión que ya muestra el sector');
+  assert.ok(Math.abs(b.piso - (-0.13456)) < 1e-9);
+  assert.strictEqual(b.exigeNegativas, true, 'la banda cae en negativo: habrá que justificarlas');
+  assert.strictEqual(b.esEstimacion, true, 'y se dice que es una estimación');
+});
+
+test('sin desplazamiento la banda queda pegada al indicador del contribuyente', () => {
+  /* Comparables con capital de trabajo parecido: el ajuste no mueve nada y el techo es el nivel
+     del contribuyente, sin corrección. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.08, p75: 0.15 },
+    statsNoAjustado: { p25: 0.08, p75: 0.15 },
+    indicador: 0.06204,
+  });
+  assert.strictEqual(b.desplazamiento, 0);
+  assert.ok(Math.abs(b.techo - 0.06204) < 1e-12);
+  assert.strictEqual(b.exigeNegativas, false, 'y no hace falta buscar pérdidas');
+});
+
+test('sin uno de los dos rangos no se inventa una banda', () => {
+  assert.strictEqual(bandaParaCribado({ statsAjustado: { p25: 0.1, p75: 0.2 }, indicador: 0.05 }), null);
+  assert.strictEqual(bandaParaCribado({ statsNoAjustado: { p25: 0.1, p75: 0.2 }, indicador: 0.05 }), null);
+  assert.strictEqual(bandaParaCribado({
+    statsAjustado: { p25: 0.1, p75: 0.2 }, statsNoAjustado: { p25: 0.1, p75: 0.2 }, indicador: null,
+  }), null);
+});
+
+test('el diagnóstico trae la banda cuando no cumple, y no cuando cumple', () => {
+  const muestra = Array.from({ length: 12 }, (_, i) => ({
+    name: 'C' + i, amb: 'Int', s: 10000, c: 8000, op: (0.10 + i * 0.005) * 10000,
+    ar: 100, inv: 100, ap: 100,
+  }));
+  const estudio = {
+    pli: 'MO', cmode: 'all', prime: 12.5,
+    t_s: 100000, t_c: 93796, t_op: 6204, t_ar: 18000, t_inv: 26000, t_ap: 4000,
+  };
+  const d = diagnosticarCumplimiento({ estudio, comparables: muestra, universo: [] });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.banda, 'trae la banda para el screening');
+  assert.ok(d.banda.piso < d.banda.techo, 'y es una banda, no un punto');
 });

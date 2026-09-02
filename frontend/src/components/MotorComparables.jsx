@@ -80,7 +80,7 @@ const mil = (n) => Number(n || 0).toLocaleString('es-CO');
    Ahí decir «NO CUMPLE» no le sirve al analista: ya lo sabe. Lo que le sirve es el criterio de
    rentabilidad que tiene que agregar al screening del paso 1, y eso `requisitoDeCribado` lo
    calcula exacto sobre la posición del primer cuartil. */
-function RequisitoDelCribado({ requisito, indicador }) {
+function RequisitoDelCribado({ requisito, indicador, banda }) {
   if (!requisito) return null;
   const { necesita, hay, faltan, laMasCercana, exigeNegativas, tamanoMuestra } = requisito;
   if (faltan <= 0) return null;
@@ -99,10 +99,48 @@ function RequisitoDelCribado({ requisito, indicador }) {
           {laMasCercana !== null ? <> (la más cercana, {pctf(laMasCercana)})</> : null}.
           {' '}Faltan <strong>{faltan}</strong>.
           <div className="mt-2 pt-2 border-t border-sky-200 dark:border-sky-800/60">
-            Agregue al screening del paso 1 un criterio de rentabilidad que las traiga
-            {exigeNegativas
-              ? ' — al ser un margen negativo, entrarán compañías en pérdida y habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), que es lo que hace el asistente del paso 2.'
-              : ' — no hace falta que estén en pérdida: basta con que sean poco rentables.'}
+            {/* LA BANDA PARA PEGAR EN CAPITAL IQ.
+                Pedido el 2026-09-02: «¿no podemos hacer que busque según los rangos
+                intercuartiles de x a x según el indicador del contribuyente?». Capital IQ
+                filtra por rangos, así que un techo suelto no se puede usar; y va en margen SIN
+                ajustar porque el screening solo conoce ese —el ajuste se calcula después, con
+                el capital de trabajo de cada compañía—, de modo que el nivel objetivo se
+                traduce restando lo que el ajuste le desplaza al rango. Pedir el nivel a secas
+                habría traído compañías que, ya ajustadas, quedan doce puntos más arriba. */}
+            {banda ? (
+              <>
+                Agregue al screening del paso 1 este criterio de rentabilidad:
+                <div className="mt-1.5 mb-1.5 px-2 py-1.5 rounded bg-white dark:bg-[#09090b] border border-sky-300 dark:border-sky-800 font-mono text-[11px] text-sky-900 dark:text-sky-200">
+                  Margen operacional entre <strong>{pctf(banda.piso)}</strong> y{' '}
+                  <strong>{pctf(banda.techo)}</strong>
+                </div>
+                {Math.abs(banda.desplazamiento) > 0.0005 ? (
+                  <div className="text-[10.5px] text-sky-800/80 dark:text-sky-300/70 leading-snug">
+                    Va en margen <strong>sin ajustar</strong>, que es lo que filtra Capital IQ: su
+                    nivel objetivo ({pctf(indicador)}) menos los{' '}
+                    <strong>{pctf(banda.desplazamiento)}</strong> que el ajuste de capital de
+                    trabajo le desplaza al primer cuartil. El ancho ({pctf(banda.amplitud)}) es la
+                    dispersión que ya muestra su propia muestra. Es una estimación: cada compañía
+                    se ajusta según su propio capital de trabajo, así que el veredicto lo dará el
+                    rango cuando las nuevas entren con sus cifras.
+                  </div>
+                ) : null}
+                {banda.exigeNegativas ? (
+                  <div className="text-[10.5px] mt-1 text-sky-800/80 dark:text-sky-300/70 leading-snug">
+                    La banda cae en terreno negativo, así que entrarán compañías en pérdida:
+                    habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), y de eso se encarga
+                    el asistente del paso 2.
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <>
+                Agregue al screening del paso 1 un criterio de rentabilidad que las traiga
+                {exigeNegativas
+                  ? ' — al ser un margen negativo, entrarán compañías en pérdida y habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), que es lo que hace el asistente del paso 2.'
+                  : ' — no hace falta que estén en pérdida: basta con que sean poco rentables.'}
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -424,6 +462,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      `scoreCandidates` es determinista y tiene sus insumos persistidos —universo,
      configuración, actividad, veredicto de la IA y estudio anterior—, así que se
      recalcula cuando falta en lugar de emitir una hoja vacía. */
+  /* La intensidad de capital de trabajo del contribuyente, en ratios sobre ventas: es la vara
+     con la que el motor puntúa la comparabilidad en esa dimensión. Se calcula aquí porque es
+     aquí donde se sabe qué campo del estudio es cuál; el motor solo compara.
+
+     VA ANTES del `useMemo` de `auditoria` y no más abajo: ese memo corre DURANTE el render y lo
+     lee, así que declararlo después dejaba la constante en zona muerta y el panel se caía con
+     «Cannot access 'capitalTrabajoTP' before initialization». Lo atrapó `smoke_panel.mjs`, no
+     el build ni las pruebas unitarias. */
+  const capitalTrabajoTP = useMemo(() => {
+    const ventas = num(study.t_s);
+    if (ventas === null || !ventas) return null;
+    const ar = num(study.t_ar), inv = num(study.t_inv), ap = num(study.t_ap);
+    if (ar === null && inv === null && ap === null) return null;
+    return { ar: (ar || 0) / ventas, inv: (inv || 0) / ventas, ap: (ap || 0) / ventas };
+  }, [study.t_s, study.t_ar, study.t_inv, study.t_ap]);
+
   const auditoria = useMemo(() => {
     if (motorAuditoria) return motorAuditoria;
     if (!Array.isArray(universo) || universo.length === 0) return null;
@@ -432,6 +486,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
       {
         ventasParteExaminada: study.t_s, iaMatch,
+        /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
+           comparables de intensidad parecida el ajuste pasa de desplazar el rango +4,45 pt a
+           +0,24 pt, y el ajustado —el que decide— converge al crudo. */
+        capitalTrabajoParteExaminada: capitalTrabajoTP,
         /* Los MISMOS insumos que la corrida real: sin el margen del contribuyente esta
            reconstrucción ordenaría la cuota por puntaje y la hoja de trazabilidad describiría
            una selección distinta de la que se radicó. */
@@ -440,7 +498,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       },
     );
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
-  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch]);
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch,
+    capitalTrabajoTP]);
 
   /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
      —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
@@ -1030,6 +1089,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         : { ...engineConfig, alternativa: alternativaForzada };
       const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
+        /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
+           comparables de intensidad parecida el ajuste pasa de desplazar el rango +4,45 pt a
+           +0,24 pt, y el ajustado —el que decide— converge al crudo. */
+        capitalTrabajoParteExaminada: capitalTrabajoTP,
         iaMatch: veredicto,
         /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
            rentabilidad más parecido al suyo (decisión del usuario, 2026-09-01). Sin cifras
@@ -3205,7 +3268,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           {/* Cuando ninguna palanca alcanza, esto es lo único accionable: qué buscar en el
               paso 1. Va antes de las palancas porque ampliar el cribado sostiene mejor el
               estudio —más comparables reales— que apretar la selección de las pocas que hay. */}
-          <RequisitoDelCribado requisito={diagnostico.requisito} indicador={diagnostico.indicador} />
+          <RequisitoDelCribado
+            requisito={diagnostico.requisito}
+            indicador={diagnostico.indicador}
+            banda={diagnostico.banda}
+          />
 
           {/* Antes de mover una sola comparable: si el indicador del contribuyente sale de una
               lectura que no se pudo cotejar contra el documento, ajustar la muestra para
