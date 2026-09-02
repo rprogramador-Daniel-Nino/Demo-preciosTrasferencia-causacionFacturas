@@ -471,11 +471,83 @@ export function valorDeRubro(rubro) {
    aparecer impresa en el documento. */
 const RX_MILES_COMO_DECIMAL = /^(-?[1-9]\d{0,2})\.(\d+)$/;
 
-export function repararMilesComoDecimal(n) {
+export function repararMilesComoDecimal(n, { cerosPerdidos = false } = {}) {
   if (typeof n !== 'number' || !Number.isFinite(n) || Number.isInteger(n)) return n;
   const m = RX_MILES_COMO_DECIMAL.exec(String(n));
-  if (!m || m[2].length % 3 !== 0) return n;
-  return Number(m[1] + m[2]);
+  if (!m) return n;
+
+  /* JavaScript no guarda los ceros finales de un decimal: «51.500» —el punto de miles de
+     51.500— se convierte en el número 51.5, y su parte decimal deja de medir un grupo de
+     tres. Es el caso que delató todo esto, porque `CampoMoneda` lo repinta como «515» en vez
+     de disimularlo. Rellenar hasta el siguiente múltiplo de tres lo reconstruye.
+
+     Solo se pide desde `repararCifrasDelEstudio`, o sea sobre las cifras en pesos del
+     contribuyente, donde no hay decimales que perder: `fmt()` redondea y `CampoMoneda` ni
+     siquiera los acepta. La lectura NO lo usa, porque por ahí pasan también los estados de
+     las comparables, que Capital IQ publica en millones y con decimales de verdad — «28,81»
+     es 28,81 millones, y estirarlo a 28.810 sería inventarse la cifra. */
+  const decimales = cerosPerdidos
+    ? m[2].padEnd(Math.ceil(m[2].length / 3) * 3, '0')
+    : m[2];
+  if (decimales.length % 3 !== 0) return n;
+  return Number(m[1] + decimales);
+}
+
+/* Los campos del estudio que guardan una cifra del estado financiero. Se enumeran y no se
+   deducen del prefijo `t_`: ahí viven también `t_activos_detalle` (un arreglo) y campos de
+   texto, y reparar a ciegas todo lo que empiece por `t_` sería tocar lo que no se entiende. */
+const CAMPOS_CIFRA_EEFF = [
+  't_cash', 't_inv_assoc', 't_ar', 't_inv', 't_tax', 't_act_curr',
+  't_ppe', 't_intang', 't_dif', 't_act_nocurr', 't_act_tot',
+  't_ap', 't_s', 't_c', 't_gastos', 't_op',
+];
+
+/**
+ * Repara un estudio ya guardado cuyas cifras del EEFF quedaron con el separador de miles
+ * como punto decimal (ver `repararMilesComoDecimal`).
+ *
+ * `valorDeRubro` corrige la LECTURA, pero no puede alcanzar lo que se guardó antes de que
+ * existiera: un estudio abierto de `localStorage` o de Firestore conserva sus cifras rotas y
+ * publica la Tabla 10 con el primer grupo de dígitos de cada una. Pedirle al analista que
+ * vuelva a leer el PDF no es una respuesta: son estudios que ya se revisaron y corrigieron a
+ * mano, y releer los devuelve a la lectura cruda de la IA.
+ *
+ * En la ingesta el defecto es invisible —`CampoMoneda` quita el punto y lo repinta como
+ * separador de miles—, salvo cuando el grupo termina en cero: 51.500 se guarda como el
+ * número 51.5, JavaScript borra los ceros finales y la casilla publica «515». Ese fue el
+ * caso que lo destapó (2026-09-02, fila «Total Activos» de un informe real).
+ *
+ * Devuelve el mismo objeto si no había nada que reparar, para no romper la igualdad por
+ * referencia de la que dependen los efectos de React.
+ *
+ * @param {object} estudio
+ * @returns {object}
+ */
+export function repararCifrasDelEstudio(estudio) {
+  if (!estudio || typeof estudio !== 'object') return estudio;
+  const reparado = {};
+  let cambio = false;
+
+  CAMPOS_CIFRA_EEFF.forEach((campo) => {
+    const valor = estudio[campo];
+    const sano = repararMilesComoDecimal(valor, { cerosPerdidos: true });
+    if (sano !== valor) { reparado[campo] = sano; cambio = true; }
+  });
+
+  const detalle = estudio.t_activos_detalle;
+  if (Array.isArray(detalle)) {
+    let cambioDetalle = false;
+    const filas = detalle.map((fila) => {
+      if (!fila || typeof fila !== 'object') return fila;
+      const sano = repararMilesComoDecimal(fila.valor, { cerosPerdidos: true });
+      if (sano === fila.valor) return fila;
+      cambioDetalle = true;
+      return { ...fila, valor: sano };
+    });
+    if (cambioDetalle) { reparado.t_activos_detalle = filas; cambio = true; }
+  }
+
+  return cambio ? { ...estudio, ...reparado } : estudio;
 }
 
 /** El rótulo literal con que el documento imprimió ese rubro, si vino. */

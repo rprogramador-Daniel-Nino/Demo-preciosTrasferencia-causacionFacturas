@@ -30,6 +30,9 @@ import {
   leerSesionUi, guardarSesionUi, limpiarSesionUi, acumularVistaMontada, tabCanonica,
   accionSobreElRecuerdo,
 } from './services/sesionUi';
+/* Rescata las cifras del EEFF que se guardaron con el separador de miles como punto
+   decimal, antes de que `valorDeRubro` lo corrigiera en la lectura. Ver `eeffParser.js`. */
+import { repararCifrasDelEstudio } from './services/eeffParser';
 
 /* Retardo del autoguardado. El estudio cambia con cada tecla y cada escritura en
    Firestore se factura y cuenta contra el límite de escrituras por documento, así que
@@ -282,7 +285,10 @@ export default function App() {
        (`cargando.current`), y el informe se generaría con la página en blanco. */
     const eeffImagenesComparables = await recortarImagenesGuardadas(id);
     return {
-      ...(datos || {}),
+      /* Antes que nada, las cifras: un estudio guardado antes del arreglo trae el detalle
+         de activos y los rubros del balance con el punto de miles leído como decimal, y
+         publicaría la Tabla 10 con «4» donde el documento imprime 4.064.393. */
+      ...repararCifrasDelEstudio(datos || {}),
       ...(iaMatch ? { iaMatch } : {}),
       ...(eeffImages && eeffImages.length ? { eeffImages } : {}),
       ...(eeffImagenesComparables && Object.keys(eeffImagenesComparables).length ? { eeffImagenesComparables } : {}),

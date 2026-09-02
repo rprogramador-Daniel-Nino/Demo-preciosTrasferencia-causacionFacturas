@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, FileWarning, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
-import { parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS } from '../services/eeffParser';
+import {
+  parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS, repararCifrasDelEstudio,
+} from '../services/eeffParser';
 import {
   verificarEeff, camposAplicables, camposParaLimpiar, candidataParaAprender, utilidadOperacionalDe,
 } from '../services/eeffVerificacion';
@@ -261,7 +263,12 @@ export default function IngestaCifras({ study, updateStudy }) {
         guardarVocabulario: guardarVocabularioEeff,
       }).catch((err) => console.warn('No se pudo actualizar el diccionario de vocabulario:', err));
 
-      Object.assign(updates, camposAplicables(verificacion.campos));
+      /* `repararCifrasDelEstudio` sobre lo que la lectura acaba de escribir: `valorDeRubro`
+         ya rescata el punto de miles colado como decimal, pero no la cifra cuyo último grupo
+         termina en cero —«51.500» llega como el número 51.5 y JavaScript ya perdió los
+         ceros—. Aquí sí se puede reconstruir, porque estas son las cifras en pesos del
+         contribuyente. Sin esto habría que recargar el estudio para verlas sanas. */
+      Object.assign(updates, repararCifrasDelEstudio(camposAplicables(verificacion.campos)));
 
       /* Cualquier campo que ESTA lectura dejó en null y trae una advertencia asociada se
          limpia explícitamente: camposAplicables() no lo propaga porque protege lo que el
