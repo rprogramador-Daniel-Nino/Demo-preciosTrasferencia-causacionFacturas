@@ -1199,9 +1199,31 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   if (sustituciones > 0 && direccion !== 'ninguna') {
     /* Las candidatas de misma actividad ordenadas por margen. Las que entran salen de la
        reserva —las que no caben en el cupo— y las que salen, del cupo. */
+    /* ── LA VARA DE LA DIRECCION ES LA QUE FORMA EL RANGO ──
+       Reportado el 2026-09-02: «en lugar de bajar subio». Y era mi defecto: la direccion
+       ordenaba por `margenDe` —el margen CRUDO, que es la vara de la BUSQUEDA— mientras el
+       rango que el analista ve en pantalla se forma con el AJUSTADO.
+
+       Y no es un matiz. Medido con dos comparables del MISMO margen crudo (5,000 %): la de poco
+       capital de trabajo termina en +9,597 % ajustado y la de mucho en -43,769 %. Ordenar por el
+       crudo no dice nada de donde caen en el rango que decide, asi que «bajar» podia elegir
+       justo las que lo subian.
+
+       Se usa la vara inyectada por el llamador —`margenQueDecide`, el ajustado— y solo si no
+       viene se cae al crudo. Cuando la muestra no trae capital de trabajo el ajuste degenera en
+       un desplazamiento casi constante (medido: amplitud 0,310 pt en once comparables), asi que
+       el ORDEN por ajustado coincide con el orden por crudo y la caida es inocua.
+
+       `margenDe` NO cambia: sigue siendo el crudo y sigue ordenando la cuota de negativas, que
+       es la BUSQUEDA y ahi manda el criterio del contador («primero buscamos las comparables con
+       el no ajustado»). Son dos varas con dos oficios y por eso no se comparten. */
+    const varaDelRango = typeof contexto.margenQueFormaElRango === 'function'
+      ? contexto.margenQueFormaElRango
+      : null;
     const conMargen = (c) => {
-      const m = margenDe(c);
-      return m === null ? Number.POSITIVE_INFINITY : m;
+      const m = varaDelRango ? num(varaDelRango(c)) : margenDe(c);
+      const v = m === null ? margenDe(c) : m;
+      return v === null ? Number.POSITIVE_INFINITY : v;
     };
     const enCupo = mismasPositivas.slice(0, cupoParaPositivas);
     const enReserva = mismasPositivas.slice(cupoParaPositivas);
@@ -1298,8 +1320,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        muestra: con el cribado y este numero se reconstruye exactamente la misma seleccion. */
     alternativa,
     alternativasDisponibles,
-    /* Hacia donde se pidio mover el rango. */
+    /* Hacia donde se pidio mover el rango, y con que vara se ordeno para moverlo: la que
+       forma el rango (el ajustado) si el llamador la inyecta, o el margen crudo si no. */
     direccionAlternativa: direccion,
+    varaDeLaDireccion: typeof contexto.margenQueFormaElRango === 'function' ? 'la-que-decide' : 'margen-crudo',
     /* ── POR QUE LA ALTERNATIVA NO MUEVE EL CUARTIL, CUANDO NO LO MUEVE ──
        Reportado el 2026-09-02: «a veces le damos en otra combinacion pero no se observan cambios
        a pesar de que si se ejecuta». La causa es que las de continuidad no se sustituyen —su

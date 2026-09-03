@@ -3022,3 +3022,97 @@ test('la dirección NO retira comparables de continuidad', () => {
       `«${dir}» no puede retirar continuidad`);
   });
 });
+
+/* ══════ LA DIRECCION ORDENA CON LA VARA QUE FORMA EL RANGO ══════
+
+   Reportado el 2026-09-02, con dos capturas: al pulsar «Bajar cuartiles» el rango paso de
+   1,788 % - 6,872 % a 7,559 % - 9,563 %. «En lugar de bajar subio».
+
+   Y era un defecto mio del mismo dia: la direccion ordenaba por `margenDe`, el margen CRUDO
+   —que es la vara de la BUSQUEDA— mientras el rango que el analista ve se forma con el AJUSTADO.
+
+   NO ES UN MATIZ. Medido con dos comparables del MISMO margen crudo (5,000 %): la de poco
+   capital de trabajo termina en +9,597 % ajustado y la de mucho en -43,769 %. El margen crudo no
+   dice nada de donde cae una comparable en el rango que decide, asi que «bajar» elegia a veces
+   justo las que lo subian. */
+
+/* `crudo` ES el margen operacional de la candidata: `op / s`. En la primera version de este
+   fixture `op` quedo fijo en 500 y lo que variaba era el costo, asi que las doce tenian el
+   MISMO margen y la direccion no tenia nada que ordenar — la prueba fallaba por el fixture y no
+   por la implementacion. */
+const cVara = (id, crudo, wc) => ({
+  id, name: 'V' + id, nameKey: nameKey('V' + id),
+  s: 10000, c: 10000 - crudo * 10000 - 500, op: crudo * 10000, desc: 'x', ...wc,
+});
+
+/* Doce candidatas con el margen crudo CRECIENTE y el capital de trabajo DECRECIENTE: asi el
+   orden por crudo y el orden por la vara inyectada quedan invertidos, que es el caso que
+   produjo el defecto. */
+const UNIVERSO_VARA = Array.from({ length: 12 }, (_, i) => cVara(i, 0.02 + i * 0.01, {
+  ar: 6000 - i * 450, inv: 2000 - i * 150, ap: 300, ppe: 50,
+}));
+const CFG_VARA = {
+  nTarget: 6, minimo: 1, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+/* Una vara inyectada que INVIERTE el orden del margen crudo, para comprobar que la direccion
+   sigue la vara y no el crudo. */
+const varaInvertida = (c) => -(c.op / c.s);
+
+test('la dirección sigue la vara inyectada, no el margen crudo', () => {
+  const corre = (dir, inyectar) => scoreCandidates(
+    UNIVERSO_VARA, { ...CFG_VARA, alternativa: 3, direccionAlternativa: dir }, 'x', [],
+    { ventasParteExaminada: 10000, ...(inyectar ? { margenQueFormaElRango: varaInvertida } : {}) },
+  );
+  const conVara = corre('bajar', true);
+  const sinVara = corre('bajar', false);
+  assert.strictEqual(conVara.varaDeLaDireccion, 'la-que-decide');
+  assert.strictEqual(sinVara.varaDeLaDireccion, 'margen-crudo');
+
+  /* Con la vara invertida, «bajar» tiene que elegir las OPUESTAS a las que elegiria por crudo:
+     si eligiera lo mismo, no estaria usando la vara. */
+  const idsCon = conVara.seleccionadas.map((c) => c.id).sort().join(',');
+  const idsSin = sinVara.seleccionadas.map((c) => c.id).sort().join(',');
+  assert.notStrictEqual(idsCon, idsSin,
+    'con la vara inyectada la dirección elige otra muestra que por margen crudo');
+});
+
+test('«bajar» baja el cuartil MEDIDO CON LA VARA QUE DECIDE', () => {
+  /* La prueba que cierra el defecto: el cuartil que tiene que bajar es el de la vara inyectada,
+     que es la que forma el rango en pantalla, no el del margen crudo. */
+  const p25Vara = (r) => {
+    const v = r.seleccionadas.map(varaInvertida).sort((a, b) => a - b);
+    const pos = (v.length - 1) * 0.25;
+    const lo = Math.floor(pos);
+    return v[lo] + (pos - lo) * (v[lo + 1] - v[lo]);
+  };
+  const serie = [1, 2, 3].map((a) => p25Vara(scoreCandidates(
+    UNIVERSO_VARA, { ...CFG_VARA, alternativa: a, direccionAlternativa: 'bajar' }, 'x', [],
+    { ventasParteExaminada: 10000, margenQueFormaElRango: varaInvertida },
+  )));
+  serie.slice(1).forEach((v, i) => {
+    assert.ok(v < serie[i],
+      `la alternativa ${i + 2} debe bajar el cuartil de la vara que decide: ${serie[i]} → ${v}`);
+  });
+});
+
+test('la cuota de negativas NO usa la vara de la dirección', () => {
+  /* Son dos varas con dos oficios: la BUSQUEDA va con el margen crudo —criterio del contador,
+     2026-09-01— y solo la DIRECCION usa la que forma el rango. Inyectar una no puede cambiar la
+     otra. */
+  const universo = [
+    ...Array.from({ length: 6 }, (_, i) => cVara('P' + i, 0.05 + i * 0.01, { ar: 100, inv: 100, ap: 50 })),
+    ...Array.from({ length: 3 }, (_, i) => ({
+      ...cVara('N' + i, 0.05, { ar: 100, inv: 100, ap: 50 }),
+      op: -300 - i * 100, hasLoss: true,
+    })),
+  ];
+  const cfg = { ...CFG_VARA, perdidaOp: 'incluir', nTarget: 5, negativasObjetivo: 2 };
+  const sin = scoreCandidates(universo, cfg, 'x', [], { ventasParteExaminada: 10000, pliParteExaminada: -0.02 });
+  const con = scoreCandidates(universo, cfg, 'x', [], {
+    ventasParteExaminada: 10000, pliParteExaminada: -0.02, margenQueFormaElRango: varaInvertida,
+  });
+  const negs = (r) => r.seleccionadas.filter((c) => c.op < 0).map((c) => c.id).sort().join(',');
+  assert.strictEqual(negs(con), negs(sin),
+    'las negativas de la cuota son las mismas: la vara de la dirección no las toca');
+});

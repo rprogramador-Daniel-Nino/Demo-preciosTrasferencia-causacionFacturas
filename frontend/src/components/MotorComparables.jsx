@@ -4,7 +4,7 @@ import {
   Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock, ArrowDown, ArrowUp
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { analizarRango } from '../services/rangoIntercuartil';
+import { analizarRango, margenQueDecide } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { previsualizarFiltros } from '../services/previsualizarFiltros';
 import { redactarJustificacionPerdidas } from '../services/justificacionPerdidasIA';
@@ -477,6 +477,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     if (ar === null && inv === null && ap === null) return null;
     return { ar: (ar || 0) / ventas, inv: (inv || 0) / ventas, ap: (ap || 0) / ventas };
   }, [study.t_s, study.t_ar, study.t_inv, study.t_ap]);
+
+  /* Si el rango que concluye es el ajustado. Lo decide `analizarRango` según la cobertura de
+     capital de trabajo de la muestra, y la dirección de la alternativa necesita saberlo para
+     ordenar con la vara correcta. Se mira sobre las comparables vigentes: la cobertura del
+     universo no cambia de una alternativa a otra. */
+  const decideElAjustado = useMemo(() => {
+    if (!Array.isArray(comparables) || comparables.length === 0) return true;
+    try {
+      return analizarRango({ ...study, comparables, cmode }).ajusteTieneDatos !== false;
+    } catch {
+      return true;
+    }
+  }, [study, comparables, cmode]);
 
   const auditoria = useMemo(() => {
     if (motorAuditoria) return motorAuditoria;
@@ -1097,6 +1110,28 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            comparables de intensidad parecida el ajuste pasa de desplazar el rango +4,45 pt a
            +0,24 pt, y el ajustado —el que decide— converge al crudo. */
         capitalTrabajoParteExaminada: capitalTrabajoTP,
+        /* ── LA VARA CON LA QUE LA DIRECCION ORDENA ──
+           Tiene que ser la que DE VERDAD forma el rango en pantalla, y eso son dos casos:
+
+             · el AJUSTADO cuando la mayoría de la muestra trae capital de trabajo;
+             · el CRUDO cuando no, porque ahí el ajuste degenera en un desplazamiento constante
+               y `analizarRango` concluye sobre el rango sin ajustar.
+
+           Sin esto la dirección movía el rango al revés —reportado el 2026-09-02: «en lugar de
+           bajar subió»—: ordenaba por el margen crudo mientras la pantalla mostraba el ajustado,
+           y dos comparables del MISMO margen crudo acaban en extremos opuestos del ajustado
+           según su capital de trabajo (medido: +9,597 % y −43,769 %).
+
+           `decideElAjustado` se toma de la corrida vigente: depende de la cobertura de capital de
+           trabajo del universo, que no cambia de una alternativa a otra. NO afecta a la cuota de
+           negativas, que sigue ordenándose con el margen crudo por criterio del contador. */
+        margenQueFormaElRango: (cand) => {
+          const m = decideElAjustado ? margenQueDecide(cand, study) : null;
+          if (m !== null && m !== undefined) return m;
+          const s = num(cand && cand.s);
+          const op = num(cand && cand.op);
+          return (s && op !== null) ? op / s : null;
+        },
         iaMatch: veredicto,
         /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
            rentabilidad más parecido al suyo (decisión del usuario, 2026-09-01). Sin cifras
