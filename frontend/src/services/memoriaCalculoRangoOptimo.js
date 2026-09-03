@@ -1017,6 +1017,37 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        (Art. 260-4 E.T., un nivel semejante suele reflejar funciones y riesgos semejantes) o el
        comportamiento central del universo cribado. Se publica porque es lo que un revisor mira
        más de cerca, y dejarlo implícito en un puntaje no sirve de sustento. */
+    /* ─── Prioridad a las comparables del estudio anterior ───
+       Conservar en la muestra una comparable que el filtro de pérdidas habría retirado se
+       sustenta en que su inclusión ya se justificó el año anterior y en que una pérdida no
+       descalifica por sí sola (Guías OCDE cap. III, §3.64-3.65). Y las que NO pudieron volver
+       se nombran con su motivo: es lo que permite explicar, frente al informe del año pasado,
+       por qué la muestra cambió. */
+    const prioridad = seleccion.continuidadPrioritaria || null;
+    if (prioridad) {
+      sel.push([cTxt('PRIORIDAD A LAS COMPARABLES DEL ESTUDIO ANTERIOR')]);
+      sel.push([
+        cTxt('Criterio aplicado'),
+        cTxt('Se conservaron en la muestra las comparables aceptadas en el estudio del año '
+          + 'anterior que el filtro de pérdidas operativas habría retirado, y no se desplazó '
+          + 'ninguna por la cuota de comparables en pérdida. El sustento es que su inclusión ya '
+          + 'se justificó entonces y que una pérdida operativa no descalifica por sí sola '
+          + '(Guías OCDE cap. III, §3.64-3.65). NO se relajaron los criterios de independencia '
+          + '(Art. 260-4 E.T.) ni el de saldos no verosímiles: el primero es un hecho del '
+          + 'ejercicio corriente y el segundo afecta a las cifras que alimentan el ajuste de '
+          + 'capital de trabajo.'),
+      ]);
+      sel.push([cTxt('Conservadas por este criterio'), cNum(prioridad.rescatadas, '0')]);
+      if (prioridad.noRescatadas.length) {
+        sel.push([cTxt('Del estudio anterior que NO integran la muestra'),
+          cNum(prioridad.noRescatadas.length, '0')]);
+        prioridad.noRescatadas.forEach((c) => {
+          sel.push([cTxt('   ' + (c.name || '(sin nombre)')), cTxt(c.motivo || '')]);
+        });
+      }
+      sel.push([]);
+    }
+
     if (seleccion.anclaRentabilidad) {
       sel.push([cTxt('CRITERIO DE CERCANÍA DE RENTABILIDAD')]);
       sel.push([

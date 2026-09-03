@@ -486,6 +486,10 @@ export const FILTROS_DUROS = [
   },
   {
     clave: 'perdidaOperativa',
+    /* Rescatable por el modo «priorizar continuidad»: la inclusion de una comparable del anio
+       anterior ya se sustento entonces, y una perdida no descalifica por si sola (Guias OCDE
+       cap. III, §3.64-3.65). Los otros tres NO lo son: ver la nota de `filtroQueDescarta`. */
+    rescatablePorPrioridad: true,
     /* La continuidad NO queda exenta, a diferencia del holding. Es una decisión deliberada y
        probada: la pérdida es un hecho del ejercicio en curso, no una presunción sobre la razón
        social, así que el estudio anterior no la sustenta; y desde que existe
@@ -508,6 +512,11 @@ export function configDeFiltros(config = {}) {
     saldoNegativo: config.saldoNegativo || 'excluir',
     control: config.control || 'excluir',
     umbralControl: config.umbralControl === undefined ? 50 : config.umbralControl,
+    /* Modo «priorizar continuidad»: relaja los filtros marcados `rescatablePorPrioridad` para
+       las comparables del anio anterior. Viaja aqui porque es `filtroQueDescarta` quien lo
+       aplica, y de ese juez cuelgan tanto el embudo del paso 2 como el descarte de verdad: si
+       la bandera no llegara a los dos, el panel prometeria un numero que el motor no respeta. */
+    priorizarContinuidad: Boolean(config.priorizarContinuidad),
   };
 }
 
@@ -519,11 +528,30 @@ export function configDeFiltros(config = {}) {
  *
  * @returns {{clave:string, motivo:string}|null}
  */
+/* ── PRIORIZAR CONTINUIDAD ──
+   Pedido el 2026-09-02. De que rescata a las comparables del anio anterior, decidido con el
+   usuario: del filtro de PERDIDAS OPERATIVAS —su inclusion se sustento el anio pasado y las
+   Guias OCDE (cap. III, §3.64-3.65) dicen que una perdida no descalifica por si sola siempre que
+   se analice la causa— y de la CUOTA de negativas, que las desplazaba para hacer sitio.
+
+   DE QUE NO LAS RESCATA, y esto importa mas que lo anterior:
+
+     · INDEPENDENCIA (Art. 260-1). No ser independiente es un hecho de HOY, no una presuncion:
+       una comparable que este anio tiene un accionista de control no es comparable, la aceptaran
+       o no el anio pasado. El filtro de holding si la exime, porque ese se PRESUME de la razon
+       social; este no se presume, se mide.
+     · SALDOS NEGATIVOS. Cuentas por cobrar, por pagar o inventarios en negativo son dato no
+       verosimil, y esas mismas cifras entran despues al ajuste de capital de trabajo: un saldo
+       mal leido no queda en una fila, contamina el rango que decide.
+
+   Los filtros que el modo relaja llevan `rescatablePorPrioridad: true`. */
 export function filtroQueDescarta(cand, config = {}, esContinuidad = false) {
   const cfg = configDeFiltros(config);
   for (const f of FILTROS_DUROS) {
     if (!f.activo(cfg)) continue;
     if (f.eximeContinuidad && esContinuidad) continue;
+    /* El modo «priorizar continuidad» relaja los filtros marcados como rescatables. */
+    if (cfg.priorizarContinuidad && f.rescatablePorPrioridad && esContinuidad) continue;
     if (f.aplica(cand, cfg)) return { clave: f.clave, motivo: f.motivo(cfg) };
   }
   return null;
@@ -709,10 +737,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        del usuario (2026-08-31). Con `perdidaOp: 'excluir'` no hay negativas que repartir y
        el objetivo se ignora solo. */
     negativasObjetivo = 0,
-    holding = 'excluir',
-    control = 'excluir',
-    umbralControl = 50,
-    saldoNegativo = 'excluir',
+    /* `holding`, `control`, `umbralControl` y `saldoNegativo` YA NO SE DESESTRUCTURAN aquí: el
+       único sitio que los usaba reconstruía a mano la config del juez de filtros, y
+       reconstruirla obligaba a acordarse de cada bandera nueva —`priorizarContinuidad` se quedó
+       fuera al agregarla el 2026-09-02 y el rescate no ocurría en este juez aunque `prefiltrar`
+       sí lo aplicara—. Ahora se le pasa `config` entero, así que estas cuatro sobraban. Los
+       valores por defecto viven donde siempre debieron: en `configDeFiltros`. */
     geo = 'ninguna',
     /* `rigor` puede seguir llegando en estudios guardados antes del 2026-09-01. Se acepta y se
        ignora a propósito: su filtro se retiró el 2026-08-10 —ver la nota del bloque «rigor
@@ -825,9 +855,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        escritos dos veces y divergían en dos puntos —la exención de continuidad del holding y el
        reconocimiento de `op < 0` sin flag—, de modo que se pagaba por candidatas que el motor
        descartaba y se perdían de continuidad que el motor habría conservado. */
-    const fuera = filtroQueDescarta(cand, {
-      perdidaOp, holding, saldoNegativo, control, umbralControl,
-    }, esContinuidad);
+    /* `config` TAL CUAL y no una copia reconstruida campo por campo. Reconstruirla obligaba a
+       acordarse de cada bandera nueva: `priorizarContinuidad` se quedo fuera al agregarla y el
+       rescate no ocurria aqui aunque `prefiltrar` —el otro llamador, que si pasa `config`
+       entero— lo aplicara. Es la misma divergencia entre los dos jueces que ya costo un defecto
+       el 2026-09-01, y la forma de que no vuelva es no volver a copiar la config a mano. */
+    const fuera = filtroQueDescarta(cand, config, esContinuidad);
     if (fuera) rechazar('filtro', fuera.clave, fuera.motivo);
 
     /* ── veredicto de la curación por IA ──
@@ -1124,7 +1157,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      porque retirar una ya aceptada hay que justificarlo»— y sigue en pie, con su aviso
      `continuidadExcedeObjetivo`. Lo que cambia es solo el caso en que el analista pide negativas
      de forma explícita. */
-  const topeContinuidad = objetivoNegativas > 0
+  /* Con el modo de prioridad NINGUNA de continuidad cede sitio a la cuota: es la otra mitad
+     de lo que el boton rescata. Sin el modo se conserva la decision del 2026-09-01 —la cuota
+     manda y se retiran las de menor puntaje, nombradas en `continuidadDesplazada`—. */
+  const topeContinuidad = (objetivoNegativas > 0 && !config.priorizarContinuidad)
     ? Math.max(negativasDeContinuidad, cupo - negativasAUsar)
     : continuidadOrdenada.length;
   const continuidadIncluidas = continuidadOrdenada.slice(0, topeContinuidad);
@@ -1430,6 +1466,29 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivo: MOTIVO_DESPLAZADA_POR_CUOTA,
     })),
     continuidadDesplazadaPorCuota: continuidadDesplazadaLista.length,
+    /* ── EL RASTRO DEL MODO «PRIORIZAR CONTINUIDAD» ──
+       Cuantas comparables del anio anterior volvieron por el rescate y cuales NO pudieron
+       volver, con el motivo. Lo segundo importa mas: una comparable del estudio pasado que
+       desaparece en silencio se descubre al cotejar los dos informes, y para entonces hay que
+       explicarla sin saber por que se fue. */
+    priorizoContinuidad: Boolean(config.priorizarContinuidad),
+    continuidadRescatadas: config.priorizarContinuidad
+      ? continuidadIncluidas.filter((c) => enPerdida(c)).length
+      : 0,
+    continuidadNoRescatada: (() => {
+      if (!config.priorizarContinuidad) return [];
+      /* Las que el estudio anterior aportaba y no estan en la muestra: se buscan entre las
+         rechazadas por filtro, que es lo unico que puede dejarlas fuera en este modo. */
+      const dentro = new Set(seleccionadas.map((c) => c.nameKey || nameKey(c.name || '')));
+      return rechazadas
+        .filter((c) => c.esContinuidad && c.categoriaRechazo === 'filtro'
+          && !dentro.has(c.nameKey || nameKey(c.name || '')))
+        .map((c) => ({
+          name: c.name || '(sin nombre)',
+          clave: c.motivoClave || '',
+          motivo: c.motivoRechazo || '',
+        }));
+    })(),
     /* Con qué criterio se eligieron las negativas de la cuota. El informe lo escribe: la
        selección de comparables es una decisión metodológica y su criterio se sustenta. */
     criterioNegativas,

@@ -3116,3 +3116,122 @@ test('la cuota de negativas NO usa la vara de la dirección', () => {
   assert.strictEqual(negs(con), negs(sin),
     'las negativas de la cuota son las mismas: la vara de la dirección no las toca');
 });
+
+/* ══════ PRIORIZAR LAS COMPARABLES DE CONTINUIDAD ══════
+
+   Pedido el 2026-09-02: «quiero una funcion mas y es que le demos prioridad a las de
+   continuidad, haciendo la seleccion clicando un boton frente a los recien creados botones de
+   cuartiles».
+
+   LO QUE YA HABIA. La continuidad entra ANTES de competir por puntaje —no compite, se incluye—
+   y esta exenta del filtro de holding, porque ese se presume de la razon social. Pero SI la
+   descartaban tres cosas: el filtro de perdidas operativas, el de saldos negativos y la cuota
+   de negativas, que la desplazaba para hacer sitio.
+
+   LO QUE RESCATA EL BOTON, decidido con el usuario: las perdidas y la cuota.
+
+     · PERDIDAS. Su inclusion se sustento el anio anterior, y las Guias OCDE (cap. III,
+       §3.64-3.65) dicen que una perdida no descalifica por si sola siempre que se analice la
+       causa. Retirarla este anio por el mismo hecho que se acepto el pasado es lo que hay que
+       poder evitar.
+     · LA CUOTA. Al pedir negativas, `topeContinuidad` retiraba las de menor puntaje para hacer
+       sitio. Con el boton no retira ninguna.
+
+   LO QUE NO RESCATA, Y POR QUE:
+
+     · INDEPENDENCIA (Art. 260-1). No ser independiente es un hecho de HOY, no una presuncion:
+       una comparable que este anio tiene un accionista de control no es comparable, la aceptaran
+       o no el anio pasado.
+     · SALDOS NEGATIVOS. Cuentas por cobrar, por pagar o inventarios en negativo son dato no
+       verosimil, y esas cifras entran despues al ajuste de capital de trabajo: un saldo mal
+       leido contamina el rango que decide.
+
+   Y REPORTA lo que no pudo rescatar, con el motivo, porque el analista tiene que saber que
+   comparable del anio pasado no volvio y por que. */
+
+const cCont = (id, margen, extra = {}) => ({
+  id, name: 'Cont ' + id, nameKey: nameKey('Cont ' + id),
+  s: 10000, c: 8000, op: margen * 10000, desc: 'x', ...extra,
+});
+const CFG_CONT = {
+  nTarget: 6, minimo: 1, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+
+test('sin el botón, una comparable de continuidad en pérdida se cae por el filtro', () => {
+  /* El comportamiento de siempre: no cambia por este añadido. */
+  const universo = [cCont('P', -0.05, { hasLoss: true }), ...[0.02, 0.04].map((m, i) => cCont(i, m))];
+  const previas = [{ name: 'Cont P' }];
+  const r = scoreCandidates(universo, CFG_CONT, 'x', previas, { ventasParteExaminada: 10000 });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'P'), 'se cae por el filtro de pérdidas');
+});
+
+test('con el botón, la de continuidad en pérdida vuelve a la muestra', () => {
+  const universo = [cCont('P', -0.05, { hasLoss: true }), ...[0.02, 0.04].map((m, i) => cCont(i, m))];
+  const previas = [{ name: 'Cont P' }];
+  const r = scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(r.seleccionadas.some((c) => c.id === 'P'),
+    'su inclusión se sustentó el año anterior (Guías OCDE cap. III §3.64-3.65)');
+  assert.strictEqual(r.continuidadRescatadas, 1, 'y se reporta cuántas rescató');
+});
+
+test('el botón NO rescata de independencia ni de saldos negativos', () => {
+  /* No ser independiente es un hecho de hoy; un saldo negativo es dato no verosímil y entra al
+     ajuste de capital de trabajo. Rescatar por ahí metería una comparable inválida. */
+  const universo = [
+    cCont('CTRL', 0.03, { maxpct: 80 }),
+    cCont('SALDO', 0.03, { hasNegativeBalance: true }),
+    ...[0.02, 0.04].map((m, i) => cCont(i, m)),
+  ];
+  const previas = [{ name: 'Cont CTRL' }, { name: 'Cont SALDO' }];
+  const r = scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'CTRL'), 'la controlada no vuelve');
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'SALDO'), 'ni la de saldo negativo');
+});
+
+test('reporta las de continuidad que NO pudo rescatar, con su motivo', () => {
+  /* El analista tiene que saber qué comparable del año pasado no volvió y por qué: sin eso, una
+     desaparición silenciosa se descubre al cotejar el informe con el del año anterior. */
+  const universo = [
+    cCont('CTRL', 0.03, { maxpct: 80 }),
+    ...[0.02, 0.04].map((m, i) => cCont(i, m)),
+  ];
+  const previas = [{ name: 'Cont CTRL' }];
+  const r = scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(Array.isArray(r.continuidadNoRescatada));
+  assert.strictEqual(r.continuidadNoRescatada.length, 1);
+  assert.strictEqual(r.continuidadNoRescatada[0].name, 'Cont CTRL');
+  assert.strictEqual(r.continuidadNoRescatada[0].clave, 'controlada');
+  assert.match(r.continuidadNoRescatada[0].motivo, /260-1|accionista/i,
+    'el motivo nombra la norma, que es lo que el analista tiene que poder citar');
+});
+
+test('con el botón la cuota de negativas no desplaza continuidad', () => {
+  /* Reportado antes en la sesión: al pedir negativas, la cuota retiraba las de continuidad de
+     menor puntaje para hacer sitio. Con el botón no retira ninguna. */
+  const universo = [
+    ...Array.from({ length: 6 }, (_, i) => cCont('K' + i, 0.02 + i * 0.01)),
+    ...Array.from({ length: 3 }, (_, i) => cCont('N' + i, -0.04 - i * 0.01, { hasLoss: true })),
+  ];
+  const previas = Array.from({ length: 6 }, (_, i) => ({ name: 'Cont K' + i }));
+  const cfg = { ...CFG_CONT, nTarget: 6, perdidaOp: 'incluir', negativasObjetivo: 2 };
+
+  const sin = scoreCandidates(universo, cfg, 'x', previas, { ventasParteExaminada: 10000 });
+  const con = scoreCandidates(universo, { ...cfg, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(sin.continuidadDesplazadaPorCuota > 0, 'sin el botón la cuota sí desplaza');
+  assert.strictEqual(con.continuidadDesplazadaPorCuota, 0, 'con el botón no desplaza ninguna');
+  assert.strictEqual(con.seleccionadas.filter((c) => c.esContinuidad).length, 6);
+});
+
+test('el modo queda declarado en el resultado', () => {
+  const universo = [0.02, 0.04].map((m, i) => cCont(i, m));
+  assert.strictEqual(
+    scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', [], { ventasParteExaminada: 10000 })
+      .priorizoContinuidad, true);
+  assert.strictEqual(
+    scoreCandidates(universo, CFG_CONT, 'x', [], { ventasParteExaminada: 10000 }).priorizoContinuidad, false);
+});

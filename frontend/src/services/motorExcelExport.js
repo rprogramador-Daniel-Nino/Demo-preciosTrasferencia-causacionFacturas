@@ -157,6 +157,16 @@ export function construirLibroSoporte(datos) {
          comparabilidad (Art. 260-4) que hay que sustentar, y es lo que un revisor mira más de
          cerca: dejarlo implícito en un puntaje no sirve de sustento. */
       anclaRentabilidad: embudo.anclaRentabilidad || 'medianaPool',
+      /* El modo «priorizar continuidad» y su rastro. Se publica porque conservar en la muestra
+         una comparable que el filtro de pérdidas habría retirado es una decisión metodológica
+         que hay que sustentar, y porque una comparable del estudio anterior que NO pudo volver
+         tiene que quedar nombrada con su motivo: si desaparece en silencio, se descubre al
+         cotejar los dos informes y para entonces hay que explicarla sin saber por qué se fue. */
+      continuidadPrioritaria: embudo.priorizoContinuidad ? {
+        rescatadas: embudo.continuidadRescatadas || 0,
+        noRescatadas: Array.isArray(embudo.continuidadNoRescatada)
+          ? embudo.continuidadNoRescatada : [],
+      } : null,
     }
     : seleccion;
 

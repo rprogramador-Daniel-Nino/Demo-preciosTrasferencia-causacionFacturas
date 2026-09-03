@@ -1066,7 +1066,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   };
 
   // Run Motor TOP-N Selection & AI Curation
-  const runEngineSelection = async (alternativaForzada = null, direccionForzada = null) => {
+  /* «Priorizar continuidad»: vuelve a correr rescatando las comparables del año anterior que
+     el filtro de pérdidas dejó fuera, y evitando que la cuota de negativas las desplace. NO
+     rescata de independencia ni de saldos negativos —lo primero es un hecho de hoy (Art. 260-1)
+     y lo segundo es dato no verosímil que entra al ajuste de capital de trabajo—, y reporta
+     cuáles no pudo recuperar con el motivo de cada una. */
+  const priorizarContinuidad = () => {
+    setEngineConfig((prev) => ({ ...prev, priorizarContinuidad: true }));
+    runEngineSelection(null, null, true);
+  };
+
+  const runEngineSelection = async (
+    alternativaForzada = null, direccionForzada = null, priorizarForzado = null,
+  ) => {
     if (!universo || universo.length === 0) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
@@ -1097,13 +1109,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
       /* La forzada manda sobre la del estado por lo dicho en `otraCombinacion`: en la misma
          vuelta el estado todavia trae la anterior. */
-      const configDeEstaCorrida = alternativaForzada === null
-        ? engineConfig
-        : {
-          ...engineConfig,
-          alternativa: alternativaForzada,
-          ...(direccionForzada ? { direccionAlternativa: direccionForzada } : {}),
-        };
+      /* Las forzadas mandan sobre el estado: `useState` no es síncrono y correr en la misma
+         vuelta usaría los valores anteriores. */
+      const configDeEstaCorrida = {
+        ...engineConfig,
+        ...(alternativaForzada !== null ? { alternativa: alternativaForzada } : {}),
+        ...(direccionForzada ? { direccionAlternativa: direccionForzada } : {}),
+        ...(priorizarForzado !== null ? { priorizarContinuidad: priorizarForzado } : {}),
+      };
       const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
         /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
@@ -1216,6 +1229,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         direccionAlternativa: result.direccionAlternativa || 'ninguna',
         plazasQueRotan: result.plazasQueRotan || 0,
         plazasFijasPorContinuidad: result.plazasFijasPorContinuidad || 0,
+        /* El modo de prioridad y su rastro: cuántas del año anterior volvieron y cuáles no
+           pudieron, con el motivo. Va al estudio guardado porque el Excel lo declara. */
+        priorizoContinuidad: Boolean(result.priorizoContinuidad),
+        continuidadRescatadas: result.continuidadRescatadas || 0,
+        continuidadNoRescatada: result.continuidadNoRescatada || [],
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -2832,6 +2850,59 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     </button>
                   ))}
               </div>
+            )}
+
+            {/* ── PRIORIZAR CONTINUIDAD ──
+                Pedido el 2026-09-02, «frente a los recién creados botones de cuartiles». La
+                continuidad YA entraba antes de competir por puntaje y ya estaba exenta del
+                filtro de holding; lo que la seguía descartando eran el filtro de pérdidas
+                operativas y la cuota de negativas. De esos dos la rescata este botón.
+
+                Solo aparece cuando el estudio anterior aporta comparables: sin ellas no hay nada
+                que priorizar. */}
+            {estudioAnteriorInfo && Array.isArray(estudioAnteriorInfo.comparables)
+              && estudioAnteriorInfo.comparables.length > 0 && (
+              <button
+                onClick={priorizarContinuidad}
+                disabled={loadingSelection || curando}
+                className={'flex items-center gap-1 px-2.5 py-2.5 rounded-lg text-[11px] font-bold border transition-colors '
+                  + (loadingSelection || curando
+                    ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                    : (selectionFunnel && selectionFunnel.priorizoContinuidad
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 cursor-pointer'
+                      : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'))}
+                title={'Rescata las comparables del estudio anterior que el filtro de pérdidas '
+                  + 'operativas dejó fuera, y evita que la cuota de negativas las desplace. NO '
+                  + 'rescata de independencia (Art. 260-1) ni de saldos negativos: lo primero es '
+                  + 'un hecho de hoy y lo segundo es dato no verosímil. Queda declarado en el '
+                  + 'Excel de soporte.'}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Priorizar continuidad</span>
+              </button>
+            )}
+
+            {/* Lo que el modo rescató y lo que no pudo. Lo segundo importa más: una comparable
+                del estudio pasado que desaparece en silencio se descubre al cotejar los dos
+                informes, y para entonces hay que explicarla sin saber por qué se fue. */}
+            {selectionFunnel && selectionFunnel.priorizoContinuidad && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem]">
+                <span className="text-indigo-700 dark:text-indigo-400 font-bold">
+                  {selectionFunnel.continuidadRescatadas} rescatada(s)
+                </span>
+                {' del filtro de pérdidas. '}
+                {selectionFunnel.continuidadNoRescatada
+                  && selectionFunnel.continuidadNoRescatada.length > 0 ? (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      {selectionFunnel.continuidadNoRescatada.length} no pudo(ieron) volver:{' '}
+                      {selectionFunnel.continuidadNoRescatada.slice(0, 2)
+                        .map((c) => `${c.name} (${c.motivo})`).join('; ')}
+                      {selectionFunnel.continuidadNoRescatada.length > 2 ? '…' : ''}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-500">Todas las del estudio anterior están en la muestra.</span>
+                  )}
+              </span>
             )}
 
             {/* POR QUE A VECES NO SE VE NINGUN CAMBIO.
