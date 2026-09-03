@@ -1167,12 +1167,67 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const alternativa = Math.min(alternativaPedida, alternativasDisponibles);
   const sustituciones = alternativa - 1;
 
-  const deMisma = sustituciones > 0
-    ? [
+  /* ── HACIA DONDE MUEVE LA ALTERNATIVA ──
+     Pedido el 2026-09-02: «cuando doy en otra combinacion me gustaria poder definirle si
+     queremos que los cuartiles suban o bajen», junto con «a veces le damos en otra combinacion
+     pero no se observan cambios a pesar de que si se ejecuta».
+
+     LAS DOS COSAS TIENEN LA MISMA CAUSA, y esta medida. Sustituyendo por ORDEN DE PUNTAJE, las
+     que salen son las de menor puntaje y las que entran son las siguientes de la reserva — y
+     ninguna de las dos tiene por que estar cerca del primer cuartil. Reproducido con 30
+     candidatas de la misma actividad, 10 de ellas de continuidad y N objetivo 12: las cinco
+     alternativas cambiaban la muestra (C15 salia, C13 entraba) y el P25 se quedaba CLAVADO en
+     3,650 %. La muestra se movia; el cuartil no. Eso es exactamente «se ejecuta y no se ve
+     nada».
+
+     Con direccion, la sustitucion se hace por MARGEN y no por puntaje:
+       · «bajar»: salen las de margen mas ALTO de las movibles y entran las mas BAJAS de la
+         reserva, asi que el rango entero —y con el el primer cuartil— baja;
+       · «subir»: al contrario.
+
+     Se mide con `margenDe`, la misma vara con la que se ordena la cuota de negativas: la
+     inyectada si el llamador la manda, y el margen crudo si no.
+
+     QUEDA DECLARADO en el resultado y en el Excel de soporte. Mover la muestra en una direccion
+     elegida es lo que un revisor mira con mas cuidado, asi que no puede quedar implicito: el
+     libro dice que combinacion se uso, hacia donde y cuantas comparables se sustituyeron. */
+  const direccion = config.direccionAlternativa === 'bajar' || config.direccionAlternativa === 'subir'
+    ? config.direccionAlternativa
+    : 'ninguna';
+
+  let deMisma;
+  if (sustituciones > 0 && direccion !== 'ninguna') {
+    /* Las candidatas de misma actividad ordenadas por margen. Las que entran salen de la
+       reserva —las que no caben en el cupo— y las que salen, del cupo. */
+    const conMargen = (c) => {
+      const m = margenDe(c);
+      return m === null ? Number.POSITIVE_INFINITY : m;
+    };
+    const enCupo = mismasPositivas.slice(0, cupoParaPositivas);
+    const enReserva = mismasPositivas.slice(cupoParaPositivas);
+    const peorPrimero = direccion === 'bajar'
+      /* Para bajar el rango: fuera las de margen mas alto. */
+      ? [...enCupo].sort((a, b) => conMargen(b) - conMargen(a))
+      /* Para subirlo: fuera las de margen mas bajo. */
+      : [...enCupo].sort((a, b) => conMargen(a) - conMargen(b));
+    const mejorPrimero = direccion === 'bajar'
+      /* Y entran las mas bajas de la reserva. */
+      ? [...enReserva].sort((a, b) => conMargen(a) - conMargen(b))
+      : [...enReserva].sort((a, b) => conMargen(b) - conMargen(a));
+
+    const salen = new Set(peorPrimero.slice(0, sustituciones));
+    deMisma = [
+      ...enCupo.filter((c) => !salen.has(c)),
+      ...mejorPrimero.slice(0, sustituciones),
+    ];
+  } else if (sustituciones > 0) {
+    deMisma = [
       ...mismasPositivas.slice(0, cupoParaPositivas - sustituciones),
       ...mismasPositivas.slice(cupoParaPositivas, cupoParaPositivas + sustituciones),
-    ]
-    : mismasPositivas.slice(0, cupoParaPositivas);
+    ];
+  } else {
+    deMisma = mismasPositivas.slice(0, cupoParaPositivas);
+  }
   const faltan = Math.max(0, cupoParaPositivas - deMisma.length);
   const afinesPositivas = afines.filter((c) => !enPerdida(c));
   const deAmpliacion = afinesPositivas.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
@@ -1243,6 +1298,19 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        muestra: con el cribado y este numero se reconstruye exactamente la misma seleccion. */
     alternativa,
     alternativasDisponibles,
+    /* Hacia donde se pidio mover el rango. */
+    direccionAlternativa: direccion,
+    /* ── POR QUE LA ALTERNATIVA NO MUEVE EL CUARTIL, CUANDO NO LO MUEVE ──
+       Reportado el 2026-09-02: «a veces le damos en otra combinacion pero no se observan cambios
+       a pesar de que si se ejecuta». La causa es que las de continuidad no se sustituyen —su
+       inclusion se sustento el anio anterior— asi que solo rotan las plazas que quedan. Con 10
+       de continuidad en una muestra de 12, la alternativa mueve 2 comparables de 12 y el primer
+       cuartil, que cae en la posicion 2,75, ni se entera.
+
+       Estos dos numeros permiten decirlo en la pantalla con evidencia en vez de dejar al
+       analista pulsando un boton que no hace nada visible. */
+    plazasQueRotan: cupoParaPositivas,
+    plazasFijasPorContinuidad: continuidadIncluidas.length,
     /* Contra que se midio la cercania de rentabilidad. Se declara porque centrar la muestra en
        la rentabilidad de la parte examinada es lo que un revisor mira mas de cerca: tiene que
        quedar escrito en el soporte, no implicito en un puntaje. */

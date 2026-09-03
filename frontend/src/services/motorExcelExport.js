@@ -148,6 +148,10 @@ export function construirLibroSoporte(datos) {
       combinacion: {
         usada: embudo.alternativa || 1,
         disponibles: embudo.alternativasDisponibles || 1,
+        /* HACIA DONDE se movió la muestra. Se publica porque mover el rango en una dirección
+           elegida es lo que un revisor mira con más cuidado: tiene que constar, no quedar
+           implícito en una muestra que ya no es la de mayor puntaje. */
+        direccion: embudo.direccionAlternativa || 'ninguna',
       },
       /* Contra qué se midió la cercanía de rentabilidad de cada candidata. Es un criterio de
          comparabilidad (Art. 260-4) que hay que sustentar, y es lo que un revisor mira más de

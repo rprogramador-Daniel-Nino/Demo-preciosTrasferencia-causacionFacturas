@@ -2918,3 +2918,107 @@ test('la política de pérdidas sigue mandando sobre el ancla', () => {
   assert.strictEqual(por.P.factores.rentabilidad, 1, 'la negativa se premia');
   assert.strictEqual(por.R.factores.rentabilidad, 0.4, 'y la rentable no, aunque coincida con el ancla');
 });
+
+/* ══════ LA DIRECCION DE LA ALTERNATIVA, Y POR QUE ANTES NO SE VEIA NADA ══════
+
+   Dos pedidos del 2026-09-02, con la misma causa detras: «cuando doy en otra combinacion me
+   gustaria poder definirle si queremos que los cuartiles suban o bajen» y «a veces le damos en
+   otra combinacion pero no se observan cambios a pesar de que si se ejecuta».
+
+   MEDIDO. Sustituyendo por ORDEN DE PUNTAJE —lo que hacia antes— las que salen son las de menor
+   puntaje y las que entran las siguientes de la reserva, y ninguna de las dos tiene por que
+   estar cerca del primer cuartil. Con 30 candidatas y N objetivo 12, el P25 oscilaba entre
+   9,05 % y 8,45 % sin ir a ninguna parte. Con direccion va monotono:
+
+     bajar   9,05 → 8,45 → 7,85 → 6,35 %
+     subir   9,05 → 9,65 → 10,25 → 10,85 %
+
+   Y LA OTRA MITAD DEL DEFECTO: con 10 de continuidad en una muestra de 12 no se mueve NADA en
+   ninguna direccion —P25 fijo en 3,65 %— porque las de continuidad no se sustituyen y las 2
+   plazas que rotan caen por encima del cuartil. Eso es lo que el analista veia como «se ejecuta
+   y no cambia nada», y ahora se reporta con numeros. */
+
+const cDir = (i) => ({
+  id: 'D' + i, name: 'Dir ' + i, nameKey: nameKey('Dir ' + i),
+  s: 10000, c: 8000, op: (0.02 + i * 0.006) * 10000, desc: 'x',
+});
+const UNIVERSO_DIR = Array.from({ length: 30 }, (_, i) => cDir(i));
+const CFG_DIR = {
+  nTarget: 12, minimo: 10, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+const p25De = (r) => {
+  const v = r.seleccionadas.map((c) => c.op / c.s).sort((a, b) => a - b);
+  const pos = (v.length - 1) * 0.25;
+  const lo = Math.floor(pos);
+  return v[lo] + (pos - lo) * (v[lo + 1] - v[lo]);
+};
+const corre = (dir, alt, previas = []) => scoreCandidates(
+  UNIVERSO_DIR, { ...CFG_DIR, alternativa: alt, direccionAlternativa: dir },
+  'x', previas, { ventasParteExaminada: 10000 },
+);
+
+test('con dirección «bajar» el primer cuartil baja en cada alternativa', () => {
+  const serie = [1, 2, 3, 4].map((a) => p25De(corre('bajar', a)));
+  serie.slice(1).forEach((v, i) => {
+    assert.ok(v < serie[i],
+      `la alternativa ${i + 2} debe bajar el P25: ${serie[i]} → ${v}`);
+  });
+});
+
+test('con dirección «subir» sube', () => {
+  const serie = [1, 2, 3, 4].map((a) => p25De(corre('subir', a)));
+  serie.slice(1).forEach((v, i) => {
+    assert.ok(v > serie[i], `la alternativa ${i + 2} debe subir el P25: ${serie[i]} → ${v}`);
+  });
+});
+
+test('sin dirección, el comportamiento de antes: cambia la muestra pero el cuartil no va a ninguna parte', () => {
+  /* Se conserva porque es el comportamiento por defecto y ninguna corrida anterior debe
+     cambiar de resultado por este añadido. */
+  const a1 = corre('ninguna', 1);
+  const a3 = corre('ninguna', 3);
+  assert.strictEqual(a1.direccionAlternativa, 'ninguna');
+  assert.ok(Math.abs(p25De(a1) - p25De(a3)) < 1e-12,
+    'la 1 y la 3 dan el mismo cuartil: la sustitución por puntaje oscila');
+});
+
+test('la dirección queda declarada en el resultado', () => {
+  assert.strictEqual(corre('bajar', 2).direccionAlternativa, 'bajar');
+  assert.strictEqual(corre('subir', 2).direccionAlternativa, 'subir');
+  /* Un valor que no existe no se inventa: cae a «ninguna». */
+  const raro = scoreCandidates(UNIVERSO_DIR, { ...CFG_DIR, alternativa: 2, direccionAlternativa: 'raro' },
+    'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(raro.direccionAlternativa, 'ninguna');
+});
+
+test('reporta cuántas plazas rotan y cuántas están fijas por continuidad', () => {
+  /* LA PRUEBA QUE EXPLICA EL «NO SE VE NADA». Con 10 de continuidad en una muestra de 12 solo
+     rotan 2 plazas, y el primer cuartil —que cae en la posición 2,75— queda entre las fijas. */
+  const previas = UNIVERSO_DIR.slice(0, 10).map((c) => ({ name: c.name }));
+  const r = corre('bajar', 2, previas);
+  assert.strictEqual(r.plazasFijasPorContinuidad, 10);
+  assert.strictEqual(r.plazasQueRotan, 2);
+
+  /* Y en efecto no se mueve, en ninguna dirección: es lo que hay que poder decirle al analista
+     en vez de dejarlo pulsando un botón. */
+  const base = p25De(corre('ninguna', 1, previas));
+  ['bajar', 'subir'].forEach((dir) => {
+    [2, 3, 4].forEach((a) => {
+      assert.ok(Math.abs(p25De(corre(dir, a, previas)) - base) < 1e-12,
+        `con la continuidad dominando, «${dir}» tampoco mueve el cuartil`);
+    });
+  });
+});
+
+test('la dirección NO retira comparables de continuidad', () => {
+  /* Retirar una comparable aceptada el año anterior hay que justificarlo en el informe: no
+     puede pasar porque alguien eligió una dirección. Es la misma regla que ya protege a la
+     continuidad frente a la alternativa y frente al puntaje. */
+  const previas = UNIVERSO_DIR.slice(0, 10).map((c) => ({ name: c.name }));
+  ['bajar', 'subir'].forEach((dir) => {
+    const r = corre(dir, 3, previas);
+    assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 10,
+      `«${dir}» no puede retirar continuidad`);
+  });
+});

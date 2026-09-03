@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock, ArrowDown, ArrowUp
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
 import { analizarRango } from '../services/rangoIntercuartil';
@@ -1053,7 +1053,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   };
 
   // Run Motor TOP-N Selection & AI Curation
-  const runEngineSelection = async (alternativaForzada = null) => {
+  const runEngineSelection = async (alternativaForzada = null, direccionForzada = null) => {
     if (!universo || universo.length === 0) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
@@ -1086,7 +1086,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          vuelta el estado todavia trae la anterior. */
       const configDeEstaCorrida = alternativaForzada === null
         ? engineConfig
-        : { ...engineConfig, alternativa: alternativaForzada };
+        : {
+          ...engineConfig,
+          alternativa: alternativaForzada,
+          ...(direccionForzada ? { direccionAlternativa: direccionForzada } : {}),
+        };
       const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
         /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
@@ -1171,6 +1175,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            Excel de soporte lo declara: centrar la muestra en la rentabilidad de la parte
            examinada es criterio de comparabilidad del Art. 260-4 y hay que sustentarlo. */
         anclaRentabilidad: result.anclaRentabilidad || 'medianaPool',
+        /* Hacia dónde se movió la muestra, y cuántas plazas podían moverse: lo primero se
+           declara en el soporte y lo segundo explica en pantalla por qué a veces no se ve
+           ningún cambio. */
+        direccionAlternativa: result.direccionAlternativa || 'ninguna',
+        plazasQueRotan: result.plazasQueRotan || 0,
+        plazasFijasPorContinuidad: result.plazasFijasPorContinuidad || 0,
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -1281,12 +1291,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      La alternativa se le pasa al motor por argumento en lugar de leerla del estado: `useState`
      no es sincrono y correr en la misma vuelta usaria la anterior, de modo que el boton
      mostraria siempre una combinacion de retraso. */
-  const otraCombinacion = () => {
+  /* `direccion` dice hacia dónde mover el rango: «bajar» saca las comparables de margen más
+     alto y mete las más bajas de la reserva, «subir» al contrario. Sin dirección se conserva la
+     sustitución por puntaje, que es el comportamiento anterior. */
+  const otraCombinacion = (direccion = 'ninguna') => {
     const total = (selectionFunnel && selectionFunnel.alternativasDisponibles) || 1;
     const actual = (selectionFunnel && selectionFunnel.alternativa) || 1;
-    const siguiente = total <= 1 ? 1 : (actual % total) + 1;
-    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente }));
-    runEngineSelection(siguiente);
+    /* Al cambiar de dirección se vuelve a empezar desde la 2: la alternativa 3 de «bajar» no es
+       la 3 de «subir», así que seguir el contador de la otra dirección saltaría pasos. */
+    const cambioDeDireccion = direccion !== ((selectionFunnel && selectionFunnel.direccionAlternativa) || 'ninguna');
+    const siguiente = total <= 1 ? 1 : (cambioDeDireccion ? Math.min(2, total) : (actual % total) + 1);
+    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente, direccionAlternativa: direccion }));
+    runEngineSelection(siguiente, direccion);
   };
 
 
@@ -2749,6 +2765,55 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   Otra combinación ({selectionFunnel.alternativa || 1}/{selectionFunnel.alternativasDisponibles})
                 </span>
               </button>
+            )}
+
+            {/* ── HACIA DONDE ──
+                Pedido el 2026-09-02: «me gustaría poder definirle si queremos que los cuartiles
+                suban o bajen». La sustitución por puntaje cambiaba la muestra sin mover el
+                cuartil —medido: oscilaba entre 9,05 % y 8,45 % sin ir a ninguna parte—, porque
+                las que salían y entraban no tenían por qué estar cerca del primer cuartil. Con
+                dirección la sustitución se hace por margen y el cuartil va monótono. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1
+              && selectionFunnel.plazasQueRotan > 0 && (
+              <div className="flex items-center gap-1">
+                {[['bajar', 'Bajar cuartiles', ArrowDown], ['subir', 'Subir cuartiles', ArrowUp]]
+                  .map(([dir, etq, Icono]) => (
+                    <button
+                      key={dir}
+                      onClick={() => otraCombinacion(dir)}
+                      disabled={loadingSelection || curando}
+                      className={'flex items-center gap-1 px-2.5 py-2.5 rounded-lg text-[11px] font-bold border transition-colors '
+                        + (loadingSelection || curando
+                          ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                          : (selectionFunnel.direccionAlternativa === dir
+                            ? 'border-[#0FA3A1] bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1] cursor-pointer'
+                            : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'))}
+                      title={dir === 'bajar'
+                        ? 'Sustituye las comparables de margen más alto por las más bajas de la reserva, de modo que el rango entero baja. Queda declarado en el Excel de soporte.'
+                        : 'Sustituye las de margen más bajo por las más altas de la reserva, de modo que el rango entero sube. Queda declarado en el Excel de soporte.'}
+                    >
+                      <Icono className="w-3.5 h-3.5" />
+                      <span>{etq}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            {/* POR QUE A VECES NO SE VE NINGUN CAMBIO.
+                Reportado el 2026-09-02. Las de continuidad no se sustituyen —su inclusión se
+                sustentó el año anterior— así que solo rotan las plazas restantes. Con 10 de
+                continuidad en una muestra de 12 se mueven 2 comparables y el primer cuartil, que
+                cae en la posición 2,75, ni se entera. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1
+              && selectionFunnel.plazasFijasPorContinuidad > 0
+              && selectionFunnel.plazasQueRotan
+                <= selectionFunnel.plazasFijasPorContinuidad / 2 && (
+              <span className="text-[10.5px] text-amber-700 dark:text-amber-400 leading-snug max-w-[16rem]">
+                Solo <strong>{selectionFunnel.plazasQueRotan}</strong> plaza(s) pueden rotar:{' '}
+                {selectionFunnel.plazasFijasPorContinuidad} están fijas porque vienen del estudio
+                anterior. Con tan pocas, el cuartil casi no se mueve — para moverlo habría que
+                retirar comparables de continuidad, y eso se justifica en el informe.
+              </span>
             )}
 
           </div>

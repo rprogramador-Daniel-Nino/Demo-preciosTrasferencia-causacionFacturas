@@ -989,11 +989,22 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         cTxt('Combinación usada'),
         cTxt(`${combinacion.usada} de ${combinacion.disponibles}`),
       ]);
+      const dir = combinacion.direccion || 'ninguna';
       sel.push([
         cTxt('Criterio'),
-        cTxt('La selección es determinista y se ordena por puntaje de comparabilidad. Esta '
-          + 'combinación conserva las de mayor puntaje y sustituye las '
-          + `${combinacion.usada - 1} de menor puntaje por las siguientes de la reserva. `
+        cTxt('La selección es determinista y se ordena por puntaje de comparabilidad. '
+          + (dir === 'ninguna'
+            ? 'Esta combinación conserva las de mayor puntaje y sustituye las '
+              + `${combinacion.usada - 1} de menor puntaje por las siguientes de la reserva. `
+            : `Esta combinación sustituyó ${combinacion.usada - 1} comparable(s) `
+              + (dir === 'bajar'
+                ? 'de mayor margen por las de menor margen disponibles en la reserva, con lo '
+                  + 'que el rango intercuartílico se desplaza a la baja. '
+                : 'de menor margen por las de mayor margen disponibles en la reserva, con lo '
+                  + 'que el rango intercuartílico se desplaza al alza. ')
+              + 'Las sustituidas y las que entraron pertenecen todas a la actividad económica '
+              + 'confirmada por la curación, de modo que la sustitución opera entre candidatas '
+              + 'equivalentes en comparabilidad funcional. ')
           + 'La misma combinación reproduce siempre la misma muestra a partir del mismo '
           + 'cribado: la selección no es aleatoria.'),
       ]);
