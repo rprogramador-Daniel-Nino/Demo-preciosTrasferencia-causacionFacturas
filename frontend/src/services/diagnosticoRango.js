@@ -333,6 +333,9 @@ export function diagnosticarCumplimiento({
       statsAjustado: conAjuste.stats,
       statsNoAjustado: sinAjuste.stats,
       indicador,
+      /* Sin esto la banda descontaba el desplazamiento del ajuste incluso cuando el rango que
+         concluye es el crudo, y mandaba a buscar un nivel que no es el que se compara. */
+      ajusteDecide: rango.ajusteTieneDatos !== false,
     }),
     requisito,
     /* `null` cuando no hay rango o no hay indicador: es distinto de «no cumple», y la
@@ -670,17 +673,28 @@ function negativasDisponiblesEnUniverso(universo, study) {
  * @param {object} p
  * @param {object} p.statsAjustado    el rango que decide.
  * @param {object} p.statsNoAjustado  el mismo rango sin ajustar, para medir el desplazamiento.
- * @param {number} p.indicador        el margen de la parte examinada (ajustado, el que decide).
+ * @param {number} p.indicador        el margen de la parte examinada.
+ * @param {boolean} [p.ajusteDecide]   si el rango AJUSTADO es el que concluye. Cuando no lo es
+ *   —la mayoría de la muestra sin capital de trabajo— NO hay desplazamiento que descontar, y
+ *   descontarlo manda a buscar un nivel que no es el que se compara. Reportado el 2026-09-02
+ *   sobre un estudio real: la tarjeta decía «se concluye sobre el rango sin ajustar» y la banda
+ *   restaba de todos modos los 4,356 pt del ajuste, mandando a buscar entre -7,655 % y -2,847 %
+ *   cuando el nivel que había que alcanzar era 1,509 %. Y de paso avisaba de que entrarían
+ *   compañías en pérdida y habría que justificarlas, que tampoco hacía falta.
  * @returns {object|null} `null` si falta cualquiera de los dos rangos o el indicador.
  */
-export function bandaParaCribado({ statsAjustado, statsNoAjustado, indicador } = {}) {
+export function bandaParaCribado({
+  statsAjustado, statsNoAjustado, indicador, ajusteDecide = true,
+} = {}) {
   if (!statsAjustado || !statsNoAjustado) return null;
   if (indicador === null || indicador === undefined || Number.isNaN(indicador)) return null;
   const { p25: p25Aj } = statsAjustado;
   const { p25: p25Cr, p75: p75Cr } = statsNoAjustado;
   if ([p25Aj, p25Cr, p75Cr].some((v) => v === null || v === undefined || Number.isNaN(v))) return null;
 
-  const desplazamiento = p25Aj - p25Cr;
+  /* Solo se descuenta el desplazamiento cuando el ajustado es el que concluye. Si concluye el
+     crudo, el nivel objetivo del screening es el del contribuyente tal cual. */
+  const desplazamiento = ajusteDecide ? (p25Aj - p25Cr) : 0;
   /* El ancho de la banda: la dispersión intercuartílica que el propio sector ya muestra. No es
      un número inventado —sale de las comparables que hay— y mantiene el criterio proporcionado a
      la realidad del mercado en vez de a lo que haría falta para cumplir. */
