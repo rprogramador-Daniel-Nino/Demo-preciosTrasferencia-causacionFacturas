@@ -1167,6 +1167,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            seleccion, y por eso viaja al estudio guardado y no solo a la pantalla. */
         alternativa: result.alternativa || 1,
         alternativasDisponibles: result.alternativasDisponibles || 1,
+        /* Contra qué se midió la cercanía de rentabilidad. Va al estudio guardado porque el
+           Excel de soporte lo declara: centrar la muestra en la rentabilidad de la parte
+           examinada es criterio de comparabilidad del Art. 260-4 y hay que sustentarlo. */
+        anclaRentabilidad: result.anclaRentabilidad || 'medianaPool',
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el

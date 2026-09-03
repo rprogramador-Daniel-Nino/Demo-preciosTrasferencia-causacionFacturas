@@ -757,11 +757,38 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      especialidad. */
   const iaPorId = (contexto.iaMatch && contexto.iaMatch.porId) || null;
 
-  /* Mediana del margen operacional del pool: el factor de rentabilidad premia a
-     las candidatas próximas al comportamiento central del conjunto. */
+  /* Mediana del margen operacional del pool: el comportamiento central del universo cribado.
+     Es el ancla de respaldo del factor de rentabilidad. */
   const medianaPool = medianaDe(
     (candidates || []).map(c => (c.s ? (c.op ?? 0) / c.s : null)).filter(x => x !== null)
   );
+
+  /* ── EL ANCLA DE LA RENTABILIDAD: LA PARTE EXAMINADA ──
+     Pedido el 2026-09-02: «tomar comparables que encajen con el indicador de nuestra compañia,
+     hacemos ese dato dinamico para que sirva para todas las compañias».
+
+     Antes el factor premiaba la cercania a la MEDIANA DEL POOL, asi que la muestra se centraba
+     en la industria y no en la parte examinada. En el caso reportado el pool estaba cerca del
+     10 % y el contribuyente en 6,204 %: el puntaje empujaba justo hacia las que lo dejaban
+     fuera del rango.
+
+     Anclarlo en el indicador de la parte examinada es criterio de comparabilidad del Art. 260-4
+     —un nivel de rentabilidad semejante suele reflejar funciones y riesgos semejantes— y es
+     DINAMICO por construccion: sale del propio estudio, no de un parametro, asi que sirve para
+     todas las compañias sin configurar nada.
+
+     Se mide con el margen SIN AJUSTAR, que es la vara con la que se busca («primero buscamos
+     las comparables con el no ajustado», criterio del contador del 2026-09-01). El cumplimiento
+     se sigue concluyendo sobre el ajustado.
+
+     Sin indicador propio se cae a la mediana del pool: el comportamiento anterior es mejor que
+     ninguno. */
+  /* Se reutiliza , que el componente ya envia para ordenar la cuota de
+     negativas: es el mismo margen del contribuyente medido con la misma vara sin ajustar, asi
+     que pedirlo dos veces con dos nombres invitaria a que divergieran. */
+  const margenTP = num(contexto.pliParteExaminada);
+  const anclaRent = margenTP !== null ? margenTP : medianaPool;
+  const anclaRentabilidad = margenTP !== null ? 'parteExaminada' : 'medianaPool';
 
   const evaluated = (candidates || []).map(cand => {
     let descartada = false;
@@ -872,13 +899,15 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       fTamano = 1 / (1 + distancia);
     }
 
-    /* ── rentabilidad: cercanía a la mediana del pool, o preferencia por pérdida ── */
+    /* ── rentabilidad: cercanía al ancla, o preferencia por pérdida ──
+       La política de pérdidas manda sobre el ancla: con `preferir` es una decisión explícita del
+       analista y no puede quedar por debajo de una preferencia de comparabilidad. */
     let fRent;
     if (cand.hasLoss) fRent = perdidaOp === 'preferir' ? 1 : 0.4;
     else if (perdidaOp === 'preferir') fRent = 0.4;
     else {
       const pli = cand.s ? (cand.op ?? 0) / cand.s : 0;
-      fRent = Math.max(0, 1 - Math.min(1, Math.abs(pli - medianaPool) / 0.5));
+      fRent = Math.max(0, 1 - Math.min(1, Math.abs(pli - anclaRent) / 0.5));
     }
 
     /* ── capital de trabajo: cuanto ajuste haria falta para poder compararla ── */
@@ -1214,6 +1243,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        muestra: con el cribado y este numero se reconstruye exactamente la misma seleccion. */
     alternativa,
     alternativasDisponibles,
+    /* Contra que se midio la cercania de rentabilidad. Se declara porque centrar la muestra en
+       la rentabilidad de la parte examinada es lo que un revisor mira mas de cerca: tiene que
+       quedar escrito en el soporte, no implicito en un puntaje. */
+    anclaRentabilidad,
     /* ── LA DIMENSION QUE EXPLICA EL AJUSTE ──
        Si el ajuste desplaza el rango diez puntos, el problema del estudio no es la muestra: es
        que las comparables no se parecen al contribuyente en capital de trabajo. Estos numeros
