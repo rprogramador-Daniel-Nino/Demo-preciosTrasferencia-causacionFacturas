@@ -18,7 +18,7 @@ import {
   guardarCliente, migrarDesdeLocalStorage, migrarDesdeRaiz,
   listarEstudiosCompartidosConmigo, leerEstudioCompartido, guardarEstudioCompartido,
 } from './services/firestoreRepo';
-import { separarEstudio, SELLO_ESTUDIO, ROL_EDITOR } from './services/firestoreModelo';
+import { separarEstudio, SELLO_ESTUDIO, sonDelEstudio, ROL_EDITOR } from './services/firestoreModelo';
 import {
   guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes,
   borrarRecursosDelEstudio,
@@ -187,7 +187,7 @@ export default function App() {
        los datos de un contribuyente en el estudio de otro no se nota hasta que ya se
        radicó. El aviso es visible a propósito: un guardado que se salta en silencio es
        lo mismo que un fallo silencioso. */
-    if (study[SELLO_ESTUDIO] !== activeStudyId) {
+    if (!sonDelEstudio(study, activeStudyId)) {
       console.error(
         '[estudios] guardado bloqueado: los datos en memoria son del estudio ' +
         study[SELLO_ESTUDIO] + ' y el activo es ' + activeStudyId
@@ -298,14 +298,41 @@ export default function App() {
     };
   };
 
+  /* Pone en pantalla un estudio ya resuelto: el identificador, sus datos y el paso por el
+     que se entra, todo en el mismo render.
+
+     Que sea uno solo es el punto. Antes cada camino hacía `setActiveStudyId(id)` y después
+     `setStudy(await conRecursosLocales(...))`, y ese `await` en medio partía el cambio en
+     dos renders: en el primero el estudio activo ya era el nuevo mientras los datos en
+     memoria —y la pestaña— seguían siendo los del anterior. En esa ventana la aplicación
+     montaba las pantallas del estudio nuevo alimentándolas con el estudio viejo, y el motor
+     de comparables toma su estado inicial UNA sola vez, al montarse: se quedaba con las
+     comparables, el cribado de Capital IQ, el informe del año anterior y las imágenes de
+     los EEFF del estudio anterior. Cuando llegaban los datos buenos ya no se remontaba —el
+     identificador no había vuelto a cambiar—, así que su efecto volcaba todo eso en el
+     estudio recién abierto, ya con el sello correcto, y el autoguardado lo subía a la nube
+     sin poder distinguirlo de un trabajo legítimo. El resultado: un estudio nuevo que abría
+     el paso 4 con las comparables y los EEFF de otro contribuyente.
+
+     Los datos llegan ya completos —leídos de la nube y con los recursos de este navegador
+     pegados por `conRecursosLocales`—: aquí no se espera nada. */
+  const abrirEstudio = ({ id, datos, tab = 'contribuyente', ajeno = null }) => {
+    /* Abrir un estudio no es modificarlo: el autoguardado se salta el primer disparo. */
+    cargando.current = true;
+    setEstudioAjeno(ajeno);
+    setActiveStudyId(id);
+    setStudy(datos);
+    setActiveTab(tabCanonica(tab));
+  };
+
   const selectStudy = async (id, { tabInicial = 'contribuyente' } = {}) => {
     try {
       const datos = await leerEstudio(id, usuario);
-      cargando.current = true;
-      setEstudioAjeno(null);
-      setActiveStudyId(id);
-      setStudy(await conRecursosLocales(id, datos));
-      setActiveTab(tabCanonica(tabInicial));
+      /* TODO lo asíncrono, antes de tocar el estado. El `await` que había en medio abría
+         una ventana de un render en la que el estudio activo ya era el nuevo y los datos
+         en memoria seguían siendo los del anterior; ver `abrirEstudio`. */
+      const conLocales = await conRecursosLocales(id, datos);
+      abrirEstudio({ id, datos: conLocales, tab: tabInicial });
       return true;
     } catch (err) {
       console.error('[estudios] no se pudo abrir', err);
@@ -395,15 +422,17 @@ export default function App() {
         setAvisoSesion('Ese estudio ya no está disponible: puede que su dueño le haya retirado el acceso.');
         return false;
       }
-      cargando.current = true;
-      setEstudioAjeno({
-        duenoUid: compartido.duenoUid,
-        duenoNombre: compartido.duenoNombre || leido.duenoNombre || 'otro consultor',
-        rol: leido.rol,
+      const conLocales = await conRecursosLocales(compartido.id, leido.datos);
+      abrirEstudio({
+        id: compartido.id,
+        datos: conLocales,
+        tab: tabInicial,
+        ajeno: {
+          duenoUid: compartido.duenoUid,
+          duenoNombre: compartido.duenoNombre || leido.duenoNombre || 'otro consultor',
+          rol: leido.rol,
+        },
       });
-      setActiveStudyId(compartido.id);
-      setStudy(await conRecursosLocales(compartido.id, leido.datos));
-      setActiveTab(tabCanonica(tabInicial));
       return true;
     } catch (err) {
       console.error('[compartidos] no se pudo abrir', err);
@@ -446,11 +475,7 @@ export default function App() {
     const newId = 'study_' + Date.now();
     try {
       await guardarEstudio(newId, datos, usuario);
-      cargando.current = true;
-      setEstudioAjeno(null);
-      setActiveStudyId(newId);
-      setStudy({ ...datos, [SELLO_ESTUDIO]: newId });
-      setActiveTab('contribuyente');
+      abrirEstudio({ id: newId, datos: { ...datos, [SELLO_ESTUDIO]: newId }, tab: 'contribuyente' });
       await refrescarIndice();
     } catch (err) {
       console.error('[estudios] no se pudo crear', err);
@@ -662,7 +687,15 @@ export default function App() {
            pantallas se destruyen y se crean de nuevo, y ese remonte es lo que impide que el
            estado local de un estudio acabe escrito en el siguiente. */
         <React.Fragment key={activeStudyId}>
-          {vistasMontadas.estudioId === activeStudyId && vistasMontadas.tabs.map(tab => (
+          {/* Y no se monta ninguna hasta que los datos en memoria sean los de ESTE estudio.
+              La pantalla que se monta se queda con lo que le llegue en ese primer render
+              —el motor de comparables copia ahí sus comparables, su cribado y su informe
+              anterior, y ya no los suelta—, así que montarla con el estudio anterior es
+              exactamente cómo los datos de uno acababan escritos en el otro. `abrirEstudio`
+              cierra la ventana en la que eso podía pasar; esto lo cierra también para
+              cualquier camino que se agregue después. */}
+          {vistasMontadas.estudioId === activeStudyId && sonDelEstudio(study, activeStudyId)
+            && vistasMontadas.tabs.map(tab => (
             <div key={tab} style={{ display: tab === tabCanonica(activeTab) ? undefined : 'none' }}>
               {tab === 'contribuyente' && (
                 <DatosContribuyente study={study} updateStudy={updateStudy} />
