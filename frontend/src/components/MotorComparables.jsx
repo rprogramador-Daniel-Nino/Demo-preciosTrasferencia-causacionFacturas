@@ -518,19 +518,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch,
     capitalTrabajoTP]);
 
-  /* Por qué cada comparable del año pasado ya no está.
+  /* La conciliación con el estudio anterior NO se recalcula en cada render.
 
-     VA DESPUES del memo de `auditoria` y no antes: lo lee, y los dos corren DURANTE el render,
-     así que declararlo arriba dejaba `auditoria` en zona muerta y el panel se caía con «Cannot
-     access before initialization». Es el mismo error que `smoke_panel.mjs` ya cazó hoy con
-     `capitalTrabajoTP`; esta vez se vio en el orden de las líneas antes de compilar. */
-  const conciliacion = useMemo(() => conciliarConEstudioAnterior({
-    previas: (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
-    universo,
-    muestra: comparables,
-    rechazadas: (auditoria && auditoria.rechazadas) || [],
-    reserva: (auditoria && auditoria.reserva) || [],
-  }), [estudioAnteriorInfo, universo, comparables, auditoria]);
+     Tenía un `useMemo` que corría siempre, y eso estaba mal por dos motivos, señalados por el
+     usuario el 2026-09-02 («recuerda que esto solo se hace al clicar al botón de comparables»):
+
+       · Mostraba un resultado ANTES de que el motor hubiera corrido, armado con una auditoría
+         vacía o de una corrida anterior: decía «6 fuera del cribado» sobre una clasificación
+         que nadie había calculado todavía.
+       · `auditoria` REEJECUTA `scoreCandidates` cuando le falta el rastro de la corrida, así
+         que el memo podía disparar el motor entero en cada render.
+
+     La conciliación pertenece a la CORRIDA, no al render: se calcula al ejecutar la selección y
+     viaja dentro de `selectionFunnel`, que ya se persiste con el estudio. Al abrir un estudio
+     guardado se lee de ahí, sin recalcular nada. */
+  const conciliacion = (selectionFunnel && selectionFunnel.conciliacionAnterior) || null;
 
   /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
      —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
