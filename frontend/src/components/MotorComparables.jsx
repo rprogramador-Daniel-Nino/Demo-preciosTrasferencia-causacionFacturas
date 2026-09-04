@@ -1537,8 +1537,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const redactarDescripcionesPendientes = async () => {
     setRedactandoDescripciones(true);
     try {
+      /* ── YA NO SE EXIGE `eeffArchivo` ──
+         Reportado el 2026-09-02 con una captura del ANEXO B: la descripción de Givaudan salía
+         EN INGLES. La causa era esta condición: solo se redactaba la descripción de las
+         comparables con estado financiero ADJUNTO, y una comparable sin EEFF no podía obtener
+         su traducción nunca.
+
+         Pero el ANEXO B publica `descActividad || desc` de TODA comparable de la muestra
+         (`anexoBHtml.js:304`), tenga EEFF o no. Así que la puerta estaba en el sitio
+         equivocado: bloqueaba la traducción de un texto que el informe publica igual, y el
+         documento se radicaba con la descripción en inglés de Capital IQ.
+
+         La descripción sale del campo `desc` del cribado y no necesita nada más. */
       const indices = comparables
-        .map((c, i) => (c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad ? i : -1))
+        .map((c, i) => (String(c.desc || '').trim() && !c.descActividad ? i : -1))
         .filter((i) => i >= 0);
       await redactarDescripcionesDeFilas(comparables, indices);
     } finally {
@@ -3199,9 +3211,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <button
               type="button"
               onClick={redactarDescripcionesPendientes}
-              disabled={redactandoDescripciones || !comparables.some((c) => c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad)}
+              disabled={redactandoDescripciones || !comparables.some((c) => String(c.desc || '').trim() && !c.descActividad)}
               className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Redacta en español, con IA, la descripción de actividad de las comparables con EEFF cargado que todavía no la tienen"
+              title="Redacta en español, con IA, la descripción de actividad de las comparables que todavía no la tienen. El ANEXO B publica esta descripción para todas, así que sin redactar se radica el texto en inglés de Capital IQ."
             >
               <Sparkles className="w-4 h-4" />
               {redactandoDescripciones ? 'Redactando…' : 'Redactar descripciones pendientes'}
