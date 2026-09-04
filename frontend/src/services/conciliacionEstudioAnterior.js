@@ -42,7 +42,11 @@
    Servicio puro, sin React y sin red, como `diagnosticoRango.js` y `previsualizarFiltros.js`.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { nameKey } from './comparablesEngine.js';
+/* `claveDeCruce` y no `nameKey`: la segunda es el identificador de documento del catálogo en
+   Firestore y por eso tiene que ser estable, pero no limpia las formas societarias escritas con
+   puntos y dejaba sin cruzar compañías que sí seguían en el cribado. Ver su nota en
+   `comparablesEngine.js`. */
+import { claveDeCruce } from './comparablesEngine.js';
 
 /* Cuántas palabras en común hacen sospechar que son la misma compañía escrita distinto. Dos,
    porque con una sola «Electric» emparejaría a media industria.
@@ -115,7 +119,7 @@ export function conciliarConEstudioAnterior({
   const lista = (Array.isArray(previas) ? previas : []).filter((c) => c && (c.name || c.nombre));
   if (!lista.length) return null;
 
-  const clave = (c) => (c && c.nameKey) || nameKey((c && (c.name || c.nombre)) || '');
+  const clave = (c) => claveDeCruce((c && (c.name || c.nombre)) || '');
   const indice = (arr) => {
     const m = new Map();
     (Array.isArray(arr) ? arr : []).forEach((c) => {

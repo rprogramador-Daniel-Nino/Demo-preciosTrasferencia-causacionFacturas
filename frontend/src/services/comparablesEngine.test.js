@@ -11,7 +11,7 @@ import {
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
-  MINIMO_COMPARABLES, gradoDeActividad, consultarGemini,
+  MINIMO_COMPARABLES, gradoDeActividad, consultarGemini, claveDeCruce,
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -3234,4 +3234,97 @@ test('el modo queda declarado en el resultado', () => {
       .priorizoContinuidad, true);
   assert.strictEqual(
     scoreCandidates(universo, CFG_CONT, 'x', [], { ventasParteExaminada: 10000 }).priorizoContinuidad, false);
+});
+
+/* ══════ LA CLAVE DE CRUCE: por que existe aparte de `nameKey` ══════
+
+   Reportado el 2026-09-02 con la captura del panel: «Del estudio anterior: 1 de 7 siguen. 6 que
+   el cribado de este anio no trae» y, debajo, «6 podria(n) estar en el cribado con el nombre
+   escrito de otra forma». Cuando las SEIS que se fueron tienen candidata parecida, el problema
+   no es que las companias se hayan ido: es el cruce de nombres.
+
+   LA CAUSA, medida. En el patron de `nameKey` —`\b(…|CO\.|S\.A\.|…)\b`— toda alternativa que
+   TERMINA en punto no puede satisfacer el `\b` final: despues del punto suele venir un espacio,
+   y entre dos caracteres que no son de palabra NO hay frontera. Asi que ninguna forma societaria
+   escrita con puntos se limpiaba:
+
+     «Bolak Co. Ltd»  -> BOLAKCO     vs  «Bolak Company Limited» -> BOLAK
+     «Givaudan S.A.»  -> GIVAUDANSA  vs  «Givaudan SA»           -> GIVAUDAN
+     «Alfa S.A.S.»    -> ALFAS       vs  «Alfa SAS»              -> ALFA
+
+   Y los informes colombianos escriben «S.A.S.» con puntos constantemente.
+
+   POR QUE NO SE ARREGLA `nameKey`. Es el IDENTIFICADOR DE DOCUMENTO del catalogo de comparables
+   en Firestore (`firestoreRepo.js:470`). Cambiarla dejaria huerfano todo EEFF ya guardado cuyo
+   nombre lleve una forma con puntos, y «Buscar cifras ya cargadas por el equipo» dejaria de
+   encontrarlos sin decir nada. La clave de ALMACENAMIENTO tiene que ser estable; la de CRUCE
+   tiene que ser agresiva. Dos oficios, dos funciones. */
+
+test('la clave de cruce iguala las formas societarias escritas con y sin puntos', () => {
+  const pares = [
+    ['Bolak Co. Ltd', 'Bolak Company Limited'],
+    ['Givaudan S.A.', 'Givaudan SA'],
+    ['Alfa S.A.S.', 'Alfa SAS'],
+    ['Takasago International Corp.', 'Takasago International Corporation'],
+    ['Oriental Aromatics Ltd', 'Oriental Aromatics Limited'],
+    ['Misitano & Stracuzzi S.p.A.', 'Misitano & Stracuzzi SpA'],
+  ];
+  pares.forEach(([a, b]) => {
+    assert.strictEqual(claveDeCruce(a), claveDeCruce(b), `«${a}» debe cruzar con «${b}»`);
+  });
+});
+
+test('y aguanta el sufijo de bolsa que agrega Capital IQ', () => {
+  assert.strictEqual(
+    claveDeCruce('Furukawa Electric Co., Ltd.'),
+    claveDeCruce('Furukawa Electric Co Ltd (TSE:5801)'),
+  );
+});
+
+test('NO iguala compañías distintas del mismo grupo', () => {
+  /* El riesgo de una clave agresiva: «Sumitomo Electric Industries» y «Sumitomo Corporation» son
+     dos compañías, y confundirlas mete en la muestra una que nadie evaluó. */
+  assert.notStrictEqual(
+    claveDeCruce('Sumitomo Electric Industries Ltd'),
+    claveDeCruce('Sumitomo Corporation'),
+  );
+  assert.notStrictEqual(claveDeCruce('Croda International Plc'), claveDeCruce('Croda Iberica SA'));
+  assert.notStrictEqual(claveDeCruce('Alfa Chemicals'), claveDeCruce('Beta Chemicals'));
+});
+
+test('las alternativas largas van antes que las cortas', () => {
+  /* La alternancia de JavaScript toma la primera que encaja: con `CORP` delante de
+     `CORPORATION`, «Corporation» quedaría partida en «CORP» + «ORATION» y la clave saldría con
+     basura pegada. */
+  assert.strictEqual(claveDeCruce('Acme Corporation'), 'ACME');
+  assert.strictEqual(claveDeCruce('Acme Corp'), 'ACME');
+  assert.strictEqual(claveDeCruce('Acme Limited'), 'ACME');
+  assert.strictEqual(claveDeCruce('Acme Ltda'), 'ACME');
+  assert.strictEqual(claveDeCruce('Acme Incorporated'), 'ACME');
+});
+
+test('`nameKey` NO cambia: es la clave de almacenamiento', () => {
+  /* Si esta prueba falla, hay EEFF guardados en Firestore que dejaron de encontrarse. */
+  assert.strictEqual(nameKey('Furukawa Electric Co., Ltd.'), 'FURUKAWAELECTRICCO');
+  assert.strictEqual(nameKey('Akatsuki Inc. (TSE:3932)'), 'AKATSUKI');
+  assert.strictEqual(nameKey('Bolak Co. Ltd'), 'BOLAKCO');
+  /* Se fijan los valores TAL COMO SON, con su limitación incluida —«…CO» al final, porque `CO`
+     sin punto no está en su patrón— y no como sería deseable que fueran. Es una clave de
+     almacenamiento: lo que importa es que no se mueva, no que sea bonita. El cruce lo arregla
+     `claveDeCruce`, que es la de las pruebas de arriba. */
+});
+
+test('el cruce de continuidad del motor usa la clave nueva', () => {
+  /* La prueba que cierra el reporte: una comparable del estudio anterior escrita «Co. Ltd» y en
+     el cribado «Company Limited» tiene que reconocerse como continuidad. */
+  const universo = [{
+    id: 'B1', name: 'Bolak Company Limited', nameKey: nameKey('Bolak Company Limited'),
+    s: 10000, c: 8000, op: 500, desc: 'x',
+  }];
+  const r = scoreCandidates(universo, {
+    nTarget: 1, minimo: 1, perdidaOp: 'incluir', holding: 'excluir',
+    saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50,
+  }, 'x', [{ name: 'Bolak Co. Ltd' }], { ventasParteExaminada: 10000 });
+  assert.strictEqual(r.seleccionadas[0].esContinuidad, true,
+    'la reconoce aunque el informe anterior escribiera la forma societaria de otro modo');
 });

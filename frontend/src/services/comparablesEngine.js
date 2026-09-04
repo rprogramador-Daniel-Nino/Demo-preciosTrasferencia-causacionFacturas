@@ -24,6 +24,64 @@ export function nameKey(str) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
+/* ── LA CLAVE DE CRUCE: normaliza lo que `nameKey` no puede ──
+
+   `nameKey` tiene un defecto verificado el 2026-09-02: en su patrón `(…|CO\.|S\.A\.|…)`,
+   toda alternativa que TERMINA en punto no puede satisfacer el `` final —después del punto
+   suele venir un espacio, y entre dos caracteres que no son de palabra NO hay frontera—. Así que
+   `CO\.`, `INC\.`, `S\.A\.`, `S\.A\.S\.` y compañía están muertas. `INC`, `CORP` y `LTD`
+   funcionan solo porque también figuran SIN punto; `CO` no figuraba, y ninguna forma escrita con
+   puntos se limpiaba. Medido:
+
+     «Bolak Co. Ltd»  → BOLAKCO     vs  «Bolak Company Limited» → BOLAK      NO cruzaban
+     «Givaudan S.A.»  → GIVAUDANSA  vs  «Givaudan SA»           → GIVAUDAN   NO cruzaban
+     «Alfa S.A.S.»    → ALFAS       vs  «Alfa SAS»              → ALFA       NO cruzaban
+
+   Y los informes colombianos escriben «S.A.S.» con puntos constantemente, así que el cruce de
+   continuidad fallaba de forma sistemática: reportado como «la continuidad no me está trayendo
+   las mismas comparables del año pasado».
+
+   POR QUE NO SE ARREGLA `nameKey` Y SE AGREGA ESTA. `nameKey` ES EL IDENTIFICADOR DE DOCUMENTO
+   del catálogo de comparables en Firestore (`documento(usuario, COMPARABLES, entrante.nameKey)`
+   en `firestoreRepo.js:470`). Cambiarlo dejaría huérfano todo EEFF ya guardado cuyo nombre
+   lleve una forma con puntos, y «Buscar cifras ya cargadas por el equipo» dejaría de
+   encontrarlos sin decir nada. La clave de ALMACENAMIENTO tiene que ser estable; la de CRUCE
+   tiene que ser agresiva. Son dos oficios y por eso son dos funciones.
+
+   El orden es lo que arregla el defecto: la puntuación se convierte en ESPACIOS antes de quitar
+   las formas societarias, de modo que «S.A.S.» llega como «S A S» y «Co.» como «Co», y ahí sí
+   hay fronteras de palabra. Después se colapsa todo. */
+/* LITERAL de expresión regular y no `new RegExp('…')`: dentro de una cadena JavaScript, `'\b'`
+   es el carácter de RETROCESO (U+0008) y no una frontera de palabra, así que el patrón no
+   limpiaba nada y la clave salía con las formas societarias pegadas. Se comprobó midiendo.
+
+   Las alternativas van de la MÁS LARGA a la más corta dentro de cada familia —CORPORATION antes
+   que CORP, LIMITED antes que LTD— porque la alternancia de JavaScript toma la primera que
+   encaja: con `CORP` delante, «Corporation» quedaría partida en «CORP» + «ORATION». */
+const FORMAS_SOCIETARIAS = /\b(COLOMBIA|INCORPORATED|INC|CORPORATION|CORP|LIMITED|LTDA|LTD|LLC|LLP|PLC|COMPANY|CO|S A S|SAS|S A DE C V|S DE R L|S A|SA|C A|CA|NV|BV|GMBH|AG|OYJ|OY|AB|ASA|S P A|SPA|PTE|PT|TBK|BHD|SDN|K K|KK|JSC|PJSC|OAO|PAO)\b/g;
+
+/**
+ * La clave con la que se cruza una comparable del estudio anterior contra el cribado de este
+ * año. NO se usa para almacenar nada: ver la nota de arriba.
+ */
+export function claveDeCruce(str) {
+  if (!str) return '';
+  return String(str)
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    /* El sufijo de bolsa que agrega Capital IQ: «Akatsuki Inc. (TSE:3932)». */
+    .replace(/\([^)]*\)/g, ' ')
+    /* La puntuación a ESPACIOS y no a nada: es lo que deja «S.A.S.» como tres palabras y
+       permite que el patrón de formas societarias las alcance. */
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(FORMAS_SOCIETARIAS, ' ')
+    /* Y otra vez, porque quitar «S A S» puede dejar una «S» suelta que antes era parte de la
+       forma: «ALFA S A S» → «ALFA S» en una sola pasada del patrón global. */
+    .replace(FORMAS_SOCIETARIAS, ' ')
+    .replace(/[^A-Z0-9]+/g, '');
+}
+
 /**
  * Localiza la hoja de cribado. El export de Capital IQ trae varias —Screening,
  * Aggregates, Screen Criteria— y las candidatas están en la primera. Tomar
@@ -574,15 +632,20 @@ export function filtroQueDescarta(cand, config = {}, esContinuidad = false) {
  * @returns {{validas:Array, rechazadas:Array, porMotivo:Object<string,Array>}}
  */
 export function prefiltrar(candidates, config = {}, previas = []) {
+  /* Con `claveDeCruce` y no con `nameKey`: esta última no limpia las formas societarias
+     escritas con puntos —«Bolak Co. Ltd» no cruzaba con «Bolak Company Limited», ni «Givaudan
+     S.A.» con «Givaudan SA»— y por eso la continuidad no reconocía a compañías que sí seguían
+     en el cribado. `nameKey` se conserva intacta porque es el identificador de documento del
+     catálogo en Firestore. */
   const priorSet = new Set(
-    (previas || []).map((c) => c.nameKey || nameKey(c.name)).filter(Boolean),
+    (previas || []).map((c) => claveDeCruce(c.name || c.nombre || '')).filter(Boolean),
   );
   const validas = [], rechazadas = [];
   const porMotivo = {};
   FILTROS_DUROS.forEach((f) => { porMotivo[f.clave] = []; });
 
   (candidates || []).forEach(cand => {
-    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
+    const esContinuidad = priorSet.has(claveDeCruce(cand.name));
     const fuera = filtroQueDescarta(cand, config, esContinuidad);
     if (fuera) {
       rechazadas.push(cand);
@@ -750,7 +813,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        lo usa; destructurarlo sin usarlo haría creer que sí. */
   } = config;
 
-  const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
+  /* Misma clave que en `prefiltrar`: los dos jueces tienen que reconocer la continuidad
+     igual, o el embudo del paso 2 promete un número que el motor no respeta. */
+  const priorSet = new Set(
+    (priorComps || []).map(c => claveDeCruce((c && (c.name || c.nombre)) || c)),
+  );
   const ventasTP = num(contexto.ventasParteExaminada);
   /* La intensidad de capital de trabajo del contribuyente: la vara del factor nuevo. Llega como
      ratios ya calculados y no como saldos, porque el llamador tiene las cifras del estudio y
@@ -838,7 +905,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivoRechazo = motivo;
     };
 
-    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
+    const esContinuidad = priorSet.has(claveDeCruce(cand.name));
 
     /* ── Filtros de exclusión ──
        Control y holding van separados y en ese orden. Son dos hechos distintos y el

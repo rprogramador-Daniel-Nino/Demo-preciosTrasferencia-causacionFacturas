@@ -98,8 +98,12 @@ test('cuando hay una candidata PARECIDA se nombra: suele ser la misma con otro n
   /* El motivo más común de «no me trae las mismas» no es que la compañía se haya ido: es que el
      informe del año pasado escribió el nombre de otra forma. Se nombra para poder corregirlo, y
      NO se da por continuidad: un parecido no es una identidad. */
+  /* El par que esta prueba usaba antes —«Yangtze … Joint Stock Co» frente a «Yangtze … Joint
+     Stock Limited Company»— dejó de servir de ejemplo: con `claveDeCruce` ahora CRUZA EXACTO,
+     que es justo lo que ese arreglo buscaba. Hace falta un par que de verdad no normalice igual
+     y comparta palabras: el informe del año pasado escribió el nombre corto. */
   const r = conciliarConEstudioAnterior({
-    previas: [c('Yangtze Optical Fibre and Cable Joint Stock Co')],
+    previas: [c('Yangtze Optical Fibre')],
     universo: [c('Yangtze Optical Fibre And Cable Joint Stock Limited Company (SHSE:601869)')],
     muestra: [],
   });
