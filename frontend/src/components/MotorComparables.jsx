@@ -167,6 +167,21 @@ function ActividadDeLaComparable({ row }) {
   const cruda = String(row.desc || '').trim();
   const texto = redactada || cruda;
   if (!texto) {
+    /* La INYECTADA no tiene descripción por construcción: viene del informe del año anterior,
+       que trae la razón social y poco más, y el cribado de este año no la devolvió. Decirle
+       «sin descripción en el cribado» no ayuda; lo que hace falta es el paso siguiente.
+       Reportado el 2026-09-02: «¿y qué se espera que haga?». */
+    if (row.sinCifrasDeEsteAnio) {
+      return (
+        <p className="text-[10.5px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
+          <strong>Del estudio anterior; el cribado de este año no la trae.</strong> Sin cifras no
+          entra al rango. Dos caminos: inclúyala en el screening del paso 1 con su razón social
+          completa —Capital IQ la registra con la forma societaria, no con el nombre comercial— o
+          adjúntele el estado financiero aquí. Si es una compañía de capital cerrado, no publica
+          cifras y hay que sustentar su retiro.
+        </p>
+      );
+    }
     return (
       <p className="text-[10.5px] text-zinc-400 mt-1 italic">
         Sin descripción del negocio en el cribado: el informe la publicaría vacía.
