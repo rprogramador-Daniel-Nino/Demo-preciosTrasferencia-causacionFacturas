@@ -11,12 +11,41 @@ const path = require('path');
 const {
   debeCaerAGemini, aPeticionGemini, aRespuestaAnthropic, PROVEEDOR_GEMINI, CABECERA_PROVEEDOR,
 } = require('./functions/fallbackGemini');
+const { peticionDeOrigenPermitido } = require('./functions/origenesPermitidos');
+const { crearLimitadorPorIp, ipDeLaPeticion } = require('./functions/limitadorTasa');
+const { peticionAutenticada } = require('./functions/verificarSesion');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL_DEFAULT = 'gemini-3.5-flash';
+
+/* Filtro común de las cuatro rutas que hablan con una API de pago (Anthropic/Gemini):
+   /api/claude, /api/gemini, /api/extraer-rut y /api/extraer-camara. Ninguna comprobaba
+   sesión, solo el método HTTP. Ver functions/verificarSesion.js,
+   functions/origenesPermitidos.js y functions/limitadorTasa.js para el porqué de cada
+   capa. Mismo filtro que functions/index.js. Un limitador por ruta: que una se llene no
+   debe tapar a las demás. */
+const limitadorClaude = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorGemini = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorExtraerRut = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorExtraerCamara = crearLimitadorPorIp({ maxPorMinuto: 20 });
+async function bloqueadoAcceso(req, res, limitador) {
+  if (!(await peticionAutenticada(req))) {
+    res.status(401).json({ error: 'Se requiere iniciar sesión.' });
+    return true;
+  }
+  if (!peticionDeOrigenPermitido(req)) {
+    res.status(403).json({ error: 'Origen no permitido.' });
+    return true;
+  }
+  if (!limitador.permitir(ipDeLaPeticion(req))) {
+    res.status(429).json({ error: 'Demasiadas solicitudes; intente de nuevo en un minuto.' });
+    return true;
+  }
+  return false;
+}
 
 if (!API_KEY) {
   console.error('\n⚠️  Falta ANTHROPIC_API_KEY en el archivo .env — el proxy no va a funcionar.\n');
@@ -89,6 +118,7 @@ app.get('/gestor-reportes*', (req, res, next) => {
 // Proxy hacia la API de Anthropic. El frontend llama a /api/claude,
 // nunca directo a api.anthropic.com — así la key queda oculta.
 app.post('/api/claude', async (req, res) => {
+  if (await bloqueadoAcceso(req, res, limitadorClaude)) return;
   if (!API_KEY) {
     return res.status(500).json({ error: 'Servidor sin ANTHROPIC_API_KEY configurada.' });
   }
@@ -170,6 +200,7 @@ async function atenderConGemini(cuerpoOriginal, errorAnthropic, statusAnthropic)
 // Hosting concede al rewrite hacia la función. En local no hay tal techo, y este mismo
 // endpoint lee PDFs grandes (estados financieros, estudio anterior) que tardan más.
 app.post('/api/gemini', async (req, res) => {
+  if (await bloqueadoAcceso(req, res, limitadorGemini)) return;
   if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: 'Servidor sin GEMINI_API_KEY configurada.' });
   }
@@ -198,6 +229,7 @@ app.post('/api/gemini', async (req, res) => {
 // Proxy para extracción de RUT con visión/documentos, vía Gemini (lectura de
 // archivos: más económico que Claude para esta tarea).
 const handlerExtraerRut = async (req, res) => {
+  if (await bloqueadoAcceso(req, res, limitadorExtraerRut)) return;
   if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: 'Servidor sin GEMINI_API_KEY configurada.' });
   }
@@ -263,6 +295,7 @@ app.post('/extraer-rut', handlerExtraerRut);
 // Proxy para extracción del Certificado de Existencia y Representación Legal
 // (Cámara de Comercio), vía Gemini Vision — mismo patrón que el RUT.
 const handlerExtraerCamara = async (req, res) => {
+  if (await bloqueadoAcceso(req, res, limitadorExtraerCamara)) return;
   if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: 'Servidor sin GEMINI_API_KEY configurada.' });
   }
