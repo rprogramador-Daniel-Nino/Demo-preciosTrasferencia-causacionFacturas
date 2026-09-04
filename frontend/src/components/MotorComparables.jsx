@@ -2938,10 +2938,39 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   [conciliacion.fueraDelCribado, 'que el cribado de este año no trae'],
                   [conciliacion.sinEvaluar, 'sin evaluar en la última corrida'],
                 ].filter(([n]) => n > 0).map(([n, etq]) => `${n} ${etq}`).join(' · ')}
+                {/* LOS PARES CONCRETOS, y no solo el conteo.
+                    Reportado el 2026-09-02: el panel decía «1 podría(n) estar en el cribado con
+                    el nombre escrito de otra forma» y para saber CUÁL había que abrir el Excel.
+                    Con el par a la vista se resuelve de un golpe: o son la misma compañía y hay
+                    que corregir el nombre, o no lo son y se sustenta que se fue. */}
                 {conciliacion.posiblesCoincidencias > 0 && (
-                  <span className="block mt-0.5 text-amber-700 dark:text-amber-400">
+                  <span className="block mt-1 text-amber-700 dark:text-amber-400">
                     Ojo: {conciliacion.posiblesCoincidencias} podría(n) estar en el cribado con el
-                    nombre escrito de otra forma. Revíselas antes de sustentar que se fueron.
+                    nombre escrito de otra forma:
+                    <span className="block mt-0.5 space-y-0.5">
+                      {conciliacion.filas
+                        .filter((f) => f.estado === 'fueraDelCribado' && f.parecido)
+                        .slice(0, 4)
+                        .map((f) => (
+                          <span key={f.clave} className="block">
+                            «<strong>{f.name}</strong>» ¿es «<strong>{f.parecido.name}</strong>»?
+                          </span>
+                        ))}
+                    </span>
+                    Si es la misma, corrija el nombre en el estudio anterior y vuelva a ejecutar.
+                  </span>
+                )}
+
+                {/* Y las que NO tienen ni parecido: esas sí se fueron, y son las que hay que
+                    sustentar ante el cliente. Se nombran para poder escribirlo. */}
+                {conciliacion.filas.some((f) => f.estado === 'fueraDelCribado' && !f.parecido) && (
+                  <span className="block mt-1 text-zinc-600 dark:text-zinc-400">
+                    Sin parecido en el cribado —estas sí hay que sustentarlas—:{' '}
+                    {conciliacion.filas
+                      .filter((f) => f.estado === 'fueraDelCribado' && !f.parecido)
+                      .slice(0, 5)
+                      .map((f) => f.name)
+                      .join(', ')}
                   </span>
                 )}
                 <span className="block mt-0.5 text-zinc-500">
