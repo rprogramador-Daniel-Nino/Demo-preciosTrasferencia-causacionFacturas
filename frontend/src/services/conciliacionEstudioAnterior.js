@@ -140,6 +140,26 @@ export function conciliarConEstudioAnterior({
     const base = { name: nombre, clave: k };
 
     if (enMuestra.has(k)) {
+      const c = enMuestra.get(k);
+      /* ── LA INYECTADA NO CUENTA COMO RESUELTA ──
+         Reportado el 2026-09-02: con las siete del año anterior inyectadas, el panel decía
+         «Todas las del estudio anterior están en la muestra» — y era cierto en la tabla y falso
+         en el fondo: entraron SIN CIFRAS, así que no cuentan en el rango. La inyección hacía
+         que la conciliación se declarara resuelta a sí misma, tapando justo el problema que
+         venía a exponer.
+
+         Un estado propio: está en la tabla, no está en el cálculo, y falta el estado
+         financiero. */
+      if (c && c.sinCifrasDeEsteAnio) {
+        return {
+          ...base,
+          estado: 'traidaSinCifras',
+          motivo: 'Se trajo del estudio anterior porque el cribado de este año no la devolvió, '
+            + 'pero SIN cifras de este ejercicio: figura en la tabla y NO integra el cálculo del '
+            + 'rango. Requiere que se le cargue el estado financiero, o que se sustente su '
+            + 'retiro si es una compañía de capital cerrado que no publica cifras.',
+        };
+      }
       return { ...base, estado: 'enLaMuestra', motivo: '' };
     }
     if (enRechazadas.has(k)) {
@@ -190,6 +210,8 @@ export function conciliarConEstudioAnterior({
     filas,
     total: filas.length,
     enLaMuestra: cuenta('enLaMuestra'),
+    /* Traídas a la tabla pero sin cifras: ni resueltas ni perdidas. */
+    traidasSinCifras: cuenta('traidaSinCifras'),
     descartadas: cuenta('descartadaPorFiltro'),
     enReserva: cuenta('enReserva'),
     fueraDelCribado: cuenta('fueraDelCribado'),

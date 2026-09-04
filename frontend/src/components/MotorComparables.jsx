@@ -1106,8 +1106,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      rescata de independencia ni de saldos negativos —lo primero es un hecho de hoy (Art. 260-1)
      y lo segundo es dato no verosímil que entra al ajuste de capital de trabajo—, y reporta
      cuáles no pudo recuperar con el motivo de cada una. */
+  /* ── ES UNA ACCION, NO UN MODO PEGAJOSO ──
+     Reportado el 2026-09-02: «esas comparables que saca son bien altas aun cuando no le pedí
+     que siguiera con las de continuidad». Y era mi defecto: guardaba `priorizarContinuidad` en
+     `engineConfig`, así que una vez pulsado el botón TODA corrida posterior inyectaba las del
+     año anterior —incluida la del botón normal «Ejecutar Selección Automática»— y no había
+     forma de apagarlo.
+
+     La bandera NO se guarda: se pasa solo a la corrida que la pidió. «Ejecutar Selección
+     Automática» vuelve al comportamiento normal, que es lo que el analista espera de un botón
+     que dice eso. */
   const priorizarContinuidad = () => {
-    setEngineConfig((prev) => ({ ...prev, priorizarContinuidad: true }));
     runEngineSelection(null, null, true);
   };
 
@@ -1150,7 +1159,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         ...engineConfig,
         ...(alternativaForzada !== null ? { alternativa: alternativaForzada } : {}),
         ...(direccionForzada ? { direccionAlternativa: direccionForzada } : {}),
-        ...(priorizarForzado !== null ? { priorizarContinuidad: priorizarForzado } : {}),
+        /* SIEMPRE explícito y nunca heredado: sin este `false` por defecto, un estudio guardado
+           con la bandera puesta seguiría inyectando en cada corrida sin que nadie lo pidiera.
+           Es una acción de un botón, no una configuración del estudio. */
+        priorizarContinuidad: priorizarForzado === true,
       };
       const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
@@ -2963,6 +2975,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 </span>
                 {' '}
                 {[
+                  [conciliacion.traidasSinCifras, 'traída(s) a la tabla SIN cifras: no cuentan en el rango'],
                   [conciliacion.descartadas, 'descartada(s) por un filtro'],
                   [conciliacion.enReserva, 'en reserva (siguen siendo comparables)'],
                   [conciliacion.fueraDelCribado, 'que el cribado de este año no trae'],
@@ -3042,7 +3055,14 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                       {selectionFunnel.continuidadNoRescatada.length > 2 ? '…' : ''}
                     </span>
                   ) : (
-                    <span className="text-zinc-500">Todas las del estudio anterior están en la muestra.</span>
+                    /* «Todas están en la muestra» solo si de verdad cuentan. Con inyectadas sin
+                       cifras esa frase era cierta en la tabla y falsa en el rango, y fue como se
+                       leyó mal (2026-09-02). */
+                    <span className="text-zinc-500">
+                      {conciliacion && conciliacion.traidasSinCifras > 0
+                        ? `${conciliacion.traidasSinCifras} están en la tabla pero sin cifras: aún no cuentan en el rango.`
+                        : 'Todas las del estudio anterior están en la muestra y cuentan en el rango.'}
+                    </span>
                   )}
               </span>
             )}

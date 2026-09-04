@@ -167,3 +167,26 @@ test('acepta las comparables del estudio anterior vengan con `name` o con `nombr
   assert.strictEqual(r.enLaMuestra, 1);
   assert.strictEqual(r.filas[0].name, 'Delta SA');
 });
+
+test('la inyectada SIN cifras no cuenta como resuelta', () => {
+  /* Reportado el 2026-09-02: con las siete del año anterior inyectadas, el panel decía «Todas
+     las del estudio anterior están en la muestra» — cierto en la tabla y falso en el fondo,
+     porque entraron sin cifras y no cuentan en el rango. La inyección hacía que la conciliación
+     se declarara resuelta a sí misma, tapando el problema que venía a exponer. */
+  const r = conciliarConEstudioAnterior({
+    previas: [c('Con Cifras SA'), c('Inyectada SA')],
+    universo: [c('Con Cifras SA')],
+    muestra: [
+      c('Con Cifras SA'),
+      { name: 'Inyectada SA', sinCifrasDeEsteAnio: true, s: null, op: null },
+    ],
+  });
+  assert.strictEqual(r.enLaMuestra, 1, 'solo la que tiene cifras cuenta como resuelta');
+  assert.strictEqual(r.traidasSinCifras, 1);
+  assert.strictEqual(r.porExplicar, 1, 'la inyectada sigue habiendo que explicarla');
+
+  const f = r.filas.find((x) => x.name === 'Inyectada SA');
+  assert.strictEqual(f.estado, 'traidaSinCifras');
+  assert.match(f.motivo, /NO integra el cálculo del rango/);
+  assert.match(f.motivo, /capital cerrado/, 'y ofrece la salida cuando no publica cifras');
+});
