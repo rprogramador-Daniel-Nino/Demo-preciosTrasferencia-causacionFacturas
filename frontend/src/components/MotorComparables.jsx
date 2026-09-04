@@ -215,7 +215,15 @@ function InsigniaActividad({ row }) {
       <span
         className={clases + 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'}
         title={'Actividad relacionada, no idéntica'
-          + (row.entroPorAmpliacion ? `. Entró para no bajar de ${MINIMO_COMPARABLES} comparables` : '')
+          /* Dos motivos distintos de ampliación, y cada fila lleva el suyo: el Excel de
+             soporte lee esta ficha y escribir el motivo equivocado lo dejaría declarando
+             algo que no pasó. */
+          + (row.entroPorCuotaNegativas
+            ? '. Entró para completar la cuota de comparables en pérdida, porque las de '
+              + 'actividad idéntica no alcanzaban'
+            : (row.entroPorAmpliacion
+              ? `. Entró para no bajar de ${MINIMO_COMPARABLES} comparables`
+              : ''))
           + '. Hay que sustentarla en el informe.'
           + (motivo ? ' · ' + motivo : '')}
       >
@@ -1214,6 +1222,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         negativasIncluidas: result.negativasIncluidas || 0,
         negativasDisponibles: result.negativasDisponibles || 0,
         negativasExcluidasPorFiltro: result.negativasExcluidasPorFiltro || 0,
+        /* Cuántas de la cuota entraron por actividad AFÍN y no idéntica. Se persiste porque
+           esas piden dos justificaciones en el informe —la pérdida y la ampliación del
+           criterio de búsqueda—, y con el estudio guardado hay que poder saber cuántas eran. */
+        negativasPorAmpliacion: result.negativasPorAmpliacion || 0,
+        negativasIdenticasDisponibles: result.negativasIdenticasDisponibles || 0,
+        negativasAfinesDisponibles: result.negativasAfinesDisponibles || 0,
         /* Cual de las combinaciones equivalentes se uso. Es lo que hace la muestra
            reconstruible: con el cribado y este numero se vuelve a obtener exactamente la misma
            seleccion, y por eso viaja al estudio guardado y no solo a la pantalla. */
@@ -1251,26 +1265,42 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       const negObjetivo = result.negativasObjetivo || 0;
       const negIncluidas = result.negativasIncluidas || 0;
       const negDisponibles = result.negativasDisponibles || 0;
+      /* Las que entraron por actividad AFÍN: piden dos justificaciones en el informe —la
+         pérdida y la ampliación del criterio— así que no pueden salir en el mismo saco que
+         las idénticas. */
+      const negPorAmpliacion = result.negativasPorAmpliacion || 0;
       if (negObjetivo > 0) {
         if (negIncluidas >= negObjetivo) {
           anotar(`${negIncluidas} comparable(s) en pérdida en la muestra, como se pidió` +
             (result.negativasDeContinuidad
               ? ` (${result.negativasDeContinuidad} viene(n) del estudio anterior)`
               : '') +
-            `. Del universo había ${negDisponibles} con la misma actividad detectada.`, 'ok');
+            `. Del universo había ${negDisponibles} que superan los filtros.`, 'ok');
         } else {
           /* La causa importa y antes se afirmaba una sola —«el resto del cupo lo llenaron
              positivas»— que era falsa cuando la continuidad se había llevado el cupo entero.
              Se reportó sobre un caso real con 16 de continuidad y 41 negativas disponibles:
              entraron 0 y el aviso mandaba a ampliar un cribado que estaba bien. */
           const causa = negDisponibles < negObjetivo
-            ? `el universo de Capital IQ solo tiene ${negDisponibles} con la misma actividad `
-              + 'detectada que superen los filtros. Amplíe el cribado del paso 1, o revise la '
-              + 'actividad detectada si cree que debería reconocer más.'
-            : `el universo tiene ${negDisponibles} con la misma actividad detectada, así que no `
-              + 'faltan candidatas: lo que faltó fue cupo. Suba el N objetivo en el paso 2.';
+            ? `el universo de Capital IQ solo tiene ${negDisponibles} en pérdida que superen `
+              + `los filtros (${result.negativasIdenticasDisponibles || 0} de actividad `
+              + `idéntica y ${result.negativasAfinesDisponibles || 0} de actividad afín). `
+              + 'Amplíe el cribado del paso 1, o revise la actividad detectada si cree que '
+              + 'debería reconocer más.'
+            : `el universo tiene ${negDisponibles} en pérdida que superan los filtros, así que `
+              + 'no faltan candidatas: lo que faltó fue cupo. Suba el N objetivo en el paso 2.';
           anotar(`Se pidieron ${negObjetivo} comparables en pérdida y solo se incluyeron `
             + `${negIncluidas}: ${causa}`, 'aviso');
+        }
+        /* La cuota se completó con actividad afín. Es una ampliación del criterio de búsqueda
+           sobre comparables que YA exigen justificar su pérdida, así que se nombra aparte: son
+           las filas que un revisor mira primero. */
+        if (negPorAmpliacion > 0) {
+          anotar(`${negPorAmpliacion} de las comparables en pérdida entraron por actividad `
+            + 'AFÍN, no idéntica, porque las de actividad idéntica no alcanzaban para la cuota. '
+            + 'Cada una necesita dos justificaciones en el informe: por qué se admite su '
+            + 'pérdida y por qué se amplió el criterio de búsqueda. Revíselas una a una.',
+          'aviso');
         }
         if (!String(engineConfig.justificacionPerdida || '').trim()) {
           anotar('Falta la justificación de la política de pérdidas: sin ella, el informe ' +
@@ -1292,9 +1322,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          metodológica que hay que sustentar en el informe, no un detalle de implementación. */
       const ampliadas = result.ampliadas || 0;
       if (ampliadas) {
-        anotar(`${ampliadas} entraron por actividad relacionada, no idéntica, para no bajar de ` +
-          `${MINIMO_COMPARABLES} comparables. Revíselas una a una: hay que justificar en el informe ` +
-          'la ampliación del criterio de búsqueda.', 'aviso');
+        /* Las que entraron por la cuota de pérdidas ya se nombraron en su propio aviso, con su
+           propio motivo. Aquí se descuentan para no afirmar de todas que entraron «para no
+           bajar del mínimo»: es el motivo de las positivas afines, no el de aquellas. */
+        const porMinimo = Math.max(0, ampliadas - negPorAmpliacion);
+        if (porMinimo > 0) {
+          anotar(`${porMinimo} entraron por actividad relacionada, no idéntica, para no bajar de ` +
+            `${MINIMO_COMPARABLES} comparables. Revíselas una a una: hay que justificar en el informe ` +
+            'la ampliación del criterio de búsqueda.', 'aviso');
+        }
       }
 
       /* La continuidad que la cuota obligó a retirar. Va en su propio aviso y con los
@@ -2434,7 +2470,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <span className="text-[10px] text-zinc-400 mt-1">
                   {engineConfig.perdidaOp === 'excluir'
                     ? 'Ponga «Incluir» para habilitarlo'
-                    : `Dentro de las ${engineConfig.nTarget}, misma actividad. Reserva cupo antes del puntaje: sin cuota no entra ninguna.`}
+                    : `Dentro de las ${engineConfig.nTarget}. Primero de actividad idéntica y, si no alcanzan, de actividad afín. Reserva cupo antes del puntaje: sin cuota no entra ninguna.`}
                 </span>
               </div>
 

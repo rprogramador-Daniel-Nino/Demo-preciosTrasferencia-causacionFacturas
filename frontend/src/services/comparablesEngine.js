@@ -1127,6 +1127,24 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
 
   const mismasNegativas = ordenarNegativas(mismas.filter(enPerdida));
   const mismasPositivas = mismas.filter((c) => !enPerdida(c));
+  /* ── LA CUOTA SE COMPLETA CON ACTIVIDAD AFÍN CUANDO LAS IDÉNTICAS NO ALCANZAN ──
+     Reportado el 2026-09-04 sobre un estudio real: cuota de 10 y UNA sola incluida. No fue
+     falta de cupo —13 de continuidad sobre un N de 30 dejaban 17 plazas libres— ni falta de
+     candidatas: el universo traía 1.904 compañías en pérdida. Fue este filtro, que solo
+     miraba `mismas`, así que las negativas de actividad afín se iban enteras a la reserva y
+     la cuota se quedaba en lo que dieran las idénticas.
+
+     La decisión del 2026-09-01 —«las afines nunca aportan negativas», para no pedir dos
+     justificaciones a la vez— se conserva como PREFERENCIA y deja de ser un tope: primero
+     entran todas las idénticas que haya, y solo lo que falte se completa con afines. Un
+     estudio con idénticas de sobra se comporta exactamente igual que antes; el que no las
+     tiene deja de quedarse sin cuota en silencio.
+
+     Entran marcadas con `entroPorAmpliacion`, la misma marca que ya llevan las positivas
+     afines, así que el informe las declara por la vía que ya existe para sustentar la
+     ampliación del criterio de búsqueda. Son las que piden las dos justificaciones —pérdida
+     y actividad afín— y por eso van al final de la cuota y nombradas aparte. */
+  const afinesNegativas = ordenarNegativas(afines.filter(enPerdida));
   /* Las de continuidad ya entraron y cuentan contra el objetivo: si el estudio anterior
      aporta una en pérdida y se piden 3, faltan 2, no 3. El objetivo es «cuántas negativas
      salen en el informe», no «cuántas nuevas se buscan». */
@@ -1138,8 +1156,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   ];
   const negativasDeContinuidad = continuidadTodas.filter(enPerdida).length;
   const porCubrir = Math.max(0, objetivoNegativas - negativasDeContinuidad);
-  /* Cuántas negativas nuevas hay DE VERDAD: no se retira continuidad por unas que no existen. */
-  const negativasAUsar = Math.min(porCubrir, mismasNegativas.length);
+  /* Cuántas negativas nuevas hay DE VERDAD: no se retira continuidad por unas que no existen.
+     Cuenta las dos fuentes —idénticas y afines—, o la continuidad no cedería el sitio que la
+     cuota va a ocupar y el cupo se quedaría corto justo en el caso que este cambio arregla. */
+  const negativasAUsar = Math.min(
+    porCubrir,
+    mismasNegativas.length + afinesNegativas.length,
+  );
 
   /* ── La continuidad cede sitio a la cuota ──
      Reportado el 2026-09-01 sobre un estudio real: 16 comparables del año anterior, todas
@@ -1167,7 +1190,21 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const continuidadDesplazadaLista = continuidadOrdenada.slice(topeContinuidad);
 
   const cupoRestante = Math.max(0, cupo - continuidadIncluidas.length);
-  const deNegativas = mismasNegativas.slice(0, Math.min(porCubrir, cupoRestante));
+  /* Primero las idénticas, y solo lo que falte con afines: la preferencia por actividad
+     idéntica se mantiene entera —si hay idénticas para llenar la cuota, las afines no entran—.
+     El tope sigue siendo el mismo de antes, `min(porCubrir, cupoRestante)`, así que pedir 10
+     nunca devuelve 11 ni le come el sitio a las positivas más allá de la cuota. */
+  const plazasParaNegativas = Math.min(porCubrir, cupoRestante);
+  const negativasIdenticas = mismasNegativas.slice(0, plazasParaNegativas);
+  const negativasAfines = afinesNegativas
+    .slice(0, Math.max(0, plazasParaNegativas - negativasIdenticas.length))
+    /* `entroPorCuotaNegativas` distingue POR QUÉ se amplió el criterio en esta fila. Las
+       positivas afines entran «para no bajar del mínimo de comparables»; estas entran para
+       llenar la cuota de pérdidas que el analista pidió, que es otro hecho y otra
+       justificación. Escribir el motivo de las unas en la ficha de las otras dejaría el Excel
+       de soporte declarando algo que no pasó. */
+    .map((c) => ({ ...c, entroPorAmpliacion: true, entroPorCuotaNegativas: true }));
+  const deNegativas = [...negativasIdenticas, ...negativasAfines];
 
   const cupoParaPositivas = Math.max(0, cupoRestante - deNegativas.length);
 
@@ -1342,9 +1379,14 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        cuadrar contra el universo— y perdia de vista a las desplazadas, que es justo lo que el
        informe tiene que poder nombrar. */
     ...mismasPositivas.filter((c) => !deMisma.includes(c)).map(enReserva),
-    ...mismasNegativas.slice(deNegativas.length).map(enReserva),
+    ...mismasNegativas.slice(negativasIdenticas.length).map(enReserva),
     ...afinesPositivas.slice(deAmpliacion.length).map(enReserva),
-    ...afines.filter(enPerdida).map(enReserva),
+    /* Las afines en pérdida que la cuota NO usó. Por `slice` y no por identidad porque la
+       cuota no varía con la alternativa —solo varían las positivas—, así que las que entraron
+       son siempre el prefijo de la lista ordenada. Antes iban todas aquí sin excepción; con la
+       cuota completándose desde esta lista, incluirlas enteras las contaría dos veces y el
+       embudo dejaría de cuadrar contra el universo. */
+    ...afinesNegativas.slice(negativasAfines.length).map(enReserva),
   ];
 
   return {
@@ -1425,7 +1467,11 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     /* Cuántas entraron ampliando el criterio a actividades afines, y cuántas más había
        disponibles. Lo primero hay que declararlo en el informe; lo segundo dice si el techo lo
        pone el universo o el cupo. */
-    ampliadas: deAmpliacion.length,
+    /* Incluye las negativas que entraron por la cuota ampliada: la ampliación del criterio de
+       búsqueda hay que declararla en el informe por igual, venga la comparable en pérdida o
+       en utilidad. Contar solo las positivas dejaba sin declarar justo las que exigen más
+       sustento. El desglose va aparte, en `negativasPorAmpliacion`. */
+    ampliadas: deAmpliacion.length + negativasAfines.length,
     relacionadasDisponibles: afines.length,
 
     /* ── La cuota de negativas, en tres cifras ──
@@ -1438,7 +1484,17 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
            entraron 2 de 3 no se puede escribir sin adivinar por qué. */
     negativasObjetivo: objetivoNegativas,
     negativasIncluidas: deNegativas.length + negativasDeContinuidad,
-    negativasDisponibles: mismasNegativas.length + negativasDeContinuidad,
+    /* El techo real de la cuota: idénticas + afines + las que ya trae la continuidad. Antes
+       contaba solo las idénticas y el aviso mandaba a ampliar un cribado que sí tenía
+       candidatas —solo que de actividad afín, y la cuota no las miraba—. */
+    negativasDisponibles: mismasNegativas.length + afinesNegativas.length
+      + negativasDeContinuidad,
+    /* El desglose, porque las dos cifras dicen cosas distintas en el informe: las idénticas
+       se sustentan con la política de pérdidas y las afines necesitan ADEMÁS el sustento de la
+       ampliación del criterio de búsqueda. */
+    negativasIdenticasDisponibles: mismasNegativas.length,
+    negativasAfinesDisponibles: afinesNegativas.length,
+    negativasPorAmpliacion: negativasAfines.length,
     /* Las que el filtro de pérdidas dejó fuera. Con `perdidaOp: 'excluir'` es el número que
        le permite al diagnóstico del rango decir «hay N negativas que el filtro está
        excluyendo, incluirlas bajaría el P25» en vez de una sugerencia genérica. */
