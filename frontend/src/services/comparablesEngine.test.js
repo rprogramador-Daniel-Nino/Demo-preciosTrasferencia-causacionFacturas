@@ -3359,32 +3359,41 @@ const CFG_INJ = {
   saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
 };
 
-test('con el botón, la del año pasado que NO está en el cribado sale de todos modos', () => {
+test('la del año pasado que el cribado no trae NO se inyecta en la muestra', () => {
+  /* Se construyó la inyección el 2026-09-02 a pedido explícito —«necesito que salgan las
+     comparables del año pasado cuando le doy al botón sin importar qué»— y se retiró el mismo
+     día, también a pedido: «¿y a mí de qué me sirve tener comparables sin datos? de nadaaaa».
+
+     Y es correcto. Una comparable que el cribado no devolvió no tiene cifras de este ejercicio,
+     así que la fila inyectada no entraba al cuartil —no acercaba el estudio al cumplimiento ni
+     un punto—, ensuciaba la tabla de trabajo y llegaba al informe: el ANEXO B publicaba un
+     «[PENDIENTE] Falta el estado financiero de X» por cada una, siete en el caso reportado.
+
+     Lo que hacía falta no era la fila: era el MOTIVO, y eso lo da
+     `conciliarConEstudioAnterior` sin ensuciar la muestra. */
   const universo = [0.02, 0.04, 0.06].map((m, i) => cInj(i, m));
   const previas = [{ name: 'Inj 0' }, { name: 'Compañía Que El Cribado No Trae SA' }];
   const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x', previas,
     { ventasParteExaminada: 10000 });
 
-  const nombres = r.seleccionadas.map((c) => c.name);
-  assert.ok(nombres.includes('Compañía Que El Cribado No Trae SA'),
-    'la inyecta en la muestra aunque el screening no la devolviera');
-  const inyectada = r.seleccionadas.find((c) => c.name === 'Compañía Que El Cribado No Trae SA');
-  assert.strictEqual(inyectada.esContinuidad, true);
-  assert.strictEqual(inyectada.sinCifrasDeEsteAnio, true,
-    'marcada para que se le carguen las cifras');
-  assert.strictEqual(r.continuidadInyectadas, 1, 'y se reporta cuántas se inyectaron');
+  assert.ok(!r.seleccionadas.some((c) => c.name === 'Compañía Que El Cribado No Trae SA'),
+    'no se inyecta: una fila sin cifras no sirve para nada');
+  assert.strictEqual(r.continuidadInyectadas, 0);
+  /* Y ninguna fila de la muestra queda sin cifras. */
+  assert.ok(r.seleccionadas.every((c) => c.s !== null && c.op !== null),
+    'toda comparable de la muestra tiene cifras');
 });
 
-test('la inyectada NO mueve el cuartil hasta que tenga cifras', () => {
-  /* Meterla al cuartil sin cifras sería inventarle un margen. Se ve en la tabla y se excluye
-     del cálculo: `analizarRangoAjustado` descarta la fila cuyo indicador es null. */
+test('la que SÍ está en el cribado sigue reconociéndose como continuidad', () => {
+  /* Retirar la inyección no puede tocar lo que sí funciona: la del año anterior que el cribado
+     devuelve entra, con sus cifras, y marcada como continuidad. */
   const universo = [0.02, 0.04, 0.06].map((m, i) => cInj(i, m));
-  const previas = [{ name: 'Sin Cifras SA' }];
-  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x', previas,
-    { ventasParteExaminada: 10000 });
-  const inyectada = r.seleccionadas.find((c) => c.name === 'Sin Cifras SA');
-  assert.strictEqual(inyectada.s, null, 'sin ventas');
-  assert.strictEqual(inyectada.op, null, 'sin utilidad operacional');
+  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x',
+    [{ name: 'Inj 0' }], { ventasParteExaminada: 10000 });
+  const suya = r.seleccionadas.find((c) => c.name === 'Inj 0');
+  assert.ok(suya, 'entra');
+  assert.strictEqual(suya.esContinuidad, true);
+  assert.ok(suya.s !== null, 'y con cifras');
 });
 
 test('sin el botón NO se inyecta nada: el comportamiento de siempre', () => {

@@ -1301,6 +1301,30 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         }),
       });
 
+      /* ── LA DESCRIPCION SE TRADUCE SOLA ──
+         «Redactar las actividades siempre deben estar en español, ¿por qué tengo que accionar
+         la traducción yo?» (2026-09-02), después de encontrar el ANEXO B con la descripción de
+         Givaudan en inglés.
+
+         Tenía razón: el informe publica esta descripción de TODA comparable de la muestra
+         (`anexoBHtml.js:304`), así que dejarla como un paso manual solo abre la puerta a que se
+         olvide — y entonces se radica el texto en inglés de Capital IQ. No es una opción del
+         analista: es un requisito del documento.
+
+         Va DESPUES de fijar la muestra y sin `await`, para que la tabla aparezca de inmediato y
+         las descripciones se rellenen encima. Es idempotente —salta las que ya tienen
+         `descActividad`, así que reejecutar la selección no vuelve a pagar por las traducidas—
+         y no rompe nada si falla: `redactarDescripcionesEnLote` devuelve `null` por candidata y
+         la fila se queda con su texto original, que es el comportamiento de antes. El botón
+         manual se conserva para el caso de que una traducción falle y haya que reintentarla. */
+      redactarDescripcionesDeFilas(
+        finales,
+        finales.map((c, i) => (String(c.desc || '').trim() && !c.descActividad ? i : -1))
+          .filter((i) => i >= 0),
+      ).catch((err) => {
+        console.warn('[descripciones] no se pudieron redactar automáticamente:', err && err.message);
+      });
+
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
          tamaño final, y las de continuidad ocupan parte de ese cupo. */
       const deContinuidad = result.continuidad || 0;

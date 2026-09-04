@@ -1357,66 +1357,30 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const afinesPositivas = afines.filter((c) => !enPerdida(c));
   const deAmpliacion = afinesPositivas.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
 
-  const seleccionadasDelUniverso = [
+  /* ── POR QUE AQUI NO SE INYECTAN LAS DEL ANIO ANTERIOR QUE EL CRIBADO NO TRAE ──
+     Se construyo el 2026-09-02 a pedido explicito —«necesito que salgan las comparables del
+     anio pasado cuando le doy al boton sin importar que»— y se retiro el mismo dia, tambien a
+     pedido: «¿y a mi de que me sirve tener comparables sin datos? de nadaaaa».
+
+     Y es correcto. Una comparable que el cribado de este anio no devolvio NO TIENE CIFRAS de
+     este ejercicio, asi que la fila inyectada:
+
+       · no entra al cuartil —`analizarRangoAjustado` excluye el indicador nulo—, de modo que no
+         acerca el estudio al cumplimiento ni un punto;
+       · ensucia la tabla de trabajo con filas vacias;
+       · y llega al informe: el ANEXO B publica un «[PENDIENTE] Falta el estado financiero de X»
+         por cada una, siete en el caso reportado.
+
+     Lo que el analista necesitaba de esto no era la fila: era el MOTIVO. Y eso lo da
+     `conciliarConEstudioAnterior`, que clasifica cada comparable del anio pasado y dice por que
+     no esta —descartada por un filtro, en reserva, o fuera del cribado— sin ensuciar la muestra.
+
+     Para la que SI cotiza y falta solo porque el informe anterior la nombro por su nombre
+     comercial —«IFF» en vez de «International Flavors & Fragrances Inc.»— el camino es el
+     screening del paso 1, que la trae CON cifras. Una fila vacia no sustituye eso. */
+  const seleccionadas = [
     ...continuidadIncluidas, ...deNegativas, ...deMisma, ...deAmpliacion,
   ];
-
-  /* ── LAS DEL AÑO PASADO QUE EL CRIBADO NO TRAE, INYECTADAS ──
-     «Necesito que salgan las comparables del año pasado cuando le doy al botón sin importar
-     qué» (2026-09-02), después de que la conciliación mostrara «2 de 7 siguen».
-
-     EL LIMITE QUE HABIA: el motor solo puede SELECCIONAR de entre las candidatas del universo.
-     Una comparable del estudio anterior que este año el screening de Capital IQ no devolvió no
-     está ahí, así que no se podía seleccionar ni rechazar — simplemente no salía. Con el modo de
-     prioridad se INYECTA.
-
-     Y EL LIMITE QUE SIGUE, que no es del motor sino de los datos: no tiene cifras de este año.
-     Entra marcada `sinCifrasDeEsteAnio` para que el analista le cargue el estado financiero —a
-     mano o con «Buscar cifras ya cargadas por el equipo», que lo busca en el catálogo compartido
-     por nombre— y hasta entonces NO entra al cuartil, porque `analizarRangoAjustado` excluye la
-     fila cuyo indicador es `null`. Eso es lo correcto: meter al cuartil una comparable sin
-     cifras sería inventarle un margen.
-
-     NO se inyecta la que ya está en la muestra —duplicaría la compañía en el cuartil— ni la que
-     está en el cribado y un filtro descartó: esa no se fue, está y se descartó por un motivo, y
-     traerla por aquí sería pasar por encima de un filtro que el modo no rescata (independencia,
-     saldos negativos) por la puerta de atrás. */
-  const clavesEvaluadas = new Set(evaluated.map((c) => claveDeCruce(c.name)));
-  const clavesEnMuestra = new Set(seleccionadasDelUniverso.map((c) => claveDeCruce(c.name)));
-  const continuidadInyectada = !config.priorizarContinuidad ? [] : (priorComps || [])
-    .map((c) => ({
-      nombre: (c && (c.name || c.nombre)) || String(c || ''),
-      clave: claveDeCruce((c && (c.name || c.nombre)) || c),
-    }))
-    .filter((c) => c.clave && !clavesEvaluadas.has(c.clave) && !clavesEnMuestra.has(c.clave))
-    /* Una sola vez por compañía, aunque el estudio anterior la liste dos veces. */
-    .filter((c, i, arr) => arr.findIndex((o) => o.clave === c.clave) === i)
-    .map((c) => ({
-      name: c.nombre,
-      nameKey: nameKey(c.nombre),
-      amb: 'Int',
-      /* Sin cifras: el cribado de este año no las trae. `null` y no cero, para que el rango la
-         excluya en vez de contarla como una comparable de margen nulo. */
-      s: null, c: null, op: null, ar: null, inv: null, ap: null, ppe: null,
-      desc: '',
-      score: 0,
-      factores: {
-        perfil: 0, especialidad: 0, geografia: 0, tamano: 0, rentabilidad: 0, capitalTrabajo: 0,
-      },
-      razones: 'del estudio del año anterior; el cribado de este año no la devolvió',
-      esContinuidad: true,
-      sinCifrasDeEsteAnio: true,
-      gradoActividad: '',
-      motivoActividad: '',
-      esRelacionada: false,
-      descartada: false,
-      motivoRechazo: '',
-      categoriaRechazo: '',
-      motivoClave: '',
-      intensidadCapitalTrabajo: null,
-    }));
-
-  const seleccionadas = [...seleccionadasDelUniverso, ...continuidadInyectada];
 
   /* MOTIVO ESCRITO PARA LA RESERVA (2026-08-20, a pedido del usuario).
 
@@ -1598,10 +1562,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        desaparece en silencio se descubre al cotejar los dos informes, y para entonces hay que
        explicarla sin saber por que se fue. */
     priorizoContinuidad: Boolean(config.priorizarContinuidad),
-    /* Cuántas comparables del año anterior se inyectaron por no estar en el cribado de este
-       año. Van SIN cifras: el analista tiene que cargarles el estado financiero para que entren
-       al cuartil, y la pantalla se lo dice. */
-    continuidadInyectadas: continuidadInyectada.length,
+    /* Se conserva en cero: la inyeccion se retiro (ver la nota de `seleccionadas`) y el campo
+       sigue publicado para que la pantalla y el Excel de un estudio guardado con el valor
+       anterior no tengan que distinguir entre «cero» y «no existe». */
+    continuidadInyectadas: 0,
     continuidadRescatadas: config.priorizarContinuidad
       ? continuidadIncluidas.filter((c) => enPerdida(c)).length
       : 0,
