@@ -3328,3 +3328,107 @@ test('el cruce de continuidad del motor usa la clave nueva', () => {
   assert.strictEqual(r.seleccionadas[0].esContinuidad, true,
     'la reconoce aunque el informe anterior escribiera la forma societaria de otro modo');
 });
+
+/* ══════ LAS DEL AÑO PASADO SALEN SIEMPRE CON EL BOTON ══════
+
+   «Necesito que salgan las comparables del año pasado cuando le doy al botón sin importar qué»
+   (2026-09-02), después de que la conciliación mostrara «2 de 7 siguen» y 4 sin ni parecido en
+   el cribado.
+
+   EL LIMITE QUE HABIA. El motor solo puede SELECCIONAR de entre las candidatas del universo: una
+   comparable del estudio anterior que este año el screening de Capital IQ no devolvió no está
+   ahí, así que no se podía seleccionar ni rechazar — simplemente no salía. Con el botón se
+   INYECTA en la muestra.
+
+   Y EL LIMITE QUE SIGUE HABIENDO, que no es del motor sino de los datos: una comparable que el
+   cribado no trae NO TIENE CIFRAS DE ESTE AÑO. Entra a la tabla marcada `sinCifrasDeEsteAnio`
+   para que el analista le cargue el estado financiero —a mano o con «Buscar cifras ya cargadas
+   por el equipo», que las busca en el catálogo compartido por nombre— y hasta entonces NO entra
+   al cuartil: `analizarRangoAjustado` excluye la fila cuyo indicador es `null`
+   (`incluida: … && valor !== null`), así que una fila sin cifras se ve pero no mueve el rango.
+
+   Eso es lo correcto y no una limitación que haya que tapar: meter al cuartil una comparable sin
+   cifras sería inventarle un margen. */
+
+const cInj = (id, margen) => ({
+  id, name: 'Inj ' + id, nameKey: nameKey('Inj ' + id),
+  s: 10000, c: 8000, op: margen * 10000, desc: 'x',
+});
+const CFG_INJ = {
+  nTarget: 4, minimo: 1, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+
+test('con el botón, la del año pasado que NO está en el cribado sale de todos modos', () => {
+  const universo = [0.02, 0.04, 0.06].map((m, i) => cInj(i, m));
+  const previas = [{ name: 'Inj 0' }, { name: 'Compañía Que El Cribado No Trae SA' }];
+  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+
+  const nombres = r.seleccionadas.map((c) => c.name);
+  assert.ok(nombres.includes('Compañía Que El Cribado No Trae SA'),
+    'la inyecta en la muestra aunque el screening no la devolviera');
+  const inyectada = r.seleccionadas.find((c) => c.name === 'Compañía Que El Cribado No Trae SA');
+  assert.strictEqual(inyectada.esContinuidad, true);
+  assert.strictEqual(inyectada.sinCifrasDeEsteAnio, true,
+    'marcada para que se le carguen las cifras');
+  assert.strictEqual(r.continuidadInyectadas, 1, 'y se reporta cuántas se inyectaron');
+});
+
+test('la inyectada NO mueve el cuartil hasta que tenga cifras', () => {
+  /* Meterla al cuartil sin cifras sería inventarle un margen. Se ve en la tabla y se excluye
+     del cálculo: `analizarRangoAjustado` descarta la fila cuyo indicador es null. */
+  const universo = [0.02, 0.04, 0.06].map((m, i) => cInj(i, m));
+  const previas = [{ name: 'Sin Cifras SA' }];
+  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  const inyectada = r.seleccionadas.find((c) => c.name === 'Sin Cifras SA');
+  assert.strictEqual(inyectada.s, null, 'sin ventas');
+  assert.strictEqual(inyectada.op, null, 'sin utilidad operacional');
+});
+
+test('sin el botón NO se inyecta nada: el comportamiento de siempre', () => {
+  const universo = [0.02, 0.04, 0.06].map((m, i) => cInj(i, m));
+  const previas = [{ name: 'Fuera SA' }];
+  const r = scoreCandidates(universo, CFG_INJ, 'x', previas, { ventasParteExaminada: 10000 });
+  assert.ok(!r.seleccionadas.some((c) => c.name === 'Fuera SA'));
+  assert.strictEqual(r.continuidadInyectadas, 0);
+});
+
+test('no se inyecta la que YA está en la muestra', () => {
+  /* Duplicarla contaría dos veces la misma compañía en el cuartil. */
+  const universo = [0.02, 0.04].map((m, i) => cInj(i, m));
+  const previas = [{ name: 'Inj 0' }];
+  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.strictEqual(r.seleccionadas.filter((c) => c.name === 'Inj 0').length, 1);
+  assert.strictEqual(r.continuidadInyectadas, 0);
+});
+
+test('tampoco se inyecta la que está en el cribado y un filtro descartó', () => {
+  /* Esa NO se fue: está y se descartó por un motivo. Inyectarla sería pasar por encima de un
+     filtro que el modo no rescata —independencia o saldos negativos— por la puerta de atrás. */
+  const universo = [
+    { ...cInj('CTRL', 0.03), maxpct: 80 },
+    ...[0.02, 0.04].map((m, i) => cInj(i, m)),
+  ];
+  const previas = [{ name: 'Inj CTRL' }];
+  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'CTRL'), 'sigue descartada');
+  assert.strictEqual(r.continuidadInyectadas, 0, 'y no se inyecta por la puerta de atrás');
+});
+
+test('el cruce de la inyección usa la clave de cruce, no el nombre literal', () => {
+  /* Si «Bolak Co. Ltd» del informe anterior está en el cribado como «Bolak Company Limited», NO
+     hay que inyectarla: ya está. Inyectarla duplicaría la compañía. */
+  const universo = [
+    { id: 'B', name: 'Bolak Company Limited', nameKey: nameKey('Bolak Company Limited'),
+      s: 10000, c: 8000, op: 300, desc: 'x' },
+    ...[0.02, 0.04].map((m, i) => cInj(i, m)),
+  ];
+  const r = scoreCandidates(universo, { ...CFG_INJ, priorizarContinuidad: true }, 'x',
+    [{ name: 'Bolak Co. Ltd' }], { ventasParteExaminada: 10000 });
+  assert.strictEqual(r.continuidadInyectadas, 0, 'ya estaba: no se inyecta');
+  assert.strictEqual(r.seleccionadas.filter((c) => /Bolak/.test(c.name)).length, 1);
+});

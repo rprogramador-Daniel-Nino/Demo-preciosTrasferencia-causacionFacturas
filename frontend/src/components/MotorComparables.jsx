@@ -1252,6 +1252,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         /* El modo de prioridad y su rastro: cuántas del año anterior volvieron y cuáles no
            pudieron, con el motivo. Va al estudio guardado porque el Excel lo declara. */
         priorizoContinuidad: Boolean(result.priorizoContinuidad),
+        /* Cuántas del año anterior se inyectaron sin cifras: la pantalla tiene que pedir que se
+           les cargue el estado financiero, porque hasta entonces no entran al cuartil. */
+        continuidadInyectadas: result.continuidadInyectadas || 0,
         continuidadRescatadas: result.continuidadRescatadas || 0,
         continuidadNoRescatada: result.continuidadNoRescatada || [],
         /* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR, PERSISTIDA ──
@@ -2982,6 +2985,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             {/* Lo que el modo rescató y lo que no pudo. Lo segundo importa más: una comparable
                 del estudio pasado que desaparece en silencio se descubre al cotejar los dos
                 informes, y para entonces hay que explicarla sin saber por qué se fue. */}
+            {/* LAS INYECTADAS NECESITAN CIFRAS, y hasta entonces no cuentan.
+                El botón las trae «sin importar qué» —pedido del 2026-09-02— pero una comparable
+                que el cribado no devolvió no tiene cifras de este año: se ve en la tabla y NO
+                entra al cuartil, porque meterla sin cifras sería inventarle un margen. Decirlo
+                aquí es lo que evita que el analista crea que ya están contando. */}
+            {selectionFunnel && selectionFunnel.continuidadInyectadas > 0 && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem] text-amber-700 dark:text-amber-400">
+                <strong>{selectionFunnel.continuidadInyectadas} del año anterior entraron sin
+                cifras de este año.</strong>{' '}
+                Están en la tabla pero NO cuentan en el rango hasta que se les cargue el estado
+                financiero: use «Buscar cifras ya cargadas por el equipo» o adjúnteselo a cada
+                una.
+              </span>
+            )}
+
             {selectionFunnel && selectionFunnel.priorizoContinuidad && (
               <span className="text-[10.5px] leading-snug max-w-[18rem]">
                 <span className="text-indigo-700 dark:text-indigo-400 font-bold">
