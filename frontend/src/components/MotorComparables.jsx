@@ -1699,12 +1699,48 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
       const destino = comparables[compIndex];
       const cruce = cruzar(result.data, file.name, comparables);
+      /* Sobre qué arreglo se aplican las cifras: el actual, salvo que la fila estuviera vacía y
+         acabe de nombrarse con el documento (ver abajo). */
+      let comparablesParaAplicar = comparables;
 
       /* Cruzó con OTRA fila, o no cruzó con ninguna: no se aplica nada y se
          explica por qué. Si el documento no trae razón social no hay nada que
          contrastar, así que se acepta pero queda marcado por confirmar. */
       const traeNombre = String(result.data.nombre || '').trim() || String(result.data.identificador_fuente || '').trim();
-      if (traeNombre && cruce.indice !== compIndex) {
+
+      /* ── LA FILA VACIA SE NOMBRA CON EL DOCUMENTO ──
+         Reportado el 2026-09-02: «hicimos la búsqueda de las comparables de manera manual y ya
+         tenemos las comparables; si cargamos los EEFF de estas comparables debería agregarlos y
+         generar los análisis con estos datos, de modo que así tenemos dos opciones para hacer
+         el proceso».
+
+         El rechazo decía: «El documento es de "BOLAK COMPANY LIMITED" y lo estás cargando en
+         "la fila seleccionada" (0,000 % de coincidencia)». Y ese «la fila seleccionada» es el
+         texto que se usa cuando la fila NO TIENE razón social: la comparación daba 0 % porque
+         no había con qué comparar, no porque hubiera desacuerdo. La verificación de identidad
+         existe para atrapar el documento cargado en la fila EQUIVOCADA; en una fila vacía no
+         hay nada que equivocar.
+
+         Así que la fila vacía se nombra con la razón social del documento. Eso habilita el
+         segundo camino: buscar las comparables por fuera, crear las filas y darles identidad
+         cargándoles su estado financiero. */
+      const filaSinIdentidad = !String((destino && destino.name) || '').trim()
+        && !String((destino && destino.id) || '').trim();
+
+      if (traeNombre && filaSinIdentidad) {
+        const conNombre = [...comparables];
+        conNombre[compIndex] = {
+          ...conNombre[compIndex],
+          name: String(result.data.nombre || '').trim() || conNombre[compIndex].name || '',
+          nameKey: nameKey(String(result.data.nombre || '').trim()),
+          id: String(result.data.identificador_fuente || '').trim() || conNombre[compIndex].id || '',
+        };
+        setComparables(conNombre);
+        /* El resto del flujo sigue con la fila ya nombrada: `comparables` todavía apunta al
+           arreglo anterior en esta vuelta —`useState` no es síncrono—, así que las cifras se
+           aplican sobre `conNombre` y no sobre el estado viejo. */
+        comparablesParaAplicar = conNombre;
+      } else if (traeNombre && cruce.indice !== compIndex) {
         setResultadoCarga({
           aplicadas: [],
           rechazadas: [{
@@ -1737,10 +1773,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         return;
       }
 
-      const cruceEfectivo = traeNombre
+      /* Con la fila recién nombrada el cruce es por identidad tomada del propio documento: no
+         hay dos nombres que contrastar, así que se marca `manual` —«lo asignaste a mano»— que es
+         exactamente lo que ocurrió. */
+      const cruceEfectivo = (traeNombre && !filaSinIdentidad)
         ? cruce
         : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
-      const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
+      const filas = aplicarEeffEnFila(comparablesParaAplicar, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
       setComparables(filas);
 
       /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. Recortada al
@@ -1839,7 +1878,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       }
 
       setCargaEeff({ etapa: 'Cruzando ' + entradas.length + ' empresa(s) con las comparables…', hechas: lista.length, total: lista.length });
-      const { aplicadas, rechazadas } = repartir(entradas, comparables);
+      const { aplicadas, rechazadas, nuevas } = repartir(entradas, comparables);
 
       /* Las que cruzaron pero cuyo documento no trae con qué calcular el margen salen de
          la muestra en vez de aplicarse. Volcarlas dejaría en la fila las cifras que ya
@@ -1847,10 +1886,48 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          seguiría en el rango sin soporte. */
       const { conCifras, sinCifras } = separarPorSuficiencia(aplicadas);
 
-      /* Se acumulan todas las filas antes de un único setComparables: un set por
-         empresa se sobrescribiría entre iteraciones y solo entraría la última. */
+      /* ── LAS QUE NO EXISTIAN SE CREAN ──
+         «Al cargar un estado financiero lo que debe hacer es crear la comparable si esta no
+         existe» (2026-09-02), que es el segundo camino del proceso: buscar las comparables por
+         fuera, soltar sus estados financieros y que el sistema arme la muestra.
+
+         Se crean ANTES de aplicar las cifras y el índice se toma de la fila recién creada, no
+         del que traía `repartir` —que es -1 justamente porque la fila no existía—. Las cifras se
+         aplican después por el mismo camino que las demás, así que pasan por la misma
+         verificación y quedan con el mismo rastro. */
       let filas = comparables;
-      conCifras.forEach((a) => {
+      const creadas = [];
+      /* SOLO se crea la fila si el documento trae con qué calcular el margen. Crear una
+         comparable a partir de un documento sin cifras dejaría en la muestra una fila que no
+         entra al rango y que nadie pidió — exactamente el problema de las filas vacías que se
+         retiró el mismo día. Las otras se reportan con su motivo, igual que las existentes cuyo
+         documento no sirve. */
+      const nuevasUtiles = [];
+      const nuevasSinDatos = [];
+      nuevas.forEach((n) => {
+        (partidasFaltantes(n.datos).length ? nuevasSinDatos : nuevasUtiles).push(n);
+      });
+      nuevasUtiles.forEach((n) => {
+        const indice = filas.length;
+        filas = [...filas, {
+          name: n.nombre,
+          nameKey: nameKey(n.nombre),
+          id: n.identificador || '',
+          amb: 'Int',
+          desc: '',
+          /* Sin cifras todavía: se las pone `aplicarEeffEnFila` justo abajo, con las del
+             documento y su verificación. */
+          s: null, c: null, op: null, ar: null, inv: null, ap: null, ppe: null,
+          /* Creada desde su estado financiero y no desde el cribado: no pasó por la curación de
+             actividad, así que no se le atribuye ningún grado. La tabla la marca «Actividad sin
+             verificar», que es exactamente lo que es. */
+          gradoActividad: '',
+          motivoActividad: '',
+          creadaDesdeEeff: true,
+        }];
+        creadas.push({ ...n, indice });
+      });
+      [...conCifras, ...creadas].forEach((a) => {
         filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
       });
 
@@ -1874,6 +1951,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* El retiro va después de aplicar y de recortar las imágenes, que trabajan sobre
          los índices originales, y antes de publicar y de pedir las descripciones, que
          reciben ya los nuevos. */
+      /* Las que no llegaron a crearse por falta de cifras se informan en la misma lista: para
+         el analista es el mismo hecho —«este documento no sirve para sostener una comparable»—
+         y distinguir si la fila existía antes o no solo añade ruido. */
+      const noCreadas = nuevasSinDatos.map((n) => ({
+        archivo: n.archivo,
+        comparable: n.nombre,
+        motivo: motivoSinInformacionFinanciera(n.nombre, partidasFaltantes(n.datos), n.archivo)
+          + ' No se creó la comparable.',
+      }));
+
       const retiradas = sinCifras.map((a) => ({
         archivo: a.archivo,
         comparable: (filas[a.indice] && filas[a.indice].name)
@@ -1900,7 +1987,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setResultadoCarga({
         aplicadas: conCifras,
         rechazadas: [...rechazadas, ...fallosLectura],
-        retiradas,
+        /* Las retiradas de la muestra y las que no llegaron a crearse van juntas: para el
+           analista es el mismo hecho. */
+        retiradas: [...retiradas, ...noCreadas],
       });
     } finally {
       setUploadingEEFF(false);

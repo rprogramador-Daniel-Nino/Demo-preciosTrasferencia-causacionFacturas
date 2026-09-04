@@ -40,15 +40,44 @@ test('una lista ausente se trata igual que una vacía', () => {
   assert.strictEqual(cruzar({ nombre: 'APPIRITS INC' }, 'a.pdf', undefined).modo, 'sin-comparables');
 });
 
-test('repartir sin comparables rechaza todo con el motivo correcto', () => {
+test('sin comparables cargadas, cada documento CREA la suya', () => {
+  /* Esta prueba fijaba lo contrario —«repartir sin comparables rechaza todo»— y era correcto
+     mientras la muestra solo podía salir del cribado de Capital IQ.
+
+     Desde el 2026-09-02 hay un segundo camino, pedido así: «hicimos la búsqueda de las
+     comparables de manera manual y ya tenemos las comparables; si cargamos los EEFF de estas
+     comparables debería agregarlos y generar los análisis con estos datos» y «al cargar un
+     estado financiero lo que debe hacer es crear la comparable si esta no existe».
+
+     Este es justo ese flujo en su forma pura: sin ninguna comparable cargada, soltar los estados
+     financieros crea la muestra entera. */
   const entradas = [
     { archivo: '9 APPIRITS INC.pdf', datos: { nombre: 'APPIRITS INC' } },
     { archivo: '15 KIDS STAR INC.pdf', datos: { nombre: 'KIDS STAR INC' } },
   ];
-  const { aplicadas, rechazadas } = repartir(entradas, []);
-  assert.strictEqual(aplicadas.length, 0);
-  assert.strictEqual(rechazadas.length, 2);
-  rechazadas.forEach((r) => assert.match(r.motivo, /todavía no tiene comparables/));
+  const { aplicadas, rechazadas, nuevas } = repartir(entradas, []);
+  assert.strictEqual(aplicadas.length, 0, 'ninguna se aplica sobre una fila existente');
+  assert.strictEqual(rechazadas.length, 0, 'y ninguna se rechaza');
+  assert.strictEqual(nuevas.length, 2);
+  assert.deepStrictEqual(nuevas.map((n) => n.nombre).sort(), ['APPIRITS INC', 'KIDS STAR INC']);
+  nuevas.forEach((n) => {
+    assert.strictEqual(n.crearComparable, true);
+    assert.match(n.motivo, /se creó la comparable/);
+    assert.strictEqual(n.firme, false, 'creada desde el documento: hay que verificarla');
+  });
+});
+
+test('el documento sin razón social SÍ se rechaza: no se puede crear una fila anónima', () => {
+  /* El límite del camino nuevo. Una fila con cifras y sin nombre entraría al rango sin que
+     nadie sepa de quién es, que es peor que un rechazo con su motivo. */
+  const { rechazadas, nuevas } = repartir(
+    [{ archivo: 'sin-nombre.pdf', datos: { ingresos: 100 } }],
+    [],
+  );
+  assert.strictEqual(nuevas.length, 0);
+  assert.strictEqual(rechazadas.length, 1);
+  assert.match(rechazadas[0].motivo, /tampoco trae la razón social/);
+  assert.match(rechazadas[0].motivo, /sin que nadie sepa de quién es/);
 });
 
 test('con comparables, un documento ajeno sigue diciendo cuál era la más parecida', () => {
@@ -160,11 +189,23 @@ test('reparte cada empresa a su fila y rechaza las ajenas con motivo', () => {
     { datos: { nombre: 'BANCOLOMBIA S.A.' }, archivo: 'lote.pdf', verificacion: { esValido: true, hallazgos: [] } },
     { datos: { nombre: 'ENDAVA PLC' }, archivo: 'lote.pdf', verificacion: { esValido: true, hallazgos: [] } },
   ];
-  const { aplicadas, rechazadas } = repartir(entradas, COMPARABLES);
+  const { aplicadas, rechazadas, nuevas } = repartir(entradas, COMPARABLES);
 
   assert.strictEqual(aplicadas.length, 2, 'debieron aplicarse Globant y Endava');
-  assert.strictEqual(rechazadas.length, 1, 'debió rechazarse Bancolombia');
-  assert.ok(rechazadas[0].motivo.includes('BANCOLOMBIA'), 'el rechazo no dice de qué empresa era el documento');
+  /* Bancolombia ya no se RECHAZA: se CREA. No cruza con ninguna fila de la muestra, y desde el
+     2026-09-02 un documento que no cruza con nadie crea su comparable —«al cargar un estado
+     financiero lo que debe hacer es crear la comparable si esta no existe»—.
+
+     Lo que la prueba sigue protegiendo, y es lo que vino a cerrar: que cada documento vaya a SU
+     fila y no a la de al lado. La verificación de identidad no se debilita; lo que cambió es
+     qué pasa cuando no hay ninguna fila con la que chocar. Que un estado financiero de un banco
+     acabe creando una comparable en un estudio de software es una decisión del analista, y por
+     eso la fila queda marcada como no firme y con el motivo escrito. */
+  assert.strictEqual(rechazadas.length, 0);
+  assert.strictEqual(nuevas.length, 1);
+  assert.ok(nuevas[0].nombre.includes('BANCOLOMBIA'));
+  assert.strictEqual(nuevas[0].firme, false, 'creada desde el documento: hay que verificarla');
+  assert.match(nuevas[0].motivo, /Verifique que corresponde al estudio/);
 
   const destinos = aplicadas.map((a) => COMPARABLES[a.indice].name).sort();
   assert.deepStrictEqual(destinos, ['ENDAVA PLC', 'GLOBANT S.A.']);
@@ -191,19 +232,25 @@ test('un lote sin ninguna coincidencia no aplica nada y lo explica todo', () => 
     { datos: { nombre: 'ECOPETROL S.A.' }, archivo: 'a.pdf', verificacion: { esValido: true, hallazgos: [] } },
     { datos: { nombre: 'AVIANCA HOLDINGS' }, archivo: 'b.pdf', verificacion: { esValido: true, hallazgos: [] } },
   ];
-  const { aplicadas, rechazadas } = repartir(entradas, COMPARABLES);
-  assert.strictEqual(aplicadas.length, 0);
-  assert.strictEqual(rechazadas.length, 2);
-  rechazadas.forEach((r) => assert.ok(r.motivo && r.motivo.length > 20, 'todo rechazo necesita su motivo'));
+  const { aplicadas, rechazadas, nuevas } = repartir(entradas, COMPARABLES);
+  assert.strictEqual(aplicadas.length, 0, 'ninguna cruza con las que ya están');
+  assert.strictEqual(rechazadas.length, 0);
+  /* Ya no se rechazan: se crean. Traen razón social, que es lo único que hace falta para
+     nombrarlas, y la verificación de identidad no tiene con qué chocar porque esas comparables
+     no existen en la muestra. */
+  assert.strictEqual(nuevas.length, 2);
+  nuevas.forEach((n) => assert.ok(n.motivo && n.motivo.length > 20, 'y cada una dice que se creó'));
 });
 
-test('sin comparables cargadas no se aplica nada, en vez de fallar', () => {
-  const { aplicadas, rechazadas } = repartir(
+test('sin comparables cargadas no falla: crea la del documento', () => {
+  const { aplicadas, rechazadas, nuevas } = repartir(
     [{ datos: { nombre: 'GLOBANT S.A.' }, archivo: 'x.pdf', verificacion: { esValido: true, hallazgos: [] } }],
     []
   );
   assert.strictEqual(aplicadas.length, 0);
-  assert.strictEqual(rechazadas.length, 1);
+  assert.strictEqual(rechazadas.length, 0);
+  assert.strictEqual(nuevas.length, 1);
+  assert.strictEqual(nuevas[0].nombre, 'GLOBANT S.A.');
 });
 
 /* ══════ ruido en el nombre del archivo y ticker de Capital IQ ══════
