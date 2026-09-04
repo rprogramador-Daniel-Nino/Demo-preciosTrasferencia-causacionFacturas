@@ -162,6 +162,12 @@ export function construirLibroSoporte(datos) {
          que hay que sustentar, y porque una comparable del estudio anterior que NO pudo volver
          tiene que quedar nombrada con su motivo: si desaparece en silencio, se descubre al
          cotejar los dos informes y para entonces hay que explicarla sin saber por qué se fue. */
+      /* La conciliación contra el estudio del año anterior: el estado de cada comparable que
+         integró la muestra del año pasado y, cuando no siguió, el motivo. Es lo que el despacho
+         le entrega al cliente cuando la muestra no se puede reproducir (pedido del 2026-09-02),
+         y lo que responde a la pregunta que la DIAN hace primero al comparar dos informes: por
+         qué cambió la muestra. */
+      conciliacionAnterior: embudo.conciliacionAnterior || null,
       continuidadPrioritaria: embudo.priorizoContinuidad ? {
         rescatadas: embudo.continuidadRescatadas || 0,
         noRescatadas: Array.isArray(embudo.continuidadNoRescatada)

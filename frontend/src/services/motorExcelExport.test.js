@@ -493,3 +493,70 @@ test('retirarla no rompe lo que sí se publica junto a ella', () => {
   assert.match(texto, /COMBINACIÓN DE SELECCIÓN/, 'la combinación sigue');
   assert.match(texto, /CRITERIO DE CERCANÍA DE RENTABILIDAD/, 'y el ancla de rentabilidad');
 });
+
+/* ══════ LA CONCILIACION SALE EN EL EXCEL, QUE ES LO QUE SE LE ENTREGA AL CLIENTE ══════
+
+   «Generamos con las comparables del anio anterior, si nos funciona pues perfecto, y si no ya
+   tenemos justificacion del porque no de ello a nuestros clientes» (2026-09-02). Esa
+   justificacion tiene que salir del soporte y no de una reconstruccion a mano contra el informe
+   del anio pasado. */
+
+const conFunnel = (extra) => construirLibroSoporte({
+  ...PAYLOAD,
+  filtros: {
+    ...(PAYLOAD.filtros || {}),
+    selectionFunnel: {
+      ...((PAYLOAD.filtros && PAYLOAD.filtros.selectionFunnel) || {}),
+      ...extra,
+    },
+  },
+});
+const hoja = (libro) => {
+  assert.ok(libro.SheetNames.includes('Selección comparables'), 'la hoja debe existir');
+  return XLSX.utils.sheet_to_csv(libro.Sheets['Selección comparables']);
+};
+
+test('el libro publica el motivo de cada comparable del año anterior que no siguió', () => {
+  const texto = hoja(conFunnel({
+    conciliacionAnterior: {
+      total: 4, enLaMuestra: 1, descartadas: 1, enReserva: 1, fueraDelCribado: 1,
+      sinEvaluar: 0, porExplicar: 3, posiblesCoincidencias: 1,
+      filas: [
+        { name: 'Sigue SA', estado: 'enLaMuestra', motivo: '' },
+        { name: 'Cae SA', estado: 'descartadaPorFiltro', motivo: 'Vinculada (Art. 260-1 E.T.).' },
+        { name: 'Reserva SA', estado: 'enReserva', motivo: 'Sigue siendo comparable.' },
+        { name: 'Se Fue SA', estado: 'fueraDelCribado', motivo: 'El cribado no la devolvió.' },
+      ],
+    },
+  }));
+  assert.match(texto, /CONCILIACIÓN CON LA MUESTRA DEL EJERCICIO ANTERIOR/);
+  assert.match(texto, /1 integran también la muestra/, 'dice cuántas siguen');
+  assert.match(texto, /Cae SA/);
+  assert.match(texto, /260-1/, 'con el motivo citable');
+  assert.match(texto, /Se Fue SA/);
+  assert.match(texto, /No figura en el cribado del ejercicio corriente/);
+  assert.match(texto, /Posibles coincidencias por revisar/,
+    'y avisa de las que podrían estar con otro nombre');
+  assert.doesNotMatch(texto, /Sigue SA\s*,\s*Descartada/,
+    'la que siguió no se lista: no hay nada que explicar');
+});
+
+test('con la muestra del año anterior reproducida entera, no se imprime nada', () => {
+  /* La regla de este libro: una sección que aparece siempre se deja de leer. */
+  const texto = hoja(conFunnel({
+    conciliacionAnterior: {
+      total: 2, enLaMuestra: 2, descartadas: 0, enReserva: 0, fueraDelCribado: 0,
+      sinEvaluar: 0, porExplicar: 0, posiblesCoincidencias: 0,
+      filas: [
+        { name: 'A SA', estado: 'enLaMuestra', motivo: '' },
+        { name: 'B SA', estado: 'enLaMuestra', motivo: '' },
+      ],
+    },
+  }));
+  assert.doesNotMatch(texto, /CONCILIACIÓN CON LA MUESTRA DEL EJERCICIO ANTERIOR/);
+});
+
+test('un estudio sin estudio anterior no rompe el libro', () => {
+  const texto = hoja(conFunnel({ conciliacionAnterior: null }));
+  assert.doesNotMatch(texto, /CONCILIACIÓN CON LA MUESTRA/);
+});

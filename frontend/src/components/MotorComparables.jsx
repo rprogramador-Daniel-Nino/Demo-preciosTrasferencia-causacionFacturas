@@ -25,6 +25,10 @@ import { redactarDescripcionesEnLote } from '../services/descripcionComparables'
 import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
 import { residuoDeCriterios } from '../services/criteriosScreeningEs';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
+/* Por qué cada comparable del año pasado ya no está: es lo que permite intentar el estudio con
+   la muestra del año anterior y, si no se puede, entregarle al cliente el motivo de cada una
+   (pedido del 2026-09-02). */
+import { conciliarConEstudioAnterior } from '../services/conciliacionEstudioAnterior';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
   registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
@@ -513,6 +517,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
   }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch,
     capitalTrabajoTP]);
+
+  /* Por qué cada comparable del año pasado ya no está.
+
+     VA DESPUES del memo de `auditoria` y no antes: lo lee, y los dos corren DURANTE el render,
+     así que declararlo arriba dejaba `auditoria` en zona muerta y el panel se caía con «Cannot
+     access before initialization». Es el mismo error que `smoke_panel.mjs` ya cazó hoy con
+     `capitalTrabajoTP`; esta vez se vio en el orden de las líneas antes de compilar. */
+  const conciliacion = useMemo(() => conciliarConEstudioAnterior({
+    previas: (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
+    universo,
+    muestra: comparables,
+    rechazadas: (auditoria && auditoria.rechazadas) || [],
+    reserva: (auditoria && auditoria.reserva) || [],
+  }), [estudioAnteriorInfo, universo, comparables, auditoria]);
 
   /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
      —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
@@ -1234,6 +1252,21 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         priorizoContinuidad: Boolean(result.priorizoContinuidad),
         continuidadRescatadas: result.continuidadRescatadas || 0,
         continuidadNoRescatada: result.continuidadNoRescatada || [],
+        /* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR, PERSISTIDA ──
+           Va DENTRO del embudo y no en un estado aparte porque el embudo ya se guarda con el
+           estudio y ya lo lee el Excel de soporte: un estado nuevo habria que persistirlo,
+           cargarlo y mantenerlo sincronizado por separado.
+
+           Es la justificacion que el despacho le entrega al cliente cuando la muestra del anio
+           pasado no se puede reproducir, y tiene que salir del soporte en vez de reconstruirse a
+           mano contra el informe anterior. */
+        conciliacionAnterior: conciliarConEstudioAnterior({
+          previas: (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
+          universo,
+          muestra: result.seleccionadas,
+          rechazadas: result.rechazadas,
+          reserva: result.reserva,
+        }),
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -2880,6 +2913,39 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <Layers className="w-3.5 h-3.5" />
                 <span>Priorizar continuidad</span>
               </button>
+            )}
+
+            {/* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR ──
+                Pedido el 2026-09-02: «generamos con las comparables del año anterior, si nos
+                funciona pues perfecto, y si no ya tenemos justificación del porqué no de ello a
+                nuestros clientes».
+
+                El motor solo veía las del año pasado que SIGUEN en el cribado de este año: una
+                que el screening no devolvió es invisible para él —no está entre las candidatas,
+                así que no se puede seleccionar ni rechazar— y simplemente no salía. Esta línea
+                clasifica las cuatro situaciones y da el motivo de cada una. */}
+            {conciliacion && conciliacion.porExplicar > 0 && (
+              <span className="text-[10.5px] leading-snug max-w-[20rem]">
+                <span className="font-bold text-zinc-700 dark:text-zinc-200">
+                  Del estudio anterior: {conciliacion.enLaMuestra} de {conciliacion.total} siguen.
+                </span>
+                {' '}
+                {[
+                  [conciliacion.descartadas, 'descartada(s) por un filtro'],
+                  [conciliacion.enReserva, 'en reserva (siguen siendo comparables)'],
+                  [conciliacion.fueraDelCribado, 'que el cribado de este año no trae'],
+                  [conciliacion.sinEvaluar, 'sin evaluar en la última corrida'],
+                ].filter(([n]) => n > 0).map(([n, etq]) => `${n} ${etq}`).join(' · ')}
+                {conciliacion.posiblesCoincidencias > 0 && (
+                  <span className="block mt-0.5 text-amber-700 dark:text-amber-400">
+                    Ojo: {conciliacion.posiblesCoincidencias} podría(n) estar en el cribado con el
+                    nombre escrito de otra forma. Revíselas antes de sustentar que se fueron.
+                  </span>
+                )}
+                <span className="block mt-0.5 text-zinc-500">
+                  El motivo de cada una va en la hoja «Selección comparables» del Excel de soporte.
+                </span>
+              </span>
             )}
 
             {/* Lo que el modo rescató y lo que no pudo. Lo segundo importa más: una comparable

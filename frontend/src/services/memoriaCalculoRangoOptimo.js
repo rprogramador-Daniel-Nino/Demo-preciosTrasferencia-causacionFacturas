@@ -1023,6 +1023,48 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        descalifica por sí sola (Guías OCDE cap. III, §3.64-3.65). Y las que NO pudieron volver
        se nombran con su motivo: es lo que permite explicar, frente al informe del año pasado,
        por qué la muestra cambió. */
+    /* ─── Conciliación con el estudio del año anterior ───
+       Comparable por comparable, si siguió en la muestra y, cuando no, por qué. Va en el soporte
+       porque es la primera pregunta al comparar dos informes —por qué cambió la muestra— y
+       reconstruirla a mano contra el informe anterior es el trabajo que este bloque quita.
+
+       Se imprime solo si hay estudio anterior y algo que explicar: con la muestra reproducida
+       entera no hay nada que sustentar. */
+    const conc = seleccion.conciliacionAnterior || null;
+    if (conc && conc.porExplicar > 0) {
+      const ETIQUETA_ESTADO = {
+        descartadaPorFiltro: 'Descartada por un criterio de comparabilidad',
+        enReserva: 'Sigue siendo comparable; no integró la muestra por cupo',
+        fueraDelCribado: 'No figura en el cribado del ejercicio corriente',
+        enElCribadoSinEvaluar: 'Figura en el cribado, pendiente de evaluar',
+      };
+      sel.push([cTxt('CONCILIACIÓN CON LA MUESTRA DEL EJERCICIO ANTERIOR')]);
+      sel.push([
+        cTxt('Comparables del estudio anterior'),
+        cNum(conc.total, '0'),
+        cTxt(`${conc.enLaMuestra} integran también la muestra de este ejercicio`),
+      ]);
+      if (conc.posiblesCoincidencias) {
+        sel.push([
+          cTxt('Posibles coincidencias por revisar'),
+          cNum(conc.posiblesCoincidencias, '0'),
+          cTxt('Figuran en el cribado con la razón social escrita de otra forma: confírmelas '
+            + 'antes de sustentar que dejaron de ser comparables.'),
+        ]);
+      }
+      sel.push([cTxt('Razón social'), cTxt('Situación'), cTxt('Motivo')]);
+      conc.filas
+        .filter((f) => f.estado !== 'enLaMuestra')
+        .forEach((f) => {
+          sel.push([
+            cTxt(f.name || '(sin nombre)'),
+            cTxt(ETIQUETA_ESTADO[f.estado] || f.estado),
+            cTxt(f.motivo || ''),
+          ]);
+        });
+      sel.push([]);
+    }
+
     const prioridad = seleccion.continuidadPrioritaria || null;
     if (prioridad) {
       sel.push([cTxt('PRIORIDAD A LAS COMPARABLES DEL ESTUDIO ANTERIOR')]);
