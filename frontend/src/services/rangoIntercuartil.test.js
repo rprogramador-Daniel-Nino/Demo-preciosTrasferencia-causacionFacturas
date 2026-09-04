@@ -110,15 +110,22 @@ test('las dos cifras de cada comparable se publican aunque useadj esté apagado'
   });
 });
 
-test('useadj decide el rango que sostiene la conclusión, no lo que muestran las tablas', () => {
-  /* Lo que la casilla significa: si el ANÁLISIS ajusta por capital de trabajo. Eso cambia
-     contra qué rango se compara el indicador del contribuyente —y por tanto el CUMPLE—,
-     pero no puede cambiar el contenido de una columna que ya tiene su título. */
+test('la conclusión sale del rango AJUSTADO, con la casilla encendida o apagada', () => {
+  /* Metodología del despacho, del 2026-09-02: «el MO sin ajuste solo nos ayuda a escoger las
+     comparables, pero cómo sabemos si cumple es con el rango ajustado». Antes esta prueba
+     fijaba que `useadj` elegía el rango que concluye, y así se radicó un estudio concluyendo
+     con el rango sin ajustar —CUMPLE con el P25 en 1,364 %— cuando el ajustado lo dejaba fuera
+     con el P25 en 12,197 %.
+
+     `useadj` dejó de elegirlo. Lo que la prueba sigue fijando, y es lo que vino a cerrar: que
+     las DOS estadísticas viajen calculadas en los dos casos, para que una columna titulada
+     «AJUSTADO» no publique el margen crudo. */
   const con = analizarRango(conAjuste);
   const sin = analizarRango({ ...conAjuste, useadj: false });
 
   assert.deepStrictEqual(con.stats, con.statsAjustado, 'con la casilla, concluye con el ajustado');
-  assert.deepStrictEqual(sin.stats, sin.statsNoAjustado, 'sin ella, con el crudo');
+  assert.deepStrictEqual(sin.stats, sin.statsAjustado,
+    'y SIN la casilla también: el ajustado es el que decide');
   /* Y las dos estadísticas de las tablas son las mismas en ambos casos. */
   assert.deepStrictEqual(sin.statsAjustado, con.statsAjustado);
   assert.deepStrictEqual(sin.statsNoAjustado, con.statsNoAjustado);

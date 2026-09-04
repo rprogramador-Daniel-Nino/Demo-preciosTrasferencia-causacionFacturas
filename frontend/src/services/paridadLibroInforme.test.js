@@ -242,7 +242,13 @@ test('el informe y el libro coinciden en los tres indicadores del sistema, con a
       const estudio = { ...ESTUDIO_INFORME, pli, useadj };
       const delInforme = analizarRango(estudio);
       const norm = obtenerEstudioNormalizadoParaParche(estudio);
-      const idx = useadj ? IDX_SABOR_INFORME : IDX_SIN_AJUSTE;
+      /* SIEMPRE la columna del escenario ajustado, con la casilla encendida o apagada:
+         El cumplimiento se decide SIEMPRE con el rango ajustado desde el 2026-09-02
+     («el MO sin ajuste solo nos ayuda a escoger las comparables, pero como sabemos si
+     cumple es con el rango ajustado»). `useadj` dejo de elegirlo.
+         La prueba conserva lo que vino a cerrar —que el rango del informe sea exactamente el
+         de una columna del libro, estadistico por estadistico— y solo cambia cual columna. */
+      const idx = IDX_SABOR_INFORME;
       const delLibro = estadisticaDelLibro(norm, pli, idx);
       const donde = `${pli}, useadj=${useadj}`;
       assert.ok(delInforme.stats, `${donde}: el informe publica rango`);
@@ -481,18 +487,28 @@ test('la fórmula de cada fila de estadística apunta a su propia columna y a su
       revisadas++;
     });
 
-    /* La Conclusión: el contribuyente dentro del rango, con el P25 abajo y el P75 arriba,
-       en esa dirección y sobre la columna de su propio sabor. */
+    /* La Conclusión: el contribuyente POR ENCIMA de su propio P25, sobre la columna de su
+       propio sabor.
+
+       El criterio cambió el 2026-09-02, por decisión del despacho con su contador: cumple
+       quien está sobre el primer cuartil, sin techo. Antes la fórmula exigía AND(>=P25, <=P75),
+       y con el indicador sobre el tercer cuartil la celda decía «NO CUMPLE» — el ajuste de
+       precios de transferencia solo procede cuando el contribuyente declaró MENOS utilidad de
+       la que corresponde, así que por encima no hay nada que declarar.
+
+       Esta prueba se conserva palabra por palabra en lo demás: sigue verificando que cada
+       columna apunte a SUS celdas y no a las del sabor de al lado, que es el defecto que vino
+       a cerrar. Lo único que cambia es el criterio, y tiene que cambiar aquí también porque el
+       libro no puede contradecir al informe que sustenta. */
     const filaTested = filaDe('Indicador del contribuyente');
     const filaP25 = filaDe('P25 (cuartil inferior)');
-    const filaP75 = filaDe('P75 (cuartil superior)');
     LETRAS_SERIE.forEach((L, k) => {
       const rango = `${L}${primera}:${L}${ultima}`;
-      const esperada = `IF(COUNT(${rango})<3,"",IF(AND(${L}${filaTested}>=${L}${filaP25},`
-        + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE"))`;
+      const esperada = `IF(COUNT(${rango})<3,"",IF(${L}${filaTested}>=${L}${filaP25},`
+        + '"CUMPLE","NO CUMPLE"))';
       assert.strictEqual(celdaDe('Conclusión', k).f, esperada,
         `${metodo}/${SABORES[k]}: la fórmula de la Conclusión no compara el contribuyente `
-        + 'contra su propio P25 y P75');
+        + 'contra su propio P25');
       revisadas++;
     });
   });

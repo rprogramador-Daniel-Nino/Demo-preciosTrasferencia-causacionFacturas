@@ -138,6 +138,16 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
               {memoria.stats ? `${pctf(memoria.stats.p25)} – ${pctf(memoria.stats.p75)}` : 'sin rango'}
               {' · '}mediana {memoria.stats ? pctf(memoria.stats.med) : '—'}
               {' · '}{memoria.indicador.clave} del contribuyente {pct(r.pli)}
+              {/* CUAL de los dos rangos se esta explicando. Con las dos columnas a la vista en la
+                  pestana de comparables, no decirlo dejaba comparar el indicador contra la que
+                  no manda: reportado el 2026-09-02, la memoria mostraba el ajustado y la tarjeta
+                  concluia con el otro. */}
+              {' · '}
+              <span className="text-zinc-400">
+                {memoria.serieQueDecide === 'ajustado'
+                  ? 'rango ajustado por capital de trabajo'
+                  : 'rango sin ajuste de capital de trabajo'}
+              </span>
             </p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -211,14 +221,53 @@ export default function MemoriaRangoModal({ estudio, alCerrar }) {
                 ['Mediana', memoria.stats ? pctf(memoria.stats.med) : '—', true],
                 [
                   'Conclusión',
+                  /* El criterio es estar POR ENCIMA del primer cuartil, sin techo (2026-09-02),
+                     asi que «dentro del rango» ya no describe todos los casos que cumplen. */
                   r.dentro === null ? (
                     <span key="c" className="text-zinc-500">Falta el indicador o el rango para concluir.</span>
                   ) : r.dentro ? (
-                    <b key="c" className="text-emerald-600 dark:text-emerald-400">CUMPLE — dentro del rango</b>
+                    <b key="c" className="text-emerald-600 dark:text-emerald-400">
+                      CUMPLE — {r.sobreP75 ? 'sobre el tercer cuartil' : 'por encima del primer cuartil'}
+                    </b>
                   ) : (
-                    <b key="c" className="text-red-600 dark:text-rose-400">NO CUMPLE — {r.dir} del rango</b>
+                    <b key="c" className="text-red-600 dark:text-rose-400">
+                      NO CUMPLE — por debajo del primer cuartil
+                    </b>
                   ),
                 ],
+                /* LOS DOS VEREDICTOS. Cargar los EEFF de las comparables cambia su capital de
+                   trabajo y con el el rango ajustado, asi que el veredicto puede voltearse sin
+                   que nada mas se mueva: en el caso reportado el sin ajustar cumple y el
+                   ajustado no. Verlos juntos evita abrir el Excel para saber que paso con el
+                   otro, y deja claro que el estudio depende de ese interruptor. */
+                ...(memoria.veredictos && memoria.veredictos.noAjustado && memoria.veredictos.ajustado
+                  ? [[
+                    'Con y sin ajuste',
+                    <span key="v" className="space-y-0.5 block">
+                      {[['noAjustado', 'Sin ajuste de capital de trabajo'],
+                        ['ajustado', 'Ajustado por capital de trabajo']].map(([clave, etq]) => {
+                        const v = memoria.veredictos[clave];
+                        const decide = memoria.serieQueDecide === clave;
+                        return (
+                          <span key={clave} className="block">
+                            <span className={v.cumple
+                              ? 'text-emerald-600 dark:text-emerald-400 font-bold'
+                              : 'text-red-600 dark:text-rose-400 font-bold'}>
+                              {v.cumple ? 'CUMPLE' : 'NO CUMPLE'}
+                            </span>
+                            {' · '}{etq}
+                            {' · P25 '}<span className="font-mono">{pctf(v.stats.p25)}</span>
+                            {decide && (
+                              <span className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold bg-[#0FA3A1]/15 text-[#0B7C7A] dark:text-[#0FA3A1]">
+                                DECIDE
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </span>,
+                  ]]
+                  : []),
                 [
                   'Ajuste propuesto',
                   r.dentro === false ? money(r.ajustePropuesto) : '— (no procede)',

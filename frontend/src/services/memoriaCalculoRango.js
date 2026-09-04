@@ -12,7 +12,7 @@
    produciría una memoria de cálculo que no explica el número que se está mostrando, que
    es peor que no tener memoria. */
 
-import { num, pliOf, ratios } from '../utils/calculations.js';
+import { num, pliOf, ratios, cumpleElRango } from '../utils/calculations.js';
 import { analizarRango } from './rangoIntercuartil.js';
 import { cuartilInterpolado } from './ajusteRangoCapitalTrabajo.js';
 
@@ -64,12 +64,35 @@ export function construirMemoriaRango(estudio) {
   const tasa = (num(study.prime) || 0) / 100;
 
   /* Las filas salen de `analizarRango`: mismo margen y mismo ajuste que el informe. */
-  const { filas } = analizarRango(study);
+  const { filas, ajusteTieneDatos } = analizarRango(study);
+
+  /* CUAL DE LOS DOS MARGENES SOSTIENE LA CONCLUSION.
+     `useadj` lo decide, igual que en `rangoIntercuartil.js:80`, y esta memoria tiene que
+     calcular sobre el MISMO. Antes tomaba `ajustado` siempre, y con el ajuste apagado publicaba
+     un rango que no era el del veredicto.
+
+     Reportado el 2026-09-02 con dos capturas del mismo estudio: la memoria mostraba
+     13,962 % - 22,250 % junto a un contribuyente en 6,204 %, y la tarjeta decia CUMPLE con
+     4,840 % de holgura. Las dos eran ciertas —la tarjeta decidia con el rango sin ajustar, cuyo
+     primer cuartil estaba en 1,364 %— y juntas se contradecian: puesto asi, cualquiera concluye
+     que el estudio no cumple. Este modal existe para explicar el numero de la tarjeta; si
+     calcula sobre otra serie, explica un numero que nadie ve. */
+  /* CUAL DECIDE lo dice `analizarRango`, y esta memoria no lo vuelve a razonar: existe para
+     explicar el numero de la tarjeta, asi que preguntarselo es lo unico que garantiza que
+     explique el mismo. Ya divergio una vez por tener su propio criterio (2026-09-02, con la
+     serie ajustada frente a un veredicto que salia del crudo).
+
+     El ajustado decide salvo que la mayoria de las comparables no traiga capital de trabajo: sin
+     esos datos el ajuste degenera en un desplazamiento constante que sale del balance del
+     contribuyente, y entonces concluye el rango sin ajustar. `useAdj` ya no elige nada aqui;
+     sigue leyendose para el aviso de tasa en cero y para informar `ajuste.aplicado`. */
+  const margenQueManda = (f) => (ajusteTieneDatos ? f.ajustado : f.noAjustado);
 
   const comparables = filas.map((f) => {
-    const incluida = entra(f.amb, modo) && f.ajustado !== null;
+    const decide = margenQueManda(f);
+    const incluida = entra(f.amb, modo) && decide !== null;
     let excluida = '';
-    if (f.ajustado === null) excluida = 'sin estados financieros cargados';
+    if (decide === null) excluida = 'sin estados financieros cargados';
     else if (!entra(f.amb, modo)) excluida = 'fuera del filtro de ámbito';
     return {
       nombre: f.nombre,
@@ -79,12 +102,15 @@ export function construirMemoriaRango(estudio) {
          con las otras dos y no puede desviarse de lo que se sumó de verdad. */
       ajuste: f.ajustado === null || f.noAjustado === null ? null : f.ajustado - f.noAjustado,
       ajustado: f.ajustado,
+      /* El de esta fila que entra al cuartil, para que la tabla se pueda rehacer a mano contra
+         la serie sin tener que saber cual de las dos columnas se uso. */
+      queDecide: decide,
       incluida,
       excluida,
     };
   });
 
-  const serie = comparables.filter((c) => c.incluida).map((c) => c.ajustado).sort((a, b) => a - b);
+  const serie = comparables.filter((c) => c.incluida).map((c) => c.queDecide).sort((a, b) => a - b);
   const n = serie.length;
 
   /* Cuartiles por interpolación lineal —QUARTILE.INC—, los mismos que calculan el
@@ -112,8 +138,11 @@ export function construirMemoriaRango(estudio) {
     ? { p25: cuartiles.p25.valor, med: cuartiles.mediana.valor, p75: cuartiles.p75.valor }
     : null;
 
+  /* La MISMA regla que la tarjeta y el informe, importada de `utils/calculations.js`: por
+     encima del primer cuartil. Con su propia copia, esta memoria ya habia divergido una vez
+     (2026-09-02, por la serie ajustada), y el modal existe para explicar el veredicto. */
   const dentro = stats && pliContribuyente !== null
-    ? pliContribuyente >= stats.p25 && pliContribuyente <= stats.p75
+    ? cumpleElRango(stats, pliContribuyente)
     : null;
 
   const advertencias = [];
@@ -141,10 +170,15 @@ export function construirMemoriaRango(estudio) {
       'debajo de ese número la sección del rango sale sin cifras.'
     );
   }
-  if (useAdj && !tasa) {
+  /* Ya no depende de la casilla: el cumplimiento se decide con el rango ajustado en todo
+     estudio (2026-09-02), asi que una tasa en cero anula el ajuste de todos y hace que el rango
+     ajustado colapse al crudo. Eso cambia la conclusion sin decirlo, y es lo mas grave que
+     puede pasarle a esta memoria en silencio. */
+  if (!tasa) {
     advertencias.push(
-      'El ajuste de capital de trabajo está activado pero la tasa de interés está en cero, ' +
-      'así que el ajuste de cada comparable es nulo.'
+      'La tasa de interés está en cero, así que el ajuste de capital de trabajo de cada ' +
+      'comparable es nulo y el rango ajustado —el que decide el cumplimiento— coincide con el ' +
+      'rango sin ajustar. Fije la tasa en el paso 3 para que el ajuste tenga efecto.'
     );
   }
 
@@ -219,6 +253,12 @@ export function construirMemoriaRango(estudio) {
     indicador: { clave, ...indicador },
     ambito: { modo, etiqueta: AMBITOS[modo] || AMBITOS.all },
     parteExaminada: { cifras: T, pli: pliContribuyente, razones: razonesT },
+    /* Cual de las dos series sostiene los cuartiles de arriba. La pantalla lo dice al lado del
+       rango: con las dos columnas a la vista hay que declarar cual manda, o el lector vuelve a
+       comparar el indicador contra la que no decide, que es justo lo que paso. */
+    serieQueDecide: ajusteTieneDatos ? 'ajustado' : 'noAjustado',
+    /* Y por que: una conclusion sobre el rango sin ajustar hay que sustentarla. */
+    ajusteTieneDatos,
     ajuste: {
       /* Berry dejó de estar exceptuado: con la definición del motor —utilidad bruta
          sobre gastos operativos— sí admite el ajuste, y la hoja Berry del Excel ya
@@ -249,10 +289,43 @@ export function construirMemoriaRango(estudio) {
     serie,
     cuartiles,
     stats,
+    /* LOS DOS VEREDICTOS, no solo el que decide.
+       Pedido el 2026-09-02 tras cargar los EEFF de las comparables: esos datos cambian el
+       capital de trabajo y con el el rango AJUSTADO, asi que el veredicto puede voltearse sin
+       que nada mas del estudio se mueva. En el caso reportado el sin ajustar CUMPLE (P25
+       1,364 %) y el ajustado NO (P25 12,197 %), con el contribuyente en 6,204 %. Publicar solo
+       uno obliga a abrir el Excel para saber que paso con el otro.
+
+       Se calculan los dos siempre, como ya hace `rangoIntercuartil.js`, y se dice cual sostiene
+       la conclusion. */
+    veredictos: (() => {
+      const de = (campo) => {
+        const s = comparables
+          .filter((c) => entra(c.amb, modo) && c[campo] !== null)
+          .map((c) => c[campo])
+          .sort((a, b) => a - b);
+        if (!s.length) return null;
+        const st = {
+          p25: cuartilInterpolado(s, 0.25),
+          med: cuartilInterpolado(s, 0.5),
+          p75: cuartilInterpolado(s, 0.75),
+        };
+        return {
+          stats: st,
+          n: s.length,
+          cumple: pliContribuyente === null ? null : cumpleElRango(st, pliContribuyente),
+        };
+      };
+      return { noAjustado: de('noAjustado'), ajustado: de('ajustado') };
+    })(),
     resultado: {
       pli: pliContribuyente,
       dentro,
-      dir: dentro === false && stats ? (pliContribuyente < stats.p25 ? 'por debajo' : 'por encima') : '',
+      /* Con el criterio de «por encima del P25» (2026-09-02) el incumplimiento solo puede ser
+         por debajo: sobre el tercer cuartil se cumple. Se conserva el campo porque lo leen el
+         modal y el Excel, pero ya no puede valer 'por encima'. */
+      dir: dentro === false ? 'por debajo' : '',
+      sobreP75: Boolean(stats && pliContribuyente !== null && pliContribuyente > stats.p75),
       ajustePropuesto: dentro === false && stats && pliContribuyente !== null
         ? (stats.med - pliContribuyente) * (T.s || 0)
         : null,

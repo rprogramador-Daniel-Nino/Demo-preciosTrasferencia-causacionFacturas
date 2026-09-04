@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { montoOperacion, num, fmt, pctf, egreso, pliOf, ratios } from './calculations.js';
+import {
+  montoOperacion, num, fmt, pctf, egreso, pliOf, ratios, adjustInfo, cumpleElRango,
+} from './calculations.js';
+import { analizarRango } from '../services/rangoIntercuartil.js';
+import { diagnosticarCumplimiento } from '../services/diagnosticoRango.js';
 
 /* ══════ montoOperacion ══════
    El monto de las operaciones con vinculados se guarda en más de un campo y cada
@@ -146,4 +150,163 @@ test('el ratio de cuentas por pagar sobre costo no se invierte por el signo del 
   });
   assert.deepStrictEqual(conSigno, enPositivo);
   assert.ok(conSigno.apC > 0, 'un pasivo sobre un costo, los dos positivos, da un ratio positivo');
+});
+
+/* ══════════ EL CRITERIO DE CUMPLIMIENTO: POR ENCIMA DEL PRIMER CUARTIL ══════════
+
+   Decisión del despacho, con su contador, el 2026-09-02: «el modo de decidir que está
+   cumpliendo es que esté por encima del p25».
+
+   Antes se exigía estar DENTRO del rango (P25 <= PLI <= P75), así que un contribuyente por
+   encima del tercer cuartil salía como «NO CUMPLE (por encima)».
+
+   POR QUÉ EL CAMBIO ES COHERENTE CON LO QUE EL SISTEMA YA CALCULABA. El ajuste de precios de
+   transferencia solo procede cuando el contribuyente declaró MENOS utilidad de la que
+   corresponde: por encima del rango no hay nada que cobrarle. Y `adjustInfo` ya lo trataba así
+   —con el indicador sobre la mediana, `raw` sale negativo y el ajuste se marca improcedente con
+   monto cero—, de modo que el sistema ya concluía que no había ajuste que declarar mientras la
+   etiqueta decía lo contrario. Lo que cambia es la etiqueta, no la economía.
+
+   NO SE PIERDE LA SEÑAL. Estar muy por encima del P75 sigue siendo informativo —puede indicar
+   que el método o la parte examinada no son los adecuados— y se reporta en `sobreP75`, como
+   observación y no como incumplimiento. */
+
+test('cumple cuando está por encima del primer cuartil, aunque supere el tercero', () => {
+  const st = { p25: 0.05, med: 0.10, p75: 0.15 };
+  assert.strictEqual(cumpleElRango(st, 0.05), true, 'justo en el P25 cumple');
+  assert.strictEqual(cumpleElRango(st, 0.10), true, 'en la mediana');
+  assert.strictEqual(cumpleElRango(st, 0.15), true, 'justo en el P75');
+  assert.strictEqual(cumpleElRango(st, 0.30), true,
+    'MUY por encima del P75 CUMPLE: no hay ajuste que declarar a favor del fisco');
+});
+
+test('no cumple solo por debajo del primer cuartil', () => {
+  const st = { p25: 0.05, med: 0.10, p75: 0.15 };
+  assert.strictEqual(cumpleElRango(st, 0.049), false);
+  assert.strictEqual(cumpleElRango(st, -0.20), false);
+});
+
+test('sin rango o sin indicador no se afirma cumplimiento', () => {
+  assert.strictEqual(cumpleElRango(null, 0.10), false);
+  assert.strictEqual(cumpleElRango({ p25: 0.05, p75: 0.15 }, null), false);
+  assert.strictEqual(cumpleElRango({ p25: 0.05, p75: 0.15 }, undefined), false);
+});
+
+test('adjustInfo no declara ajuste cuando está por encima del rango', () => {
+  /* Es lo que ya hacía por la vía de «improcedente»; ahora lo dice también en el veredicto. */
+  const T = { s: 1000, c: 800, op: 300 };
+  const st = { p25: 0.05, med: 0.10, p75: 0.15 };
+  const r = adjustInfo(T, 0.30, st, 1000, 1, null);
+  assert.strictEqual(r.within, true, 'cumple');
+  assert.strictEqual(r.capped, 0, 'y no hay ajuste que declarar');
+  assert.strictEqual(r.sobreP75, true, 'pero se dice que quedó sobre el tercer cuartil');
+});
+
+test('adjustInfo sigue calculando el ajuste cuando está por debajo', () => {
+  /* La otra mitad: el cambio no puede tocar el caso que SÍ genera ajuste, que es el que se
+     declara ante la DIAN. */
+  const T = { s: 1000, c: 800, op: 10 };
+  const st = { p25: 0.05, med: 0.10, p75: 0.15 };
+  const r = adjustInfo(T, 0.01, st, 1000, 1, null);
+  assert.strictEqual(r.within, false);
+  assert.ok(r.raw > 0, 'el ajuste lleva el indicador a la mediana');
+  assert.ok(Math.abs(r.raw - (0.10 - 0.01) * 1000) < 1e-9, 'y es (mediana − indicador) × base');
+  assert.strictEqual(r.sobreP75, false);
+});
+
+test('el veredicto que publica el informe usa la misma regla', () => {
+  /* `plantillaVocabulario.js` toma `rango.cumple` de `analizarRango`, que lo deriva de
+     `adj.within`: si la regla no fuera la misma, el documento radicado diría una cosa y la
+     pantalla otra. */
+  const comparables = [0.02, 0.04, 0.06, 0.08, 0.10, 0.12].map((m, i) => ({
+    name: 'C' + i, amb: 'Int', s: 1000, c: 800, op: m * 1000,
+  }));
+  /* Contribuyente MUY rentable: 40 % de MO, por encima de todas. */
+  const arriba = analizarRango({ pli: 'MO', cmode: 'all', t_s: 1000, t_c: 600, t_op: 400, comparables });
+  assert.ok(arriba.tPLI > arriba.stats.p75, 'está sobre el tercer cuartil');
+  assert.strictEqual(arriba.cumple, 'CUMPLE', 'y el informe dice CUMPLE');
+
+  /* Y por debajo sigue diciendo NO CUMPLE. */
+  const abajo = analizarRango({ pli: 'MO', cmode: 'all', t_s: 1000, t_c: 995, t_op: 5, comparables });
+  assert.ok(abajo.tPLI < abajo.stats.p25);
+  assert.strictEqual(abajo.cumple, 'NO CUMPLE');
+});
+
+/* ══════ NCP Y COST PLUS: dos indicadores que el motor ya calculaba y la pantalla no ofrecia ══════
+
+   El 2026-09-02 el usuario compartio el modelo canonico de S&P Global Market Intelligence
+   («Formulas for Transfer Pricing Model»), que define:
+
+     NCP       = Operating Profit / (COGS + Total Operating Expenses)
+     Cost Plus = Gross Profit / COGS
+
+   Y ahi se vio el hueco: `BASES` de `ajusteRangoCapitalTrabajo.js` YA tenia los dos
+   —`NCP: 'costos'`, `CostPlus: 'cogs'`—, el Excel de soporte YA publica sus siete escenarios de
+   ajuste con el denominador depurado que pide S&P, pero `pliOf` devolvia `null` para ambos, asi
+   que el indicador del contribuyente no se podia calcular y los dos metodos quedaban
+   inalcanzables desde la pantalla.
+
+   Habilitarlos no agrega ningun proceso: son dos varas mas para el analisis funcional y dos
+   palancas mas que `diagnosticoRango` prueba solo. Con `op` como UTILIDAD, que es el convenio
+   del estudio:
+
+     COGS + TotalOpex = c + (s − c − op) = s − op    →  NCP = op / (s − op)
+     Cost Plus        = (s − c) / c */
+
+test('NCP es la utilidad operacional sobre los costos totales', () => {
+  /* S&P: Operating Profit / (COGS + Total Operating Expenses). Con ventas 1000, costo 600 y
+     utilidad 100, los gastos operativos son 300 y los costos totales 900. */
+  assert.ok(Math.abs(pliOf({ s: 1000, c: 600, op: 100 }, 'NCP') - (100 / 900)) < 1e-12);
+  /* Y equivale a op / (ventas − utilidad), que es la forma en que se calcula. */
+  assert.ok(Math.abs(pliOf({ s: 1000, c: 600, op: 100 }, 'NCP') - (100 / 900)) < 1e-12);
+});
+
+test('Cost Plus es la utilidad bruta sobre el costo de ventas', () => {
+  /* S&P: Gross Profit / COGS. Con ventas 1000 y costo 600, la utilidad bruta es 400. */
+  assert.ok(Math.abs(pliOf({ s: 1000, c: 600, op: 100 }, 'CostPlus') - (400 / 600)) < 1e-12);
+});
+
+test('los dos leen el costo con el signo del documento', () => {
+  /* `egreso` normaliza el costo venga positivo o negativo, igual que en MB y Berry: un estado
+     financiero que trae los costos en negativo no puede dar un indicador con el signo al reves. */
+  assert.strictEqual(
+    pliOf({ s: 1000, c: -600, op: 100 }, 'CostPlus'),
+    pliOf({ s: 1000, c: 600, op: 100 }, 'CostPlus'),
+  );
+  assert.strictEqual(
+    pliOf({ s: 1000, c: -600, op: 100 }, 'NCP'),
+    pliOf({ s: 1000, c: 600, op: 100 }, 'NCP'),
+  );
+});
+
+test('sin cifras no inventan un indicador', () => {
+  assert.strictEqual(pliOf({ s: 0, c: 600, op: 100 }, 'NCP'), null, 'sin ventas');
+  assert.strictEqual(pliOf({ s: 1000, c: 600, op: null }, 'NCP'), null, 'sin utilidad');
+  assert.strictEqual(pliOf({ s: 1000, c: null, op: 100 }, 'CostPlus'), null, 'sin costo');
+  assert.strictEqual(pliOf({ s: 1000, c: 0, op: 100 }, 'CostPlus'), null,
+    'con costo en cero Cost Plus no es calculable: dividiria por cero');
+  assert.strictEqual(pliOf({ s: 100, c: 600, op: 100 }, 'NCP'), null,
+    'con utilidad igual a las ventas los costos totales son cero');
+});
+
+test('el diagnóstico prueba los cinco indicadores como palanca, no tres', () => {
+  /* `INDICADORES` listaba MO, MB y Berry. NCP y Cost Plus estaban implementados en el motor de
+     ajuste y en el Excel, asi que no probarlos descartaba dos vias legitimas de cumplimiento
+     sin decirlo. */
+  const muestra = [0.02, 0.05, 0.09, 0.14].map((m, i) => ({
+    name: 'C' + i, amb: 'Int', s: 1000, c: 700, op: m * 1000,
+  }));
+  const d = diagnosticarCumplimiento({
+    estudio: { pli: 'MO', cmode: 'all', t_s: 1000, t_c: 700, t_op: 5 },
+    comparables: muestra,
+    universo: [],
+  });
+  /* No se afirma que alguna palanca aparezca —depende de las cifras—, sino que si aparece una de
+     indicador, puede ser cualquiera de los cuatro alternos y no solo de los dos de antes. */
+  const deIndicador = d.palancas.filter((p) => p.clave.startsWith('indicador:'));
+  deIndicador.forEach((p) => {
+    const otro = p.clave.slice('indicador:'.length);
+    assert.ok(['MB', 'Berry', 'NCP', 'CostPlus'].includes(otro),
+      `la palanca propone «${otro}», que no es uno de los indicadores del sistema`);
+  });
 });

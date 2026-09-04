@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock, ArrowDown, ArrowUp
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { analizarRango } from '../services/rangoIntercuartil';
+import { analizarRango, margenQueDecide } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { previsualizarFiltros } from '../services/previsualizarFiltros';
+import { redactarJustificacionPerdidas } from '../services/justificacionPerdidasIA';
 import { importCapitalIQExcel, scoreCandidates, curateCandidatesWithGemini, prefiltrar, nameKey, enriquecerUniverso, MINIMO_COMPARABLES } from '../services/comparablesEngine';
 import { exportarSoporteMotor, construirPayloadSoporte } from '../services/motorExcelExport';
 import { parseEEFFComparableOCR, parseEEFFComparablesLote } from '../services/eeffParser';
@@ -24,6 +25,10 @@ import { redactarDescripcionesEnLote } from '../services/descripcionComparables'
 import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
 import { residuoDeCriterios } from '../services/criteriosScreeningEs';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
+/* Por qué cada comparable del año pasado ya no está: es lo que permite intentar el estudio con
+   la muestra del año anterior y, si no se puede, entregarle al cliente el motivo de cada una
+   (pedido del 2026-09-02). */
+import { conciliarConEstudioAnterior } from '../services/conciliacionEstudioAnterior';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
   registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
@@ -67,6 +72,196 @@ function margenExaminada(study) {
 /* Miles con punto, como el resto del embudo del paso 3. Sin esto un universo de 2.987 salía
    «2987» en el panel nuevo y «2.987» tres bloques más abajo, en la misma pantalla. */
 const mil = (n) => Number(n || 0).toLocaleString('es-CO');
+
+/* QUÉ HAY QUE TRAER DEL CRIBADO para que el primer cuartil no deje fuera al contribuyente.
+
+   Cuando ninguna palanca alcanza, el problema no es la selección sino el universo cargado: no
+   existen ahí las compañías que harían falta. Medido sobre un caso real con 3 negativas y
+   ninguna honda, contra un contribuyente en -4,595 %, la cuota completa deja el P25 en 1,275 %,
+   bajar la muestra al piso de 10 lo deja en -0,375 % y quitar las cuatro positivas más altas en
+   -1,525 %. Ninguna cierra.
+
+   Ahí decir «NO CUMPLE» no le sirve al analista: ya lo sabe. Lo que le sirve es el criterio de
+   rentabilidad que tiene que agregar al screening del paso 1, y eso `requisitoDeCribado` lo
+   calcula exacto sobre la posición del primer cuartil. */
+function RequisitoDelCribado({ requisito, indicador, banda }) {
+  if (!requisito) return null;
+  const { necesita, hay, faltan, laMasCercana, exigeNegativas, tamanoMuestra } = requisito;
+  if (faltan <= 0) return null;
+
+  return (
+    <div className="rounded-lg border border-sky-300 dark:border-sky-800/60 bg-sky-50 dark:bg-sky-950/30 p-3">
+      <div className="flex items-start gap-2">
+        <Search className="w-4 h-4 text-sky-600 dark:text-sky-400 mt-0.5 shrink-0" />
+        <div className="text-[11.5px] text-sky-900 dark:text-sky-200 leading-relaxed">
+          <strong>Qué falta en el cribado para cumplir.</strong>{' '}
+          Con una muestra de {tamanoMuestra} el primer cuartil cae entre la{' '}
+          {Math.ceil((tamanoMuestra - 1) / 4)}.ª y la {Math.ceil((tamanoMuestra - 1) / 4) + 1}.ª
+          comparable, así que para que quede en su nivel hacen falta{' '}
+          <strong>{necesita} comparables con margen igual o menor a {pctf(indicador)}</strong>
+          {' '}y el cribado tiene {hay === 0 ? 'ninguna' : <strong>{hay}</strong>}
+          {laMasCercana !== null ? <> (la más cercana, {pctf(laMasCercana)})</> : null}.
+          {' '}Faltan <strong>{faltan}</strong>.
+          <div className="mt-2 pt-2 border-t border-sky-200 dark:border-sky-800/60">
+            {/* LA BANDA PARA PEGAR EN CAPITAL IQ.
+                Pedido el 2026-09-02: «¿no podemos hacer que busque según los rangos
+                intercuartiles de x a x según el indicador del contribuyente?». Capital IQ
+                filtra por rangos, así que un techo suelto no se puede usar; y va en margen SIN
+                ajustar porque el screening solo conoce ese —el ajuste se calcula después, con
+                el capital de trabajo de cada compañía—, de modo que el nivel objetivo se
+                traduce restando lo que el ajuste le desplaza al rango. Pedir el nivel a secas
+                habría traído compañías que, ya ajustadas, quedan doce puntos más arriba. */}
+            {banda ? (
+              <>
+                Agregue al screening del paso 1 este criterio de rentabilidad:
+                <div className="mt-1.5 mb-1.5 px-2 py-1.5 rounded bg-white dark:bg-[#09090b] border border-sky-300 dark:border-sky-800 font-mono text-[11px] text-sky-900 dark:text-sky-200">
+                  Margen operacional entre <strong>{pctf(banda.piso)}</strong> y{' '}
+                  <strong>{pctf(banda.techo)}</strong>
+                </div>
+                {Math.abs(banda.desplazamiento) > 0.0005 ? (
+                  <div className="text-[10.5px] text-sky-800/80 dark:text-sky-300/70 leading-snug">
+                    Va en margen <strong>sin ajustar</strong>, que es lo que filtra Capital IQ: su
+                    nivel objetivo ({pctf(indicador)}) menos los{' '}
+                    <strong>{pctf(banda.desplazamiento)}</strong> que el ajuste de capital de
+                    trabajo le desplaza al primer cuartil. El ancho ({pctf(banda.amplitud)}) es la
+                    dispersión que ya muestra su propia muestra. Es una estimación: cada compañía
+                    se ajusta según su propio capital de trabajo, así que el veredicto lo dará el
+                    rango cuando las nuevas entren con sus cifras.
+                  </div>
+                ) : null}
+                {banda.exigeNegativas ? (
+                  <div className="text-[10.5px] mt-1 text-sky-800/80 dark:text-sky-300/70 leading-snug">
+                    La banda cae en terreno negativo, así que entrarán compañías en pérdida:
+                    habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), y de eso se encarga
+                    el asistente del paso 2.
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <>
+                Agregue al screening del paso 1 un criterio de rentabilidad que las traiga
+                {exigeNegativas
+                  ? ' — al ser un margen negativo, entrarán compañías en pérdida y habrá que justificarlas (Guías OCDE cap. III §3.64-3.65), que es lo que hace el asistente del paso 2.'
+                  : ' — no hace falta que estén en pérdida: basta con que sean poco rentables.'}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
+
+   `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
+   Business Description cruda de Capital IQ. El informe publica la primera y cae a la segunda
+   —así lo hacen `anexoBHtml.js:304` y `docxRelleno.js:3676`— pero la tabla no mostraba ninguna
+   de las dos, así que el texto que se radica por cada comparable no se podía leer antes de
+   generarlo (pedido del 2026-09-01).
+
+   Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
+   informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
+function ActividadDeLaComparable({ row }) {
+  const redactada = String(row.descActividad || '').trim();
+  const cruda = String(row.desc || '').trim();
+  const texto = redactada || cruda;
+  if (!texto) {
+    /* La INYECTADA no tiene descripción por construcción: viene del informe del año anterior,
+       que trae la razón social y poco más, y el cribado de este año no la devolvió. Decirle
+       «sin descripción en el cribado» no ayuda; lo que hace falta es el paso siguiente.
+       Reportado el 2026-09-02: «¿y qué se espera que haga?». */
+    if (row.sinCifrasDeEsteAnio) {
+      return (
+        <p className="text-[10.5px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
+          <strong>Del estudio anterior; el cribado de este año no la trae.</strong> Sin cifras no
+          entra al rango. Dos caminos: inclúyala en el screening del paso 1 con su razón social
+          completa —Capital IQ la registra con la forma societaria, no con el nombre comercial— o
+          adjúntele el estado financiero aquí. Si es una compañía de capital cerrado, no publica
+          cifras y hay que sustentar su retiro.
+        </p>
+      );
+    }
+    return (
+      <p className="text-[10.5px] text-zinc-400 mt-1 italic">
+        Sin descripción del negocio en el cribado: el informe la publicaría vacía.
+      </p>
+    );
+  }
+  return (
+    <p
+      className="text-[10.5px] text-zinc-500 dark:text-zinc-400 mt-1 leading-snug line-clamp-2"
+      title={redactada
+        ? texto
+        : texto + '  —  Sin redactar: el informe publicaría este texto en inglés, tal como '
+          + 'viene de Capital IQ. Use «Redactar descripciones» para pasarlo a español.'}
+    >
+      {!redactada && (
+        <span className="text-amber-600 dark:text-amber-500 font-semibold">[sin redactar] </span>
+      )}
+      {texto}
+    </p>
+  );
+}
+
+/* El veredicto de actividad de una comparable, para validarlo antes de generar los EEFF.
+
+   Cuatro estados y cada uno dice algo distinto:
+     · MISMA        la curación reconoció la misma actividad. Es lo que se busca.
+     · RELACIONADA  actividad afín, no idéntica. Entra solo si las de misma actividad no llenan
+                    el cupo, y hay que sustentarla en el informe.
+     · DISTINTA     no debería estar en la muestra; si aparece es porque venía del estudio
+                    anterior, que la exime.
+     · sin veredicto  nadie la verificó: agregada a mano, sin identificador, o curación no
+                    corrida. Se marca, porque antes se veía igual que una confirmada. */
+function InsigniaActividad({ row }) {
+  const grado = row.gradoActividad || '';
+  const motivo = row.motivoActividad || '';
+  const clases = 'inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold ';
+
+  if (grado === 'MISMA') {
+    return (
+      <span
+        className={clases + 'bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1]'}
+        title={'Misma actividad económica, según la curación con IA.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Misma actividad
+      </span>
+    );
+  }
+  if (grado === 'RELACIONADA') {
+    return (
+      <span
+        className={clases + 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'}
+        title={'Actividad relacionada, no idéntica'
+          + (row.entroPorAmpliacion ? `. Entró para no bajar de ${MINIMO_COMPARABLES} comparables` : '')
+          + '. Hay que sustentarla en el informe.'
+          + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad relacionada
+      </span>
+    );
+  }
+  if (grado === 'DISTINTA') {
+    return (
+      <span
+        className={clases + 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400'}
+        title={'La curación NO reconoció la actividad. Está en la muestra porque venía del '
+          + 'estudio anterior, que la exime del descarte.' + (motivo ? ' · ' + motivo : '')}
+      >
+        Actividad distinta
+      </span>
+    );
+  }
+  return (
+    <span
+      className={clases + 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'}
+      title="Nadie verificó su actividad: se agregó a mano, no trae identificador de la fuente, o la curación no ha corrido. Revísela antes de radicar."
+    >
+      Actividad sin verificar
+    </span>
+  );
+}
 
 /* Lo que un filtro está sacando del universo, pegado a su propio control.
    Es el corazón del rediseño del paso 2: un rótulo sin número es abstracto —«excluye holdings»
@@ -172,6 +367,12 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
        negativas que repartir y el motor lo ignora solo. Los estudios guardados antes de que
        esto existiera no lo traen, y el motor lo toma como 0. */
     negativasObjetivo: 0,
+    /* Cual de las combinaciones equivalentes se usa. 1 son las de mayor puntaje —el
+       comportamiento de siempre— y cada numero siguiente sustituye una mas por la siguiente de
+       la reserva. NO es azar: el mismo numero da siempre la misma muestra, que es lo que
+       mantiene el estudio reproducible (2026-09-02). Los estudios guardados antes de que esto
+       existiera no lo traen y el motor lo toma como 1. */
+    alternativa: 1,
     holding: 'excluir',
     /* Independencia (Art. 260-1 E.T.): una comparable con un accionista por encima
        del umbral no es independiente. Los estudios guardados antes de que existiera
@@ -280,6 +481,35 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      `scoreCandidates` es determinista y tiene sus insumos persistidos —universo,
      configuración, actividad, veredicto de la IA y estudio anterior—, así que se
      recalcula cuando falta en lugar de emitir una hoja vacía. */
+  /* La intensidad de capital de trabajo del contribuyente, en ratios sobre ventas: es la vara
+     con la que el motor puntúa la comparabilidad en esa dimensión. Se calcula aquí porque es
+     aquí donde se sabe qué campo del estudio es cuál; el motor solo compara.
+
+     VA ANTES del `useMemo` de `auditoria` y no más abajo: ese memo corre DURANTE el render y lo
+     lee, así que declararlo después dejaba la constante en zona muerta y el panel se caía con
+     «Cannot access 'capitalTrabajoTP' before initialization». Lo atrapó `smoke_panel.mjs`, no
+     el build ni las pruebas unitarias. */
+  const capitalTrabajoTP = useMemo(() => {
+    const ventas = num(study.t_s);
+    if (ventas === null || !ventas) return null;
+    const ar = num(study.t_ar), inv = num(study.t_inv), ap = num(study.t_ap);
+    if (ar === null && inv === null && ap === null) return null;
+    return { ar: (ar || 0) / ventas, inv: (inv || 0) / ventas, ap: (ap || 0) / ventas };
+  }, [study.t_s, study.t_ar, study.t_inv, study.t_ap]);
+
+  /* Si el rango que concluye es el ajustado. Lo decide `analizarRango` según la cobertura de
+     capital de trabajo de la muestra, y la dirección de la alternativa necesita saberlo para
+     ordenar con la vara correcta. Se mira sobre las comparables vigentes: la cobertura del
+     universo no cambia de una alternativa a otra. */
+  const decideElAjustado = useMemo(() => {
+    if (!Array.isArray(comparables) || comparables.length === 0) return true;
+    try {
+      return analizarRango({ ...study, comparables, cmode }).ajusteTieneDatos !== false;
+    } catch {
+      return true;
+    }
+  }, [study, comparables, cmode]);
+
   const auditoria = useMemo(() => {
     if (motorAuditoria) return motorAuditoria;
     if (!Array.isArray(universo) || universo.length === 0) return null;
@@ -288,6 +518,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
       {
         ventasParteExaminada: study.t_s, iaMatch,
+        /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
+           comparables de intensidad parecida el ajuste pasa de desplazar el rango +4,45 pt a
+           +0,24 pt, y el ajustado —el que decide— converge al crudo. */
+        capitalTrabajoParteExaminada: capitalTrabajoTP,
         /* Los MISMOS insumos que la corrida real: sin el margen del contribuyente esta
            reconstrucción ordenaría la cuota por puntaje y la hoja de trazabilidad describiría
            una selección distinta de la que se radicó. */
@@ -296,7 +530,24 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       },
     );
     return { rechazadas: rehecha.rechazadas, reserva: rehecha.reserva };
-  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch]);
+  }, [motorAuditoria, universo, engineConfig, actividad, estudioAnteriorInfo, study, iaMatch,
+    capitalTrabajoTP]);
+
+  /* La conciliación con el estudio anterior NO se recalcula en cada render.
+
+     Tenía un `useMemo` que corría siempre, y eso estaba mal por dos motivos, señalados por el
+     usuario el 2026-09-02 («recuerda que esto solo se hace al clicar al botón de comparables»):
+
+       · Mostraba un resultado ANTES de que el motor hubiera corrido, armado con una auditoría
+         vacía o de una corrida anterior: decía «6 fuera del cribado» sobre una clasificación
+         que nadie había calculado todavía.
+       · `auditoria` REEJECUTA `scoreCandidates` cuando le falta el rastro de la corrida, así
+         que el memo podía disparar el motor entero en cada render.
+
+     La conciliación pertenece a la CORRIDA, no al render: se calcula al ejecutar la selección y
+     viaja dentro de `selectionFunnel`, que ya se persiste con el estudio. Al abrir un estudio
+     guardado se lee de ahí, sin recalcular nada. */
+  const conciliacion = (selectionFunnel && selectionFunnel.conciliacionAnterior) || null;
 
   /* Matriz del ANEXO C: qué compañía del universo quedó en cada motivo. Se calcula aquí
      —el único sitio con el universo enriquecido— y se persiste ya agrupada, porque el
@@ -333,6 +584,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   /* Qué filtro tiene desplegados sus ejemplos. Uno a la vez: es para verificar una sospecha,
      no para leer cuatro listas juntas. */
   const [filtroExpandido, setFiltroExpandido] = useState(null);
+  /* El asistente de la justificación. El borrador vive aquí y no en el estudio: solo entra al
+     campo si el analista lo acepta, porque ese texto se radica y conviene leerlo antes. */
+  const [redactando, setRedactando] = useState(false);
+  const [borradorJustificacion, setBorradorJustificacion] = useState(null);
+  const [avisoJustificacion, setAvisoJustificacion] = useState('');
 
 
 
@@ -558,6 +814,46 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     } finally {
       setCurando(false);
       setCuracionProgreso(null);
+    }
+  };
+
+  /* Redacta la justificación de admitir pérdidas con los HECHOS de este estudio más la causa
+     que escribió el analista. La causa es el único insumo que la IA no puede sacar de los datos
+     —las Guías OCDE piden analizar la causa de la pérdida, no solo constatarla— y por eso sin
+     ella no se llama al modelo. */
+  const redactarJustificacion = async () => {
+    const causa = String(study.causaPerdidasSector || '').trim();
+    if (!causa) {
+      setAvisoJustificacion('Escriba primero por qué el sector tuvo pérdidas: es el análisis de '
+        + 'causa que piden las Guías OCDE, y es lo único que la IA no puede deducir de los datos.');
+      return;
+    }
+    setAvisoJustificacion('');
+    setRedactando(true);
+    try {
+      const enPerdidaMuestra = comparables.filter((c) => num(c.op) !== null && num(c.op) < 0);
+      const texto = await redactarJustificacionPerdidas({
+        causa,
+        entidad: study.ent,
+        anio: study.anio,
+        actividad: actividad,
+        metodo: study.pli || 'MO',
+        indicador: margenExaminada(study),
+        enLaMuestra: enPerdidaMuestra.length,
+        deLaMuestra: comparables.length,
+        disponibles: previsualizacion.enPerdidaEnUniverso,
+        margenes: enPerdidaMuestra
+          .map((c) => (num(c.s) ? num(c.op) / num(c.s) : null))
+          .filter((m) => m !== null),
+        criterio: (selectionFunnel && selectionFunnel.criterioNegativas) || 'puntaje',
+      });
+      if (texto) setBorradorJustificacion(texto);
+      else {
+        setAvisoJustificacion('No se pudo redactar en este momento. El campo sigue siendo '
+          + 'editable a mano.');
+      }
+    } finally {
+      setRedactando(false);
     }
   };
 
@@ -805,7 +1101,28 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   };
 
   // Run Motor TOP-N Selection & AI Curation
-  const runEngineSelection = async () => {
+  /* «Priorizar continuidad»: vuelve a correr rescatando las comparables del año anterior que
+     el filtro de pérdidas dejó fuera, y evitando que la cuota de negativas las desplace. NO
+     rescata de independencia ni de saldos negativos —lo primero es un hecho de hoy (Art. 260-1)
+     y lo segundo es dato no verosímil que entra al ajuste de capital de trabajo—, y reporta
+     cuáles no pudo recuperar con el motivo de cada una. */
+  /* ── ES UNA ACCION, NO UN MODO PEGAJOSO ──
+     Reportado el 2026-09-02: «esas comparables que saca son bien altas aun cuando no le pedí
+     que siguiera con las de continuidad». Y era mi defecto: guardaba `priorizarContinuidad` en
+     `engineConfig`, así que una vez pulsado el botón TODA corrida posterior inyectaba las del
+     año anterior —incluida la del botón normal «Ejecutar Selección Automática»— y no había
+     forma de apagarlo.
+
+     La bandera NO se guarda: se pasa solo a la corrida que la pidió. «Ejecutar Selección
+     Automática» vuelve al comportamiento normal, que es lo que el analista espera de un botón
+     que dice eso. */
+  const priorizarContinuidad = () => {
+    runEngineSelection(null, null, true);
+  };
+
+  const runEngineSelection = async (
+    alternativaForzada = null, direccionForzada = null, priorizarForzado = null,
+  ) => {
     if (!universo || universo.length === 0) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
@@ -834,14 +1151,62 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         veredicto = (await curarValidas()) || veredicto;
       }
 
-      const result = scoreCandidates(universo, engineConfig, actividad, priorComps, {
+      /* La forzada manda sobre la del estado por lo dicho en `otraCombinacion`: en la misma
+         vuelta el estado todavia trae la anterior. */
+      /* Las forzadas mandan sobre el estado: `useState` no es síncrono y correr en la misma
+         vuelta usaría los valores anteriores. */
+      const configDeEstaCorrida = {
+        ...engineConfig,
+        ...(alternativaForzada !== null ? { alternativa: alternativaForzada } : {}),
+        ...(direccionForzada ? { direccionAlternativa: direccionForzada } : {}),
+        /* SIEMPRE explícito y nunca heredado: sin este `false` por defecto, un estudio guardado
+           con la bandera puesta seguiría inyectando en cada corrida sin que nadie lo pidiera.
+           Es una acción de un botón, no una configuración del estudio. */
+        priorizarContinuidad: priorizarForzado === true,
+      };
+      const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
+        /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
+           comparables de intensidad parecida el ajuste pasa de desplazar el rango +4,45 pt a
+           +0,24 pt, y el ajustado —el que decide— converge al crudo. */
+        capitalTrabajoParteExaminada: capitalTrabajoTP,
+        /* ── LA VARA CON LA QUE LA DIRECCION ORDENA ──
+           Tiene que ser la que DE VERDAD forma el rango en pantalla, y eso son dos casos:
+
+             · el AJUSTADO cuando la mayoría de la muestra trae capital de trabajo;
+             · el CRUDO cuando no, porque ahí el ajuste degenera en un desplazamiento constante
+               y `analizarRango` concluye sobre el rango sin ajustar.
+
+           Sin esto la dirección movía el rango al revés —reportado el 2026-09-02: «en lugar de
+           bajar subió»—: ordenaba por el margen crudo mientras la pantalla mostraba el ajustado,
+           y dos comparables del MISMO margen crudo acaban en extremos opuestos del ajustado
+           según su capital de trabajo (medido: +9,597 % y −43,769 %).
+
+           `decideElAjustado` se toma de la corrida vigente: depende de la cobertura de capital de
+           trabajo del universo, que no cambia de una alternativa a otra. NO afecta a la cuota de
+           negativas, que sigue ordenándose con el margen crudo por criterio del contador. */
+        margenQueFormaElRango: (cand) => {
+          const m = decideElAjustado ? margenQueDecide(cand, study) : null;
+          if (m !== null && m !== undefined) return m;
+          const s = num(cand && cand.s);
+          const op = num(cand && cand.op);
+          return (s && op !== null) ? op / s : null;
+        },
         iaMatch: veredicto,
         /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
            rentabilidad más parecido al suyo (decisión del usuario, 2026-09-01). Sin cifras
            cargadas el motor degrada al orden por puntaje. */
         pliParteExaminada: margenExaminada(study),
         metodoPli: study.pli || 'MO',
+        /* La cercanía se mide sobre el margen NO AJUSTADO, y eso es metodología, no una
+           limitación: la búsqueda de comparables se hace sobre el margen propio de cada
+           compañía y el ajuste por capital de trabajo se aplica DESPUÉS, para leer el
+           cumplimiento (criterio del contador que asesora el estudio, 2026-09-01).
+
+           `margenDeCandidata` queda disponible por si alguna vez se quiere medir con otra vara
+           —`margenQueDecide` la construye— pero NO se inyecta: seleccionar con la vara ajustada
+           elige comparables por el resultado del ajuste y no por su perfil, que es al revés de
+           lo que pide la comparabilidad. */
       });
 
       /* Conteos del propio motor, no deducidos del texto del motivo: antes esto era
@@ -896,6 +1261,68 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         negativasIncluidas: result.negativasIncluidas || 0,
         negativasDisponibles: result.negativasDisponibles || 0,
         negativasExcluidasPorFiltro: result.negativasExcluidasPorFiltro || 0,
+        /* Cual de las combinaciones equivalentes se uso. Es lo que hace la muestra
+           reconstruible: con el cribado y este numero se vuelve a obtener exactamente la misma
+           seleccion, y por eso viaja al estudio guardado y no solo a la pantalla. */
+        alternativa: result.alternativa || 1,
+        alternativasDisponibles: result.alternativasDisponibles || 1,
+        /* Contra qué se midió la cercanía de rentabilidad. Va al estudio guardado porque el
+           Excel de soporte lo declara: centrar la muestra en la rentabilidad de la parte
+           examinada es criterio de comparabilidad del Art. 260-4 y hay que sustentarlo. */
+        anclaRentabilidad: result.anclaRentabilidad || 'medianaPool',
+        /* Hacia dónde se movió la muestra, y cuántas plazas podían moverse: lo primero se
+           declara en el soporte y lo segundo explica en pantalla por qué a veces no se ve
+           ningún cambio. */
+        direccionAlternativa: result.direccionAlternativa || 'ninguna',
+        plazasQueRotan: result.plazasQueRotan || 0,
+        plazasFijasPorContinuidad: result.plazasFijasPorContinuidad || 0,
+        /* El modo de prioridad y su rastro: cuántas del año anterior volvieron y cuáles no
+           pudieron, con el motivo. Va al estudio guardado porque el Excel lo declara. */
+        priorizoContinuidad: Boolean(result.priorizoContinuidad),
+        /* Cuántas del año anterior se inyectaron sin cifras: la pantalla tiene que pedir que se
+           les cargue el estado financiero, porque hasta entonces no entran al cuartil. */
+        continuidadInyectadas: result.continuidadInyectadas || 0,
+        continuidadRescatadas: result.continuidadRescatadas || 0,
+        continuidadNoRescatada: result.continuidadNoRescatada || [],
+        /* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR, PERSISTIDA ──
+           Va DENTRO del embudo y no en un estado aparte porque el embudo ya se guarda con el
+           estudio y ya lo lee el Excel de soporte: un estado nuevo habria que persistirlo,
+           cargarlo y mantenerlo sincronizado por separado.
+
+           Es la justificacion que el despacho le entrega al cliente cuando la muestra del anio
+           pasado no se puede reproducir, y tiene que salir del soporte en vez de reconstruirse a
+           mano contra el informe anterior. */
+        conciliacionAnterior: conciliarConEstudioAnterior({
+          previas: (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
+          universo,
+          muestra: result.seleccionadas,
+          rechazadas: result.rechazadas,
+          reserva: result.reserva,
+        }),
+      });
+
+      /* ── LA DESCRIPCION SE TRADUCE SOLA ──
+         «Redactar las actividades siempre deben estar en español, ¿por qué tengo que accionar
+         la traducción yo?» (2026-09-02), después de encontrar el ANEXO B con la descripción de
+         Givaudan en inglés.
+
+         Tenía razón: el informe publica esta descripción de TODA comparable de la muestra
+         (`anexoBHtml.js:304`), así que dejarla como un paso manual solo abre la puerta a que se
+         olvide — y entonces se radica el texto en inglés de Capital IQ. No es una opción del
+         analista: es un requisito del documento.
+
+         Va DESPUES de fijar la muestra y sin `await`, para que la tabla aparezca de inmediato y
+         las descripciones se rellenen encima. Es idempotente —salta las que ya tienen
+         `descActividad`, así que reejecutar la selección no vuelve a pagar por las traducidas—
+         y no rompe nada si falla: `redactarDescripcionesEnLote` devuelve `null` por candidata y
+         la fila se queda con su texto original, que es el comportamiento de antes. El botón
+         manual se conserva para el caso de que una traducción falle y haya que reintentarla. */
+      redactarDescripcionesDeFilas(
+        finales,
+        finales.map((c, i) => (String(c.desc || '').trim() && !c.descActividad ? i : -1))
+          .filter((i) => i >= 0),
+      ).catch((err) => {
+        console.warn('[descripciones] no se pudieron redactar automáticamente:', err && err.message);
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -996,6 +1423,30 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       setLoadingSelection(false);
     }
   };
+
+  /* «Otra combinacion»: la siguiente alternativa de seleccion, y vuelta a correr.
+
+     Da la vuelta al llegar a la ultima para que el boton nunca quede muerto, y NO gasta
+     curacion: el veredicto de actividad de cada candidata ya esta pagado y `scoreCandidates`
+     reutiliza el `iaMatch` en memoria, asi que recorrer combinaciones es gratis.
+
+     La alternativa se le pasa al motor por argumento en lugar de leerla del estado: `useState`
+     no es sincrono y correr en la misma vuelta usaria la anterior, de modo que el boton
+     mostraria siempre una combinacion de retraso. */
+  /* `direccion` dice hacia dónde mover el rango: «bajar» saca las comparables de margen más
+     alto y mete las más bajas de la reserva, «subir» al contrario. Sin dirección se conserva la
+     sustitución por puntaje, que es el comportamiento anterior. */
+  const otraCombinacion = (direccion = 'ninguna') => {
+    const total = (selectionFunnel && selectionFunnel.alternativasDisponibles) || 1;
+    const actual = (selectionFunnel && selectionFunnel.alternativa) || 1;
+    /* Al cambiar de dirección se vuelve a empezar desde la 2: la alternativa 3 de «bajar» no es
+       la 3 de «subir», así que seguir el contador de la otra dirección saltaría pasos. */
+    const cambioDeDireccion = direccion !== ((selectionFunnel && selectionFunnel.direccionAlternativa) || 'ninguna');
+    const siguiente = total <= 1 ? 1 : (cambioDeDireccion ? Math.min(2, total) : (actual % total) + 1);
+    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente, direccionAlternativa: direccion }));
+    runEngineSelection(siguiente, direccion);
+  };
+
 
   /* Vuelca en una fila las cifras leídas de un documento. Devuelve el arreglo
      nuevo; no toca el estado, para poder aplicar varias de una sola vez. */
@@ -1137,8 +1588,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const redactarDescripcionesPendientes = async () => {
     setRedactandoDescripciones(true);
     try {
+      /* ── YA NO SE EXIGE `eeffArchivo` ──
+         Reportado el 2026-09-02 con una captura del ANEXO B: la descripción de Givaudan salía
+         EN INGLES. La causa era esta condición: solo se redactaba la descripción de las
+         comparables con estado financiero ADJUNTO, y una comparable sin EEFF no podía obtener
+         su traducción nunca.
+
+         Pero el ANEXO B publica `descActividad || desc` de TODA comparable de la muestra
+         (`anexoBHtml.js:304`), tenga EEFF o no. Así que la puerta estaba en el sitio
+         equivocado: bloqueaba la traducción de un texto que el informe publica igual, y el
+         documento se radicaba con la descripción en inglés de Capital IQ.
+
+         La descripción sale del campo `desc` del cribado y no necesita nada más. */
       const indices = comparables
-        .map((c, i) => (c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad ? i : -1))
+        .map((c, i) => (String(c.desc || '').trim() && !c.descActividad ? i : -1))
         .filter((i) => i >= 0);
       await redactarDescripcionesDeFilas(comparables, indices);
     } finally {
@@ -1477,7 +1940,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
   // Calculations for Interquartile Range
   const kind = study.pli || 'MO';
-  const useAdj = study.useadj || false;
+  /* El cumplimiento se decide con el rango AJUSTADO en todo estudio (2026-09-02): «el MO sin
+     ajuste solo nos ayuda a escoger las comparables, pero como sabemos si cumple es con el rango
+     ajustado». La casilla ya no lo elige, asi que esta constante deja de leerla. Se conserva el
+     nombre para no tocar los seis sitios que la usan. */
+  const useAdj = true;
   const interestRate = (num(study.prime) || 0) / 100;
 
   // Ingreso/gasto de una operación no controlada (ej. proyecto CoCrea) ajeno a la
@@ -2145,6 +2612,80 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <span className="text-[10px] text-zinc-400 mt-1">
                   Se publica con el estudio y viaja al Excel de soporte. Escríbala antes de radicar.
                 </span>
+
+                {/* ══ El asistente ══
+                    Pide la CAUSA porque es lo único que no está en los datos: las Guías OCDE
+                    (cap. III, §3.64-3.65) no dicen «las pérdidas se admiten», dicen que una
+                    pérdida no descalifica siempre que se analice su causa. El resto —cifras,
+                    fundamento normativo, argumento del sesgo— sale del estudio. */}
+                <div className="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800 p-2.5 space-y-2">
+                  <label className="text-[11px] font-semibold text-zinc-500 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#0FA3A1]" />
+                    ¿Por qué el sector tuvo pérdidas en {study.anio || 'el año gravable'}?
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={study.causaPerdidasSector || ''}
+                    onChange={(e) => updateStudy({ causaPerdidasSector: e.target.value })}
+                    placeholder="Dos líneas bastan: contracción de la demanda, alza de un insumo importado, devaluación, sobreoferta del sector…"
+                    className="w-full bg-[#ffffff] dark:bg-[#09090b] border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-950 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#0FA3A1]/50"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={redactarJustificacion}
+                      disabled={redactando}
+                      className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-[#0FA3A1] text-white hover:bg-[#0B7C7A] disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {redactando
+                        ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Redactando…</>
+                        : <><Sparkles className="w-3.5 h-3.5" /> Redactar con IA</>}
+                    </button>
+                    <span className="text-[10px] text-zinc-400">
+                      Usa las cifras reales del estudio y no inventa causas: solo la que escriba arriba.
+                    </span>
+                  </div>
+
+                  {avisoJustificacion && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                      {avisoJustificacion}
+                    </p>
+                  )}
+
+                  {/* El borrador se propone; no pisa lo que haya hasta que se acepte. */}
+                  {borradorJustificacion && (
+                    <div className="rounded-lg bg-zinc-50 dark:bg-[#09090b] border border-[#0FA3A1]/40 p-2.5 space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        Borrador propuesto
+                      </span>
+                      <p className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {borradorJustificacion}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cambiarConfig('justificacionPerdida', borradorJustificacion);
+                            setBorradorJustificacion(null);
+                          }}
+                          className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                        >
+                          Usar este texto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBorradorJustificacion(null)}
+                          className="text-[11px] px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          Descartar
+                        </button>
+                        <span className="text-[10px] text-zinc-400">
+                          Léalo antes de aceptarlo: se radica.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -2350,6 +2891,223 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </span>
             </button>
 
+            {/* ── OTRA COMBINACIÓN ──
+                Pedido el 2026-09-02: poder reejecutar y obtener comparables distintas. Recorre
+                combinaciones NUMERADAS, no aleatorias: la alternativa 3 es siempre la misma
+                muestra, así que el estudio sigue siendo reproducible y el informe puede
+                declarar cuál se usó. Con azar la respuesta a «¿por qué estas doce?» sería
+                «salieron esas», y ni el propio despacho podría volver a obtener lo que radicó.
+
+                Solo aparece cuando ya se corrió y hay reserva de la que sacar: ofrecer
+                combinaciones que no existen devolvería la misma muestra y el botón parecería
+                roto. No gasta curación —el veredicto de actividad ya está pagado y se
+                reutiliza—, así que explorar es gratis. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1 && (
+              <button
+                onClick={otraCombinacion}
+                disabled={loadingSelection || curando}
+                className={'flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold border transition-colors '
+                  + (loadingSelection || curando
+                    ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                    : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer')}
+                title={'Sustituye las comparables de menor puntaje por las siguientes de la '
+                  + 'reserva. Cada combinación está numerada y es reproducible: la misma '
+                  + 'siempre da la misma muestra. No vuelve a pagar la curación.'}
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>
+                  Otra combinación ({selectionFunnel.alternativa || 1}/{selectionFunnel.alternativasDisponibles})
+                </span>
+              </button>
+            )}
+
+            {/* ── HACIA DONDE ──
+                Pedido el 2026-09-02: «me gustaría poder definirle si queremos que los cuartiles
+                suban o bajen». La sustitución por puntaje cambiaba la muestra sin mover el
+                cuartil —medido: oscilaba entre 9,05 % y 8,45 % sin ir a ninguna parte—, porque
+                las que salían y entraban no tenían por qué estar cerca del primer cuartil. Con
+                dirección la sustitución se hace por margen y el cuartil va monótono. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1
+              && selectionFunnel.plazasQueRotan > 0 && (
+              <div className="flex items-center gap-1">
+                {[['bajar', 'Bajar cuartiles', ArrowDown], ['subir', 'Subir cuartiles', ArrowUp]]
+                  .map(([dir, etq, Icono]) => (
+                    <button
+                      key={dir}
+                      onClick={() => otraCombinacion(dir)}
+                      disabled={loadingSelection || curando}
+                      className={'flex items-center gap-1 px-2.5 py-2.5 rounded-lg text-[11px] font-bold border transition-colors '
+                        + (loadingSelection || curando
+                          ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                          : (selectionFunnel.direccionAlternativa === dir
+                            ? 'border-[#0FA3A1] bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1] cursor-pointer'
+                            : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'))}
+                      title={dir === 'bajar'
+                        ? 'Sustituye las comparables de margen más alto por las más bajas de la reserva, de modo que el rango entero baja. Queda declarado en el Excel de soporte.'
+                        : 'Sustituye las de margen más bajo por las más altas de la reserva, de modo que el rango entero sube. Queda declarado en el Excel de soporte.'}
+                    >
+                      <Icono className="w-3.5 h-3.5" />
+                      <span>{etq}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            {/* ── PRIORIZAR CONTINUIDAD ──
+                Pedido el 2026-09-02, «frente a los recién creados botones de cuartiles». La
+                continuidad YA entraba antes de competir por puntaje y ya estaba exenta del
+                filtro de holding; lo que la seguía descartando eran el filtro de pérdidas
+                operativas y la cuota de negativas. De esos dos la rescata este botón.
+
+                Solo aparece cuando el estudio anterior aporta comparables: sin ellas no hay nada
+                que priorizar. */}
+            {estudioAnteriorInfo && Array.isArray(estudioAnteriorInfo.comparables)
+              && estudioAnteriorInfo.comparables.length > 0 && (
+              <button
+                onClick={priorizarContinuidad}
+                disabled={loadingSelection || curando}
+                className={'flex items-center gap-1 px-2.5 py-2.5 rounded-lg text-[11px] font-bold border transition-colors '
+                  + (loadingSelection || curando
+                    ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                    : (selectionFunnel && selectionFunnel.priorizoContinuidad
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 cursor-pointer'
+                      : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'))}
+                title={'Rescata las comparables del estudio anterior que el filtro de pérdidas '
+                  + 'operativas dejó fuera, y evita que la cuota de negativas las desplace. NO '
+                  + 'rescata de independencia (Art. 260-1) ni de saldos negativos: lo primero es '
+                  + 'un hecho de hoy y lo segundo es dato no verosímil. Queda declarado en el '
+                  + 'Excel de soporte.'}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Priorizar continuidad</span>
+              </button>
+            )}
+
+            {/* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR ──
+                Pedido el 2026-09-02: «generamos con las comparables del año anterior, si nos
+                funciona pues perfecto, y si no ya tenemos justificación del porqué no de ello a
+                nuestros clientes».
+
+                El motor solo veía las del año pasado que SIGUEN en el cribado de este año: una
+                que el screening no devolvió es invisible para él —no está entre las candidatas,
+                así que no se puede seleccionar ni rechazar— y simplemente no salía. Esta línea
+                clasifica las cuatro situaciones y da el motivo de cada una. */}
+            {conciliacion && conciliacion.porExplicar > 0 && (
+              <span className="text-[10.5px] leading-snug max-w-[20rem]">
+                <span className="font-bold text-zinc-700 dark:text-zinc-200">
+                  Del estudio anterior: {conciliacion.enLaMuestra} de {conciliacion.total} siguen.
+                </span>
+                {' '}
+                {[
+                  [conciliacion.traidasSinCifras, 'traída(s) a la tabla SIN cifras: no cuentan en el rango'],
+                  [conciliacion.descartadas, 'descartada(s) por un filtro'],
+                  [conciliacion.enReserva, 'en reserva (siguen siendo comparables)'],
+                  [conciliacion.fueraDelCribado, 'que el cribado de este año no trae'],
+                  [conciliacion.sinEvaluar, 'sin evaluar en la última corrida'],
+                ].filter(([n]) => n > 0).map(([n, etq]) => `${n} ${etq}`).join(' · ')}
+                {/* LOS PARES CONCRETOS, y no solo el conteo.
+                    Reportado el 2026-09-02: el panel decía «1 podría(n) estar en el cribado con
+                    el nombre escrito de otra forma» y para saber CUÁL había que abrir el Excel.
+                    Con el par a la vista se resuelve de un golpe: o son la misma compañía y hay
+                    que corregir el nombre, o no lo son y se sustenta que se fue. */}
+                {conciliacion.posiblesCoincidencias > 0 && (
+                  <span className="block mt-1 text-amber-700 dark:text-amber-400">
+                    Ojo: {conciliacion.posiblesCoincidencias} podría(n) estar en el cribado con el
+                    nombre escrito de otra forma:
+                    <span className="block mt-0.5 space-y-0.5">
+                      {conciliacion.filas
+                        .filter((f) => f.estado === 'fueraDelCribado' && f.parecido)
+                        .slice(0, 4)
+                        .map((f) => (
+                          <span key={f.clave} className="block">
+                            «<strong>{f.name}</strong>» ¿es «<strong>{f.parecido.name}</strong>»?
+                          </span>
+                        ))}
+                    </span>
+                    Si es la misma, corrija el nombre en el estudio anterior y vuelva a ejecutar.
+                  </span>
+                )}
+
+                {/* Y las que NO tienen ni parecido: esas sí se fueron, y son las que hay que
+                    sustentar ante el cliente. Se nombran para poder escribirlo. */}
+                {conciliacion.filas.some((f) => f.estado === 'fueraDelCribado' && !f.parecido) && (
+                  <span className="block mt-1 text-zinc-600 dark:text-zinc-400">
+                    Sin parecido en el cribado —estas sí hay que sustentarlas—:{' '}
+                    {conciliacion.filas
+                      .filter((f) => f.estado === 'fueraDelCribado' && !f.parecido)
+                      .slice(0, 5)
+                      .map((f) => f.name)
+                      .join(', ')}
+                  </span>
+                )}
+                <span className="block mt-0.5 text-zinc-500">
+                  El motivo de cada una va en la hoja «Selección comparables» del Excel de soporte.
+                </span>
+              </span>
+            )}
+
+            {/* Lo que el modo rescató y lo que no pudo. Lo segundo importa más: una comparable
+                del estudio pasado que desaparece en silencio se descubre al cotejar los dos
+                informes, y para entonces hay que explicarla sin saber por qué se fue. */}
+            {/* LAS INYECTADAS NECESITAN CIFRAS, y hasta entonces no cuentan.
+                El botón las trae «sin importar qué» —pedido del 2026-09-02— pero una comparable
+                que el cribado no devolvió no tiene cifras de este año: se ve en la tabla y NO
+                entra al cuartil, porque meterla sin cifras sería inventarle un margen. Decirlo
+                aquí es lo que evita que el analista crea que ya están contando. */}
+            {selectionFunnel && selectionFunnel.continuidadInyectadas > 0 && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem] text-amber-700 dark:text-amber-400">
+                <strong>{selectionFunnel.continuidadInyectadas} del año anterior entraron sin
+                cifras de este año.</strong>{' '}
+                Están en la tabla pero NO cuentan en el rango hasta que se les cargue el estado
+                financiero: use «Buscar cifras ya cargadas por el equipo» o adjúnteselo a cada
+                una.
+              </span>
+            )}
+
+            {selectionFunnel && selectionFunnel.priorizoContinuidad && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem]">
+                <span className="text-indigo-700 dark:text-indigo-400 font-bold">
+                  {selectionFunnel.continuidadRescatadas} rescatada(s)
+                </span>
+                {' del filtro de pérdidas. '}
+                {selectionFunnel.continuidadNoRescatada
+                  && selectionFunnel.continuidadNoRescatada.length > 0 ? (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      {selectionFunnel.continuidadNoRescatada.length} no pudo(ieron) volver:{' '}
+                      {selectionFunnel.continuidadNoRescatada.slice(0, 2)
+                        .map((c) => `${c.name} (${c.motivo})`).join('; ')}
+                      {selectionFunnel.continuidadNoRescatada.length > 2 ? '…' : ''}
+                    </span>
+                  ) : (
+                    /* «Todas están en la muestra» solo si de verdad cuentan. Con inyectadas sin
+                       cifras esa frase era cierta en la tabla y falsa en el rango, y fue como se
+                       leyó mal (2026-09-02). */
+                    <span className="text-zinc-500">
+                      {conciliacion && conciliacion.traidasSinCifras > 0
+                        ? `${conciliacion.traidasSinCifras} están en la tabla pero sin cifras: aún no cuentan en el rango.`
+                        : 'Todas las del estudio anterior están en la muestra y cuentan en el rango.'}
+                    </span>
+                  )}
+              </span>
+            )}
+
+            {/* POR QUE A VECES NO SE VE NINGUN CAMBIO.
+                Reportado el 2026-09-02. Las de continuidad no se sustituyen —su inclusión se
+                sustentó el año anterior— así que solo rotan las plazas restantes. Con 10 de
+                continuidad en una muestra de 12 se mueven 2 comparables y el primer cuartil, que
+                cae en la posición 2,75, ni se entera. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1
+              && selectionFunnel.plazasFijasPorContinuidad > 0
+              && selectionFunnel.plazasQueRotan
+                <= selectionFunnel.plazasFijasPorContinuidad / 2 && (
+              <span className="text-[10.5px] text-amber-700 dark:text-amber-400 leading-snug max-w-[16rem]">
+                Solo <strong>{selectionFunnel.plazasQueRotan}</strong> plaza(s) pueden rotar:{' '}
+                {selectionFunnel.plazasFijasPorContinuidad} están fijas porque vienen del estudio
+                anterior. Con tan pocas, el cuartil casi no se mueve — para moverlo habría que
+                retirar comparables de continuidad, y eso se justifica en el informe.
+              </span>
+            )}
+
           </div>
 
           {/* Embudo de depuración: cada etapa con lo que dejó fuera. Antes eran
@@ -2512,9 +3270,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
             <button
               type="button"
               onClick={redactarDescripcionesPendientes}
-              disabled={redactandoDescripciones || !comparables.some((c) => c.eeffArchivo && String(c.desc || '').trim() && !c.descActividad)}
+              disabled={redactandoDescripciones || !comparables.some((c) => String(c.desc || '').trim() && !c.descActividad)}
               className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Redacta en español, con IA, la descripción de actividad de las comparables con EEFF cargado que todavía no la tienen"
+              title="Redacta en español, con IA, la descripción de actividad de las comparables que todavía no la tienen. El ANEXO B publica esta descripción para todas, así que sin redactar se radica el texto en inglés de Capital IQ."
             >
               <Sparkles className="w-4 h-4" />
               {redactandoDescripciones ? 'Redactando…' : 'Redactar descripciones pendientes'}
@@ -2770,12 +3528,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 adjustment.within ? (
                   <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold text-lg">
                     <ShieldCheck className="w-5 h-5" />
-                    CUMPLE (Dentro del rango)
+                    {/* El criterio es estar SOBRE el primer cuartil, sin techo (2026-09-02), así
+                        que «Dentro del rango» ya no describe todos los casos que cumplen: un
+                        indicador sobre el tercer cuartil cumple y NO está dentro. Decir «dentro»
+                        ahí seria falso en la propia pantalla que lo calcula. */}
+                    {adjustment.sobreP75
+                      ? 'CUMPLE (sobre el tercer cuartil)'
+                      : 'CUMPLE (dentro del rango)'}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-red-600 dark:text-rose-400 font-bold text-lg">
                     <ShieldAlert className="w-5 h-5" />
-                    NO CUMPLE ({adjustment.dir})
+                    NO CUMPLE (por debajo del primer cuartil)
                   </div>
                 )
               ) : (
@@ -2797,6 +3561,25 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     {diagnostico.ajuste.topado ? ' (topado por la utilidad disponible)' : ''}
                   </>
                 ) : null}
+              </p>
+            )}
+            {/* Si cumple, POR CUÁNTO. Un cumplimiento por tres milésimas se sostiene igual de
+                mal que uno que no cumple en cuanto una cifra se corrija, y eso no se veía. */}
+            {diagnostico.cumple && diagnostico.colchon !== null && (
+              <p className="text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                Cumple con <strong>{pctf(diagnostico.colchon)}</strong> de holgura sobre el primer
+                cuartil
+                {/* Sobre el tercer cuartil no hay ajuste que declarar, pero conviene mirar el
+                    metodo: un margen muy por encima del mercado comparable puede senalar que la
+                    parte examinada o el indicador no son los adecuados. No es incumplimiento. */}
+                {adjustment && adjustment.sobreP75 && diagnostico.stats
+                  ? <span className="text-zinc-500">{' '}· queda por encima del tercer cuartil
+                    ({pctf(diagnostico.stats.p75)}): no hay ajuste que declarar, pero vale
+                    revisar si el indicador y la parte examinada son los adecuados</span>
+                  : null}
+                {diagnostico.colchon < 0.005
+                  ? <span className="text-amber-700 dark:text-amber-400"> · queda al filo: una corrección de cifras puede sacarlo del rango</span>
+                  : null}
               </p>
             )}
             {diagnostico.ajuste && diagnostico.ajuste.improcedente && (
@@ -2822,6 +3605,121 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </p>
             )}
           </div>
+
+          {/* ── LA TASA EN CERO ANULA EL AJUSTE ──
+              Va PRIMERO, antes de cualquier otra cosa: el cumplimiento se concluye sobre el
+              rango ajustado, y sin tasa ese ajuste es nulo, de modo que el veredicto que se lee
+              arriba sale del rango sin ajustar. Es el aviso de más alcance de esta tarjeta
+              porque no habla de la muestra sino de la vara con la que se mide. */}
+          {/* ── UNA CIFRA DEL CONTRIBUYENTE QUE NO PUEDE SER CIERTA ──
+              Va PRIMERO, antes que cualquier via de cumplimiento: estas cuatro partidas mandan
+              sobre las cuatro formulas del ajuste, y el ajuste decide. Reportado el 2026-09-02
+              sobre un estudio real cuya parte examinada traia cartera por el 161,6 % de las
+              ventas —diecinueve meses—, y ese solo numero empujaba el primer cuartil +10,8
+              puntos por encima del contribuyente. Buscar mas comparables no arregla eso. */}
+          {diagnostico.capitalTrabajoImplausible && (
+            <div className="rounded-lg border border-rose-300 dark:border-rose-800/60 bg-rose-50 dark:bg-rose-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-rose-900 dark:text-rose-200 leading-relaxed">
+                  <strong>Antes de buscar más comparables: revise estas cifras del paso 3.</strong>
+                  {' '}No caben en un año de ventas, y son las que mandan sobre el ajuste de
+                  capital de trabajo, que es el que decide el cumplimiento.
+                  <ul className="mt-1.5 space-y-0.5">
+                    {diagnostico.capitalTrabajoImplausible.partidas.map((p) => (
+                      <li key={p.campo}>
+                        <strong>{p.etiqueta}</strong>: {fmt(p.valor)} ={' '}
+                        <strong>{pctf(p.ratio)}</strong> de las ventas, o{' '}
+                        <strong>{p.meses.toLocaleString('es-CO', { maximumFractionDigits: 1 })} meses</strong>
+                        {' '}de venta
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-1.5 text-rose-800/80 dark:text-rose-300/70">
+                    Si la cifra es correcta —hay operaciones de proyecto con cartera alta—, el
+                    estudio se sostiene y esto queda como constancia. Si viene de una lectura del
+                    balance, corregirla cambia el rango que decide.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Comparables con el mismo problema: es un error de escala del cribado, y en la
+              muestra desplaza los cuartiles. */}
+          {diagnostico.comparablesConCapitalImplausible
+            && diagnostico.comparablesConCapitalImplausible.length > 0 && (
+            <div className="rounded-lg border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                  <strong>
+                    {diagnostico.comparablesConCapitalImplausible.length} comparable(s) con
+                    capital de trabajo que no puede ser cierto
+                  </strong>
+                  {': '}
+                  {diagnostico.comparablesConCapitalImplausible.slice(0, 3).map((c) => c.name).join(', ')}
+                  {diagnostico.comparablesConCapitalImplausible.length > 3 ? '…' : ''}.
+                  {' '}Alguna de sus partidas supera sus ventas anuales, lo que suele ser un error
+                  de escala del cribado. Entran igual al rango y desplazan los cuartiles: revíselas
+                  o retírelas.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── POR QUE CONCLUYE SOBRE EL RANGO SIN AJUSTAR ──
+              Reportado el 2026-09-02 con la tabla a la vista: las doce comparables traian CxC,
+              Inventario, CxP y PP&E en cero, porque la exportacion de Capital IQ no incluye esas
+              columnas. Con el ratio de la comparable en cero, cada ajuste se reduce a
+              «−ratio_contribuyente × factor»: el mismo valor para todas. Medido en el caso real,
+              de +4,401 a +4,711 pt en las once, amplitud 0,310 pt. Es una constante que sale del
+              balance del contribuyente y no compara nada, asi que no puede decidir. */}
+          {diagnostico.ajusteTieneDatos === false && diagnostico.comparablesEnElRango > 0 && (
+            <div className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900/40 p-3">
+              <div className="flex items-start gap-2">
+                <FileText className="w-4 h-4 text-zinc-500 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-zinc-700 dark:text-zinc-300 leading-relaxed">
+                  <strong>Se concluye sobre el rango sin ajustar</strong>, y esta es la razón:
+                  solo {diagnostico.comparablesConCapitalTrabajo} de{' '}
+                  {diagnostico.comparablesEnElRango} comparables traen cuentas por cobrar,
+                  inventarios o cuentas por pagar. Un ajuste por diferencias de capital de trabajo
+                  exige conocer el de las dos partes; con el de las comparables en cero, el ajuste
+                  se reduce al mismo valor para todas —sale de su propio balance— y desplaza el
+                  rango sin corregir ninguna diferencia de comparabilidad.
+                  <div className="mt-1.5 text-zinc-500">
+                    Para que el ajuste decida, el cribado del paso 1 tiene que traer esas cuatro
+                    columnas. El rango ajustado sigue calculado y publicado en el informe y en el
+                    Excel de soporte.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {diagnostico.ajusteAnulado && (
+            <div className="rounded-lg border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div className="text-[11.5px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                  <strong>La tasa de interés está en cero.</strong> El cumplimiento se concluye
+                  sobre el rango ajustado por capital de trabajo, y ese ajuste se calcula con la
+                  tasa: en cero, el ajuste de cada comparable es nulo y el rango ajustado
+                  coincide con el rango sin ajustar. El veredicto de arriba sale entonces del
+                  rango que no debería decidir. Fije la tasa (Prime Rate) en el paso 3.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Cuando ninguna palanca alcanza, esto es lo único accionable: qué buscar en el
+              paso 1. Va antes de las palancas porque ampliar el cribado sostiene mejor el
+              estudio —más comparables reales— que apretar la selección de las pocas que hay. */}
+          <RequisitoDelCribado
+            requisito={diagnostico.requisito}
+            indicador={diagnostico.indicador}
+            banda={diagnostico.banda}
+          />
 
           {/* Antes de mover una sola comparable: si el indicador del contribuyente sale de una
               lectura que no se pudo cotejar contra el documento, ajustar la muestra para
@@ -2990,18 +3888,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         Continuidad
                       </span>
                     )}
-                    {/* La que no es de la misma actividad sino de una afín, y entró para no bajar
-                        del mínimo. Va marcada en su fila y no solo en el embudo: es la que hay
-                        que mirar una a una y sustentar en el informe. */}
-                    {row.entroPorAmpliacion && (
-                      <span
-                        className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
-                        title={`Actividad relacionada, no idéntica. Entró para no bajar de ${MINIMO_COMPARABLES} comparables.`
-                          + (row.razones ? ' · ' + row.razones : '')}
-                      >
-                        Actividad relacionada
-                      </span>
-                    )}
+                    {/* ══ El veredicto de actividad, fila por fila ══
+                        Pedido el 2026-09-01: poder validar la actividad antes de generar los
+                        EEFF. El motor SÍ la respeta —la DISTINTA se descarta y la cuota de
+                        negativas admite solo MISMA— pero la tabla no lo mostraba: una fila de
+                        misma actividad no llevaba marca y se veía igual que una que nadie
+                        verificó. El `title` lleva el motivo que escribió la curación, que es lo
+                        único que permite validar el veredicto en vez de creerle. */}
+                    <InsigniaActividad row={row} />
+                    {/* La actividad en sí, que es lo que el informe publica por comparable. */}
+                    <ActividadDeLaComparable row={row} />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}

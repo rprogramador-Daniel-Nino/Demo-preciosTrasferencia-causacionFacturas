@@ -7,6 +7,7 @@ import {
   CAMPO_POR_RUBRO, RUBROS_DE_COTEJO, extraerTextoEstructuradoPdf,
   verifyAccountingEqualities,
   CAMPOS_CON_FALLBACK_NOTAS, promptFaltantesEnNotas, buscarFaltantesEnNotas,
+  repararMilesComoDecimal, repararCifrasDelEstudio,
 } from './eeffParser.js';
 import { CLAVES_RUBROS_EXAMINADA } from './memoriaCalculoRangoOptimo.js';
 
@@ -226,6 +227,116 @@ test('valorDeRubro acepta las tres formas en que responde el modelo', () => {
   assert.strictEqual(valorDeRubro(337546138), 337546138);
   assert.strictEqual(valorDeRubro({ valor: '337.546.138' }), 337546138);
   assert.strictEqual(valorDeRubro('337.546.138,00'), 337546138);
+});
+
+test('valorDeRubro rescata la cifra cuyo separador de miles llegó como punto decimal', () => {
+  /* El defecto que dejó la Tabla 10 con «4» donde el documento imprime 4.064.393: JSON no
+     admite el punto de miles, el modelo conserva el primero y `fmt()` redondea el resto. */
+  assert.strictEqual(valorDeRubro({ valor: 4.064393 }), 4064393);
+  assert.strictEqual(valorDeRubro({ valor: 4.064 }), 4064);
+  assert.strictEqual(valorDeRubro({ valor: 51.512 }), 51512);
+  assert.strictEqual(valorDeRubro({ valor: 687.123456 }), 687123456);
+  assert.strictEqual(valorDeRubro({ valor: -4.064 }), -4064);
+  /* La cadena con sus puntos ya la resolvía `num()`, y sigue igual. */
+  assert.strictEqual(valorDeRubro({ valor: '4.064.393' }), 4064393);
+});
+
+test('repararMilesComoDecimal deja en paz lo que sí es decimal', () => {
+  /* Céntimos: una o dos cifras tras el punto no son un grupo de miles. */
+  assert.strictEqual(repararMilesComoDecimal(1234.56), 1234.56);
+  assert.strictEqual(repararMilesComoDecimal(21.85), 21.85);
+  assert.strictEqual(repararMilesComoDecimal(1.5), 1.5);
+  /* Un primer grupo de más de tres dígitos no puede venir de un separador de miles. */
+  assert.strictEqual(repararMilesComoDecimal(21850.187), 21850.187);
+  /* Ningún separador de miles abre con un grupo «0». */
+  assert.strictEqual(repararMilesComoDecimal(0.123), 0.123);
+  /* Los enteros y lo que no es número pasan tal cual. */
+  assert.strictEqual(repararMilesComoDecimal(4064393), 4064393);
+  assert.strictEqual(repararMilesComoDecimal(0), 0);
+  assert.strictEqual(repararMilesComoDecimal(null), null);
+});
+
+test('repararCifrasDelEstudio rescata el detalle de un estudio ya guardado', () => {
+  /* Las once filas del informe real que lo destapó (2026-09-02), tal como quedaron
+     guardadas. La fila «Total Activos» es la que se delataba en pantalla: 51.500 se guarda
+     como 51.5 —JavaScript borra los ceros finales— y `CampoMoneda` la pintaba «515». */
+  const estudio = {
+    t_act_tot: 51500,
+    t_activos_detalle: [
+      { etiqueta: 'Efectivo y equivalentes al efectivo', valor: 687, esSubtotal: false },
+      { etiqueta: 'Cuentas por Cobrar comerciales corto plazo Neto', valor: 4.064, esSubtotal: false },
+      { etiqueta: 'Inventarios', valor: 2.726, esSubtotal: false },
+      { etiqueta: 'Otros deudores empleados, reembolsos', valor: 518, esSubtotal: false },
+      { etiqueta: 'Cuentas por Cobrar impuestos', valor: 921, esSubtotal: false },
+      { etiqueta: 'Total activo corriente', valor: 8.916, esSubtotal: true },
+      { etiqueta: 'Cuentas por cobrar compañías asociadas', valor: 15.183, esSubtotal: false },
+      { etiqueta: 'Equipo para alquilar Neto', valor: 1.785, esSubtotal: false },
+      { etiqueta: 'Propiedades y equipo Neto', valor: 25.617, esSubtotal: false },
+      { etiqueta: 'Total activo no corriente', valor: 42.584, esSubtotal: true },
+      { etiqueta: 'Total Activos', valor: 51.5, esSubtotal: true },
+    ],
+  };
+
+  const sano = repararCifrasDelEstudio(estudio);
+  const valores = sano.t_activos_detalle.map((f) => f.valor);
+  assert.deepStrictEqual(valores, [
+    687, 4064, 2726, 518, 921, 8916, 15183, 1785, 25617, 42584, 51500,
+  ]);
+
+  /* Las cifras del documento cuadran entre sí, que es la prueba de que se reconstruyeron
+     bien y no solo de que cambiaron: las cinco corrientes suman su subtotal, los dos
+     subtotales suman el total, y el total coincide con `t_act_tot`. */
+  const corriente = valores.slice(0, 5).reduce((a, b) => a + b, 0);
+  assert.strictEqual(corriente, 8916);
+  assert.strictEqual(valores[5] + valores[9], valores[10]);
+  assert.strictEqual(valores[10], sano.t_act_tot);
+  /* Y con eso el A.V. de «Total, Activos» vuelve a ser el 100 % que debe ser. */
+  assert.strictEqual(valores[10] / sano.t_act_tot, 1);
+});
+
+test('repararCifrasDelEstudio no toca un estudio sano ni cambia su referencia', () => {
+  const sano = { t_act_tot: 51500, t_activos_detalle: [{ etiqueta: 'Inventarios', valor: 2726 }] };
+  assert.strictEqual(repararCifrasDelEstudio(sano), sano);
+  assert.strictEqual(repararCifrasDelEstudio(null), null);
+  assert.deepStrictEqual(repararCifrasDelEstudio({}), {});
+});
+
+test('repararCifrasDelEstudio deja en paz lo que no es una cifra del balance', () => {
+  const estudio = {
+    razon_social: 'MONTACHEM',
+    anio: 2025,
+    t_act_tot: 51.5,
+    margen: 4.064,
+    t_activos_detalle: [{ etiqueta: 'Sin cifra', valor: null }, null, 'basura'],
+  };
+  const sano = repararCifrasDelEstudio(estudio);
+  assert.strictEqual(sano.t_act_tot, 51500);
+  /* `margen` no está en la lista de campos de cifra: es una razón, no pesos. */
+  assert.strictEqual(sano.margen, 4.064);
+  assert.strictEqual(sano.razon_social, 'MONTACHEM');
+  assert.strictEqual(sano.anio, 2025);
+  assert.deepStrictEqual(sano.t_activos_detalle, [{ etiqueta: 'Sin cifra', valor: null }, null, 'basura']);
+});
+
+test('los ceros perdidos solo se reconstruyen cuando se piden', () => {
+  /* La lectura no los pide: por ahí pasan los EEFF de comparables, que Capital IQ publica
+     en millones con decimales de verdad. */
+  assert.strictEqual(repararMilesComoDecimal(28.81), 28.81);
+  assert.strictEqual(repararMilesComoDecimal(51.5), 51.5);
+  /* La reparación del estudio sí, porque ahí son pesos del contribuyente. */
+  assert.strictEqual(repararMilesComoDecimal(51.5, { cerosPerdidos: true }), 51500);
+  assert.strictEqual(repararMilesComoDecimal(28.81, { cerosPerdidos: true }), 28810);
+  /* Con grupos completos las dos coinciden. */
+  assert.strictEqual(repararMilesComoDecimal(4.064, { cerosPerdidos: true }), 4064);
+  assert.strictEqual(repararMilesComoDecimal(687.123456, { cerosPerdidos: true }), 687123456);
+  /* Y lo que no casa el patrón sigue intacto con cualquiera de las dos. */
+  assert.strictEqual(repararMilesComoDecimal(1234.56, { cerosPerdidos: true }), 1234.56);
+  assert.strictEqual(repararMilesComoDecimal(0.123, { cerosPerdidos: true }), 0.123);
+});
+
+test('el prompt prohíbe el separador de miles dentro del JSON', () => {
+  /* Sin esta regla el modelo transcribe «dígito por dígito» y deja el primer punto. */
+  assert.match(EEFF_PROMPT, /separador de miles NO va en el JSON/);
 });
 
 test('valorDeRubro distingue el cero de la ausencia', () => {

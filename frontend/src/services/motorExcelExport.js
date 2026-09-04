@@ -141,6 +141,38 @@ export function construirLibroSoporte(datos) {
         disponibles: embudo.negativasDisponibles || 0,
         excluidasPorFiltro: embudo.negativasExcluidasPorFiltro || 0,
       },
+      /* Cual de las combinaciones equivalentes se uso. Se publica porque es lo que hace la
+         muestra REPRODUCIBLE: con el cribado y este numero se vuelve a obtener exactamente la
+         misma seleccion. Sin declararlo, la reproducibilidad existe en el codigo pero no en el
+         soporte, y es en el soporte donde un revisor la comprueba. */
+      combinacion: {
+        usada: embudo.alternativa || 1,
+        disponibles: embudo.alternativasDisponibles || 1,
+        /* HACIA DONDE se movió la muestra. Se publica porque mover el rango en una dirección
+           elegida es lo que un revisor mira con más cuidado: tiene que constar, no quedar
+           implícito en una muestra que ya no es la de mayor puntaje. */
+        direccion: embudo.direccionAlternativa || 'ninguna',
+      },
+      /* Contra qué se midió la cercanía de rentabilidad de cada candidata. Es un criterio de
+         comparabilidad (Art. 260-4) que hay que sustentar, y es lo que un revisor mira más de
+         cerca: dejarlo implícito en un puntaje no sirve de sustento. */
+      anclaRentabilidad: embudo.anclaRentabilidad || 'medianaPool',
+      /* El modo «priorizar continuidad» y su rastro. Se publica porque conservar en la muestra
+         una comparable que el filtro de pérdidas habría retirado es una decisión metodológica
+         que hay que sustentar, y porque una comparable del estudio anterior que NO pudo volver
+         tiene que quedar nombrada con su motivo: si desaparece en silencio, se descubre al
+         cotejar los dos informes y para entonces hay que explicarla sin saber por qué se fue. */
+      /* La conciliación contra el estudio del año anterior: el estado de cada comparable que
+         integró la muestra del año pasado y, cuando no siguió, el motivo. Es lo que el despacho
+         le entrega al cliente cuando la muestra no se puede reproducir (pedido del 2026-09-02),
+         y lo que responde a la pregunta que la DIAN hace primero al comparar dos informes: por
+         qué cambió la muestra. */
+      conciliacionAnterior: embudo.conciliacionAnterior || null,
+      continuidadPrioritaria: embudo.priorizoContinuidad ? {
+        rescatadas: embudo.continuidadRescatadas || 0,
+        noRescatadas: Array.isArray(embudo.continuidadNoRescatada)
+          ? embudo.continuidadNoRescatada : [],
+      } : null,
     }
     : seleccion;
 

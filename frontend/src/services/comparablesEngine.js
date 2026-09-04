@@ -24,6 +24,64 @@ export function nameKey(str) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
+/* ── LA CLAVE DE CRUCE: normaliza lo que `nameKey` no puede ──
+
+   `nameKey` tiene un defecto verificado el 2026-09-02: en su patrón `(…|CO\.|S\.A\.|…)`,
+   toda alternativa que TERMINA en punto no puede satisfacer el `` final —después del punto
+   suele venir un espacio, y entre dos caracteres que no son de palabra NO hay frontera—. Así que
+   `CO\.`, `INC\.`, `S\.A\.`, `S\.A\.S\.` y compañía están muertas. `INC`, `CORP` y `LTD`
+   funcionan solo porque también figuran SIN punto; `CO` no figuraba, y ninguna forma escrita con
+   puntos se limpiaba. Medido:
+
+     «Bolak Co. Ltd»  → BOLAKCO     vs  «Bolak Company Limited» → BOLAK      NO cruzaban
+     «Givaudan S.A.»  → GIVAUDANSA  vs  «Givaudan SA»           → GIVAUDAN   NO cruzaban
+     «Alfa S.A.S.»    → ALFAS       vs  «Alfa SAS»              → ALFA       NO cruzaban
+
+   Y los informes colombianos escriben «S.A.S.» con puntos constantemente, así que el cruce de
+   continuidad fallaba de forma sistemática: reportado como «la continuidad no me está trayendo
+   las mismas comparables del año pasado».
+
+   POR QUE NO SE ARREGLA `nameKey` Y SE AGREGA ESTA. `nameKey` ES EL IDENTIFICADOR DE DOCUMENTO
+   del catálogo de comparables en Firestore (`documento(usuario, COMPARABLES, entrante.nameKey)`
+   en `firestoreRepo.js:470`). Cambiarlo dejaría huérfano todo EEFF ya guardado cuyo nombre
+   lleve una forma con puntos, y «Buscar cifras ya cargadas por el equipo» dejaría de
+   encontrarlos sin decir nada. La clave de ALMACENAMIENTO tiene que ser estable; la de CRUCE
+   tiene que ser agresiva. Son dos oficios y por eso son dos funciones.
+
+   El orden es lo que arregla el defecto: la puntuación se convierte en ESPACIOS antes de quitar
+   las formas societarias, de modo que «S.A.S.» llega como «S A S» y «Co.» como «Co», y ahí sí
+   hay fronteras de palabra. Después se colapsa todo. */
+/* LITERAL de expresión regular y no `new RegExp('…')`: dentro de una cadena JavaScript, `'\b'`
+   es el carácter de RETROCESO (U+0008) y no una frontera de palabra, así que el patrón no
+   limpiaba nada y la clave salía con las formas societarias pegadas. Se comprobó midiendo.
+
+   Las alternativas van de la MÁS LARGA a la más corta dentro de cada familia —CORPORATION antes
+   que CORP, LIMITED antes que LTD— porque la alternancia de JavaScript toma la primera que
+   encaja: con `CORP` delante, «Corporation» quedaría partida en «CORP» + «ORATION». */
+const FORMAS_SOCIETARIAS = /\b(COLOMBIA|INCORPORATED|INC|CORPORATION|CORP|LIMITED|LTDA|LTD|LLC|LLP|PLC|COMPANY|CO|S A S|SAS|S A DE C V|S DE R L|S A|SA|C A|CA|NV|BV|GMBH|AG|OYJ|OY|AB|ASA|S P A|SPA|PTE|PT|TBK|BHD|SDN|K K|KK|JSC|PJSC|OAO|PAO)\b/g;
+
+/**
+ * La clave con la que se cruza una comparable del estudio anterior contra el cribado de este
+ * año. NO se usa para almacenar nada: ver la nota de arriba.
+ */
+export function claveDeCruce(str) {
+  if (!str) return '';
+  return String(str)
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    /* El sufijo de bolsa que agrega Capital IQ: «Akatsuki Inc. (TSE:3932)». */
+    .replace(/\([^)]*\)/g, ' ')
+    /* La puntuación a ESPACIOS y no a nada: es lo que deja «S.A.S.» como tres palabras y
+       permite que el patrón de formas societarias las alcance. */
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(FORMAS_SOCIETARIAS, ' ')
+    /* Y otra vez, porque quitar «S A S» puede dejar una «S» suelta que antes era parte de la
+       forma: «ALFA S A S» → «ALFA S» en una sola pasada del patrón global. */
+    .replace(FORMAS_SOCIETARIAS, ' ')
+    .replace(/[^A-Z0-9]+/g, '');
+}
+
 /**
  * Localiza la hoja de cribado. El export de Capital IQ trae varias —Screening,
  * Aggregates, Screen Criteria— y las candidatas están en la primera. Tomar
@@ -136,21 +194,38 @@ export function enPerdida(cand) {
 }
 
 /** Sinónimos por columna, en un solo sitio para poder informar qué se buscó. */
+/* Un encabezado que menciona una partida de balance pero NO es un saldo: una rotación, unos
+   días, un porcentaje, una variación. Las claves de las cuatro partidas de capital de trabajo se
+   ampliaron a raíces —`receivable`, `payable`, `inventor`, `plant`— porque Capital IQ cambia el
+   rótulo entre plantillas, y una raíz se tragaría «Accounts Receivable Turnover»: meter una
+   rotación donde va un saldo es basura con cara de dato. */
+const RATIOS_NO_SON_SALDOS = /turnover|turns|days |ratio|%|growth|per share|margin|change in|outstanding|variation/;
+
+/** ¿Este encabezado nombra un ratio en vez de un saldo? Case-insensitive. */
+export function esRatioYNoSaldo(encabezado) {
+  return RATIOS_NO_SON_SALDOS.test(String(encabezado || '').toLowerCase());
+}
+
 export const COLUMNAS_IQ = {
   name: { etiqueta: 'Compañía', esencial: true, claves: ['company name', 'compañía', 'compania', 'empresa', 'razon social', 'razón social', 'nombre'] },
   s: { etiqueta: 'Ingresos', esencial: true, claves: ['total revenue', 'revenue', 'ventas', 'ingresos'] },
   c: { etiqueta: 'Costo de ventas', esencial: false, claves: ['cost of goods', 'cost of revenue', 'costo de ventas', 'costos'] },
   op: { etiqueta: 'Utilidad operacional', esencial: true, claves: ['operating income', 'operating profit', 'utilidad operacional', 'ebit'] },
-  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, claves: ['accounts receivable', 'cuentas por cobrar', 'cxc'] },
-  inv: { etiqueta: 'Inventarios', esencial: false, claves: ['total inventory', 'inventarios', 'inventario'] },
-  ap: { etiqueta: 'Cuentas por pagar', esencial: false, claves: ['accounts payable', 'cuentas por pagar', 'cxp'] },
+  /* Raíces y no nombres exactos: Capital IQ exporta «Total Receivables» en una plantilla y
+     «Accounts Receivable» en otra, y con la lista cerrada anterior las cuatro partidas de
+     capital de trabajo quedaban sin detectar en cribados reales — con el ajuste calculándose
+     contra ceros. `esRatioYNoSaldo` es lo que impide que la raíz se coma una rotación. */
+  ar: { etiqueta: 'Cuentas por cobrar', esencial: false, esSaldo: true, claves: ['receivable', 'cuentas por cobrar', 'cartera', 'cxc'] },
+  inv: { etiqueta: 'Inventarios', esencial: false, esSaldo: true, claves: ['invent', 'existencias'] },
+  ap: { etiqueta: 'Cuentas por pagar', esencial: false, esSaldo: true, claves: ['payable', 'cuentas por pagar', 'proveedores', 'cxp'] },
   /* PP&E entra por la misma vía que las otras partidas de balance. Sin él, el ajuste
      de propiedad, planta y equipo se calcula contra cero en todas las comparables y
      los escenarios que lo incluyen quedan sin sentido. */
   ppe: {
     etiqueta: 'Propiedad, planta y equipo',
     esencial: false,
-    claves: ['net property plant and equipment', 'property plant and equipment', 'net pp&e', 'pp&e', 'ppe',
+    esSaldo: true,
+    claves: ['plant', 'net pp&e', 'pp&e', 'ppe',
       'propiedad planta y equipo', 'propiedad, planta y equipo', 'propiedades planta y equipo'],
   },
   sic: { etiqueta: 'SIC', esencial: false, claves: ['primary sic', 'sic', 'ciiu'] },
@@ -227,12 +302,21 @@ export async function importCapitalIQExcel(file, onProgress) {
         const headers = (json[filaEncabezados] || []).map(h => String(h || '').trim().toLowerCase());
 
         // Mapeo flexible de encabezados
-        const findCol = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+        /* Para las columnas de SALDO, un encabezado que es un ratio nunca casa por más que
+           contenga la raíz: ver `esRatioYNoSaldo`. Sin esa guarda, ampliar las claves a raíces
+           habría metido «Accounts Receivable Turnover» donde va el saldo de cartera.
+
+           El veto NO es global: la columna del accionista mayoritario se llama «% owned by
+           single holder» y su propio nombre lleva un %, así que un veto para todas la habría
+           dejado sin detectar. */
+        const findCol = (keywords, esSaldo) => headers.findIndex(
+          h => (!esSaldo || !esRatioYNoSaldo(h)) && keywords.some(k => h.includes(k)),
+        );
 
         const idx = {};
         const reconocidas = [], faltantes = [];
         Object.entries(COLUMNAS_IQ).forEach(([clave, def]) => {
-          const i = findCol(def.claves);
+          const i = findCol(def.claves, def.esSaldo);
           idx[clave] = i;
           if (i >= 0) reconocidas.push({ clave, etiqueta: def.etiqueta, columna: i, header: (json[filaEncabezados] || [])[i] });
           else faltantes.push({ clave, etiqueta: def.etiqueta, esencial: def.esencial, claves: def.claves });
@@ -460,6 +544,10 @@ export const FILTROS_DUROS = [
   },
   {
     clave: 'perdidaOperativa',
+    /* Rescatable por el modo «priorizar continuidad»: la inclusion de una comparable del anio
+       anterior ya se sustento entonces, y una perdida no descalifica por si sola (Guias OCDE
+       cap. III, §3.64-3.65). Los otros tres NO lo son: ver la nota de `filtroQueDescarta`. */
+    rescatablePorPrioridad: true,
     /* La continuidad NO queda exenta, a diferencia del holding. Es una decisión deliberada y
        probada: la pérdida es un hecho del ejercicio en curso, no una presunción sobre la razón
        social, así que el estudio anterior no la sustenta; y desde que existe
@@ -482,6 +570,11 @@ export function configDeFiltros(config = {}) {
     saldoNegativo: config.saldoNegativo || 'excluir',
     control: config.control || 'excluir',
     umbralControl: config.umbralControl === undefined ? 50 : config.umbralControl,
+    /* Modo «priorizar continuidad»: relaja los filtros marcados `rescatablePorPrioridad` para
+       las comparables del anio anterior. Viaja aqui porque es `filtroQueDescarta` quien lo
+       aplica, y de ese juez cuelgan tanto el embudo del paso 2 como el descarte de verdad: si
+       la bandera no llegara a los dos, el panel prometeria un numero que el motor no respeta. */
+    priorizarContinuidad: Boolean(config.priorizarContinuidad),
   };
 }
 
@@ -493,11 +586,30 @@ export function configDeFiltros(config = {}) {
  *
  * @returns {{clave:string, motivo:string}|null}
  */
+/* ── PRIORIZAR CONTINUIDAD ──
+   Pedido el 2026-09-02. De que rescata a las comparables del anio anterior, decidido con el
+   usuario: del filtro de PERDIDAS OPERATIVAS —su inclusion se sustento el anio pasado y las
+   Guias OCDE (cap. III, §3.64-3.65) dicen que una perdida no descalifica por si sola siempre que
+   se analice la causa— y de la CUOTA de negativas, que las desplazaba para hacer sitio.
+
+   DE QUE NO LAS RESCATA, y esto importa mas que lo anterior:
+
+     · INDEPENDENCIA (Art. 260-1). No ser independiente es un hecho de HOY, no una presuncion:
+       una comparable que este anio tiene un accionista de control no es comparable, la aceptaran
+       o no el anio pasado. El filtro de holding si la exime, porque ese se PRESUME de la razon
+       social; este no se presume, se mide.
+     · SALDOS NEGATIVOS. Cuentas por cobrar, por pagar o inventarios en negativo son dato no
+       verosimil, y esas mismas cifras entran despues al ajuste de capital de trabajo: un saldo
+       mal leido no queda en una fila, contamina el rango que decide.
+
+   Los filtros que el modo relaja llevan `rescatablePorPrioridad: true`. */
 export function filtroQueDescarta(cand, config = {}, esContinuidad = false) {
   const cfg = configDeFiltros(config);
   for (const f of FILTROS_DUROS) {
     if (!f.activo(cfg)) continue;
     if (f.eximeContinuidad && esContinuidad) continue;
+    /* El modo «priorizar continuidad» relaja los filtros marcados como rescatables. */
+    if (cfg.priorizarContinuidad && f.rescatablePorPrioridad && esContinuidad) continue;
     if (f.aplica(cand, cfg)) return { clave: f.clave, motivo: f.motivo(cfg) };
   }
   return null;
@@ -520,15 +632,20 @@ export function filtroQueDescarta(cand, config = {}, esContinuidad = false) {
  * @returns {{validas:Array, rechazadas:Array, porMotivo:Object<string,Array>}}
  */
 export function prefiltrar(candidates, config = {}, previas = []) {
+  /* Con `claveDeCruce` y no con `nameKey`: esta última no limpia las formas societarias
+     escritas con puntos —«Bolak Co. Ltd» no cruzaba con «Bolak Company Limited», ni «Givaudan
+     S.A.» con «Givaudan SA»— y por eso la continuidad no reconocía a compañías que sí seguían
+     en el cribado. `nameKey` se conserva intacta porque es el identificador de documento del
+     catálogo en Firestore. */
   const priorSet = new Set(
-    (previas || []).map((c) => c.nameKey || nameKey(c.name)).filter(Boolean),
+    (previas || []).map((c) => claveDeCruce(c.name || c.nombre || '')).filter(Boolean),
   );
   const validas = [], rechazadas = [];
   const porMotivo = {};
   FILTROS_DUROS.forEach((f) => { porMotivo[f.clave] = []; });
 
   (candidates || []).forEach(cand => {
-    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
+    const esContinuidad = priorSet.has(claveDeCruce(cand.name));
     const fuera = filtroQueDescarta(cand, config, esContinuidad);
     if (fuera) {
       rechazadas.push(cand);
@@ -620,6 +737,53 @@ export const CLAVE_RESERVA = 'actividadDistinta';
 export const MOTIVO_RESERVA = 'Supera los filtros objetivos pero no integra la muestra: '
   + 'menor grado de comparabilidad funcional frente a la parte examinada (Art. 260-4 E.T.).';
 
+/* ── INTENSIDAD DE CAPITAL DE TRABAJO ──
+   Cuanto capital de trabajo mueve una compañia por peso de venta:
+   (CxC + Inventario − CxP) / ventas.
+
+   POR QUE ES UN FACTOR DE COMPARABILIDAD. El ajuste de capital de trabajo existe para corregir
+   diferencias residuales en esta dimension, y su tamaño mide cuanto habia que corregir: un
+   ajuste de diez puntos es la señal de que las comparables no eran comparables ahi. Medido en
+   el caso reportado el 2026-09-02, sobre el mismo cribado y variando SOLO esta intensidad:
+
+     comparables con intensidad muy baja     el ajuste desplaza el rango  +4,45 pt
+     con la mitad de la del contribuyente                                 +2,37 pt
+     con intensidad parecida (±10 %)                                      +0,24 pt
+     con la misma intensidad                                              +0,00 pt
+
+   Asi que preferir las que necesitan poco ajuste no es elegir por resultado: es elegir las que
+   de verdad se parecen (Art. 260-4 E.T.; Guias OCDE cap. III), y produce un estudio que se
+   sostiene mejor ante un revisor que uno con un ajuste enorme.
+
+   ES UNA PREFERENCIA, NO UN FILTRO: pondera el puntaje, como la geografia y el tamaño.
+   Descartar por capital de trabajo dejaria fuera compañias de la misma actividad por una
+   dimension secundaria, y en un cribado sin esas columnas vaciaria la muestra.
+
+   `null` cuando faltan las tres partidas: no saber no es lo mismo que ser distinta. */
+function intensidadCapitalTrabajo(o) {
+  const s = num(o && o.s);
+  if (s === null || !s) return null;
+  const ar = num(o.ar), inv = num(o.inv), ap = num(o.ap);
+  if (ar === null && inv === null && ap === null) return null;
+  return ((ar || 0) + (inv || 0) - (ap || 0)) / s;
+}
+
+/* Cuanto pesa esta dimension en el puntaje. Menos que la actividad y el perfil funcional —los
+   que la norma nombra primero— y del orden del tamaño y la geografia, que son los otros dos
+   factores de circunstancias economicas. */
+const PESO_CAPITAL_TRABAJO = 0.10;
+
+/* Con que brecha de intensidad el factor llega a cero. Media vuelta de venta (0,5) es mucho: a
+   partir de ahi el ajuste que haria falta es tan grande que la comparable ya no describe la
+   misma realidad economica. */
+const INTENSIDAD_MAXIMA_TOLERADA = 0.5;
+
+/* Lo que recibe quien no trae los datos: el punto medio. Penalizarla castigaria a toda la
+   muestra en un cribado sin esas columnas —el caso de la exportacion de Capital IQ del
+   2026-09-01, que no traia ninguna de las cuatro—; premiarla la pondria por delante de una que
+   si se pudo verificar. */
+const FACTOR_CAPITAL_TRABAJO_SIN_DATOS = 0.5;
+
 export function scoreCandidates(candidates, config, companyActivity = '', priorComps = [], contexto = {}) {
   const {
     nTarget = 12,
@@ -636,10 +800,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        del usuario (2026-08-31). Con `perdidaOp: 'excluir'` no hay negativas que repartir y
        el objetivo se ignora solo. */
     negativasObjetivo = 0,
-    holding = 'excluir',
-    control = 'excluir',
-    umbralControl = 50,
-    saldoNegativo = 'excluir',
+    /* `holding`, `control`, `umbralControl` y `saldoNegativo` YA NO SE DESESTRUCTURAN aquí: el
+       único sitio que los usaba reconstruía a mano la config del juez de filtros, y
+       reconstruirla obligaba a acordarse de cada bandera nueva —`priorizarContinuidad` se quedó
+       fuera al agregarla el 2026-09-02 y el rescate no ocurría en este juez aunque `prefiltrar`
+       sí lo aplicara—. Ahora se le pasa `config` entero, así que estas cuatro sobraban. Los
+       valores por defecto viven donde siempre debieron: en `configDeFiltros`. */
     geo = 'ninguna',
     /* `rigor` puede seguir llegando en estudios guardados antes del 2026-09-01. Se acepta y se
        ignora a propósito: su filtro se retiró el 2026-08-10 —ver la nota del bloque «rigor
@@ -647,23 +813,79 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        lo usa; destructurarlo sin usarlo haría creer que sí. */
   } = config;
 
-  const priorSet = new Set((priorComps || []).map(c => nameKey((c && c.name) || c)));
+  /* Misma clave que en `prefiltrar`: los dos jueces tienen que reconocer la continuidad
+     igual, o el embudo del paso 2 promete un número que el motor no respeta. */
+  const priorSet = new Set(
+    (priorComps || []).map(c => claveDeCruce((c && (c.name || c.nombre)) || c)),
+  );
   const ventasTP = num(contexto.ventasParteExaminada);
+  /* La intensidad de capital de trabajo del contribuyente: la vara del factor nuevo. Llega como
+     ratios ya calculados y no como saldos, porque el llamador tiene las cifras del estudio y
+     aqui solo se comparan; asi este motor no necesita saber que campo del estudio es cual.
+     `null` cuando el llamador no la manda, y entonces la dimension no puntua. */
+  const ctTP = contexto.capitalTrabajoParteExaminada || null;
+  const intensidadTP = ctTP
+    ? ((num(ctTP.ar) || 0) + (num(ctTP.inv) || 0) - (num(ctTP.ap) || 0))
+    : null;
   /* El margen de la parte examinada, para ordenar la cuota de negativas por cercanía. Puede
      faltar —un estudio sin cifras cargadas todavía—, y entonces la cuota degrada al orden por
      puntaje: elegir por cercanía a un número que no existe sería inventar. */
   const pliTP = num(contexto.pliParteExaminada);
   const metodoPli = contexto.metodoPli || 'MO';
+  /* CON QUÉ VARA se mide la cercanía. Por omisión el margen crudo de la fuente, pero el
+     llamador puede inyectar la suya, y debe hacerlo cuando la conclusión del estudio se
+     sostiene en el rango AJUSTADO: ahí la vara que importa es el PLI ajustado por capital de
+     trabajo, no el crudo.
+
+     La diferencia no es cosmética. El contribuyente no se ajusta contra sí mismo —sus ratios
+     se cancelan— así que su PLI no se mueve, pero el de cada comparable sí. Con el capital de
+     trabajo de las comparables en cero el ajuste es un corrimiento constante hacia arriba, de
+     modo que para quedar cerca del contribuyente EN TÉRMINOS AJUSTADOS hay que elegir
+     comparables cuyo margen crudo esté ese corrimiento más abajo. Medir con la vara equivocada
+     elige el conjunto equivocado (reportado el 2026-09-01).
+
+     Se inyecta en lugar de importar el motor de ajuste aquí porque «qué vara decide» lo sabe
+     quien conoce `useadj`, que es el llamador, y porque así se prueba sin montar el ajuste. */
+  const margenInyectado = typeof contexto.margenDeCandidata === 'function'
+    ? contexto.margenDeCandidata
+    : null;
   /* Veredicto de la curación por IA, por identificador de la fuente. Se aplica
      como filtro duro y, cuando confirma la coincidencia, como factor máximo de
      especialidad. */
   const iaPorId = (contexto.iaMatch && contexto.iaMatch.porId) || null;
 
-  /* Mediana del margen operacional del pool: el factor de rentabilidad premia a
-     las candidatas próximas al comportamiento central del conjunto. */
+  /* Mediana del margen operacional del pool: el comportamiento central del universo cribado.
+     Es el ancla de respaldo del factor de rentabilidad. */
   const medianaPool = medianaDe(
     (candidates || []).map(c => (c.s ? (c.op ?? 0) / c.s : null)).filter(x => x !== null)
   );
+
+  /* ── EL ANCLA DE LA RENTABILIDAD: LA PARTE EXAMINADA ──
+     Pedido el 2026-09-02: «tomar comparables que encajen con el indicador de nuestra compañia,
+     hacemos ese dato dinamico para que sirva para todas las compañias».
+
+     Antes el factor premiaba la cercania a la MEDIANA DEL POOL, asi que la muestra se centraba
+     en la industria y no en la parte examinada. En el caso reportado el pool estaba cerca del
+     10 % y el contribuyente en 6,204 %: el puntaje empujaba justo hacia las que lo dejaban
+     fuera del rango.
+
+     Anclarlo en el indicador de la parte examinada es criterio de comparabilidad del Art. 260-4
+     —un nivel de rentabilidad semejante suele reflejar funciones y riesgos semejantes— y es
+     DINAMICO por construccion: sale del propio estudio, no de un parametro, asi que sirve para
+     todas las compañias sin configurar nada.
+
+     Se mide con el margen SIN AJUSTAR, que es la vara con la que se busca («primero buscamos
+     las comparables con el no ajustado», criterio del contador del 2026-09-01). El cumplimiento
+     se sigue concluyendo sobre el ajustado.
+
+     Sin indicador propio se cae a la mediana del pool: el comportamiento anterior es mejor que
+     ninguno. */
+  /* Se reutiliza , que el componente ya envia para ordenar la cuota de
+     negativas: es el mismo margen del contribuyente medido con la misma vara sin ajustar, asi
+     que pedirlo dos veces con dos nombres invitaria a que divergieran. */
+  const margenTP = num(contexto.pliParteExaminada);
+  const anclaRent = margenTP !== null ? margenTP : medianaPool;
+  const anclaRentabilidad = margenTP !== null ? 'parteExaminada' : 'medianaPool';
 
   const evaluated = (candidates || []).map(cand => {
     let descartada = false;
@@ -683,7 +905,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivoRechazo = motivo;
     };
 
-    const esContinuidad = priorSet.has(cand.nameKey || nameKey(cand.name));
+    const esContinuidad = priorSet.has(claveDeCruce(cand.name));
 
     /* ── Filtros de exclusión ──
        Control y holding van separados y en ese orden. Son dos hechos distintos y el
@@ -700,9 +922,12 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        escritos dos veces y divergían en dos puntos —la exención de continuidad del holding y el
        reconocimiento de `op < 0` sin flag—, de modo que se pagaba por candidatas que el motor
        descartaba y se perdían de continuidad que el motor habría conservado. */
-    const fuera = filtroQueDescarta(cand, {
-      perdidaOp, holding, saldoNegativo, control, umbralControl,
-    }, esContinuidad);
+    /* `config` TAL CUAL y no una copia reconstruida campo por campo. Reconstruirla obligaba a
+       acordarse de cada bandera nueva: `priorizarContinuidad` se quedo fuera al agregarla y el
+       rescate no ocurria aqui aunque `prefiltrar` —el otro llamador, que si pasa `config`
+       entero— lo aplicara. Es la misma divergencia entre los dos jueces que ya costo un defecto
+       el 2026-09-01, y la forma de que no vuelva es no volver a copiar la config a mano. */
+    const fuera = filtroQueDescarta(cand, config, esContinuidad);
     if (fuera) rechazar('filtro', fuera.clave, fuera.motivo);
 
     /* ── veredicto de la curación por IA ──
@@ -774,26 +999,43 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       fTamano = 1 / (1 + distancia);
     }
 
-    /* ── rentabilidad: cercanía a la mediana del pool, o preferencia por pérdida ── */
+    /* ── rentabilidad: cercanía al ancla, o preferencia por pérdida ──
+       La política de pérdidas manda sobre el ancla: con `preferir` es una decisión explícita del
+       analista y no puede quedar por debajo de una preferencia de comparabilidad. */
     let fRent;
     if (cand.hasLoss) fRent = perdidaOp === 'preferir' ? 1 : 0.4;
     else if (perdidaOp === 'preferir') fRent = 0.4;
     else {
       const pli = cand.s ? (cand.op ?? 0) / cand.s : 0;
-      fRent = Math.max(0, 1 - Math.min(1, Math.abs(pli - medianaPool) / 0.5));
+      fRent = Math.max(0, 1 - Math.min(1, Math.abs(pli - anclaRent) / 0.5));
+    }
+
+    /* ── capital de trabajo: cuanto ajuste haria falta para poder compararla ── */
+    const intensidadCand = intensidadCapitalTrabajo(cand);
+    let fCapTrabajo = FACTOR_CAPITAL_TRABAJO_SIN_DATOS;
+    if (intensidadTP !== null && intensidadCand !== null) {
+      const brecha = Math.abs(intensidadCand - intensidadTP);
+      fCapTrabajo = Math.max(0, 1 - Math.min(1, brecha / INTENSIDAD_MAXIMA_TOLERADA));
     }
 
     /* Pesos dinámicos: con actividad detectada el nicho manda. */
     const hayAct = act.hayActividad;
-    const wPerfil = hayAct ? 0.20 : 0.35;
-    const wEspecialidad = hayAct ? 0.40 : 0.15;
-    const wGeo = hayAct ? 0.10 : 0.15;
-    const wTamano = hayAct ? 0.15 : 0.20;
-    const wRent = 0.15;
+    /* Los cinco pesos de siempre, REESCALADOS para dejarle sitio al capital de trabajo sin que
+       la suma pase de 1. Sin reescalar, agregar un factor subiria el puntaje de todas y el tope
+       de `Math.min(1, ...)` empezaria a aplanar a las mejores, que es como se pierde la
+       capacidad de ordenar justo en la cabeza de la lista. El reparto RELATIVO entre los cinco
+       no cambia, asi que el orden que producian entre ellos se conserva. */
+    const escala = 1 - PESO_CAPITAL_TRABAJO;
+    const wPerfil = (hayAct ? 0.20 : 0.35) * escala;
+    const wEspecialidad = (hayAct ? 0.40 : 0.15) * escala;
+    const wGeo = (hayAct ? 0.10 : 0.15) * escala;
+    const wTamano = (hayAct ? 0.15 : 0.20) * escala;
+    const wRent = 0.15 * escala;
 
     const score = Math.min(1,
       wPerfil * fPerfil + wEspecialidad * fEspecialidad + wGeo * fGeo +
-      wTamano * fTamano + wRent * fRent + (esContinuidad ? 0.08 : 0)
+      wTamano * fTamano + wRent * fRent + PESO_CAPITAL_TRABAJO * fCapTrabajo +
+      (esContinuidad ? 0.08 : 0)
     );
 
     const razones = [
@@ -811,10 +1053,21 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       perfilFuncional: perfil,
       perfilOrigen,
       score,
-      factores: { perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano, rentabilidad: fRent },
+      factores: {
+        perfil: fPerfil, especialidad: fEspecialidad, geografia: fGeo, tamano: fTamano,
+        rentabilidad: fRent, capitalTrabajo: fCapTrabajo,
+      },
+      /* La intensidad medida, para que la tabla la muestre al lado del factor: el numero explica
+         el factor, y sin el hay que creerselo. */
+      intensidadCapitalTrabajo: intensidadCand,
       razones,
       esContinuidad,
       gradoActividad: grado || '',
+      /* El motivo que escribió la curación. Sin él el grado es una etiqueta que hay que creer;
+         con él el analista puede validar el veredicto antes de generar los EEFF, que es para lo
+         que se pidió (2026-09-01). Vacío cuando nadie la curó: agregada a mano, sin
+         identificador, o curación no corrida. */
+      motivoActividad: (ia && ia.motivo) || '',
       esRelacionada,
       descartada,
       motivoRechazo,
@@ -889,22 +1142,55 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      capital de trabajo, que es el que decide el rango: replicar el motor OCDE aquí encadenaría
      los dos módulos. Para ordenar por semejanza el margen crudo es la medida correcta —es el
      perfil de la compañía, no el del escenario de ajuste— y basta. */
-  const margenDe = (cand) => pliOf({
+  const margenCrudoDe = (cand) => pliOf({
     s: num(cand.s), c: num(cand.c), op: num(cand.op),
     ar: num(cand.ar), inv: num(cand.inv), ap: num(cand.ap),
   }, metodoPli);
+  const margenDe = (cand) => {
+    if (!margenInyectado) return margenCrudoDe(cand);
+    /* Si la vara inyectada no puede medir esta candidata —le faltan partidas—, se cae al margen
+       crudo en vez de mandarla al final: quedarse sin medida no es lo mismo que estar lejos. */
+    const v = num(margenInyectado(cand));
+    return v === null ? margenCrudoDe(cand) : v;
+  };
+  /* Y DENTRO de las cercanas, primero las que están POR DEBAJO del contribuyente.
+
+     Reportado el 2026-09-01: «ya son muchas negativas, la idea es que cumpla así ponga pocas».
+     La cercanía a secas elige alrededor del margen del contribuyente, así que la mitad quedan
+     por encima y empujan el primer cuartil hacia arriba. Medido sobre las 37 negativas de un
+     cribado real, con el contribuyente en -4,595 % y muestra de 12:
+
+       cercanas                 hacían falta 7   P25  -4,940 %
+       cercanas POR DEBAJO      hacen falta  4   P25  -4,940 %
+       las más profundas        harían falta 4   P25 -16,460 %  ← rango indefendible
+
+     Por debajo cumple con CUATRO y deja el rango igual de sano. Y sigue siendo comparabilidad y
+     no resultado: «se eligieron comparables cuya rentabilidad es comparable o inferior a la de
+     la parte examinada», que es lo que corresponde cuando la parte examinada está en pérdida.
+
+     Es una PREFERENCIA, no un filtro: si no hay suficientes por debajo se completa con las más
+     cercanas de las que quedan. Y dentro de cada grupo manda la cercanía, no la profundidad —
+     tomar las más hondas daría el rango de -16 % de la tabla. */
   const ordenarNegativas = (lista) => {
     if (pliTP === null) return lista;
-    return [...lista].sort((a, b) => {
+    const porCercania = (a, b) => {
       const da = margenDe(a), db = margenDe(b);
       /* Las que no tienen margen calculable van al final: no se puede afirmar que se parezcan. */
       if (da === null && db === null) return 0;
       if (da === null) return 1;
       if (db === null) return -1;
       return Math.abs(da - pliTP) - Math.abs(db - pliTP);
-    });
+    };
+    const estaDebajo = (c) => {
+      const m = margenDe(c);
+      return m !== null && m <= pliTP;
+    };
+    return [
+      ...lista.filter(estaDebajo).sort(porCercania),
+      ...lista.filter((c) => !estaDebajo(c)).sort(porCercania),
+    ];
   };
-  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-al-contribuyente';
+  const criterioNegativas = pliTP === null ? 'puntaje' : 'cercania-por-debajo';
 
   const mismasNegativas = ordenarNegativas(mismas.filter(enPerdida));
   const mismasPositivas = mismas.filter((c) => !enPerdida(c));
@@ -938,7 +1224,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      porque retirar una ya aceptada hay que justificarlo»— y sigue en pie, con su aviso
      `continuidadExcedeObjetivo`. Lo que cambia es solo el caso en que el analista pide negativas
      de forma explícita. */
-  const topeContinuidad = objetivoNegativas > 0
+  /* Con el modo de prioridad NINGUNA de continuidad cede sitio a la cuota: es la otra mitad
+     de lo que el boton rescata. Sin el modo se conserva la decision del 2026-09-01 —la cuota
+     manda y se retiran las de menor puntaje, nombradas en `continuidadDesplazada`—. */
+  const topeContinuidad = (objetivoNegativas > 0 && !config.priorizarContinuidad)
     ? Math.max(negativasDeContinuidad, cupo - negativasAUsar)
     : continuidadOrdenada.length;
   const continuidadIncluidas = continuidadOrdenada.slice(0, topeContinuidad);
@@ -948,12 +1237,150 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const deNegativas = mismasNegativas.slice(0, Math.min(porCubrir, cupoRestante));
 
   const cupoParaPositivas = Math.max(0, cupoRestante - deNegativas.length);
-  const deMisma = mismasPositivas.slice(0, cupoParaPositivas);
+
+  /* ── ALTERNATIVAS DE SELECCION, NUMERADAS Y REPRODUCIBLES ──
+     Pedido el 2026-09-02: poder reejecutar y obtener comparables distintas.
+
+     NO es aleatorio, y la diferencia importa. La seleccion de este motor es determinista a
+     proposito: mismo cribado y misma configuracion dan siempre la misma muestra, y eso es lo
+     que permite responderle a un revisor «estas doce, porque son las de mayor puntaje segun
+     estos criterios» en vez de «salieron esas». Con azar el estudio deja de ser reproducible
+     —ni el propio despacho podria volver a obtener la muestra que radico— y reejecutar hasta
+     que cumpla es seleccion por resultado, que es justo lo que un revisor busca.
+
+     Asi que se explora sin perder eso: la alternativa N conserva las mejores por puntaje y
+     sustituye las ultimas N-1 por las siguientes de la reserva. La alternativa 3 de hoy es la
+     alternativa 3 de dentro de un anio, de modo que la muestra se reconstruye desde el cribado
+     mas el numero de alternativa, y el informe puede declarar cual se uso.
+
+     SOLO VARIAN LAS POSITIVAS. La cuota de negativas se elige por un criterio declarado —las
+     mas cercanas por debajo del contribuyente— y variar entre ellas contradiria ese criterio.
+     La continuidad tampoco cede: retirar una comparable aceptada el anio anterior hay que
+     justificarlo en el informe, y no puede pasar porque alguien pulso «otra combinacion».
+
+     El desplazamiento se topa en lo que la reserva permite de verdad: una alternativa que no
+     existe devolveria la misma muestra y el boton pareceria roto, asi que se satura en la
+     ultima y `alternativasDisponibles` dice cuantas hay. */
+  const sustituiblesPositivas = Math.min(
+    cupoParaPositivas,
+    Math.max(0, mismasPositivas.length - cupoParaPositivas),
+  );
+  const alternativasDisponibles = 1 + sustituiblesPositivas;
+  const alternativaPedida = Math.max(1, Math.trunc(Number(config.alternativa) || 1));
+  const alternativa = Math.min(alternativaPedida, alternativasDisponibles);
+  const sustituciones = alternativa - 1;
+
+  /* ── HACIA DONDE MUEVE LA ALTERNATIVA ──
+     Pedido el 2026-09-02: «cuando doy en otra combinacion me gustaria poder definirle si
+     queremos que los cuartiles suban o bajen», junto con «a veces le damos en otra combinacion
+     pero no se observan cambios a pesar de que si se ejecuta».
+
+     LAS DOS COSAS TIENEN LA MISMA CAUSA, y esta medida. Sustituyendo por ORDEN DE PUNTAJE, las
+     que salen son las de menor puntaje y las que entran son las siguientes de la reserva — y
+     ninguna de las dos tiene por que estar cerca del primer cuartil. Reproducido con 30
+     candidatas de la misma actividad, 10 de ellas de continuidad y N objetivo 12: las cinco
+     alternativas cambiaban la muestra (C15 salia, C13 entraba) y el P25 se quedaba CLAVADO en
+     3,650 %. La muestra se movia; el cuartil no. Eso es exactamente «se ejecuta y no se ve
+     nada».
+
+     Con direccion, la sustitucion se hace por MARGEN y no por puntaje:
+       · «bajar»: salen las de margen mas ALTO de las movibles y entran las mas BAJAS de la
+         reserva, asi que el rango entero —y con el el primer cuartil— baja;
+       · «subir»: al contrario.
+
+     Se mide con `margenDe`, la misma vara con la que se ordena la cuota de negativas: la
+     inyectada si el llamador la manda, y el margen crudo si no.
+
+     QUEDA DECLARADO en el resultado y en el Excel de soporte. Mover la muestra en una direccion
+     elegida es lo que un revisor mira con mas cuidado, asi que no puede quedar implicito: el
+     libro dice que combinacion se uso, hacia donde y cuantas comparables se sustituyeron. */
+  const direccion = config.direccionAlternativa === 'bajar' || config.direccionAlternativa === 'subir'
+    ? config.direccionAlternativa
+    : 'ninguna';
+
+  let deMisma;
+  if (sustituciones > 0 && direccion !== 'ninguna') {
+    /* Las candidatas de misma actividad ordenadas por margen. Las que entran salen de la
+       reserva —las que no caben en el cupo— y las que salen, del cupo. */
+    /* ── LA VARA DE LA DIRECCION ES LA QUE FORMA EL RANGO ──
+       Reportado el 2026-09-02: «en lugar de bajar subio». Y era mi defecto: la direccion
+       ordenaba por `margenDe` —el margen CRUDO, que es la vara de la BUSQUEDA— mientras el
+       rango que el analista ve en pantalla se forma con el AJUSTADO.
+
+       Y no es un matiz. Medido con dos comparables del MISMO margen crudo (5,000 %): la de poco
+       capital de trabajo termina en +9,597 % ajustado y la de mucho en -43,769 %. Ordenar por el
+       crudo no dice nada de donde caen en el rango que decide, asi que «bajar» podia elegir
+       justo las que lo subian.
+
+       Se usa la vara inyectada por el llamador —`margenQueDecide`, el ajustado— y solo si no
+       viene se cae al crudo. Cuando la muestra no trae capital de trabajo el ajuste degenera en
+       un desplazamiento casi constante (medido: amplitud 0,310 pt en once comparables), asi que
+       el ORDEN por ajustado coincide con el orden por crudo y la caida es inocua.
+
+       `margenDe` NO cambia: sigue siendo el crudo y sigue ordenando la cuota de negativas, que
+       es la BUSQUEDA y ahi manda el criterio del contador («primero buscamos las comparables con
+       el no ajustado»). Son dos varas con dos oficios y por eso no se comparten. */
+    const varaDelRango = typeof contexto.margenQueFormaElRango === 'function'
+      ? contexto.margenQueFormaElRango
+      : null;
+    const conMargen = (c) => {
+      const m = varaDelRango ? num(varaDelRango(c)) : margenDe(c);
+      const v = m === null ? margenDe(c) : m;
+      return v === null ? Number.POSITIVE_INFINITY : v;
+    };
+    const enCupo = mismasPositivas.slice(0, cupoParaPositivas);
+    const enReserva = mismasPositivas.slice(cupoParaPositivas);
+    const peorPrimero = direccion === 'bajar'
+      /* Para bajar el rango: fuera las de margen mas alto. */
+      ? [...enCupo].sort((a, b) => conMargen(b) - conMargen(a))
+      /* Para subirlo: fuera las de margen mas bajo. */
+      : [...enCupo].sort((a, b) => conMargen(a) - conMargen(b));
+    const mejorPrimero = direccion === 'bajar'
+      /* Y entran las mas bajas de la reserva. */
+      ? [...enReserva].sort((a, b) => conMargen(a) - conMargen(b))
+      : [...enReserva].sort((a, b) => conMargen(b) - conMargen(a));
+
+    const salen = new Set(peorPrimero.slice(0, sustituciones));
+    deMisma = [
+      ...enCupo.filter((c) => !salen.has(c)),
+      ...mejorPrimero.slice(0, sustituciones),
+    ];
+  } else if (sustituciones > 0) {
+    deMisma = [
+      ...mismasPositivas.slice(0, cupoParaPositivas - sustituciones),
+      ...mismasPositivas.slice(cupoParaPositivas, cupoParaPositivas + sustituciones),
+    ];
+  } else {
+    deMisma = mismasPositivas.slice(0, cupoParaPositivas);
+  }
   const faltan = Math.max(0, cupoParaPositivas - deMisma.length);
   const afinesPositivas = afines.filter((c) => !enPerdida(c));
   const deAmpliacion = afinesPositivas.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
 
-  const seleccionadas = [...continuidadIncluidas, ...deNegativas, ...deMisma, ...deAmpliacion];
+  /* ── POR QUE AQUI NO SE INYECTAN LAS DEL ANIO ANTERIOR QUE EL CRIBADO NO TRAE ──
+     Se construyo el 2026-09-02 a pedido explicito —«necesito que salgan las comparables del
+     anio pasado cuando le doy al boton sin importar que»— y se retiro el mismo dia, tambien a
+     pedido: «¿y a mi de que me sirve tener comparables sin datos? de nadaaaa».
+
+     Y es correcto. Una comparable que el cribado de este anio no devolvio NO TIENE CIFRAS de
+     este ejercicio, asi que la fila inyectada:
+
+       · no entra al cuartil —`analizarRangoAjustado` excluye el indicador nulo—, de modo que no
+         acerca el estudio al cumplimiento ni un punto;
+       · ensucia la tabla de trabajo con filas vacias;
+       · y llega al informe: el ANEXO B publica un «[PENDIENTE] Falta el estado financiero de X»
+         por cada una, siete en el caso reportado.
+
+     Lo que el analista necesitaba de esto no era la fila: era el MOTIVO. Y eso lo da
+     `conciliarConEstudioAnterior`, que clasifica cada comparable del anio pasado y dice por que
+     no esta —descartada por un filtro, en reserva, o fuera del cribado— sin ensuciar la muestra.
+
+     Para la que SI cotiza y falta solo porque el informe anterior la nombro por su nombre
+     comercial —«IFF» en vez de «International Flavors & Fragrances Inc.»— el camino es el
+     screening del paso 1, que la trae CON cifras. Una fila vacia no sustituye eso. */
+  const seleccionadas = [
+    ...continuidadIncluidas, ...deNegativas, ...deMisma, ...deAmpliacion,
+  ];
 
   /* MOTIVO ESCRITO PARA LA RESERVA (2026-08-20, a pedido del usuario).
 
@@ -998,7 +1425,13 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivoRechazo: MOTIVO_DESPLAZADA_POR_CUOTA,
       categoriaRechazo: 'rigor',
     })),
-    ...mismasPositivas.slice(deMisma.length).map(enReserva),
+    /* Por IDENTIDAD y no por «slice(deMisma.length)»: la alternativa rompe el supuesto de que
+       las seleccionadas son un prefijo de la lista ordenada. Con la alternativa 3, `deMisma`
+       tiene el mismo tamanio pero NO son las primeras, asi que cortar por longitud dejaba a dos
+       seleccionadas TAMBIEN en la reserva —contadas dos veces en el embudo, que entonces deja de
+       cuadrar contra el universo— y perdia de vista a las desplazadas, que es justo lo que el
+       informe tiene que poder nombrar. */
+    ...mismasPositivas.filter((c) => !deMisma.includes(c)).map(enReserva),
     ...mismasNegativas.slice(deNegativas.length).map(enReserva),
     ...afinesPositivas.slice(deAmpliacion.length).map(enReserva),
     ...afines.filter(enPerdida).map(enReserva),
@@ -1008,6 +1441,46 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
     evaluadas: evaluated.length,
     seleccionadas,
     rechazadas,
+    /* Cual de las combinaciones se uso y cuantas hay. Viaja en el resultado —y de ahi al
+       `selectionFunnel` que se persiste con el estudio— porque es lo que hace reproducible la
+       muestra: con el cribado y este numero se reconstruye exactamente la misma seleccion. */
+    alternativa,
+    alternativasDisponibles,
+    /* Hacia donde se pidio mover el rango, y con que vara se ordeno para moverlo: la que
+       forma el rango (el ajustado) si el llamador la inyecta, o el margen crudo si no. */
+    direccionAlternativa: direccion,
+    varaDeLaDireccion: typeof contexto.margenQueFormaElRango === 'function' ? 'la-que-decide' : 'margen-crudo',
+    /* ── POR QUE LA ALTERNATIVA NO MUEVE EL CUARTIL, CUANDO NO LO MUEVE ──
+       Reportado el 2026-09-02: «a veces le damos en otra combinacion pero no se observan cambios
+       a pesar de que si se ejecuta». La causa es que las de continuidad no se sustituyen —su
+       inclusion se sustento el anio anterior— asi que solo rotan las plazas que quedan. Con 10
+       de continuidad en una muestra de 12, la alternativa mueve 2 comparables de 12 y el primer
+       cuartil, que cae en la posicion 2,75, ni se entera.
+
+       Estos dos numeros permiten decirlo en la pantalla con evidencia en vez de dejar al
+       analista pulsando un boton que no hace nada visible. */
+    plazasQueRotan: cupoParaPositivas,
+    plazasFijasPorContinuidad: continuidadIncluidas.length,
+    /* Contra que se midio la cercania de rentabilidad. Se declara porque centrar la muestra en
+       la rentabilidad de la parte examinada es lo que un revisor mira mas de cerca: tiene que
+       quedar escrito en el soporte, no implicito en un puntaje. */
+    anclaRentabilidad,
+    /* ── LA DIMENSION QUE EXPLICA EL AJUSTE ──
+       Si el ajuste desplaza el rango diez puntos, el problema del estudio no es la muestra: es
+       que las comparables no se parecen al contribuyente en capital de trabajo. Estos numeros
+       permiten decirlo con evidencia en vez de sospecharlo. */
+    capitalTrabajo: (() => {
+      const conDatos = seleccionadas.filter((c) => intensidadCapitalTrabajo(c) !== null);
+      const media = conDatos.length
+        ? conDatos.reduce((a, c) => a + intensidadCapitalTrabajo(c), 0) / conDatos.length
+        : null;
+      return {
+        conDatos: conDatos.length,
+        total: seleccionadas.length,
+        intensidadMediaMuestra: media,
+        intensidadParteExaminada: intensidadTP,
+      };
+    })(),
     /* Conteo por etapa, calculado aquí y no en la UI: son categorías del motor y
        deducirlas del texto del motivo obligaba a mantener una expresión regular en
        el componente, que se desincronizaba en cuanto cambiaba una redacción. */
@@ -1083,9 +1556,39 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
       motivo: MOTIVO_DESPLAZADA_POR_CUOTA,
     })),
     continuidadDesplazadaPorCuota: continuidadDesplazadaLista.length,
+    /* ── EL RASTRO DEL MODO «PRIORIZAR CONTINUIDAD» ──
+       Cuantas comparables del anio anterior volvieron por el rescate y cuales NO pudieron
+       volver, con el motivo. Lo segundo importa mas: una comparable del estudio pasado que
+       desaparece en silencio se descubre al cotejar los dos informes, y para entonces hay que
+       explicarla sin saber por que se fue. */
+    priorizoContinuidad: Boolean(config.priorizarContinuidad),
+    /* Se conserva en cero: la inyeccion se retiro (ver la nota de `seleccionadas`) y el campo
+       sigue publicado para que la pantalla y el Excel de un estudio guardado con el valor
+       anterior no tengan que distinguir entre «cero» y «no existe». */
+    continuidadInyectadas: 0,
+    continuidadRescatadas: config.priorizarContinuidad
+      ? continuidadIncluidas.filter((c) => enPerdida(c)).length
+      : 0,
+    continuidadNoRescatada: (() => {
+      if (!config.priorizarContinuidad) return [];
+      /* Las que el estudio anterior aportaba y no estan en la muestra: se buscan entre las
+         rechazadas por filtro, que es lo unico que puede dejarlas fuera en este modo. */
+      const dentro = new Set(seleccionadas.map((c) => c.nameKey || nameKey(c.name || '')));
+      return rechazadas
+        .filter((c) => c.esContinuidad && c.categoriaRechazo === 'filtro'
+          && !dentro.has(c.nameKey || nameKey(c.name || '')))
+        .map((c) => ({
+          name: c.name || '(sin nombre)',
+          clave: c.motivoClave || '',
+          motivo: c.motivoRechazo || '',
+        }));
+    })(),
     /* Con qué criterio se eligieron las negativas de la cuota. El informe lo escribe: la
        selección de comparables es una decisión metodológica y su criterio se sustenta. */
     criterioNegativas,
+    /* Con qué vara se midió la cercanía: el margen crudo de la fuente, o la que inyectó el
+       llamador —el PLI ajustado cuando la conclusión se sostiene en el rango ajustado—. */
+    varaDeCercania: margenInyectado ? 'inyectada' : 'margen-crudo',
     medianaPool,
     conActividad: !!String(companyActivity || '').trim(),
     ventasParteExaminada: ventasTP,

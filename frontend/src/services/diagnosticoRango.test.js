@@ -11,7 +11,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   diagnosticarCumplimiento, confianzaDelIndicador, resumenDeLectura,
+  requisitoDeCribado, comparablesEnOPorDebajoDe, bandaParaCribado,
 } from './diagnosticoRango.js';
+import { analizarRango } from './rangoIntercuartil.js';
 
 /* Una comparable con el margen operacional que se le pida. `op` es UTILIDAD, que es el
    convenio del estudio: el diagnóstico lo traduce a gastos para el motor por su cuenta. */
@@ -52,9 +54,27 @@ test('cuando no cumple, dice a cuánto está del límite y cuánto sería el aju
 test('publica los dos rangos y cuál de ellos decide', () => {
   const d = diagnosticar();
   assert.ok(d.rangos.sinAjustar, 'el rango sin ajustar siempre está calculado');
-  assert.strictEqual(d.rangos.decide, 'sinAjustar', 'con useadj apagado decide el sin ajustar');
-  const conUseadj = diagnosticar({ useadj: true });
-  assert.strictEqual(conUseadj.rangos.decide, 'ajustado');
+  /* CUAL DECIDE, y la casilla `useadj` no interviene en ninguno de los dos casos:
+
+       · el AJUSTADO cuando la mayoria de la muestra trae capital de trabajo —«el MO sin ajuste
+         solo nos ayuda a escoger las comparables, pero como sabemos si cumple es con el rango
+         ajustado», 2026-09-02—;
+       · el SIN AJUSTAR cuando no lo trae, porque ahi cada ajuste se reduce a
+         «−ratio_contribuyente × factor», el mismo valor para todas: un desplazamiento constante
+         que sale del balance del contribuyente y no compara nada. Medido en el caso reportado:
+         de +4,401 a +4,711 pt en las once comparables, amplitud 0,310 pt.
+
+     Las comparables de este fixture no traen esas partidas, asi que aqui manda el crudo. */
+  assert.strictEqual(d.rangos.decide, 'sinAjustar',
+    'sin capital de trabajo en la muestra, el ajuste no puede concluir');
+  assert.strictEqual(diagnosticar({ useadj: true }).rangos.decide, 'sinAjustar',
+    'y la casilla no lo cambia: dejo de elegir el 2026-09-02');
+
+  /* Con capital de trabajo en la muestra, el ajustado recupera el mando. */
+  const conCapital = diagnosticar({}, {
+    comparables: POSITIVAS.map((c) => ({ ...c, ar: 120, inv: 90, ap: 40 })),
+  });
+  assert.strictEqual(conCapital.rangos.decide, 'ajustado');
 });
 
 test('cuando cumple no propone ninguna palanca', () => {
@@ -531,4 +551,438 @@ test('un margen bruto negativo MODERADO no se marca: pasa de verdad', () => {
     estudio: { ...ESTUDIO, t_c: 700, t_op: -45 }, comparables: muestra,
   });
   assert.deepEqual(d.costosImplausibles, []);
+});
+
+/* ══════════════════ QUÉ HAY QUE TRAER DEL CRIBADO PARA CUMPLIR ══════════════════
+
+   Pedido el 2026-09-02: «nos pasa que en otra compañía las comparables que selecciona no
+   alcanzan a estar por encima de este p25».
+
+   Medido sobre un cribado pobre —3 negativas, ninguna honda— NINGUNA palanca alcanza: la cuota
+   completa deja el P25 en 1,275 %, bajar la muestra a 10 lo deja en -0,375 %, y quitar las
+   cuatro positivas más altas en -1,525 %, contra un contribuyente en -4,595 %. Cuando eso pasa
+   el problema no es la selección sino EL CRIBADO, y el sistema tenía que dejar de decir «no
+   cumple» para decir qué hay que traer de Capital IQ.
+
+   NO SE SIMULA: SE CALCULA. Con QUARTILE.INC el primer cuartil de n valores ordenados cae en la
+   posición (n-1)/4, así que para que el P25 quede en o por debajo del margen del contribuyente
+   hacen falta ceil((n-1)/4) + 1 comparables en ese nivel o por debajo. La primera prueba valida
+   esa aritmética contra el motor de rango de verdad, tamaño por tamaño: si la fórmula se
+   desviara, el sistema mandaría a buscar un número equivocado de compañías.
+
+   Y EL REQUISITO NO ES «NEGATIVAS», ES «MARGEN <= EL DEL CONTRIBUYENTE». Con un contribuyente en
+   utilidad baja se cumple con comparables poco rentables y ninguna en pérdida; hablar de
+   pérdidas ahí mandaría a buscar lo que no hace falta. */
+
+const compReq = (margen, extra = {}) => ({
+  name: 'C', amb: 'Int', s: 10000, c: 8000, op: margen * 10000, ...extra,
+});
+const ESTUDIO_REQ = { t_s: 100000, t_c: 92000, t_op: -4595, pli: 'MO', cmode: 'all' };
+
+test('la aritmética del requisito coincide con el motor de rango, tamaño por tamaño', () => {
+  /* LA PRUEBA QUE SOSTIENE TODO LO DEMÁS. Para cada n se arma una muestra con exactamente el
+     número de comparables que la fórmula pide en el nivel del contribuyente, y se comprueba
+     contra `analizarRango` que el P25 quedó en ese nivel o por debajo; y con UNA MENOS, que no.
+     Si la fórmula pidiera de más, el sistema mandaría a buscar compañías innecesarias; si
+     pidiera de menos, el analista pagaría un cribado que sigue sin cumplir. */
+  const TP = -0.04595;
+  for (let n = 4; n <= 25; n += 1) {
+    const k = requisitoDeCribado({
+      estudio: ESTUDIO_REQ, tamanoMuestra: n, indicador: TP, universo: [],
+    }).necesita;
+
+    const conK = [
+      ...Array.from({ length: k }, () => compReq(TP)),
+      ...Array.from({ length: n - k }, (_, i) => compReq(0.02 + i * 0.01)),
+    ];
+    const rK = analizarRango({ ...ESTUDIO_REQ, comparables: conK });
+    assert.ok(rK.stats.p25 <= TP + 1e-12,
+      'n=' + n + ': con ' + k + ' en el nivel el P25 quedo en ' + rK.stats.p25);
+
+    const conMenos = [
+      ...Array.from({ length: k - 1 }, () => compReq(TP)),
+      ...Array.from({ length: n - k + 1 }, (_, i) => compReq(0.02 + i * 0.01)),
+    ];
+    const rM = analizarRango({ ...ESTUDIO_REQ, comparables: conMenos });
+    assert.ok(rM.stats.p25 > TP,
+      'n=' + n + ': con ' + (k - 1) + ' ya cumplia, asi que ' + k + ' pide una de mas');
+  }
+});
+
+test('cuenta cuántas hay en el cribado en o por debajo del margen, y la más cercana', () => {
+  const universo = [compReq(-0.06), compReq(-0.05), compReq(-0.038), compReq(-0.012), compReq(0.03)];
+  const r = requisitoDeCribado({
+    estudio: ESTUDIO_REQ, tamanoMuestra: 12, indicador: -0.04595, universo,
+  });
+  assert.strictEqual(r.necesita, 4, 'ceil(11/4) + 1');
+  assert.strictEqual(r.hay, 2, 'solo -0,06 y -0,05 estan en el nivel o por debajo');
+  assert.strictEqual(r.faltan, 2);
+  assert.ok(Math.abs(r.laMasCercana - (-0.038)) < 1e-9,
+    'la mas cercana POR ENCIMA del nivel: dice cuan lejos esta el cribado');
+});
+
+test('con el cribado suficiente no pide nada', () => {
+  const universo = Array.from({ length: 6 }, () => compReq(-0.06));
+  const r = requisitoDeCribado({
+    estudio: ESTUDIO_REQ, tamanoMuestra: 12, indicador: -0.04595, universo,
+  });
+  assert.strictEqual(r.faltan, 0);
+  assert.strictEqual(r.alcanza, true);
+});
+
+test('el requisito se expresa en margen, no en pérdidas: un contribuyente rentable no necesita negativas', () => {
+  /* Con el contribuyente en 2 % y el rango arrancando más arriba, lo que falta son comparables
+     POCO RENTABLES, no en pérdida. Decir «pérdidas» ahí mandaría a buscar lo que no hace falta
+     y a justificar una inclusión que el estudio no necesita. */
+  const rentable = { t_s: 100000, t_c: 90000, t_op: 2000, pli: 'MO', cmode: 'all' };
+  const universo = [compReq(0.005), compReq(0.012), compReq(0.018), compReq(0.04), compReq(0.06)];
+  const r = requisitoDeCribado({
+    estudio: rentable, tamanoMuestra: 12, indicador: 0.02, universo,
+  });
+  assert.strictEqual(r.hay, 3, 'las tres de margen bajo cuentan, y ninguna esta en perdida');
+  assert.strictEqual(r.exigeNegativas, false);
+  assert.strictEqual(r.faltan, 1);
+});
+
+test('sin indicador no inventa un requisito', () => {
+  assert.strictEqual(requisitoDeCribado({
+    estudio: ESTUDIO_REQ, tamanoMuestra: 12, indicador: null, universo: [],
+  }), null);
+});
+
+test('el margen se mide con la misma vara que decide el cumplimiento', () => {
+  /* Si aquí se contara con el margen crudo y el rango decidiera con el ajustado, el requisito
+     apuntaría a un nivel que no es el que se compara. Es el error que ya costó una cuota
+     equivocada en `cuotaMinimaQueCumple`. */
+  const conAjuste = { ...ESTUDIO_REQ, useadj: true, t_ar: 12000, t_inv: 21000, t_ap: 15000, prime: 12.5 };
+  const universo = [compReq(-0.06, { ar: 1200, inv: 2100, ap: 1500 })];
+  const cruda = comparablesEnOPorDebajoDe(universo, ESTUDIO_REQ, -0.04595);
+  const ajustada = comparablesEnOPorDebajoDe(universo, conAjuste, -0.04595);
+  assert.ok(Array.isArray(cruda) && Array.isArray(ajustada),
+    'cada una usa su propia vara, sin lanzar y devolviendo el mismo tipo');
+});
+
+/* ══════════════ El colchón: si cumple, por cuánto ══════════════ */
+
+const MUESTRA_QUE_CUMPLE = [
+  -0.06, -0.055, -0.05, -0.048, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09,
+].map((m) => compReq(m));
+
+test('el diagnóstico dice por cuánto cumple, no solo que cumple', () => {
+  /* Pedido en la misma conversación: saber si el estudio quedó al filo. Un cumplimiento por
+     tres milésimas se sostiene igual de mal que uno que no cumple, si una cifra se corrige. */
+  const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: MUESTRA_QUE_CUMPLE, universo: [] });
+  assert.strictEqual(d.cumple, true);
+  assert.ok(d.colchon > 0, 'los puntos que sobran entre el indicador y el P25');
+  assert.ok(Math.abs(d.colchon - (d.indicador - d.stats.p25)) < 1e-12);
+});
+
+test('cuando no cumple, el diagnóstico trae el requisito del cribado', () => {
+  const muestra = Array.from({ length: 12 }, (_, i) => compReq(0.02 + i * 0.005));
+  const universo = [compReq(-0.012), compReq(-0.025), compReq(-0.038)];
+  const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: muestra, universo });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.requisito, 'trae el requisito');
+  assert.strictEqual(d.requisito.necesita, 4);
+  assert.strictEqual(d.requisito.hay, 0, 'ninguna de las tres llega al nivel del contribuyente');
+  assert.strictEqual(d.requisito.faltan, 4);
+  assert.strictEqual(d.colchon, null, 'no hay colchon cuando no cumple');
+});
+
+test('cuando cumple no se calcula requisito: no hay nada que traer', () => {
+  const d = diagnosticarCumplimiento({ estudio: ESTUDIO_REQ, comparables: MUESTRA_QUE_CUMPLE, universo: [] });
+  assert.strictEqual(d.requisito, null);
+});
+
+/* ══════ LA TASA EN CERO ANULA EL AJUSTE, Y SE DICE ══════
+
+   El cumplimiento se concluye sobre el rango ajustado (2026-09-02), y ese ajuste se calcula con
+   la tasa del paso 3. Con la tasa en cero cada ajuste sale nulo, el rango ajustado COLAPSA al
+   crudo, y el veredicto pasa a salir del rango que la metodologia del despacho descarta.
+
+   ESTE HUECO CASI SE COLO. Al hacer que el ajustado decidiera siempre, el campo de la tasa
+   seguia escondido detras de la casilla `useadj`: con la casilla apagada no habia forma de
+   fijar la tasa, asi que el ajuste era nulo y el estudio seguia concluyendo con el rango crudo
+   —P25 1,364 %, CUMPLE— en vez del ajustado —P25 6,232 %, NO CUMPLE—. El cambio no habria
+   tenido ningun efecto en un estudio real. Se cerro sacando la tasa de detras de la casilla y
+   avisando cuando esta en cero. */
+
+const compTasa = (m) => ({
+  name: 'C', amb: 'Int', s: 10000, c: 8000, op: m * 10000,
+  ar: 300, inv: 400, ap: 900, ppe: 200,
+});
+const ESTUDIO_TASA = {
+  pli: 'MO', cmode: 'all',
+  t_s: 100000, t_c: 87796, t_op: 6204,
+  t_ar: 18000, t_inv: 26000, t_ap: 4000, t_ppe: 9000,
+};
+const MUESTRA_TASA = [0.04884, 0.00026, 0.09688, 0.10512, 0.03994, 0.10747,
+  0.01497, 0.00248, 0.15826, 0.12063, 0.0159, 0.00964].map(compTasa);
+
+test('el diagnóstico marca cuando la tasa en cero anula el ajuste', () => {
+  const sinTasa = diagnosticarCumplimiento({
+    estudio: ESTUDIO_TASA, comparables: MUESTRA_TASA, universo: [],
+  });
+  assert.strictEqual(sinTasa.ajusteAnulado, true,
+    'sin tasa el ajuste no puede ajustar nada y hay que decirlo donde se lee el veredicto');
+
+  const conTasa = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_TASA, prime: 12.5 }, comparables: MUESTRA_TASA, universo: [],
+  });
+  assert.strictEqual(conTasa.ajusteAnulado, false);
+});
+
+test('el rango ajustado decide con la casilla encendida Y apagada', () => {
+  /* La regla del 2026-09-02: «el MO sin ajuste solo nos ayuda a escoger las comparables, pero
+     cómo sabemos si cumple es con el rango ajustado». La casilla dejó de elegirlo. */
+  for (const useadj of [false, true]) {
+    const d = diagnosticarCumplimiento({
+      estudio: { ...ESTUDIO_TASA, useadj, prime: 12.5 },
+      comparables: MUESTRA_TASA,
+      universo: [],
+    });
+    assert.strictEqual(d.rangos.decide, 'ajustado', `con useadj=${useadj} debe decidir el ajustado`);
+    /* Y el veredicto sale de ese rango, no del otro: con estas comparables el ajustado deja
+       fuera al contribuyente y el crudo no. */
+    assert.strictEqual(d.cumple, false,
+      `con useadj=${useadj} el ajustado deja fuera al contribuyente`);
+  }
+});
+
+test('la palanca del ajuste dice dónde está el problema, sin prometer apagarlo', () => {
+  /* Antes proponía «active/desactive la casilla», que ahora sería proponer concluir con el
+     rango que la metodología descarta. Sigue reportándose porque señala la causa: si sin el
+     ajuste el contribuyente sí entra, lo que lo saca es el capital de trabajo. */
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_TASA, prime: 12.5 }, comparables: MUESTRA_TASA, universo: [],
+  });
+  const p = d.palancas.find((x) => x.clave === 'ajusteCapitalTrabajo');
+  if (p) {
+    assert.strictEqual(p.accionable, false, 'no es una palanca que el analista pueda accionar');
+    assert.doesNotMatch(p.texto, /casilla/, 'y no manda a tocar ninguna casilla');
+    assert.match(p.texto, /capital de trabajo/, 'sino a revisar lo que el ajuste compara');
+  }
+});
+
+/* ══════ LA BANDA PARA EL SCREENING, CON LOS NUMEROS REALES DEL CASO ══════
+
+   «¿No podemos hacer que busque según los rangos intercuartiles de x a x según el indicador del
+   contribuyente?» (2026-09-02). Capital IQ filtra por rangos, así que un techo suelto no se
+   puede pegar en el screening; y un techo sin piso traería las compañías más ruinosas del
+   universo, que arrastran el rango y se leen como una búsqueda dirigida al resultado. */
+
+test('la banda sale en margen SIN ajustar, descontando el desplazamiento del ajuste', () => {
+  /* Los numeros de la captura del 2026-09-02: ajustado 15,717 % - 22,250 %, el mismo sin
+     ajustar 3,314 % - 10,571 %, contribuyente 6,204 %. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.15717, med: 0.18975, p75: 0.22250 },
+    statsNoAjustado: { p25: 0.03314, med: 0.06, p75: 0.10571 },
+    indicador: 0.06204,
+  });
+  assert.ok(b);
+  assert.ok(Math.abs(b.desplazamiento - 0.12403) < 1e-9, 'el ajuste desplaza +12,403 pt');
+  assert.ok(Math.abs(b.techo - (-0.06199)) < 1e-9,
+    'el techo es el nivel del contribuyente MENOS el desplazamiento, no el nivel a secas');
+  assert.ok(Math.abs(b.amplitud - 0.07257) < 1e-9, 'el ancho es la dispersión que ya muestra el sector');
+  assert.ok(Math.abs(b.piso - (-0.13456)) < 1e-9);
+  assert.strictEqual(b.exigeNegativas, true, 'la banda cae en negativo: habrá que justificarlas');
+  assert.strictEqual(b.esEstimacion, true, 'y se dice que es una estimación');
+});
+
+test('sin desplazamiento la banda queda pegada al indicador del contribuyente', () => {
+  /* Comparables con capital de trabajo parecido: el ajuste no mueve nada y el techo es el nivel
+     del contribuyente, sin corrección. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.08, p75: 0.15 },
+    statsNoAjustado: { p25: 0.08, p75: 0.15 },
+    indicador: 0.06204,
+  });
+  assert.strictEqual(b.desplazamiento, 0);
+  assert.ok(Math.abs(b.techo - 0.06204) < 1e-12);
+  assert.strictEqual(b.exigeNegativas, false, 'y no hace falta buscar pérdidas');
+});
+
+test('sin uno de los dos rangos no se inventa una banda', () => {
+  assert.strictEqual(bandaParaCribado({ statsAjustado: { p25: 0.1, p75: 0.2 }, indicador: 0.05 }), null);
+  assert.strictEqual(bandaParaCribado({ statsNoAjustado: { p25: 0.1, p75: 0.2 }, indicador: 0.05 }), null);
+  assert.strictEqual(bandaParaCribado({
+    statsAjustado: { p25: 0.1, p75: 0.2 }, statsNoAjustado: { p25: 0.1, p75: 0.2 }, indicador: null,
+  }), null);
+});
+
+test('el diagnóstico trae la banda cuando no cumple, y no cuando cumple', () => {
+  const muestra = Array.from({ length: 12 }, (_, i) => ({
+    name: 'C' + i, amb: 'Int', s: 10000, c: 8000, op: (0.10 + i * 0.005) * 10000,
+    ar: 100, inv: 100, ap: 100,
+  }));
+  const estudio = {
+    pli: 'MO', cmode: 'all', prime: 12.5,
+    t_s: 100000, t_c: 93796, t_op: 6204, t_ar: 18000, t_inv: 26000, t_ap: 4000,
+  };
+  const d = diagnosticarCumplimiento({ estudio, comparables: muestra, universo: [] });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.banda, 'trae la banda para el screening');
+  assert.ok(d.banda.piso < d.banda.techo, 'y es una banda, no un punto');
+});
+
+/* ══════ CAPITAL DE TRABAJO IMPLAUSIBLE EN LA PARTE EXAMINADA ══════
+
+   Reportado el 2026-09-02 con el Excel de soporte real de un estudio (Fiberhome sucursal
+   Colombia). El estudio no cumplia y la causa no estaba en las comparables:
+
+     Ventas netas         85.880.665.653
+     Cuentas por cobrar  138.758.822.124  →  161,6 % de las ventas = 19,4 MESES de venta
+     Inventarios          39.062.476.887  →   45,5 %                =  5,5 meses
+     Cuentas por pagar     3.700.194.871  →    4,3 %
+
+   Una cartera de diecinueve meses no es capital de trabajo operativo. Y ese solo numero era el
+   que empujaba el primer cuartil del rango ajustado +10,8 puntos por encima del contribuyente:
+   el ajuste dice «estas comparables cargan mucha menos cartera que tu, asi que sus margenes hay
+   que subirlos», y con la cartera mal leida sube de mas.
+
+   EL MISMO BALANCE TRAIA UN ERROR PROBADO: «Total Activo corriente» y «Total Activos NO
+   corrientes» con la MISMA cifra (211.372.303.311), cuando «Total Activos» es la suma del
+   corriente mas PP&E. Es decir, la lectura del balance ya habia fallado al menos una vez, lo
+   que resta credibilidad al resto de sus partidas.
+
+   El sistema YA detecta el costo implausible de una comparable (`costosImplausiblesDe`, con
+   COSTO_SOBRE_INGRESO_MAXIMO = 2) y suprime las palancas que se apoyarian en el. No habia nada
+   equivalente para el capital de trabajo, ni de las comparables ni —sobre todo— del propio
+   contribuyente, que es el que entra en las cuatro formulas de ajuste.
+
+   NO DESCARTA NADA Y NO PIDE NADA: avisa donde se lee el veredicto, con la cifra en meses, que
+   es la unidad en que un contador reconoce el disparate. Hay negocios de proyecto con cartera
+   alta; lo que no puede pasar es que el estudio falle por una cifra que nadie miro. */
+
+const ESTUDIO_WC = {
+  pli: 'MO', cmode: 'all', prime: 7.37,
+  t_s: 85880665653, t_c: -74145859892, t_op: 5327751909,
+  t_ar: 138758822124, t_inv: 39062476887, t_ap: 3700194871, t_ppe: 285229663,
+};
+const MUESTRA_WC = [0.02, 0.04, 0.06, 0.09, 0.12].map((m, i) => ({
+  name: 'C' + i, amb: 'Int', s: 1000, c: 800, op: m * 1000,
+  ar: 200, inv: 150, ap: 90, ppe: 60,
+}));
+
+test('avisa cuando una partida del contribuyente no cabe en un año de ventas', () => {
+  const d = diagnosticarCumplimiento({
+    estudio: ESTUDIO_WC, comparables: MUESTRA_WC, universo: [],
+  });
+  assert.ok(d.capitalTrabajoImplausible, 'lo detecta');
+  const partidas = d.capitalTrabajoImplausible.partidas.map((p) => p.campo);
+  assert.ok(partidas.includes('t_ar'), 'la cartera de 19,4 meses');
+  assert.ok(!partidas.includes('t_inv'), 'el inventario de 5,5 meses NO se marca: es alto pero posible');
+  assert.ok(!partidas.includes('t_ap'), 'ni las cuentas por pagar de medio mes');
+});
+
+test('dice cuántos meses de venta representa, que es como se reconoce el disparate', () => {
+  const d = diagnosticarCumplimiento({
+    estudio: ESTUDIO_WC, comparables: MUESTRA_WC, universo: [],
+  });
+  const ar = d.capitalTrabajoImplausible.partidas.find((p) => p.campo === 't_ar');
+  assert.ok(Math.abs(ar.meses - 19.39) < 0.05, `19,4 meses, no ${ar.meses}`);
+  assert.ok(Math.abs(ar.ratio - 1.6157) < 0.001);
+});
+
+test('con capital de trabajo normal no avisa nada', () => {
+  /* La regla de estos avisos: uno que aparece siempre se deja de leer. */
+  const normal = {
+    ...ESTUDIO_WC,
+    t_ar: 85880665653 * 0.20, t_inv: 85880665653 * 0.15, t_ap: 85880665653 * 0.10,
+  };
+  const d = diagnosticarCumplimiento({ estudio: normal, comparables: MUESTRA_WC, universo: [] });
+  assert.strictEqual(d.capitalTrabajoImplausible, null);
+});
+
+test('sin ventas no se afirma nada sobre las partidas', () => {
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_WC, t_s: null }, comparables: MUESTRA_WC, universo: [],
+  });
+  assert.strictEqual(d.capitalTrabajoImplausible, null,
+    'sin la base no hay ratio que juzgar, y adivinarlo seria peor que callar');
+});
+
+test('detecta también la comparable con capital de trabajo imposible', () => {
+  /* Tongding, del caso real: inventario 30,8 veces sus ventas. Es un error de escala del
+     cribado, y en la muestra desplaza los cuartiles. */
+  const conMala = [
+    ...MUESTRA_WC,
+    { name: 'Tongding', amb: 'Int', s: 3413, c: 2786, op: 627, ar: 16274, inv: 105166, ap: 46618, ppe: 5854 },
+  ];
+  const d = diagnosticarCumplimiento({
+    estudio: { ...ESTUDIO_WC, t_ar: 85880665653 * 0.2, t_inv: 85880665653 * 0.15, t_ap: 85880665653 * 0.1 },
+    comparables: conMala,
+    universo: [],
+  });
+  assert.ok(d.comparablesConCapitalImplausible.length >= 1, 'la nombra');
+  assert.strictEqual(d.comparablesConCapitalImplausible[0].name, 'Tongding');
+});
+
+/* ══════ LA BANDA NO DESCUENTA UN DESPLAZAMIENTO QUE NO SE APLICA ══════
+
+   Reportado el 2026-09-02 con la tarjeta de un estudio real a la vista, y era una contradiccion
+   dentro de la misma tarjeta:
+
+     arriba  «Se concluye sobre el rango sin ajustar, y esta es la razon: solo 0 de 12
+              comparables traen cuentas por cobrar, inventarios o cuentas por pagar»
+     abajo   «Margen operacional entre -7,655 % y -2,847 %  ·  su nivel objetivo (1,509 %)
+              menos los 4,356 % que el ajuste de capital de trabajo le desplaza al primer
+              cuartil»
+
+   Si el rango que concluye es el CRUDO no hay desplazamiento que descontar: el nivel objetivo
+   del screening es el del contribuyente tal cual. Descontarlo mandaba a buscar companias cuatro
+   puntos y medio mas abajo de lo necesario, y de paso avisaba de que entrarian companias en
+   perdida —«habra que justificarlas»— cuando con 1,509 % de objetivo basta con companias poco
+   rentables. */
+
+test('cuando concluye el rango crudo, el techo es el nivel del contribuyente sin descontar nada', () => {
+  /* Las cifras exactas del caso: crudo 1,788 % - 6,596 %, ajustado con P25 en 6,145 %,
+     contribuyente 1,509 %. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.06145, p75: 0.10859 },
+    statsNoAjustado: { p25: 0.01788, p75: 0.06596 },
+    indicador: 0.01509,
+    ajusteDecide: false,
+  });
+  assert.strictEqual(b.desplazamiento, 0, 'no hay desplazamiento que descontar');
+  assert.ok(Math.abs(b.techo - 0.01509) < 1e-12, 'el techo es el nivel del contribuyente');
+  assert.ok(Math.abs(b.amplitud - 0.04808) < 1e-9, 'el ancho sigue siendo la dispersión del sector');
+  assert.ok(Math.abs(b.piso - (0.01509 - 0.04808)) < 1e-9);
+  assert.strictEqual(b.exigeNegativas, false,
+    'con el techo en positivo no hace falta buscar pérdidas ni justificarlas');
+});
+
+test('cuando concluye el ajustado, sí se descuenta el desplazamiento', () => {
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.06145, p75: 0.10859 },
+    statsNoAjustado: { p25: 0.01788, p75: 0.06596 },
+    indicador: 0.01509,
+    ajusteDecide: true,
+  });
+  assert.ok(Math.abs(b.desplazamiento - (0.06145 - 0.01788)) < 1e-12);
+  assert.ok(b.techo < 0, 'el techo baja a terreno negativo');
+  assert.strictEqual(b.exigeNegativas, true);
+});
+
+test('el diagnóstico pasa el estado real del ajuste, no lo asume', () => {
+  /* La muestra sin capital de trabajo: el crudo concluye, así que la banda no descuenta. */
+  const muestra = Array.from({ length: 12 }, (_, i) => ({
+    name: 'C' + i, amb: 'Int', s: 10000, c: 8000, op: (0.02 + i * 0.005) * 10000,
+    ar: 0, inv: 0, ap: 0, ppe: 0,
+  }));
+  const d = diagnosticarCumplimiento({
+    estudio: {
+      pli: 'MO', cmode: 'all', prime: 7.37,
+      t_s: 100000, t_c: 98000, t_op: 500,
+      t_ar: 40000, t_inv: 15000, t_ap: 2000, t_ppe: 300,
+    },
+    comparables: muestra,
+    universo: [],
+  });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.banda, 'trae banda');
+  assert.strictEqual(d.banda.desplazamiento, 0,
+    'con la muestra sin capital de trabajo concluye el crudo y no hay desplazamiento');
+  assert.ok(Math.abs(d.banda.techo - d.indicador) < 1e-12,
+    'el techo es el propio indicador del contribuyente');
 });

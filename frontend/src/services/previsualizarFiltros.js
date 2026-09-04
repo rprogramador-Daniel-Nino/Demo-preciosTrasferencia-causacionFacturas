@@ -35,6 +35,10 @@ import {
   MINIMO_COMPARABLES, CURACION_LOTE, CURACION_CONCURRENCIA, SEGUNDOS_POR_LOTE,
 } from './comparablesEngine.js';
 import { num, pliOf } from '../utils/calculations.js';
+/* El requisito se calcula en `diagnosticoRango.js` y NO se reimplementa aquí: la tarjeta del
+   paso 4 y este panel tienen que pedir el mismo número de comparables, o el analista amplía el
+   cribado con una cifra y luego la tarjeta le pide otra. */
+import { requisitoDeCribado } from './diagnosticoRango.js';
 
 /* Cuántos nombres se muestran de cada descarte. Cinco: la lista es para VERIFICAR que el filtro
    no se equivocó —el de holding se presume de la razón social y a veces acierta de más—, no
@@ -175,6 +179,20 @@ export function previsualizarFiltros(universo, config = {}, contexto = {}) {
      número es el techo. */
   const enPerdidaEnUniverso = lista.filter((c) => enPerdida(c)).length;
 
+  /* Cuántas comparables traen capital de trabajo. Decide si el ajuste puede comparar algo:
+     medido el 2026-09-01, con las comparables en cero el ajuste no es una corrección de
+     comparabilidad sino un corrimiento fijo calculado solo con el capital de trabajo del
+     contribuyente —+2,33 puntos sobre todas—, y si el estudio concluye sobre el rango ajustado
+     entonces la conclusión se apoya en un artefacto. */
+  const conCapitalTrabajo = lista.filter((c) => (
+    num(c.ar) || num(c.inv) || num(c.ap) || num(c.ppe)
+  )).length;
+  const capitalTrabajo = {
+    total: lista.length,
+    conDatos: conCapitalTrabajo,
+    sinDatos: lista.length - conCapitalTrabajo,
+  };
+
   const indicador = indicadorDelContribuyente(estudio);
   const negativasObjetivo = Math.max(0, Math.trunc(Number(config.negativasObjetivo) || 0));
 
@@ -195,9 +213,14 @@ export function previsualizarFiltros(universo, config = {}, contexto = {}) {
       valor: cfg.geo || config.geo || 'ninguna',
       texto: GEOGRAFIA[config.geo] || GEOGRAFIA.ninguna,
     },
+    capitalTrabajo,
     avisos: lista.length ? avisosDe({
       cfg, config, indicador, quedan, nObjetivo, enPerdidaEnUniverso,
-      negativasObjetivo, continuidad,
+      negativasObjetivo, continuidad, capitalTrabajo, estudio,
+      /* Las que pasaron los filtros: es el universo real del que puede salir la muestra,
+         no el cribado completo. Contar sobre el cribado crudo prometeria comparables que
+         los propios filtros de esta pantalla ya descartaron. */
+      candidatasValidas: validas,
     }) : [],
   };
 }
@@ -206,8 +229,34 @@ export function previsualizarFiltros(universo, config = {}, contexto = {}) {
    avisa de todo enseña a ignorar los avisos, que es lo que ya le pasó a los del generador. */
 function avisosDe({
   cfg, config, indicador, quedan, nObjetivo, enPerdidaEnUniverso, negativasObjetivo, continuidad,
+  capitalTrabajo, estudio, candidatasValidas = [],
 }) {
   const avisos = [];
+
+  /* 0. El ajuste de capital de trabajo sin capital de trabajo.
+        Va primero porque invalida la vara con la que el estudio concluye, y eso pesa más que
+        cualquier ajuste de la muestra. Solo aplica si el estudio de verdad concluye sobre el
+        rango ajustado: sin `useadj` no hay nada que distorsionar. */
+  /* Ya no depende de `useadj`: desde el 2026-09-02 el cumplimiento se decide SIEMPRE con el
+     rango ajustado, asi que el ajuste sin datos distorsiona la conclusion de todo estudio y no
+     solo la de los que tenian el interruptor encendido. */
+  if (capitalTrabajo && capitalTrabajo.total
+      && capitalTrabajo.conDatos < capitalTrabajo.total) {
+    const cuantas = capitalTrabajo.conDatos === 0
+      ? 'ninguna'
+      : `solo ${capitalTrabajo.conDatos} de ${capitalTrabajo.total}`;
+    avisos.push({
+      clave: 'ajusteSinCapitalTrabajo',
+      severidad: 'bloqueo',
+      texto: `El estudio concluye sobre el rango AJUSTADO por capital de trabajo, y ${cuantas} `
+        + 'de las candidatas del cribado trae esas partidas. Con las comparables en cero el '
+        + 'ajuste deja de comparar: se vuelve un corrimiento fijo calculado solo con el capital '
+        + 'de trabajo del contribuyente, que empuja todo el rango en la misma dirección y hace '
+        + 'más difícil cumplir sin que eso signifique nada. Vuelva a exportar el cribado de '
+        + 'Capital IQ con cuatro columnas más —Accounts Receivable, Inventory, Accounts Payable '
+        + 'y Net PP&E— o concluya sobre el rango sin ajustar.',
+    });
+  }
 
   /* 1. Incumplimiento DEMOSTRABLE, no probable.
         Toda comparable con utilidad >= 0 tiene indicador >= 0, luego el primer cuartil de una
@@ -280,6 +329,36 @@ function avisosDe({
       texto: 'Falta la justificación de admitir comparables en pérdida. El Excel de soporte la '
         + 'publica y es lo que sustenta la decisión: una pérdida no descalifica por sí sola '
         + '(Guías OCDE cap. III, §3.64-3.65), pero hay que decir por qué se analizó y se aceptó.',
+    });
+  }
+
+  /* 4-bis. QUÉ FALTA EN EL CRIBADO, con el número exacto.
+        Es el aviso que responde a «en otra compañía las comparables que selecciona no alcanzan
+        a estar por encima del P25» (2026-09-02). Los avisos anteriores dicen que el estudio no
+        va a cumplir; este dice QUÉ TRAER para que cumpla, y va aquí —antes de correr y de
+        pagar— porque después de la curación el remedio ya cuesta otra corrida.
+
+        No se muestra cuando las pérdidas están excluidas: ahí manda el aviso de imposibilidad,
+        que apunta a cambiar la política antes que a ampliar el cribado. */
+  const requisito = (indicador !== null && cfg.perdidaOp !== 'excluir')
+    ? requisitoDeCribado({
+      estudio, tamanoMuestra: nObjetivo, indicador, universo: candidatasValidas,
+    })
+    : null;
+  if (requisito && requisito.faltan > 0) {
+    avisos.push({
+      clave: 'cribadoInsuficiente',
+      severidad: 'aviso',
+      texto: `Con una muestra de ${nObjetivo} hacen falta ${requisito.necesita} comparable(s) `
+        + `con margen igual o menor a ${pct(indicador)} para que el primer cuartil no deje `
+        + `fuera al contribuyente, y este cribado tiene ${requisito.hay}`
+        + (requisito.laMasCercana !== null
+          ? ` (la más cercana, ${pct(requisito.laMasCercana)})` : '')
+        + `. Faltan ${requisito.faltan}. Ninguna configuración de esta pantalla lo resuelve: `
+        + 'agregue al screening del paso 1 un criterio de rentabilidad que las traiga'
+        + (requisito.exigeNegativas
+          ? ' —al ser un margen negativo entrarán compañías en pérdida, y habrá que justificarlas.'
+          : ' —no hace falta que estén en pérdida: basta con que sean poco rentables.'),
     });
   }
 

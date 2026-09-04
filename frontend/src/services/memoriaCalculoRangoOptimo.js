@@ -42,6 +42,10 @@ import {
    informe el correcto. Dos procedencias para el mismo dato, que es el defecto que el
    diseño de 2026-08-11 retira. */
 import { num } from '../utils/calculations.js';
+/* Para preguntarle CUAL escenario concluye. No se vuelve a razonar aqui: la regla vive en
+   `analizarRango` y este libro ya se contradijo con el informe dos veces el 2026-09-02 por tener
+   su propia copia del criterio. */
+import { analizarRango } from './rangoIntercuartil.js';
 import { traducirCriterio } from './criteriosScreeningEs.js';
 
 /* Métodos y su configuración de fórmulas. `base` indica sobre qué se calcula el
@@ -402,6 +406,7 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        justo la desviación que esta tarea viene a cerrar. */
     const porSabor = AJUSTES.map((aj) => analizarRangoAjustado(study, M.hoja, aj.clave));
 
+
     const celdas = [];
     celdas.push([cTxt(`${M.nombre} — fórmulas vivas y trazables`)]);
     // encabezado de columnas
@@ -668,12 +673,32 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
            única celda donde el libro y el informe difieren a propósito, y la prueba de
            paridad entre ambos la excluye por este motivo. */
         const st = porSabor[k].stats;
+        /* EL CRITERIO ES ESTAR POR ENCIMA DEL PRIMER CUARTIL, y la formula del libro tiene que
+           ser la misma que aplica el codigo (`cumpleElRango` en utils/calculations.js).
+           Antes exigia AND(>=P25, <=P75): con el indicador sobre el tercer cuartil la celda
+           decia «NO CUMPLE» mientras el informe —tras el cambio de criterio del 2026-09-02—
+           dice «CUMPLE», y el soporte contradeciria al documento que sustenta. El ajuste solo
+           procede cuando el contribuyente declaro MENOS utilidad de la que corresponde. */
         fila.push(cForT(conGuarda(L,
-          `IF(AND(${L}${filaTested}>=${L}${filaP25},`
-          + `${L}${filaTested}<=${L}${filaP75}),"CUMPLE","NO CUMPLE")`),
+          `IF(${L}${filaTested}>=${L}${filaP25},"CUMPLE","NO CUMPLE")`),
           st ? porSabor[k].cumple : ''));
       });
       celdas.push(fila);
+
+      /* ── POR QUE NO VA AQUI UNA FILA DE «ESCENARIO QUE GOBIERNA» ──
+         La fila de Conclusión concluye COLUMNA POR COLUMNA, y eso es correcto: cada escenario
+         dice lo que diría si fuera el que se reporta. Falta decir CUÁL gobierna, porque sin eso
+         leer la hoja invita a fijarse en la columna equivocada —reportado el 2026-09-02: «no
+         cumple en el ajustado, ¿ejecuto la IA de nuevo?», mirando CxC+CxP+Inv cuando el informe
+         concluía sobre «Sin ajuste», y no había nada que reejecutar—.
+
+         Pero NO puede ir como una fila más de esta hoja: la hoja Resumen referencia las celdas
+         de aquí por número de fila, así que insertar una las corre todas y el Resumen empieza a
+         apuntar a la celda de al lado. Lo detectó la prueba de que cada celda del Resumen trae
+         el mismo valor que la celda de método que referencia.
+
+         Va entonces en la hoja de DIAGNÓSTICO DE DATOS, que es única y no tiene referencias
+         entrantes, y ahí se dice además POR QUÉ gobierna ese —lo que una celda no cabría—. */
     }
 
     /* `porSabor` viaja a infoMetodos porque la hoja Resumen se arma después de este
@@ -702,6 +727,12 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
     const cd = (L) => `Datos!$${L}$${filaComp0}:$${L}$${filaCompN}`;
     const VEN = cd('B'), COS = cd('C'), GAS = cd('D');
     const CXC = cd('E'), INV = cd('F'), CXP = cd('G'), PPE = cd('H');
+
+    /* CUÁL escenario sostiene la conclusión. Esta hoja es única —no va por método— así que
+       se pide con el `pli` del estudio, que es el que el informe publica. Se le pregunta a
+       `analizarRango`, el único sitio donde se elige, en vez de recalcular la regla: este libro
+       ya se contradijo con el informe dos veces el 2026-09-02 por tener su propia copia. */
+    const rangoDelInforme = analizarRango(study);
 
     const dg = [];
     dg.push([cTxt('DIAGNÓSTICO DE DATOS — comprobaciones por fórmula sobre la hoja «Datos»')]);
@@ -806,8 +837,29 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
         ]);
       }
       dg.push([]);
-      dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
-      dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+      /* CUAL escenario reporta el informe DE VERDAD. Esto afirmaba «CxC+CxP+Inv» sin mirar
+         `useadj`, y con el ajuste apagado el informe concluye sobre el rango SIN ajustar: la
+         frase mandaba a un auditor a cotejar la conclusión contra una columna que el informe no
+         usó. Mismo defecto de fondo que el reportado el 2026-09-02 en la memoria del rango
+         —dar por hecho que el ajustado siempre manda— en otro sitio del mismo libro. */
+      /* CUAL escenario concluye DE VERDAD. Afirmarlo sin condicion mandaba a un auditor a
+         cotejar la conclusion del informe contra una columna que el informe no uso: cuando la
+         mayoria de las comparables no trae capital de trabajo, el informe concluye sobre el
+         rango SIN AJUSTAR y las columnas ajustadas son un desplazamiento constante. */
+      if (rangoDelInforme.ajusteTieneDatos) {
+        dg.push([cTxt('El escenario que reporta el informe es «CxC+CxP+Inv» (columna W de las hojas de método),')]);
+        dg.push([cTxt('que no incluye PP&E. Esta sección sirve para decidir si los escenarios con PP&E son presentables.')]);
+      } else {
+        dg.push([cTxt('El informe concluye sobre «Sin ajuste», NO sobre «CxC+CxP+Inv»: solo '
+          + `${rangoDelInforme.comparablesConCapitalTrabajo} de ${rangoDelInforme.comparablesEnElRango} `
+          + 'comparables traen cuentas por cobrar, inventarios o cuentas por pagar.')]);
+        dg.push([cTxt('Un ajuste por diferencias de capital de trabajo exige conocer el de las dos partes. '
+          + 'Con el de las comparables en cero, cada ajuste se reduce al mismo valor para todas —sale '
+          + 'del balance de la parte examinada— y desplaza el rango sin corregir ninguna diferencia '
+          + 'de comparabilidad, así que no puede sostener la conclusión.')]);
+        dg.push([cTxt('Las columnas ajustadas quedan calculadas y a la vista para dejar constancia de '
+          + 'la magnitud de ese desplazamiento.')]);
+      }
     }
 
     /* Las correcciones que la verificación de la ingesta aplicó a las cifras leídas del
@@ -923,38 +975,159 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
        analista: si no la escribió, se dice que falta, en vez de dejar el hueco en blanco.
        Solo se imprime si el estudio trae la política, para no llenar de filas vacías el libro
        de un estudio corrido antes de que esto existiera. */
-    const perdidas = seleccion.perdidas || null;
-    if (perdidas && perdidas.politica) {
-      sel.push([cTxt('POLÍTICA DE PÉRDIDAS OPERATIVAS (Guías OCDE cap. III, §3.64-3.65)')]);
+    /* ─── Combinación de selección usada ───
+       El motor es determinista: mismo cribado y misma configuración dan siempre la misma
+       muestra. Cuando el analista recorre combinaciones equivalentes —«Otra combinación» del
+       paso 2, que sustituye las de menor puntaje por las siguientes de la reserva— la muestra
+       cambia, y entonces el número de combinación es parte de lo que hace falta para
+       reconstruirla. Se publica solo si NO es la primera: en la 1 la muestra son directamente
+       las de mayor puntaje y una fila que lo dijera solo añadiría ruido al libro. */
+    const combinacion = seleccion.combinacion || null;
+    if (combinacion && combinacion.usada > 1) {
+      sel.push([cTxt('COMBINACIÓN DE SELECCIÓN')]);
       sel.push([
-        cTxt('Criterio aplicado'),
-        cTxt(perdidas.politica === 'excluir'
-          ? 'Excluir las comparables en pérdida'
-          : 'Admitir comparables en pérdida'),
+        cTxt('Combinación usada'),
+        cTxt(`${combinacion.usada} de ${combinacion.disponibles}`),
       ]);
-      if (perdidas.politica !== 'excluir') {
-        sel.push([cTxt('Comparables en pérdida solicitadas'), cNum(perdidas.objetivo, '0')]);
-        sel.push([cTxt('Comparables en pérdida en la muestra'), cNum(perdidas.incluidas, '0')]);
-        sel.push([
-          cTxt('Disponibles en el universo (misma actividad)'),
-          cNum(perdidas.disponibles, '0'),
-          cTxt(perdidas.incluidas < perdidas.objetivo
-            ? 'Entraron menos de las solicitadas: el universo no tenía más'
-            : ''),
-        ]);
-      } else if (perdidas.excluidasPorFiltro) {
-        sel.push([
-          cTxt('Comparables en pérdida excluidas por el filtro'),
-          cNum(perdidas.excluidasPorFiltro, '0'),
-        ]);
-      }
+      const dir = combinacion.direccion || 'ninguna';
       sel.push([
-        cTxt('Justificación'),
-        cTxt(String(perdidas.justificacion || '').trim()
-          || 'PENDIENTE — el estudio no registró la justificación de esta política.'),
+        cTxt('Criterio'),
+        cTxt('La selección es determinista y se ordena por puntaje de comparabilidad. '
+          + (dir === 'ninguna'
+            ? 'Esta combinación conserva las de mayor puntaje y sustituye las '
+              + `${combinacion.usada - 1} de menor puntaje por las siguientes de la reserva. `
+            : `Esta combinación sustituyó ${combinacion.usada - 1} comparable(s) `
+              + (dir === 'bajar'
+                ? 'de mayor margen por las de menor margen disponibles en la reserva, con lo '
+                  + 'que el rango intercuartílico se desplaza a la baja. '
+                : 'de menor margen por las de mayor margen disponibles en la reserva, con lo '
+                  + 'que el rango intercuartílico se desplaza al alza. ')
+              + 'Las sustituidas y las que entraron pertenecen todas a la actividad económica '
+              + 'confirmada por la curación, de modo que la sustitución opera entre candidatas '
+              + 'equivalentes en comparabilidad funcional. ')
+          + 'La misma combinación reproduce siempre la misma muestra a partir del mismo '
+          + 'cribado: la selección no es aleatoria.'),
       ]);
       sel.push([]);
     }
+
+    /* ─── Cómo se midió la cercanía de rentabilidad ───
+       El puntaje premia a la candidata cuya rentabilidad se aproxima a un nivel de referencia, y
+       cuál sea ese nivel es una decisión de comparabilidad: la rentabilidad de la parte examinada
+       (Art. 260-4 E.T., un nivel semejante suele reflejar funciones y riesgos semejantes) o el
+       comportamiento central del universo cribado. Se publica porque es lo que un revisor mira
+       más de cerca, y dejarlo implícito en un puntaje no sirve de sustento. */
+    /* ─── Prioridad a las comparables del estudio anterior ───
+       Conservar en la muestra una comparable que el filtro de pérdidas habría retirado se
+       sustenta en que su inclusión ya se justificó el año anterior y en que una pérdida no
+       descalifica por sí sola (Guías OCDE cap. III, §3.64-3.65). Y las que NO pudieron volver
+       se nombran con su motivo: es lo que permite explicar, frente al informe del año pasado,
+       por qué la muestra cambió. */
+    /* ─── Conciliación con el estudio del año anterior ───
+       Comparable por comparable, si siguió en la muestra y, cuando no, por qué. Va en el soporte
+       porque es la primera pregunta al comparar dos informes —por qué cambió la muestra— y
+       reconstruirla a mano contra el informe anterior es el trabajo que este bloque quita.
+
+       Se imprime solo si hay estudio anterior y algo que explicar: con la muestra reproducida
+       entera no hay nada que sustentar. */
+    const conc = seleccion.conciliacionAnterior || null;
+    if (conc && conc.porExplicar > 0) {
+      const ETIQUETA_ESTADO = {
+        descartadaPorFiltro: 'Descartada por un criterio de comparabilidad',
+        enReserva: 'Sigue siendo comparable; no integró la muestra por cupo',
+        fueraDelCribado: 'No figura en el cribado del ejercicio corriente',
+        enElCribadoSinEvaluar: 'Figura en el cribado, pendiente de evaluar',
+      };
+      sel.push([cTxt('CONCILIACIÓN CON LA MUESTRA DEL EJERCICIO ANTERIOR')]);
+      sel.push([
+        cTxt('Comparables del estudio anterior'),
+        cNum(conc.total, '0'),
+        cTxt(`${conc.enLaMuestra} integran también la muestra de este ejercicio`),
+      ]);
+      if (conc.posiblesCoincidencias) {
+        sel.push([
+          cTxt('Posibles coincidencias por revisar'),
+          cNum(conc.posiblesCoincidencias, '0'),
+          cTxt('Figuran en el cribado con la razón social escrita de otra forma: confírmelas '
+            + 'antes de sustentar que dejaron de ser comparables.'),
+        ]);
+      }
+      sel.push([cTxt('Razón social'), cTxt('Situación'), cTxt('Motivo')]);
+      conc.filas
+        .filter((f) => f.estado !== 'enLaMuestra')
+        .forEach((f) => {
+          sel.push([
+            cTxt(f.name || '(sin nombre)'),
+            cTxt(ETIQUETA_ESTADO[f.estado] || f.estado),
+            cTxt(f.motivo || ''),
+          ]);
+        });
+      sel.push([]);
+    }
+
+    const prioridad = seleccion.continuidadPrioritaria || null;
+    if (prioridad) {
+      sel.push([cTxt('PRIORIDAD A LAS COMPARABLES DEL ESTUDIO ANTERIOR')]);
+      sel.push([
+        cTxt('Criterio aplicado'),
+        cTxt('Se conservaron en la muestra las comparables aceptadas en el estudio del año '
+          + 'anterior que el filtro de pérdidas operativas habría retirado, y no se desplazó '
+          + 'ninguna por la cuota de comparables en pérdida. El sustento es que su inclusión ya '
+          + 'se justificó entonces y que una pérdida operativa no descalifica por sí sola '
+          + '(Guías OCDE cap. III, §3.64-3.65). NO se relajaron los criterios de independencia '
+          + '(Art. 260-4 E.T.) ni el de saldos no verosímiles: el primero es un hecho del '
+          + 'ejercicio corriente y el segundo afecta a las cifras que alimentan el ajuste de '
+          + 'capital de trabajo.'),
+      ]);
+      sel.push([cTxt('Conservadas por este criterio'), cNum(prioridad.rescatadas, '0')]);
+      if (prioridad.noRescatadas.length) {
+        sel.push([cTxt('Del estudio anterior que NO integran la muestra'),
+          cNum(prioridad.noRescatadas.length, '0')]);
+        prioridad.noRescatadas.forEach((c) => {
+          sel.push([cTxt('   ' + (c.name || '(sin nombre)')), cTxt(c.motivo || '')]);
+        });
+      }
+      sel.push([]);
+    }
+
+    if (seleccion.anclaRentabilidad) {
+      sel.push([cTxt('CRITERIO DE CERCANÍA DE RENTABILIDAD')]);
+      sel.push([
+        cTxt('Nivel de referencia'),
+        cTxt(seleccion.anclaRentabilidad === 'parteExaminada'
+          ? 'La rentabilidad de la parte examinada. El puntaje prefiere las candidatas cuyo '
+            + 'indicador se aproxima al suyo, por ser un factor de comparabilidad del artículo '
+            + '260-4 del Estatuto Tributario: un nivel de rentabilidad semejante suele reflejar '
+            + 'funciones desempeñadas y riesgos asumidos semejantes. Se mide sobre el margen sin '
+            + 'ajustar, que es la vara de la búsqueda; el cumplimiento se concluye sobre el rango '
+            + 'ajustado.'
+          : 'El comportamiento central del universo cribado (mediana del margen operacional). Se '
+            + 'usa cuando el estudio no tiene todavía el indicador de la parte examinada.'),
+      ]);
+      sel.push([]);
+    }
+
+    /* ─── POR QUE AQUI NO VA LA POLITICA DE PERDIDAS OPERATIVAS ───
+       Retirada el 2026-09-02 por decision del despacho, consultada con su contador: «quitalo,
+       tenga o no tenga negativas o de perdidas no deben salir en el excel, ya que no lo
+       necesitan».
+
+       Publicaba el criterio aplicado, los conteos de negativas —solicitadas, incluidas y
+       disponibles en el universo— y el texto de justificacion. Antes de retirarla se ajusto para
+       que solo saliera cuando decia algo, porque con la politica en «excluir» y cero descartadas
+       imprimia una fila «PENDIENTE» que inventaba una obligacion inexistente; el despacho pidio
+       retirarla completa.
+
+       LO QUE ESTO DEJA SIN PUBLICAR: `justificacionPerdida` no aparece en ningun otro
+       documento —se verifico: no llega al .docx del informe—, asi que el texto que el analista
+       escribe en el paso 2, o que le redacta el asistente de IA, queda guardado con el estudio
+       pero sin publicarse en ninguna parte. Si alguna vez hace falta sustentar la inclusion de
+       comparables en perdida ante un revisor (Guias OCDE cap. III, §3.64-3.65), el sitio natural
+       es el informe y no este libro.
+
+       Los datos SIGUEN VIAJANDO en `seleccion.perdidas`: solo se dejo de imprimir. Volver a
+       publicarlos es reponer este bloque, no recalcular nada. */
+
 
     /* Embudo con fórmulas COUNTIF sobre la columna «Motivo de rechazo», que es la
        que escribe el motor. Antes se contaba sobre las columnas de flags, que

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Sparkles, BarChart, Settings, Calculator, Upload, CheckCircle2, Loader2, FileCheck, FileText, AlertTriangle, FileWarning, Wand2, Plus, Trash2, ListTree } from 'lucide-react';
 import { pliOf, pctf, fmt } from '../utils/calculations';
-import { parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS } from '../services/eeffParser';
+import {
+  parseEeffWithGeminiOCR, CAMPOS_CON_FALLBACK_NOTAS, repararCifrasDelEstudio,
+} from '../services/eeffParser';
 import {
   verificarEeff, camposAplicables, camposParaLimpiar, candidataParaAprender, utilidadOperacionalDe,
 } from '../services/eeffVerificacion';
@@ -261,7 +263,12 @@ export default function IngestaCifras({ study, updateStudy }) {
         guardarVocabulario: guardarVocabularioEeff,
       }).catch((err) => console.warn('No se pudo actualizar el diccionario de vocabulario:', err));
 
-      Object.assign(updates, camposAplicables(verificacion.campos));
+      /* `repararCifrasDelEstudio` sobre lo que la lectura acaba de escribir: `valorDeRubro`
+         ya rescata el punto de miles colado como decimal, pero no la cifra cuyo último grupo
+         termina en cero —«51.500» llega como el número 51.5 y JavaScript ya perdió los
+         ceros—. Aquí sí se puede reconstruir, porque estas son las cifras en pesos del
+         contribuyente. Sin esto habría que recargar el estudio para verlas sanas. */
+      Object.assign(updates, repararCifrasDelEstudio(camposAplicables(verificacion.campos)));
 
       /* Cualquier campo que ESTA lectura dejó en null y trae una advertencia asociada se
          limpia explícitamente: camposAplicables() no lo propaga porque protege lo que el
@@ -759,6 +766,12 @@ export default function IngestaCifras({ study, updateStudy }) {
               <option value="MO">Margen Operacional (MO = Utilidad Op / Ventas)</option>
               <option value="MB">Margen Bruto (MB = Utilidad Bruta / Ventas)</option>
               <option value="Berry">Índice de Berry (Utilidad Bruta / Gastos Operativos)</option>
+              {/* NCP y Cost Plus, con las definiciones del modelo canónico de S&P Global Market
+                  Intelligence. Los dos estaban implementados en el motor de ajuste y publicados
+                  en el Excel de soporte desde antes; lo que faltaba era el indicador del
+                  contribuyente (`pliOf`), sin el cual no se podían elegir. */}
+              <option value="NCP">Costo Neto Adicionado (NCP = Utilidad Op. / Costos totales)</option>
+              <option value="CostPlus">Costo Adicionado (Cost Plus = Utilidad Bruta / Costo de ventas)</option>
             </select>
           </div>
 
@@ -775,7 +788,15 @@ export default function IngestaCifras({ study, updateStudy }) {
             </label>
           </div>
 
-          {study.useadj && (
+          {/* LA TASA VA SIEMPRE, no detras de la casilla.
+              Desde el 2026-09-02 el cumplimiento se decide con el rango ajustado en todo
+              estudio, y el ajuste se calcula con esta tasa: sin ella el factor vale cero, cada
+              ajuste sale nulo y el rango ajustado COLAPSA al crudo. Es decir, dejarla escondida
+              detras de la casilla reintroducia por otra puerta exactamente el defecto que el
+              cambio venia a cerrar: el estudio concluia con el rango sin ajustar sin decirlo.
+              Medido: con la casilla apagada y sin tasa, el P25 que decidia era 1,364 % —el
+              crudo— en vez de los 6,232 % del ajustado. */}
+          {(
             <div className="flex flex-col pt-2">
               <label className="text-xs font-semibold text-zinc-500 mb-1.5">Tasa de Interés Anual (Prime Rate %)</label>
               <input
