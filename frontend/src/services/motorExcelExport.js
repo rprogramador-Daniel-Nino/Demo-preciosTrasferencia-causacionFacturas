@@ -148,11 +148,25 @@ export function construirLibroSoporte(datos) {
       combinacion: {
         usada: embudo.alternativa || 1,
         disponibles: embudo.alternativasDisponibles || 1,
+        /* HACIA DONDE se movió la muestra. Se publica porque mover el rango en una dirección
+           elegida es lo que un revisor mira con más cuidado: tiene que constar, no quedar
+           implícito en una muestra que ya no es la de mayor puntaje. */
+        direccion: embudo.direccionAlternativa || 'ninguna',
       },
       /* Contra qué se midió la cercanía de rentabilidad de cada candidata. Es un criterio de
          comparabilidad (Art. 260-4) que hay que sustentar, y es lo que un revisor mira más de
          cerca: dejarlo implícito en un puntaje no sirve de sustento. */
       anclaRentabilidad: embudo.anclaRentabilidad || 'medianaPool',
+      /* El modo «priorizar continuidad» y su rastro. Se publica porque conservar en la muestra
+         una comparable que el filtro de pérdidas habría retirado es una decisión metodológica
+         que hay que sustentar, y porque una comparable del estudio anterior que NO pudo volver
+         tiene que quedar nombrada con su motivo: si desaparece en silencio, se descubre al
+         cotejar los dos informes y para entonces hay que explicarla sin saber por qué se fue. */
+      continuidadPrioritaria: embudo.priorizoContinuidad ? {
+        rescatadas: embudo.continuidadRescatadas || 0,
+        noRescatadas: Array.isArray(embudo.continuidadNoRescatada)
+          ? embudo.continuidadNoRescatada : [],
+      } : null,
     }
     : seleccion;
 

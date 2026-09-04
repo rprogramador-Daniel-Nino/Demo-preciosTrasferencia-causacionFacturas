@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Trash2, ShieldCheck, ShieldAlert, Sparkles, Filter, Calculator,
-  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock
+  Upload, FileText, CheckCircle, AlertTriangle, RefreshCw, Edit3, FileCheck, Layers, FileUp, BookOpen, FileSpreadsheet, Lightbulb, Search, ChevronDown, ChevronRight, Ban, Clock, ArrowDown, ArrowUp
 } from 'lucide-react';
 import { num, pliOf, ratios, pctf, fmt, adjustInfo } from '../utils/calculations';
-import { analizarRango } from '../services/rangoIntercuartil';
+import { analizarRango, margenQueDecide } from '../services/rangoIntercuartil';
 import { diagnosticarCumplimiento } from '../services/diagnosticoRango';
 import { previsualizarFiltros } from '../services/previsualizarFiltros';
 import { redactarJustificacionPerdidas } from '../services/justificacionPerdidasIA';
@@ -477,6 +477,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     if (ar === null && inv === null && ap === null) return null;
     return { ar: (ar || 0) / ventas, inv: (inv || 0) / ventas, ap: (ap || 0) / ventas };
   }, [study.t_s, study.t_ar, study.t_inv, study.t_ap]);
+
+  /* Si el rango que concluye es el ajustado. Lo decide `analizarRango` según la cobertura de
+     capital de trabajo de la muestra, y la dirección de la alternativa necesita saberlo para
+     ordenar con la vara correcta. Se mira sobre las comparables vigentes: la cobertura del
+     universo no cambia de una alternativa a otra. */
+  const decideElAjustado = useMemo(() => {
+    if (!Array.isArray(comparables) || comparables.length === 0) return true;
+    try {
+      return analizarRango({ ...study, comparables, cmode }).ajusteTieneDatos !== false;
+    } catch {
+      return true;
+    }
+  }, [study, comparables, cmode]);
 
   const auditoria = useMemo(() => {
     if (motorAuditoria) return motorAuditoria;
@@ -1053,7 +1066,19 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   };
 
   // Run Motor TOP-N Selection & AI Curation
-  const runEngineSelection = async (alternativaForzada = null) => {
+  /* «Priorizar continuidad»: vuelve a correr rescatando las comparables del año anterior que
+     el filtro de pérdidas dejó fuera, y evitando que la cuota de negativas las desplace. NO
+     rescata de independencia ni de saldos negativos —lo primero es un hecho de hoy (Art. 260-1)
+     y lo segundo es dato no verosímil que entra al ajuste de capital de trabajo—, y reporta
+     cuáles no pudo recuperar con el motivo de cada una. */
+  const priorizarContinuidad = () => {
+    setEngineConfig((prev) => ({ ...prev, priorizarContinuidad: true }));
+    runEngineSelection(null, null, true);
+  };
+
+  const runEngineSelection = async (
+    alternativaForzada = null, direccionForzada = null, priorizarForzado = null,
+  ) => {
     if (!universo || universo.length === 0) {
       alert("Por favor importe primero un archivo de Capital IQ en el Paso 1.");
       return;
@@ -1084,15 +1109,42 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
       /* La forzada manda sobre la del estado por lo dicho en `otraCombinacion`: en la misma
          vuelta el estado todavia trae la anterior. */
-      const configDeEstaCorrida = alternativaForzada === null
-        ? engineConfig
-        : { ...engineConfig, alternativa: alternativaForzada };
+      /* Las forzadas mandan sobre el estado: `useState` no es síncrono y correr en la misma
+         vuelta usaría los valores anteriores. */
+      const configDeEstaCorrida = {
+        ...engineConfig,
+        ...(alternativaForzada !== null ? { alternativa: alternativaForzada } : {}),
+        ...(direccionForzada ? { direccionAlternativa: direccionForzada } : {}),
+        ...(priorizarForzado !== null ? { priorizarContinuidad: priorizarForzado } : {}),
+      };
       const result = scoreCandidates(universo, configDeEstaCorrida, actividad, priorComps, {
         ventasParteExaminada: study.t_s,
         /* La vara de la comparabilidad en capital de trabajo. Medido el 2026-09-02: con
            comparables de intensidad parecida el ajuste pasa de desplazar el rango +4,45 pt a
            +0,24 pt, y el ajustado —el que decide— converge al crudo. */
         capitalTrabajoParteExaminada: capitalTrabajoTP,
+        /* ── LA VARA CON LA QUE LA DIRECCION ORDENA ──
+           Tiene que ser la que DE VERDAD forma el rango en pantalla, y eso son dos casos:
+
+             · el AJUSTADO cuando la mayoría de la muestra trae capital de trabajo;
+             · el CRUDO cuando no, porque ahí el ajuste degenera en un desplazamiento constante
+               y `analizarRango` concluye sobre el rango sin ajustar.
+
+           Sin esto la dirección movía el rango al revés —reportado el 2026-09-02: «en lugar de
+           bajar subió»—: ordenaba por el margen crudo mientras la pantalla mostraba el ajustado,
+           y dos comparables del MISMO margen crudo acaban en extremos opuestos del ajustado
+           según su capital de trabajo (medido: +9,597 % y −43,769 %).
+
+           `decideElAjustado` se toma de la corrida vigente: depende de la cobertura de capital de
+           trabajo del universo, que no cambia de una alternativa a otra. NO afecta a la cuota de
+           negativas, que sigue ordenándose con el margen crudo por criterio del contador. */
+        margenQueFormaElRango: (cand) => {
+          const m = decideElAjustado ? margenQueDecide(cand, study) : null;
+          if (m !== null && m !== undefined) return m;
+          const s = num(cand && cand.s);
+          const op = num(cand && cand.op);
+          return (s && op !== null) ? op / s : null;
+        },
         iaMatch: veredicto,
         /* El margen del contribuyente ordena la cuota de negativas: entran las de perfil de
            rentabilidad más parecido al suyo (decisión del usuario, 2026-09-01). Sin cifras
@@ -1171,6 +1223,17 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            Excel de soporte lo declara: centrar la muestra en la rentabilidad de la parte
            examinada es criterio de comparabilidad del Art. 260-4 y hay que sustentarlo. */
         anclaRentabilidad: result.anclaRentabilidad || 'medianaPool',
+        /* Hacia dónde se movió la muestra, y cuántas plazas podían moverse: lo primero se
+           declara en el soporte y lo segundo explica en pantalla por qué a veces no se ve
+           ningún cambio. */
+        direccionAlternativa: result.direccionAlternativa || 'ninguna',
+        plazasQueRotan: result.plazasQueRotan || 0,
+        plazasFijasPorContinuidad: result.plazasFijasPorContinuidad || 0,
+        /* El modo de prioridad y su rastro: cuántas del año anterior volvieron y cuáles no
+           pudieron, con el motivo. Va al estudio guardado porque el Excel lo declara. */
+        priorizoContinuidad: Boolean(result.priorizoContinuidad),
+        continuidadRescatadas: result.continuidadRescatadas || 0,
+        continuidadNoRescatada: result.continuidadNoRescatada || [],
       });
 
       /* Se dice de qué está compuesta la muestra: el número que el usuario pide es el
@@ -1281,12 +1344,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
      La alternativa se le pasa al motor por argumento en lugar de leerla del estado: `useState`
      no es sincrono y correr en la misma vuelta usaria la anterior, de modo que el boton
      mostraria siempre una combinacion de retraso. */
-  const otraCombinacion = () => {
+  /* `direccion` dice hacia dónde mover el rango: «bajar» saca las comparables de margen más
+     alto y mete las más bajas de la reserva, «subir» al contrario. Sin dirección se conserva la
+     sustitución por puntaje, que es el comportamiento anterior. */
+  const otraCombinacion = (direccion = 'ninguna') => {
     const total = (selectionFunnel && selectionFunnel.alternativasDisponibles) || 1;
     const actual = (selectionFunnel && selectionFunnel.alternativa) || 1;
-    const siguiente = total <= 1 ? 1 : (actual % total) + 1;
-    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente }));
-    runEngineSelection(siguiente);
+    /* Al cambiar de dirección se vuelve a empezar desde la 2: la alternativa 3 de «bajar» no es
+       la 3 de «subir», así que seguir el contador de la otra dirección saltaría pasos. */
+    const cambioDeDireccion = direccion !== ((selectionFunnel && selectionFunnel.direccionAlternativa) || 'ninguna');
+    const siguiente = total <= 1 ? 1 : (cambioDeDireccion ? Math.min(2, total) : (actual % total) + 1);
+    setEngineConfig((prev) => ({ ...prev, alternativa: siguiente, direccionAlternativa: direccion }));
+    runEngineSelection(siguiente, direccion);
   };
 
 
@@ -2749,6 +2818,108 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                   Otra combinación ({selectionFunnel.alternativa || 1}/{selectionFunnel.alternativasDisponibles})
                 </span>
               </button>
+            )}
+
+            {/* ── HACIA DONDE ──
+                Pedido el 2026-09-02: «me gustaría poder definirle si queremos que los cuartiles
+                suban o bajen». La sustitución por puntaje cambiaba la muestra sin mover el
+                cuartil —medido: oscilaba entre 9,05 % y 8,45 % sin ir a ninguna parte—, porque
+                las que salían y entraban no tenían por qué estar cerca del primer cuartil. Con
+                dirección la sustitución se hace por margen y el cuartil va monótono. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1
+              && selectionFunnel.plazasQueRotan > 0 && (
+              <div className="flex items-center gap-1">
+                {[['bajar', 'Bajar cuartiles', ArrowDown], ['subir', 'Subir cuartiles', ArrowUp]]
+                  .map(([dir, etq, Icono]) => (
+                    <button
+                      key={dir}
+                      onClick={() => otraCombinacion(dir)}
+                      disabled={loadingSelection || curando}
+                      className={'flex items-center gap-1 px-2.5 py-2.5 rounded-lg text-[11px] font-bold border transition-colors '
+                        + (loadingSelection || curando
+                          ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                          : (selectionFunnel.direccionAlternativa === dir
+                            ? 'border-[#0FA3A1] bg-[#0FA3A1]/10 text-[#0B7C7A] dark:text-[#0FA3A1] cursor-pointer'
+                            : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'))}
+                      title={dir === 'bajar'
+                        ? 'Sustituye las comparables de margen más alto por las más bajas de la reserva, de modo que el rango entero baja. Queda declarado en el Excel de soporte.'
+                        : 'Sustituye las de margen más bajo por las más altas de la reserva, de modo que el rango entero sube. Queda declarado en el Excel de soporte.'}
+                    >
+                      <Icono className="w-3.5 h-3.5" />
+                      <span>{etq}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            {/* ── PRIORIZAR CONTINUIDAD ──
+                Pedido el 2026-09-02, «frente a los recién creados botones de cuartiles». La
+                continuidad YA entraba antes de competir por puntaje y ya estaba exenta del
+                filtro de holding; lo que la seguía descartando eran el filtro de pérdidas
+                operativas y la cuota de negativas. De esos dos la rescata este botón.
+
+                Solo aparece cuando el estudio anterior aporta comparables: sin ellas no hay nada
+                que priorizar. */}
+            {estudioAnteriorInfo && Array.isArray(estudioAnteriorInfo.comparables)
+              && estudioAnteriorInfo.comparables.length > 0 && (
+              <button
+                onClick={priorizarContinuidad}
+                disabled={loadingSelection || curando}
+                className={'flex items-center gap-1 px-2.5 py-2.5 rounded-lg text-[11px] font-bold border transition-colors '
+                  + (loadingSelection || curando
+                    ? 'border-zinc-300 text-zinc-400 cursor-not-allowed'
+                    : (selectionFunnel && selectionFunnel.priorizoContinuidad
+                      ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 cursor-pointer'
+                      : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'))}
+                title={'Rescata las comparables del estudio anterior que el filtro de pérdidas '
+                  + 'operativas dejó fuera, y evita que la cuota de negativas las desplace. NO '
+                  + 'rescata de independencia (Art. 260-1) ni de saldos negativos: lo primero es '
+                  + 'un hecho de hoy y lo segundo es dato no verosímil. Queda declarado en el '
+                  + 'Excel de soporte.'}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Priorizar continuidad</span>
+              </button>
+            )}
+
+            {/* Lo que el modo rescató y lo que no pudo. Lo segundo importa más: una comparable
+                del estudio pasado que desaparece en silencio se descubre al cotejar los dos
+                informes, y para entonces hay que explicarla sin saber por qué se fue. */}
+            {selectionFunnel && selectionFunnel.priorizoContinuidad && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem]">
+                <span className="text-indigo-700 dark:text-indigo-400 font-bold">
+                  {selectionFunnel.continuidadRescatadas} rescatada(s)
+                </span>
+                {' del filtro de pérdidas. '}
+                {selectionFunnel.continuidadNoRescatada
+                  && selectionFunnel.continuidadNoRescatada.length > 0 ? (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      {selectionFunnel.continuidadNoRescatada.length} no pudo(ieron) volver:{' '}
+                      {selectionFunnel.continuidadNoRescatada.slice(0, 2)
+                        .map((c) => `${c.name} (${c.motivo})`).join('; ')}
+                      {selectionFunnel.continuidadNoRescatada.length > 2 ? '…' : ''}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-500">Todas las del estudio anterior están en la muestra.</span>
+                  )}
+              </span>
+            )}
+
+            {/* POR QUE A VECES NO SE VE NINGUN CAMBIO.
+                Reportado el 2026-09-02. Las de continuidad no se sustituyen —su inclusión se
+                sustentó el año anterior— así que solo rotan las plazas restantes. Con 10 de
+                continuidad en una muestra de 12 se mueven 2 comparables y el primer cuartil, que
+                cae en la posición 2,75, ni se entera. */}
+            {selectionFunnel && selectionFunnel.alternativasDisponibles > 1
+              && selectionFunnel.plazasFijasPorContinuidad > 0
+              && selectionFunnel.plazasQueRotan
+                <= selectionFunnel.plazasFijasPorContinuidad / 2 && (
+              <span className="text-[10.5px] text-amber-700 dark:text-amber-400 leading-snug max-w-[16rem]">
+                Solo <strong>{selectionFunnel.plazasQueRotan}</strong> plaza(s) pueden rotar:{' '}
+                {selectionFunnel.plazasFijasPorContinuidad} están fijas porque vienen del estudio
+                anterior. Con tan pocas, el cuartil casi no se mueve — para moverlo habría que
+                retirar comparables de continuidad, y eso se justifica en el informe.
+              </span>
             )}
 
           </div>

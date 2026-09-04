@@ -2918,3 +2918,320 @@ test('la política de pérdidas sigue mandando sobre el ancla', () => {
   assert.strictEqual(por.P.factores.rentabilidad, 1, 'la negativa se premia');
   assert.strictEqual(por.R.factores.rentabilidad, 0.4, 'y la rentable no, aunque coincida con el ancla');
 });
+
+/* ══════ LA DIRECCION DE LA ALTERNATIVA, Y POR QUE ANTES NO SE VEIA NADA ══════
+
+   Dos pedidos del 2026-09-02, con la misma causa detras: «cuando doy en otra combinacion me
+   gustaria poder definirle si queremos que los cuartiles suban o bajen» y «a veces le damos en
+   otra combinacion pero no se observan cambios a pesar de que si se ejecuta».
+
+   MEDIDO. Sustituyendo por ORDEN DE PUNTAJE —lo que hacia antes— las que salen son las de menor
+   puntaje y las que entran las siguientes de la reserva, y ninguna de las dos tiene por que
+   estar cerca del primer cuartil. Con 30 candidatas y N objetivo 12, el P25 oscilaba entre
+   9,05 % y 8,45 % sin ir a ninguna parte. Con direccion va monotono:
+
+     bajar   9,05 → 8,45 → 7,85 → 6,35 %
+     subir   9,05 → 9,65 → 10,25 → 10,85 %
+
+   Y LA OTRA MITAD DEL DEFECTO: con 10 de continuidad en una muestra de 12 no se mueve NADA en
+   ninguna direccion —P25 fijo en 3,65 %— porque las de continuidad no se sustituyen y las 2
+   plazas que rotan caen por encima del cuartil. Eso es lo que el analista veia como «se ejecuta
+   y no cambia nada», y ahora se reporta con numeros. */
+
+const cDir = (i) => ({
+  id: 'D' + i, name: 'Dir ' + i, nameKey: nameKey('Dir ' + i),
+  s: 10000, c: 8000, op: (0.02 + i * 0.006) * 10000, desc: 'x',
+});
+const UNIVERSO_DIR = Array.from({ length: 30 }, (_, i) => cDir(i));
+const CFG_DIR = {
+  nTarget: 12, minimo: 10, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+const p25De = (r) => {
+  const v = r.seleccionadas.map((c) => c.op / c.s).sort((a, b) => a - b);
+  const pos = (v.length - 1) * 0.25;
+  const lo = Math.floor(pos);
+  return v[lo] + (pos - lo) * (v[lo + 1] - v[lo]);
+};
+const corre = (dir, alt, previas = []) => scoreCandidates(
+  UNIVERSO_DIR, { ...CFG_DIR, alternativa: alt, direccionAlternativa: dir },
+  'x', previas, { ventasParteExaminada: 10000 },
+);
+
+test('con dirección «bajar» el primer cuartil baja en cada alternativa', () => {
+  const serie = [1, 2, 3, 4].map((a) => p25De(corre('bajar', a)));
+  serie.slice(1).forEach((v, i) => {
+    assert.ok(v < serie[i],
+      `la alternativa ${i + 2} debe bajar el P25: ${serie[i]} → ${v}`);
+  });
+});
+
+test('con dirección «subir» sube', () => {
+  const serie = [1, 2, 3, 4].map((a) => p25De(corre('subir', a)));
+  serie.slice(1).forEach((v, i) => {
+    assert.ok(v > serie[i], `la alternativa ${i + 2} debe subir el P25: ${serie[i]} → ${v}`);
+  });
+});
+
+test('sin dirección, el comportamiento de antes: cambia la muestra pero el cuartil no va a ninguna parte', () => {
+  /* Se conserva porque es el comportamiento por defecto y ninguna corrida anterior debe
+     cambiar de resultado por este añadido. */
+  const a1 = corre('ninguna', 1);
+  const a3 = corre('ninguna', 3);
+  assert.strictEqual(a1.direccionAlternativa, 'ninguna');
+  assert.ok(Math.abs(p25De(a1) - p25De(a3)) < 1e-12,
+    'la 1 y la 3 dan el mismo cuartil: la sustitución por puntaje oscila');
+});
+
+test('la dirección queda declarada en el resultado', () => {
+  assert.strictEqual(corre('bajar', 2).direccionAlternativa, 'bajar');
+  assert.strictEqual(corre('subir', 2).direccionAlternativa, 'subir');
+  /* Un valor que no existe no se inventa: cae a «ninguna». */
+  const raro = scoreCandidates(UNIVERSO_DIR, { ...CFG_DIR, alternativa: 2, direccionAlternativa: 'raro' },
+    'x', [], { ventasParteExaminada: 10000 });
+  assert.strictEqual(raro.direccionAlternativa, 'ninguna');
+});
+
+test('reporta cuántas plazas rotan y cuántas están fijas por continuidad', () => {
+  /* LA PRUEBA QUE EXPLICA EL «NO SE VE NADA». Con 10 de continuidad en una muestra de 12 solo
+     rotan 2 plazas, y el primer cuartil —que cae en la posición 2,75— queda entre las fijas. */
+  const previas = UNIVERSO_DIR.slice(0, 10).map((c) => ({ name: c.name }));
+  const r = corre('bajar', 2, previas);
+  assert.strictEqual(r.plazasFijasPorContinuidad, 10);
+  assert.strictEqual(r.plazasQueRotan, 2);
+
+  /* Y en efecto no se mueve, en ninguna dirección: es lo que hay que poder decirle al analista
+     en vez de dejarlo pulsando un botón. */
+  const base = p25De(corre('ninguna', 1, previas));
+  ['bajar', 'subir'].forEach((dir) => {
+    [2, 3, 4].forEach((a) => {
+      assert.ok(Math.abs(p25De(corre(dir, a, previas)) - base) < 1e-12,
+        `con la continuidad dominando, «${dir}» tampoco mueve el cuartil`);
+    });
+  });
+});
+
+test('la dirección NO retira comparables de continuidad', () => {
+  /* Retirar una comparable aceptada el año anterior hay que justificarlo en el informe: no
+     puede pasar porque alguien eligió una dirección. Es la misma regla que ya protege a la
+     continuidad frente a la alternativa y frente al puntaje. */
+  const previas = UNIVERSO_DIR.slice(0, 10).map((c) => ({ name: c.name }));
+  ['bajar', 'subir'].forEach((dir) => {
+    const r = corre(dir, 3, previas);
+    assert.strictEqual(r.seleccionadas.filter((c) => c.esContinuidad).length, 10,
+      `«${dir}» no puede retirar continuidad`);
+  });
+});
+
+/* ══════ LA DIRECCION ORDENA CON LA VARA QUE FORMA EL RANGO ══════
+
+   Reportado el 2026-09-02, con dos capturas: al pulsar «Bajar cuartiles» el rango paso de
+   1,788 % - 6,872 % a 7,559 % - 9,563 %. «En lugar de bajar subio».
+
+   Y era un defecto mio del mismo dia: la direccion ordenaba por `margenDe`, el margen CRUDO
+   —que es la vara de la BUSQUEDA— mientras el rango que el analista ve se forma con el AJUSTADO.
+
+   NO ES UN MATIZ. Medido con dos comparables del MISMO margen crudo (5,000 %): la de poco
+   capital de trabajo termina en +9,597 % ajustado y la de mucho en -43,769 %. El margen crudo no
+   dice nada de donde cae una comparable en el rango que decide, asi que «bajar» elegia a veces
+   justo las que lo subian. */
+
+/* `crudo` ES el margen operacional de la candidata: `op / s`. En la primera version de este
+   fixture `op` quedo fijo en 500 y lo que variaba era el costo, asi que las doce tenian el
+   MISMO margen y la direccion no tenia nada que ordenar — la prueba fallaba por el fixture y no
+   por la implementacion. */
+const cVara = (id, crudo, wc) => ({
+  id, name: 'V' + id, nameKey: nameKey('V' + id),
+  s: 10000, c: 10000 - crudo * 10000 - 500, op: crudo * 10000, desc: 'x', ...wc,
+});
+
+/* Doce candidatas con el margen crudo CRECIENTE y el capital de trabajo DECRECIENTE: asi el
+   orden por crudo y el orden por la vara inyectada quedan invertidos, que es el caso que
+   produjo el defecto. */
+const UNIVERSO_VARA = Array.from({ length: 12 }, (_, i) => cVara(i, 0.02 + i * 0.01, {
+  ar: 6000 - i * 450, inv: 2000 - i * 150, ap: 300, ppe: 50,
+}));
+const CFG_VARA = {
+  nTarget: 6, minimo: 1, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+/* Una vara inyectada que INVIERTE el orden del margen crudo, para comprobar que la direccion
+   sigue la vara y no el crudo. */
+const varaInvertida = (c) => -(c.op / c.s);
+
+test('la dirección sigue la vara inyectada, no el margen crudo', () => {
+  const corre = (dir, inyectar) => scoreCandidates(
+    UNIVERSO_VARA, { ...CFG_VARA, alternativa: 3, direccionAlternativa: dir }, 'x', [],
+    { ventasParteExaminada: 10000, ...(inyectar ? { margenQueFormaElRango: varaInvertida } : {}) },
+  );
+  const conVara = corre('bajar', true);
+  const sinVara = corre('bajar', false);
+  assert.strictEqual(conVara.varaDeLaDireccion, 'la-que-decide');
+  assert.strictEqual(sinVara.varaDeLaDireccion, 'margen-crudo');
+
+  /* Con la vara invertida, «bajar» tiene que elegir las OPUESTAS a las que elegiria por crudo:
+     si eligiera lo mismo, no estaria usando la vara. */
+  const idsCon = conVara.seleccionadas.map((c) => c.id).sort().join(',');
+  const idsSin = sinVara.seleccionadas.map((c) => c.id).sort().join(',');
+  assert.notStrictEqual(idsCon, idsSin,
+    'con la vara inyectada la dirección elige otra muestra que por margen crudo');
+});
+
+test('«bajar» baja el cuartil MEDIDO CON LA VARA QUE DECIDE', () => {
+  /* La prueba que cierra el defecto: el cuartil que tiene que bajar es el de la vara inyectada,
+     que es la que forma el rango en pantalla, no el del margen crudo. */
+  const p25Vara = (r) => {
+    const v = r.seleccionadas.map(varaInvertida).sort((a, b) => a - b);
+    const pos = (v.length - 1) * 0.25;
+    const lo = Math.floor(pos);
+    return v[lo] + (pos - lo) * (v[lo + 1] - v[lo]);
+  };
+  const serie = [1, 2, 3].map((a) => p25Vara(scoreCandidates(
+    UNIVERSO_VARA, { ...CFG_VARA, alternativa: a, direccionAlternativa: 'bajar' }, 'x', [],
+    { ventasParteExaminada: 10000, margenQueFormaElRango: varaInvertida },
+  )));
+  serie.slice(1).forEach((v, i) => {
+    assert.ok(v < serie[i],
+      `la alternativa ${i + 2} debe bajar el cuartil de la vara que decide: ${serie[i]} → ${v}`);
+  });
+});
+
+test('la cuota de negativas NO usa la vara de la dirección', () => {
+  /* Son dos varas con dos oficios: la BUSQUEDA va con el margen crudo —criterio del contador,
+     2026-09-01— y solo la DIRECCION usa la que forma el rango. Inyectar una no puede cambiar la
+     otra. */
+  const universo = [
+    ...Array.from({ length: 6 }, (_, i) => cVara('P' + i, 0.05 + i * 0.01, { ar: 100, inv: 100, ap: 50 })),
+    ...Array.from({ length: 3 }, (_, i) => ({
+      ...cVara('N' + i, 0.05, { ar: 100, inv: 100, ap: 50 }),
+      op: -300 - i * 100, hasLoss: true,
+    })),
+  ];
+  const cfg = { ...CFG_VARA, perdidaOp: 'incluir', nTarget: 5, negativasObjetivo: 2 };
+  const sin = scoreCandidates(universo, cfg, 'x', [], { ventasParteExaminada: 10000, pliParteExaminada: -0.02 });
+  const con = scoreCandidates(universo, cfg, 'x', [], {
+    ventasParteExaminada: 10000, pliParteExaminada: -0.02, margenQueFormaElRango: varaInvertida,
+  });
+  const negs = (r) => r.seleccionadas.filter((c) => c.op < 0).map((c) => c.id).sort().join(',');
+  assert.strictEqual(negs(con), negs(sin),
+    'las negativas de la cuota son las mismas: la vara de la dirección no las toca');
+});
+
+/* ══════ PRIORIZAR LAS COMPARABLES DE CONTINUIDAD ══════
+
+   Pedido el 2026-09-02: «quiero una funcion mas y es que le demos prioridad a las de
+   continuidad, haciendo la seleccion clicando un boton frente a los recien creados botones de
+   cuartiles».
+
+   LO QUE YA HABIA. La continuidad entra ANTES de competir por puntaje —no compite, se incluye—
+   y esta exenta del filtro de holding, porque ese se presume de la razon social. Pero SI la
+   descartaban tres cosas: el filtro de perdidas operativas, el de saldos negativos y la cuota
+   de negativas, que la desplazaba para hacer sitio.
+
+   LO QUE RESCATA EL BOTON, decidido con el usuario: las perdidas y la cuota.
+
+     · PERDIDAS. Su inclusion se sustento el anio anterior, y las Guias OCDE (cap. III,
+       §3.64-3.65) dicen que una perdida no descalifica por si sola siempre que se analice la
+       causa. Retirarla este anio por el mismo hecho que se acepto el pasado es lo que hay que
+       poder evitar.
+     · LA CUOTA. Al pedir negativas, `topeContinuidad` retiraba las de menor puntaje para hacer
+       sitio. Con el boton no retira ninguna.
+
+   LO QUE NO RESCATA, Y POR QUE:
+
+     · INDEPENDENCIA (Art. 260-1). No ser independiente es un hecho de HOY, no una presuncion:
+       una comparable que este anio tiene un accionista de control no es comparable, la aceptaran
+       o no el anio pasado.
+     · SALDOS NEGATIVOS. Cuentas por cobrar, por pagar o inventarios en negativo son dato no
+       verosimil, y esas cifras entran despues al ajuste de capital de trabajo: un saldo mal
+       leido contamina el rango que decide.
+
+   Y REPORTA lo que no pudo rescatar, con el motivo, porque el analista tiene que saber que
+   comparable del anio pasado no volvio y por que. */
+
+const cCont = (id, margen, extra = {}) => ({
+  id, name: 'Cont ' + id, nameKey: nameKey('Cont ' + id),
+  s: 10000, c: 8000, op: margen * 10000, desc: 'x', ...extra,
+});
+const CFG_CONT = {
+  nTarget: 6, minimo: 1, perdidaOp: 'excluir', holding: 'excluir',
+  saldoNegativo: 'excluir', control: 'excluir', umbralControl: 50, negativasObjetivo: 0,
+};
+
+test('sin el botón, una comparable de continuidad en pérdida se cae por el filtro', () => {
+  /* El comportamiento de siempre: no cambia por este añadido. */
+  const universo = [cCont('P', -0.05, { hasLoss: true }), ...[0.02, 0.04].map((m, i) => cCont(i, m))];
+  const previas = [{ name: 'Cont P' }];
+  const r = scoreCandidates(universo, CFG_CONT, 'x', previas, { ventasParteExaminada: 10000 });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'P'), 'se cae por el filtro de pérdidas');
+});
+
+test('con el botón, la de continuidad en pérdida vuelve a la muestra', () => {
+  const universo = [cCont('P', -0.05, { hasLoss: true }), ...[0.02, 0.04].map((m, i) => cCont(i, m))];
+  const previas = [{ name: 'Cont P' }];
+  const r = scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(r.seleccionadas.some((c) => c.id === 'P'),
+    'su inclusión se sustentó el año anterior (Guías OCDE cap. III §3.64-3.65)');
+  assert.strictEqual(r.continuidadRescatadas, 1, 'y se reporta cuántas rescató');
+});
+
+test('el botón NO rescata de independencia ni de saldos negativos', () => {
+  /* No ser independiente es un hecho de hoy; un saldo negativo es dato no verosímil y entra al
+     ajuste de capital de trabajo. Rescatar por ahí metería una comparable inválida. */
+  const universo = [
+    cCont('CTRL', 0.03, { maxpct: 80 }),
+    cCont('SALDO', 0.03, { hasNegativeBalance: true }),
+    ...[0.02, 0.04].map((m, i) => cCont(i, m)),
+  ];
+  const previas = [{ name: 'Cont CTRL' }, { name: 'Cont SALDO' }];
+  const r = scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'CTRL'), 'la controlada no vuelve');
+  assert.ok(!r.seleccionadas.some((c) => c.id === 'SALDO'), 'ni la de saldo negativo');
+});
+
+test('reporta las de continuidad que NO pudo rescatar, con su motivo', () => {
+  /* El analista tiene que saber qué comparable del año pasado no volvió y por qué: sin eso, una
+     desaparición silenciosa se descubre al cotejar el informe con el del año anterior. */
+  const universo = [
+    cCont('CTRL', 0.03, { maxpct: 80 }),
+    ...[0.02, 0.04].map((m, i) => cCont(i, m)),
+  ];
+  const previas = [{ name: 'Cont CTRL' }];
+  const r = scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(Array.isArray(r.continuidadNoRescatada));
+  assert.strictEqual(r.continuidadNoRescatada.length, 1);
+  assert.strictEqual(r.continuidadNoRescatada[0].name, 'Cont CTRL');
+  assert.strictEqual(r.continuidadNoRescatada[0].clave, 'controlada');
+  assert.match(r.continuidadNoRescatada[0].motivo, /260-1|accionista/i,
+    'el motivo nombra la norma, que es lo que el analista tiene que poder citar');
+});
+
+test('con el botón la cuota de negativas no desplaza continuidad', () => {
+  /* Reportado antes en la sesión: al pedir negativas, la cuota retiraba las de continuidad de
+     menor puntaje para hacer sitio. Con el botón no retira ninguna. */
+  const universo = [
+    ...Array.from({ length: 6 }, (_, i) => cCont('K' + i, 0.02 + i * 0.01)),
+    ...Array.from({ length: 3 }, (_, i) => cCont('N' + i, -0.04 - i * 0.01, { hasLoss: true })),
+  ];
+  const previas = Array.from({ length: 6 }, (_, i) => ({ name: 'Cont K' + i }));
+  const cfg = { ...CFG_CONT, nTarget: 6, perdidaOp: 'incluir', negativasObjetivo: 2 };
+
+  const sin = scoreCandidates(universo, cfg, 'x', previas, { ventasParteExaminada: 10000 });
+  const con = scoreCandidates(universo, { ...cfg, priorizarContinuidad: true }, 'x', previas,
+    { ventasParteExaminada: 10000 });
+  assert.ok(sin.continuidadDesplazadaPorCuota > 0, 'sin el botón la cuota sí desplaza');
+  assert.strictEqual(con.continuidadDesplazadaPorCuota, 0, 'con el botón no desplaza ninguna');
+  assert.strictEqual(con.seleccionadas.filter((c) => c.esContinuidad).length, 6);
+});
+
+test('el modo queda declarado en el resultado', () => {
+  const universo = [0.02, 0.04].map((m, i) => cCont(i, m));
+  assert.strictEqual(
+    scoreCandidates(universo, { ...CFG_CONT, priorizarContinuidad: true }, 'x', [], { ventasParteExaminada: 10000 })
+      .priorizoContinuidad, true);
+  assert.strictEqual(
+    scoreCandidates(universo, CFG_CONT, 'x', [], { ventasParteExaminada: 10000 }).priorizoContinuidad, false);
+});

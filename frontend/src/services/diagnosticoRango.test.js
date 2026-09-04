@@ -917,3 +917,72 @@ test('detecta también la comparable con capital de trabajo imposible', () => {
   assert.ok(d.comparablesConCapitalImplausible.length >= 1, 'la nombra');
   assert.strictEqual(d.comparablesConCapitalImplausible[0].name, 'Tongding');
 });
+
+/* ══════ LA BANDA NO DESCUENTA UN DESPLAZAMIENTO QUE NO SE APLICA ══════
+
+   Reportado el 2026-09-02 con la tarjeta de un estudio real a la vista, y era una contradiccion
+   dentro de la misma tarjeta:
+
+     arriba  «Se concluye sobre el rango sin ajustar, y esta es la razon: solo 0 de 12
+              comparables traen cuentas por cobrar, inventarios o cuentas por pagar»
+     abajo   «Margen operacional entre -7,655 % y -2,847 %  ·  su nivel objetivo (1,509 %)
+              menos los 4,356 % que el ajuste de capital de trabajo le desplaza al primer
+              cuartil»
+
+   Si el rango que concluye es el CRUDO no hay desplazamiento que descontar: el nivel objetivo
+   del screening es el del contribuyente tal cual. Descontarlo mandaba a buscar companias cuatro
+   puntos y medio mas abajo de lo necesario, y de paso avisaba de que entrarian companias en
+   perdida —«habra que justificarlas»— cuando con 1,509 % de objetivo basta con companias poco
+   rentables. */
+
+test('cuando concluye el rango crudo, el techo es el nivel del contribuyente sin descontar nada', () => {
+  /* Las cifras exactas del caso: crudo 1,788 % - 6,596 %, ajustado con P25 en 6,145 %,
+     contribuyente 1,509 %. */
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.06145, p75: 0.10859 },
+    statsNoAjustado: { p25: 0.01788, p75: 0.06596 },
+    indicador: 0.01509,
+    ajusteDecide: false,
+  });
+  assert.strictEqual(b.desplazamiento, 0, 'no hay desplazamiento que descontar');
+  assert.ok(Math.abs(b.techo - 0.01509) < 1e-12, 'el techo es el nivel del contribuyente');
+  assert.ok(Math.abs(b.amplitud - 0.04808) < 1e-9, 'el ancho sigue siendo la dispersión del sector');
+  assert.ok(Math.abs(b.piso - (0.01509 - 0.04808)) < 1e-9);
+  assert.strictEqual(b.exigeNegativas, false,
+    'con el techo en positivo no hace falta buscar pérdidas ni justificarlas');
+});
+
+test('cuando concluye el ajustado, sí se descuenta el desplazamiento', () => {
+  const b = bandaParaCribado({
+    statsAjustado: { p25: 0.06145, p75: 0.10859 },
+    statsNoAjustado: { p25: 0.01788, p75: 0.06596 },
+    indicador: 0.01509,
+    ajusteDecide: true,
+  });
+  assert.ok(Math.abs(b.desplazamiento - (0.06145 - 0.01788)) < 1e-12);
+  assert.ok(b.techo < 0, 'el techo baja a terreno negativo');
+  assert.strictEqual(b.exigeNegativas, true);
+});
+
+test('el diagnóstico pasa el estado real del ajuste, no lo asume', () => {
+  /* La muestra sin capital de trabajo: el crudo concluye, así que la banda no descuenta. */
+  const muestra = Array.from({ length: 12 }, (_, i) => ({
+    name: 'C' + i, amb: 'Int', s: 10000, c: 8000, op: (0.02 + i * 0.005) * 10000,
+    ar: 0, inv: 0, ap: 0, ppe: 0,
+  }));
+  const d = diagnosticarCumplimiento({
+    estudio: {
+      pli: 'MO', cmode: 'all', prime: 7.37,
+      t_s: 100000, t_c: 98000, t_op: 500,
+      t_ar: 40000, t_inv: 15000, t_ap: 2000, t_ppe: 300,
+    },
+    comparables: muestra,
+    universo: [],
+  });
+  assert.strictEqual(d.cumple, false);
+  assert.ok(d.banda, 'trae banda');
+  assert.strictEqual(d.banda.desplazamiento, 0,
+    'con la muestra sin capital de trabajo concluye el crudo y no hay desplazamiento');
+  assert.ok(Math.abs(d.banda.techo - d.indicador) < 1e-12,
+    'el techo es el propio indicador del contribuyente');
+});
