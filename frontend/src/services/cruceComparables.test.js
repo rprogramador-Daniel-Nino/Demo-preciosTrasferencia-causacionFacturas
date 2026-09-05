@@ -23,14 +23,24 @@ const COMPARABLES = [
 test('sin comparables el cruce lo dice, en vez de culpar al documento', () => {
   /* Pasó de verdad: una carga masiva de quince estados financieros devolvió quince
      rechazos con «no se parece a ninguna de las comparables del estudio», cuando lo que
-     faltaba era ejecutar la selección del paso 3. El mensaje mandaba a revisar las razones
-     sociales de los documentos, que estaban bien. */
+     faltaba era la muestra. El mensaje mandaba a revisar las razones sociales de los
+     documentos, que estaban bien.
+
+     LO QUE CAMBIÓ EL 2026-09-05: ese mensaje mandaba a «ejecutar la selección del paso 3», y
+     eso dejó de ser lo que hay que hacer — desde el 2026-09-04 un documento que no cruza con
+     ninguna fila CREA su comparable, así que con la tabla vacía no hay nada que ejecutar antes:
+     la carga masiva arma la muestra sola.
+
+     Lo que la prueba sigue fijando es lo que vino a cerrar: que el motivo señale la ausencia de
+     comparables y no la razón social del documento, que está bien. */
   const cruce = cruzar({ nombre: 'APPIRITS INC' }, '9 APPIRITS INC.pdf', []);
   assert.strictEqual(cruce.indice, -1);
   assert.strictEqual(cruce.modo, 'sin-comparables');
   const motivo = motivoCruce(cruce, { nombre: 'APPIRITS INC' }, '9 APPIRITS INC.pdf');
   assert.match(motivo, /todavía no tiene comparables/);
-  assert.match(motivo, /paso 3/, 'dice qué hacer, no solo qué falló');
+  assert.match(motivo, /carga masiva/, 'dice qué hacer, no solo qué falló');
+  assert.doesNotMatch(motivo, /paso 3/,
+    'y ya no manda a un paso que dejó de hacer falta');
   assert.doesNotMatch(motivo, /no se parece/,
     'el documento no tiene nada de malo: no hay contra qué cruzarlo');
 });
