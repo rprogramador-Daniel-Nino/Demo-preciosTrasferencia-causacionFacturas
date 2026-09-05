@@ -150,3 +150,53 @@ test('el ámbito decide si la comparable entra al rango bajo un filtro nacional'
   const incluidas = nacional.filas.filter((f) => f.amb === 'Nac');
   assert.strictEqual(incluidas.length, 2, 'solo las nacionales cuentan con ese ámbito');
 });
+
+/* ══════ LA GUARDA QUE DEJABA LA CARGA SIN EFECTO ══════
+
+   Reportado el 2026-09-05: «ya hice procesa los EEFF pero no carga información». Los documentos
+   se leían —el log mostraba el worker de pdf.js trabajando— y al terminar no aparecía nada.
+
+   La causa estaba en el pegamento del componente, no en el reparto: al agregar la creación de
+   comparables el día anterior actualicé `repartir` pero no las tres líneas que deciden qué pasa
+   después, y las tres seguían mirando SOLO los documentos que cruzaron con una fila ya existente:
+
+     if (conCifras.length || aRetirar.size) setComparables(filasFinales);   ← no se llamaba
+     const indicesAplicados = conCifras.map(…)                              ← no se publicaba
+     setResultadoCarga({ aplicadas: conCifras, … })                         ← no se informaba
+
+   Con la muestra vacía —que es justo el flujo manual— TODOS los documentos crean su comparable
+   y ninguno cae en `conCifras`, así que las tres se saltaban y el proceso terminaba en silencio.
+
+   Estas pruebas fijan la propiedad que faltaba: lo que `repartir` propone como `nuevas` tiene
+   que acabar contando como aplicado. No pueden ejecutar el componente, así que verifican la
+   condición sobre la que se equivocó la guarda. */
+
+test('con la muestra vacía, TODO el lote cae en «nuevas» y nada en «aplicadas»', () => {
+  /* La forma exacta del caso que dejaba la carga sin efecto. Si esta prueba cambia, la guarda
+     del componente tiene que revisarse con ella. */
+  const documentos = [
+    docDe('ALFA SA', 10000, 8000, 400),
+    docDe('BETA SA', 20000, 16000, 900),
+  ];
+  const { aplicadas, nuevas } = repartir(documentos, []);
+  assert.strictEqual(aplicadas.length, 0,
+    'ninguna cruza con una fila existente: no hay filas');
+  assert.strictEqual(nuevas.length, 2);
+  /* Y por eso una guarda que solo mire `aplicadas` deja la carga sin efecto: lo que hay que
+     mirar es la unión de las dos. */
+  assert.strictEqual(aplicadas.length + nuevas.length, documentos.length,
+    'todo documento útil termina en una de las dos listas');
+});
+
+test('con la muestra a medias, el lote se reparte entre las dos listas', () => {
+  /* El caso mixto: parte del cribado y parte incorporada a mano. Las dos clases tienen que
+     llegar a la muestra, y una guarda que mire solo una deja la mitad fuera. */
+  const existentes = [{ name: 'ALFA SA', s: 1, c: 1, op: 1 }];
+  const { aplicadas, nuevas } = repartir(
+    [docDe('ALFA SA', 10000, 8000, 400), docDe('NUEVA SA', 5000, 4000, 300)],
+    existentes,
+  );
+  assert.strictEqual(aplicadas.length, 1, 'ALFA cruza con la fila que ya estaba');
+  assert.strictEqual(nuevas.length, 1, 'NUEVA crea la suya');
+  assert.strictEqual(aplicadas.length + nuevas.length, 2);
+});

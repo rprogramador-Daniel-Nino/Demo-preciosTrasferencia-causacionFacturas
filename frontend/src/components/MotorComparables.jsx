@@ -2020,7 +2020,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* Imágenes por empresa, recortadas del PDF de lote al que pertenecen. Se hace
          después de aplicar las cifras: la clave (nameKey) sale del nombre ya asentado
          en la fila, que puede diferir en mayúsculas/acentos del que trajo el documento. */
-      conCifras.forEach((a) => {
+      /* Las creadas también: su estado financiero va al ANEXO B igual que el de cualquier otra,
+         y dejarlas fuera publicaba su cuadro vacío. Mismo descuido que el de `aplicadasTodas`
+         de más abajo, y el mismo día. */
+      [...conCifras, ...creadas].forEach((a) => {
         const clave = nameKey(filas[a.indice].name || '');
         const imagenesArchivo = a._imagenesDelArchivo || [];
         if (!imagenesArchivo.length) {
@@ -2058,11 +2061,25 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       }));
       const aRetirar = new Set(sinCifras.map((a) => a.indice));
       const { filas: filasFinales, nuevoIndice } = retirarFilas(filas, aRetirar);
-      const indicesAplicados = conCifras
+      /* ── LAS CREADAS CUENTAN COMO APLICADAS EN LOS TRES PUNTOS QUE SIGUEN ──
+         Reportado el 2026-09-05: «ya hice procesa los EEFF pero no carga información». Y era
+         mi defecto del día anterior: al agregar la creación de comparables actualicé el reparto
+         pero NO estas tres líneas, que seguían mirando solo `conCifras` —los documentos que
+         cruzaron con una fila que YA existía—.
+
+         Con una muestra vacía, que es justo el flujo manual, TODOS los documentos crean su
+         comparable y ninguno cae en `conCifras`. Resultado: `setComparables` no se llamaba, y
+         el analista veía el proceso terminar sin que apareciera nada.
+
+         `aplicadas` reúne ahora las dos clases. La distinción entre «cruzó con una fila que ya
+         estaba» y «creó la suya» sigue viva donde importa —en el motivo que se le muestra a
+         cada una— y desaparece aquí, donde solo estorbaba. */
+      const aplicadasTodas = [...conCifras, ...creadas];
+      const indicesAplicados = aplicadasTodas
         .map((a) => (nuevoIndice ? nuevoIndice.get(a.indice) : a.indice))
         .filter((i) => i != null);
 
-      if (conCifras.length || aRetirar.size) setComparables(filasFinales);
+      if (aplicadasTodas.length || aRetirar.size) setComparables(filasFinales);
       anotarRetiradasEnEmbudo(aRetirar.size);
       if (indicesAplicados.length) {
         await publicarEeff(filasFinales, indicesAplicados);
@@ -2071,7 +2088,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         );
       }
       setResultadoCarga({
-        aplicadas: conCifras,
+        aplicadas: aplicadasTodas,
         rechazadas: [...rechazadas, ...fallosLectura],
         /* Las retiradas de la muestra y las que no llegaron a crearse van juntas: para el
            analista es el mismo hecho. */
