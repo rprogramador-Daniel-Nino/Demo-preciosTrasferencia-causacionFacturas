@@ -165,7 +165,7 @@ function RequisitoDelCribado({ requisito, indicador, banda }) {
 
    Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
    informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
-function ActividadDeLaComparable({ row }) {
+function ActividadDeLaComparable({ row, alEditarActividad }) {
   const redactada = String(row.descActividad || '').trim();
   const cruda = String(row.desc || '').trim();
   const texto = redactada || cruda;
@@ -174,6 +174,28 @@ function ActividadDeLaComparable({ row }) {
        que trae la razón social y poco más, y el cribado de este año no la devolvió. Decirle
        «sin descripción en el cribado» no ayuda; lo que hace falta es el paso siguiente.
        Reportado el 2026-09-02: «¿y qué se espera que haga?». */
+    /* ── LA ACTIVIDAD SE PUEDE ESCRIBIR ──
+       Una comparable incorporada cargando su estado financiero no trae descripción del negocio:
+       el lector de EEFF devuelve razón social y cifras, no la actividad, y esa comparable no
+       pasó por Capital IQ, que es de donde sale `desc`.
+
+       Sin esto el ANEXO B publicaría «Descripción de actividad no disponible» por cada una —en
+       un estudio armado a mano, por TODAS— y el analista no tenía dónde escribirla: el único
+       camino era la redacción con IA, que necesita un texto de partida que aquí no existe.
+
+       Se ofrece el campo en lugar del aviso. Lo que se escribe va a `descActividad`, el mismo
+       campo que publica el informe, así que no hay una segunda ruta que mantener. */
+    if (row.creadaDesdeEeff) {
+      return (
+        <textarea
+          value={row.descActividad || ''}
+          onChange={(e) => alEditarActividad(e.target.value)}
+          rows={2}
+          placeholder="Escriba la actividad de esta comparable: el informe la publica en el ANEXO B."
+          className="w-full mt-1 text-[10.5px] leading-snug bg-transparent border border-dashed border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-600 dark:text-zinc-300 placeholder:text-zinc-400 focus:outline-none focus:border-[#0FA3A1] resize-y"
+        />
+      );
+    }
     if (row.sinCifrasDeEsteAnio) {
       return (
         <p className="text-[10.5px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
@@ -1969,7 +1991,15 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
           name: n.nombre,
           nameKey: nameKey(n.nombre),
           id: n.identificador || '',
-          amb: 'Int',
+          /* El ÁMBITO se deduce de la moneda del estado financiero, que es el único indicio de
+             procedencia que el documento trae —el lector devuelve `moneda` pero no país—. Un
+             estado en pesos colombianos es de una compañía colombiana; cualquier otra moneda se
+             toma como internacional, que es lo más frecuente en un cribado de Capital IQ.
+
+             Antes se fijaba «Int» siempre, así que una comparable colombiana incorporada a mano
+             quedaba mal clasificada y el filtro de ámbito la sacaba del rango sin decir por qué.
+             Es una deducción, no un dato: el selector de la fila la deja corregir. */
+          amb: /^COP$/i.test(String((n.datos && n.datos.moneda) || '').trim()) ? 'Nac' : 'Int',
           desc: '',
           /* Sin cifras todavía: se las pone `aplicarEeffEnFila` justo abajo, con las del
              documento y su verificación. */
@@ -4063,7 +4093,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         único que permite validar el veredicto en vez de creerle. */}
                     <InsigniaActividad row={row} />
                     {/* La actividad en sí, que es lo que el informe publica por comparable. */}
-                    <ActividadDeLaComparable row={row} />
+                    <ActividadDeLaComparable
+                      row={row}
+                      alEditarActividad={(v) => handleRowChange(idx, 'descActividad', v)}
+                    />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}
