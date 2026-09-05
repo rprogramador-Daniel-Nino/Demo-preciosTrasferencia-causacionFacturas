@@ -20,7 +20,7 @@ import {
 } from './services/firestoreRepo';
 import { separarEstudio, SELLO_ESTUDIO, sonDelEstudio, ROL_EDITOR } from './services/firestoreModelo';
 import {
-  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes,
+  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes, guardarAnexosDelEstudio,
   borrarRecursosDelEstudio,
 } from './services/plantillaStore';
 /* Lee las imágenes del ANEXO B y, de paso, recorta las que se guardaron como hoja
@@ -206,15 +206,21 @@ export default function App() {
       try {
         const { local } = separarEstudio(study);
         if (local.iaMatch) guardarJSON(claveIaMatch(activeStudyId), local.iaMatch);
-        /* Las páginas del PDF de estados financieros van a IndexedDB: son data URLs de
-           varias páginas y no caben ni en el documento de Firestore ni en localStorage. */
-        if (local.eeffImages && local.eeffImages.length) {
-          await guardarAnexoEeff(activeStudyId, local.eeffImages);
-        }
-        /* Mismo motivo, pero por comparable: ver CAMPOS_SOLO_LOCALES. */
-        if (local.eeffImagenesComparables && Object.keys(local.eeffImagenesComparables).length) {
-          await guardarAnexoBImagenes(activeStudyId, local.eeffImagenesComparables);
-        }
+        /* ── LOS ANEXOS NO PUEDEN TUMBAR EL GUARDADO DEL ESTUDIO ──
+           Las páginas de los estados financieros van a IndexedDB: son data URLs y no caben ni
+           en el documento de Firestore ni en localStorage (ANEXO A el del contribuyente,
+           ANEXO B uno por comparable; ver CAMPOS_SOLO_LOCALES).
+
+           Antes se escribían aquí con un `await` suelto, en el mismo bloque y ANTES de la nube.
+           Así, un fallo local se llevaba por delante `guardarEstudio` y se perdía el trabajo
+           entero, no solo el adjunto. El 2026-09-05 pasó en su peor forma —la escritura no
+           fallaba, se COLGABA (ver `onabort` en plantillaStore), de modo que el estudio dejó de
+           guardarse sin un solo error y la barra se quedó en «guardando…»—.
+
+           `guardarAnexosDelEstudio` no lanza nunca: intenta los dos, devuelve un aviso por cada
+           uno que no pudo, y el estudio sigue camino a Firestore. La jerarquía es esa: el
+           adjunto se vuelve a generar cargando otra vez el PDF; el estudio, no. */
+        const { avisos: avisosAnexos } = await guardarAnexosDelEstudio(activeStudyId, local);
         const resultado = estudioAjeno
           ? await guardarEstudioCompartido(estudioAjeno.duenoUid, activeStudyId, study, usuario)
           : await guardarEstudio(activeStudyId, study, usuario);
@@ -238,8 +244,16 @@ export default function App() {
         }
 
         await guardarCliente(study, usuario);
+        /* El estudio SÍ se guardó; lo que falló son los adjuntos de este navegador. Se dice,
+           porque el informe saldría sin esas páginas y eso hay que notarlo antes de generarlo,
+           pero no se marca el guardado como fallido: decir «no se pudo guardar» cuando el
+           trabajo está a salvo empuja a repetirlo o a no cerrar, que es el daño contrario. */
         setEstadoGuardado('guardado');
-        setAvisoSesion('');
+        setAvisoSesion(avisosAnexos.length
+          ? avisosAnexos.join(' · ') + ' El estudio sí quedó guardado en la nube; lo que falta '
+            + 'son las páginas que se adjuntan al informe. Vuelva a cargar esos PDF, o libere '
+            + 'espacio del sitio en el navegador.'
+          : '');
         setIndice(prev => prev.map(e => e.id === activeStudyId
           ? { ...e, ent: study.ent || e.ent, nit: study.nit || e.nit, anio: study.anio || e.anio, updated: Date.now() }
           : e));

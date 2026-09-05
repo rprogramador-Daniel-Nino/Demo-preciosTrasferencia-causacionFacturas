@@ -4,7 +4,7 @@ import {
   hashPlantilla, claveMarcado, claveHuecos, claveDocx, claveDocxMarcado,
   guardarRecursos, guardarAnexoEeff, guardarAnexoBImagenes, guardarVinculo, guardarPlantilla,
   leerRecursos, leerAnexoEeff, leerAnexoBImagenes, leerVinculo, leerPlantilla, borrarRecursosDelEstudio,
-  guardarMarcado, leerMarcado, guardarHuecos, leerHuecos,
+  guardarMarcado, leerMarcado, guardarHuecos, leerHuecos, guardarAnexosDelEstudio,
 } from './plantillaStore.js';
 
 /* IndexedDB no existe en node: se simula el mínimo que usa el módulo —abrir, una
@@ -12,7 +12,7 @@ import {
    `setImmediate` para respetar el orden real: el código asigna `oncomplete` después de
    pedir la operación. `fallarEn` permite comprobar que un borrado caído no impide los
    demás. */
-function conIndexedDBSimulado(fn, { fallarEn = null } = {}) {
+function conIndexedDBSimulado(fn, { fallarEn = null, abortarEn = null, abortarConError = true } = {}) {
   const almacenes = { plantillas: new Map(), recursos: new Map(), anexos: new Map() };
   const previo = global.indexedDB;
 
@@ -32,7 +32,18 @@ function conIndexedDBSimulado(fn, { fallarEn = null } = {}) {
               }),
             };
             setImmediate(() => {
-              if (fallarEn === nombre) {
+              if (abortarEn === nombre) {
+                /* Una transaccion ABORTADA dispara `abort`, no `error`: es lo que hace el
+                   navegador al quedarse sin cuota al confirmar la escritura —ninguna peticion
+                   falla, se aborta la transaccion entera—.
+
+                   Los dos abortos reales: con `tx.error` (un DOMException, el caso de cuota) y
+                   sin el (un `tx.abort()` explicito, o el cierre de la conexion). El segundo es
+                   el que obliga a tener un motivo propio: sin el, se rechazaria con `undefined`
+                   y el fallo volveria a ser mudo. */
+                if (abortarConError) tx.error = new Error('QuotaExceededError simulado');
+                if (tx.onabort) tx.onabort();
+              } else if (fallarEn === nombre) {
                 tx.error = new Error('fallo simulado en ' + nombre);
                 if (tx.onerror) tx.onerror();
               } else if (tx.oncomplete) tx.oncomplete();
@@ -51,6 +62,104 @@ function conIndexedDBSimulado(fn, { fallarEn = null } = {}) {
     if (previo) global.indexedDB = previo; else delete global.indexedDB;
   });
 }
+
+/* Una promesa que no se resuelve NI se rechaza no falla: cuelga. Sin este tope la prueba se
+   quedaria esperando hasta que el corredor la mate, y el motivo no se distinguiria de una
+   prueba lenta. Asi el fallo dice lo que es. */
+function conTope(promesa, ms = 2000) {
+  let temporizador;
+  return Promise.race([
+    promesa.finally(() => clearTimeout(temporizador)),
+    new Promise((_, rej) => {
+      temporizador = setTimeout(() => rej(new Error('COLGADA: la promesa no se resolvio ni se rechazo')), ms);
+    }),
+  ]);
+}
+
+test('una transaccion ABORTADA rechaza; antes dejaba la promesa colgada para siempre', async () => {
+  /* EL DEFECTO, reportado el 2026-09-05: «las elimino pero al recargar persisten», y a la vez
+     las comparables nuevas no sobrevivian a la recarga. Dos sintomas opuestos y una sola causa.
+
+     `operar` manejaba `oncomplete` y `onerror` y NO `onabort`. Una transaccion que se aborta
+     —el caso tipico es quedarse sin cuota al confirmar, justo lo que pasa al guardar las
+     paginas rasterizadas de diez estados financieros— dispara `abort` y ningun `error`, asi
+     que la promesa no se resolvia ni se rechazaba NUNCA.
+
+     Y esa promesa esta en el camino del autoguardado ANTES de Firestore: `await
+     guardarAnexoBImagenes(...)` se colgaba, `guardarEstudio` no llegaba a ejecutarse, y el
+     estudio dejaba de guardarse entero sin un solo error. La barra se quedaba en «guardando…».
+
+     Por eso los dos sintomas: al recargar se lee de Firestore la version anterior, donde la
+     comparable borrada sigue estando y la nueva nunca llego. */
+  await conIndexedDBSimulado(async () => {
+    /* Con `tx.error` manda el error del navegador: dice mas que cualquier texto propio, porque
+       nombra la causa real (QuotaExceededError). Lo que se fija aqui es que RECHACE. */
+    await assert.rejects(
+      conTope(guardarAnexoBImagenes('estudio-1', { alfa: ['data:image/png;base64,AAA'] })),
+      /QuotaExceeded/,
+      'la escritura abortada tiene que rechazar, no quedarse colgada',
+    );
+  }, { abortarEn: 'anexos' });
+});
+
+test('el aborto SIN error del navegador tampoco queda mudo: nombra el almacen', async () => {
+  /* Un `tx.abort()` o el cierre de la conexion abortan sin dejar `tx.error`. Rechazar con eso
+     tal cual daria `undefined`, y un fallo sin motivo es casi tan malo como el cuelgue: se sabe
+     que algo se cayo y no que escritura. */
+  await conIndexedDBSimulado(async () => {
+    await assert.rejects(
+      conTope(guardarAnexoEeff('estudio-1', ['data:image/png;base64,AAA'])),
+      (err) => err instanceof Error && /anexos/.test(err.message) && /espacio/.test(err.message),
+      'el motivo tiene que decir en que almacen fue y por donde empezar a mirar',
+    );
+  }, { abortarEn: 'anexos', abortarConError: false });
+});
+
+test('lo que completa bien sigue resolviendo igual', async () => {
+  /* La red de seguridad del arreglo: agregar `onabort` no puede cambiar el camino normal. */
+  await conIndexedDBSimulado(async (almacenes) => {
+    await conTope(guardarAnexoBImagenes('estudio-1', { alfa: ['x'] }));
+    assert.deepStrictEqual(almacenes.anexos.get('estudio-1:cmpB'), { alfa: ['x'] });
+  });
+});
+
+test('un anexo que no se puede guardar NO impide guardar el estudio', async () => {
+  /* LA JERARQUIA: el estudio es el trabajo; las paginas del anexo son un adjunto que se vuelve
+     a generar cargando otra vez el PDF. El autoguardado escribia los anexos y DESPUES el
+     estudio, en el mismo bloque, asi que un fallo local se llevaba por delante la escritura en
+     la nube y se perdia el dia entero.
+
+     El contrato es que esta funcion nunca lanza: devuelve el aviso y deja seguir. */
+  await conIndexedDBSimulado(async () => {
+    const { avisos } = await conTope(guardarAnexosDelEstudio('estudio-1', {
+      eeffImages: ['data:image/png;base64,AAA'],
+      eeffImagenesComparables: { alfa: ['data:image/png;base64,BBB'] },
+    }));
+    assert.strictEqual(avisos.length, 2, 'los dos anexos fallaron y los dos se reportan');
+    assert.match(avisos[0], /ANEXO A/);
+    assert.match(avisos[1], /ANEXO B/);
+    assert.match(avisos[1], /QuotaExceeded/, 'y se cita el motivo del navegador');
+  }, { abortarEn: 'anexos' });
+});
+
+test('sin anexos que guardar no se toca la base ni se avisa de nada', async () => {
+  await conIndexedDBSimulado(async () => {
+    const { avisos } = await conTope(guardarAnexosDelEstudio('estudio-1', {}));
+    assert.deepStrictEqual(avisos, []);
+  }, { abortarEn: 'anexos' });
+});
+
+test('cuando los anexos se guardan bien, quedan guardados y sin avisos', async () => {
+  await conIndexedDBSimulado(async (almacenes) => {
+    const { avisos } = await conTope(guardarAnexosDelEstudio('estudio-1', {
+      eeffImages: ['pagina-A'],
+      eeffImagenesComparables: { alfa: ['pagina-B'] },
+    }));
+    assert.deepStrictEqual(avisos, []);
+    assert.deepStrictEqual(almacenes.anexos.get('estudio-1'), ['pagina-A']);
+    assert.deepStrictEqual(almacenes.anexos.get('estudio-1:cmpB'), { alfa: ['pagina-B'] });
+  });
+});
 
 test('el hash no colisiona con el de cero bytes', async () => {
   /* Regresión: si se hashea un buffer ya desprendido por pdf.js, digest no

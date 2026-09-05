@@ -50,6 +50,30 @@ async function operar(almacen, modo, fn) {
       const req = fn(tx.objectStore(almacen));
       tx.oncomplete = () => res(req ? req.result : undefined);
       tx.onerror = () => rej(tx.error);
+      /* ── SIN ESTO LA PROMESA NO SE RESOLVIA NI SE RECHAZABA NUNCA ──
+         Una transacción de IndexedDB no siempre acaba en `complete` o en `error`: puede
+         ABORTARSE, y entonces dispara `abort` y ningún evento de error. El caso típico es
+         quedarse sin cuota al confirmar la escritura —el navegador no falla la petición, aborta
+         la transacción entera—, y también lo provoca un `tx.abort()` o el cierre de la conexión.
+
+         Faltando `onabort`, esa promesa quedaba pendiente para siempre. Y no colgaba solo esta
+         escritura: está en el camino del autoguardado ANTES de Firestore (`App.jsx`), así que
+         `await guardarAnexoBImagenes(...)` se quedaba esperando, `guardarEstudio` no llegaba a
+         ejecutarse y el estudio dejaba de guardarse ENTERO, sin un solo error en la consola.
+         La barra se quedaba en «guardando…».
+
+         Reportado el 2026-09-05 con dos síntomas que parecían contrarios: las comparables
+         borradas reaparecían al recargar y las nuevas desaparecían. Era lo mismo visto por sus
+         dos caras — al recargar se lee de Firestore la versión anterior, en la que la borrada
+         sigue estando y la nueva nunca llegó.
+
+         El motivo nombra el almacén: `tx.error` viene vacío en algunos abortos, y «falló una
+         escritura» sin decir cuál no permite ni empezar a mirar. */
+      tx.onabort = () => rej(tx.error || new Error(
+        `Se abortó la escritura en «${almacen}» de la base local del navegador. `
+        + 'La causa más frecuente es quedarse sin espacio: libere almacenamiento del sitio '
+        + 'o cierre estudios con muchos anexos.'
+      ));
     });
   } finally {
     db.close();
@@ -229,4 +253,51 @@ export async function borrarRecursosDelEstudio(estudioId) {
       fallidos.map((f) => f.reason));
   }
   return { borrados: resultados.length - fallidos.length, fallidos: fallidos.length };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Los anexos del estudio, guardados SIN poder tumbar el guardado del estudio.
+
+   POR QUÉ EXISTE. El autoguardado escribía los anexos en IndexedDB y después el estudio en
+   Firestore, en el mismo bloque y con el mismo `await`. Así, un fallo al escribir unas imágenes
+   locales se llevaba por delante la escritura del estudio: `guardarEstudio` no llegaba a
+   ejecutarse y se perdía TODO lo trabajado, no solo las páginas del anexo.
+
+   Pasó de verdad el 2026-09-05, y sin un error visible, porque el fallo era un cuelgue (ver la
+   nota de `onabort` en `operar`). Corregido el cuelgue, el mismo orden convertía el cuelgue en
+   una excepción y el resultado para el analista seguía siendo el mismo: no se guarda nada.
+
+   LA JERARQUÍA, que es lo que esta función fija: el estudio es el trabajo; las páginas del
+   ANEXO A y del ANEXO B son un adjunto que se puede volver a generar cargando otra vez el PDF.
+   Perder el adjunto es un inconveniente; perder el estudio es perder el día. Así que los
+   anexos se intentan, y lo que falle se REPORTA y no se propaga.
+
+   Nunca lanza: ese es el contrato entero.
+
+   @returns {Promise<{avisos: string[]}>} un aviso por anexo que no se pudo guardar.
+   ───────────────────────────────────────────────────────────────────────────── */
+export async function guardarAnexosDelEstudio(estudioId, { eeffImages, eeffImagenesComparables } = {}) {
+  const avisos = [];
+
+  if (eeffImages && eeffImages.length) {
+    try {
+      await guardarAnexoEeff(estudioId, eeffImages);
+    } catch (err) {
+      console.error('[anexos] no se pudieron guardar las páginas del ANEXO A', err);
+      avisos.push('No se pudieron guardar en este navegador las páginas del estado financiero '
+        + '(ANEXO A): ' + ((err && err.message) || 'motivo desconocido'));
+    }
+  }
+
+  if (eeffImagenesComparables && Object.keys(eeffImagenesComparables).length) {
+    try {
+      await guardarAnexoBImagenes(estudioId, eeffImagenesComparables);
+    } catch (err) {
+      console.error('[anexos] no se pudieron guardar las páginas del ANEXO B', err);
+      avisos.push('No se pudieron guardar en este navegador las páginas de los estados '
+        + 'financieros de las comparables (ANEXO B): ' + ((err && err.message) || 'motivo desconocido'));
+    }
+  }
+
+  return { avisos };
 }
