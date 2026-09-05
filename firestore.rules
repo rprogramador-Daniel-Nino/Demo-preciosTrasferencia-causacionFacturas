@@ -4,8 +4,9 @@ rules_version = '2';
 // Sistema PT — reglas de seguridad de Firestore
 // ===============================================================
 //
-// Modelo de acceso: entra cualquier cuenta de Google con el correo verificado, y cada
-// persona trabaja con sus propios datos. Nadie ve ni escribe lo de otro.
+// Modelo de acceso: solo entran cuentas @crconsultorescolombia.com o @scientia-legal.com
+// con el correo verificado, y cada persona trabaja con sus propios datos. Nadie ve ni
+// escribe lo de otro, ni siquiera dentro del mismo dominio.
 //
 // El aislamiento es estructural, no solo por campo: todo vive bajo
 // `usuarios/{uid}/…` y las reglas comparan ese `uid` con el de quien pide. Dos
@@ -18,9 +19,8 @@ rules_version = '2';
 //   2. Una consulta sobre una colección común tiene que filtrar por el dueño o
 //      Firestore la rechaza entera. Bajo la ruta del usuario eso ya no hace falta.
 //
-// El acceso abierto es una decisión explícita del usuario. Consecuencia a tener presente:
-// quien encuentre la URL puede crear su espacio y consumir cuota de Firestore y de las
-// API de IA, que no piden autenticación. Los datos existentes siguen inaccesibles.
+// Entrar sigue exigiendo cuenta de uno de los dos dominios con el correo verificado:
+// la privacidad por usuario no sustituye el control de quién puede usar la base.
 //
 // ===============================================================
 // Modelo de datos asumido
@@ -55,20 +55,14 @@ service cloud.firestore {
     // Funciones de apoyo
     // =============================================================
 
-    /* Cualquier cuenta de Google puede entrar, por decisión del usuario: ya no se exige
-       el dominio corporativo. Lo que protege los datos es el aislamiento por usuario
-       —todo vive bajo `usuarios/{uid}/…` y estas reglas comparan ese uid con el de quien
-       pide—, así que alguien de fuera solo alcanza su propio espacio vacío.
-
-       El correo verificado sí se sigue exigiendo: es lo que impide reclamar una dirección
-       ajena, y de ello depende la compartición, que se concede por correo. */
     function esMiembro() {
       return request.auth != null
         && request.auth.token.email is string
+        && request.auth.token.email.lower().matches('^[a-z0-9._%+-]+@(crconsultorescolombia|scientia-legal)[.]com$')
         && request.auth.token.email_verified == true;
     }
 
-    // Sesión válida y dueño del espacio al que se está entrando.
+    // Miembro de uno de los dos dominios y dueño del espacio al que se está entrando.
     function esDueno(uid) {
       return esMiembro() && request.auth.uid == uid;
     }
