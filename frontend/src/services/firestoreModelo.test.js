@@ -4,7 +4,7 @@ import { nameKey } from './comparablesEngine.js';
 import {
   normalizarNit, anioValido, separarEstudio, docEstudio, docCliente,
   normalizarComparableHistorica, fusionarComparableHistorica, docEeff, idEeff,
-  estudiosPorMigrar, aNumero, CAMPOS_SOLO_LOCALES, SELLO_ESTUDIO, TOPE_APARICIONES,
+  estudiosPorMigrar, aNumero, CAMPOS_SOLO_LOCALES, SELLO_ESTUDIO, sonDelEstudio, TOPE_APARICIONES,
   comparablesConEeffReutilizable, aplicarEeffGuardadoEnFila,
   aniosDelCatalogo, filtrarCatalogo, catalogoAComparablesPrevias,
   pesoAproximado, camposMasPesados, verificarTamano, TOPE_DOCUMENTO,
@@ -866,4 +866,25 @@ test('docEstudio no escribe el sello dentro de los datos', () => {
   assert.ok(!(SELLO_ESTUDIO in doc.datos), 'el sello se colaría en el documento del estudio');
   assert.ok(!(SELLO_ESTUDIO in doc), 'ni en la raíz del documento');
   assert.strictEqual(doc.datos.ent, 'Acme', 'el resto de los datos sí van');
+});
+
+/* La misma comprobación, pero antes de montar las pantallas. Abrir un estudio es
+   asíncrono, y en esa ventana el identificador activo ya es el nuevo mientras los datos en
+   memoria siguen siendo los del anterior: montar ahí el motor de comparables le dejaba en
+   su estado local las comparables del estudio previo —el estado inicial se toma una sola
+   vez, al montar— y de ahí pasaban al estudio recién abierto. */
+test('sonDelEstudio distingue los datos del estudio abierto', () => {
+  const abierto = { ent: 'Acme', comparables: [{ name: 'X' }], [SELLO_ESTUDIO]: 'study_2' };
+  assert.strictEqual(sonDelEstudio(abierto, 'study_2'), true);
+  assert.strictEqual(sonDelEstudio(abierto, 'study_1'), false,
+    'los datos del estudio anterior no pueden pasar por los del que se está abriendo');
+});
+
+test('sonDelEstudio no da por bueno lo que no tiene sello', () => {
+  /* Sin estudio abierto y con el estudio recién vaciado: en ninguno de los dos casos hay
+     pantallas que montar ni nada que guardar. */
+  assert.strictEqual(sonDelEstudio({}, 'study_1'), false);
+  assert.strictEqual(sonDelEstudio({ ent: 'Acme' }, 'study_1'), false);
+  assert.strictEqual(sonDelEstudio({ [SELLO_ESTUDIO]: 'study_1' }, null), false);
+  assert.strictEqual(sonDelEstudio(null, 'study_1'), false);
 });

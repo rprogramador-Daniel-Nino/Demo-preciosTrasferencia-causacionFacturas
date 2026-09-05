@@ -97,6 +97,25 @@ export function anioValido(valor) {
  */
 export const SELLO_ESTUDIO = '_estudioId';
 
+/**
+ * ¿Los datos que hay en memoria son los del estudio que está abierto?
+ *
+ * La comprobación es la del autoguardado, pero hace falta antes: también decide si se
+ * pueden MONTAR las pantallas del estudio. Abrir un estudio es asíncrono —se lee el
+ * documento y después los recursos de este navegador—, y mientras tanto el identificador
+ * activo ya es el nuevo pero los datos en memoria siguen siendo los del anterior. Montar
+ * ahí las pantallas era el fallo: `MotorComparables` copia a su estado local las
+ * comparables, el cribado y el informe del año anterior al montarse, una sola vez, así que
+ * se quedaba con los del estudio previo y su efecto los volcaba luego en el nuevo —ya con
+ * el sello correcto, de modo que el autoguardado los subía sin poder distinguirlos.
+ *
+ * Un estudio sin abrir (`{}`) no es de ningún estudio: devuelve `false`.
+ */
+export function sonDelEstudio(study, estudioId) {
+  if (!estudioId || !study) return false;
+  return study[SELLO_ESTUDIO] === estudioId;
+}
+
 /* `matrizRechazo` VIAJA a Firestore, y esta lista es justamente donde no debe estar.
    Estuvo aquí por un motivo que no se sostiene al medirlo: un nombre por cada compañía
    evaluada pesa 154 KB para un universo de 3.000 —el 15 % de `TOPE_DOCUMENTO`—, porque son

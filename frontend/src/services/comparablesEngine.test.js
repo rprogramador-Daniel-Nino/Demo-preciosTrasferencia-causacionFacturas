@@ -325,23 +325,60 @@ test('una negativa de continuidad cuenta contra el objetivo', () => {
   assert.strictEqual(r.negativasIncluidas, 3);
 });
 
-test('una negativa de actividad afín no entra a la cuota', () => {
-  /* Solo MISMA: una comparable en pérdida ya obliga a explicar por qué se incluye, y
-     sumarle que su actividad solo es afín es pedir dos justificaciones a la vez. */
+test('una negativa de actividad afín completa la cuota cuando no hay idénticas', () => {
+  /* Reportado el 2026-09-04: cuota de 10 y UNA sola incluida, con 1.904 en pérdida en el
+     universo. Las afines en pérdida se iban enteras a la reserva y la cuota se quedaba en lo
+     que dieran las idénticas, sin cupo de por medio. Ahora completan lo que falte, marcadas
+     por ampliación para que el informe sustente las dos cosas: la pérdida y el criterio. */
   const afinNegativa = { id: 'AF', name: 'Afin Negativa', desc: 'algo parecido', s: 100, op: -10 };
-  const candidatas = [...positivas(3), afinNegativa];
+  /* Con `desc`: sin descripción la curación las rechaza antes de llegar a la cuota y la
+     prueba pasaría por el motivo equivocado. */
+  const pos = positivas(3).map((c) => ({ ...c, desc: 'servicios varios' }));
+  const candidatas = [...pos, afinNegativa];
   const r = scoreCandidates(candidatas,
     { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 2 },
     'actividad concreta',
     [],
     { iaMatch: { porId: {
-      ...Object.fromEntries(positivas(3).map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
+      ...Object.fromEntries(pos.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
       AF: { grado: 'RELACIONADA', perfil: 'SERVICIO' },
     } } });
 
-  assert.strictEqual(cuantasNegativas(r.seleccionadas), 0, 'la afín negativa no llena la cuota');
-  assert.strictEqual(r.negativasDisponibles, 0, 'ni cuenta como disponible');
-  assert.ok(r.reserva.some((c) => c.id === 'AF'), 'queda en reserva con su motivo');
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 1, 'entra la única negativa que hay');
+  assert.strictEqual(r.seleccionadas.length, 4, 'y las positivas idénticas siguen en la muestra');
+  assert.strictEqual(r.negativasDisponibles, 1, 'y cuenta como disponible');
+  assert.strictEqual(r.negativasIdenticasDisponibles, 0);
+  assert.strictEqual(r.negativasAfinesDisponibles, 1);
+  assert.strictEqual(r.negativasPorAmpliacion, 1, 'declarada como ampliación del criterio');
+  assert.ok(r.ampliadas >= 1, 'y suma a las que el informe declara como actividad afín');
+  const dentro = r.seleccionadas.find((c) => c.id === 'AF');
+  assert.ok(dentro, 'está en la muestra');
+  assert.strictEqual(dentro.entroPorAmpliacion, true, 'marcada por fila, para el Excel');
+  assert.ok(!r.reserva.some((c) => c.id === 'AF'),
+    'y no queda además en la reserva: contarla dos veces descuadra el embudo');
+});
+
+test('con idénticas de sobra, la cuota no toca las afines en pérdida', () => {
+  /* La preferencia del 2026-09-01 se conserva entera: las afines solo entran por lo que falte.
+     Un estudio con idénticas suficientes se comporta exactamente igual que antes del cambio. */
+  const afinNegativa = { id: 'AF', name: 'Afin Negativa', desc: 'algo parecido', s: 100, op: -10 };
+  const conDesc = (lista) => lista.map((c) => ({ ...c, desc: 'servicios varios' }));
+  const pos = conDesc(positivas(10));
+  const negs = conDesc(negativas(4));
+  const r = scoreCandidates([...pos, ...negs, afinNegativa],
+    { nTarget: 12, minimo: 0, perdidaOp: 'incluir', negativasObjetivo: 2 },
+    'actividad concreta',
+    [],
+    { iaMatch: { porId: {
+      ...Object.fromEntries(pos.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
+      ...Object.fromEntries(negs.map((c) => [c.id, { grado: 'MISMA', perfil: 'SERVICIO' }])),
+      AF: { grado: 'RELACIONADA', perfil: 'SERVICIO' },
+    } } });
+
+  assert.strictEqual(cuantasNegativas(r.seleccionadas), 2, 'la cuota se llena con idénticas');
+  assert.strictEqual(r.negativasPorAmpliacion, 0, 'ninguna entró por afinidad');
+  assert.strictEqual(r.seleccionadas.find((c) => c.id === 'AF'), undefined);
+  assert.ok(r.reserva.some((c) => c.id === 'AF'), 'la afín queda en reserva con su motivo');
 });
 
 test('la continuidad que este año está en pérdida se nombra, para poder justificar su retiro', () => {
