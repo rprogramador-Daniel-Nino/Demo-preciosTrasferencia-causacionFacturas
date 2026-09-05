@@ -22,6 +22,7 @@ import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRender
    comparable se llevaba una página entera del informe. */
 import { recortarPaginas } from '../services/recorteImagen';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
+import { buscarActividadesPorRazonSocial } from '../services/actividadComparables';
 import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
 import { residuoDeCriterios } from '../services/criteriosScreeningEs';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
@@ -155,6 +156,35 @@ function RequisitoDelCribado({ requisito, indicador, banda }) {
   );
 }
 
+/* DE DÓNDE SALIÓ la actividad de una comparable incorporada a mano.
+
+   Vive SOLO en esta pantalla. El informe publica la actividad y no su procedencia —decisión del
+   usuario, 2026-09-05— porque lo que el cliente y la DIAN leen es a qué se dedica la comparable,
+   no cómo lo averiguó el sistema.
+
+   Aquí sí importa, y para una cosa concreta: decirle al analista QUÉ tiene que revisar. Las dos
+   actividades se ven idénticas en la tabla y no se sostienen igual —una la respalda la nota del
+   estado financiero que se adjunta en el ANEXO B; la otra la atribuyó un modelo por la razón
+   social y no la respalda nada—. Sin la marca, la segunda pasa por verificada. */
+function ProcedenciaDeLaActividad({ row, hayTexto }) {
+  const origen = row.origenActividad || '';
+  if (!hayTexto || !origen) return null;
+
+  if (origen === 'documento') {
+    const rotulo = String(row.actividadRotulo || '').trim();
+    return (
+      <p className="text-[9.5px] text-zinc-400 dark:text-zinc-500 mt-0.5 leading-snug" title={rotulo || undefined}>
+        Del estado financiero{rotulo ? ' — «' + rotulo.slice(0, 60) + (rotulo.length > 60 ? '…' : '') + '»' : ''}
+      </p>
+    );
+  }
+  return (
+    <p className="text-[9.5px] text-amber-600 dark:text-amber-500 mt-0.5 leading-snug">
+      Atribuida por IA desde la razón social, sin respaldo documental: confírmela.
+    </p>
+  );
+}
+
 /* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
 
    `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
@@ -169,33 +199,38 @@ function ActividadDeLaComparable({ row, alEditarActividad }) {
   const redactada = String(row.descActividad || '').trim();
   const cruda = String(row.desc || '').trim();
   const texto = redactada || cruda;
+
+  /* ── LA CREADA DESDE SU EEFF SIEMPRE SE PUEDE ESCRIBIR ──
+     El campo se ofrecía solo cuando la fila estaba VACÍA, y eso bastaba mientras nada la
+     llenaba. Desde el 2026-09-05 la actividad llega sola —de la nota del estado financiero, o
+     atribuida por IA desde la razón social— y con la regla anterior el campo desaparecía justo
+     al aparecer el texto: quedaba un párrafo fijo que el analista no podía tocar, y encima uno
+     rotulado «confírmela». Se le pedía confirmar algo sin darle dónde corregirlo.
+
+     Ahora manda la procedencia de la fila y no si está llena: si la comparable se incorporó
+     cargando su estado financiero, su actividad es editable siempre. Lo que se escribe va a
+     `descActividad` —el campo que publica el informe— y la redacción automática no lo pisa,
+     porque salta las filas que ya lo tienen. */
+  if (row.creadaDesdeEeff) {
+    return (
+      <div className="mt-1">
+        <textarea
+          value={redactada || cruda}
+          onChange={(e) => alEditarActividad(e.target.value)}
+          rows={2}
+          placeholder="Escriba la actividad de esta comparable: el informe la publica en el ANEXO B."
+          className="w-full text-[10.5px] leading-snug bg-transparent border border-dashed border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-600 dark:text-zinc-300 placeholder:text-zinc-400 focus:outline-none focus:border-[#0FA3A1] resize-y"
+        />
+        <ProcedenciaDeLaActividad row={row} hayTexto={!!texto} />
+      </div>
+    );
+  }
+
   if (!texto) {
     /* La INYECTADA no tiene descripción por construcción: viene del informe del año anterior,
        que trae la razón social y poco más, y el cribado de este año no la devolvió. Decirle
        «sin descripción en el cribado» no ayuda; lo que hace falta es el paso siguiente.
        Reportado el 2026-09-02: «¿y qué se espera que haga?». */
-    /* ── LA ACTIVIDAD SE PUEDE ESCRIBIR ──
-       Una comparable incorporada cargando su estado financiero no trae descripción del negocio:
-       el lector de EEFF devuelve razón social y cifras, no la actividad, y esa comparable no
-       pasó por Capital IQ, que es de donde sale `desc`.
-
-       Sin esto el ANEXO B publicaría «Descripción de actividad no disponible» por cada una —en
-       un estudio armado a mano, por TODAS— y el analista no tenía dónde escribirla: el único
-       camino era la redacción con IA, que necesita un texto de partida que aquí no existe.
-
-       Se ofrece el campo en lugar del aviso. Lo que se escribe va a `descActividad`, el mismo
-       campo que publica el informe, así que no hay una segunda ruta que mantener. */
-    if (row.creadaDesdeEeff) {
-      return (
-        <textarea
-          value={row.descActividad || ''}
-          onChange={(e) => alEditarActividad(e.target.value)}
-          rows={2}
-          placeholder="Escriba la actividad de esta comparable: el informe la publica en el ANEXO B."
-          className="w-full mt-1 text-[10.5px] leading-snug bg-transparent border border-dashed border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-600 dark:text-zinc-300 placeholder:text-zinc-400 focus:outline-none focus:border-[#0FA3A1] resize-y"
-        />
-      );
-    }
     if (row.sinCifrasDeEsteAnio) {
       return (
         <p className="text-[10.5px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
@@ -2001,7 +2036,23 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
              quedaba mal clasificada y el filtro de ámbito la sacaba del rango sin decir por qué.
              Es una deducción, no un dato: el selector de la fila la deja corregir. */
           amb: /^COP$/i.test(String((n.datos && n.datos.moneda) || '').trim()) ? 'Nac' : 'Int',
-          desc: '',
+          /* ── LA ACTIVIDAD, CUANDO EL DOCUMENTO LA PUBLICA ──
+             `desc` es la descripción cruda del negocio: del cribado viene de Capital IQ y aquí
+             sale de la nota de «Entidad reportante» / «Objeto social» / «Nature of operations»,
+             que el prompt del lote pide con su rótulo y con prohibición de deducirla del nombre.
+
+             Llenarla es lo único que hacía falta para que el resto funcione solo: la redacción
+             automática filtra por `desc` no vacía, así que una comparable creada desde su EEFF
+             se quedaba fuera de esa máquina para siempre y su actividad había que escribirla a
+             mano, una por una. Con esto se traduce al español y sale en el ANEXO B como
+             cualquier otra. */
+          desc: String((n.datos && n.datos.actividad_economica) || '').trim(),
+          /* De dónde salió. Vive SOLO en la pantalla —el informe publica la actividad, no su
+             procedencia, por decisión del usuario (2026-09-05)— y sirve para que el analista
+             sepa qué confirmar: lo que respalda un documento adjunto en el ANEXO B no se revisa
+             igual que lo que atribuyó un modelo por la razón social. */
+          origenActividad: String((n.datos && n.datos.actividad_economica) || '').trim() ? 'documento' : '',
+          actividadRotulo: String((n.datos && n.datos.actividad_rotulo) || '').trim(),
           /* Sin cifras todavía: se las pone `aplicarEeffEnFila` justo abajo, con las del
              documento y su verificación. */
           s: null, c: null, op: null, ar: null, inv: null, ap: null, ppe: null,
@@ -2080,11 +2131,52 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         .map((a) => (nuevoIndice ? nuevoIndice.get(a.indice) : a.indice))
         .filter((i) => i != null);
 
-      if (aplicadasTodas.length || aRetirar.size) setComparables(filasFinales);
+      /* ── LO QUE EL DOCUMENTO NO DIJO ──
+         El camino que manda es el papel: el prompt del lote lee la actividad de la nota de
+         «Entidad reportante» y la fila nace con ella. Pero buena parte de lo que se carga a
+         mano es un estado de resultados suelto, sin ninguna nota que leer, y esas filas nacen
+         mudas — que es exactamente lo que se reportó el 2026-09-05: diez comparables con
+         «Actividad sin verificar» y un textarea vacío que había que llenar una por una.
+
+         Se pregunta por razón social, en UNA sola llamada para todas las mudas. El servicio
+         descarta lo que el modelo no conoce con certeza y nunca lanza: quedarse sin actividades
+         es un inconveniente —se escriben a mano, como hoy— y tumbar la carga de estados
+         financieros por eso sería perder el trabajo de verdad.
+
+         Va ANTES de publicar y de redactar, para que la traducción al español recoja también
+         estas: `redactarDescripcionesDeFilas` filtra por `desc` no vacía, y llenarla después
+         las dejaría fuera hasta la siguiente corrida. */
+      let filasConActividad = filasFinales;
+      const mudas = indicesAplicados.filter((i) => {
+        const f = filasFinales[i];
+        return f && f.creadaDesdeEeff && !String(f.desc || '').trim();
+      });
+      if (mudas.length) {
+        setCargaEeff({
+          etapa: 'Buscando la actividad de ' + mudas.length + ' comparable(s)…',
+          hechas: lista.length,
+          total: lista.length,
+        });
+        const encontradas = await buscarActividadesPorRazonSocial(
+          mudas.map((i) => filasFinales[i].name),
+        );
+        if (encontradas.length) {
+          const porNombre = new Map(encontradas.map((e) => [e.nombre, e.actividad]));
+          const aRellenar = new Set(mudas);
+          filasConActividad = filasFinales.map((f, i) => {
+            const act = aRellenar.has(i) ? porNombre.get(f.name) : null;
+            /* `origenActividad: 'ia'` es lo que hace que la tabla la marque en ámbar: no la
+               respalda ningún documento del ANEXO B y el analista tiene que confirmarla. */
+            return act ? { ...f, desc: act, origenActividad: 'ia' } : f;
+          });
+        }
+      }
+
+      if (aplicadasTodas.length || aRetirar.size) setComparables(filasConActividad);
       anotarRetiradasEnEmbudo(aRetirar.size);
       if (indicesAplicados.length) {
-        await publicarEeff(filasFinales, indicesAplicados);
-        redactarDescripcionesDeFilas(filasFinales, indicesAplicados).catch((err) =>
+        await publicarEeff(filasConActividad, indicesAplicados);
+        redactarDescripcionesDeFilas(filasConActividad, indicesAplicados).catch((err) =>
           console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
         );
       }
