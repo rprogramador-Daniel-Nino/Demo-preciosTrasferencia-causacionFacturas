@@ -220,10 +220,18 @@ export function motivoCruce(cruce, entrada, nombreArchivo) {
      creíble y falsa —«8.700,000 %» o «87,000 % %»—. */
   const pct = pctf(cruce.punt || 0);
 
+  /* ── ESTA RAMA YA NO SE ALCANZA, y se conserva por si algún llamador nuevo la pide ──
+     Decía «ejecute la selección del paso 3 y vuelva a cargar los estados financieros», que era
+     cierto mientras la muestra solo podía salir del cribado. Desde el 2026-09-04 un documento
+     que no cruza con ninguna fila CREA su comparable, así que `repartir` manda el caso a
+     `nuevas` antes de llegar aquí, y la carga por fila necesita una fila seleccionada —o sea,
+     que la tabla no esté vacía—.
+
+     Se deja el texto corregido en vez de un mensaje que contradiga el comportamiento: si
+     reaparece, que no mande al analista a un paso que ya no hace falta. */
   if (cruce.modo === 'sin-comparables') {
-    return 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a la ' +
-      'que aplicar «' + leido + '». Ejecute la selección del paso 3 y vuelva a cargar los estados ' +
-      'financieros; o cargue este documento desde la fila de su comparable.';
+    return 'El estudio todavía no tiene comparables en la tabla. Cargue este documento desde la ' +
+      'carga masiva, que crea la comparable a partir de su razón social y sus cifras.';
   }
 
   if (cruce.modo === 'ambiguo') {
@@ -275,9 +283,53 @@ export function repartir(entradas, comparables) {
   const conCruce = entradas.map((e) => ({ entrada: e, cruce: cruzar(e.datos, e.archivo, comparables) }));
   const orden = [...conCruce].sort((a, b) => (b.cruce.punt || 0) - (a.cruce.punt || 0));
 
+  /* ── EL DOCUMENTO QUE NO CRUZA CON NINGUNA FILA CREA SU COMPARABLE ──
+     Pedido el 2026-09-02: «al cargar un estado financiero lo que debe hacer es crear la
+     comparable si esta no existe».
+
+     Es el segundo camino del proceso, y el usuario lo describió así: «hicimos la búsqueda de
+     las comparables de manera manual y ya tenemos las comparables; si cargamos los EEFF de
+     estas comparables debería agregarlos y generar los análisis con estos datos». Antes había
+     que crear la fila a mano y con la razón social exacta, o el documento se rechazaba con
+     «0,000 % de coincidencia».
+
+     La verificación de identidad NO se debilita: sigue atrapando el documento que cruza con
+     OTRA fila y el duplicado que llega a una fila ya ocupada. Lo que cambia es el caso en que
+     no hay con qué chocar — no existe la comparable— y ahí crearla es lo correcto: el documento
+     trae la razón social y las cifras, que es todo lo que la fila necesita.
+
+     Se exige que el documento traiga RAZON SOCIAL. Sin ella no se puede nombrar la comparable, y
+     una fila anónima con cifras es peor que un rechazo: entra al rango sin que nadie sepa de
+     quién es. */
+  const nuevas = [];
+
   orden.forEach(({ entrada, cruce }) => {
     if (cruce.indice < 0) {
-      rechazadas.push({ ...entrada, motivo: motivoCruce(cruce, entrada.datos, entrada.archivo), cruce });
+      const nombreDoc = String((entrada.datos && entrada.datos.nombre) || '').trim();
+      if (!nombreDoc) {
+        rechazadas.push({
+          ...entrada,
+          motivo: 'El documento no cruza con ninguna comparable de la muestra y tampoco trae la '
+            + 'razón social, así que no se puede crear una para él: una fila con cifras y sin '
+            + 'nombre entraría al rango sin que nadie sepa de quién es. Escriba la razón social '
+            + 'en una fila y vuelva a cargarlo ahí.',
+          cruce,
+        });
+        return;
+      }
+      nuevas.push({
+        ...entrada,
+        /* El índice se le asigna al crear la fila, en el llamador: aquí solo se declara que
+           hace falta una. */
+        indice: -1,
+        crearComparable: true,
+        nombre: nombreDoc,
+        identificador: String((entrada.datos && entrada.datos.identificador_fuente) || '').trim(),
+        cruce: { ...cruce, modo: 'manual', punt: 1 },
+        firme: false,
+        motivo: 'No estaba en la muestra: se creó la comparable «' + nombreDoc + '» con la razón '
+          + 'social y las cifras de este documento. Verifique que corresponde al estudio.',
+      });
       return;
     }
     if (ocupadas.has(cruce.indice)) {
@@ -299,5 +351,8 @@ export function repartir(entradas, comparables) {
     });
   });
 
-  return { aplicadas, rechazadas };
+  /* `nuevas` va aparte de `aplicadas` porque el llamador tiene que CREAR la fila antes de
+     aplicarles las cifras: mezclarlas obligaría a distinguirlas por un campo dentro del bucle
+     que ya las aplica, y ahí es donde se cuela un índice equivocado. */
+  return { aplicadas, rechazadas, nuevas };
 }

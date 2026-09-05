@@ -22,6 +22,7 @@ import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRender
    comparable se llevaba una página entera del informe. */
 import { recortarPaginas } from '../services/recorteImagen';
 import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
+import { buscarActividadesPorRazonSocial } from '../services/actividadComparables';
 import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
 import { residuoDeCriterios } from '../services/criteriosScreeningEs';
 import { parsePriorStudyFile } from '../services/priorStudyParser';
@@ -29,6 +30,9 @@ import { parsePriorStudyFile } from '../services/priorStudyParser';
    la muestra del año anterior y, si no se puede, entregarle al cliente el motivo de cada una
    (pedido del 2026-09-02). */
 import { conciliarConEstudioAnterior } from '../services/conciliacionEstudioAnterior';
+/* Las comparables que el analista agregó cargando su estado financiero no las borra una corrida
+   nueva del motor: son decisiones tomadas, no candidatas a evaluar. */
+import { fusionarAgregadasAMano } from '../services/muestraManual';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
   registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
@@ -152,6 +156,35 @@ function RequisitoDelCribado({ requisito, indicador, banda }) {
   );
 }
 
+/* DE DÓNDE SALIÓ la actividad de una comparable incorporada a mano.
+
+   Vive SOLO en esta pantalla. El informe publica la actividad y no su procedencia —decisión del
+   usuario, 2026-09-05— porque lo que el cliente y la DIAN leen es a qué se dedica la comparable,
+   no cómo lo averiguó el sistema.
+
+   Aquí sí importa, y para una cosa concreta: decirle al analista QUÉ tiene que revisar. Las dos
+   actividades se ven idénticas en la tabla y no se sostienen igual —una la respalda la nota del
+   estado financiero que se adjunta en el ANEXO B; la otra la atribuyó un modelo por la razón
+   social y no la respalda nada—. Sin la marca, la segunda pasa por verificada. */
+function ProcedenciaDeLaActividad({ row, hayTexto }) {
+  const origen = row.origenActividad || '';
+  if (!hayTexto || !origen) return null;
+
+  if (origen === 'documento') {
+    const rotulo = String(row.actividadRotulo || '').trim();
+    return (
+      <p className="text-[9.5px] text-zinc-400 dark:text-zinc-500 mt-0.5 leading-snug" title={rotulo || undefined}>
+        Del estado financiero{rotulo ? ' — «' + rotulo.slice(0, 60) + (rotulo.length > 60 ? '…' : '') + '»' : ''}
+      </p>
+    );
+  }
+  return (
+    <p className="text-[9.5px] text-amber-600 dark:text-amber-500 mt-0.5 leading-snug">
+      Atribuida por IA desde la razón social, sin respaldo documental: confírmela.
+    </p>
+  );
+}
+
 /* LA ACTIVIDAD de la comparable, tal como la va a publicar el informe.
 
    `descActividad` es la redacción en español que hace `descripcionComparables.js`; `desc` es la
@@ -162,10 +195,37 @@ function RequisitoDelCribado({ requisito, indicador, banda }) {
 
    Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
    informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
-function ActividadDeLaComparable({ row }) {
+function ActividadDeLaComparable({ row, alEditarActividad }) {
   const redactada = String(row.descActividad || '').trim();
   const cruda = String(row.desc || '').trim();
   const texto = redactada || cruda;
+
+  /* ── LA CREADA DESDE SU EEFF SIEMPRE SE PUEDE ESCRIBIR ──
+     El campo se ofrecía solo cuando la fila estaba VACÍA, y eso bastaba mientras nada la
+     llenaba. Desde el 2026-09-05 la actividad llega sola —de la nota del estado financiero, o
+     atribuida por IA desde la razón social— y con la regla anterior el campo desaparecía justo
+     al aparecer el texto: quedaba un párrafo fijo que el analista no podía tocar, y encima uno
+     rotulado «confírmela». Se le pedía confirmar algo sin darle dónde corregirlo.
+
+     Ahora manda la procedencia de la fila y no si está llena: si la comparable se incorporó
+     cargando su estado financiero, su actividad es editable siempre. Lo que se escribe va a
+     `descActividad` —el campo que publica el informe— y la redacción automática no lo pisa,
+     porque salta las filas que ya lo tienen. */
+  if (row.creadaDesdeEeff) {
+    return (
+      <div className="mt-1">
+        <textarea
+          value={redactada || cruda}
+          onChange={(e) => alEditarActividad(e.target.value)}
+          rows={2}
+          placeholder="Escriba la actividad de esta comparable: el informe la publica en el ANEXO B."
+          className="w-full text-[10.5px] leading-snug bg-transparent border border-dashed border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-600 dark:text-zinc-300 placeholder:text-zinc-400 focus:outline-none focus:border-[#0FA3A1] resize-y"
+        />
+        <ProcedenciaDeLaActividad row={row} hayTexto={!!texto} />
+      </div>
+    );
+  }
+
   if (!texto) {
     /* La INYECTADA no tiene descripción por construcción: viene del informe del año anterior,
        que trae la razón social y poco más, y el cribado de este año no la devolvió. Decirle
@@ -1236,7 +1296,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* El cupo que el motor aplicó de verdad: nunca por debajo de `MINIMO_COMPARABLES`,
          aunque el paso 2 pida menos. */
       const nTarget = result.cupo;
-      const finales = result.seleccionadas;
+
+      /* ── LO QUE EL ANALISTA AGREGO A MANO NO LO BORRA EL MOTOR ──
+         El motor selecciona del UNIVERSO —el cribado del paso 1— y las comparables creadas al
+         cargar su estado financiero viven solo en la MUESTRA, así que hasta ahora una corrida
+         nueva las barría todas. Doce EEFF cargados a mano y un clic en el botón equivocado.
+
+         Es la misma lógica que ya protege lo que se retira a mano: el motor propone, el analista
+         dispone, y una corrida nueva no puede deshacer lo que él decidió. */
+      const fusion = fusionarAgregadasAMano(comparables, result.seleccionadas, result.cupo);
+      const finales = fusion.muestra;
       setComparables(finales);
       /* Detalle por candidata para el Excel de soporte: `scoreCandidates` ya lo
          calcula (motivo, categoría, score, factores), pero hasta ahora solo se
@@ -1306,10 +1375,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            Es la justificacion que el despacho le entrega al cliente cuando la muestra del anio
            pasado no se puede reproducir, y tiene que salir del soporte en vez de reconstruirse a
            mano contra el informe anterior. */
+        /* Cuántas comparables agregadas a mano sobrevivieron a esta corrida, y si su número
+           ya excede el objetivo de la muestra. La pantalla lo dice: son las que el motor no
+           eligió y el informe tiene que poder sustentar. */
+        agregadasAMano: fusion.conservadas,
+        agregadasExcedenObjetivo: fusion.excedeObjetivo,
         conciliacionAnterior: conciliarConEstudioAnterior({
           previas: (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
           universo,
-          muestra: result.seleccionadas,
+          /* `finales` y no `result.seleccionadas`: la muestra real incluye las agregadas a
+             mano, y una comparable del año anterior que el analista recuperó cargando su EEFF
+             tiene que contar como presente, no como perdida. */
+          muestra: finales,
           rechazadas: result.rechazadas,
           reserva: result.reserva,
         }),
@@ -1735,12 +1812,48 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
       const destino = comparables[compIndex];
       const cruce = cruzar(result.data, file.name, comparables);
+      /* Sobre qué arreglo se aplican las cifras: el actual, salvo que la fila estuviera vacía y
+         acabe de nombrarse con el documento (ver abajo). */
+      let comparablesParaAplicar = comparables;
 
       /* Cruzó con OTRA fila, o no cruzó con ninguna: no se aplica nada y se
          explica por qué. Si el documento no trae razón social no hay nada que
          contrastar, así que se acepta pero queda marcado por confirmar. */
       const traeNombre = String(result.data.nombre || '').trim() || String(result.data.identificador_fuente || '').trim();
-      if (traeNombre && cruce.indice !== compIndex) {
+
+      /* ── LA FILA VACIA SE NOMBRA CON EL DOCUMENTO ──
+         Reportado el 2026-09-02: «hicimos la búsqueda de las comparables de manera manual y ya
+         tenemos las comparables; si cargamos los EEFF de estas comparables debería agregarlos y
+         generar los análisis con estos datos, de modo que así tenemos dos opciones para hacer
+         el proceso».
+
+         El rechazo decía: «El documento es de "BOLAK COMPANY LIMITED" y lo estás cargando en
+         "la fila seleccionada" (0,000 % de coincidencia)». Y ese «la fila seleccionada» es el
+         texto que se usa cuando la fila NO TIENE razón social: la comparación daba 0 % porque
+         no había con qué comparar, no porque hubiera desacuerdo. La verificación de identidad
+         existe para atrapar el documento cargado en la fila EQUIVOCADA; en una fila vacía no
+         hay nada que equivocar.
+
+         Así que la fila vacía se nombra con la razón social del documento. Eso habilita el
+         segundo camino: buscar las comparables por fuera, crear las filas y darles identidad
+         cargándoles su estado financiero. */
+      const filaSinIdentidad = !String((destino && destino.name) || '').trim()
+        && !String((destino && destino.id) || '').trim();
+
+      if (traeNombre && filaSinIdentidad) {
+        const conNombre = [...comparables];
+        conNombre[compIndex] = {
+          ...conNombre[compIndex],
+          name: String(result.data.nombre || '').trim() || conNombre[compIndex].name || '',
+          nameKey: nameKey(String(result.data.nombre || '').trim()),
+          id: String(result.data.identificador_fuente || '').trim() || conNombre[compIndex].id || '',
+        };
+        setComparables(conNombre);
+        /* El resto del flujo sigue con la fila ya nombrada: `comparables` todavía apunta al
+           arreglo anterior en esta vuelta —`useState` no es síncrono—, así que las cifras se
+           aplican sobre `conNombre` y no sobre el estado viejo. */
+        comparablesParaAplicar = conNombre;
+      } else if (traeNombre && cruce.indice !== compIndex) {
         setResultadoCarga({
           aplicadas: [],
           rechazadas: [{
@@ -1773,10 +1886,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         return;
       }
 
-      const cruceEfectivo = traeNombre
+      /* Con la fila recién nombrada el cruce es por identidad tomada del propio documento: no
+         hay dos nombres que contrastar, así que se marca `manual` —«lo asignaste a mano»— que es
+         exactamente lo que ocurrió. */
+      const cruceEfectivo = (traeNombre && !filaSinIdentidad)
         ? cruce
         : { modo: 'manual', punt: 1, comparable: destino, indice: compIndex };
-      const filas = aplicarEeffEnFila(comparables, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
+      const filas = aplicarEeffEnFila(comparablesParaAplicar, compIndex, result.data, result.verificacion, result.filename, cruceEfectivo);
       setComparables(filas);
 
       /* Imagen del EEFF para el Anexo B: no bloquea lo anterior si falla. Recortada al
@@ -1826,21 +1942,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const lista = Array.from(files || []);
     if (!lista.length) return;
 
-    /* Sin comparables en la tabla no hay a qué fila aplicar nada, y leer los documentos
-       primero para rechazarlos después cuesta una consulta a Gemini por archivo —minutos y
-       dinero— para acabar en una lista de rechazos idénticos. Se avisa antes de leer. */
-    if (!comparables.length) {
-      setResultadoCarga({
-        aplicadas: [],
-        rechazadas: lista.map((f) => ({
-          archivo: f.name,
-          motivo: 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a ' +
-            'la que aplicar sus cifras. Ejecute la selección del paso 3 y vuelva a cargar los ' +
-            'estados financieros. No se leyó ningún documento, así que no se gastó ninguna consulta.',
-        })),
-      });
-      return;
-    }
+    /* ── AQUI HABIA UNA GUARDA QUE YA NO APLICA ──
+       Rechazaba el lote entero cuando la tabla estaba vacía, sin leer ningún documento, con
+       este motivo: «El estudio todavía no tiene comparables en la tabla, así que no hay ninguna
+       fila a la que aplicar sus cifras. Ejecute la selección del paso 3».
+
+       Su razón era buena: sin filas no había a qué aplicar las cifras, y leer los documentos
+       para rechazarlos después cuesta una consulta por archivo —minutos y dinero— para acabar
+       en una lista de rechazos idénticos.
+
+       Esa premisa dejó de ser cierta el 2026-09-04, cuando cargar un estado financiero pasó a
+       CREAR la comparable si no existe. Con la tabla vacía ya no hay nada que rechazar: hay una
+       muestra que armar, que es justo el segundo camino del proceso —buscar las comparables por
+       fuera y soltar sus estados financieros—.
+
+       Reportado el 2026-09-05 con la captura de siete documentos rechazados en bloque, todos con
+       ese texto. Retirada: era el guardia de una puerta que ahora tiene que estar abierta. */
 
     setUploadingEEFF(true);
     setResultadoCarga(null);
@@ -1875,7 +1992,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       }
 
       setCargaEeff({ etapa: 'Cruzando ' + entradas.length + ' empresa(s) con las comparables…', hechas: lista.length, total: lista.length });
-      const { aplicadas, rechazadas } = repartir(entradas, comparables);
+      const { aplicadas, rechazadas, nuevas } = repartir(entradas, comparables);
 
       /* Las que cruzaron pero cuyo documento no trae con qué calcular el margen salen de
          la muestra en vez de aplicarse. Volcarlas dejaría en la fila las cifras que ya
@@ -1883,17 +2000,82 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
          seguiría en el rango sin soporte. */
       const { conCifras, sinCifras } = separarPorSuficiencia(aplicadas);
 
-      /* Se acumulan todas las filas antes de un único setComparables: un set por
-         empresa se sobrescribiría entre iteraciones y solo entraría la última. */
+      /* ── LAS QUE NO EXISTIAN SE CREAN ──
+         «Al cargar un estado financiero lo que debe hacer es crear la comparable si esta no
+         existe» (2026-09-02), que es el segundo camino del proceso: buscar las comparables por
+         fuera, soltar sus estados financieros y que el sistema arme la muestra.
+
+         Se crean ANTES de aplicar las cifras y el índice se toma de la fila recién creada, no
+         del que traía `repartir` —que es -1 justamente porque la fila no existía—. Las cifras se
+         aplican después por el mismo camino que las demás, así que pasan por la misma
+         verificación y quedan con el mismo rastro. */
       let filas = comparables;
-      conCifras.forEach((a) => {
+      const creadas = [];
+      /* SOLO se crea la fila si el documento trae con qué calcular el margen. Crear una
+         comparable a partir de un documento sin cifras dejaría en la muestra una fila que no
+         entra al rango y que nadie pidió — exactamente el problema de las filas vacías que se
+         retiró el mismo día. Las otras se reportan con su motivo, igual que las existentes cuyo
+         documento no sirve. */
+      const nuevasUtiles = [];
+      const nuevasSinDatos = [];
+      nuevas.forEach((n) => {
+        (partidasFaltantes(n.datos).length ? nuevasSinDatos : nuevasUtiles).push(n);
+      });
+      nuevasUtiles.forEach((n) => {
+        const indice = filas.length;
+        filas = [...filas, {
+          name: n.nombre,
+          nameKey: nameKey(n.nombre),
+          id: n.identificador || '',
+          /* El ÁMBITO se deduce de la moneda del estado financiero, que es el único indicio de
+             procedencia que el documento trae —el lector devuelve `moneda` pero no país—. Un
+             estado en pesos colombianos es de una compañía colombiana; cualquier otra moneda se
+             toma como internacional, que es lo más frecuente en un cribado de Capital IQ.
+
+             Antes se fijaba «Int» siempre, así que una comparable colombiana incorporada a mano
+             quedaba mal clasificada y el filtro de ámbito la sacaba del rango sin decir por qué.
+             Es una deducción, no un dato: el selector de la fila la deja corregir. */
+          amb: /^COP$/i.test(String((n.datos && n.datos.moneda) || '').trim()) ? 'Nac' : 'Int',
+          /* ── LA ACTIVIDAD, CUANDO EL DOCUMENTO LA PUBLICA ──
+             `desc` es la descripción cruda del negocio: del cribado viene de Capital IQ y aquí
+             sale de la nota de «Entidad reportante» / «Objeto social» / «Nature of operations»,
+             que el prompt del lote pide con su rótulo y con prohibición de deducirla del nombre.
+
+             Llenarla es lo único que hacía falta para que el resto funcione solo: la redacción
+             automática filtra por `desc` no vacía, así que una comparable creada desde su EEFF
+             se quedaba fuera de esa máquina para siempre y su actividad había que escribirla a
+             mano, una por una. Con esto se traduce al español y sale en el ANEXO B como
+             cualquier otra. */
+          desc: String((n.datos && n.datos.actividad_economica) || '').trim(),
+          /* De dónde salió. Vive SOLO en la pantalla —el informe publica la actividad, no su
+             procedencia, por decisión del usuario (2026-09-05)— y sirve para que el analista
+             sepa qué confirmar: lo que respalda un documento adjunto en el ANEXO B no se revisa
+             igual que lo que atribuyó un modelo por la razón social. */
+          origenActividad: String((n.datos && n.datos.actividad_economica) || '').trim() ? 'documento' : '',
+          actividadRotulo: String((n.datos && n.datos.actividad_rotulo) || '').trim(),
+          /* Sin cifras todavía: se las pone `aplicarEeffEnFila` justo abajo, con las del
+             documento y su verificación. */
+          s: null, c: null, op: null, ar: null, inv: null, ap: null, ppe: null,
+          /* Creada desde su estado financiero y no desde el cribado: no pasó por la curación de
+             actividad, así que no se le atribuye ningún grado. La tabla la marca «Actividad sin
+             verificar», que es exactamente lo que es. */
+          gradoActividad: '',
+          motivoActividad: '',
+          creadaDesdeEeff: true,
+        }];
+        creadas.push({ ...n, indice });
+      });
+      [...conCifras, ...creadas].forEach((a) => {
         filas = aplicarEeffEnFila(filas, a.indice, a.datos, a.verificacion, a.archivo, a.cruce);
       });
 
       /* Imágenes por empresa, recortadas del PDF de lote al que pertenecen. Se hace
          después de aplicar las cifras: la clave (nameKey) sale del nombre ya asentado
          en la fila, que puede diferir en mayúsculas/acentos del que trajo el documento. */
-      conCifras.forEach((a) => {
+      /* Las creadas también: su estado financiero va al ANEXO B igual que el de cualquier otra,
+         y dejarlas fuera publicaba su cuadro vacío. Mismo descuido que el de `aplicadasTodas`
+         de más abajo, y el mismo día. */
+      [...conCifras, ...creadas].forEach((a) => {
         const clave = nameKey(filas[a.indice].name || '');
         const imagenesArchivo = a._imagenesDelArchivo || [];
         if (!imagenesArchivo.length) {
@@ -1910,6 +2092,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* El retiro va después de aplicar y de recortar las imágenes, que trabajan sobre
          los índices originales, y antes de publicar y de pedir las descripciones, que
          reciben ya los nuevos. */
+      /* Las que no llegaron a crearse por falta de cifras se informan en la misma lista: para
+         el analista es el mismo hecho —«este documento no sirve para sostener una comparable»—
+         y distinguir si la fila existía antes o no solo añade ruido. */
+      const noCreadas = nuevasSinDatos.map((n) => ({
+        archivo: n.archivo,
+        comparable: n.nombre,
+        motivo: motivoSinInformacionFinanciera(n.nombre, partidasFaltantes(n.datos), n.archivo)
+          + ' No se creó la comparable.',
+      }));
+
       const retiradas = sinCifras.map((a) => ({
         archivo: a.archivo,
         comparable: (filas[a.indice] && filas[a.indice].name)
@@ -1921,22 +2113,79 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       }));
       const aRetirar = new Set(sinCifras.map((a) => a.indice));
       const { filas: filasFinales, nuevoIndice } = retirarFilas(filas, aRetirar);
-      const indicesAplicados = conCifras
+      /* ── LAS CREADAS CUENTAN COMO APLICADAS EN LOS TRES PUNTOS QUE SIGUEN ──
+         Reportado el 2026-09-05: «ya hice procesa los EEFF pero no carga información». Y era
+         mi defecto del día anterior: al agregar la creación de comparables actualicé el reparto
+         pero NO estas tres líneas, que seguían mirando solo `conCifras` —los documentos que
+         cruzaron con una fila que YA existía—.
+
+         Con una muestra vacía, que es justo el flujo manual, TODOS los documentos crean su
+         comparable y ninguno cae en `conCifras`. Resultado: `setComparables` no se llamaba, y
+         el analista veía el proceso terminar sin que apareciera nada.
+
+         `aplicadas` reúne ahora las dos clases. La distinción entre «cruzó con una fila que ya
+         estaba» y «creó la suya» sigue viva donde importa —en el motivo que se le muestra a
+         cada una— y desaparece aquí, donde solo estorbaba. */
+      const aplicadasTodas = [...conCifras, ...creadas];
+      const indicesAplicados = aplicadasTodas
         .map((a) => (nuevoIndice ? nuevoIndice.get(a.indice) : a.indice))
         .filter((i) => i != null);
 
-      if (conCifras.length || aRetirar.size) setComparables(filasFinales);
+      /* ── LO QUE EL DOCUMENTO NO DIJO ──
+         El camino que manda es el papel: el prompt del lote lee la actividad de la nota de
+         «Entidad reportante» y la fila nace con ella. Pero buena parte de lo que se carga a
+         mano es un estado de resultados suelto, sin ninguna nota que leer, y esas filas nacen
+         mudas — que es exactamente lo que se reportó el 2026-09-05: diez comparables con
+         «Actividad sin verificar» y un textarea vacío que había que llenar una por una.
+
+         Se pregunta por razón social, en UNA sola llamada para todas las mudas. El servicio
+         descarta lo que el modelo no conoce con certeza y nunca lanza: quedarse sin actividades
+         es un inconveniente —se escriben a mano, como hoy— y tumbar la carga de estados
+         financieros por eso sería perder el trabajo de verdad.
+
+         Va ANTES de publicar y de redactar, para que la traducción al español recoja también
+         estas: `redactarDescripcionesDeFilas` filtra por `desc` no vacía, y llenarla después
+         las dejaría fuera hasta la siguiente corrida. */
+      let filasConActividad = filasFinales;
+      const mudas = indicesAplicados.filter((i) => {
+        const f = filasFinales[i];
+        return f && f.creadaDesdeEeff && !String(f.desc || '').trim();
+      });
+      if (mudas.length) {
+        setCargaEeff({
+          etapa: 'Buscando la actividad de ' + mudas.length + ' comparable(s)…',
+          hechas: lista.length,
+          total: lista.length,
+        });
+        const encontradas = await buscarActividadesPorRazonSocial(
+          mudas.map((i) => filasFinales[i].name),
+        );
+        if (encontradas.length) {
+          const porNombre = new Map(encontradas.map((e) => [e.nombre, e.actividad]));
+          const aRellenar = new Set(mudas);
+          filasConActividad = filasFinales.map((f, i) => {
+            const act = aRellenar.has(i) ? porNombre.get(f.name) : null;
+            /* `origenActividad: 'ia'` es lo que hace que la tabla la marque en ámbar: no la
+               respalda ningún documento del ANEXO B y el analista tiene que confirmarla. */
+            return act ? { ...f, desc: act, origenActividad: 'ia' } : f;
+          });
+        }
+      }
+
+      if (aplicadasTodas.length || aRetirar.size) setComparables(filasConActividad);
       anotarRetiradasEnEmbudo(aRetirar.size);
       if (indicesAplicados.length) {
-        await publicarEeff(filasFinales, indicesAplicados);
-        redactarDescripcionesDeFilas(filasFinales, indicesAplicados).catch((err) =>
+        await publicarEeff(filasConActividad, indicesAplicados);
+        redactarDescripcionesDeFilas(filasConActividad, indicesAplicados).catch((err) =>
           console.error('[MotorComparables] no se pudo redactar la descripción de actividad', err)
         );
       }
       setResultadoCarga({
-        aplicadas: conCifras,
+        aplicadas: aplicadasTodas,
         rechazadas: [...rechazadas, ...fallosLectura],
-        retiradas,
+        /* Las retiradas de la muestra y las que no llegaron a crearse van juntas: para el
+           analista es el mismo hecho. */
+        retiradas: [...retiradas, ...noCreadas],
       });
     } finally {
       setUploadingEEFF(false);
@@ -3019,6 +3268,27 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
               </button>
             )}
 
+            {/* ── LO QUE EL ANALISTA AGREGO A MANO ──
+                Estas comparables no salieron del cribado ni pasaron por la curación: las eligió
+                el analista y entraron cargando su estado financiero. El motor ya no las borra al
+                reejecutar (2026-09-05), y decirlo aquí importa porque son las que el informe
+                tiene que sustentar como elección propia. */}
+            {selectionFunnel && selectionFunnel.agregadasAMano > 0 && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem]">
+                <span className="font-bold text-[#0B7C7A] dark:text-[#0FA3A1]">
+                  {selectionFunnel.agregadasAMano} agregada(s) a mano
+                </span>
+                {' se conservaron: las trajo usted cargando su estado financiero, no el cribado, '
+                  + 'y no pasaron por la curación de actividad. Sustente su inclusión en el informe.'}
+                {selectionFunnel.agregadasExcedenObjetivo && (
+                  <span className="block mt-0.5 text-amber-700 dark:text-amber-400">
+                    Ya superan el tamaño de muestra que pidió, así que el motor no agregó
+                    ninguna. Retire las que sobren si quiere bajar a ese número.
+                  </span>
+                )}
+              </span>
+            )}
+
             {/* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR ──
                 Pedido el 2026-09-02: «generamos con las comparables del año anterior, si nos
                 funciona pues perfecto, y si no ya tenemos justificación del porqué no de ello a
@@ -3933,7 +4203,10 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                         único que permite validar el veredicto en vez de creerle. */}
                     <InsigniaActividad row={row} />
                     {/* La actividad en sí, que es lo que el informe publica por comparable. */}
-                    <ActividadDeLaComparable row={row} />
+                    <ActividadDeLaComparable
+                      row={row}
+                      alEditarActividad={(v) => handleRowChange(idx, 'descActividad', v)}
+                    />
                   </td>
                   <td className="py-2 px-3 text-zinc-500 dark:text-zinc-400 text-[11px]">
                     {row.id || '—'}

@@ -168,6 +168,11 @@ export function construirLibroSoporte(datos) {
          y lo que responde a la pregunta que la DIAN hace primero al comparar dos informes: por
          qué cambió la muestra. */
       conciliacionAnterior: embudo.conciliacionAnterior || null,
+      /* Cuántas comparables no salieron del cribado sino de una elección del analista, que las
+         incorporó cargando su estado financiero. Se publica porque una comparable que no pasó
+         por el proceso de búsqueda documentado hay que sustentarla aparte: es la primera que un
+         revisor va a preguntar por qué está. */
+      agregadasAMano: embudo.agregadasAMano || 0,
       continuidadPrioritaria: embudo.priorizoContinuidad ? {
         rescatadas: embudo.continuidadRescatadas || 0,
         noRescatadas: Array.isArray(embudo.continuidadNoRescatada)

@@ -20,7 +20,7 @@ import {
 } from './services/firestoreRepo';
 import { separarEstudio, SELLO_ESTUDIO, sonDelEstudio, ROL_EDITOR } from './services/firestoreModelo';
 import {
-  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes,
+  guardarAnexoEeff, leerAnexoEeff, guardarAnexoBImagenes, guardarAnexosDelEstudio,
   borrarRecursosDelEstudio,
 } from './services/plantillaStore';
 /* Lee las imágenes del ANEXO B y, de paso, recorta las que se guardaron como hoja
@@ -38,6 +38,20 @@ import { repararCifrasDelEstudio } from './services/eeffParser';
    Firestore se factura y cuenta contra el límite de escrituras por documento, así que
    se espera a que la mano se detenga. Con localStorage esto no importaba. */
 const RETARDO_GUARDADO = 1500;
+/* Cuánto puede tardar un guardado antes de darlo por caído. Treinta segundos: ninguna de sus
+   tres etapas tarda tanto de forma legítima, y esperar más deja al analista trabajando sobre un
+   estudio que ya no se guarda. */
+const TOPE_GUARDADO = 30000;
+
+/* Qué se está guardando ahora mismo. «guardando…» a secas vale igual para «tarda un segundo»
+   que para «lleva diez minutos colgado», y el analista no puede distinguirlas; nombrar la etapa
+   convierte la barra en el primer sitio donde mirar cuando algo no se guarda. */
+function textoGuardando(etapa) {
+  if (etapa === 'anexos') return 'guardando… (anexos, en este navegador)';
+  if (etapa === 'nube') return 'guardando… (en la nube)';
+  if (etapa === 'cliente') return 'guardando… (ficha del cliente)';
+  return 'guardando…';
+}
 
 /* Clave del veredicto de la curación con IA. Se queda en el navegador por decisión
    del usuario, y además es lo más pesado del estudio: un dictamen por candidata sobre
@@ -80,6 +94,17 @@ export default function App() {
   /* 'guardado' | 'guardando' | 'error': con la base remota una escritura puede
      fallar, y el problema que traíamos era justamente perder cambios sin avisar. */
   const [estadoGuardado, setEstadoGuardado] = useState('guardado');
+  /* ── EN QUÉ ETAPA VA EL GUARDADO ──
+     Un guardado que se queda a medias solo decía «guardando…», y esa palabra vale igual para
+     «tardando un segundo» que para «colgado desde hace diez minutos y perdiendo todo lo que
+     escriba». El 2026-09-05 costó dos rondas de diagnóstico a ciegas: sin saber en qué etapa se
+     detenía, no había forma de distinguir un fallo de la base local del navegador de uno de la
+     escritura en la nube. La etapa se nombra y se ve. */
+  const [etapaGuardado, setEtapaGuardado] = useState('');
+  /* La misma etapa en una ref: el `catch` y el vigilante corren dentro de una función que
+     capturó el render anterior, así que leer el estado ahí daría el valor de entonces. */
+  const etapaRef = useRef('');
+  const vigilante = useRef(null);
   /* Identificador recién copiado, para confirmarlo en el botón un instante. */
   const [idCopiado, setIdCopiado] = useState(null);
 
@@ -200,21 +225,58 @@ export default function App() {
       return;
     }
 
+    /* Mueve el estado visible y la ref a la vez: tenerlos separados es como se desincronizan. */
+    const marcarEtapa = (e) => { etapaRef.current = e; setEtapaGuardado(e); };
+
     setEstadoGuardado('guardando');
     if (temporizador.current) clearTimeout(temporizador.current);
     temporizador.current = setTimeout(async () => {
+      /* ── EL VIGILANTE ──
+         Un guardado colgado no lanza, así que ni el `catch` ni la barra se enteran: se queda en
+         «guardando…» indefinidamente mientras el analista sigue trabajando sobre algo que ya no
+         se está guardando. Es la peor forma de fallar que tiene esta aplicación, y ocurrió el
+         2026-09-05: horas de trabajo perdidas sin un solo aviso.
+
+         Ninguna de las tres etapas tarda de forma legítima medio minuto. Pasado ese tiempo se
+         declara caído y se NOMBRA la etapa, que es lo que permite saber dónde mirar. No se
+         cancela nada —no se puede abortar una escritura de Firestore a medias, y si acaba
+         llegando, mejor—: lo que se corrige es el silencio. */
+      vigilante.current = setTimeout(() => {
+        if (etapaRef.current === '') return;
+        const donde = {
+          anexos: 'guardando las páginas de los anexos en este navegador',
+          nube: 'escribiendo el estudio en la nube',
+          cliente: 'actualizando la ficha del cliente',
+        }[etapaRef.current] || etapaRef.current;
+        console.error('[estudios] el guardado lleva demasiado tiempo en la etapa: ' + etapaRef.current);
+        setEstadoGuardado('error');
+        setAvisoSesion(
+          `El guardado se quedó ${donde} y no respondió en 30 segundos. Lo que cambie a partir `
+          + 'de ahora puede no estarse guardando: copie aparte lo último y recargue la página '
+          + '(F5) para comprobar qué quedó guardado antes de seguir.'
+        );
+      }, TOPE_GUARDADO);
+
       try {
         const { local } = separarEstudio(study);
         if (local.iaMatch) guardarJSON(claveIaMatch(activeStudyId), local.iaMatch);
-        /* Las páginas del PDF de estados financieros van a IndexedDB: son data URLs de
-           varias páginas y no caben ni en el documento de Firestore ni en localStorage. */
-        if (local.eeffImages && local.eeffImages.length) {
-          await guardarAnexoEeff(activeStudyId, local.eeffImages);
-        }
-        /* Mismo motivo, pero por comparable: ver CAMPOS_SOLO_LOCALES. */
-        if (local.eeffImagenesComparables && Object.keys(local.eeffImagenesComparables).length) {
-          await guardarAnexoBImagenes(activeStudyId, local.eeffImagenesComparables);
-        }
+        /* ── LOS ANEXOS NO PUEDEN TUMBAR EL GUARDADO DEL ESTUDIO ──
+           Las páginas de los estados financieros van a IndexedDB: son data URLs y no caben ni
+           en el documento de Firestore ni en localStorage (ANEXO A el del contribuyente,
+           ANEXO B uno por comparable; ver CAMPOS_SOLO_LOCALES).
+
+           Antes se escribían aquí con un `await` suelto, en el mismo bloque y ANTES de la nube.
+           Así, un fallo local se llevaba por delante `guardarEstudio` y se perdía el trabajo
+           entero, no solo el adjunto. El 2026-09-05 pasó en su peor forma —la escritura no
+           fallaba, se COLGABA (ver `onabort` en plantillaStore), de modo que el estudio dejó de
+           guardarse sin un solo error y la barra se quedó en «guardando…»—.
+
+           `guardarAnexosDelEstudio` no lanza nunca: intenta los dos, devuelve un aviso por cada
+           uno que no pudo, y el estudio sigue camino a Firestore. La jerarquía es esa: el
+           adjunto se vuelve a generar cargando otra vez el PDF; el estudio, no. */
+        marcarEtapa('anexos');
+        const { avisos: avisosAnexos } = await guardarAnexosDelEstudio(activeStudyId, local);
+        marcarEtapa('nube');
         const resultado = estudioAjeno
           ? await guardarEstudioCompartido(estudioAjeno.duenoUid, activeStudyId, study, usuario)
           : await guardarEstudio(activeStudyId, study, usuario);
@@ -223,6 +285,7 @@ export default function App() {
            No se pisa: se avisa y se deja el trabajo en pantalla, que es lo único que
            permite decidir qué conservar. Guardar encima borraría lo suyo sin rastro. */
         if (resultado && resultado.conflicto) {
+          marcarEtapa('');
           setEstadoGuardado('error');
           setAvisoSesion(
             `No se guardó: ${resultado.quien} modificó este estudio mientras usted trabajaba. ` +
@@ -232,29 +295,47 @@ export default function App() {
           return;
         }
         if (resultado && resultado.error) {
+          marcarEtapa('');
           setEstadoGuardado('error');
           setAvisoSesion(resultado.error);
           return;
         }
 
+        marcarEtapa('cliente');
         await guardarCliente(study, usuario);
+        marcarEtapa('');
+        /* El estudio SÍ se guardó; lo que falló son los adjuntos de este navegador. Se dice,
+           porque el informe saldría sin esas páginas y eso hay que notarlo antes de generarlo,
+           pero no se marca el guardado como fallido: decir «no se pudo guardar» cuando el
+           trabajo está a salvo empuja a repetirlo o a no cerrar, que es el daño contrario. */
         setEstadoGuardado('guardado');
-        setAvisoSesion('');
+        setAvisoSesion(avisosAnexos.length
+          ? avisosAnexos.join(' · ') + ' El estudio sí quedó guardado en la nube; lo que falta '
+            + 'son las páginas que se adjuntan al informe. Vuelva a cargar esos PDF, o libere '
+            + 'espacio del sitio en el navegador.'
+          : '');
         setIndice(prev => prev.map(e => e.id === activeStudyId
           ? { ...e, ent: study.ent || e.ent, nit: study.nit || e.nit, anio: study.anio || e.anio, updated: Date.now() }
           : e));
       } catch (err) {
-        console.error('[estudios] no se pudo guardar', err);
+        console.error('[estudios] no se pudo guardar (etapa: ' + (etapaRef.current || '?') + ')', err);
+        marcarEtapa('');
         setEstadoGuardado('error');
         /* El motivo va a la vista: un fallo de guardado que solo aparece en la consola
            es lo mismo que un fallo silencioso, y ese era el problema de partida. */
         setAvisoSesion((err && err.message) || 'No se pudo guardar el estudio en la nube.');
+      } finally {
+        /* El vigilante se retira pase lo que pase: si no, un guardado que acabó en error
+           dispararía además su aviso treinta segundos después, pisando el motivo real. */
+        if (vigilante.current) { clearTimeout(vigilante.current); vigilante.current = null; }
       }
     }, RETARDO_GUARDADO);
 
-    return () => { if (temporizador.current) clearTimeout(temporizador.current); };
+    return () => {
+      if (temporizador.current) clearTimeout(temporizador.current);
+      if (vigilante.current) clearTimeout(vigilante.current);
+    };
   }, [study, activeStudyId, usuario, estudioAjeno]);
-
   /* `tabInicial` existe para la restauración al arrancar: abrir un estudio a mano empieza
      por el primer paso, pero volver tras una recarga tiene que dejar al usuario en el paso
      donde estaba. */
@@ -603,7 +684,7 @@ export default function App() {
                     : estadoGuardado === 'guardando' ? 'text-zinc-400' : 'text-emerald-600 dark:text-emerald-500'
                 }>
                   {estadoGuardado === 'error' ? '⚠ no se pudo guardar en la nube'
-                    : estadoGuardado === 'guardando' ? 'guardando…' : 'guardado'}
+                    : estadoGuardado === 'guardando' ? textoGuardando(etapaGuardado) : 'guardado'}
                 </span>
                 {' · puede editar · de '}{estudioAjeno.duenoNombre}
               </>
@@ -615,7 +696,7 @@ export default function App() {
               : estadoGuardado === 'guardando' ? 'text-zinc-400' : 'text-emerald-600 dark:text-emerald-500'
           }>
             {estadoGuardado === 'error' ? '⚠ no se pudo guardar en la nube'
-              : estadoGuardado === 'guardando' ? 'guardando…' : 'guardado'}
+              : estadoGuardado === 'guardando' ? textoGuardando(etapaGuardado) : 'guardado'}
           </span>
         )}
         <button

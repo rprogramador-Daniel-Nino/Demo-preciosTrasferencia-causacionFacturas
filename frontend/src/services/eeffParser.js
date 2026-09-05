@@ -699,6 +699,8 @@ Devuelve SOLO un JSON estricto con esta estructura:
     {
       "nombre": "Razón social EXACTA de la empresa, tal como aparece en el documento",
       "identificador_fuente": "Company ID de Capital IQ, NIT o tax ID si figura; cadena vacía si no",
+      "actividad_economica": "A qué se dedica la empresa, SOLO si el documento lo dice; cadena vacía si no",
+      "actividad_rotulo": "El texto EXACTO de la nota de donde tomaste la actividad; cadena vacía si va vacía",
       "pagina_inicio": 1,
       "pagina_fin": 1,
       "periodo": "Año o rango del ejercicio",
@@ -726,6 +728,11 @@ Devuelve SOLO un JSON estricto con esta estructura:
     }
   ]
 }
+
+── LA ACTIVIDAD ECONÓMICA ──
+Se toma de la nota donde el documento describe a la compañía: «Entidad reportante», «Objeto social», «Información general», «Nature of operations», «Principal activities», «Description of business». Devuelve una frase breve —a qué se dedica, qué produce o comercializa— y en "actividad_rotulo" el texto exacto de esa nota.
+
+NO LA DEDUZCAS. No la infieras de la razón social, ni de los rubros contables, ni del sector que te parezca. Un documento llamado «ASIA AROMA CORP» no autoriza a escribir «fabricación de aromas»: eso es el nombre, no el documento. Si la empresa no publica esa nota —y un estado de resultados suelto no la trae— devuelve AMBOS campos en cadena vacía. La cadena vacía es una respuesta correcta y esperada; una actividad deducida es un error, porque el informe la publica como si el documento la respaldara.
 
 Reglas: una entrada por empresa, en el orden en que aparecen. Si un rubro no figura para una empresa, devuélvelo en null — NUNCA en 0, porque 0 se lee como "la empresa reportó cero" y ese no es el caso cuando el concepto simplemente no aparece. Esto aplica a TODOS los rubros numéricos, incluyendo "gastos_investigacion_desarrollo" y "gastos_publicidad" (que además son OPCIONALES: van en null salvo que la empresa los desglose como línea propia). No estimes ni deduzcas ningún rubro por diferencia. Si el documento resulta contener una sola empresa, devuelve un arreglo de un elemento. "pagina_inicio" y "pagina_fin" son la primera y la última página (1-indexadas) del PDF COMPLETO tal como se envió donde aparecen los estados financieros de esa empresa — no un conteo relativo a la empresa. Si el documento no permite determinarlas con certeza, devuelve null en ambas: no estimes.
 
