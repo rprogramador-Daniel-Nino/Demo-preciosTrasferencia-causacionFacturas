@@ -1030,6 +1030,24 @@ export function hojasMemoriaRangoOptimo(estudio, seleccion) {
 
        Se imprime solo si hay estudio anterior y algo que explicar: con la muestra reproducida
        entera no hay nada que sustentar. */
+    /* ─── Comparables incorporadas fuera del cribado ───
+       No salieron del screening de Capital IQ ni pasaron por la curación de actividad: el
+       analista las identificó por su cuenta y las incorporó cargando su estado financiero. Va en
+       el soporte porque es lo primero que un revisor pregunta al ver en la muestra una compañía
+       que el proceso de búsqueda documentado no devolvió. */
+    if (seleccion.agregadasAMano) {
+      sel.push([cTxt('COMPARABLES INCORPORADAS FUERA DEL CRIBADO')]);
+      sel.push([
+        cTxt('Cantidad'),
+        cNum(seleccion.agregadasAMano, '0'),
+        cTxt('Identificadas por el analista e incorporadas a partir de sus estados financieros. '
+          + 'No provienen del cribado automatizado ni de la curación de actividad económica, de '
+          + 'modo que su comparabilidad funcional se sustenta en el análisis del informe y no en '
+          + 'el proceso de búsqueda de esta hoja.'),
+      ]);
+      sel.push([]);
+    }
+
     const conc = seleccion.conciliacionAnterior || null;
     if (conc && conc.porExplicar > 0) {
       const ETIQUETA_ESTADO = {

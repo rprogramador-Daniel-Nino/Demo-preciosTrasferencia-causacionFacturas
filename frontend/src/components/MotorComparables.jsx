@@ -29,6 +29,9 @@ import { parsePriorStudyFile } from '../services/priorStudyParser';
    la muestra del año anterior y, si no se puede, entregarle al cliente el motivo de cada una
    (pedido del 2026-09-02). */
 import { conciliarConEstudioAnterior } from '../services/conciliacionEstudioAnterior';
+/* Las comparables que el analista agregó cargando su estado financiero no las borra una corrida
+   nueva del motor: son decisiones tomadas, no candidatas a evaluar. */
+import { fusionarAgregadasAMano } from '../services/muestraManual';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
   registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
@@ -1236,7 +1239,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
       /* El cupo que el motor aplicó de verdad: nunca por debajo de `MINIMO_COMPARABLES`,
          aunque el paso 2 pida menos. */
       const nTarget = result.cupo;
-      const finales = result.seleccionadas;
+
+      /* ── LO QUE EL ANALISTA AGREGO A MANO NO LO BORRA EL MOTOR ──
+         El motor selecciona del UNIVERSO —el cribado del paso 1— y las comparables creadas al
+         cargar su estado financiero viven solo en la MUESTRA, así que hasta ahora una corrida
+         nueva las barría todas. Doce EEFF cargados a mano y un clic en el botón equivocado.
+
+         Es la misma lógica que ya protege lo que se retira a mano: el motor propone, el analista
+         dispone, y una corrida nueva no puede deshacer lo que él decidió. */
+      const fusion = fusionarAgregadasAMano(comparables, result.seleccionadas, result.cupo);
+      const finales = fusion.muestra;
       setComparables(finales);
       /* Detalle por candidata para el Excel de soporte: `scoreCandidates` ya lo
          calcula (motivo, categoría, score, factores), pero hasta ahora solo se
@@ -1306,10 +1318,18 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
            Es la justificacion que el despacho le entrega al cliente cuando la muestra del anio
            pasado no se puede reproducir, y tiene que salir del soporte en vez de reconstruirse a
            mano contra el informe anterior. */
+        /* Cuántas comparables agregadas a mano sobrevivieron a esta corrida, y si su número
+           ya excede el objetivo de la muestra. La pantalla lo dice: son las que el motor no
+           eligió y el informe tiene que poder sustentar. */
+        agregadasAMano: fusion.conservadas,
+        agregadasExcedenObjetivo: fusion.excedeObjetivo,
         conciliacionAnterior: conciliarConEstudioAnterior({
           previas: (estudioAnteriorInfo && estudioAnteriorInfo.comparables) || [],
           universo,
-          muestra: result.seleccionadas,
+          /* `finales` y no `result.seleccionadas`: la muestra real incluye las agregadas a
+             mano, y una comparable del año anterior que el analista recuperó cargando su EEFF
+             tiene que contar como presente, no como perdida. */
+          muestra: finales,
           rechazadas: result.rechazadas,
           reserva: result.reserva,
         }),
@@ -3106,6 +3126,27 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                 <Layers className="w-3.5 h-3.5" />
                 <span>Priorizar continuidad</span>
               </button>
+            )}
+
+            {/* ── LO QUE EL ANALISTA AGREGO A MANO ──
+                Estas comparables no salieron del cribado ni pasaron por la curación: las eligió
+                el analista y entraron cargando su estado financiero. El motor ya no las borra al
+                reejecutar (2026-09-05), y decirlo aquí importa porque son las que el informe
+                tiene que sustentar como elección propia. */}
+            {selectionFunnel && selectionFunnel.agregadasAMano > 0 && (
+              <span className="text-[10.5px] leading-snug max-w-[18rem]">
+                <span className="font-bold text-[#0B7C7A] dark:text-[#0FA3A1]">
+                  {selectionFunnel.agregadasAMano} agregada(s) a mano
+                </span>
+                {' se conservaron: las trajo usted cargando su estado financiero, no el cribado, '
+                  + 'y no pasaron por la curación de actividad. Sustente su inclusión en el informe.'}
+                {selectionFunnel.agregadasExcedenObjetivo && (
+                  <span className="block mt-0.5 text-amber-700 dark:text-amber-400">
+                    Ya superan el tamaño de muestra que pidió, así que el motor no agregó
+                    ninguna. Retire las que sobren si quiere bajar a ese número.
+                  </span>
+                )}
+              </span>
             )}
 
             {/* ── LA CONCILIACION CONTRA EL ESTUDIO ANTERIOR ──
