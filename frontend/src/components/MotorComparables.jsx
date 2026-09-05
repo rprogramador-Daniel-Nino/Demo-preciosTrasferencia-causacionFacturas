@@ -1907,21 +1907,22 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     const lista = Array.from(files || []);
     if (!lista.length) return;
 
-    /* Sin comparables en la tabla no hay a qué fila aplicar nada, y leer los documentos
-       primero para rechazarlos después cuesta una consulta a Gemini por archivo —minutos y
-       dinero— para acabar en una lista de rechazos idénticos. Se avisa antes de leer. */
-    if (!comparables.length) {
-      setResultadoCarga({
-        aplicadas: [],
-        rechazadas: lista.map((f) => ({
-          archivo: f.name,
-          motivo: 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a ' +
-            'la que aplicar sus cifras. Ejecute la selección del paso 3 y vuelva a cargar los ' +
-            'estados financieros. No se leyó ningún documento, así que no se gastó ninguna consulta.',
-        })),
-      });
-      return;
-    }
+    /* ── AQUI HABIA UNA GUARDA QUE YA NO APLICA ──
+       Rechazaba el lote entero cuando la tabla estaba vacía, sin leer ningún documento, con
+       este motivo: «El estudio todavía no tiene comparables en la tabla, así que no hay ninguna
+       fila a la que aplicar sus cifras. Ejecute la selección del paso 3».
+
+       Su razón era buena: sin filas no había a qué aplicar las cifras, y leer los documentos
+       para rechazarlos después cuesta una consulta por archivo —minutos y dinero— para acabar
+       en una lista de rechazos idénticos.
+
+       Esa premisa dejó de ser cierta el 2026-09-04, cuando cargar un estado financiero pasó a
+       CREAR la comparable si no existe. Con la tabla vacía ya no hay nada que rechazar: hay una
+       muestra que armar, que es justo el segundo camino del proceso —buscar las comparables por
+       fuera y soltar sus estados financieros—.
+
+       Reportado el 2026-09-05 con la captura de siete documentos rechazados en bloque, todos con
+       ese texto. Retirada: era el guardia de una puerta que ahora tiene que estar abierta. */
 
     setUploadingEEFF(true);
     setResultadoCarga(null);

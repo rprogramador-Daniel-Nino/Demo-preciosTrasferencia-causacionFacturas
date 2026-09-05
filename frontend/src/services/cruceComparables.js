@@ -220,10 +220,18 @@ export function motivoCruce(cruce, entrada, nombreArchivo) {
      creíble y falsa —«8.700,000 %» o «87,000 % %»—. */
   const pct = pctf(cruce.punt || 0);
 
+  /* ── ESTA RAMA YA NO SE ALCANZA, y se conserva por si algún llamador nuevo la pide ──
+     Decía «ejecute la selección del paso 3 y vuelva a cargar los estados financieros», que era
+     cierto mientras la muestra solo podía salir del cribado. Desde el 2026-09-04 un documento
+     que no cruza con ninguna fila CREA su comparable, así que `repartir` manda el caso a
+     `nuevas` antes de llegar aquí, y la carga por fila necesita una fila seleccionada —o sea,
+     que la tabla no esté vacía—.
+
+     Se deja el texto corregido en vez de un mensaje que contradiga el comportamiento: si
+     reaparece, que no mande al analista a un paso que ya no hace falta. */
   if (cruce.modo === 'sin-comparables') {
-    return 'El estudio todavía no tiene comparables en la tabla, así que no hay ninguna fila a la ' +
-      'que aplicar «' + leido + '». Ejecute la selección del paso 3 y vuelva a cargar los estados ' +
-      'financieros; o cargue este documento desde la fila de su comparable.';
+    return 'El estudio todavía no tiene comparables en la tabla. Cargue este documento desde la ' +
+      'carga masiva, que crea la comparable a partir de su razón social y sus cifras.';
   }
 
   if (cruce.modo === 'ambiguo') {
