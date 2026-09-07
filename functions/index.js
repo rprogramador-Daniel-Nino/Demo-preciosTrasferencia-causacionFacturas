@@ -8,6 +8,36 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const {
   debeCaerAGemini, aPeticionGemini, aRespuestaAnthropic, PROVEEDOR_GEMINI, CABECERA_PROVEEDOR,
 } = require('./fallbackGemini');
+const { peticionDeOrigenPermitido } = require('./origenesPermitidos');
+const { crearLimitadorPorIp, ipDeLaPeticion } = require('./limitadorTasa');
+const { peticionAutenticada } = require('./verificarSesion');
+
+/* Filtro común de las cinco funciones HTTP públicas (`claude`, `gemini`, `extraerRut`,
+   `extraerCamara`, `generarAnalisisSector`): todas hablan con una API de pago
+   (Anthropic/Gemini) y ninguna comprobaba sesión, solo el método HTTP. Ver
+   verificarSesion.js, origenesPermitidos.js y limitadorTasa.js para el porqué de cada
+   capa. Mismo filtro que server.js. Un limitador por función: que una se llene no debe
+   tapar a las demás. */
+const limitadorClaude = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorGemini = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorExtraerRut = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorExtraerCamara = crearLimitadorPorIp({ maxPorMinuto: 20 });
+const limitadorAnalisisSector = crearLimitadorPorIp({ maxPorMinuto: 20 });
+async function bloqueadoAcceso(req, res, limitador) {
+  if (!(await peticionAutenticada(req))) {
+    res.status(401).json({ error: 'Se requiere iniciar sesión.' });
+    return true;
+  }
+  if (!peticionDeOrigenPermitido(req)) {
+    res.status(403).json({ error: 'Origen no permitido.' });
+    return true;
+  }
+  if (!limitador.permitir(ipDeLaPeticion(req))) {
+    res.status(429).json({ error: 'Demasiadas solicitudes; intente de nuevo en un minuto.' });
+    return true;
+  }
+  return false;
+}
 
 /* Atiende con Gemini una petición que venía para Claude y devuelve la respuesta ya con forma
    de Anthropic. Si Gemini tampoco puede, se devuelve el error ORIGINAL de Anthropic: es el
@@ -66,6 +96,7 @@ exports.claude = onRequest(
       res.status(405).json({ error: 'Method not allowed' });
       return;
     }
+    if (await bloqueadoAcceso(req, res, limitadorClaude)) return;
     try {
       const apiKey = ANTHROPIC_API_KEY.value();
       if (!apiKey) {
@@ -137,6 +168,7 @@ exports.gemini = onRequest(
       res.status(405).json({ error: 'Method not allowed' });
       return;
     }
+    if (await bloqueadoAcceso(req, res, limitadorGemini)) return;
     try {
       const apiKey = GEMINI_API_KEY.value();
       if (!apiKey) {
@@ -184,6 +216,7 @@ exports.extraerRut = onRequest(
       res.status(405).json({ error: 'Method not allowed' });
       return;
     }
+    if (await bloqueadoAcceso(req, res, limitadorExtraerRut)) return;
     try {
       const apiKey = GEMINI_API_KEY.value();
       if (!apiKey) {
@@ -259,6 +292,7 @@ exports.extraerCamara = onRequest(
       res.status(405).json({ error: 'Method not allowed' });
       return;
     }
+    if (await bloqueadoAcceso(req, res, limitadorExtraerCamara)) return;
     try {
       const apiKey = GEMINI_API_KEY.value();
       if (!apiKey) {
@@ -383,6 +417,7 @@ exports.generarAnalisisSector = onRequest(
       res.status(405).json({ error: 'Method not allowed' });
       return;
     }
+    if (await bloqueadoAcceso(req, res, limitadorAnalisisSector)) return;
     const { actividad, year } = req.body || {};
     if (typeof actividad !== 'string' || !actividad.trim()) {
       res.status(400).json({ error: 'Falta "actividad".' });

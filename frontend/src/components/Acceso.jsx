@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldCheck, LogIn, AlertTriangle } from 'lucide-react';
 import { iniciarSesionGoogle } from '../services/sesion';
+import { DOMINIOS_PERMITIDOS } from '../services/firebase';
 
 /* Puerta de entrada. Antes no había ninguna: los estudios vivían en el navegador de
    cada uno, así que no hacía falta identificarse. Con la base compartida sí, y el
@@ -45,8 +46,14 @@ export default function Acceso() {
         </div>
 
         <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-5">
-          Entre con cualquier cuenta de Google. Sus estudios, clientes y comparables son
-          <b> privados</b>: solo usted los ve, y puede dar acceso de lectura a quien decida.
+          Entre con su cuenta corporativa
+          {DOMINIOS_PERMITIDOS.map((d, i) => (
+            <React.Fragment key={d}>
+              {i > 0 && ' o '} <b>@{d}</b>
+            </React.Fragment>
+          ))}
+          . Sus estudios, clientes y comparables son <b>privados</b>: solo usted los ve,
+          y puede dar acceso de lectura a quien decida.
         </p>
 
         <button

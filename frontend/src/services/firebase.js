@@ -89,10 +89,16 @@ if (entornoFirebase !== 'produccion') {
   console.info(`[Sistema PT] Firebase apuntando al proyecto de ${entornoFirebase}: ${firebaseConfig.projectId}`);
 }
 
-/* No hay restricción de dominio: por decisión del usuario entra cualquier cuenta de
-   Google. Lo que protege los datos es que cada persona trabaja en su propio espacio
-   (`usuarios/{uid}/…`), de modo que quien llegue de fuera ve su base vacía y nunca la de
-   otro. */
+/** Dominios corporativos permitidos. `firestore.rules` exige lo mismo del lado del
+    servidor: esta constante solo evita el viaje inútil y da un mensaje claro. */
+export const DOMINIOS_PERMITIDOS = ['crconsultorescolombia.com', 'scientia-legal.com'];
+
+/** ¿El correo pertenece a alguno de los dominios permitidos? */
+export function esCorreoDeDominioPermitido(correo) {
+  if (typeof correo !== 'string') return false;
+  const limpio = correo.trim().toLowerCase();
+  return DOMINIOS_PERMITIDOS.some((dominio) => limpio.endsWith('@' + dominio));
+}
 
 /* El projectId del entorno activo. Lo necesita quien tenga que construir la URL de una
    Cloud Function a mano, porque no toda llamada puede ir por los rewrites de Hosting: ver
@@ -103,8 +109,10 @@ export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 
-/* Sin `hd`: ese parámetro limitaba el selector de Google a las cuentas del dominio, y
-   ahora cualquier cuenta sirve. Se conserva `select_account` para que quien tenga varias
-   sesiones abiertas pueda elegir con cuál entra, en vez de que Google decida por él. */
+/* Sin `hd`: ese parámetro de Google solo acepta UN dominio (o `*` para cualquier cuenta
+   de Workspace), y aquí hay dos. Filtrar el selector queda fuera de alcance; la
+   restricción real ocurre después, al recibir la sesión, y otra vez en `firestore.rules`.
+   Se conserva `select_account` para que quien tenga varias sesiones abiertas pueda elegir
+   con cuál entra, en vez de que Google decida por él. */
 export const proveedorGoogle = new GoogleAuthProvider();
 proveedorGoogle.setCustomParameters({ prompt: 'select_account' });
