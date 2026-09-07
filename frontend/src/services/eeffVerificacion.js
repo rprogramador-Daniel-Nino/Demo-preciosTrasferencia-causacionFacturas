@@ -66,6 +66,7 @@ import { num, egreso } from '../utils/calculations.js';
 import { cifrasDelTexto, cifraApareceEnTexto } from './eeffTextoPdf.js';
 import { ubicacionDeCifra } from './eeffColumnas.js';
 import { contienePalabraConocida, normalizarPalabra } from './vocabularioEeff.js';
+import { CLAVES_RUBROS_BALANCE_ADICIONALES, indiceFilaCoincidenteUnica } from './sincronizarRubrosBalance.js';
 
 /* Una identidad se considera cumplida dentro de una milésima de la escala del estado, con
    un piso de un peso para los estados expresados en unidades pequeñas: los estados
@@ -100,6 +101,15 @@ const ETIQUETA = {
   t_act_curr: 'Total, Activo corriente',
   t_act_tot: 'Total, Activos',
   t_ppe: 'Propiedad, planta y equipo',
+  /* Ampliación del 2026-09-07. Mismo texto que su `etiqueta` en `RUBROS_EXAMINADA`
+     (memoriaCalculoRangoOptimo.js) y en el arreglo de casillas de IngestaCifras.jsx: una
+     etiqueta distinta en la advertencia y en la pantalla confundiría a quien la lea. */
+  t_cash: 'Efectivo y equivalentes de efectivo',
+  t_inv_assoc: 'Inversiones asociadas',
+  t_tax: 'Activos por impuestos corrientes',
+  t_intang: 'Intangibles',
+  t_dif: 'Diferidos',
+  t_act_nocurr: 'Total, Activos no corrientes',
 };
 
 /* Los que se leen del documento. `t_op` no está: se calcula (o, en su defecto, sale del
@@ -107,7 +117,15 @@ const ETIQUETA = {
    balance — a diferencia del diseño anterior (100% manual), que dejaba en cero, por
    omisión, el PP&E de un estudio real como Symtek (~32% del activo) solo porque el caso que
    motivó ese diseño (Montachem) tenía el equipo totalmente depreciado. */
-const LEIDOS = ['t_s', 't_c', 't_ar', 't_inv', 't_ap', 't_act_curr', 't_act_tot', 't_ppe'];
+/* Ampliación del 2026-09-07: los seis rubros de más abajo (`t_cash` en adelante) entran a
+   esta misma lista para heredar gratis la verificación por columna/texto que ya corre para
+   los demás — presencia literal, corrección si la columna trae otra cifra, descarte con
+   advertencia si no aparece impresa. Antes solo los llenaba (si acaso) la fila equivalente
+   de `activos_detalle`, sin verificación propia. */
+const LEIDOS = [
+  't_s', 't_c', 't_ar', 't_inv', 't_ap', 't_act_curr', 't_act_tot', 't_ppe',
+  't_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr',
+];
 
 const fmtCop = (v) => (v === null || v === undefined
   ? '—'
@@ -223,18 +241,28 @@ export function verificarEeff(lectura, {
    en vez de 4.003.623.665, y 59.805.002 en vez de 53.708.962.262.
 
    `t_ppe` y `t_act_tot` no entran: uno vive en el no corriente por definición y el otro es el
-   total general, y ninguno de los dos rótulos se repite. */
+   total general, y ninguno de los dos rótulos se repite.
+
+   De los seis rubros ampliados el 2026-09-07, solo `t_cash` y `t_tax` entran aquí: el
+   propio nombre del rubro ("impuestos CORRIENTES") y la práctica contable los fijan sin
+   ambigüedad al corriente. Los otros cuatro (`t_inv_assoc`, `t_intang`, `t_dif`,
+   `t_act_nocurr`) quedan fuera por el mismo criterio que `t_ppe`/`t_act_tot`: antes de
+   afirmar en qué subsección cae cada uno sin excepción, no se adivina. */
 const SUBSECCION_ESPERADA = {
   t_ar: 'CORRIENTE',
   t_inv: 'CORRIENTE',
   t_ap: 'CORRIENTE',
   t_act_curr: 'CORRIENTE',
+  t_cash: 'CORRIENTE',
+  t_tax: 'CORRIENTE',
 };
 
 const SECCION_ESPERADA = {
     t_s: 'RESULTADOS', t_c: 'RESULTADOS',
     t_ar: 'ACTIVO', t_inv: 'ACTIVO', t_act_curr: 'ACTIVO', t_act_tot: 'ACTIVO', t_ppe: 'ACTIVO',
     t_ap: 'PASIVO',
+    t_cash: 'ACTIVO', t_inv_assoc: 'ACTIVO', t_tax: 'ACTIVO', t_intang: 'ACTIVO',
+    t_dif: 'ACTIVO', t_act_nocurr: 'ACTIVO',
   };
 
   const estructura = l.estructura || null;
@@ -774,6 +802,39 @@ const SECCION_ESPERADA = {
             : ' Escríbala a mano si el documento la trae con otro nombre.'),
       });
     }
+  });
+
+  /* ── Respaldo para los seis rubros ampliados el 2026-09-07 ──
+     Misma filosofía que el bloque de arriba (`CAMPOS_DESDE_DETALLE_ACTIVOS`), pero con el
+     matcher compartido de `sincronizarRubrosBalance.js` en vez de un patrón ad hoc: es el
+     MISMO matcher que usa la sincronía manual del formulario (`IngestaCifras.jsx`), así que
+     las dos rutas nunca pueden reconocer una fila distinta como el mismo concepto.
+
+     Aplica cuando la lectura directa (arriba, en `LEIDOS`) no alcanzó el rubro — el caso
+     real que esto cierra es el EEFF que agrega el concepto dentro de una fila genérica
+     ("Otros activos") en el cuerpo del balance pero SÍ lo desglosa como fila propia en
+     `activos_detalle` bajo otro rótulo. Con match único se aplica como corrección visible;
+     con cero o varias filas candidatas, no se fuerza nada. Ninguno de los seis alimenta un
+     ajuste ni el margen —solo el Análisis Vertical—, así que a diferencia del bloque de
+     arriba no hace falta advertir si sigue en null: la casilla queda en blanco para que el
+     analista decida, igual que hoy. */
+  CLAVES_RUBROS_BALANCE_ADICIONALES.forEach((clave) => {
+    const valor = campos[clave];
+    if (valor !== null && valor !== undefined && valor !== 0) return;
+    const idx = indiceFilaCoincidenteUnica(detalle, clave);
+    if (idx === -1) return;
+    const candidata = detalle[idx];
+    correcciones.push({
+      campo: clave,
+      etiqueta: ETIQUETA[clave],
+      valorLeido: valor,
+      valorAplicado: candidata.valor,
+      motivo: `No se encontró bajo el rótulo esperado; se indexó «${candidata.etiqueta}» `
+        + `(${fmtCop(candidata.valor)}) del detalle de activos del documento, la única fila `
+        + 'que corresponde a este rubro con otro nombre. Verifíquela contra el estado '
+        + 'financiero.',
+    });
+    campos[clave] = candidata.valor;
   });
 
   if (campos.t_c === null) {

@@ -206,17 +206,84 @@ test('un detalle de activos vacío no pisa uno ya cargado a mano', () => {
   assert.ok(!('t_activos_detalle' in aplicables));
 });
 
-test('no toca ningún otro campo con nombre del balance', () => {
+test('no toca ningún otro campo con nombre del balance, salvo los que sí puede derivar del detalle', () => {
   /* Las partidas de partes relacionadas siguen siendo tres y un subtotal; el total general
      de activos (`t_act_tot`) y el detalle completo (`t_activos_detalle`) sí se escriben
      ahora, porque alimentan la Tabla 10 y el ANEXO A y no el motor de ajuste. `t_ppe` YA NO
      está en esta lista: ver la sección de PP&E más abajo — el criterio cambió porque dejarlo
      100% manual hacía que un PP&E real (como el de Symtek, ~32% del activo) se tratara como
      cero en los ajustes por omisión, a diferencia del caso que motivó el diseño manual
-     (Montachem, donde el PP&E neto SÍ era cero por depreciación total). */
+     (Montachem, donde el PP&E neto SÍ era cero por depreciación total).
+
+     De los seis rubros ampliados el 2026-09-07, `t_cash` SÍ se escribe con este fixture: la
+     lectura no lo trae como campo directo, pero `activosDetalle` sí tiene una fila «EFECTIVO
+     Y EQUIVALENTES DE EFECTIVO» sin ambigüedad, y el respaldo por detalle la toma — es
+     exactamente el comportamiento que motivó la ampliación. Los otros cinco siguen ausentes
+     porque este fixture (activo corriente de Montachem) no trae ninguna fila que les
+     corresponda. */
   const aplicables = camposAplicables(verificar().campos);
-  ['t_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr']
+  assert.strictEqual(aplicables.t_cash, 337546138);
+  ['t_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr']
     .forEach((clave) => assert.ok(!(clave in aplicables), `${clave} no debería escribirse`));
+});
+
+/* ══════ Ampliación 2026-09-07: los seis rubros que antes solo llenaba "Detalle de Activos" ══════
+   efectivo (t_cash), inversiones asociadas (t_inv_assoc), impuestos corrientes (t_tax),
+   intangibles (t_intang), diferidos (t_dif) y el subtotal de activo no corriente
+   (t_act_nocurr). Dos fuentes independientes, como para el resto del balance: la lectura
+   directa (entran a `LEIDOS`, se verifican por columna/texto igual que cualquier otro
+   campo) y, si esta no los alcanzó, el respaldo por detalle (mismo matcher que la sincronía
+   manual de IngestaCifras.jsx, ver sincronizarRubrosBalance.js). */
+
+test('un rubro ampliado leído directo se verifica contra el texto, igual que cualquier otro campo de LEIDOS', () => {
+  const r = verificar({ t_cash: 337546138 });
+  assert.strictEqual(r.campos.t_cash, 337546138);
+});
+
+test('un rubro ampliado leído directo que no aparece impreso se descarta con advertencia', () => {
+  const r = verificar({ t_intang: 999999999 });
+  assert.strictEqual(r.campos.t_intang, null);
+  const a = r.advertencias.find((x) => x.tipo === 'cifra-inexistente' && x.campo === 't_intang');
+  assert.ok(a, 'debe advertir igual que con cualquier otro campo de LEIDOS');
+});
+
+test('respaldo por detalle: si la lectura directa no trae el rubro, se deriva de la única fila candidata', () => {
+  /* Es el caso concreto que motiva la ampliación: el EEFF no desglosa "Intangibles" como
+     campo propio de la lectura directa (o el cálculo lo descartó), pero SÍ tiene una fila
+     inequívoca en `activos_detalle`. */
+  const r = verificar({
+    textoPdf: '',
+    activosDetalle: [{ etiqueta: 'Intangibles', valor: 800000, esSubtotal: false }],
+  });
+  assert.strictEqual(r.campos.t_intang, 800000);
+  const c = r.correcciones.find((x) => x.campo === 't_intang');
+  assert.ok(c, 'debe quedar registrada como corrección visible, no como lectura silenciosa');
+  assert.strictEqual(c.valorAplicado, 800000);
+  assert.match(c.motivo, /detalle de activos/);
+});
+
+test('respaldo por detalle: con dos filas ambiguas para el mismo rubro, no se deriva nada', () => {
+  const r = verificar({
+    textoPdf: '',
+    activosDetalle: [
+      { etiqueta: 'Efectivo y equivalentes de efectivo', valor: 100, esSubtotal: false },
+      { etiqueta: 'Caja y Bancos', valor: 50, esSubtotal: false },
+    ],
+  });
+  assert.strictEqual(r.campos.t_cash, null, 'ambiguo: no se fuerza ninguna de las dos');
+  assert.strictEqual(r.correcciones.find((x) => x.campo === 't_cash'), undefined);
+});
+
+test('respaldo por detalle: la lectura directa ya verificada NO se pisa aunque el detalle traiga otra cifra', () => {
+  const r = verificar({
+    t_cash: 337546138,
+    textoPdf: 'EFECTIVO Y EQUIVALENTES DE EFECTIVO | 337.546.138\nOTRA FILA CUALQUIERA | 999.999',
+    activosDetalle: [
+      { etiqueta: 'Efectivo y equivalentes de efectivo', valor: 999999, esSubtotal: false },
+    ],
+  });
+  assert.strictEqual(r.campos.t_cash, 337546138, 'la lectura directa, ya verificada, manda');
+  assert.strictEqual(r.correcciones.find((x) => x.campo === 't_cash'), undefined);
 });
 
 test('el cajón residual «Otras cuentas por pagar» NO se indexa', () => {
@@ -838,10 +905,14 @@ RESULTADO DE ACTIVIDADES DE LA OPERACIÓN | -2.986.236.031`,
 
 test('el uop analítico que sí cuadra con la identidad no dispara el fallback ni avisa de más', () => {
   /* Montachem: −1.091.003.854 (analítico) == 1.891.180.250 − 2.982.184.104 (bruta − gastos).
-     Cuadra exacto, así que no debe tocarse ni generar ninguna corrección. */
+     Cuadra exacto, así que no debe tocarse ni generar ninguna corrección relacionada con la
+     utilidad operacional. La única corrección que SÍ aparece con este fixture es la de
+     `t_cash` (ver el test de "no toca ningún otro campo..." más arriba): es el respaldo por
+     detalle ampliado el 2026-09-07, ajeno al fallback de utilidad operacional que este test
+     verifica. */
   const r = verificar();
   assert.strictEqual(r.campos.t_op, -1091003854);
-  assert.deepStrictEqual(r.correcciones, []);
+  assert.deepStrictEqual(r.correcciones.filter((c) => c.campo !== 't_cash'), []);
 });
 
 /* ══════ PP&E: se lee y se verifica como cualquier otra partida del balance ══════ */
