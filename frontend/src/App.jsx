@@ -250,10 +250,31 @@ export default function App() {
         }[etapaRef.current] || etapaRef.current;
         console.error('[estudios] el guardado lleva demasiado tiempo en la etapa: ' + etapaRef.current);
         setEstadoGuardado('error');
+        /* ── POR QUÉ LA ETAPA «nube» LLEVA SU PROPIA EXPLICACIÓN ──
+           Diagnosticado el 2026-09-05, y costó el día: el navegador estaba BLOQUEANDO las
+           peticiones a Firestore —`net::ERR_BLOCKED_BY_CLIENT` en el canal de escritura, obra de
+           una extensión de bloqueo—. El SDK de Firestore no falla ante eso: reintenta
+           indefinidamente, así que la promesa de `setDoc` no se resuelve NUNCA. Desde dentro se
+           ve igual que una red lenta, y JavaScript no puede leer ese motivo: el bloqueo ocurre
+           por debajo, en el propio navegador.
+
+           Los síntomas no apuntaban a nada de esto: las comparables borradas reaparecían al
+           recargar y las nuevas desaparecían, porque al leer de la nube volvía la versión
+           anterior. Se persiguió durante horas dentro del código, que estaba bien.
+
+           Por eso el aviso nombra la causa probable en vez de decir solo «no respondió»: es la
+           única pista que el usuario puede accionar, y sin ella el siguiente que lo sufra
+           repetirá el mismo día de diagnóstico. */
+        const pista = etapaRef.current === 'nube'
+          ? ' Lo más probable es que una EXTENSIÓN DEL NAVEGADOR esté bloqueando la conexión con '
+            + 'la base de datos (un bloqueador de anuncios o de rastreo, o el antivirus). '
+            + 'Compruébelo abriendo la aplicación en una ventana de incógnito, o permita este '
+            + 'sitio en esa extensión. En la consola del navegador se ve como '
+            + '«ERR_BLOCKED_BY_CLIENT» en peticiones a firestore.googleapis.com.'
+          : '';
         setAvisoSesion(
           `El guardado se quedó ${donde} y no respondió en 30 segundos. Lo que cambie a partir `
-          + 'de ahora puede no estarse guardando: copie aparte lo último y recargue la página '
-          + '(F5) para comprobar qué quedó guardado antes de seguir.'
+          + 'de ahora NO se está guardando: copie aparte lo último antes de seguir.' + pista
         );
       }, TOPE_GUARDADO);
 
