@@ -57,6 +57,23 @@ export function evaluarRadicacion({ diagnostico, fugasReferencia, avisosTablas, 
   if (d.comparablesSinCifras) {
     advertencias.push(d.comparablesSinCifras + ' comparable(s) sin estados financieros cargados.');
   }
+  /* ── SIN ACTIVIDAD, EL ANEXO B LO DICE EN VOZ ALTA ──
+     Faltando la descripción, el anexo imprime «Descripción de actividad no disponible.» junto a
+     la comparable. No es una fuga de la plantilla —nada de otro contribuyente se cuela— así que
+     no bloquea; pero es un hueco visible en el sustento de comparabilidad (Art. 260-4 E.T.), y
+     radicarlo sin saberlo era posible hasta el 2026-09-05.
+
+     Se nombran las compañías: es lo que permite ir a la fila y escribirla. Con muchas se citan
+     las primeras y se dice cuántas quedan, para no convertir el aviso en un listado ilegible. */
+  const sinActividad = d.comparablesSinActividad || [];
+  if (sinActividad.length) {
+    const primeras = sinActividad.slice(0, 5).join(', ');
+    const resto = sinActividad.length > 5 ? ` y ${sinActividad.length - 5} más` : '';
+    advertencias.push(
+      `${sinActividad.length} comparable(s) saldrían en el ANEXO B con «Descripción de actividad `
+      + `no disponible»: ${primeras}${resto}. Escriba su actividad en el paso 4.`
+    );
+  }
   (avisosTablas || []).forEach((t) => advertencias.push('No se encontró en la plantilla: ' + t + '.'));
   (camposVacios || []).forEach((c) => advertencias.push('Campo sin dato: ' + c + '.'));
 

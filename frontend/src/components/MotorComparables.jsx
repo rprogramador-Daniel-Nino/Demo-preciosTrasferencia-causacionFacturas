@@ -21,7 +21,7 @@ import { rasterizarConReintento, recortarPorPagina } from '../services/pdfRender
    (spec 2026-08-06). Sin quitarle el papel en blanco de alrededor, el cuadro de cada
    comparable se llevaba una página entera del informe. */
 import { recortarPaginas } from '../services/recorteImagen';
-import { redactarDescripcionesEnLote } from '../services/descripcionComparables';
+import { redactarDescripcionesEnLote, redactarDescripcionActividad } from '../services/descripcionComparables';
 import { buscarActividadesPorRazonSocial } from '../services/actividadComparables';
 import { traducirCriteriosScreening } from '../services/criteriosScreeningIA';
 import { residuoDeCriterios } from '../services/criteriosScreeningEs';
@@ -195,7 +195,7 @@ function ProcedenciaDeLaActividad({ row, hayTexto }) {
 
    Se distingue cuál de las dos se está viendo: si todavía no hay redacción en español, el
    informe saldría con el inglés de la fuente, y eso hay que poder notarlo. */
-function ActividadDeLaComparable({ row, alEditarActividad }) {
+function ActividadDeLaComparable({ row, alEditarActividad, alRedactar, redactandoEsta }) {
   const redactada = String(row.descActividad || '').trim();
   const cruda = String(row.desc || '').trim();
   const texto = redactada || cruda;
@@ -218,9 +218,29 @@ function ActividadDeLaComparable({ row, alEditarActividad }) {
           value={redactada || cruda}
           onChange={(e) => alEditarActividad(e.target.value)}
           rows={2}
-          placeholder="Escriba la actividad de esta comparable: el informe la publica en el ANEXO B."
+          placeholder="Escriba o pegue la actividad de esta comparable: el informe la publica en el ANEXO B."
           className="w-full text-[10.5px] leading-snug bg-transparent border border-dashed border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-600 dark:text-zinc-300 placeholder:text-zinc-400 focus:outline-none focus:border-[#0FA3A1] resize-y"
         />
+        {/* ── PEGAR Y REDACTAR ──
+            Cuando ni el estado financiero ni la consulta por razón social dan la actividad, la
+            averigua el analista —la web de la compañía, su reporte anual—. Y lo que encuentra
+            viene en inglés y en tono comercial, así que pegado tal cual acababa así EN EL
+            INFORME. Este botón lo pasa por el mismo redactor que ya usan las de Capital IQ: sale
+            el párrafo del ANEXO B, en español y en tono de informe.
+
+            Solo aparece habiendo texto: sin nada que redactar no hay nada que hacer, y ofrecerlo
+            vacío invitaría a que el modelo se lo invente, que es justo lo que no se quiere. */}
+        {!!texto && (
+          <button
+            type="button"
+            onClick={alRedactar}
+            disabled={redactandoEsta}
+            title="Convierte lo que hay escrito en el párrafo de actividad del ANEXO B, en español"
+            className="mt-1 text-[9.5px] px-1.5 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:border-[#0FA3A1] hover:text-[#0FA3A1] disabled:opacity-50 disabled:cursor-wait transition-colors"
+          >
+            {redactandoEsta ? 'Redactando…' : 'Redactar para el informe'}
+          </button>
+        )}
         <ProcedenciaDeLaActividad row={row} hayTexto={!!texto} />
       </div>
     );
@@ -511,6 +531,9 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   /* Descripciones de actividad pendientes de redactar con IA: solo para el botón de
      backfill del Paso 4 — el disparo automático tras cargar un EEFF no usa este estado. */
   const [redactandoDescripciones, setRedactandoDescripciones] = useState(false);
+  /* Qué fila está redactando ahora mismo, para que su botón lo diga y no se pueda pulsar dos
+     veces. Es el índice, no un booleano: con un booleano las diez filas se verían ocupadas. */
+  const [filaRedactando, setFilaRedactando] = useState(null);
   const [cargaEeff, setCargaEeff] = useState(null);          // { etapa, hechas, total }
   const [resultadoCarga, setResultadoCarga] = useState(null); // { aplicadas, rechazadas }
   /* Qué se subió al repositorio compartido de estados financieros tras una carga. */
@@ -2201,6 +2224,42 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
        retiro: es lo que permite corregir un borrado por error sin dejar el embudo contando una
        baja que ya no existe. */
     if (key === 'name') devolverAMuestra(value);
+  };
+
+  /* ── REDACTAR LA ACTIVIDAD DE UNA FILA ──
+     Lo que el analista pegó —de la web de la compañía, de su reporte anual— convertido en el
+     párrafo del ANEXO B: en español y en tono de informe. Mismo redactor que usan las de
+     Capital IQ, así que las dos vías producen un texto homogéneo y no hay una segunda ruta que
+     mantener.
+
+     Toma el texto de la fila y NO el nombre a secas: `redactarDescripcionActividad` no inventa
+     lo que no está en el texto crudo, y pasarle solo el nombre la invitaría a rellenar de
+     memoria una compañía que puede no conocer. Ese es el guardia de todo esto. */
+  const redactarUnaActividad = async (indice) => {
+    const fila = comparables[indice];
+    const crudo = String((fila && (fila.descActividad || fila.desc)) || '').trim();
+    if (!crudo) return;
+    setFilaRedactando(indice);
+    try {
+      const parrafo = await redactarDescripcionActividad(fila.name || 'la comparable', crudo);
+      if (!parrafo) {
+        anotar(`No se pudo redactar la actividad de ${fila.name || 'la comparable'}: el texto se `
+          + 'queda tal como está y se puede editar a mano.');
+        return;
+      }
+      /* Actualizador de estado y no `[...comparables]`: la redacción tarda, y en ese rato el
+         analista puede haber escrito en otra fila. Con la copia del render de partida, aquello
+         se perdería. */
+      setComparables((prev) => prev.map((c, i) => (i === indice
+        ? { ...c, descActividad: parrafo, origenActividad: 'analista' }
+        : c)));
+    } catch (err) {
+      console.error('[MotorComparables] no se pudo redactar la actividad de la fila', err);
+      anotar('No se pudo redactar la actividad: ' + ((err && err.message) || 'error de la IA')
+        + '. El texto se queda como está.');
+    } finally {
+      setFilaRedactando(null);
+    }
   };
 
   const addComparable = () => {
@@ -4204,6 +4263,8 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
                     <InsigniaActividad row={row} />
                     {/* La actividad en sí, que es lo que el informe publica por comparable. */}
                     <ActividadDeLaComparable
+                      alRedactar={() => redactarUnaActividad(idx)}
+                      redactandoEsta={filaRedactando === idx}
                       row={row}
                       alEditarActividad={(v) => handleRowChange(idx, 'descActividad', v)}
                     />

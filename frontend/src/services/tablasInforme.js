@@ -528,6 +528,21 @@ export function diagnosticarCobertura(rawHtml, study, datosMacro, analisisSector
     /* Comparables de la muestra sin estados financieros cargados: salen con hueco en la
        tabla de márgenes y no entran al rango. */
     comparablesSinCifras: comparables.filter((f) => f.ajustado === null).length,
+    /* ── LAS QUE SALDRIAN SIN ACTIVIDAD, POR NOMBRE ──
+       El ANEXO B publica `descActividad || desc` y, faltando las dos, imprime literalmente
+       «Descripción de actividad no disponible.» (anexoBHtml.js, docxRelleno.js). Eso se radicaba
+       sin que nada lo advirtiera, y es justo el sustento de comparabilidad que pregunta la DIAN
+       (Art. 260-4 E.T.): una comparable de la que el informe no dice a qué se dedica no sostiene
+       la comparación que se está usando para justificar el precio.
+
+       Se leen de `study.comparables` y con el MISMO filtro del anexo —las que tienen razón
+       social—, para que lo que se cuenta aquí sea exactamente lo que va a salir impreso. Y se
+       devuelven los NOMBRES y no un conteo: «3 comparables sin actividad» obliga a buscarlas
+       una por una en la tabla. */
+    comparablesSinActividad: ((study && study.comparables) || [])
+      .filter((c) => c && String(c.name || '').trim())
+      .filter((c) => !String((c.descActividad || c.desc) || '').trim())
+      .map((c) => String(c.name).trim()),
   };
 }
 
