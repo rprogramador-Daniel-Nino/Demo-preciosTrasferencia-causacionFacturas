@@ -23,7 +23,7 @@
    Servicio puro, sin React y sin red, como `conciliacionEstudioAnterior.js`.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { claveDeCruce } from './comparablesEngine.js';
+import { claveDeCruce, nameKey, enPerdida } from './comparablesEngine.js';
 
 /**
  * Une la selección del motor con las comparables que el analista agregó a mano.
@@ -63,5 +63,78 @@ export function fusionarAgregadasAMano(muestraPrevia, delMotor, cupo) {
        configuración sería tirar el trabajo del analista— y se dice que la muestra excede el
        objetivo para que él decida si retira alguna. */
     excedeObjetivo: aMano.length > (Number(cupo) || 0),
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Lo que el analista RETIRÓ tampoco lo devuelve el motor.
+
+   POR QUÉ EXISTE. Medido el 2026-09-08 con el motor real, a raíz de «estoy viendo resultados
+   que difieren»: se borra una comparable de la muestra, se vuelve a ejecutar la selección, y
+   VUELVE. `retiradasManual` se escribía en el embudo y se leía solo para contar
+   (`tablasInforme.js`), pero nadie se la daba al motor, que selecciona del universo sin saber
+   qué decidió el analista.
+
+   Y esta nota lo afirmaba de más: decía que `fusionarAgregadasAMano` era «la misma lógica que ya
+   protege lo que se retira a mano». No protegía nada. Ahora sí, y aquí está.
+
+   SE REPONE EL SITIO. Retirar una comparable no es querer una muestra más pequeña: es querer
+   OTRA comparable en su lugar —«esta no, busca otra»—. Así que el hueco se llena con la primera
+   de la reserva, que ya pasó todos los filtros y la curación. Dejar la muestra corta empujaría
+   el cuartil por una decisión que no era esa.
+
+   POR QUÉ NO SE FILTRA EL UNIVERSO NI SE MARCAN COMO RECHAZADAS. Las dos cosas romperían la
+   contabilidad que el informe ya publica: filtrar el universo baja `evaluadas` y la tabla de
+   razones de rechazo deja de sumar el universo evaluado; y marcarlas rechazadas las contaría
+   DOS veces, porque `filasRazonesRechazo` ya suma `retiradasManual` a las diferencias
+   funcionales. Se quedan donde ya estaban contadas y solo se les quita el sitio en la muestra.
+
+   @param {Array} seleccionadas  lo que el motor eligió, en su orden.
+   @param {Array} reserva        las que pasaron todo y no alcanzaron cupo, por puntaje.
+   @param {Array<string>} retiradas  claves (`nameKey`) de las que el analista quitó.
+   @returns {{muestra: Array, retiradasHonradas: number, repuestas: number, sinReponer: number}}
+   ───────────────────────────────────────────────────────────────────────────── */
+export function aplicarRetiradasManuales(seleccionadas, reserva, retiradas) {
+  const elegidas = Array.isArray(seleccionadas) ? seleccionadas : [];
+  const suplentes = Array.isArray(reserva) ? reserva : [];
+  const fuera = new Set((Array.isArray(retiradas) ? retiradas : []).filter(Boolean));
+  if (!fuera.size) {
+    return { muestra: elegidas, retiradasHonradas: 0, repuestas: 0, sinReponer: 0 };
+  }
+
+  const clave = (c) => (c && c.nameKey) || nameKey((c && c.name) || '');
+  const quedan = elegidas.filter((c) => !fuera.has(clave(c)));
+  const honradas = elegidas.length - quedan.length;
+  if (!honradas) {
+    return { muestra: elegidas, retiradasHonradas: 0, repuestas: 0, sinReponer: 0 };
+  }
+
+  /* La reserva también se filtra: una retirada que quedó en reserva no puede entrar por la
+     puerta de atrás a ocupar el hueco que ella misma dejó. */
+  const reponibles = suplentes.filter((c) => !fuera.has(clave(c)));
+  const repuestas = reponibles.slice(0, honradas);
+
+  return {
+    muestra: [...quedan, ...repuestas],
+    retiradasHonradas: honradas,
+    repuestas: repuestas.length,
+    /* Sin reserva suficiente la muestra queda corta, y eso hay que decirlo: el cuartil se
+       calcula sobre menos comparables de las pedidas. */
+    sinReponer: honradas - repuestas.length,
+  };
+}
+
+/** Cuántas de la muestra están en pérdida, y cuántas de esas entraron ampliando la actividad.
+ *
+ *  Se cuenta sobre la muestra FINAL y no sobre lo que devolvió el motor: entre las dos cosas
+ *  pasan las retiradas manuales y la fusión con las agregadas a mano, que cambian quién está
+ *  dentro. El informe y el Excel justifican la política de pérdidas con este número, así que
+ *  tiene que describir la muestra que se radica y no una intermedia. */
+export function negativasDeLaMuestra(muestra) {
+  const filas = (Array.isArray(muestra) ? muestra : []).filter(Boolean);
+  const negativas = filas.filter((c) => enPerdida(c));
+  return {
+    incluidas: negativas.length,
+    porAmpliacion: negativas.filter((c) => c.entroPorAmpliacion).length,
   };
 }
