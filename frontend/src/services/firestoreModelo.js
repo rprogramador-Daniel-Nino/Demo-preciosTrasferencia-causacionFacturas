@@ -599,6 +599,93 @@ export function docEeff({ comparable, anio, usuario, previo = null, marcaDeTiemp
   return doc;
 }
 
+/* ══════════════ chat del asistente (por estudio) ══════════════ */
+
+/** Máximo de mensajes por hilo, el mismo que exigen las reglas. */
+export const TOPE_MENSAJES_CHAT = 200;
+
+/**
+ * Error con el diagnóstico ya hecho, paralelo a `ErrorEstudioDemasiadoGrande` pero
+ * para un hilo de chat: no tiene un campo `datos` que señalar, así que se nombran los
+ * mensajes más pesados directamente.
+ */
+export class ErrorChatDemasiadoGrande extends Error {
+  constructor(bytes) {
+    super(
+      `Este chat pesa ${Math.round(bytes / 1024)} KB y el máximo por hilo es ` +
+      `${Math.round(TOPE_DOCUMENTO / 1024)} KB, así que no se guardó. Empiece un chat nuevo.`
+    );
+    this.name = 'ErrorChatDemasiadoGrande';
+    this.bytes = bytes;
+  }
+}
+
+/** Comprueba el tamaño de un hilo antes de escribirlo, con el mismo margen que `verificarTamano`. */
+export function verificarTamanoChat(documento) {
+  const bytes = pesoAproximado(documento);
+  if (bytes > TOPE_DOCUMENTO * 0.95) throw new ErrorChatDemasiadoGrande(bytes);
+  return bytes;
+}
+
+/** Título con el que arranca un hilo antes de tener mensajes. NO es un título real
+ *  —es el que `docChat` reemplaza en cuanto hay un primer mensaje de usuario—, así
+ *  que se compara contra este valor exacto para decidir si ya toca reemplazarlo. */
+export const TITULO_NUEVO_CHAT = 'Nuevo chat';
+
+/**
+ * Documento de un hilo de chat (`usuarios/{uid}/estudios/{estudioId}/chats/{chatId}`).
+ * `previo` es el documento que ya estaba en la nube: se conserva su rastro de creación
+ * igual que hace `docEstudio` con el estudio.
+ *
+ * El título se deriva del primer mensaje de usuario la primera vez que hay uno —antes
+ * de eso el hilo se crea vacío con `TITULO_NUEVO_CHAT`—, y desde ahí se conserva tal
+ * cual quedó, así el usuario pueda renombrarlo sin que el envío del siguiente mensaje
+ * lo pise. `tituloManual` fuerza un título concreto (lo usa el renombrado desde la UI)
+ * sin tocar nada más del hilo.
+ *
+ * Los adjuntos NO viajan con su contenido — solo nombre y tipo, para que el hilo
+ * quede legible en el historial sin arriesgar el tope de tamaño del documento; el
+ * archivo en sí solo existe en el navegador mientras dura esa petición al modelo.
+ */
+export function docChat({ mensajes, usuario, previo = null, marcaDeTiempo, tituloManual }) {
+  /* `serverTimestamp()` es un centinela que Firestore SOLO acepta en un campo directo
+     del documento, nunca dentro de un array — `setDoc` lo rechaza con
+     "serverTimestamp() is not currently supported inside arrays". Cada mensaje vive
+     dentro de `mensajes`, así que su fecha se fija en el navegador con `Date.now()` en
+     vez de heredar `marcaDeTiempo`, que es el centinela reservado para los campos
+     `creadoEn`/`actualizadoEn` de la raíz del documento. */
+  const lista = (mensajes || []).slice(-TOPE_MENSAJES_CHAT).map(m => ({
+    rol: m && m.rol === 'model' ? 'model' : 'user',
+    texto: String((m && m.texto) || '').slice(0, 8000),
+    adjuntos: Array.isArray(m && m.adjuntos)
+      ? m.adjuntos.slice(0, 10).map(a => ({
+        nombre: String((a && a.nombre) || '').slice(0, 200),
+        tipo: String((a && a.tipo) || '').slice(0, 100),
+      }))
+      : [],
+    creadoEn: (m && m.creadoEn) || Date.now(),
+  }));
+  const primerMensaje = lista.find(m => m.rol === 'user' && m.texto);
+  const tituloPrevio = previo && previo.titulo;
+  const titulo = tituloManual
+    ? String(tituloManual).trim().slice(0, 60) || TITULO_NUEVO_CHAT
+    : (tituloPrevio && tituloPrevio !== TITULO_NUEVO_CHAT)
+      ? tituloPrevio
+      : (primerMensaje ? primerMensaje.texto.slice(0, 60) : TITULO_NUEVO_CHAT);
+  const doc = {
+    titulo,
+    mensajes: lista,
+    creadoPor: previo ? previo.creadoPor : usuario.uid,
+    creadoEn: previo ? previo.creadoEn : marcaDeTiempo,
+    actualizadoPor: usuario.uid,
+    actualizadoEn: marcaDeTiempo,
+  };
+  if (usuario.nombre) doc.actualizadoPorNombre = usuario.nombre.slice(0, 120);
+  if (previo && previo.creadoPorNombre) doc.creadoPorNombre = previo.creadoPorNombre;
+  else if (!previo && usuario.nombre) doc.creadoPorNombre = usuario.nombre.slice(0, 120);
+  return doc;
+}
+
 /* ══════════════ reutilización de estados financieros ══════════════ */
 
 /**

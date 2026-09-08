@@ -10,6 +10,7 @@ import ReporteGenerador from './components/ReporteGenerador';
 import Acceso from './components/Acceso';
 import Clientes from './components/Clientes';
 import CatalogoHistorico from './components/CatalogoHistorico';
+import ChatFlotante from './components/chat/ChatFlotante';
 import { guardarJSON } from './services/persistenciaLocal';
 import { observarSesion, cerrarSesion } from './services/sesion';
 import CompartirEstudio from './components/CompartirEstudio';
@@ -662,6 +663,7 @@ export default function App() {
   if (!usuario) return <Acceso />;
 
   return (
+    <>
     <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
       {/* Barra de estado de la sesión y del guardado. Con la base compartida importa
           saber con qué cuenta se está trabajando y si lo último quedó guardado. */}
@@ -832,5 +834,11 @@ export default function App() {
         )
       )}
     </Layout>
+    {/* Hermano de `Layout`, no hijo: así sobrevive a cualquier cambio de `activeTab`
+        sin depender de su árbol interno. Vive por estudio —sin uno abierto, no
+        aparece— y siempre con las cifras en vivo de `study`, sin importar en qué
+        paso del estudio esté el analista. */}
+    <ChatFlotante study={study} estudioId={activeStudyId} usuario={usuario} />
+    </>
   );
 }

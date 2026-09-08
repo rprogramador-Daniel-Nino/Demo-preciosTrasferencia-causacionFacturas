@@ -23,7 +23,7 @@
       social letra por letra serían veinte escrituras del mismo documento. */
 
 import {
-  doc, getDoc, getDocs, setDoc, deleteDoc, collection, collectionGroup, query,
+  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, collectionGroup, query,
   orderBy, where, limit, serverTimestamp, runTransaction,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -33,6 +33,7 @@ import {
   normalizarComparableHistorica, fusionarComparableHistorica, separarEstudio,
   verificarTamano, rastroPropio,
   aplicarAcceso, accesosDe, rolEnEstudio, puedeEditarEstudio, ROL_LECTOR,
+  docChat, verificarTamanoChat,
 } from './firestoreModelo';
 import { diccionarioVacio } from './vocabularioEeff';
 
@@ -42,6 +43,7 @@ const COMPARABLES = 'comparablesHistoricas';
 const EEFF = 'eeffComparables';
 const ANALISIS_MERCADO = 'analisisMercado';
 const ANALISIS_SECTOR = 'analisisSector';
+const CHATS = 'chats';
 
 /* Colecciones del modelo compartido anterior, para la migración. */
 const COLECCIONES_MIGRABLES = [ESTUDIOS, CLIENTES, COMPARABLES, EEFF];
@@ -57,6 +59,13 @@ function uidDe(usuario) {
 
 const coleccion = (usuario, nombre) => collection(db, 'usuarios', uidDe(usuario), nombre);
 const documento = (usuario, nombre, id) => doc(db, 'usuarios', uidDe(usuario), nombre, id);
+
+/* Los hilos de chat cuelgan del estudio al que pertenecen, no de una colección plana
+   como las demás: hay varios por estudio y ninguno tiene sentido fuera de él. */
+const coleccionChats = (usuario, estudioId) =>
+  collection(db, 'usuarios', uidDe(usuario), ESTUDIOS, estudioId, CHATS);
+const documentoChat = (usuario, estudioId, chatId) =>
+  doc(db, 'usuarios', uidDe(usuario), ESTUDIOS, estudioId, CHATS, chatId);
 
 /* Rastro de creación por documento ya visto en esta sesión. La clave incluye el uid
    porque dos consultores pueden tener un estudio con el mismo identificador. */
@@ -237,6 +246,57 @@ export async function listarEstudios(usuario, tope = 200) {
 export async function borrarEstudio(id, usuario) {
   await deleteDoc(documento(usuario, ESTUDIOS, id));
   cacheMeta.delete(claveCache(uidDe(usuario), ESTUDIOS, id));
+}
+
+/* ══════════════════════ chat del asistente (por estudio) ══════════════════════ */
+
+/** Hilos de chat de un estudio, del más reciente al más antiguo. */
+export async function listarChats(usuario, estudioId) {
+  const consulta = query(coleccionChats(usuario, estudioId), orderBy('actualizadoEn', 'desc'));
+  const instantanea = await getDocs(consulta);
+  return instantanea.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+export async function leerChat(usuario, estudioId, chatId) {
+  const instantanea = await getDoc(documentoChat(usuario, estudioId, chatId));
+  return instantanea.exists() ? { id: chatId, ...instantanea.data() } : null;
+}
+
+/** Abre un hilo nuevo y vacío, y devuelve su identificador. */
+export async function crearChat(usuario, estudioId) {
+  const referencia = doc(coleccionChats(usuario, estudioId));
+  await setDoc(referencia, docChat({ mensajes: [], usuario, marcaDeTiempo: serverTimestamp() }));
+  return referencia.id;
+}
+
+/** Agrega mensajes al final de un hilo y actualiza su rastro. Lee antes de escribir
+ *  porque, a diferencia del estudio, un hilo de chat no se guarda con autoguardado con
+ *  retardo — cada turno de la conversación es su propia escritura. */
+export async function agregarMensajesChat(usuario, estudioId, chatId, mensajesNuevos) {
+  const referencia = documentoChat(usuario, estudioId, chatId);
+  const instantanea = await getDoc(referencia);
+  const previo = instantanea.exists() ? instantanea.data() : null;
+  const mensajes = [...((previo && previo.mensajes) || []), ...(mensajesNuevos || [])];
+  const documentoNuevo = docChat({ mensajes, usuario, previo, marcaDeTiempo: serverTimestamp() });
+  verificarTamanoChat(documentoNuevo);
+  await setDoc(referencia, documentoNuevo);
+}
+
+export async function borrarChat(usuario, estudioId, chatId) {
+  await deleteDoc(documentoChat(usuario, estudioId, chatId));
+}
+
+/** Renombra un hilo a mano. Solo toca `titulo` y el rastro de modificación —no hace
+ *  falta leer ni reescribir `mensajes`—, y `docChat` no vuelve a derivarlo del primer
+ *  mensaje mientras el título no sea `TITULO_NUEVO_CHAT` (ver `docChat`). */
+export async function renombrarChat(usuario, estudioId, chatId, tituloNuevo) {
+  const limpio = String(tituloNuevo || '').trim().slice(0, 60);
+  if (!limpio) throw new Error('El título no puede quedar vacío.');
+  await updateDoc(documentoChat(usuario, estudioId, chatId), {
+    titulo: limpio,
+    actualizadoPor: uidDe(usuario),
+    actualizadoEn: serverTimestamp(),
+  });
 }
 
 /* ══════════════════════ compartir un estudio ══════════════════════ */
