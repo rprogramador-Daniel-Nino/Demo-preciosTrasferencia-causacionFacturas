@@ -12,6 +12,7 @@ import {
   TOPE_COMPARTIDO, rastroPropio,
   ROL_LECTOR, ROL_EDITOR, esRolValido, rolEnEstudio, puedeEditarEstudio,
   accesosDe, aplicarAcceso,
+  docChat, verificarTamanoChat, ErrorChatDemasiadoGrande, TOPE_MENSAJES_CHAT, TITULO_NUEVO_CHAT,
 } from './firestoreModelo.js';
 
 const USUARIO = { uid: 'uid-antonio', nombre: 'Antonio Barreto', correo: 'antonio@crconsultorescolombia.com' };
@@ -887,4 +888,115 @@ test('sonDelEstudio no da por bueno lo que no tiene sello', () => {
   assert.strictEqual(sonDelEstudio({ ent: 'Acme' }, 'study_1'), false);
   assert.strictEqual(sonDelEstudio({ [SELLO_ESTUDIO]: 'study_1' }, null), false);
   assert.strictEqual(sonDelEstudio(null, 'study_1'), false);
+});
+
+/* ══════ chat del asistente ══════ */
+
+test('docChat arma el título con el primer mensaje del usuario', () => {
+  const doc = docChat({
+    mensajes: [{ rol: 'user', texto: 'Hola, ¿cuál es el rango intercuartil?' }],
+    usuario: USUARIO,
+    marcaDeTiempo: AHORA,
+  });
+  assert.strictEqual(doc.titulo, 'Hola, ¿cuál es el rango intercuartil?');
+  assert.strictEqual(doc.mensajes.length, 1);
+  assert.strictEqual(doc.creadoPor, USUARIO.uid);
+  assert.strictEqual(doc.creadoEn, AHORA);
+});
+
+test('docChat NO mete el centinela de serverTimestamp() dentro de un mensaje del array', () => {
+  /* Firestore rechaza el `setDoc` entero con "serverTimestamp() is not currently
+     supported inside arrays" si `creadoEn` de un mensaje hereda `marcaDeTiempo` — el
+     centinela solo es válido en un campo directo del documento (`doc.creadoEn` /
+     `doc.actualizadoEn`), nunca dentro de `mensajes`. */
+  const doc = docChat({
+    mensajes: [{ rol: 'user', texto: 'hola' }],
+    usuario: USUARIO,
+    marcaDeTiempo: AHORA,
+  });
+  assert.notStrictEqual(doc.mensajes[0].creadoEn, AHORA);
+  assert.strictEqual(typeof doc.mensajes[0].creadoEn, 'number');
+});
+
+test('docChat conserva el rastro de creación de un hilo ya existente', () => {
+  const previo = { titulo: 'Nuevo chat', mensajes: [], creadoPor: 'otro-uid', creadoEn: 'hace-rato' };
+  const doc = docChat({
+    mensajes: [{ rol: 'user', texto: 'segundo mensaje' }],
+    usuario: USUARIO,
+    previo,
+    marcaDeTiempo: AHORA,
+  });
+  assert.strictEqual(doc.creadoPor, 'otro-uid');
+  assert.strictEqual(doc.creadoEn, 'hace-rato');
+  assert.strictEqual(doc.actualizadoPor, USUARIO.uid);
+});
+
+test('docChat reemplaza el título placeholder por el del primer mensaje real, en vez de quedarse pegado en "Nuevo chat"', () => {
+  /* Bug real: `crearChat` abre el hilo con `titulo: 'Nuevo chat'` antes de que exista
+     ningún mensaje, y el primer `agregarMensajesChat` llegaba después con ESE
+     documento como `previo` — tratando el placeholder como si ya fuera un título
+     elegido, y el hilo se quedaba diciendo "Nuevo chat" para siempre. */
+  const previo = { titulo: TITULO_NUEVO_CHAT, mensajes: [], creadoPor: USUARIO.uid, creadoEn: 'hace-rato' };
+  const doc = docChat({
+    mensajes: [{ rol: 'user', texto: '¿Qué datos se usaron para calcular el MO?' }],
+    usuario: USUARIO,
+    previo,
+    marcaDeTiempo: AHORA,
+  });
+  assert.strictEqual(doc.titulo, '¿Qué datos se usaron para calcular el MO?');
+});
+
+test('docChat SÍ conserva un título ya elegido (auto o renombrado a mano) frente a mensajes nuevos', () => {
+  const previo = { titulo: 'Cálculo del margen operacional', mensajes: [{ rol: 'user', texto: 'primero' }], creadoPor: USUARIO.uid, creadoEn: 'hace-rato' };
+  const doc = docChat({
+    mensajes: [...previo.mensajes, { rol: 'user', texto: 'un mensaje totalmente distinto' }],
+    usuario: USUARIO,
+    previo,
+    marcaDeTiempo: AHORA,
+  });
+  assert.strictEqual(doc.titulo, 'Cálculo del margen operacional');
+});
+
+test('docChat con tituloManual renombra el hilo sin importar los mensajes', () => {
+  const previo = { titulo: 'Cálculo del margen operacional', mensajes: [{ rol: 'user', texto: 'primero' }], creadoPor: USUARIO.uid, creadoEn: 'hace-rato' };
+  const doc = docChat({
+    mensajes: previo.mensajes,
+    usuario: USUARIO,
+    previo,
+    marcaDeTiempo: AHORA,
+    tituloManual: '  Margen operacional del año 2025  ',
+  });
+  assert.strictEqual(doc.titulo, 'Margen operacional del año 2025');
+});
+
+test('docChat recorta nombre y tipo de los adjuntos y nunca guarda su contenido', () => {
+  const doc = docChat({
+    mensajes: [{
+      rol: 'user',
+      texto: 'revisa esto',
+      adjuntos: [{ nombre: 'rut.pdf', tipo: 'application/pdf', base64: 'esto-no-deberia-guardarse' }],
+    }],
+    usuario: USUARIO,
+    marcaDeTiempo: AHORA,
+  });
+  const adjunto = doc.mensajes[0].adjuntos[0];
+  assert.strictEqual(adjunto.nombre, 'rut.pdf');
+  assert.strictEqual(adjunto.tipo, 'application/pdf');
+  assert.ok(!('base64' in adjunto), 'el binario del adjunto no debe viajar a Firestore');
+});
+
+test('docChat se queda solo con los últimos TOPE_MENSAJES_CHAT mensajes', () => {
+  const mensajes = Array.from({ length: TOPE_MENSAJES_CHAT + 20 }, (_, i) => ({ rol: 'user', texto: `m${i}` }));
+  const doc = docChat({ mensajes, usuario: USUARIO, marcaDeTiempo: AHORA });
+  assert.strictEqual(doc.mensajes.length, TOPE_MENSAJES_CHAT);
+  assert.strictEqual(doc.mensajes[0].texto, `m${20}`, 'se recortan los más antiguos, no los recientes');
+});
+
+test('verificarTamanoChat deja pasar un hilo normal y rechaza uno que se pasa del tope', () => {
+  assert.doesNotThrow(() => verificarTamanoChat({ titulo: 'x', mensajes: [{ rol: 'user', texto: 'hola' }] }));
+  const mensajeEnorme = 'x'.repeat(TOPE_DOCUMENTO);
+  assert.throws(
+    () => verificarTamanoChat({ titulo: 'x', mensajes: [{ rol: 'user', texto: mensajeEnorme }] }),
+    ErrorChatDemasiadoGrande
+  );
 });

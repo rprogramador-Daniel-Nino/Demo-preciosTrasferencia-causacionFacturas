@@ -361,14 +361,19 @@ test('rotuloDeRubro devuelve el texto de la fila, y cadena vacía si no vino', (
 });
 
 test('el mapeo produce exactamente los campos del alcance, y todos son del libro', () => {
-  /* Esta ingesta ya no llena las quince filas de la hoja Datos: toma tres partidas del
-     balance, el subtotal del activo corriente, PP&E, los ingresos y el costo, y calcula la
-     utilidad operacional (con su fallback a la impresa, ver eeffVerificacion.js). Lo que sí
+  /* Esta ingesta toma tres partidas del balance, el subtotal del activo corriente, PP&E,
+     los ingresos y el costo (y calcula la utilidad operacional, con su fallback a la
+     impresa, ver eeffVerificacion.js), más los seis rubros ampliados el 2026-09-07
+     (efectivo, inversiones asociadas, impuestos corrientes, intangibles, diferidos y el
+     subtotal de activo no corriente) que antes solo llenaba "Detalle de Activos". Lo que sí
      tiene que cumplirse es que cada campo que produce sea un rubro que el libro conoce — si
      no, escribiría en un campo que nadie publica. */
   const producidos = [...Object.values(CAMPO_POR_RUBRO), 't_op'].sort();
   assert.deepStrictEqual(producidos,
-    ['t_act_curr', 't_act_tot', 't_ap', 't_ar', 't_c', 't_inv', 't_op', 't_ppe', 't_s'],
+    [
+      't_act_curr', 't_act_nocurr', 't_act_tot', 't_ap', 't_ar', 't_c', 't_cash', 't_dif',
+      't_intang', 't_inv', 't_inv_assoc', 't_op', 't_ppe', 't_s', 't_tax',
+    ],
     'el alcance de la ingesta cambió sin que esta prueba lo diga');
   producidos.forEach((clave) => assert.ok(CLAVES_RUBROS_EXAMINADA.includes(clave),
     `${clave} no es un rubro de la hoja Datos`));
@@ -379,6 +384,38 @@ test('propiedad_planta_equipo entra al mapeo de campos del estudio, como t_ppe',
      sea la operación: es una partida universal del balance, y por eso se lee y se mapea
      igual que `total_activos`. */
   assert.strictEqual(CAMPO_POR_RUBRO.propiedad_planta_equipo, 't_ppe');
+});
+
+/* ══════ Ampliación 2026-09-07: los seis rubros que antes solo llenaba "Detalle de Activos" ══════
+   El problema que motiva esto: esos seis conceptos (efectivo, inversiones asociadas,
+   impuestos corrientes, intangibles, diferidos, total activo no corriente) casi siempre
+   llegan solos como fila de `activos_detalle`, pero un EEFF que los agregue dentro de una
+   fila genérica ("Otros activos") y solo los desglose en una nota no produciría esa fila —
+   y con una sola fuente las 6 casillas escalares quedarían en 0,00 pese a que el dato existe
+   en el documento. De ahí la lectura directa, además de la derivación de respaldo que hace
+   `eeffVerificacion.js` desde `activos_detalle` (ver `sincronizarRubrosBalance.js`). */
+
+test('los seis rubros ampliados entran al mapeo de campos del estudio', () => {
+  assert.strictEqual(CAMPO_POR_RUBRO.efectivo_equivalentes, 't_cash');
+  assert.strictEqual(CAMPO_POR_RUBRO.inversiones_asociadas, 't_inv_assoc');
+  assert.strictEqual(CAMPO_POR_RUBRO.activos_por_impuestos_corrientes, 't_tax');
+  assert.strictEqual(CAMPO_POR_RUBRO.intangibles, 't_intang');
+  assert.strictEqual(CAMPO_POR_RUBRO.diferidos, 't_dif');
+  assert.strictEqual(CAMPO_POR_RUBRO.total_activo_no_corriente, 't_act_nocurr');
+});
+
+test('el prompt distingue el impuesto corriente del impuesto diferido', () => {
+  assert.match(EEFF_PROMPT, /activos_por_impuestos_corrientes[\s\S]{0,300}NO el impuesto diferido/i);
+});
+
+test('el prompt pide el esqueleto JSON de los seis rubros ampliados', () => {
+  [
+    'efectivo_equivalentes', 'inversiones_asociadas', 'activos_por_impuestos_corrientes',
+    'intangibles', 'diferidos', 'total_activo_no_corriente',
+  ].forEach((rubro) => {
+    assert.match(EEFF_PROMPT, new RegExp(`"${rubro}":\\s*\\{"valor":\\s*null`),
+      `falta el esqueleto de "${rubro}" en EEFF_PROMPT`);
+  });
 });
 
 test('los rubros de cotejo no son campos del estudio', () => {
@@ -730,8 +767,10 @@ test('parseEEFFComparableOCR cae correctamente al Vision OCR original si es una 
 
 /* ══════ La pasada angosta a notas, cuando algo quedó en null ══════ */
 
-test('CAMPOS_CON_FALLBACK_NOTAS son exactamente costo de ventas, partes relacionadas e inventarios', () => {
-  assert.deepStrictEqual(Object.keys(CAMPOS_CON_FALLBACK_NOTAS).sort(), ['t_ap', 't_ar', 't_c', 't_inv']);
+test('CAMPOS_CON_FALLBACK_NOTAS incluye costo de ventas, partes relacionadas, inventarios y los cuatro rubros del balance que suelen vivir solo en nota', () => {
+  assert.deepStrictEqual(Object.keys(CAMPOS_CON_FALLBACK_NOTAS).sort(), [
+    't_ap', 't_ar', 't_c', 't_dif', 't_intang', 't_inv', 't_inv_assoc', 't_tax',
+  ]);
 });
 
 test('promptFaltantesEnNotas solo pide los campos indicados, con su definición', () => {

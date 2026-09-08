@@ -18,6 +18,9 @@ import { convertPdfToImages } from '../services/pdfRenderer';
 import { resumenDeLectura } from '../services/diagnosticoRango';
 import { respaldarLecturaConOcr } from '../services/eeffOcrRespaldo';
 import { RUBROS_EXAMINADA } from '../services/memoriaCalculoRangoOptimo.js';
+import {
+  CLAVES_RUBROS_BALANCE_ADICIONALES, sincronizarDetalleDesdeEscalar, sincronizarEscalarDesdeFila,
+} from '../services/sincronizarRubrosBalance.js';
 import PopupFaltantesEeff from './PopupFaltantesEeff';
 import CampoMoneda from './CampoMoneda';
 
@@ -47,17 +50,19 @@ const RUBROS_BALANCE = [
   { clave: 't_ppe', etiqueta: 'Propiedad, planta y equipo' },
 ];
 
-/* Los seis rubros que el Excel Soporte Motor ya publica (hoja Datos, columna A.V.) pero
-   que hasta ahora ningún punto de la interfaz permitía corregir: solo los escribía la
-   lectura del documento, y esta no los toma (ver `CAMPO_POR_RUBRO` en eeffParser.js), así
-   que quedaban siempre en 0,00. No alimentan la utilidad operacional ni los ajustes de
-   capital de trabajo — solo el Análisis Vertical de la hoja Datos y del ANEXO A/Tabla 10.
+/* Los seis rubros que el Excel Soporte Motor ya publica (hoja Datos, columna A.V.). Hasta
+   el 2026-09-07 solo los llenaba (si acaso) la fila equivalente de "Detalle de Activos" más
+   abajo, sin que nada la copiara aquí — el analista terminaba digitando el mismo dato dos
+   veces. Ahora tienen dos fuentes: la lectura del documento (directa, o derivada de una
+   fila inequívoca del detalle si la directa no la alcanzó — ver `eeffVerificacion.js`) y la
+   sincronía manual bidireccional de más abajo con esa misma sección. No alimentan la
+   utilidad operacional ni los ajustes de capital de trabajo — solo el Análisis Vertical de
+   la hoja Datos y del ANEXO A/Tabla 10.
 
    Las etiquetas se toman de `RUBROS_EXAMINADA` y no se repiten aquí a mano: es la misma
    fila que el Excel escribe, y una etiqueta distinta en los dos sitios confundiría a quien
    audite el libro contra la pantalla. */
-const CLAVES_BALANCE_ADICIONALES = ['t_cash', 't_inv_assoc', 't_tax', 't_intang', 't_dif', 't_act_nocurr'];
-const RUBROS_BALANCE_ADICIONALES = CLAVES_BALANCE_ADICIONALES.map(
+const RUBROS_BALANCE_ADICIONALES = CLAVES_RUBROS_BALANCE_ADICIONALES.map(
   (clave) => RUBROS_EXAMINADA.find((r) => r.clave === clave),
 );
 
@@ -93,6 +98,7 @@ export default function IngestaCifras({ study, updateStudy }) {
   const CAMPOS_RASTREADOS_A_MANO = [
     't_s', 't_c', 't_gastos', 't_op', 't_ar', 't_ap', 't_inv',
     't_act_curr', 't_act_tot', 't_ppe',
+    ...CLAVES_RUBROS_BALANCE_ADICIONALES,
   ];
 
   const handleFieldChange = (key, value) => {
@@ -118,6 +124,17 @@ export default function IngestaCifras({ study, updateStudy }) {
         ventas: fuente.t_s, costo: fuente.t_c, gastos: fuente.t_gastos,
       });
       if (uop !== null) cambios.t_op = uop;
+    }
+
+    /* Sincronía con "Detalle de Activos": si esta casilla tiene una fila correspondiente
+       allá abajo (match inequívoco por rótulo, ver sincronizarRubrosBalance.js), la
+       actualiza también — para que el analista no tenga que corregir el mismo dato dos
+       veces. Sin match único no toca nada, y nunca agrega una fila nueva: qué filas trae
+       esa tabla sigue siendo 100% manual. */
+    if (CLAVES_RUBROS_BALANCE_ADICIONALES.includes(key)) {
+      const detalleActual = study.t_activos_detalle || [];
+      const detalleSincronizado = sincronizarDetalleDesdeEscalar(detalleActual, key, value);
+      if (detalleSincronizado !== detalleActual) cambios.t_activos_detalle = detalleSincronizado;
     }
 
     if (CAMPOS_RELACIONADAS_APRENDIBLES.includes(key) && hallazgos) {
@@ -156,7 +173,21 @@ export default function IngestaCifras({ study, updateStudy }) {
 
   const handleActivoDetalleChange = (index, campo, valor) => {
     const detalle = detalleActivos.map((fila, i) => (i === index ? { ...fila, [campo]: valor } : fila));
-    updateStudy({ t_activos_detalle: detalle });
+    const cambios = { t_activos_detalle: detalle };
+
+    /* La misma sincronía que `handleFieldChange`, en la otra dirección: si esta fila (y solo
+       ella) corresponde sin ambigüedad a una de las seis casillas de "Cifras del ESF", la
+       edición también se refleja allá. */
+    if (campo === 'etiqueta' || campo === 'valor') {
+      const coincidencia = sincronizarEscalarDesdeFila(detalle, index);
+      if (coincidencia) {
+        cambios[coincidencia.clave] = coincidencia.valor;
+        const yaEstaban = Array.isArray(study.t_camposAMano) ? study.t_camposAMano : [];
+        cambios.t_camposAMano = [...new Set([...yaEstaban, coincidencia.clave])];
+      }
+    }
+
+    updateStudy(cambios);
   };
 
   const handleAgregarActivoDetalle = () => {

@@ -72,6 +72,12 @@ El rótulo es obligatorio cuando hay valor: es lo que permite revisar si la fila
 · total_activo_corriente: el subtotal del activo corriente, tal como el documento lo imprime.
 · total_activos: el total general de activos ("Total Activo", "Total de activos", "TOTAL ACTIVOS"), tal como el documento lo imprime.
 · propiedad_planta_equipo: propiedad, planta y equipo, activos fijos, inmuebles maquinaria y equipo — el NETO (después de depreciación acumulada), tal como el documento lo imprime.
+· efectivo_equivalentes: efectivo y equivalentes de efectivo, caja y bancos, disponible, tal como el documento lo imprime.
+· inversiones_asociadas: inversiones en asociadas o en negocios conjuntos (método de participación), SOLO si el documento la trae como línea propia. Si no la desglosa así, va en null.
+· activos_por_impuestos_corrientes: activos por impuestos corrientes, anticipo de impuestos, saldos a favor en impuestos — el CORRIENTE. NO el impuesto diferido activo, que es otro concepto y no entra aquí.
+· intangibles: intangibles, activos intangibles, propiedad intelectual, marcas, licencias — el NETO, tal como el documento lo imprime.
+· diferidos: cargos diferidos, gastos pagados por anticipado, activos diferidos, tal como el documento lo imprime.
+· total_activo_no_corriente: el subtotal del activo no corriente ("Total Activo No Corriente", "Total, Activos no corrientes"), tal como el documento lo imprime.
 
 ── ACTIVOS: DETALLE COMPLETO, PARA LA TABLA DE ACTIVOS DEL INFORME ──
 Distintos estados financieros traen distintas filas de activo (uno trae "Inversiones asociadas", otro "Activos financieros", otro separa "Cuentas por cobrar a partes relacionadas" de las comerciales), así que además de las partidas de arriba se pide la sección ACTIVOS completa:
@@ -113,6 +119,12 @@ Devuelve SOLO este JSON, sin marcas markdown:
   "total_activo_corriente": {"valor": null, "rotulo": ""},
   "total_activos": {"valor": null, "rotulo": ""},
   "propiedad_planta_equipo": {"valor": null, "rotulo": ""},
+  "efectivo_equivalentes": {"valor": null, "rotulo": ""},
+  "inversiones_asociadas": {"valor": null, "rotulo": ""},
+  "activos_por_impuestos_corrientes": {"valor": null, "rotulo": ""},
+  "intangibles": {"valor": null, "rotulo": ""},
+  "diferidos": {"valor": null, "rotulo": ""},
+  "total_activo_no_corriente": {"valor": null, "rotulo": ""},
   "ingresos_operacionales": {"valor": null, "rotulo": ""},
   "costo_ventas": {"valor": null, "rotulo": ""},
   "gastos_ventas": {"valor": null, "rotulo": ""},
@@ -305,6 +317,20 @@ export const CAMPO_POR_RUBRO = {
      totalmente depreciado y en cero; para una compañía con PP&E real, dejarlo en manual lo
      trataba como cero por omisión en los ajustes que lo usan. */
   propiedad_planta_equipo: 't_ppe',
+  /* Ampliación del 2026-09-07: seis rubros que ya vivía el Excel Soporte Motor
+     (`RUBROS_EXAMINADA` en `memoriaCalculoRangoOptimo.js`) pero que hasta ahora ningún
+     punto de la lectura completaba — solo los llenaba la fila equivalente de
+     `activos_detalle` (si el documento la desglosaba en el cuerpo del balance), y esa fila
+     nunca se copiaba al campo escalar. Con dos fuentes en vez de una: si el concepto vive
+     solo en una nota y no como fila propia del cuerpo, esta lectura directa sí lo alcanza
+     aunque `activos_detalle` no traiga esa fila; `eeffVerificacion.js` deriva además desde
+     el detalle como respaldo cuando esta lectura vuelve en null. */
+  efectivo_equivalentes: 't_cash',
+  inversiones_asociadas: 't_inv_assoc',
+  activos_por_impuestos_corrientes: 't_tax',
+  intangibles: 't_intang',
+  diferidos: 't_dif',
+  total_activo_no_corriente: 't_act_nocurr',
 };
 
 /* Los rubros que NO son campos del estudio pero se leen porque de ellos sale la utilidad
@@ -356,6 +382,15 @@ export const CAMPOS_CON_FALLBACK_NOTAS = {
   t_ar: 'cuentas por cobrar comerciales o a clientes (NO las de partes relacionadas)',
   t_ap: 'cuentas por pagar comerciales o a proveedores (NO las de partes relacionadas)',
   t_inv: 'inventarios',
+  /* Ampliación del 2026-09-07, mismo criterio que los cuatro de arriba: a diferencia de
+     efectivo y del subtotal de activo no corriente —que un balance colombiano siempre
+     imprime en su cuerpo principal—, estos cuatro con frecuencia quedan agregados dentro de
+     una fila genérica ("Otros activos", "Otros activos no corrientes") y su desglose real
+     vive solo en una nota. */
+  t_inv_assoc: 'inversiones en asociadas o en negocios conjuntos',
+  t_tax: 'activos por impuestos corrientes (NO el impuesto diferido)',
+  t_intang: 'intangibles',
+  t_dif: 'diferidos (cargos diferidos, gastos pagados por anticipado)',
 };
 
 /**

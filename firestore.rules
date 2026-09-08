@@ -27,6 +27,7 @@ rules_version = '2';
 // ===============================================================
 //
 // usuarios/{uid}/estudios/{estudioId}          — el estudio completo del gestor
+// usuarios/{uid}/estudios/{estudioId}/chats/{chatId} — hilos del chat del asistente
 // usuarios/{uid}/clientes/{nit}                — contribuyentes del consultor
 // usuarios/{uid}/comparablesHistoricas/{clave} — su catálogo de comparables
 // usuarios/{uid}/eeffComparables/{registroId}  — cifras ya leídas de un EEFF
@@ -262,6 +263,22 @@ service cloud.firestore {
         && nombreCoherente(d, 'actualizadoPorNombre');
     }
 
+    // `docChat` (firestoreModelo.js) — un hilo del chat del asistente, colgado del
+    // estudio al que pertenece. Los mensajes se validan por tipo y tamaño de la lista,
+    // no elemento por elemento (misma limitación que `apariciones`/`anios`/`hallazgos`,
+    // documentada arriba).
+    function chatValido(d) {
+      return soloEstosCampos(['titulo', 'mensajes', 'creadoPor', 'creadoPorNombre',
+                              'creadoEn', 'actualizadoPor', 'actualizadoPorNombre',
+                              'actualizadoEn'])
+        && tieneTodos(['titulo', 'mensajes', 'creadoPor', 'creadoEn', 'actualizadoEn'])
+        && texto(d.titulo, 1, 60)
+        && d.mensajes is list && d.mensajes.size() <= 200
+        && texto(d.creadoPor, 1, 128)
+        && nombreCoherente(d, 'creadoPorNombre')
+        && nombreCoherente(d, 'actualizadoPorNombre');
+    }
+
     // `guardarNarrativaMacroEstudio` (firestoreRepo.js) escribe el documento completo
     // con `setDoc` sin merge, siempre estos dos campos y ningún otro.
     function narrativaMacroValida(d) {
@@ -312,6 +329,20 @@ service cloud.firestore {
           && estudioValido(request.resource.data)
           && modificacionCoherente(request.resource.data);
         allow delete: if esDueno(uid);
+
+        // Chat del asistente de este estudio. A diferencia del estudio, no se
+        // comparte: es del consultor que conversa, no de quien el estudio esté
+        // compartido con.
+        match /chats/{chatId} {
+          allow read: if esDueno(uid);
+          allow create: if esDueno(uid)
+            && chatValido(request.resource.data)
+            && creacionCoherente(request.resource.data);
+          allow update: if esDueno(uid)
+            && chatValido(request.resource.data)
+            && modificacionCoherente(request.resource.data);
+          allow delete: if esDueno(uid);
+        }
       }
 
       match /clientes/{nit} {
