@@ -32,7 +32,9 @@ import { parsePriorStudyFile } from '../services/priorStudyParser';
 import { conciliarConEstudioAnterior } from '../services/conciliacionEstudioAnterior';
 /* Las comparables que el analista agregó cargando su estado financiero no las borra una corrida
    nueva del motor: son decisiones tomadas, no candidatas a evaluar. */
-import { fusionarAgregadasAMano } from '../services/muestraManual';
+import {
+  fusionarAgregadasAMano, aplicarRetiradasManuales, negativasDeLaMuestra,
+} from '../services/muestraManual';
 import { cruzar, repartir, esCruceFirme, motivoCruce, motivoRechazoEnFila } from '../services/cruceComparables';
 import {
   registrarComparablesHistoricas, guardarEeffComparables, leerEeffDeComparables,
@@ -1327,9 +1329,48 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
          Es la misma lógica que ya protege lo que se retira a mano: el motor propone, el analista
          dispone, y una corrida nueva no puede deshacer lo que él decidió. */
-      const fusion = fusionarAgregadasAMano(comparables, result.seleccionadas, result.cupo);
+      /* ── LO QUE EL ANALISTA RETIRO TAMPOCO VUELVE ──
+         Medido el 2026-09-08 con el motor real: se borraba una comparable, se reejecutaba la
+         seleccion y VOLVIA. `retiradasManual` se escribia en el embudo y se leia solo para
+         contar; nadie se la daba al motor, que elige del universo sin saber qué se decidió.
+
+         Va ANTES de la fusión: el hueco se repone desde la reserva y solo después se recorta
+         para hacer sitio a las agregadas a mano. Al revés, la repuesta ocuparía un sitio que le
+         corresponde a una decisión del analista. */
+      const honrado = aplicarRetiradasManuales(
+        result.seleccionadas, result.reserva,
+        (selectionFunnel && selectionFunnel.retiradasManual) || [],
+      );
+      if (honrado.retiradasHonradas) {
+        anotar(`${honrado.retiradasHonradas} comparable(s) que había retirado a mano no se `
+          + `volvieron a seleccionar; ${honrado.repuestas} se repusieron desde la reserva.`);
+      }
+      if (honrado.sinReponer) {
+        anotar(`${honrado.sinReponer} sitio(s) quedaron sin reponer: la reserva se agotó y la `
+          + 'muestra queda por debajo del cupo, así que el cuartil se calcula sobre menos '
+          + 'comparables de las pedidas.', 'aviso');
+      }
+
+      const fusion = fusionarAgregadasAMano(comparables, honrado.muestra, result.cupo);
       const finales = fusion.muestra;
       setComparables(finales);
+
+      /* ── LAS NEGATIVAS SE CUENTAN SOBRE LA MUESTRA FINAL ──
+         Medido el mismo día: con diez comparables agregadas a mano la muestra acababa con DOS en
+         pérdida y el embudo seguía declarando TRES, porque `negativasIncluidas` venía del motor
+         y la fusión recorta su lista para hacer sitio a las manuales.
+
+         Ese número no se queda en pantalla: el informe y el Excel de soporte justifican con él
+         la política de pérdidas (Guías OCDE cap. III §3.64-3.65), así que declaraba una muestra
+         que no era la que se radicaba. `objetivo` y `disponibles` sí siguen siendo del motor:
+         son lo que se PIDIO y lo que HABIA, y eso la fusión no lo cambia. */
+      const negativas = negativasDeLaMuestra(finales);
+      if (result.negativasIncluidas && negativas.incluidas < result.negativasIncluidas) {
+        anotar(`La cuota de pérdidas quedó en ${negativas.incluidas} de las `
+          + `${result.negativasIncluidas} que el motor había seleccionado: las comparables `
+          + 'agregadas a mano ocupan cupo. Reduzca el objetivo o retire alguna manual si '
+          + 'necesita las tres.', 'aviso');
+      }
       /* Detalle por candidata para el Excel de soporte: `scoreCandidates` ya lo
          calcula (motivo, categoría, score, factores), pero hasta ahora solo se
          guardaban los conteos agregados en el embudo y este detalle se perdía. */
@@ -1358,13 +1399,13 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         politicaPerdidas: engineConfig.perdidaOp,
         justificacionPerdida: engineConfig.justificacionPerdida || '',
         negativasObjetivo: result.negativasObjetivo || 0,
-        negativasIncluidas: result.negativasIncluidas || 0,
+        negativasIncluidas: negativas.incluidas,
         negativasDisponibles: result.negativasDisponibles || 0,
         negativasExcluidasPorFiltro: result.negativasExcluidasPorFiltro || 0,
         /* Cuántas de la cuota entraron por actividad AFÍN y no idéntica. Se persiste porque
            esas piden dos justificaciones en el informe —la pérdida y la ampliación del
            criterio de búsqueda—, y con el estudio guardado hay que poder saber cuántas eran. */
-        negativasPorAmpliacion: result.negativasPorAmpliacion || 0,
+        negativasPorAmpliacion: negativas.porAmpliacion,
         negativasIdenticasDisponibles: result.negativasIdenticasDisponibles || 0,
         negativasAfinesDisponibles: result.negativasAfinesDisponibles || 0,
         /* Cual de las combinaciones equivalentes se uso. Es lo que hace la muestra

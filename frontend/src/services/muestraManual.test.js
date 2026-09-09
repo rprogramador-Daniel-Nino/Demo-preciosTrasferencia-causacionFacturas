@@ -10,12 +10,20 @@
    clic en el boton equivocado.
 
    La regla: una comparable que el analista agrego a mano es una DECISION TOMADA, no una
-   candidata a evaluar. Se conserva, ocupa cupo, y solo sale si el analista la retira — que es la
-   misma logica que ya protege lo que se retira a mano (`retiradasManual`). */
+   candidata a evaluar. Se conserva, ocupa cupo, y solo sale si el analista la retira.
+
+   Esta nota decia que era «la misma logica que ya protege lo que se retira a mano
+   (`retiradasManual`)», y eso era FALSO: esa lista se escribia en el embudo y se leia solo para
+   contar, sin llegar nunca al motor, asi que una comparable borrada volvia en la corrida
+   siguiente. Se midio y se corrigio el 2026-09-08; la proteccion la da ahora
+   `aplicarRetiradasManuales`, probada al final de este archivo. */
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { fusionarAgregadasAMano } from './muestraManual.js';
+import {
+  fusionarAgregadasAMano, aplicarRetiradasManuales, negativasDeLaMuestra,
+} from './muestraManual.js';
+import { nameKey } from './comparablesEngine.js';
 
 const dele = (name, extra = {}) => ({ name, s: 1000, c: 800, op: 100, ...extra });
 const aMano = (name) => dele(name, { creadaDesdeEeff: true });
@@ -86,4 +94,92 @@ test('sin agregadas a mano no cambia nada', () => {
   assert.deepStrictEqual(r.muestra, delMotor);
   assert.strictEqual(r.conservadas, 0);
   assert.strictEqual(r.excedeObjetivo, false);
+});
+
+/* ══════════ LO RETIRADO A MANO NO VUELVE, Y LAS NEGATIVAS SE CUENTAN DONDE IMPORTA ══════════
+
+   Medido el 2026-09-08 con el motor real, tras «estoy viendo resultados que difieren»:
+
+     · se borraba una comparable, se reejecutaba la selección y VOLVÍA. `retiradasManual` se
+       escribía en el embudo y se leía solo para contar; nadie se la daba al motor.
+     · con diez comparables agregadas a mano, la muestra acababa con DOS en pérdida y el embudo
+       —y con él el informe y el Excel— seguía declarando TRES: `negativasIncluidas` venía del
+       motor, sin corregir por la fusión que recorta su lista para hacer sitio a las manuales. */
+
+const c = (name, extra = {}) => ({ name, nameKey: nameKey(name), s: 100, op: 10, ...extra });
+const enPerdidaC = (name, extra = {}) => c(name, { op: -10, ...extra });
+
+test('la comparable retirada sale de la muestra y su sitio lo ocupa la reserva', () => {
+  /* Retirar no es querer una muestra más pequeña: es querer OTRA en su lugar. */
+  const r = aplicarRetiradasManuales(
+    [c('Alfa SA'), c('Beta SA'), c('Gamma SA')],
+    [c('Suplente SA'), c('Otra Suplente SA')],
+    [nameKey('Beta SA')],
+  );
+  assert.deepStrictEqual(r.muestra.map((x) => x.name),
+    ['Alfa SA', 'Gamma SA', 'Suplente SA']);
+  assert.strictEqual(r.muestra.length, 3, 'la muestra no se encoge');
+  assert.strictEqual(r.retiradasHonradas, 1);
+  assert.strictEqual(r.repuestas, 1);
+  assert.strictEqual(r.sinReponer, 0);
+});
+
+test('una retirada que quedó en reserva no entra por la puerta de atrás', () => {
+  /* Si no, ocuparía el hueco que ella misma dejó y el borrado no serviría de nada. */
+  const r = aplicarRetiradasManuales(
+    [c('Alfa SA'), c('Beta SA')],
+    [c('Beta SA'), c('Suplente SA')],
+    [nameKey('Beta SA')],
+  );
+  assert.deepStrictEqual(r.muestra.map((x) => x.name), ['Alfa SA', 'Suplente SA']);
+});
+
+test('sin reserva suficiente la muestra queda corta, y se dice', () => {
+  /* El cuartil se calcularía sobre menos comparables de las pedidas: callarlo es lo que hacía
+     que un descuadre llegara a la radicación sin aviso. */
+  const r = aplicarRetiradasManuales([c('Alfa SA'), c('Beta SA')], [], [nameKey('Beta SA')]);
+  assert.strictEqual(r.muestra.length, 1);
+  assert.strictEqual(r.repuestas, 0);
+  assert.strictEqual(r.sinReponer, 1);
+});
+
+test('sin retiradas no toca nada, y devuelve la misma lista', () => {
+  const elegidas = [c('Alfa SA'), c('Beta SA')];
+  const r = aplicarRetiradasManuales(elegidas, [c('Suplente SA')], []);
+  assert.strictEqual(r.muestra, elegidas, 'la misma referencia: no hay trabajo que hacer');
+  assert.strictEqual(r.retiradasHonradas, 0);
+  /* Y una clave que no está en la muestra tampoco altera nada. */
+  const ajena = aplicarRetiradasManuales(elegidas, [], [nameKey('Nadie SA')]);
+  assert.strictEqual(ajena.muestra, elegidas);
+  assert.strictEqual(ajena.retiradasHonradas, 0);
+});
+
+test('las negativas se cuentan sobre la muestra FINAL, no sobre la del motor', () => {
+  /* El número exacto del defecto: diez a mano y dos en pérdida donde el embudo decía tres. */
+  const muestra = [
+    ...Array.from({ length: 10 }, (_, i) => c('Manual ' + i, { creadaDesdeEeff: true })),
+    enPerdidaC('Neg 0'),
+    enPerdidaC('Neg 1'),
+  ];
+  const n = negativasDeLaMuestra(muestra);
+  assert.strictEqual(n.incluidas, 2, 'las que de verdad están en la muestra que se radica');
+  assert.strictEqual(n.porAmpliacion, 0);
+});
+
+test('distingue las negativas que entraron ampliando la actividad', () => {
+  /* Esas piden dos justificaciones en el informe —la pérdida y la ampliación del criterio— así
+     que el conteo no puede fundirlas con las de actividad idéntica. */
+  const n = negativasDeLaMuestra([
+    enPerdidaC('Identica SA'),
+    enPerdidaC('Afin SA', { entroPorAmpliacion: true }),
+    c('Positiva SA', { entroPorAmpliacion: true }),
+  ]);
+  assert.strictEqual(n.incluidas, 2);
+  assert.strictEqual(n.porAmpliacion, 1, 'la positiva ampliada no es una negativa');
+});
+
+test('una muestra vacía o basura no rompe el conteo', () => {
+  assert.deepStrictEqual(negativasDeLaMuestra([]), { incluidas: 0, porAmpliacion: 0 });
+  assert.deepStrictEqual(negativasDeLaMuestra(null), { incluidas: 0, porAmpliacion: 0 });
+  assert.deepStrictEqual(negativasDeLaMuestra([null, undefined]), { incluidas: 0, porAmpliacion: 0 });
 });
