@@ -6,6 +6,7 @@ import {
 } from './anexoCHtml.js';
 import { localizarAnexo } from './anexoBHtml.js';
 import { textoPlanoHtml } from './tablasHtmlInforme.js';
+import { nameKey } from './comparablesEngine.js';
 
 /* Tablas como las emite el extractor desde la plantilla de END GAME. */
 const RESUMEN = '<table>'
@@ -115,6 +116,43 @@ test('sin embudo se publican todos los grupos de la matriz, con su etiqueta', ()
   assert.strictEqual(grupos.reduce((a, g) => a + g.companias.length, 0), UNIVERSO.length);
   const holding = grupos.find((g) => g.clave === 'holding');
   assert.match(holding.etiqueta, /holding/i, 'la etiqueta sale del mapa de motivos');
+});
+
+test('una retirada manual posterior a la corrida saca la compañía de aceptadas', () => {
+  /* La matriz persistida puede venir de una corrida anterior a un retiro hecho con la
+     papelera del paso 4 —pasa cuando `universo` no está en memoria al reabrir el estudio,
+     así que la matriz no se recalculó—. El embudo, en cambio, siempre está al día: es lo
+     que debe primar para que el anexo no siga listando como aceptada una compañía que el
+     analista ya sacó de la muestra. */
+  const embudoConRetiro = { ...EMBUDO, seleccionadas: 1, retiradasManual: [nameKey('ZETA COMPARABLE LTD')] };
+  const grupos = gruposDelAnexoC({ embudoSeleccion: embudoConRetiro, matrizRechazo: matrizDeRechazo(UNIVERSO) });
+
+  const aceptadas = grupos.find((g) => g.clave === 'aceptadas');
+  assert.deepStrictEqual(aceptadas.companias, ['OMEGA COMPARABLE PLC'], 'la retirada ya no sale aceptada');
+
+  const rigor = grupos.find((g) => g.clave === 'rigorFuncional');
+  assert.ok(rigor.companias.includes('ZETA COMPARABLE LTD'), 'cae en diferencias funcionales, como la Tabla 16');
+
+  const total = grupos.reduce((a, g) => a + g.companias.length, 0);
+  assert.strictEqual(total, UNIVERSO.length, 'no se pierde ni se duplica ninguna compañía');
+});
+
+test('una retirada manual que ya no está en aceptadas no hace nada raro', () => {
+  /* Si la matriz SÍ se recalculó después del retiro —`universo` estaba en memoria—, la
+     compañía ya cayó en diferencias funcionales por su cuenta. Reconciliar otra vez con
+     el mismo `retiradasManual` no debe duplicarla ni tocar los demás grupos. */
+  const universoYaAlDia = UNIVERSO.map((c) => (c.name === 'ZETA COMPARABLE LTD'
+    ? { ...c, seleccionada: false, motivoClave: '' } : c));
+  const embudoConRetiro = { ...EMBUDO, seleccionadas: 1, retiradasManual: [nameKey('ZETA COMPARABLE LTD')] };
+  const grupos = gruposDelAnexoC({
+    embudoSeleccion: embudoConRetiro, matrizRechazo: matrizDeRechazo(universoYaAlDia),
+  });
+
+  const rigor = grupos.find((g) => g.clave === 'rigorFuncional');
+  assert.strictEqual(rigor.companias.filter((n) => n === 'ZETA COMPARABLE LTD').length, 1,
+    'sin duplicarla');
+  const total = grupos.reduce((a, g) => a + g.companias.length, 0);
+  assert.strictEqual(total, UNIVERSO.length);
 });
 
 /* ══════ Localización ══════ */

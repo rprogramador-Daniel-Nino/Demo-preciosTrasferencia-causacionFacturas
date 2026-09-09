@@ -39,6 +39,7 @@ import { textoPlanoHtml, filasDe, celdasDe, mayusculasEnTablaHtml } from './tabl
 import { localizarAnexo } from './anexoBHtml.js';
 import { nombreDeAnexo } from './anexosPlantilla.js';
 import { reescribirFilasHtml } from './tablasHtmlInforme.js';
+import { nameKey } from './comparablesEngine.js';
 
 /* Con este nombre se reporta el anexo cuando no se puede regenerar. Sin letra: si hay que
    nombrarlo en un aviso es porque no se encontró, y entonces no hay letra que citar —además de
@@ -105,6 +106,39 @@ export function matrizDeRechazo(universoEnriquecido) {
 }
 
 /**
+ * Saca de «aceptadas» a las compañías que el embudo dice retiradas a mano, y las suma a
+ * `rigorFuncional` (diferencias funcionales) — el mismo destino que les da la Tabla 16.
+ *
+ * `matrizRechazo` se recalcula al vuelo con el universo completo en memoria (`MotorComparables.jsx`),
+ * y ese universo NO se persiste con el estudio: si se retira una comparable con la papelera del
+ * paso 4 sin tener el universo cargado —el caso normal al reabrir un estudio guardado—, la matriz
+ * persistida se queda con la foto de la última corrida real y sigue listando esa compañía como
+ * aceptada, aunque `embudoSeleccion.retiradasManual` (que sí viaja siempre) ya la tenga anotada.
+ * Reconciliar aquí, al leer, no depende de que la matriz se haya podido recalcular.
+ *
+ * Es un no-op si la matriz ya está al día: si la compañía ya no está en `aceptadas` —porque
+ * `matrizDeRechazo` sí corrió después del retiro—, no hay nada que mover.
+ *
+ * @param {object} porMotivo        el de `matrizRechazo`, sin tocar.
+ * @param {Array}  retiradasManual  `nameKey` de las compañías retiradas (`embudoSeleccion`).
+ * @returns {object} una copia de `porMotivo` con el ajuste, o el mismo objeto si no hacía falta.
+ */
+function reconciliarRetiradasManual(porMotivo, retiradasManual) {
+  const claves = new Set((retiradasManual || []).filter(Boolean));
+  const aceptadas = Array.isArray(porMotivo.aceptadas) ? porMotivo.aceptadas : [];
+  if (!claves.size || !aceptadas.length) return porMotivo;
+
+  const retiradas = aceptadas.filter((nombre) => claves.has(nameKey(nombre)));
+  if (!retiradas.length) return porMotivo;
+
+  return {
+    ...porMotivo,
+    aceptadas: aceptadas.filter((nombre) => !claves.has(nameKey(nombre))),
+    rigorFuncional: [...(porMotivo.rigorFuncional || []), ...retiradas].sort((a, b) => a.localeCompare(b, 'es')),
+  };
+}
+
+/**
  * Los grupos que publica el anexo, en el orden y con las letras del cuerpo del informe.
  *
  * @param {object} estudio  con `matrizRechazo` y `embudoSeleccion`.
@@ -114,8 +148,13 @@ export function matrizDeRechazo(universoEnriquecido) {
 export function gruposDelAnexoC(estudio) {
   const study = estudio || {};
   const matriz = study.matrizRechazo || null;
-  const porMotivo = (matriz && matriz.porMotivo) || null;
-  if (!porMotivo || !Object.keys(porMotivo).length) return [];
+  const porMotivoCrudo = (matriz && matriz.porMotivo) || null;
+  if (!porMotivoCrudo || !Object.keys(porMotivoCrudo).length) return [];
+
+  const porMotivo = reconciliarRetiradasManual(
+    porMotivoCrudo,
+    (study.embudoSeleccion && study.embudoSeleccion.retiradasManual) || [],
+  );
 
   /* El orden y las etiquetas salen de la misma función que llena la Tabla 16, para que la
      letra de una compañía en el anexo sea la que el cuerpo del informe le da a su motivo. */
