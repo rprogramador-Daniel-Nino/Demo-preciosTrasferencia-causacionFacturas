@@ -1,5 +1,4 @@
 // functions/analisisMercadoActualizar.js
-const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const {
   construirPromptBusqueda,
@@ -9,8 +8,9 @@ const {
   armarDocumentoFirestore,
 } = require('./analisisMercadoPrompts');
 const { redactarConFallback } = require('./redaccionConFallback');
+const { asegurarAppFirebasePorDefecto } = require('./firebaseAdmin');
 
-if (!getApps().length) initializeApp();
+asegurarAppFirebasePorDefecto();
 
 const GEMINI_MODEL = 'gemini-3.5-flash';
 const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';

@@ -1,5 +1,4 @@
 // functions/analisisSectorActualizar.js
-const { initializeApp, getApps } = require('firebase-admin/app');
 const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const {
   normalizarActividad,
@@ -16,8 +15,9 @@ const {
   armarEntradaAnio,
 } = require('./analisisSectorPrompts');
 const { redactarConFallback } = require('./redaccionConFallback');
+const { asegurarAppFirebasePorDefecto } = require('./firebaseAdmin');
 
-if (!getApps().length) initializeApp();
+asegurarAppFirebasePorDefecto();
 
 /* NO usar 'gemini-2.0-flash' (retirado, 404) ni 'gemini-3.5-flash': verificado en vivo
    el 2026-08-05 que este último nunca devuelve `groundingMetadata` (ni siquiera
