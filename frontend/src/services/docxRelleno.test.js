@@ -14,7 +14,7 @@ import {
   localizarBloquesTabla, reescribirFilasOoxml,
   insertarAnexoA, insertarAnexoC, insertarImagenesAnexoB, actualizarProsaTrasTabla, actualizarAnioConclusionRango,
   localizarBloqueProsa, parrafosOoxmlDesdeHtml, actualizarApartadosMacroOoxml,
-  localizarHitos, reemplazarPorHitos, actualizarApartadoSectorialOoxml,
+  localizarHitos, reemplazarPorHitos, resolverAnclasDeHuecos, actualizarApartadoSectorialOoxml,
   reescribirTextoParrafoOoxml, prefijoDeEncabezado,
   aplicarLetraMacroOoxml,
   actualizarFormulasMatematicasOoxml,
@@ -1433,6 +1433,62 @@ test('las tablas macro ausentes también se reportan', () => {
   assert.ok(avisos.includes('Desempleo en Colombia'));
 });
 
+const tablaVieja = (texto) => '<w:tbl><w:tr><w:tc><w:p><w:t>' + texto + '</w:t></w:p></w:tc></w:tr></w:tbl>';
+
+test('actualizarTablasMacroOoxml sustituye por posición cuando el nombre no calza pero la cadena está delimitada y hay tantas tablas sueltas como pendientes', () => {
+  /* Ninguno de los tres subtítulos ("Producto Interno Bruto (PIB)", "Inflación:",
+     "Crecimiento por región") contiene el rótulo interno exacto que el motor busca —el
+     caso real de un informe de referencia con sus propios títulos de tabla— pero SÍ se
+     reconocen los dos títulos de sección que delimitan a la cadena mundial, y hay
+     exactamente tres tablas sueltas en ese tramo, una por cada tabla pendiente: se
+     emparejan en el orden en que aparecen. */
+  const xml = [
+    parrafoXml('Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Producto Interno Bruto (PIB)'),
+    tablaVieja('vieja PIB'),
+    parrafoXml('Inflación:'),
+    tablaVieja('vieja inflación'),
+    parrafoXml('Crecimiento por región'),
+    tablaVieja('vieja región'),
+    parrafoXml('Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025, avisos);
+
+  assert.doesNotMatch(salida, /vieja PIB/);
+  assert.doesNotMatch(salida, /vieja inflación/);
+  assert.doesNotMatch(salida, /vieja región/);
+  assert.match(salida, /Crecimiento Mundial/, 'la tabla de PIB Mundial nueva se insertó en su lugar');
+  assert.match(salida, /Tasa de Inflación/, 'la tabla de Inflación Global nueva se insertó en su lugar');
+  assert.ok(!avisos.includes('PIB Mundial'));
+  assert.ok(!avisos.includes('Inflación Global'));
+  assert.ok(!avisos.includes('por Región/País'));
+});
+
+test('actualizarTablasMacroOoxml NO adivina por posición cuando el número de tablas sueltas no calza con el de pendientes', () => {
+  /* Dos tablas sueltas para tres tablas pendientes: no hay forma de emparejar sin
+     adivinar cuál falta, así que se deja el aviso de siempre para las tres, sin tocar
+     ninguna de las dos que sí están. */
+  const xml = [
+    parrafoXml('Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Producto Interno Bruto (PIB)'),
+    tablaVieja('vieja PIB'),
+    parrafoXml('Inflación:'),
+    tablaVieja('vieja inflación'),
+    parrafoXml('Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025, avisos);
+
+  assert.match(salida, /vieja PIB/, 'no se toca ninguna tabla sin poder emparejar con certeza');
+  assert.match(salida, /vieja inflación/);
+  assert.ok(avisos.includes('PIB Mundial'));
+  assert.ok(avisos.includes('Inflación Global'));
+  assert.ok(avisos.includes('por Región/País'));
+});
+
 test('la Tabla 4 declara el código de operación y no lo inventa cuando no se puede resolver', async () => {
   /* La Tabla 4 («Método de Precios de Transferencia Aplicable») publica el código de
      operación en su propia columna. Compartía el helper que devolvía '07' fijo, así que un
@@ -2127,6 +2183,62 @@ test('localizarHitos con sinónimos no encuentra nada si ninguno de los dos apar
   assert.equal(hitos[1], null);
 });
 
+/* `hitos` fabricados a mano: solo importa cuáles son `null` y cuáles no — el contenido de
+   `{inicio, finPropio}` no participa en la decisión, `resolverAnclasDeHuecos` es puro. */
+const hito = (n) => ({ inicio: n * 10, finPropio: n * 10 + 5 });
+
+test('resolverAnclasDeHuecos: ambos límites propios encontrados → reemplazo de un solo hueco (desde === hasta)', () => {
+  const anclas = resolverAnclasDeHuecos([hito(0), hito(1)]);
+  assert.deepEqual(anclas, [{ tipo: 'reemplazo', desde: 0, hasta: 0 }]);
+});
+
+test('resolverAnclasDeHuecos: una racha de rótulos ausentes delimitada por dos encontrados se funde en un solo reemplazo', () => {
+  /* Uno, Dos(null), Tres(null), Cuatro — los tres huecos entre "Uno" y "Cuatro" no
+     tienen forma de saber si eran una sola subsección sin estructura reconocida o tres
+     distintas, así que se tratan como una sola región reemplazable de punta a punta. */
+  const anclas = resolverAnclasDeHuecos([hito(0), null, null, hito(3)]);
+  assert.deepEqual(anclas, [
+    { tipo: 'reemplazo', desde: 0, hasta: 2 },
+    { tipo: 'reemplazo', desde: 0, hasta: 2 },
+    { tipo: 'reemplazo', desde: 0, hasta: 2 },
+  ]);
+});
+
+test('resolverAnclasDeHuecos: un hito encontrado EN MEDIO de la racha la parte en dos reemplazos, nunca los funde', () => {
+  /* Uno, Dos(null), Tres, Cuatro(null), Cinco — "Tres" delimita con certeza dónde
+     termina una subsección y empieza la otra, así que cada lado se reemplaza aparte. */
+  const anclas = resolverAnclasDeHuecos([hito(0), null, hito(2), null, hito(4)]);
+  assert.deepEqual(anclas, [
+    { tipo: 'reemplazo', desde: 0, hasta: 1 },
+    { tipo: 'reemplazo', desde: 0, hasta: 1 },
+    { tipo: 'reemplazo', desde: 2, hasta: 3 },
+    { tipo: 'reemplazo', desde: 2, hasta: 3 },
+  ]);
+});
+
+test('resolverAnclasDeHuecos: una racha que toca el extremo IZQUIERDO del arreglo (sin nada encontrado antes) sigue insertando, no funde', () => {
+  /* Uno(null), Dos(null), Tres — no hay ningún título encontrado ANTES del hueco 0, así
+     que no hay de dónde a dónde borrar: sigue siendo inserción junto al hito más cercano. */
+  const anclas = resolverAnclasDeHuecos([null, null, hito(2)]);
+  assert.deepEqual(anclas, [
+    { tipo: 'insertar', lado: 'izquierda-de', ref: 2 },
+    { tipo: 'insertar', lado: 'izquierda-de', ref: 2 },
+  ]);
+});
+
+test('resolverAnclasDeHuecos: una racha que toca el extremo DERECHO del arreglo sigue insertando, no funde', () => {
+  const anclas = resolverAnclasDeHuecos([hito(0), null, null]);
+  assert.deepEqual(anclas, [
+    { tipo: 'insertar', lado: 'derecha-de', ref: 0 },
+    { tipo: 'insertar', lado: 'derecha-de', ref: 0 },
+  ]);
+});
+
+test('resolverAnclasDeHuecos: si no se encuentra NINGÚN título de la cadena, todo queda sin ancla', () => {
+  const anclas = resolverAnclasDeHuecos([null, null, null]);
+  assert.deepEqual(anclas, [{ tipo: 'sin-ancla' }, { tipo: 'sin-ancla' }]);
+});
+
 test('reemplazarPorHitos reemplaza el hueco cuando la función de contenido devuelve texto', () => {
   const xml = [
     parrafoXml('Encabezado A'),
@@ -2194,10 +2306,11 @@ test('reemplazarPorHitos encuentra el hito con un sinónimo, y el aviso muestra 
   assert.ok(!avisos.some((a) => a.includes('[object Object]')));
 });
 
-test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {
-  /* Una plantilla más vieja que "Encabezado B" no puede impedir que el contenido de
-     "Encabezado B" se inserte en algún lado: se apoya en "Encabezado C", que sí existe
-     (el límite de la sección siguiente), en vez de perderse en silencio. */
+test('reemplazarPorHitos reemplaza toda la subsección cuando falta un título intermedio, pero sí se encuentran los dos que la rodean', () => {
+  /* "Encabezado A" y "Encabezado C" SÍ están: eso basta para saber con certeza dónde
+     empieza y dónde termina lo que había en medio, así que la prosa vieja se borra
+     entera y se pone ahí el contenido nuevo — ya no se limita a insertar al lado sin
+     tocarla. */
   const xml = [
     parrafoXml('Encabezado A'),
     parrafoXml('Prosa de A.'),
@@ -2208,14 +2321,16 @@ test('reemplazarPorHitos inserta de respaldo al final de la sección cuando falt
   reemplazarPorHitos(
     doc,
     ['Encabezado A', 'Encabezado B', 'Encabezado C'],
-    [() => null, () => parrafoXml('Contenido de B, sin ancla propia.')],
+    [() => null, () => parrafoXml('Contenido de B.')],
     avisos, 'III.X'
   );
-  assert.match(doc.xml, /Contenido de B, sin ancla propia\./);
+  assert.match(doc.xml, /Contenido de B\./);
+  assert.doesNotMatch(doc.xml, /Prosa de A\./, 'el texto viejo ya no sobrevive junto al nuevo');
   /* Antes del límite final, no después: se insertó DENTRO de la sección. */
   assert.ok(doc.xml.indexOf('Contenido de B') < doc.xml.indexOf('Encabezado C'));
-  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
-  assert.ok(avisos.some((a) => /entre «Encabezado B» y «Encabezado C».*se ubicó junto al encabezado más cercano, «Encabezado C»/.test(a)));
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B», pero sí los que lo rodean.*se reemplazó/.test(a)));
+  assert.ok(!avisos.some((a) => /se ubicó junto al encabezado más cercano/.test(a)),
+    'ya no es una inserción de respaldo, es un reemplazo completo');
 });
 
 test('reemplazarPorHitos NO inserta de respaldo si ni siquiera el límite final aparece', () => {
@@ -2250,14 +2365,12 @@ test('reemplazarPorHitos avisa una vez por rótulo ausente, no una por par conse
   assert.ok(porRotulo.some((a) => a.includes('«Tres»')), 'nombra el rótulo «Tres»');
 });
 
-test('reemplazarPorHitos: dos huecos seguidos sin título propio se anclan al mismo vecino y su contenido se concatena en orden', () => {
-  /* "Dos" y "Tres" faltan los dos, entre "Uno" y "Cuatro" (ambos sí están). El hueco
-     Uno→Dos tiene su propio límite izquierdo ("Uno"), así que se ancla ahí directo. El
-     hueco Dos→Tres no tiene ninguno de sus dos límites propios: queda a distancia 1 de
-     "Uno" y distancia 1 de "Cuatro" —empate—, que se resuelve a la izquierda, así que
-     TAMBIÉN se ancla junto a "Uno". Los dos terminan en el mismo punto: el punto es que
-     ninguno se pierde y que no se pisan entre sí, sino que se concatenan en el orden en
-     que aparecen en la cadena. */
+test('reemplazarPorHitos: dos huecos seguidos sin título propio se funden en un solo reemplazo y su contenido se concatena en orden', () => {
+  /* "Dos" y "Tres" faltan los dos, entre "Uno" y "Cuatro" (ambos sí están). Al estar
+     delimitada por dos títulos SÍ encontrados, toda la racha ["Uno"→"Dos", "Dos"→"Tres",
+     "Tres"→"Cuatro"] se trata como una sola región reemplazable, así que el contenido de
+     los tres huecos se concatena en el orden en que aparecen en la cadena — no hay dos
+     inserciones que se puedan pisar entre sí, es un único reemplazo. */
   const xml = parrafoXml('Uno') + parrafoXml('Cuatro');
   const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
   const avisos = [];
@@ -2270,17 +2383,70 @@ test('reemplazarPorHitos: dos huecos seguidos sin título propio se anclan al mi
     'el que va primero en la cadena queda primero en el texto, sin importar a qué vecino se ancló cada uno');
 });
 
-/* El respaldo INSERTA en el cursor, no reemplaza el tramo, y esa distinción es la que
-   permite recuperar el contenido sin arriesgar nada: cuando el rótulo ausente solo está
-   escrito de otro modo, su subsección sigue en el documento y debe sobrevivir. */
-test('el respaldo no se lleva la subsección intermedia cuyo rótulo no se reconoció', () => {
+/* Decisión del usuario (2026-09-10), tras ver un caso real: una plantilla que en realidad
+   es el informe YA RADICADO de un año anterior deja sobrevivir su propia prosa vieja junto
+   a la narrativa nueva bajo el mismo título — dos años de cifras contradictorias en el
+   mismo párrafo. Cuando los dos límites que SÍ delimitan la subsección se encuentran (aquí
+   "Uno" y "Cuatro"), ya no hay ambigüedad real sobre qué borrar: se reemplaza completo. */
+test('con los dos límites que la rodean encontrados, SÍ se borra la subsección intermedia cuyo rótulo no se reconoció', () => {
   const xml = parrafoXml('Uno') + parrafoXml('Rotulo escrito de otro modo')
-    + parrafoXml('Prosa que hay que conservar.') + parrafoXml('Cuatro');
+    + parrafoXml('Prosa que hay que reemplazar.') + parrafoXml('Cuatro');
   const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
   reemplazarPorHitos(doc, ['Uno', 'Dos', 'Cuatro'],
     [() => parrafoXml('nuevo'), () => parrafoXml('nuevo')], [], 'III.B');
-  assert.match(doc.xml, /Prosa que hay que conservar\./, 'no se borra el texto del cliente');
-  assert.match(doc.xml, /Rotulo escrito de otro modo/, 'ni su encabezado');
+  assert.doesNotMatch(doc.xml, /Prosa que hay que reemplazar\./, 'el texto viejo del cliente ya no sobrevive');
+  assert.doesNotMatch(doc.xml, /Rotulo escrito de otro modo/, 'tampoco su encabezado, que no era un hito real');
+  assert.match(doc.xml, /nuevo/);
+  assert.match(doc.xml, /Uno/);
+  assert.match(doc.xml, /Cuatro/);
+});
+
+test('el borrado nunca se sale de los títulos de la cadena que se está procesando (caso real: TENDENCIAS DE LA ECONOMÍA)', () => {
+  /* Reconstruye la forma real del informe de Ferretería Andrés Martínez 2021: un título
+     general ("TENDENCIAS DE LA ECONOMÍA") con su propia tabla de fuentes ANTES de
+     "Análisis del Panorama de la Economía Mundial" — el primer título de la cadena que
+     `actualizarApartadosMacroOoxml` procesa. Ni ese título general ni su tabla pueden
+     terminar dentro de una región que se borra, sin importar qué tan agresivo sea el
+     nuevo reemplazo de huecos intermedios. */
+  const xml = [
+    parrafoXml('III. TENDENCIAS DE LA ECONOMÍA'),
+    parrafoXml('Tabla 19.Fuentes de Información'),
+    parrafoXml('Fondo Monetario Internacional'),
+    parrafoXml('A. Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Durante el año 2021, la economía mundial estuvo a la expectativa de la pandemia del COVID-19, texto viejo de 2021.'),
+    parrafoXml('Producto Interno Bruto (PIB)'),
+    /* Ojo: evitar la frase literal "PIB Mundial" en esta prosa — coincide con la clave
+       normalizada de ese rótulo y `localizarHitos` (por diseño) toma por hito cualquier
+       párrafo corto que la incluya, aunque sea prosa y no el encabezado real. */
+    parrafoXml('El crecimiento económico global cayó -4,5% en 2020, texto viejo de 2021.'),
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Narrativa real 2025-2027.</p>' } };
+  const avisos = [];
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.match(salida, /Narrativa real 2025-2027\./);
+  assert.doesNotMatch(salida, /texto viejo de 2021/, 'toda la prosa vieja de esa subsección se reemplaza');
+  /* Lo de ANTES del primer título de la cadena nunca se toca. */
+  assert.match(salida, /TENDENCIAS DE LA ECONOMÍA/);
+  assert.match(salida, /Fondo Monetario Internacional/);
+  assert.ok(salida.indexOf('TENDENCIAS DE LA ECONOMÍA') < salida.indexOf('Análisis del Panorama de la Economía Mundial'));
+});
+
+test('reemplazarPorHitos conserva una tabla suelta dentro de una subsección que se reemplaza por completo', () => {
+  /* La tabla vieja (con un título que la plantilla del cliente no rotuló como el sistema
+     espera) no debe desaparecer sin más al borrar la prosa que la rodea: sobrevive, para
+     que otro paso (el reemplazo de tablas por posición) decida qué hacer con ella. */
+  const tablaVieja = '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>PIB 2016-2021</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+  const xml = parrafoXml('Uno') + parrafoXml('Prosa antes de la tabla.')
+    + tablaVieja + parrafoXml('Cuatro');
+  const doc = { xmlInterno: xml, aplicar(t) { this.xmlInterno = t(this.xmlInterno); }, get xml() { return this.xmlInterno; } };
+  reemplazarPorHitos(doc, ['Uno', 'Dos', 'Cuatro'],
+    [() => parrafoXml('Narrativa nueva.'), () => parrafoXml('Narrativa nueva.')], [], 'III.B');
+  assert.doesNotMatch(doc.xml, /Prosa antes de la tabla/);
+  assert.match(doc.xml, /Narrativa nueva\./);
+  assert.match(doc.xml, /PIB 2016-2021/, 'la tabla suelta sobrevive aunque la prosa alrededor se borre');
 });
 
 test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {
@@ -2479,6 +2645,30 @@ test('actualizarApartadosMacroOoxml deja el marcador especifico de tema (no el g
   assert.doesNotMatch(salida, /este párrafo del informe de referencia se retiró/i);
 });
 
+test('actualizarApartadosMacroOoxml reconoce "Análisis en el Sector" como cierre de la cadena de Colombia (caso real Sungrow)', () => {
+  /* Bug encontrado en un caso real (Sungrow Power Chile SPA, 2025): la cadena de
+     Colombia cerraba buscando el rótulo exacto "Análisis del Sector", pero III.C ya
+     aceptaba "Análisis en el Sector"/"Análisis Sectorial" como sinónimos para ESE MISMO
+     encabezado físico — la plantilla de Sungrow lo titula "Análisis en el sector de
+     energía eléctrica", que pasaba la revisión flexible de III.C pero fallaba la
+     estricta de Colombia, y salía un "no se encontró el rótulo «Análisis del Sector»"
+     que no debía salir. */
+  const xml = [
+    parrafoXml('B. Análisis del panorama de la economía colombiana'),
+    parrafoXml('Texto real de Colombia.'),
+    parrafoXml('Crecimiento del PIB en Colombia (2024-2026)'),
+    parrafoXml('Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)'),
+    parrafoXml('Análisis en el sector de energía eléctrica'),
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>' } };
+  const avisos = [];
+  actualizarApartadosMacroOoxml(xml, datosMacro, 2026, avisos);
+
+  assert.ok(!avisos.some((a) => a.includes('«Análisis del Sector»')),
+    '"Análisis en el sector..." debe reconocerse como el mismo rótulo, no avisar que falta');
+});
+
 const tablaXml = (texto) => `<w:tbl><w:tr><w:tc><w:p><w:t>${texto}</w:t></w:p></w:tc></w:tr></w:tbl>`;
 
 test('actualizarApartadoSectorialOoxml reemplaza los cuatro bloques de prosa y la tabla de datos clave', () => {
@@ -2524,6 +2714,49 @@ test('actualizarApartadoSectorialOoxml reemplaza los cuatro bloques de prosa y l
   assert.doesNotMatch(salida, /Texto viejo/);
   assert.match(salida, /260\.000/);
   assert.doesNotMatch(salida, /fila vieja/);
+});
+
+test('actualizarApartadoSectorialOoxml sustituye "Datos Clave del Sector" por posición cuando la plantilla la titula distinto', () => {
+  /* El título de la tabla no contiene el rótulo exacto "Datos Clave del Sector" —un
+     informe de referencia con su propio título—, pero SÍ hay exactamente una tabla
+     suelta entre "Comportamiento del Sector" y "Importaciones y exportaciones...", sus
+     dos vecinos directos en la cadena: se sustituye ahí por posición. */
+  const xml = [
+    parrafoXml('Análisis del Sector'),
+    parrafoXml('Comportamiento del Sector'),
+    parrafoXml('Texto viejo de comportamiento.'),
+    parrafoXml('Cifras clave del negocio'),
+    tablaXml('fila vieja'),
+    parrafoXml('Importaciones y exportaciones del sector'),
+    parrafoXml('Texto viejo de comercio exterior.'),
+    parrafoXml('¿Qué se proyecta para el sector'),
+    parrafoXml('Texto viejo de proyección.'),
+    parrafoXml('Conclusiones y Perspectivas'),
+    parrafoXml('Texto viejo de conclusiones.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2026: {
+        tituloSector: 'de pruebas',
+        narrativa: {
+          comportamiento: '<p>Comportamiento nuevo.</p>',
+          comercioExterior: '<p>Comercio exterior nuevo.</p>',
+          proyeccion: '<p>Proyección nueva.</p>',
+          conclusiones: '<p>Conclusiones nuevas.</p>',
+        },
+        datosClaveTabla: [{ indicador: 'Empleo', valorAnterior: '250.000', valorActual: '260.000' }],
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2026 }, 2026, avisos);
+
+  assert.doesNotMatch(salida, /fila vieja/);
+  assert.match(salida, /260\.000/, 'la tabla nueva se insertó en el lugar de la vieja');
+  assert.ok(!avisos.includes('tabla de Datos Clave del Sector'));
 });
 
 test('actualizarApartadoSectorialOoxml escribe los encabezados de III.C con la industria y los años', () => {
@@ -2627,13 +2860,14 @@ test('actualizarApartadoSectorialOoxml ubica la narrativa aunque la plantilla es
   assert.ok(idxNuevo < texto.indexOf('Importaciones y exportaciones del sector'),
     'y antes del siguiente apartado, no amontonada al final de toda la sección');
 
-  /* Sin un límite propio a ambos lados —falta "Datos Clave del Sector" del todo—, no se
-     puede borrar con certeza el texto viejo de esa zona sin arriesgar contenido real del
-     cliente que solo esté escrito con otro rótulo: se queda, visible, junto a la
-     narrativa nueva que sí se ubicó en su sitio. */
-  assert.match(texto, /Texto viejo de comportamiento, referencia 2024\./);
+  /* "Datos Clave del Sector" falta, pero SÍ están los dos rótulos que la rodean
+     ("Comportamiento del Sector" antes, "Importaciones y exportaciones..." después,
+     reconocido por sinónimo): eso basta para borrar con certeza toda la zona intermedia
+     y reemplazarla por la narrativa nueva, decisión del usuario (2026-09-10) tras un caso
+     real de texto de años distintos conviviendo bajo el mismo título. */
+  assert.doesNotMatch(texto, /Texto viejo de comportamiento, referencia 2024\./);
   assert.ok(avisos.some((a) => /no se encontró el rótulo «Datos Clave del Sector»/.test(a)));
-  assert.ok(avisos.some((a) => /entre «Comportamiento del Sector» y «Datos Clave del Sector».*se ubicó junto al encabezado más cercano, «Comportamiento del Sector»/.test(a)));
+  assert.ok(avisos.some((a) => /«Datos Clave del Sector», pero sí los que lo rodean.*se reemplazó completo/.test(a)));
 
   /* "Importaciones y exportaciones" → "¿Qué se proyecta" sí son dos rótulos adyacentes y
      los dos se encontraron (uno por sinónimo): ahí el reemplazo es directo y el texto
@@ -2644,6 +2878,56 @@ test('actualizarApartadoSectorialOoxml ubica la narrativa aunque la plantilla es
   assert.doesNotMatch(texto, /Texto viejo de proyección/);
   assert.match(texto, /Conclusiones reales LATV 2025\./);
   assert.doesNotMatch(texto, /Texto viejo de conclusiones/);
+});
+
+test('actualizarApartadoSectorialOoxml: dos rachas de rótulos ausentes, separadas por los que sí se encuentran, se reemplazan cada una por su cuenta sin fundirse en una sola', () => {
+  /* "Datos Clave del Sector" falta (racha 1, entre "Comportamiento del Sector" e
+     "Importaciones y exportaciones", los dos sí encontrados) y, más adelante,
+     "Conclusiones y Perspectivas" falta también (racha 2, entre "¿Qué se proyecta" y
+     "ANÁLISIS ECONÓMICO", también los dos encontrados) — dos rachas independientes, no
+     una sola: los rótulos que sí están en medio (Importaciones, "¿Qué se proyecta")
+     deben partirlas, nunca fundirlas en un solo reemplazo de punta a punta. */
+  const xml = [
+    parrafoXml('Análisis del Sector'),
+    parrafoXml('Comportamiento del Sector'),
+    parrafoXml('Texto viejo de comportamiento.'),
+    parrafoXml('Importaciones y exportaciones del sector'),
+    parrafoXml('Texto viejo de comercio exterior.'),
+    parrafoXml('¿Qué se proyecta para el sector'),
+    parrafoXml('Texto viejo de proyección.'),
+    parrafoXml('Texto viejo de conclusiones.'),
+    parrafoXml('ANÁLISIS ECONÓMICO'),
+  ].join('');
+
+  const analisisSector = {
+    porAnio: {
+      2026: {
+        tituloSector: 'de pruebas',
+        narrativa: {
+          comportamiento: '<p>Comportamiento nuevo.</p>',
+          comercioExterior: '<p>Comercio exterior nuevo.</p>',
+          proyeccion: '<p>Proyección nueva.</p>',
+          conclusiones: '<p>Conclusiones nuevas.</p>',
+        },
+      },
+    },
+  };
+
+  const avisos = [];
+  const salida = actualizarApartadoSectorialOoxml(xml, analisisSector, { anio: 2026 }, 2026, avisos);
+
+  assert.doesNotMatch(salida, /Texto viejo de comportamiento/);
+  assert.doesNotMatch(salida, /Texto viejo de conclusiones/);
+  assert.match(salida, /Comportamiento nuevo\./);
+  assert.match(salida, /Conclusiones nuevas\./);
+  /* Lo que SÍ se encontró (los rótulos de importaciones/exportaciones y de proyección, y
+     su prosa vieja correspondiente — un hueco propiamente delimitado a ambos lados que
+     ya funcionaba antes de este cambio) sigue reemplazándose igual, sin verse arrastrado
+     a una fusión con las rachas vecinas. */
+  assert.doesNotMatch(salida, /Texto viejo de comercio exterior/);
+  assert.doesNotMatch(salida, /Texto viejo de proyección/);
+  assert.match(salida, /Comercio exterior nuevo\./);
+  assert.match(salida, /Proyección nueva\./);
 });
 
 test('actualizarApartadoSectorialOoxml reconoce "Importaciones/Exportaciones" en cualquier orden y "proyección" con cualquier redacción — no por lista de frases fijas, por FORMA', () => {

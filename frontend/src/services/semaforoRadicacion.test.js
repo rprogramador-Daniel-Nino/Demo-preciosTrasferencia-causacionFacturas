@@ -68,6 +68,25 @@ test('evaluarRadicacion reporta como advertencias las tablas y campos que no se 
   assert.match(veredicto.advertencias.join(' '), /nit/);
 });
 
+test('evaluarRadicacion no antepone "No se encontró en la plantilla" a un aviso que ya es una oración completa', () => {
+  /* Un aviso que cita el rótulo entre «» —como los que arma `reemplazarPorHitos`
+     (docxRelleno.js) cuando SÍ reemplazó o insertó algo, solo que conviene revisarlo—
+     ya se explica solo; anteponerle el prefijo genérico lo volvía contradictorio: "No se
+     encontró en la plantilla: ... se ubicó junto al encabezado más cercano...". */
+  const veredicto = evaluarRadicacion({
+    diagnostico: DIAGNOSTICO_LIMPIO,
+    fugasReferencia: [],
+    avisosTablas: [
+      'Análisis del Sector: no se encontró el rótulo «Datos Clave del Sector», pero sí '
+      + 'los que lo rodean: el contenido de esa zona se reemplazó completo con la '
+      + 'narrativa nueva — revísalo antes de radicar',
+    ],
+    camposVacios: [],
+  });
+  assert.ok(!veredicto.advertencias.some((a) => a.startsWith('No se encontró en la plantilla:')));
+  assert.match(veredicto.advertencias.join(' '), /se reemplazó completo/);
+});
+
 test('evaluarRadicacion sin argumentos no lanza, y bloquea por conservador: sin diagnóstico no se puede confirmar cobertura', () => {
   const veredicto = evaluarRadicacion();
   assert.equal(veredicto.listo, false);

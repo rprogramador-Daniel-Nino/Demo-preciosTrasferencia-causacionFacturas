@@ -533,6 +533,45 @@ test('las ocho macro se actualizan sin pisarse entre sí', () => {
   assert.match(salida, /Desempleo Proyectado 2026/);
 });
 
+test('actualizarTablasMacroHtml sustituye por posición cuando los títulos no calzan pero la cadena está delimitada y hay tantas tablas sueltas como pendientes', () => {
+  /* Ninguno de los tres subtítulos contiene el rótulo interno exacto que el motor
+     busca —el caso real de un informe de referencia con sus propios títulos de tabla—
+     pero SÍ se reconocen los dos títulos de sección que delimitan la cadena mundial, y
+     hay exactamente tres tablas sueltas en ese tramo: se emparejan en el orden en que
+     aparecen, mismo criterio que `actualizarTablasMacroOoxml` (docxRelleno.js). */
+  const html = '<h2>Análisis del Panorama de la Economía Mundial</h2>'
+    + '<p>Producto Interno Bruto (PIB)</p>' + TABLA_MACRO
+    + '<p>Inflación:</p>' + TABLA_MACRO
+    + '<p>Crecimiento por región</p>' + TABLA_MACRO
+    + '<h2>Análisis del panorama de la economía colombiana</h2>';
+  const avisos = [];
+  const salida = actualizarTablasMacroHtml(html, null, 2025, avisos);
+
+  assert.ok(!salida.includes('<p>2022</p>'), 'ninguna tabla vieja sobrevive');
+  /* PIB Mundial e Inflación Global comparten la forma "año + proyección"; "por
+     Región/País" no —lista regiones, no años—, así que solo dos de las tres traen esta
+     etiqueta. */
+  assert.strictEqual((salida.match(/2026 \(Proyección\)/g) || []).length, 2, 'PIB Mundial e Inflación Global se regeneraron');
+  assert.match(salida, /Estados Unidos/, 'y también la tabla por Región/País');
+  assert.ok(!avisos.includes('PIB Mundial'));
+  assert.ok(!avisos.includes('Inflación Global'));
+  assert.ok(!avisos.includes('por Región/País'));
+});
+
+test('actualizarTablasMacroHtml NO adivina por posición cuando el número de tablas sueltas no calza con el de pendientes', () => {
+  const html = '<h2>Análisis del Panorama de la Economía Mundial</h2>'
+    + '<p>Producto Interno Bruto (PIB)</p>' + TABLA_MACRO
+    + '<p>Inflación:</p>' + TABLA_MACRO
+    + '<h2>Análisis del panorama de la economía colombiana</h2>';
+  const avisos = [];
+  const salida = actualizarTablasMacroHtml(html, null, 2025, avisos);
+
+  assert.match(salida, /<p>2022<\/p>/, 'no se toca ninguna tabla sin poder emparejar con certeza');
+  assert.ok(avisos.includes('PIB Mundial'));
+  assert.ok(avisos.includes('Inflación Global'));
+  assert.ok(avisos.includes('por Región/País'));
+});
+
 test('textoPlanoHtml deshace etiquetas y entidades', () => {
   assert.strictEqual(textoPlanoHtml('<p><strong>Tabla&nbsp;19.</strong> A &amp; B</p>'),
     'Tabla 19. A & B');
@@ -827,19 +866,23 @@ test('localizarHitosHtml: un título ausente no bloquea los que vienen después'
   assert.ok(hitos[3], '"Conclusiones y Perspectivas" también debe encontrarse');
 });
 
-test('reemplazarHuecosHtml inserta de respaldo al final de la sección cuando falta un título intermedio, pero sí se encuentra el límite final', () => {
+test('reemplazarHuecosHtml reemplaza toda la subsección cuando falta un título intermedio, pero sí se encuentran los dos que la rodean', () => {
+  /* "Encabezado A" y "Encabezado C" SÍ están: basta para borrar entera la prosa vieja de
+     en medio, en vez de solo insertar el contenido nuevo al lado sin tocarla. */
   const html = '<h2>Encabezado A</h2><p>Prosa de A.</p><h2>Encabezado C</h2>';
   const avisos = [];
   const salida = reemplazarHuecosHtml(
     html,
     ['Encabezado A', 'Encabezado B', 'Encabezado C'],
-    [() => null, () => '<p>Contenido de B, sin ancla propia.</p>'],
+    [() => null, () => '<p>Contenido de B.</p>'],
     avisos, 'III.X'
   );
-  assert.match(salida, /Contenido de B, sin ancla propia\./);
+  assert.match(salida, /Contenido de B\./);
+  assert.doesNotMatch(salida, /Prosa de A\./, 'el texto viejo ya no sobrevive junto al nuevo');
   assert.ok(salida.indexOf('Contenido de B') < salida.indexOf('Encabezado C'));
-  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B»/.test(a)));
-  assert.ok(avisos.some((a) => /entre «Encabezado B» y «Encabezado C».*se ubicó junto al encabezado más cercano, «Encabezado C»/.test(a)));
+  assert.ok(avisos.some((a) => /no se encontró el rótulo «Encabezado B», pero sí los que lo rodean.*se reemplazó/.test(a)));
+  assert.ok(!avisos.some((a) => /se ubicó junto al encabezado más cercano/.test(a)),
+    'ya no es una inserción de respaldo, es un reemplazo completo');
 });
 
 test('reemplazarHuecosHtml NO inserta de respaldo si ni siquiera el límite final aparece', () => {
@@ -882,15 +925,17 @@ test('reemplazarHuecosHtml no repite el aviso de un rótulo que cierra una caden
   assert.ok(porRotulo[0].includes('«Dos»'));
 });
 
-/* El respaldo INSERTA en el cursor, no reemplaza el tramo: cuando el rótulo ausente solo
-   está escrito de otro modo, su subsección sigue en el documento y debe sobrevivir. */
-test('el respaldo no se lleva la subsección intermedia cuyo rótulo no se reconoció', () => {
+/* Decisión del usuario (2026-09-10): con los dos límites que rodean la subsección
+   encontrados, ya no hay ambigüedad real sobre qué borrar — mismo cambio que
+   `docxRelleno.js`. */
+test('con los dos límites que la rodean encontrados, SÍ se borra la subsección intermedia cuyo rótulo no se reconoció', () => {
   const html = '<h2>Uno</h2><p>prosa uno</p><h3>Rotulo escrito de otro modo</h3>'
-    + '<p>prosa que hay que conservar</p><h2>Cuatro</h2>';
+    + '<p>prosa que hay que reemplazar</p><h2>Cuatro</h2>';
   const salida = reemplazarHuecosHtml(html, ['Uno', 'Dos', 'Cuatro'],
     [() => '<p>nuevo</p>', () => '<p>nuevo</p>'], [], 'III.B');
-  assert.match(salida, /prosa que hay que conservar/, 'no se borra el texto del cliente');
-  assert.match(salida, /Rotulo escrito de otro modo/, 'ni su encabezado');
+  assert.doesNotMatch(salida, /prosa que hay que reemplazar/, 'el texto viejo del cliente ya no sobrevive');
+  assert.doesNotMatch(salida, /Rotulo escrito de otro modo/, 'tampoco su encabezado, que no era un hito real');
+  assert.match(salida, /nuevo/);
 });
 
 test('reemplazarHuecosHtml protege una tabla que cae justo después de un hito', () => {
@@ -928,6 +973,26 @@ test('reemplazarHuecosHtml encuentra el hito con un sinónimo, y el aviso muestr
   );
   assert.ok(avisos.some((a) => a.includes('Desempleo en Colombia')));
   assert.ok(!avisos.some((a) => a.includes('[object Object]')));
+});
+
+test('actualizarApartadosMacroHtml reconoce "Análisis en el Sector" como cierre de la cadena de Colombia (caso real Sungrow)', () => {
+  /* Mismo bug real y mismo fixture que su equivalente en docxRelleno.test.js: la cadena
+     de Colombia cerraba con el rótulo exacto "Análisis del Sector" mientras III.C ya
+     aceptaba "Análisis en el Sector" como sinónimo del mismo encabezado físico. */
+  const html = [
+    '<h2>Análisis del panorama de la economía colombiana</h2>',
+    '<p>Texto real de Colombia.</p>',
+    '<h3>Crecimiento del PIB en Colombia (2024-2026)</h3>',
+    '<h3>Tasa de Desempleo en Colombia (2024 vs. Proyección 2025)</h3>',
+    '<h2>Análisis en el sector de energía eléctrica</h2>',
+  ].join('');
+
+  const datosMacro = { narrativa: { mundial: '<p>Mundial.</p>', colombia: '<p>Colombia.</p>' } };
+  const avisos = [];
+  actualizarApartadosMacroHtml(html, datosMacro, 2026, avisos);
+
+  assert.ok(!avisos.some((a) => a.includes('«Análisis del Sector»')),
+    '"Análisis en el sector..." debe reconocerse como el mismo rótulo, no avisar que falta');
 });
 
 test('actualizarApartadoSectorialHtml reemplaza los cuatro bloques y deja intacta la tabla de datos clave', () => {
@@ -1017,10 +1082,12 @@ test('actualizarApartadoSectorialHtml ubica la narrativa aunque la plantilla esc
   assert.ok(idxNuevo < texto.indexOf('Importaciones y exportaciones del sector'),
     'y antes del siguiente apartado, no amontonada al final de toda la sección');
 
-  /* Sin límite propio a ambos lados, el texto viejo de esa zona no se borra con certeza
-     — se queda, visible, junto a la narrativa nueva que sí se ubicó en su sitio. */
-  assert.match(texto, /Texto viejo de comportamiento, referencia 2024\./);
+  /* "Datos Clave del Sector" falta, pero SÍ están los dos rótulos que la rodean: eso
+     basta para borrar con certeza toda la zona intermedia — decisión del usuario
+     (2026-09-10), mismo cambio que su equivalente en docxRelleno.test.js. */
+  assert.doesNotMatch(texto, /Texto viejo de comportamiento, referencia 2024\./);
   assert.ok(avisos.some((a) => /no se encontró el rótulo «Datos Clave del Sector»/.test(a)));
+  assert.ok(avisos.some((a) => /«Datos Clave del Sector», pero sí los que lo rodean.*se reemplazó completo/.test(a)));
 
   /* "Importaciones y exportaciones" → "¿Qué se proyecta" sí son adyacentes y los dos se
      encontraron (uno por sinónimo): el reemplazo ahí es directo y el texto viejo
@@ -1217,6 +1284,24 @@ test('actualizarApartadoSectorialHtml conserva la numeración del apartado del c
     .replace('<h2>Análisis del Sector', '<h2>C. Análisis del Sector');
   const salida = actualizarApartadoSectorialHtml(html, sectorConTabla, { anio: 2025 }, 2025, []);
   assert.match(salida, /<h2>C\. Análisis del Sector de la industria de los videojuegos/);
+});
+
+test('actualizarApartadoSectorialHtml sustituye "Datos Clave del Sector" por posición cuando la plantilla la titula distinto', () => {
+  /* El encabezado de la tabla no contiene el rótulo "Datos Clave del Sector" —un
+     informe de referencia con su propio título— pero SÍ hay exactamente una tabla
+     suelta entre "Comportamiento del Sector" e "Importaciones y exportaciones...", sus
+     dos vecinos directos: se sustituye ahí por posición, sin reescribir el rótulo
+     (`rotulo: null`, no hay con qué renombrarlo con confianza). */
+  const html = htmlSectorial(TABLA_DATOS_CLAVE)
+    .replace(
+      '<h3>Datos Clave del Sector de la Industria del Software y de los Videojuegos en Colombia (2023 vs. 2024)</h3>',
+      '<h3>Cifras clave del negocio</h3>'
+    );
+  const avisos = [];
+  const salida = actualizarApartadoSectorialHtml(html, sectorConTabla, { anio: 2025 }, 2025, avisos);
+  assert.doesNotMatch(salida, /250\.000 empleos/, 'la tabla vieja se sustituyó por posición');
+  assert.match(salida, /802,3/, 'la tabla nueva quedó en su lugar');
+  assert.ok(!avisos.some((a) => a.includes('tabla de Datos Clave del Sector')));
 });
 
 test('actualizarApartadoSectorialHtml no toca los encabezados si no hay corrida del año', () => {

@@ -20,7 +20,9 @@
  * @param {Array<{campo:string, cuenta:number, texto:string}>} [args.fugasReferencia]
  *        salida de `revisarSalidaRenderizada` — el `texto` ya trae redactado el valor
  *        de referencia, cuántas veces sobrevive y cuál debía ser.
- * @param {string[]} [args.avisosTablas]   tablas que no se encontraron en la plantilla.
+ * @param {string[]} [args.avisosTablas]   avisos del motor de plantillas: nombres sueltos
+ *        de lo que no se encontró, u oraciones ya completas (citan el rótulo entre «»)
+ *        de lo que sí se ubicó o reemplazó pero conviene revisar.
  * @param {string[]} [args.camposVacios]   campos marcados sin dato del estudio.
  * @returns {{listo:boolean, bloqueantes:string[], advertencias:string[]}}
  */
@@ -74,7 +76,19 @@ export function evaluarRadicacion({ diagnostico, fugasReferencia, avisosTablas, 
       + `no disponible»: ${primeras}${resto}. Escriba su actividad en el paso 4.`
     );
   }
-  (avisosTablas || []).forEach((t) => advertencias.push('No se encontró en la plantilla: ' + t + '.'));
+  /* `avisosTablas` mezcla dos clases de texto: nombres sueltos de tabla/rótulo (p. ej.
+     «Rango Intercuartil», sin comillas angulares) que de verdad no se encontraron y
+     necesitan el prefijo para tener sentido, y oraciones YA completas que
+     `reemplazarPorHitos`/`reemplazarHuecosHtml` (docxRelleno.js/tablasHtmlInforme.js)
+     arman citando el rótulo entre «»  —algunas dicen que SÍ se reemplazó o insertó algo—.
+     Anteponer el mismo prefijo a las dos clases producía avisos que se contradicen a sí
+     mismos: "No se encontró en la plantilla: ... se ubicó junto al encabezado más
+     cercano" o "... se insertó la tabla...", como si no hubiera pasado nada cuando sí
+     pasó. Una oración ya completa nunca cita un rótulo entre «» y a la vez necesita este
+     prefijo genérico: se antepone solo a lo que todavía es un nombre suelto. */
+  (avisosTablas || []).forEach((t) => advertencias.push(
+    t.includes('«') ? t : 'No se encontró en la plantilla: ' + t + '.'
+  ));
   (camposVacios || []).forEach((c) => advertencias.push('Campo sin dato: ' + c + '.'));
 
   return { listo: bloqueantes.length === 0, bloqueantes, advertencias };

@@ -73,6 +73,44 @@ const URL_ANALISIS_SECTOR =
    cuando el efecto se volvería a disparar y pediría otra corrida por lo mismo. */
 const SECTOR_REGENERADO = new Set();
 
+/**
+ * Arma los banners de aviso para `avisosTablas` (docxRelleno.js/tablasHtmlInforme.js):
+ * la lista mezcla nombres sueltos de lo que de verdad no se encontró y oraciones YA
+ * completas —citan el rótulo entre «»— de lo que sí se reemplazó, insertó o ubicó pero
+ * conviene revisar (ver `evaluarRadicacion`, `semaforoRadicacion.js`, donde está la
+ * misma distinción). Juntarlas bajo un único "Esto no se actualizó con los datos del
+ * estudio: ..." producía banners contradictorios cuando la lista sí traía algo que se
+ * había actualizado. Se separan en dos banners: uno solo para lo que de verdad no se
+ * tocó, otro (sin ese encabezado) para lo que ya se explica solo.
+ *
+ * @param {string[]} avisosTablas
+ * @param {string} origen  `'tablas'` (vista previa HTML) o `'docx'` (documento generado).
+ * @returns {Array<{nivel:string, origen:string, texto:string}>}
+ */
+function avisosDeAvisosTablas(avisosTablas, origen) {
+  const lista = avisosTablas || [];
+  if (!lista.length) return [];
+  const sinExplicar = lista.filter((t) => !t.includes('«'));
+  const yaExplicados = lista.filter((t) => t.includes('«'));
+  const banners = [];
+  if (sinExplicar.length) {
+    banners.push({
+      nivel: 'aviso', origen,
+      texto: 'Esto no se actualizó con los datos del estudio: ' + sinExplicar.join(' · ') +
+        '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
+        'revísalo antes de radicar; si alguna tabla está rotulada de otro modo, dilo para ' +
+        'añadir ese nombre.',
+    });
+  }
+  if (yaExplicados.length) {
+    banners.push({
+      nivel: 'aviso', origen,
+      texto: yaExplicados.join(' · ') + '.',
+    });
+  }
+  return banners;
+}
+
 /* El endpoint SIEMPRE rehace la corrida y la sobrescribe con `merge`: la decisión de
    reutilizar lo guardado es de aquí, no de la función. Por eso sirve igual para la
    generación bajo demanda y para regenerar a mano una corrida vieja. */
@@ -520,19 +558,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
     /* Las tablas del motor que la plantilla no trae. Mismo aviso que en la ruta .docx:
        una tabla que no se regenera se queda con los datos del informe del que salió la
        plantilla, y sin decirlo el fallo llega hasta la radicación. */
-    const avisosDeTablas = (r.avisosTablas || []).length
-      ? [{
-        nivel: 'aviso',
-        origen: 'tablas',
-        /* La lista mezcla nombres de tabla y avisos que ya traen su propia explicación —el
-           del ANEXO B nombra las comparables a las que falta el estado financiero—, así que
-           el encabezado no puede dar por hecho que todo sea «una tabla no encontrada». */
-        texto: 'Esto no se actualizó con los datos del estudio: ' + r.avisosTablas.join(' · ') +
-          '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
-          'revísalo antes de radicar; si alguna tabla está rotulada de otro modo, dilo para ' +
-          'añadir ese nombre.',
-      }]
-      : [];
+    const avisosDeTablas = avisosDeAvisosTablas(r.avisosTablas, 'tablas');
 
     /* Qué se corrigió y qué no. Lo corregido se dice porque cambia el documento sin que nadie
        lo haya pedido explícitamente, y quien radica tiene derecho a saberlo; lo omitido,
@@ -1513,20 +1539,9 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           });
         }
         /* Lo que el motor no pudo actualizar en la plantilla. Sin este aviso se radica con las
-           cifras del informe del que salió la plantilla, y nadie se entera.
-
-           La lista mezcla nombres de tabla y avisos que ya traen su propia explicación —los de
-           los anexos dicen qué anexo falta y cómo se busca—, así que el encabezado no puede dar
-           por hecho que todo sea «una tabla no encontrada». Mismo criterio que en la ruta de
-           plantilla marcada. */
-        if (avisosTablas && avisosTablas.length) {
-          nuevos.push({
-            nivel: 'aviso', origen: 'docx',
-            texto: 'Esto no se actualizó con los datos del estudio: ' + avisosTablas.join(' · ') +
-              '. Lo que no se actualiza conserva el contenido que traía tu plantilla, así que ' +
-              'revísalo antes de radicar.',
-          });
-        }
+           cifras del informe del que salió la plantilla, y nadie se entera. Mismo criterio
+           que en la ruta de plantilla marcada — ver `avisosDeAvisosTablas`. */
+        nuevos.push(...avisosDeAvisosTablas(avisosTablas, 'docx'));
         if ((study.eeffImages || []).length && imagenesInsertadas === 0) {
           nuevos.push({
             nivel: 'aviso', origen: 'docx',

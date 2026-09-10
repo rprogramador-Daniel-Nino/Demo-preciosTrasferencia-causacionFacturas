@@ -437,6 +437,15 @@ function conFuenteCitada(parrafos, datosCita, fuenteEnLinea, notas) {
   return parrafos + parrafoFuenteOoxml(fuenteEnLinea ? fuenteEnLinea() : '');
 }
 
+/** El mismo encabezado físico que cierra la cadena de Colombia y abre la de III.C, con
+ *  sus sinónimos — antes cada cadena lo buscaba por su cuenta (la de Colombia con el
+ *  rótulo exacto, la de III.C con esta misma lista), y una plantilla real (Sungrow Power
+ *  Chile SPA, 2025) que lo titula "Análisis en el sector de energía eléctrica" pasaba la
+ *  revisión flexible de III.C pero fallaba la estricta de Colombia: el mismo título
+ *  físico salía "encontrado" para una cadena y "ausente" para la otra. Una sola lista,
+ *  usada en los dos sitios, no puede desalinearse así. */
+const SINONIMOS_ANALISIS_SECTOR = ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'];
+
 export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, notas = null) {
   const doc = sustituidorDeTablas(xml, null);
 
@@ -494,7 +503,7 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
       tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
       'Tasa Representativa del Mercado',
       ['Desempleo en Colombia', 'Tasa de Desempleo', 'Mercado Laboral en Colombia'],
-      'Análisis del Sector',
+      SINONIMOS_ANALISIS_SECTOR,
     ],
     [
       primerHueco(narrativa.colombia, 'colombiana'),
@@ -868,7 +877,7 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
        aparte del tema): ninguna lista de frases fijas cubre eso, pero las RAÍCES de
        palabra sí, sin importar en qué orden o con qué conector se escriban. */
   const titulos = [
-    ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
+    SINONIMOS_ANALISIS_SECTOR,
     'Comportamiento del Sector',
     'Datos Clave del Sector',
     {
@@ -957,14 +966,34 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
   }
 
   if (entrada && entrada.datosClaveTabla && entrada.datosClaveTabla.length) {
-    const encontrada = doc.reemplazar('Datos Clave del Sector', () => generarTablaOoxml(
+    const generarDatosClave = () => generarTablaOoxml(
       tituloDatosClaveSector(entrada.tituloSector, year),
       cabecerasDatosClaveSector(year),
       filasDatosClaveSector(entrada.datosClaveTabla),
       null
-    ));
+    );
+    let encontrada = doc.reemplazar('Datos Clave del Sector', generarDatosClave);
+    /* Por posición: si el rótulo no calzó con nada —una plantilla que trae la tabla con
+       otro título—, se busca EXACTAMENTE una tabla suelta entre "Comportamiento del
+       Sector" y el rótulo que le sigue en la cadena, los dos vecinos directos de "Datos
+       Clave del Sector". Ni cero ni más de una: con cero no hay dónde ponerla, y con más
+       de una no hay forma de saber cuál sin adivinar — en los dos casos se deja el aviso
+       de siempre en vez de arriesgar una sustitución equivocada. */
+    if (!encontrada) {
+      const hitosActuales = localizarHitos(doc.xml, titulos);
+      const vecinoIzq = hitosActuales[1];
+      const vecinoDer = hitosActuales[3];
+      if (vecinoIzq && vecinoDer) {
+        const huerfanas = tablasSueltasEnRango(doc.xml, vecinoIzq.finPropio, vecinoDer.inicio);
+        if (huerfanas.length === 1) {
+          doc.aplicar((actual) => actual.slice(0, huerfanas[0].inicio) + generarDatosClave() + actual.slice(huerfanas[0].fin));
+          encontrada = true;
+        }
+      }
+    }
     console.log('[docxRelleno] tabla "Datos Clave del Sector": '
       + (encontrada ? 'regenerada con ' + entrada.datosClaveTabla.length + ' fila(s)' : 'NO se encontró en la plantilla'));
+    if (!encontrada && Array.isArray(avisos)) avisos.push('tabla de Datos Clave del Sector');
   } else {
     console.log('[docxRelleno] tabla "Datos Clave del Sector": sin datos de la corrida de este año, se deja como está');
     if (Array.isArray(avisos)) avisos.push('tabla de Datos Clave del Sector');
@@ -973,9 +1002,31 @@ export function actualizarApartadoSectorialOoxml(xml, analisisSector, estudio, y
   return doc.xml;
 }
 
+/** Las 3 tablas de la cadena de Panorama Mundial y las 5 de la cadena de Panorama
+ *  Colombia, con los dos títulos de sección que delimitan cada cadena — MISMOS títulos
+ *  que usan `actualizarApartadosMacroOoxml`/`Html` para la prosa, porque son la MISMA
+ *  sección: si una tabla no calza por nombre, el tramo donde buscarla por posición es el
+ *  mismo que ya delimita la narrativa de ese tema. */
+const CADENAS_TABLAS_MACRO = [
+  {
+    nombres: ['PIB Mundial', 'Inflación Global', 'por Región/País'],
+    desde: 'Análisis del Panorama de la Economía Mundial',
+    hasta: 'Análisis del panorama de la economía colombiana',
+  },
+  {
+    nombres: ['PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
+      'Tasa Representativa del Mercado', 'Desempleo en Colombia'],
+    desde: 'Análisis del panorama de la economía colombiana',
+    hasta: SINONIMOS_ANALISIS_SECTOR,
+  },
+];
+
 /** Reemplaza quirúrgicamente las ocho tablas de tendencias económicas en el OOXML del documento. */
 export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
   const doc = sustituidorDeTablas(xml, avisos);
+  const generador = (t) => () => (tablaSinDatos(t)
+    ? null
+    : generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente));
 
   /* Qué tabla es cada una y con qué contenido lo describe `tablasMacroInforme`, que es de
      donde las toma también la ruta de plantilla PDF. Antes la definición de las ocho vivía
@@ -986,14 +1037,54 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
      problema; lo que sí las alcanzaba es el otro defecto del patrón anterior: el título
      tenía que estar contiguo en el XML, y Word lo parte en varios runs. Por eso pasan por
      el mismo localizador, que compara sobre el texto ya reconstruido. */
+  const sinBloque = [];
   tablasMacroInforme(datosMacro, year).forEach((t) => {
+    /* Se comprueba ANTES de intentar `doc.reemplazar`, que anota el aviso apenas no
+       encuentra el bloque: si no hay bloque por nombre, esta tabla es candidata al
+       segundo intento por posición (más abajo) y ese aviso —bare, sin explicar la
+       posición— no se anota todavía. */
+    if (!localizarBloqueTabla(doc.xml, t.nombre)) { sinBloque.push(t); return; }
     /* Igual que las del contribuyente: una tabla sin filas no se publica, se conserva la
        de la plantilla y el aviso lo dice. Las series que faltan sí se publican, porque su
        celda lleva el marcador de pendiente con el año y el concepto —ahí hay algo que
        leer y que corregir—, y eso no es lo mismo que una tabla sin nada. */
-    doc.reemplazar(t.nombre, () => (tablaSinDatos(t)
-      ? null
-      : generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente)));
+    doc.reemplazar(t.nombre, generador(t));
+  });
+
+  /* Segundo intento, por posición: cuando el nombre no calzó con nada de la plantilla
+     —un informe de referencia con sus propios títulos de tabla, no los que este motor
+     busca, el mismo caso que ya resuelve `reemplazarPorHitos` para la prosa—, se ubica
+     dentro del tramo que delimitan los dos títulos de sección de esa cadena cualquier
+     tabla que haya quedado suelta ahí (`tablasSueltasEnRango`, la misma que protege a
+     estas tablas de borrarse junto con la prosa vieja) y se sustituye 1 a 1, en el orden
+     en que aparecen. Solo cuando hay EXACTAMENTE tantas tablas sueltas como pendientes:
+     con más o menos, no hay forma de emparejar sin adivinar y se deja el aviso de
+     siempre. */
+  const sinResolver = [];
+  CADENAS_TABLAS_MACRO.forEach((cadena) => {
+    const pendientesCadena = sinBloque.filter((t) => cadena.nombres.includes(t.nombre));
+    if (!pendientesCadena.length) return;
+    const bounds = localizarHitos(doc.xml, [cadena.desde, cadena.hasta]);
+    if (!bounds[0] || !bounds[1]) { sinResolver.push(...pendientesCadena); return; }
+    const huerfanas = tablasSueltasEnRango(doc.xml, bounds[0].finPropio, bounds[1].inicio);
+    if (huerfanas.length !== pendientesCadena.length) { sinResolver.push(...pendientesCadena); return; }
+    doc.aplicar((actual) => {
+      const ops = [];
+      pendientesCadena.forEach((t, i) => {
+        const nuevo = generador(t)();
+        if (nuevo) ops.push({ inicio: huerfanas[i].inicio, fin: huerfanas[i].fin, contenido: nuevo });
+        else sinResolver.push(t);
+      });
+      let salida = actual;
+      ops.sort((a, b) => b.inicio - a.inicio).forEach((op) => {
+        salida = salida.slice(0, op.inicio) + op.contenido + salida.slice(op.fin);
+      });
+      return salida;
+    });
+  });
+
+  sinResolver.forEach((t) => {
+    if (Array.isArray(avisos)) avisos.push(t.nombre);
   });
 
   return doc.xml;
@@ -1499,6 +1590,39 @@ function finDeFuenteSiguienteOoxml(xml, desde) {
   return desde;
 }
 
+/**
+ * Las `<w:tbl>` completas cuyo inicio cae dentro de `[inicio, fin)` de `xml`, en orden de
+ * aparición — cada una con su línea «FUENTE:» siguiente absorbida si la trae inmediatamente
+ * después, igual que `sustituidorDeTablas.reemplazar` (para que tabla y pie de fuente viajen
+ * juntos).
+ *
+ * La usa `reemplazarPorHitos` cuando una racha de rótulos ausentes bien delimitada se
+ * reemplaza de punta a punta (ver `resolverAnclasDeHuecos`): una tabla que quedó dentro de
+ * ese tramo —con un título que la plantilla del cliente no rotuló como el sistema espera— no
+ * es prosa que haya que limpiar, es una tabla de datos que hay que conservar para que el
+ * reemplazo de tablas por posición (`actualizarTablasMacroOoxml`) la sustituya después, sobre
+ * el XML ya reescrito, en vez de perderla sin más.
+ *
+ * @param {string} xml
+ * @param {number} inicio
+ * @param {number} fin
+ * @returns {Array<{inicio:number, fin:number, xml:string}>}
+ */
+function tablasSueltasEnRango(xml, inicio, fin) {
+  const resultado = [];
+  const rx = /<w:tbl(?:\s[^>]*)?>/g;
+  rx.lastIndex = inicio;
+  let m;
+  while ((m = rx.exec(xml)) !== null && m.index < fin) {
+    const finTabla = finDeTabla(xml, m.index);
+    if (finTabla < 0 || finTabla > fin) break;
+    const finReal = Math.min(finDeFuenteSiguienteOoxml(xml, finTabla), fin);
+    resultado.push({ inicio: m.index, fin: finReal, xml: xml.slice(m.index, finReal) });
+    rx.lastIndex = finReal;
+  }
+  return resultado;
+}
+
 /** Igual que `finDeFuenteSiguienteOoxml`, pero devuelve el párrafo completo
  *  (`{inicio,fin,xml}`) en vez de solo su final, para poder reescribir su texto en vez de
  *  solo delimitarlo — `null` si no hay ninguno. */
@@ -1694,27 +1818,39 @@ const etiquetaTitulo = (t) => (t && typeof t.etiqueta === 'string' ? t.etiqueta 
 
 /**
  * Para cada hueco entre `titulos[i]` y `titulos[i+1]` (índices `0..hitos.length-2`),
- * decide cómo ubicar su contenido cuando no se encuentran los DOS límites propios del
- * hueco: contra el rótulo LOCALIZADO más cercano a cada lado —el de menor distancia y,
- * en empate, el de la izquierda—, en vez de un único punto de respaldo al final de toda
- * la cadena (como hacía antes `cursorRespaldo`, que solo servía si el ÚLTIMO título de
- * la cadena se encontraba, sin importar cuán cerca hubiera otro título encontrado).
+ * decide cómo ubicar su contenido.
  *
- * Nunca se funden dos huecos en una sola región para poder BORRAR el texto entre dos
- * hitos que no son adyacentes en la lista original: un título intermedio ausente no
- * distingue "esta subsección nunca existió en la plantilla" (seguro fundir y
- * reemplazar) de "existe, pero está escrita con otro rótulo que no se reconoce" (nada
- * seguro de borrar — es texto real del cliente). Como el código no puede saber cuál de
- * las dos es, cada hueco sin límite propio solo INSERTA junto al hito más cercano, sin
- * tocar lo que ya hubiera ahí — la prueba `el respaldo no se lleva la subsección
- * intermedia cuyo rótulo no se reconoció` (`docxRelleno.test.js`) protege justo esto.
+ * Cuando el hueco tiene un título encontrado en algún punto ANTES (inclusive `hitos[i]`)
+ * y otro en algún punto DESPUÉS (inclusive `hitos[i+1]`), esos dos títulos delimitan con
+ * certeza dónde empieza y dónde termina lo que hay en medio — sin importar cuántos
+ * rótulos intermedios falten: toda la racha de huecos entre ellos se trata como UNA sola
+ * región reemplazable (`tipo:'reemplazo'`, con `desde`/`hasta` marcando el primer y el
+ * último hueco de la racha; todos los huecos de la racha comparten el mismo par). Esto
+ * generaliza el caso de siempre (los dos límites propios del hueco encontrados, sin
+ * ningún rótulo ausente en medio: `desde === hasta === i`) al caso en que hay una racha
+ * de rótulos ausentes bien delimitada por dos SÍ encontrados — decisión del usuario
+ * (2026-09-10) tras ver un caso real: una plantilla que es el informe YA RADICADO de un
+ * año anterior dejaba sobrevivir su propia prosa vieja junto a la narrativa nueva bajo el
+ * mismo título, porque antes esta función solo insertaba sin borrar en ese caso. Un hito
+ * SÍ encontrado en medio de lo que sería una racha la parte en dos: nunca se funde a
+ * través de un título que sí se reconoció.
+ *
+ * Cuando el hueco no tiene un título encontrado a alguno de los dos lados en TODA la
+ * cadena (se sale del extremo del arreglo sin toparse con ninguno), no hay dónde se sabe
+ * con certeza que termine la región: se INSERTA junto al título encontrado más cercano
+ * —el de menor distancia y, en empate, el de la izquierda—, sin tocar lo que ya hubiera
+ * ahí, en vez de un único punto de respaldo al final de toda la cadena (como hacía antes
+ * `cursorRespaldo`, que solo servía si el ÚLTIMO título de la cadena se encontraba, sin
+ * importar cuán cerca hubiera otro título encontrado). Y cuando no se encuentra NINGÚN
+ * título de la cadena, el contenido se deja perder (`tipo:'sin-ancla'`): no hay evidencia
+ * de que esta sección exista aquí en absoluto.
  *
  * Puro: solo mira qué posiciones de `hitos` son no nulas, nunca el contenido del
  * documento, así lo reutilizan tanto `reemplazarPorHitos` (aquí) como
  * `reemplazarHuecosHtml` de `tablasHtmlInforme.js`.
  *
  * @param {Array<{inicio:number, finPropio:number}|null>} hitos
- * @returns {Array<{tipo:'reemplazo'}|{tipo:'insertar', lado:'derecha-de'|'izquierda-de', ref:number}|{tipo:'sin-ancla'}>}
+ * @returns {Array<{tipo:'reemplazo', desde:number, hasta:number}|{tipo:'insertar', lado:'derecha-de'|'izquierda-de', ref:number}|{tipo:'sin-ancla'}>}
  *          longitud `hitos.length - 1`, una entrada por hueco.
  */
 export function resolverAnclasDeHuecos(hitos) {
@@ -1723,10 +1859,16 @@ export function resolverAnclasDeHuecos(hitos) {
   for (let i = 0, ultimo = -1; i < n; i += 1) { antes[i] = ultimo; if (hitos[i]) ultimo = i; }
   const despues = new Array(n).fill(-1);
   for (let i = n - 1, siguiente = -1; i >= 0; i -= 1) { despues[i] = siguiente; if (hitos[i]) siguiente = i; }
+  /* Nearest found position AT OR BEFORE/AFTER `j` (a diferencia de `antes`/`despues`,
+     que son estrictas y no cuentan `j` mismo). */
+  const antesInclusive = (j) => (hitos[j] ? j : antes[j]);
+  const despuesInclusive = (j) => (hitos[j] ? j : despues[j]);
 
   const resultado = [];
   for (let i = 0; i < n - 1; i += 1) {
-    if (hitos[i] && hitos[i + 1]) { resultado.push({ tipo: 'reemplazo' }); continue; }
+    const a = antesInclusive(i);
+    const b = despuesInclusive(i + 1);
+    if (a !== -1 && b !== -1) { resultado.push({ tipo: 'reemplazo', desde: a, hasta: b - 1 }); continue; }
     if (hitos[i]) { resultado.push({ tipo: 'insertar', lado: 'derecha-de', ref: i }); continue; }
     if (hitos[i + 1]) { resultado.push({ tipo: 'insertar', lado: 'izquierda-de', ref: i + 1 }); continue; }
     const izq = antes[i];
@@ -1754,6 +1896,13 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     const etiquetas = titulos.map(etiquetaTitulo);
     console.log('[docxRelleno] ' + (nombreParaAvisos || '') + ': hitos encontrados '
       + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + etiquetas.join(' → ') + ')');
+
+    /* Se calcula ANTES del aviso por rótulo ausente: si el hueco que ese rótulo delimita
+       terminó fundido en un reemplazo completo (ver `resolverAnclasDeHuecos`), no es
+       cierto que "los apartados que delimita se quedan como están en la plantilla" — se
+       reemplazaron. El aviso tiene que decir la causa correcta. */
+    const anclas = resolverAnclasDeHuecos(hitos);
+
     /* UN aviso por rótulo ausente, y no uno por cada par de rótulos consecutivos que no
        se pudo delimitar. Cada rótulo delimita dos apartados —el que cierra y el que
        abre—, así que el aviso por pares repetía la misma causa dos veces y una cadena de
@@ -1765,8 +1914,19 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       /* `titulo` puede ser un `{etiqueta,test}` (ver `coincideTitulo`): el aviso, y su
          deduplicación más abajo, siempre usan su forma legible. */
       const etiqueta = etiquetaTitulo(titulo);
-      const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
-        + '», así que los apartados que delimita se quedan como están en la plantilla';
+      /* Los dos huecos que este rótulo delimita —el que cierra (i-1→i) y el que abre
+         (i→i+1)—; si CUALQUIERA de los dos terminó fundido en un reemplazo completo, el
+         contenido de esa zona sí cambió, aunque este rótulo puntual no se haya
+         encontrado. */
+      const huecoIzq = i > 0 ? anclas[i - 1] : null;
+      const huecoDer = i < anclas.length ? anclas[i] : null;
+      const seReemplazo = (huecoIzq && huecoIzq.tipo === 'reemplazo') || (huecoDer && huecoDer.tipo === 'reemplazo');
+      const aviso = seReemplazo
+        ? (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
+          + '», pero sí los que lo rodean: el contenido de esa zona se reemplazó completo '
+          + 'con la narrativa nueva — revísalo antes de radicar'
+        : (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
+          + '», así que los apartados que delimita se quedan como están en la plantilla';
       console.warn('[docxRelleno] ' + aviso);
       if (!Array.isArray(avisos)) return;
       /* Y ni siquiera una vez por sección: el rótulo que CIERRA una cadena es el que ABRE
@@ -1778,7 +1938,6 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
       avisos.push(aviso);
     });
 
-    const anclas = resolverAnclasDeHuecos(hitos);
     /* Inserciones agrupadas por punto de ancla: dos o más huecos consecutivos sin
        título propio pueden terminar apuntando al MISMO rótulo vecino —dos apartados
        intermedios seguidos que la plantilla no trae, por ejemplo—, y ahí su contenido
@@ -1790,17 +1949,48 @@ export function reemplazarPorHitos(doc, titulos, contenidos, avisos, nombreParaA
     for (let i = 0; i < contenidos.length; i += 1) {
       const ancla = anclas[i];
       if (ancla.tipo === 'reemplazo') {
-        const hitoActual = hitos[i];
-        const hitoSiguiente = hitos[i + 1];
+        /* Toda la racha `[ancla.desde, ancla.hasta]` se procesa UNA sola vez, en el
+           primer hueco que la compone — los huecos siguientes de la misma racha ya
+           quedaron cubiertos por ese reemplazo y no hacen nada por su cuenta. */
+        if (i !== ancla.desde) continue;
+        const hitoActual = hitos[ancla.desde];
+        const hitoSiguiente = hitos[ancla.hasta + 1];
         const textoHueco = textoPlanoOoxml(actual.slice(hitoActual.finPropio, hitoSiguiente.inicio));
-        const nuevo = contenidos[i](textoHueco);
-        if (nuevo === null) {
-          console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
+        /* Una tabla suelta dentro de la racha —con un rótulo que la plantilla no
+           escribió como el sistema espera— no es prosa del cliente que haya que
+           limpiar: es una tabla de datos que hay que conservar para que el reemplazo
+           de tablas por posición (`actualizarTablasMacroOoxml`) decida qué hacer con
+           ella después, sobre el XML ya reescrito. */
+        const tablasConservadas = tablasSueltasEnRango(actual, hitoActual.finPropio, hitoSiguiente.inicio);
+        /* `contenidos` puede traer MENOS entradas que huecos hay en `titulos` — el
+           último hueco de una cadena a veces es tierra de nadie a propósito (nadie le
+           da contenido: la posición siguiente la cubre la PRIMERA función de contenido
+           de la cadena SIGUIENTE, desde el otro lado — así separa
+           `actualizarApartadosMacroOoxml` los hitos "líderes" mundial/Colombia de los
+           temas intermedios). Si la racha se extiende hasta ahí porque su rótulo no se
+           encontró, la ZONA sí se borra completa hasta el siguiente título que SÍ se
+           encontró —no hay forma de distinguir esa tierra de nadie dentro de una racha
+           sin estructura reconocida—, pero no hay función de contenido que llamar para
+           esa cola: se detiene en la última que sí existe. */
+        const hastaConContenido = Math.min(ancla.hasta, contenidos.length - 1);
+        let narrativaNueva = '';
+        for (let k = ancla.desde; k <= hastaConContenido; k += 1) {
+          const nuevo = contenidos[k](textoHueco);
+          if (nuevo) narrativaNueva += nuevo;
+        }
+        if (!narrativaNueva && !tablasConservadas.length) {
+          console.log('[docxRelleno] hueco "' + etiquetas[ancla.desde] + '" → "'
+            + etiquetas[ancla.hasta + 1] + '": sin tocar');
           continue;
         }
-        console.log('[docxRelleno] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado ('
-          + textoHueco.length + ' caracteres viejos → ' + nuevo.length + ' nuevos)');
-        reemplazos.push({ inicio: hitoActual.finPropio, fin: hitoSiguiente.inicio, contenido: nuevo });
+        console.log('[docxRelleno] hueco "' + etiquetas[ancla.desde] + '" → "' + etiquetas[ancla.hasta + 1]
+          + '": reemplazado (' + textoHueco.length + ' caracteres viejos → ' + narrativaNueva.length
+          + ' nuevos, ' + tablasConservadas.length + ' tabla(s) conservada(s))');
+        reemplazos.push({
+          inicio: hitoActual.finPropio,
+          fin: hitoSiguiente.inicio,
+          contenido: narrativaNueva + tablasConservadas.map((t) => t.xml).join(''),
+        });
         continue;
       }
       /* 'sin-ancla': ni el propio límite del hueco ni ningún otro rótulo de la cadena

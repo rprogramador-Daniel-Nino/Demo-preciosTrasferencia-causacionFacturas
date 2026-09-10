@@ -240,6 +240,35 @@ function elementoFuenteSiguiente(html, desde) {
 }
 
 /**
+ * Las `<table>` completas cuyo inicio cae dentro de `[inicio, fin)` de `html`, en orden de
+ * aparición — cada una con su elemento «FUENTE:» siguiente absorbido si lo trae
+ * inmediatamente después. Equivalente HTML de `tablasSueltasEnRango` (`docxRelleno.js`):
+ * la usa `reemplazarHuecosHtml` para conservar una tabla que quedó dentro de una racha de
+ * rótulos ausentes que se reemplaza de punta a punta, en vez de perderla junto con la
+ * prosa vieja que la rodeaba.
+ *
+ * @param {string} html
+ * @param {number} inicio
+ * @param {number} fin
+ * @returns {Array<{inicio:number, fin:number, xml:string}>}
+ */
+function tablasSueltasEnRangoHtml(html, inicio, fin) {
+  const resultado = [];
+  const rx = /<table(?:\s[^>]*)?>/gi;
+  rx.lastIndex = inicio;
+  let m;
+  while ((m = rx.exec(html)) !== null && m.index < fin) {
+    const finTabla = finDeTabla(html, m.index);
+    if (finTabla < 0 || finTabla > fin) break;
+    const fuente = elementoFuenteSiguiente(html, finTabla);
+    const finReal = fuente ? Math.min(fuente.fin, fin) : finTabla;
+    resultado.push({ inicio: m.index, fin: finReal, xml: html.slice(m.index, finReal) });
+    rx.lastIndex = finReal;
+  }
+  return resultado;
+}
+
+/**
  * Quita del informe una tabla completa: su rótulo, la tabla y la línea de fuente que la
  * sigue.
  *
@@ -867,34 +896,91 @@ export function actualizarTablasMotorHtml(html, estudio, avisos) {
  * @param {string[]} [avisos]  se anotan las que la plantilla no trae.
  * @returns {string}
  */
+/** El mismo encabezado físico que cierra la cadena de Colombia y abre la de III.C, con
+ *  sus sinónimos — mismo motivo y misma lista que `SINONIMOS_ANALISIS_SECTOR` de
+ *  `docxRelleno.js` (duplicada a propósito, no importada: ver la nota de sincronización
+ *  entre rutas en `CLAUDE.md`). Antes cada cadena lo buscaba por su cuenta y una
+ *  plantilla real (Sungrow Power Chile SPA, 2025) que lo titula "Análisis en el sector
+ *  de energía eléctrica" pasaba la revisión flexible de III.C pero fallaba la estricta
+ *  de Colombia. */
+const SINONIMOS_ANALISIS_SECTOR_HTML = ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'];
+
+/** Mismas dos cadenas que `CADENAS_TABLAS_MACRO` de `docxRelleno.js` —los mismos títulos
+ *  de sección que ya delimitan la narrativa de ese tema (`actualizarApartadosMacroHtml`)—
+ *  para el segundo intento por posición cuando el nombre de una tabla no calza con nada
+ *  de la plantilla. Duplicada a propósito, no importada: ver la nota de sincronización
+ *  entre rutas en `CLAUDE.md`. */
+const CADENAS_TABLAS_MACRO_HTML = [
+  {
+    nombres: ['PIB Mundial', 'Inflación Global', 'por Región/País'],
+    desde: 'Análisis del Panorama de la Economía Mundial',
+    hasta: 'Análisis del panorama de la economía colombiana',
+  },
+  {
+    nombres: ['PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
+      'Tasa Representativa del Mercado', 'Desempleo en Colombia'],
+    desde: 'Análisis del panorama de la economía colombiana',
+    hasta: SINONIMOS_ANALISIS_SECTOR_HTML,
+  },
+];
+
 export function actualizarTablasMacroHtml(html, datosMacro, year, avisos) {
   let salida = String(html || '');
+  const tablas = tablasMacroInforme(datosMacro, year);
 
-  /* Cada tabla se localiza sobre la salida ya modificada, de una en una, en vez de calcular
-     todas las posiciones de golpe: los nombres son distintos entre sí, así que reescribir
-     una no cambia dónde está la siguiente, pero sus offsets sí se desplazan. */
-  tablasMacroInforme(datosMacro, year).forEach((t) => {
-    const bloque = localizarTablaHtml(salida, t.nombre);
-    if (!bloque) {
-      if (Array.isArray(avisos)) avisos.push(t.nombre);
-      return;
-    }
+  /** Reescribe filas + fuente de una tabla ya localizada (por nombre o por posición); el
+   *  rótulo solo se reescribe cuando se localizó por nombre (`bloque.rotulo`) — por
+   *  posición no hay una relación de nombre confiable con ese encabezado como para
+   *  renombrarlo, así que se deja como está. */
+  const aplicar = (t, bloque) => {
     const tabla = reescribirFilasHtml(salida.slice(bloque.inicio, bloque.fin), t.filas);
     salida = salida.slice(0, bloque.inicio) + tabla + salida.slice(bloque.fin);
-
     if (t.fuente) {
       const finBloque = finDeTabla(salida, bloque.inicio);
       if (finBloque > bloque.inicio) {
         salida = reescribirFuenteHtml(salida, finBloque, t.fuente);
       }
     }
-
-    /* El rótulo va después de la tabla en el orden de escritura porque está ANTES en el
-       documento: reescribirlo primero movería el bloque que acabamos de localizar. */
     if (bloque.rotulo) {
       const nuevo = reescribirRotuloHtml(bloque.rotulo.xml, t.titulo);
       salida = salida.slice(0, bloque.rotulo.inicio) + nuevo + salida.slice(bloque.rotulo.fin);
     }
+  };
+
+  /* Cada tabla se localiza sobre la salida ya modificada, de una en una, en vez de calcular
+     todas las posiciones de golpe: los nombres son distintos entre sí, así que reescribir
+     una no cambia dónde está la siguiente, pero sus offsets sí se desplazan. */
+  const sinBloque = [];
+  tablas.forEach((t) => {
+    const bloque = localizarTablaHtml(salida, t.nombre);
+    if (!bloque) { sinBloque.push(t); return; }
+    aplicar(t, bloque);
+  });
+
+  /* Segundo intento, por posición — mismo criterio que `actualizarTablasMacroOoxml` en
+     `docxRelleno.js`, donde está la explicación completa: solo cuando hay EXACTAMENTE
+     tantas `<table>` sueltas en el tramo de la cadena como tablas pendientes. */
+  const sinResolver = [];
+  CADENAS_TABLAS_MACRO_HTML.forEach((cadena) => {
+    const pendientesCadena = sinBloque.filter((t) => cadena.nombres.includes(t.nombre));
+    if (!pendientesCadena.length) return;
+    const bounds = localizarHitosHtml(salida, [cadena.desde, cadena.hasta]);
+    if (!bounds[0] || !bounds[1]) { sinResolver.push(...pendientesCadena); return; }
+    const huerfanas = tablasSueltasEnRangoHtml(salida, bounds[0].finPropio, bounds[1].inicio);
+    if (huerfanas.length !== pendientesCadena.length) { sinResolver.push(...pendientesCadena); return; }
+    /* De atrás hacia adelante: aplicar la primera movería los offsets de las que faltan
+       por procesar en este mismo tramo. */
+    pendientesCadena.map((t, i) => ({ t, huerfana: huerfanas[i] }))
+      .sort((a, b) => b.huerfana.inicio - a.huerfana.inicio)
+      .forEach(({ t, huerfana }) => {
+        const finTabla = finDeTabla(salida, huerfana.inicio);
+        if (finTabla < 0) { sinResolver.push(t); return; }
+        aplicar(t, { inicio: huerfana.inicio, fin: finTabla, rotulo: null });
+      });
+  });
+
+  sinResolver.forEach((t) => {
+    if (Array.isArray(avisos)) avisos.push(t.nombre);
   });
 
   return salida;
@@ -1041,14 +1127,26 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
   console.log('[tablasHtmlInforme] ' + (nombreParaAvisos || '') + ': hitos encontrados '
     + hitos.filter(Boolean).length + '/' + titulos.length + ' (' + etiquetas.join(' → ') + ')');
 
+  /* Se calcula ANTES del aviso por rótulo ausente — mismo orden y mismo motivo que
+     `reemplazarPorHitos` en `docxRelleno.js`: si el hueco que ese rótulo delimita
+     terminó fundido en un reemplazo completo, el aviso tiene que decirlo. */
+  const anclas = resolverAnclasDeHuecos(hitos);
+
   /* UN aviso por rótulo ausente, no uno por par consecutivo. Mismo criterio y mismo
      texto que `reemplazarPorHitos` en `docxRelleno.js`, donde está la explicación. */
   titulos.forEach((titulo, i) => {
     if (hitos[i]) return;
     /* `titulo` puede ser un `{etiqueta,test}` — el aviso siempre usa su forma legible. */
     const etiqueta = etiquetaTituloHtml(titulo);
-    const aviso = (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
-      + '», así que los apartados que delimita se quedan como están en la plantilla';
+    const huecoIzq = i > 0 ? anclas[i - 1] : null;
+    const huecoDer = i < anclas.length ? anclas[i] : null;
+    const seReemplazo = (huecoIzq && huecoIzq.tipo === 'reemplazo') || (huecoDer && huecoDer.tipo === 'reemplazo');
+    const aviso = seReemplazo
+      ? (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
+        + '», pero sí los que lo rodean: el contenido de esa zona se reemplazó completo '
+        + 'con la narrativa nueva — revísalo antes de radicar'
+      : (nombreParaAvisos || '') + ': no se encontró el rótulo «' + etiqueta
+        + '», así que los apartados que delimita se quedan como están en la plantilla';
     console.warn('[tablasHtmlInforme] ' + aviso);
     if (!Array.isArray(avisos)) return;
     /* Un rótulo cierra una cadena y abre la siguiente, así que sin esto se avisaría dos
@@ -1057,28 +1155,48 @@ export function reemplazarHuecosHtml(html, titulos, contenidos, avisos, nombrePa
     avisos.push(aviso);
   });
 
-  /* Emparejamiento por vecino más cercano — mismo algoritmo, mismo motivo y misma
-     explicación que `reemplazarPorHitos` de `docxRelleno.js`: `resolverAnclasDeHuecos`
-     es la función pura compartida entre las dos rutas. Nunca funde dos huecos en una
-     sola región reemplazable: un título intermedio ausente no distingue "la subsección
-     nunca existió aquí" de "existe, con otro rótulo que no se reconoce" (texto real del
-     cliente, no seguro de borrar). */
-  const anclas = resolverAnclasDeHuecos(hitos);
+  /* `resolverAnclasDeHuecos` funde en un solo reemplazo cualquier racha de rótulos
+     ausentes delimitada por dos SÍ encontrados —sin importar cuántos falten en
+     medio—; solo cuando un hueco no tiene un título encontrado a alguno de los dos
+     lados en TODA la cadena se INSERTA junto al más cercano sin tocar lo que ya
+     hubiera ahí. Mismo algoritmo, mismo motivo y misma explicación que
+     `reemplazarPorHitos` de `docxRelleno.js`: `resolverAnclasDeHuecos` es la función
+     pura compartida entre las dos rutas. */
   const inserciones = new Map();
   const reemplazos = [];
   for (let i = 0; i < contenidos.length; i += 1) {
     const ancla = anclas[i];
     if (ancla.tipo === 'reemplazo') {
-      const hitoActual = hitos[i];
-      const hitoSiguiente = hitos[i + 1];
+      /* Toda la racha `[ancla.desde, ancla.hasta]` se procesa UNA sola vez, en el
+         primer hueco que la compone. */
+      if (i !== ancla.desde) continue;
+      const hitoActual = hitos[ancla.desde];
+      const hitoSiguiente = hitos[ancla.hasta + 1];
       const textoHueco = textoPlanoHtml(salida.slice(hitoActual.finPropio, hitoSiguiente.inicio));
-      const nuevo = contenidos[i](textoHueco);
-      if (nuevo === null) {
-        console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": sin tocar');
+      /* Una tabla suelta dentro de la racha se conserva para que el reemplazo de
+         tablas por posición la sustituya después — mismo motivo que en
+         `docxRelleno.js`. */
+      const tablasConservadas = tablasSueltasEnRangoHtml(salida, hitoActual.finPropio, hitoSiguiente.inicio);
+      /* `contenidos` puede traer menos entradas que huecos hay en `titulos` — ver la
+         explicación en `reemplazarPorHitos` (`docxRelleno.js`). */
+      const hastaConContenido = Math.min(ancla.hasta, contenidos.length - 1);
+      let narrativaNueva = '';
+      for (let k = ancla.desde; k <= hastaConContenido; k += 1) {
+        const nuevo = contenidos[k](textoHueco);
+        if (nuevo) narrativaNueva += nuevo;
+      }
+      if (!narrativaNueva && !tablasConservadas.length) {
+        console.log('[tablasHtmlInforme] hueco "' + etiquetas[ancla.desde] + '" → "'
+          + etiquetas[ancla.hasta + 1] + '": sin tocar');
         continue;
       }
-      console.log('[tablasHtmlInforme] hueco "' + etiquetas[i] + '" → "' + etiquetas[i + 1] + '": reemplazado');
-      reemplazos.push({ inicio: hitoActual.finPropio, fin: hitoSiguiente.inicio, contenido: nuevo });
+      console.log('[tablasHtmlInforme] hueco "' + etiquetas[ancla.desde] + '" → "'
+        + etiquetas[ancla.hasta + 1] + '": reemplazado');
+      reemplazos.push({
+        inicio: hitoActual.finPropio,
+        fin: hitoSiguiente.inicio,
+        contenido: narrativaNueva + tablasConservadas.map((t) => t.xml).join(''),
+      });
       continue;
     }
     /* 'sin-ancla': ni el propio límite del hueco ni ningún otro rótulo de la cadena
@@ -1182,7 +1300,7 @@ export function actualizarApartadosMacroHtml(html, datosMacro, year, avisos, not
       tituloColombia, 'PIB en Colombia', 'Inflación en Colombia', 'Intervención del Banco',
       'Tasa Representativa del Mercado',
       ['Desempleo en Colombia', 'Tasa de Desempleo', 'Mercado Laboral en Colombia'],
-      'Análisis del Sector',
+      SINONIMOS_ANALISIS_SECTOR_HTML,
     ],
     [
       primerHueco(narrativa.colombia, 'colombiana'),
@@ -1242,7 +1360,7 @@ function reescribirEncabezadosHtml(html, hitos, titulos) {
  * informe de referencia («2023 | 2024»), y publicar las cifras del año en curso bajo esos
  * dos títulos de columna es peor que no tocarlas.
  */
-function regenerarTablaDatosClave(html, entrada, year, avisos) {
+function regenerarTablaDatosClave(html, entrada, year, avisos, titulos) {
   const anotar = (motivo) => {
     console.warn('[tablasHtmlInforme] tabla "Datos Clave del Sector": ' + motivo);
     if (Array.isArray(avisos)) avisos.push('tabla de Datos Clave del Sector (' + motivo + ')');
@@ -1257,7 +1375,24 @@ function regenerarTablaDatosClave(html, entrada, year, avisos) {
     return html;
   }
 
-  const bloque = localizarTablaHtml(html, 'Datos Clave del Sector');
+  let bloque = localizarTablaHtml(html, 'Datos Clave del Sector');
+  if (!bloque && Array.isArray(titulos)) {
+    /* Por posición: si el rótulo no calzó con nada, se busca EXACTAMENTE una `<table>`
+       suelta entre "Comportamiento del Sector" (índice 1) y el rótulo que le sigue en la
+       cadena (índice 3) — mismo criterio, mismo motivo que la ruta .docx
+       (`actualizarApartadoSectorialOoxml`). Sin rótulo relacionable con confianza, no se
+       reescribe (`rotulo: null`). */
+    const hitosActuales = localizarHitosHtml(html, titulos);
+    const vecinoIzq = hitosActuales[1];
+    const vecinoDer = hitosActuales[3];
+    if (vecinoIzq && vecinoDer) {
+      const huerfanas = tablasSueltasEnRangoHtml(html, vecinoIzq.finPropio, vecinoDer.inicio);
+      if (huerfanas.length === 1) {
+        const finTabla = finDeTabla(html, huerfanas[0].inicio);
+        if (finTabla > huerfanas[0].inicio) bloque = { inicio: huerfanas[0].inicio, fin: finTabla, rotulo: null };
+      }
+    }
+  }
   if (!bloque) {
     anotar('no se encontró en la plantilla');
     return html;
@@ -1343,7 +1478,7 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
      el orden invertido, y "¿Cuáles son las proyecciones y perspectivas...?" sin ninguna
      palabra en común con "¿Qué se proyecta"). */
   const titulos = [
-    ['Análisis del Sector', 'Análisis en el Sector', 'Análisis Sectorial'],
+    SINONIMOS_ANALISIS_SECTOR_HTML,
     'Comportamiento del Sector', 'Datos Clave del Sector',
     {
       etiqueta: 'Importaciones y exportaciones del sector',
@@ -1394,7 +1529,7 @@ export function actualizarApartadoSectorialHtml(html, analisisSector, estudio, y
     );
   }
 
-  return regenerarTablaDatosClave(salida, entrada, year, avisos);
+  return regenerarTablaDatosClave(salida, entrada, year, avisos, titulos);
 }
 
 /* Mismo formato que la ruta .docx, y por el mismo formateador: `pctf`. Un hueco visible —y no
