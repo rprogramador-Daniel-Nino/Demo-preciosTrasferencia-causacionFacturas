@@ -495,9 +495,9 @@ test('rellenarDocx publica las fuentes de la Sección III como notas al pie del 
      tabla la exige aparte de la nota al pie de la narrativa (numeral 4 del artículo
      1.2.2.2.1.5 del Decreto 1625 de 2016), así que buscar la frase en todo el cuerpo ya
      no basta: hay que mirar solo el párrafo de la narrativa. */
-  const parrafoInflacion = /<w:p>[\s\S]*?La inflación global cedió en 2026\.[\s\S]*?<\/w:p>/.exec(cuerpo);
+  const parrafoInflacion = parrafoQueContiene(cuerpo, 'La inflación global cedió en 2026.');
   assert.ok(parrafoInflacion, 'el párrafo de la narrativa debe existir en el cuerpo');
-  assert.doesNotMatch(parrafoInflacion[0], /FUENTE:/, 'y ya no escribe la cita en línea ahí');
+  assert.doesNotMatch(parrafoInflacion, /FUENTE:/, 'y ya no escribe la cita en línea ahí');
 
   /* 2. La nota existe, con ese mismo id y con la cita en formato bibliográfico. */
   const notas = z.file('word/footnotes.xml');
@@ -1960,6 +1960,22 @@ test('las letras del ANEXO C son las de la Tabla 16', async () => {
 
 const parrafoXml = (texto) => `<w:p><w:r><w:t>${texto}</w:t></w:r></w:p>`;
 
+/** El `<w:p>...</w:p>` que contiene `texto`, ubicado por el ÍNDICE de `texto` y no por un
+ *  regex perezoso desde el principio del documento — `/<w:p>[\s\S]*?texto[\s\S]*?<\/w:p>/`
+ *  arranca en el PRIMER `<w:p` del XML (no necesariamente el que envuelve `texto`) y se
+ *  estira hasta el primer `</w:p>` que encuentre después, así que si hay otro `<w:p>` (o
+ *  una tabla con su propia línea «FUENTE:») antes en el documento, el "párrafo" que
+ *  devuelve en realidad abarca todo ese tramo de en medio. `null` si `texto` no aparece. */
+function parrafoQueContiene(xml, texto) {
+  const idx = xml.indexOf(texto);
+  if (idx === -1) return null;
+  const inicio = xml.lastIndexOf('<w:p', idx);
+  if (inicio === -1) return null;
+  const cierre = xml.indexOf('</w:p>', idx);
+  if (cierre === -1) return null;
+  return xml.slice(inicio, cierre + '</w:p>'.length);
+}
+
 test('localizarBloqueProsa delimita desde el encabezado de inicio hasta el de fin, sin incluirlo', () => {
   const xml = [
     parrafoXml('Preámbulo'),
@@ -2100,8 +2116,16 @@ test('con recolector, la fuente del apartado va como nota al pie y no como líne
 
   /* La referencia queda DENTRO del párrafo de la narrativa, al final de la frase. */
   assert.match(salida, /La inflación global cedió en 2026\.<\/w:t><\/w:r>[\s\S]{0,200}?<w:footnoteReference w:id="7"\/>/);
-  assert.doesNotMatch(salida, /FUENTE: Fondo Monetario/, 'ya no se escribe la línea en el cuerpo');
-  assert.doesNotMatch(salida, /FUENTE: /, 'ninguna línea de fuente en el cuerpo');
+  /* Ese párrafo puntual ya no escribe la línea en línea, va a pie de página — pero
+     "FUENTE: Fondo Monetario" sí puede aparecer en OTRO punto del cuerpo ahora: como
+     "PIB Mundial"/"Inflación Global" tampoco traían una tabla real en esta plantilla
+     (solo el párrafo del título), cada una se inserta de cero junto a su propio
+     párrafo, y esas tablas SÍ llevan su propia línea «FUENTE:» — la tabla la exige
+     aparte de la nota al pie de la narrativa (numeral 4 del artículo 1.2.2.2.1.5 del
+     Decreto 1625 de 2016), así que hay que mirar solo el párrafo de la narrativa. */
+  const parrafoInflacion = parrafoQueContiene(salida, 'La inflación global cedió en 2026.');
+  assert.ok(parrafoInflacion, 'el párrafo de la narrativa debe existir en la salida');
+  assert.doesNotMatch(parrafoInflacion, /FUENTE:/, 'ese párrafo puntual ya no escribe la línea en el cuerpo');
 
   /* Y la nota trae la cita en formato bibliográfico, con su enlace. */
   assert.strictEqual(notas.cuantas(), 1);
@@ -2485,6 +2509,47 @@ test('reemplazarPorHitos conserva una tabla suelta dentro de una subsección que
   assert.doesNotMatch(doc.xml, /Prosa antes de la tabla/);
   assert.match(doc.xml, /Narrativa nueva\./);
   assert.match(doc.xml, /PIB 2016-2021/, 'la tabla suelta sobrevive aunque la prosa alrededor se borre');
+});
+
+test('actualizarApartadosMacroOoxml inserta la tabla de cada tema junto a SU PROPIO párrafo, no todas juntas al final (caso real: tablas sin descripción)', () => {
+  /* Caso real reportado (Ferretería Andrés Martínez, 2025): con las ocho tablas macro
+     insertadas de cero (`actualizarTablasMacroOoxml`) porque la plantilla no traía
+     ninguna, todas terminaban amontonadas al final de la sección, después de la
+     narrativa combinada — sin la frase que describe específicamente cada una, aunque
+     esa frase sí existiera en `datosMacro.narrativa`. Cada tabla tiene que quedar junto
+     al párrafo de SU propio tema, no separada de él. */
+  const xml = [
+    parrafoXml('Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const datosMacro = {
+    narrativa: {
+      mundial: '<p>Panorama mundial.</p>',
+      inflacionMundial: '<p>La inflación mundial bajó.</p>',
+      proyeccionMundial: '<p>El crecimiento se proyecta estable.</p>',
+    },
+    series: {
+      pib_mundial: { valores: { 2024: '3.3', 2025: '3.2', 2026: '2.8' }, fuente: 'FMI' },
+      inflacion_global: { valores: { 2024: '5.0', 2025: '4.0', 2026: '3.9' }, fuente: 'FMI' },
+    },
+  };
+  const salida = actualizarApartadosMacroOoxml(xml, datosMacro, 2025, []);
+
+  const idxParrafoMundial = salida.indexOf('Panorama mundial.');
+  const idxTablaPib = salida.indexOf('Crecimiento del PIB Mundial');
+  const idxParrafoInflacion = salida.indexOf('La inflación mundial bajó.');
+  const idxTablaInflacion = salida.indexOf('Tasas de Inflación Global');
+  const idxParrafoProyeccion = salida.indexOf('El crecimiento se proyecta estable.');
+
+  assert.ok(idxParrafoMundial !== -1 && idxTablaPib !== -1 && idxParrafoInflacion !== -1,
+    'los tres deben existir en la salida');
+  assert.ok(idxParrafoMundial < idxTablaPib,
+    'la tabla de PIB Mundial va DESPUÉS de su propio párrafo');
+  assert.ok(idxTablaPib < idxParrafoInflacion,
+    'y ANTES del párrafo del siguiente tema — no todas las tablas amontonadas al final');
+  assert.ok(idxParrafoInflacion < idxTablaInflacion && idxTablaInflacion < idxParrafoProyeccion,
+    'lo mismo para la tabla de Inflación Global, junto a su propio párrafo');
 });
 
 test('actualizarApartadosMacroOoxml reemplaza también los huecos intermedios entre tablas', () => {

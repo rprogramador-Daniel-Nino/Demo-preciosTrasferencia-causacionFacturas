@@ -456,9 +456,37 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
     + ', narrativa mundial: ' + (narrativa.mundial ? 'sí' : 'no (marcador)')
     + ', narrativa colombia: ' + (narrativa.colombia ? 'sí' : 'no (marcador)'));
 
-  const primerHueco = (narrativaHtml, tema) => () => (
+  /* Cada tema con narrativa propia tiene, casi siempre, una tabla que lo acompaña —
+     `tablasMacroInforme` es de donde sale también `actualizarTablasMacroOoxml`, la
+     misma descripción de las ocho—. Si esa tabla no está en la plantilla por su
+     nombre, `temaHueco`/`primerHueco` la insertan aquí, pegada a su propio párrafo, en
+     vez de dejar que el segundo intento por posición (`actualizarTablasMacroOoxml`) la
+     amontone al final de toda la sección junto con las demás: caso real (Ferretería
+     Andrés Martínez, 2025) donde las ocho tablas aparecían todas juntas, sin la frase
+     que describe específicamente cada una, aunque esa frase sí existiera. Se busca en
+     el XML de ENTRADA —antes de cualquier reemplazo de esta función—, así que si la
+     tabla de un tema sí está en la plantilla (con su rótulo esperado), esta función no
+     la toca dos veces: la deja para el reemplazo normal por nombre. */
+  /* La prosa nunca debe dejar de generarse porque las TABLAS tengan un dato mal formado
+     —dos preocupaciones separadas—, así que un `datosMacro` que haga fallar a
+     `tablasMacroInforme` no debe tumbar esta función: sin tablas que ofrecer, cada
+     `tablaSiFalta` sencillamente no añade ninguna, igual que si la tabla ya estuviera en
+     la plantilla. */
+  let tablaPorNombre = new Map();
+  try {
+    tablaPorNombre = new Map(tablasMacroInforme(datosMacro, year).map((t) => [t.nombre, t]));
+  } catch (err) {
+    console.warn('[docxRelleno] tablasMacroInforme falló al calcular las tablas para insertar junto a la prosa, se sigue sin ellas: ' + err.message);
+  }
+  const tablaSiFalta = (nombreTabla) => {
+    const t = tablaPorNombre.get(nombreTabla);
+    if (!t || tablaSinDatos(t) || localizarBloqueTabla(xml, nombreTabla)) return '';
+    return generarTablaOoxml(t.titulo, t.cabeceras, t.filas, t.fuente);
+  };
+
+  const primerHueco = (narrativaHtml, tema, nombreTabla) => () => (
     narrativaHtml
-      ? parrafosOoxmlDesdeHtml(narrativaHtml)
+      ? parrafosOoxmlDesdeHtml(narrativaHtml) + tablaSiFalta(nombreTabla)
       : `<w:p>${PPR_PROSA}<w:r><w:t xml:space="preserve">${escaparXml(marcadorApartadoPendiente(tema, year))}</w:t></w:r></w:p>`
   );
 
@@ -473,13 +501,15 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
    *  todo), `resolverSerie` cae al respaldo local (`DATOS_MACRO`/`FUENTES_MACRO`) igual
    *  que hace la tabla de esa misma serie: preferible citar una fuente conocida y
    *  estática a no citar ninguna, y mantiene párrafo y tabla en el mismo formato en
-   *  cualquier escenario. */
-  const temaHueco = (narrativaHtml, tema, serieClave) => (textoHueco) => {
+   *  cualquier escenario. `nombreTabla` es el nombre de SU tabla en `tablasMacroInforme`
+   *  —`null` para "conclusiones", que no tiene una tabla propia—, para insertarla junto
+   *  a este párrafo si la plantilla no la trae por su nombre. */
+  const temaHueco = (narrativaHtml, tema, serieClave, nombreTabla) => (textoHueco) => {
     if (narrativaHtml) {
       const parrafos = parrafosOoxmlDesdeHtml(narrativaHtml);
-      if (!serieClave) return parrafos;
-      return conFuenteCitada(parrafos, citaDeSerie(datosMacro, serieClave),
+      const conFuente = !serieClave ? parrafos : conFuenteCitada(parrafos, citaDeSerie(datosMacro, serieClave),
         () => resolverSerie(datosMacro, serieClave).fuente, notas);
+      return conFuente + tablaSiFalta(nombreTabla);
     }
     if (textoHueco.trim().length < UMBRAL_HUECO_CON_PROSA) return null;
     return `<w:p>${PPR_PROSA}<w:r><w:t xml:space="preserve">${escaparXml(marcadorTemaMacroPendiente(tema, year))}</w:t></w:r></w:p>`;
@@ -489,9 +519,9 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
     doc,
     [tituloMundial, 'PIB Mundial', 'Inflación Global', 'por Región/País', tituloColombia],
     [
-      primerHueco(narrativa.mundial, 'mundial'),
-      temaHueco(narrativa.inflacionMundial, 'la inflación mundial', 'inflacion_global'),
-      temaHueco(narrativa.proyeccionMundial, 'la proyección de crecimiento mundial', 'crecimiento_por_region'),
+      primerHueco(narrativa.mundial, 'mundial', 'PIB Mundial'),
+      temaHueco(narrativa.inflacionMundial, 'la inflación mundial', 'inflacion_global', 'Inflación Global'),
+      temaHueco(narrativa.proyeccionMundial, 'la proyección de crecimiento mundial', 'crecimiento_por_region', 'por Región/País'),
     ],
     avisos,
     tituloMundial
@@ -506,12 +536,12 @@ export function actualizarApartadosMacroOoxml(xml, datosMacro, year, avisos, not
       SINONIMOS_ANALISIS_SECTOR,
     ],
     [
-      primerHueco(narrativa.colombia, 'colombiana'),
-      temaHueco(narrativa.inflacionColombia, 'la inflación en Colombia', 'inflacion_colombia'),
-      temaHueco(narrativa.politicaMonetaria, 'la política monetaria', 'tasa_intervencion'),
-      temaHueco(narrativa.tasaCambio, 'la tasa de cambio (TRM)', 'trm_promedio'),
-      temaHueco(narrativa.mercadoLaboral, 'el mercado laboral en Colombia', 'desempleo_colombia'),
-      temaHueco(narrativa.conclusiones, 'las conclusiones del panorama económico', null),
+      primerHueco(narrativa.colombia, 'colombiana', 'PIB en Colombia'),
+      temaHueco(narrativa.inflacionColombia, 'la inflación en Colombia', 'inflacion_colombia', 'Inflación en Colombia'),
+      temaHueco(narrativa.politicaMonetaria, 'la política monetaria', 'tasa_intervencion', 'Intervención del Banco'),
+      temaHueco(narrativa.tasaCambio, 'la tasa de cambio (TRM)', 'trm_promedio', 'Tasa Representativa del Mercado'),
+      temaHueco(narrativa.mercadoLaboral, 'el mercado laboral en Colombia', 'desempleo_colombia', 'Desempleo en Colombia'),
+      temaHueco(narrativa.conclusiones, 'las conclusiones del panorama económico', null, null),
     ],
     avisos,
     tituloColombia
