@@ -487,7 +487,17 @@ test('rellenarDocx publica las fuentes de la Sección III como notas al pie del 
   const cuerpo = z.file(RUTA_DOC_TEST).asText();
   const ref = /<w:footnoteReference w:id="(\d+)"\/>/.exec(cuerpo);
   assert.ok(ref, 'el cuerpo debe anclar la nota donde estaba la línea «FUENTE:»');
-  assert.doesNotMatch(cuerpo, /FUENTE: Fondo Monetario/, 'y ya no la escribe en el cuerpo');
+  /* El párrafo de ESTA narrativa ya no escribe la cita en línea, va a pie de página —pero
+     "FUENTE: Fondo Monetario" sí puede aparecer en OTRO punto del cuerpo ahora: como
+     "Inflación Global" tampoco traía una tabla real en la plantilla de este fixture (solo
+     el párrafo del título), el segundo intento por posición la inserta de cero
+     (`actualizarTablasMacroOoxml`), y esa tabla SÍ lleva su propia línea «FUENTE:» — la
+     tabla la exige aparte de la nota al pie de la narrativa (numeral 4 del artículo
+     1.2.2.2.1.5 del Decreto 1625 de 2016), así que buscar la frase en todo el cuerpo ya
+     no basta: hay que mirar solo el párrafo de la narrativa. */
+  const parrafoInflacion = /<w:p>[\s\S]*?La inflación global cedió en 2026\.[\s\S]*?<\/w:p>/.exec(cuerpo);
+  assert.ok(parrafoInflacion, 'el párrafo de la narrativa debe existir en el cuerpo');
+  assert.doesNotMatch(parrafoInflacion[0], /FUENTE:/, 'y ya no escribe la cita en línea ahí');
 
   /* 2. La nota existe, con ese mismo id y con la cita en formato bibliográfico. */
   const notas = z.file('word/footnotes.xml');
@@ -1487,6 +1497,34 @@ test('actualizarTablasMacroOoxml NO adivina por posición cuando el número de t
   assert.ok(avisos.includes('PIB Mundial'));
   assert.ok(avisos.includes('Inflación Global'));
   assert.ok(avisos.includes('por Región/País'));
+});
+
+test('actualizarTablasMacroOoxml inserta tablas nuevas cuando la cadena no trae NINGUNA tabla ni gráfico (caso real Ferretería 2021)', () => {
+  /* El informe de referencia de Ferretería Andrés Martínez (2021) no tiene ni una sola
+     `<w:tbl>` ni gráfico en toda la sección mundial/Colombia — solo prosa, con un pie de
+     "Gráfico 4..." sin nada debajo (imagen que la prosa nueva ya reemplazó). Cero
+     candidatas no es ambiguo como "dos candidatas para tres pendientes" (ahí sí hay
+     riesgo de adivinar mal cuál es cuál): no hay nada que adivinar, así que las tablas
+     nuevas se insertan igual, con los datos ya verificados, en vez de perderse. */
+  const xml = [
+    parrafoXml('Análisis del Panorama de la Economía Mundial'),
+    parrafoXml('Narrativa nueva ya insertada por actualizarApartadosMacroOoxml, sin ninguna tabla.'),
+    parrafoXml('Análisis del panorama de la economía colombiana'),
+  ].join('');
+
+  const avisos = [];
+  const salida = actualizarTablasMacroOoxml(xml, null, 2025, avisos);
+
+  assert.match(salida, /Crecimiento Mundial/, 'la tabla de PIB Mundial se insertó de cero');
+  assert.match(salida, /Tasa de Inflación/, 'la tabla de Inflación Global se insertó de cero');
+  assert.match(salida, /Proyecciones de Crecimiento del PIB por Región\/País/, 'y la de por Región/País');
+  assert.ok(!avisos.includes('PIB Mundial'));
+  assert.ok(!avisos.includes('Inflación Global'));
+  assert.ok(!avisos.includes('por Región/País'));
+  /* Las tres, dentro de la sección mundial, antes del título de Colombia. */
+  const idxColombia = salida.indexOf('Análisis del panorama de la economía colombiana');
+  assert.ok(salida.indexOf('Crecimiento Mundial') < idxColombia);
+  assert.ok(salida.indexOf('por Región/País') < idxColombia);
 });
 
 test('la Tabla 4 declara el código de operación y no lo inventa cuando no se puede resolver', async () => {

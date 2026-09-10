@@ -1059,7 +1059,13 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
      estas tablas de borrarse junto con la prosa vieja) y se sustituye 1 a 1, en el orden
      en que aparecen. Solo cuando hay EXACTAMENTE tantas tablas sueltas como pendientes:
      con más o menos, no hay forma de emparejar sin adivinar y se deja el aviso de
-     siempre. */
+     siempre — SALVO que no haya ninguna suelta: ahí no hay nada que adivinar (no es
+     "¿cuál de estas dos es la que falta?", es "no hay ninguna"), así que las tablas
+     nuevas se insertan de cero, justo antes del título que cierra la sección. Caso real
+     (Ferretería Andrés Martínez, 2021): la plantilla no tiene ni una sola tabla ni
+     gráfico en toda la sección mundial/Colombia, solo prosa — sin este tercer camino,
+     las ocho tablas macro se perdían en silencio (solo quedaba el aviso) aunque los
+     datos verificados sí estuvieran disponibles. */
   const sinResolver = [];
   CADENAS_TABLAS_MACRO.forEach((cadena) => {
     const pendientesCadena = sinBloque.filter((t) => cadena.nombres.includes(t.nombre));
@@ -1067,8 +1073,22 @@ export function actualizarTablasMacroOoxml(xml, datosMacro, year, avisos) {
     const bounds = localizarHitos(doc.xml, [cadena.desde, cadena.hasta]);
     if (!bounds[0] || !bounds[1]) { sinResolver.push(...pendientesCadena); return; }
     const huerfanas = tablasSueltasEnRango(doc.xml, bounds[0].finPropio, bounds[1].inicio);
-    if (huerfanas.length !== pendientesCadena.length) { sinResolver.push(...pendientesCadena); return; }
+    if (huerfanas.length && huerfanas.length !== pendientesCadena.length) {
+      sinResolver.push(...pendientesCadena);
+      return;
+    }
     doc.aplicar((actual) => {
+      if (!huerfanas.length) {
+        /* Nada que sustituir por posición: se insertan todas, en orden, justo antes del
+           título que cierra la sección — mismo punto de anclaje que usa
+           `resolverAnclasDeHuecos` para un hueco sin límite propio a la derecha. */
+        let nuevas = '';
+        pendientesCadena.forEach((t) => {
+          const nuevo = generador(t)();
+          if (nuevo) nuevas += nuevo; else sinResolver.push(t);
+        });
+        return nuevas ? actual.slice(0, bounds[1].inicio) + nuevas + actual.slice(bounds[1].inicio) : actual;
+      }
       const ops = [];
       pendientesCadena.forEach((t, i) => {
         const nuevo = generador(t)();
