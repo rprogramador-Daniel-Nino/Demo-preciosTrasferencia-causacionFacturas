@@ -128,6 +128,211 @@ test('parseAccionistasWithGeminiOCR cae correctamente a Vision OCR si es una ima
   }
 });
 
+test('parseAccionistasWithGeminiOCR reintenta con Vision OCR si el texto nativo no trae accionistas (tabla incrustada como imagen)', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+
+  const payloadsRecibidos = [];
+
+  axios.post = async (url, payload) => {
+    payloadsRecibidos.push(payload);
+    if (payloadsRecibidos.length === 1) {
+      return {
+        data: {
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  empresa: "FERRELUGUE S.A.S",
+                  capital_pagado: null,
+                  total_acciones: null,
+                  accionistas: []
+                })
+              }]
+            }
+          }]
+        }
+      };
+    }
+    return {
+      data: {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                empresa: "FERRELUGUE S.A.S",
+                capital_pagado: 3000000000,
+                total_acciones: 3000000,
+                accionistas: [
+                  {
+                    nombre: "LUIS WILLIAM GUEVARA ACHURY",
+                    pais: "COLOMBIA",
+                    acciones: 2100000,
+                    valor_capital: 2100000000,
+                    participacion_pct: 70
+                  }
+                ]
+              })
+            }]
+          }
+        }]
+      }
+    };
+  };
+
+  try {
+    const mockFile = {
+      name: 'Composicion Accionaria Ferrelugue SAS 2025.pdf',
+      arrayBuffer: async () => {
+        return readFileSync('Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/EEFF Comparables/1 QUBICGAMES S.A..pdf');
+      }
+    };
+
+    const result = await (await import('./accionistasParser.js')).parseAccionistasWithGeminiOCR(mockFile);
+
+    assert.strictEqual(payloadsRecibidos.length, 2, 'debe reintentar con Vision OCR tras el texto nativo vacío');
+    assert.ok(!payloadsRecibidos[0].contents[0].parts[0].inline_data, 'primer intento: texto nativo, sin inline_data');
+    assert.ok(payloadsRecibidos[1].contents[0].parts[0].inline_data, 'segundo intento: Vision OCR con inline_data');
+    assert.strictEqual(result.accionistas.length, 1);
+    assert.strictEqual(result.accionistas[0].nombre, 'LUIS WILLIAM GUEVARA ACHURY');
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
+test('parseAccionistasWithGeminiOCR no reintenta si el texto nativo ya trae accionistas', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+
+  let llamadas = 0;
+
+  axios.post = async () => {
+    llamadas++;
+    return {
+      data: {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                empresa: "END GAME INTERACTIVE COLOMBIA SAS",
+                capital_pagado: 10000000,
+                total_acciones: 10000,
+                accionistas: [{ nombre: "ACCIONISTA MAYORITARIO", pais: "COLOMBIA", acciones: 9000, valor_capital: 9000000, participacion_pct: 90 }]
+              })
+            }]
+          }
+        }]
+      }
+    };
+  };
+
+  try {
+    const mockFile = {
+      name: 'EEFF Comparables 2025.pdf',
+      arrayBuffer: async () => {
+        return readFileSync('Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/EEFF Comparables/1 QUBICGAMES S.A..pdf');
+      }
+    };
+
+    await (await import('./accionistasParser.js')).parseAccionistasWithGeminiOCR(mockFile);
+
+    assert.strictEqual(llamadas, 1, 'no debe llamar a Vision OCR si el texto nativo ya trajo accionistas');
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
+test('parseAccionistasWithGeminiOCR devuelve vacío sin error si ni el texto nativo ni Vision OCR encuentran accionistas', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+
+  let llamadas = 0;
+
+  axios.post = async () => {
+    llamadas++;
+    return {
+      data: {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({ empresa: "FERRELUGUE S.A.S", capital_pagado: null, total_acciones: null, accionistas: [] })
+            }]
+          }
+        }]
+      }
+    };
+  };
+
+  try {
+    const mockFile = {
+      name: 'Composicion Accionaria Ferrelugue SAS 2025.pdf',
+      arrayBuffer: async () => {
+        return readFileSync('Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/EEFF Comparables/1 QUBICGAMES S.A..pdf');
+      }
+    };
+
+    const result = await (await import('./accionistasParser.js')).parseAccionistasWithGeminiOCR(mockFile);
+
+    assert.strictEqual(llamadas, 2, 'debe haber intentado texto nativo y Vision OCR');
+    assert.strictEqual(result.accionistas.length, 0);
+    assert.strictEqual(result.error, undefined);
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
+test('parseAccionistasFromDocument (PDF) reintenta con Vision OCR si el texto nativo no trae accionistas', async () => {
+  const axios = (await import('axios')).default;
+  const originalPost = axios.post;
+
+  const payloadsRecibidos = [];
+
+  axios.post = async (url, payload) => {
+    payloadsRecibidos.push(payload);
+    if (payloadsRecibidos.length === 1) {
+      return {
+        data: {
+          candidates: [{ content: { parts: [{ text: JSON.stringify({ capital_pagado: null, total_acciones: null, accionistas: [] }) }] } }]
+        }
+      };
+    }
+    return {
+      data: {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                capital_pagado: 3000000000,
+                total_acciones: 3000000,
+                accionistas: [{ nombre: "LUIS WILLIAM GUEVARA ACHURY", pais: "COLOMBIA", acciones: 2100000, valor_capital: 2100000000, participacion_pct: 70 }]
+              })
+            }]
+          }
+        }]
+      }
+    };
+  };
+
+  try {
+    const mockFile = {
+      name: 'Composicion Accionaria Ferrelugue SAS 2025.pdf',
+      arrayBuffer: async () => {
+        return readFileSync('Cpanel/public_html/demo-precios-transferencia/Archivos Prueba/EEFF Comparables/1 QUBICGAMES S.A..pdf');
+      }
+    };
+
+    const result = await (await import('./accionistasParser.js')).parseAccionistasFromDocument(mockFile);
+
+    assert.strictEqual(payloadsRecibidos.length, 2, 'debe reintentar con Vision OCR tras el texto nativo vacío');
+    assert.ok(payloadsRecibidos[1].contents[0].parts[0].inline_data, 'segundo intento: Vision OCR con inline_data');
+    assert.strictEqual(result.accionistas.length, 1);
+    assert.strictEqual(result.accionistas[0].nombre, 'LUIS WILLIAM GUEVARA ACHURY');
+    assert.strictEqual(result.error, undefined);
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
 test('parseAccionistasFromDocument integra la extracción nativa con Gemini (modelo texto) para PDFs digitales', async () => {
   const axios = (await import('axios')).default;
   const originalPost = axios.post;
