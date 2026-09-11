@@ -39,6 +39,7 @@ import {
   altoMaximoDeEncabezado,
 } from '../services/estiloDocumento.js';
 import { aDocxBlob } from '../services/docxWriter.js';
+import { construirHtmlSinPlantilla } from '../services/informeSinPlantilla.js';
 /* Los anexos escaneados que trae la plantilla, con el rótulo que ella les da: es la misma
    lista con la que el writer reparte las páginas entre los huecos de cada anexo. */
 import { anexosEscaneadosDeHtml } from '../services/anexoBHtml.js';
@@ -1410,6 +1411,11 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
   /* Actualización de lo que no vive en el estudio: ver `actualizarInformacion`. */
   const [actualizando, setActualizando] = useState(false);
   const actualizandoRef = useRef(false);
+  /* «Crear sin plantilla»: mismo cerrojo síncrono que `generandoDocxRef`, aunque esta
+     ruta no toca `console.warn` ni tiene con qué solaparse hoy — se deja por si mañana
+     gana avisos propios y para no divergir del patrón del botón vecino. */
+  const [generandoSinPlantilla, setGenerandoSinPlantilla] = useState(false);
+  const generandoSinPlantillaRef = useRef(false);
 
   /* Rehace el informe con lo que hay AHORA, sin volver a montar la pantalla ni rehacer el
      estudio.
@@ -1657,6 +1663,41 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
     } finally {
       generandoDocxRef.current = false;
       setGenerandoDocx(false);
+    }
+  };
+
+  /* Borrador de trabajo sin ninguna plantilla ni informe de referencia: arma el HTML
+     directo desde los datos del estudio (`informeSinPlantilla.js`) y lo pasa por el
+     mismo conversor HTML→OOXML que ya usa `descargarDocx` (`aDocxBlob`). No valida
+     `plantillaActiva` a propósito — es justo la ruta para cuando no hay ninguna. El
+     nombre de archivo lleva «SIN_PLANTILLA» para que nadie lo confunda con el
+     Informe Local real y lo radique sin completarlo. */
+  const crearSinPlantilla = async () => {
+    if (generandoSinPlantillaRef.current) return;
+    generandoSinPlantillaRef.current = true;
+    setGenerandoSinPlantilla(true);
+    try {
+      const html = construirHtmlSinPlantilla(study, analisisMercado, analisisSector);
+      const blob = await aDocxBlob({ html, recursos: [], anexo: study.eeffImages || [] });
+      const enlace = document.createElement('a');
+      enlace.href = URL.createObjectURL(blob);
+      enlace.download = 'Informe_Local_PT_SIN_PLANTILLA_' + (study.ent || 'Empresa') + '_' +
+        (study.anio || '') + '.docx';
+      enlace.click();
+      URL.revokeObjectURL(enlace.href);
+    } catch (err) {
+      console.error('No se pudo generar el borrador sin plantilla:', err);
+      setAvisos((previos) => [
+        ...previos.filter((a) => a.origen !== 'sinPlantilla'),
+        {
+          nivel: 'aviso', origen: 'sinPlantilla',
+          texto: 'No se pudo generar el borrador sin plantilla: ' +
+            (err && err.message ? err.message : 'error desconocido'),
+        },
+      ]);
+    } finally {
+      generandoSinPlantillaRef.current = false;
+      setGenerandoSinPlantilla(false);
     }
   };
 
@@ -1940,6 +1981,19 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
           >
             <FileDown className="w-3.5 h-3.5" />
             {generandoDocx ? 'Generando…' : 'Descargar Word (.docx)'}
+          </button>
+          {/* Siempre visible y habilitado, tenga o no plantilla el estudio: es justo la
+              ruta para cuando no hay ninguna. Arma un borrador con los datos ya
+              ingresados —sin la redacción legal ni la forma que aporta la plantilla—
+              que el consultor termina de completar a mano. */}
+          <button
+            onClick={crearSinPlantilla}
+            disabled={generandoSinPlantilla}
+            title="Genera un borrador de trabajo solo con los datos ya ingresados al estudio, sin partir de ninguna plantilla ni informe de referencia. No trae la redacción legal del Informe Local: complétalo antes de radicar."
+            className="flex items-center gap-2 bg-white dark:bg-[#262626] text-[#334155] dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 hover:bg-[#f8fafc] dark:hover:bg-zinc-800 rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {generandoSinPlantilla ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+            {generandoSinPlantilla ? 'Generando…' : 'Crear sin plantilla'}
           </button>
           <button
             onClick={handleDownload}
