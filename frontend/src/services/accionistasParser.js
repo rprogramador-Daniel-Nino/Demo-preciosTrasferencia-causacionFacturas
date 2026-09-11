@@ -100,56 +100,63 @@ function mimeDe(file) {
   return 'application/pdf';
 }
 
-export async function parseAccionistasWithGeminiOCR(file) {
-  try {
-    // 1. Intentar la extracción nativa por coordenadas si es un PDF
-    if (file.name && file.name.match(/\.(pdf)$/i)) {
-      const textoEstructurado = await extraerTextoEstructuradoPdf(file);
-      if (textoEstructurado) {
-        console.log(`[accionistasParser] Extracción digital nativa exitosa para composición accionaria: ${file.name}`);
-        const payload = {
-          model: 'gemini-3.5-flash',
-          contents: [{
-            parts: [
-              { text: ACCIONISTAS_PROMPT + '\n\nCONTENIDO DEL DOCUMENTO EXTRAÍDO DIRECTAMENTE DEL PDF:\n' + textoEstructurado.slice(0, 150000) }
-            ]
-          }]
-        };
+function textoDeRespuestaGemini(response) {
+  const cand = response.data?.candidates?.[0];
+  return cand?.content?.parts?.map(p => p.text || '').join('') || '';
+}
 
-        const response = await postGeminiWithRetry(payload);
-        const cand = response.data?.candidates?.[0];
-        const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+/* Un PDF puede tener de sobra texto seleccionable (encabezado, cierre y firma del revisor
+   fiscal) y aun así traer la TABLA de accionistas incrustada como imagen —una captura de
+   Excel pegada en Word antes de exportar a PDF—, así que pasa el umbral de "hay capa de
+   texto" de extraerTextoEstructuradoPdf sin que esa capa incluya la tabla. Si el texto
+   nativo no trae accionistas, se reintenta con Vision OCR (que sí ve la imagen) antes de
+   darlo por vacío. */
+async function extraerAccionistasDeArchivo(file, prompt) {
+  if (file.name && file.name.match(/\.(pdf)$/i)) {
+    const textoEstructurado = await extraerTextoEstructuradoPdf(file);
+    if (textoEstructurado) {
+      console.log(`[accionistasParser] Extracción digital nativa exitosa: ${file.name}`);
+      const payload = {
+        model: 'gemini-3.5-flash',
+        contents: [{
+          parts: [
+            { text: prompt + '\n\nCONTENIDO DEL DOCUMENTO EXTRAÍDO DIRECTAMENTE DEL PDF:\n' + textoEstructurado.slice(0, 150000) }
+          ]
+        }]
+      };
 
-        if (text) {
-          return extraerJSON(text);
-        }
+      const text = textoDeRespuestaGemini(await postGeminiWithRetry(payload));
+      if (text) {
+        const parsed = extraerJSON(text);
+        if (Array.isArray(parsed.accionistas) && parsed.accionistas.length > 0) return parsed;
+        console.log(`[accionistasParser] Texto nativo sin accionistas, reintentando con Vision OCR: ${file.name}`);
       }
     }
+  }
 
-    // 2. Fallback a Vision OCR (original)
-    console.log(`[accionistasParser] Usando Vision OCR de respaldo para composición accionaria: ${file.name}`);
-    const base64Data = await leerBase64(file);
-    const mimeType = mimeDe(file);
+  // Vision OCR (fallback original, y reintento si el texto nativo no trajo accionistas)
+  console.log(`[accionistasParser] Usando Vision OCR de respaldo: ${file.name}`);
+  const base64Data = await leerBase64(file);
+  const mimeType = mimeDe(file);
 
-    const payload = {
-      model: 'gemini-3.5-flash',
-      contents: [{
-        parts: [
-          { inline_data: { mime_type: mimeType, data: base64Data } },
-          { text: ACCIONISTAS_PROMPT }
-        ]
-      }]
-    };
+  const payload = {
+    model: 'gemini-3.5-flash',
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: mimeType, data: base64Data } },
+        { text: prompt }
+      ]
+    }]
+  };
 
-    const response = await postGeminiWithRetry(payload);
-    const cand = response.data?.candidates?.[0];
-    const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+  const text = textoDeRespuestaGemini(await postGeminiWithRetry(payload));
+  if (!text) throw new Error("No se obtuvo respuesta en formato JSON de Gemini Vision OCR.");
+  return extraerJSON(text);
+}
 
-    if (text) {
-      return extraerJSON(text);
-    } else {
-      throw new Error("No se obtuvo respuesta en formato JSON de Gemini Vision OCR.");
-    }
+export async function parseAccionistasWithGeminiOCR(file) {
+  try {
+    return await extraerAccionistasDeArchivo(file, ACCIONISTAS_PROMPT);
   } catch (err) {
     console.error("Error en parseAccionistasWithGeminiOCR:", err);
     throw err;
@@ -220,67 +227,12 @@ export async function parseAccionistasFromDocument(file) {
 
   // Si es PDF o imagen
   try {
-    // 1. Intentar la extracción nativa por coordenadas si es un PDF
-    if (file.name && file.name.match(/\.(pdf)$/i)) {
-      const textoEstructurado = await extraerTextoEstructuradoPdf(file);
-      if (textoEstructurado) {
-        console.log(`[accionistasParser] Extracción digital nativa exitosa para plantilla de accionistas: ${file.name}`);
-        const payload = {
-          model: 'gemini-3.5-flash',
-          contents: [{
-            parts: [
-              { text: PLANTILLA_ACCIONISTAS_PROMPT + '\n\nCONTENIDO DEL DOCUMENTO EXTRAÍDO DIRECTAMENTE DEL PDF:\n' + textoEstructurado.slice(0, 150000) }
-            ]
-          }]
-        };
-
-        const response = await postGeminiWithRetry(payload);
-        const cand = response.data?.candidates?.[0];
-        const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
-
-        if (text) {
-          const parsed = extraerJSON(text);
-          return {
-            accionistas: Array.isArray(parsed.accionistas) ? parsed.accionistas : [],
-            capital_pagado: parsed.capital_pagado || null,
-            total_acciones: parsed.total_acciones || null,
-          };
-        }
-      }
-    }
-
-    // 2. Fallback a Vision OCR (original)
-    console.log(`[accionistasParser] Usando Vision OCR de respaldo para plantilla de accionistas: ${file.name}`);
-    const base64Data = await leerBase64(file);
-    const mimeType = mimeDe(file);
-
-    const payload = {
-      model: 'gemini-3.5-flash',
-      contents: [{
-        parts: [
-          { inline_data: { mime_type: mimeType, data: base64Data } },
-          { text: PLANTILLA_ACCIONISTAS_PROMPT }
-        ]
-      }]
+    const parsed = await extraerAccionistasDeArchivo(file, PLANTILLA_ACCIONISTAS_PROMPT);
+    return {
+      accionistas: Array.isArray(parsed.accionistas) ? parsed.accionistas : [],
+      capital_pagado: parsed.capital_pagado || null,
+      total_acciones: parsed.total_acciones || null,
     };
-
-    const response = await postGeminiWithRetry(payload);
-    const cand = response.data?.candidates?.[0];
-    const text = cand?.content?.parts?.map(p => p.text || '').join('') || '';
-
-    if (text) {
-      const parsed = extraerJSON(text);
-      return {
-        accionistas: Array.isArray(parsed.accionistas) ? parsed.accionistas : [],
-        capital_pagado: parsed.capital_pagado || null,
-        total_acciones: parsed.total_acciones || null,
-      };
-    } else {
-      return {
-        accionistas: [], capital_pagado: null, total_acciones: null,
-        error: 'la IA no devolvió una respuesta utilizable',
-      };
-    }
   } catch (err) {
     console.warn("Error en parseAccionistasFromDocument con Gemini OCR:", err);
     return {
