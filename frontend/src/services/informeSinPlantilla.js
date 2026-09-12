@@ -23,13 +23,16 @@
 
 import { filasComposicionAccionaria, filasActivos } from './tablasContribuyente.js';
 import { filasOperacionesDeIngreso, filasOperacionAnalizar } from './tablasOperaciones.js';
-import { filasMuestraComparables } from './tablasInforme.js';
+import { filasMuestraComparables, filasRazonesRechazo } from './tablasInforme.js';
+import { gruposDelAnexoC, filasResumenAnexoC, tituloDeGrupoAnexoC } from './anexoCHtml.js';
+import { RUBROS_RESULTADOS, RUBROS_BALANCE, cifraDeRubro, rubrosConDato } from './anexoBRubros.js';
 import { citaBaseDatos } from './prosaBaseDatos.js';
 import {
   tablaHTML, generarApartadoMundial, generarApartadoColombia, generarApartadoSectorial,
   tituloSectorial,
 } from './analisisMercado.js';
 import { escaparTextoHtml } from './tablasHtmlInforme.js';
+import { num } from '../utils/calculations.js';
 
 const identidad = (v) => v;
 
@@ -70,6 +73,90 @@ function fichaVinculado(e) {
     ['País', dato(e.pais_vinc)],
     ['Tipo de operación analizada', dato(e.vinc_tipo)],
   ], '');
+}
+
+/** Tabla 16 — Razones de rechazo: letra y conteo por motivo, más el total del universo
+ *  evaluado. Mismas columnas y mismo título que arma `docxRelleno.js` (`reemplazar
+ *  ('Razones de rechazo', ...)`), para que el borrador declare lo mismo que la ruta
+ *  con plantilla ante el mismo estudio. */
+function tablaRazonesRechazo(e) {
+  const { filas, total } = filasRazonesRechazo(e.embudoSeleccion);
+  if (!filas.length) return '';
+  const filasTabla = filas.map((f) => [f.etiqueta, f.letra, String(f.cuantas)]);
+  filasTabla.push(['TOTAL, UNIVERSO', '', String(total)]);
+  return tablaHTML(
+    'Razones de rechazo (Filtros Cuantitativos – Filtros Cualitativos)',
+    ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
+    filasTabla.map((f) => f.map(escaparTextoHtml)),
+    '',
+  );
+}
+
+/** ANEXO C — el respaldo nominal de la Tabla 16: qué compañías se descartaron por cada
+ *  motivo, con la misma letra que les da la tabla. `gruposDelAnexoC` es la única fuente
+ *  para las dos rutas del informe (ver su cabecera), así que aquí no se recalcula nada. */
+function anexoC(e) {
+  const grupos = gruposDelAnexoC(e);
+  if (!grupos.length) return '';
+  const universo = num(e.matrizRechazo && e.matrizRechazo.universo) || 0;
+  const resumen = tablaHTML(
+    'Resumen ANEXO C',
+    ['FILTRO APLICADO INTERNACIONALES', 'FILTROS APLICADO', 'N° POR FILTRO'],
+    filasResumenAnexoC(grupos, universo).map((f) => f.map(escaparTextoHtml)),
+    '',
+  );
+  const detalle = grupos.map((g) => tablaHTML(
+    escaparTextoHtml(tituloDeGrupoAnexoC(g)),
+    ['Nº', 'NOMBRE DE LA COMPAÑÍA', 'FILTRO'],
+    g.companias.map((nombre, i) => [String(i + 1), escaparTextoHtml(nombre), escaparTextoHtml(g.letra)]),
+    '',
+  )).join('\n');
+  return resumen + '\n' + detalle;
+}
+
+/* La misma conversión que `celdaCifraAnexoB` de `docxRelleno.js`: dos decimales en
+ * formato es-CO, sin separador de miles detectado de ninguna plantilla —aquí no hay
+ * ninguna— porque es la que usa la ruta OOXML, que tampoco depende de un molde. */
+const cifraAnexoB = (v) => {
+  const n = num(v);
+  return n === null ? '' : n.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+/** ANEXO B — ficha de cada comparable: nombre y descripción de actividad, YA
+ *  redactada en español en el paso 4 del motor (`descripcionComparables.js` corrió
+ *  entonces, no aquí — este módulo solo lee `descActividad`), y sus cifras de Estado
+ *  de Resultados y Balance General (`anexoBRubros.js`, la misma lista de rubros que
+ *  usan las otras dos rutas). Sin `eeffDatos` se avisa en el propio documento —igual
+ *  que hace `docxRelleno.js`— en vez de omitir la comparable entera. */
+function anexoB(e) {
+  const comparables = Array.isArray(e.comparables) ? e.comparables.filter((c) => c && c.name) : [];
+  if (!comparables.length) return '';
+  const cita = e.database_source || e.database_consulta ? citaBaseDatos(e) : '';
+  const year = Number(e.anio) || new Date().getFullYear();
+
+  return comparables.map((c) => {
+    const desc = c.descActividad || c.desc || 'Descripción de actividad no disponible.';
+    const anioCol = (c.eeffDatos && c.eeffDatos.periodo) || year;
+    const ficha = tablaHTML(
+      'Descripción de la Compañía Comparable',
+      ['NOMBRE DE LA COMPAÑÍA COMPARABLE', 'DESCRIPCIÓN ACTIVIDAD'],
+      [[escaparTextoHtml(c.name), escaparTextoHtml(desc)]],
+      '',
+    );
+    if (!c.eeffDatos) {
+      return ficha + '\n<p><strong>[PENDIENTE] Falta el estado financiero de ' +
+        escaparTextoHtml(c.name) + '. Cárgalo en el paso 4 del motor de comparables y ' +
+        'vuelve a generar el informe.</strong></p>';
+    }
+    const tablaCifras = (titulo, rubros) => tablaHTML(
+      titulo,
+      ['Descripción', String(anioCol)],
+      rubrosConDato(rubros, c).map((r) => [escaparTextoHtml(r.etiqueta), cifraAnexoB(cifraDeRubro(r, c))]),
+      cita,
+    );
+    return ficha + '\n' + tablaCifras('Estado de Resultados', RUBROS_RESULTADOS) +
+      '\n' + tablaCifras('Balance General', RUBROS_BALANCE);
+  }).join('\n');
 }
 
 /** Los huecos que `docxWriter.js` sabe repartir con las páginas del anexo de EEFF, en
@@ -116,6 +203,11 @@ export function construirHtmlSinPlantilla(estudio, analisisMercado, analisisSect
       encabezados: ['N°', 'Razón social', 'Ámbito'],
       filas: filasMuestraComparables(e).map((f) => [f.numero, f.nombre, f.ambito]),
     })),
+    seccion(
+      'Matriz de rechazo (motor de comparables)',
+      [tablaRazonesRechazo(e), anexoC(e)].filter(Boolean).join('\n'),
+    ),
+    seccion('Descripción y estados financieros de las comparables (ANEXO B)', anexoB(e)),
     e.database_source || e.database_consulta
       ? '<p>' + escaparTextoHtml(citaBaseDatos(e)) + '</p>\n' : '',
     seccion('Panorama de la economía mundial', generarApartadoMundial(analisisMercado, year, identidad)),

@@ -99,3 +99,87 @@ test('sin comparables no se emite la tabla de muestra', () => {
   const html = construirHtmlSinPlantilla(CONTRIBUYENTE, null, null);
   assert.ok(!html.includes('Muestra Compañías comparables') && !html.includes('Muestra de comparables'));
 });
+
+/* ── Matriz de rechazo (Tabla 16 + ANEXO C) ── */
+
+const EMBUDO = {
+  evaluadas: 100, seleccionadas: 8, reserva: 12,
+  porMotivo: {
+    holding: 30, saldoNegativo: 5, perdidaOperativa: 15,
+    sinDescripcion: 0, actividadDistinta: 25, rigorFuncional: 5,
+  },
+};
+
+test('incluye la Tabla 16 de razones de rechazo cuando el estudio trae embudoSeleccion', () => {
+  const html = construirHtmlSinPlantilla({ ...CONTRIBUYENTE, embudoSeleccion: EMBUDO }, null, null);
+  assert.ok(html.includes('Razones de rechazo'));
+  assert.ok(html.includes('TOTAL, UNIVERSO'));
+  assert.ok(html.includes('100')); // el total evaluado
+});
+
+test('sin embudoSeleccion no se emite la Tabla 16', () => {
+  const html = construirHtmlSinPlantilla(CONTRIBUYENTE, null, null);
+  assert.ok(!html.includes('Razones de rechazo'));
+});
+
+test('incluye el detalle del ANEXO C con las compañías descartadas por cada motivo', () => {
+  const html = construirHtmlSinPlantilla({
+    ...CONTRIBUYENTE,
+    embudoSeleccion: EMBUDO,
+    matrizRechazo: { universo: 100, porMotivo: { holding: ['HOLCO SAS'], perdidaOperativa: ['PERDIDA SAS'] } },
+  }, null, null);
+  assert.ok(html.includes('HOLCO SAS'));
+  assert.ok(html.includes('PERDIDA SAS'));
+});
+
+test('sin matrizRechazo no se emite el detalle del ANEXO C', () => {
+  const html = construirHtmlSinPlantilla({ ...CONTRIBUYENTE, embudoSeleccion: EMBUDO }, null, null);
+  assert.ok(!html.includes('HOLCO SAS'));
+});
+
+/* ── Anexo B: descripción de actividad económica ── */
+
+test('incluye la descripción de actividad ya redactada en español de cada comparable', () => {
+  const estudio = {
+    ...CONTRIBUYENTE,
+    comparables: [{ name: 'ACME COMPARABLE INC', descActividad: 'Empresa dedicada a la fabricación de acero.' }],
+  };
+  const html = construirHtmlSinPlantilla(estudio, null, null);
+  assert.ok(html.includes('ACME COMPARABLE INC'));
+  assert.ok(html.includes('Empresa dedicada a la fabricación de acero.'));
+});
+
+test('sin descActividad cae a la descripción cruda, y sin ninguna al marcador fijo', () => {
+  const estudio = {
+    ...CONTRIBUYENTE,
+    comparables: [
+      { name: 'CON CRUDA INC', desc: 'Raw business description.' },
+      { name: 'SIN DESCRIPCION INC' },
+    ],
+  };
+  const html = construirHtmlSinPlantilla(estudio, null, null);
+  assert.ok(html.includes('Raw business description.'));
+  assert.ok(html.includes('Descripción de actividad no disponible.'));
+});
+
+/* ── Anexo B: EEFF de las comparables ── */
+
+test('incluye el Estado de Resultados y el Balance General de una comparable con eeffDatos', () => {
+  const estudio = {
+    ...CONTRIBUYENTE,
+    comparables: [{
+      name: 'CON CIFRAS INC',
+      eeffDatos: { periodo: 2025, ingresos_operacionales: 1000, costo_ventas: 600, utilidad_operacional: 150 },
+    }],
+  };
+  const html = construirHtmlSinPlantilla(estudio, null, null);
+  assert.ok(html.includes('Estado de Resultados'));
+  assert.ok(html.includes('Balance General'));
+  assert.ok(html.includes('1.000,00'));
+});
+
+test('sin eeffDatos de la comparable, avisa que falta el estado financiero en vez de inventarlo', () => {
+  const estudio = { ...CONTRIBUYENTE, comparables: [{ name: 'SIN EEFF INC' }] };
+  const html = construirHtmlSinPlantilla(estudio, null, null);
+  assert.ok(html.includes('[PENDIENTE] Falta el estado financiero de SIN EEFF INC'));
+});
