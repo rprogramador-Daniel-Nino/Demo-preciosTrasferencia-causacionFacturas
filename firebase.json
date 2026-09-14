@@ -45,6 +45,13 @@
         ]
       },
       {
+        "//": "Detectado el 2026-09-14: /gestor-reportes/** (con barra, sin archivo) también sirve index.html por el rewrite de abajo y tenía el mismo hueco que las dos rutas de arriba —caía en el max-age de una hora por defecto de Hosting—, así que quien entrara por esa URL exacta podía quedarse sirviendo un bundle viejo hasta una hora después de cada despliegue. Va ANTES de la regla de /gestor-reportes/assets/**: Hosting aplica la última que matchea para cada cabecera, así que esta no le quita el cacheo largo a los assets con hash.",
+        "source": "/gestor-reportes/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
         "//": "Los assets llevan el hash del contenido en el nombre, así que si cambian cambia la URL y se pueden cachear indefinidamente.",
         "source": "/gestor-reportes/assets/**",
         "headers": [
