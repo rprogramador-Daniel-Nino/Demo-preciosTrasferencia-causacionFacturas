@@ -425,6 +425,16 @@ function EjemplosDelFiltro({ paso }) {
 }
 
 export default function MotorComparables({ study, updateStudy, estudioId, usuario }) {
+  /* Sigue siendo esta instancia la que el usuario tiene abierta. `handlePriorStudyUpload`
+     no vive en un efecto —lo dispara el input de archivo—, así que no tiene el `cancelado`
+     de los demás efectos asíncronos de este componente (ver `:1028`, `:1096`): sin esta
+     guarda, si el usuario cambia de estudio mientras el informe anterior se sigue leyendo,
+     el resultado de la IA (actividad, comparables, accionistas del estudio VIEJO) llega
+     igual y `updateStudy` lo escribe sobre lo que esté activo entonces, que ya es el
+     estudio nuevo. */
+  const vigente = useRef(true);
+  useEffect(() => () => { vigente.current = false; }, []);
+
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
   const [priorStudyMsg, setPriorStudyMsg] = useState('');
@@ -737,6 +747,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
     setPriorStudyMsg('🤖 Leyendo informe del año anterior ');
     try {
       const result = await parsePriorStudyFile(file);
+      if (!vigente.current) return;
       if (result) {
         if (result.actividad_especifica) {
           setActividad(result.actividad_especifica);
@@ -775,7 +786,7 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
            Si falla, el informe ya está leído y el estudio sigue su curso: guardar el
            catálogo es un extra, no un requisito para trabajar. */
-        await registrarEnCatalogo(info, result);
+        if (vigente.current) await registrarEnCatalogo(info, result);
       }
     } catch (err) {
       console.error("Error al leer informe del año anterior:", err);
