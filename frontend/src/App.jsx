@@ -281,13 +281,6 @@ export default function App() {
 
       try {
         const { local } = separarEstudio(study);
-        /* DIAGNÓSTICO TEMPORAL — quitar junto con el resto (2026-09-14). */
-        console.log('[App][autoguardado]', activeStudyId,
-          'comparables=', (study.comparables || []).length,
-          'cribadoIQ=', !!study.cribadoIQ,
-          'criteriosScreening=', (study.criteriosScreening || []).length,
-          'actividad_especifica=', study.actividad_especifica,
-          'iaMatch=', local.iaMatch ? Object.keys(local.iaMatch.porId || {}).length : 0);
         if (local.iaMatch) guardarJSON(claveIaMatch(activeStudyId), local.iaMatch);
         /* ── LOS ANEXOS NO PUEDEN TUMBAR EL GUARDADO DEL ESTUDIO ──
            Las páginas de los estados financieros van a IndexedDB: son data URLs y no caben ni
@@ -427,12 +420,6 @@ export default function App() {
      Los datos llegan ya completos —leídos de la nube y con los recursos de este navegador
      pegados por `conRecursosLocales`—: aquí no se espera nada. */
   const abrirEstudio = ({ id, datos, tab = 'contribuyente', ajeno = null }) => {
-    /* DIAGNÓSTICO TEMPORAL — quitar junto con el resto (2026-09-14). */
-    console.log('[App][abrirEstudio]', id,
-      'comparables=', (datos && datos.comparables || []).length,
-      'cribadoIQ=', !!(datos && datos.cribadoIQ),
-      'criteriosScreening=', (datos && datos.criteriosScreening || []).length,
-      'actividad_especifica=', datos && datos.actividad_especifica);
     /* Abrir un estudio no es modificarlo: el autoguardado se salta el primer disparo. */
     cargando.current = true;
     setEstudioAjeno(ajeno);
@@ -648,9 +635,40 @@ export default function App() {
     }
   };
 
-  const updateStudy = (fields) => {
-    setStudy(prev => ({ ...prev, ...fields }));
+  /* La causa real de que un estudio se escribiera sobre otro (2026-09-14, con logs en
+     consola de por medio): no era una carrera de "quién es más rápido", sino el orden en
+     que React aplica actualizaciones encoladas. Un efecto asíncrono de una pantalla —la
+     traducción de criterios de búsqueda, por ejemplo— deja su `setStudy` en cola al
+     terminar; si en ese mismo instante se abre o crea otro estudio, React aplica primero
+     el reemplazo de `abrirEstudio` y LUEGO, de la cola anterior, la fusión de ese efecto
+     tardío —con los datos del estudio VIEJO, porque su `updateStudy` es un cierre
+     capturado antes del cambio—. `updateStudy` fusionaba sin preguntar sobre qué estudio
+     estaba escribiendo.
+
+     La solución no depende de adivinar cuándo puede llegar tarde un efecto —esa lista
+     nunca se termina de completar—: `updateStudyPara` recibe el id para el que CADA
+     pantalla lo invoca (capturado en el cierre que arma el JSX de abajo, en el render en
+     que esa pantalla se montó) y lo compara, dentro del propio actualizador funcional de
+     `setStudy`, contra el sello del estudio que sea el verdadero activo en ese instante
+     —`prev` ahí nunca es viejo, es la garantía que da React—. Si no coinciden, la
+     escritura se descarta entera: un efecto tardío de un estudio cerrado no tiene forma
+     de tocar el que esté abierto ahora. */
+  const updateStudyPara = (paraEstudioId, fields) => {
+    setStudy(prev => {
+      if (paraEstudioId && prev[SELLO_ESTUDIO] && paraEstudioId !== prev[SELLO_ESTUDIO]) {
+        console.error('[estudios] updateStudy descartado: era para ' + paraEstudioId +
+          ' pero el estudio activo es ' + prev[SELLO_ESTUDIO]);
+        return prev;
+      }
+      return { ...prev, ...fields };
+    });
   };
+
+  /* La pantalla que reciba esto en cada render queda con el `activeStudyId` de ESE
+     render capturado en el cierre: si su efecto llega tarde, tras haberse abierto otro
+     estudio, sigue comparando contra el estudio para el que de verdad se montó, no
+     contra uno nuevo que no conoce. */
+  const updateStudy = (fields) => updateStudyPara(activeStudyId, fields);
 
   /* Copia el identificador al portapapeles. `navigator.clipboard` no existe en
      contextos sin HTTPS ni con el permiso denegado, y ahí se deja el texto
