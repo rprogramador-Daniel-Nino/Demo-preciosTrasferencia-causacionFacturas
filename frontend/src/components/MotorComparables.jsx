@@ -435,6 +435,16 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
   const vigente = useRef(true);
   useEffect(() => () => { vigente.current = false; }, []);
 
+  /* DIAGNÓSTICO TEMPORAL — quitar tras localizar la fuga entre estudios (2026-09-14).
+     Marca cada instancia del componente para poder ver en consola si de verdad se
+     desmonta al cambiar de estudio o si React la está reutilizando con props nuevas. */
+  const instanciaId = useRef(Math.random().toString(36).slice(2, 8));
+  useEffect(() => {
+    console.log('[MC][mount]', instanciaId.current, 'estudioId=', estudioId);
+    return () => console.log('[MC][unmount]', instanciaId.current, 'estudioId=', estudioId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Prior Study Ingestion State
   const [loadingPriorStudy, setLoadingPriorStudy] = useState(false);
   const [priorStudyMsg, setPriorStudyMsg] = useState('');
@@ -696,6 +706,11 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
 
 
   useEffect(() => {
+    /* DIAGNÓSTICO TEMPORAL — quitar junto con el resto (2026-09-14). */
+    console.log('[MC][persist]', instanciaId.current, 'estudioId(prop)=', estudioId,
+      'comparables=', comparables.length, 'cribadoIQ=', !!cribadoIQ,
+      'criteriosScreening=', criteriosScreening.length, 'actividad=', actividad,
+      'iaMatch=', iaMatch ? Object.keys(iaMatch.porId || {}).length : 0);
     updateStudy({
       /* El aviso de «no extraído» no se guarda: el apartado sectorial del informe se
          redacta con este campo, y con el aviso dentro el documento declararía como

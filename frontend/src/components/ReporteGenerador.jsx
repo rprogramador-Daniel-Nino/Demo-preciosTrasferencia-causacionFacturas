@@ -121,6 +121,16 @@ async function pedirAnalisisSector(actividad, year) {
 }
 
 export default function ReporteGenerador({ study, updateStudy, estudioId, usuario }) {
+  /* Sigue siendo esta instancia la que el usuario tiene abierta. `handleCargarCriteriosScreening`
+     y la lectura de accionistas de la plantilla no viven en un efecto —las dispara un input de
+     archivo—, así que no tienen el `cancelado` que protege a los asíncronos de este componente
+     que sí son efectos (ver el análisis de mercado más abajo): sin esta guarda, si el usuario
+     cambia de estudio mientras el archivo se sigue leyendo, el resultado (criterios de búsqueda,
+     accionistas del estudio VIEJO) llega igual y `updateStudy` lo escribe sobre el estudio que
+     esté activo en ese momento. */
+  const vigente = useRef(true);
+  useEffect(() => () => { vigente.current = false; }, []);
+
   const [htmlContent, setHtmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   /* `customTemplateLoaded` vivía aquí y se ha retirado: su único cometido era impedir
@@ -766,6 +776,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
     setAvisoCriteriosScreening('');
     try {
       const criterios = await leerCriteriosScreeningDeArchivo(file);
+      if (!vigente.current) return;
       if (!criterios.length) {
         setAvisoCriteriosScreening(
           `⚠ El archivo «${file.name}» no trae la hoja "Screen Criteria" — no hay criterios que leer de ahí.`
@@ -797,6 +808,7 @@ export default function ReporteGenerador({ study, updateStudy, estudioId, usuari
        poblar. Por eso el botón de descarga, más abajo, ahora también se deshabilita con `loading`. */
     const promesaAccionistas = (typeof updateStudy === 'function')
       ? parseAccionistasFromDocument(file).then((resultado) => {
+          if (!vigente.current) return;
           if (resultado && resultado.accionistas && resultado.accionistas.length > 0) {
             updateStudy({ plantillaAccionistas: resultado });
             setAvisoAccionistasPlantilla(

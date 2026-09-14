@@ -281,6 +281,13 @@ export default function App() {
 
       try {
         const { local } = separarEstudio(study);
+        /* DIAGNÓSTICO TEMPORAL — quitar junto con el resto (2026-09-14). */
+        console.log('[App][autoguardado]', activeStudyId,
+          'comparables=', (study.comparables || []).length,
+          'cribadoIQ=', !!study.cribadoIQ,
+          'criteriosScreening=', (study.criteriosScreening || []).length,
+          'actividad_especifica=', study.actividad_especifica,
+          'iaMatch=', local.iaMatch ? Object.keys(local.iaMatch.porId || {}).length : 0);
         if (local.iaMatch) guardarJSON(claveIaMatch(activeStudyId), local.iaMatch);
         /* ── LOS ANEXOS NO PUEDEN TUMBAR EL GUARDADO DEL ESTUDIO ──
            Las páginas de los estados financieros van a IndexedDB: son data URLs y no caben ni
@@ -420,6 +427,12 @@ export default function App() {
      Los datos llegan ya completos —leídos de la nube y con los recursos de este navegador
      pegados por `conRecursosLocales`—: aquí no se espera nada. */
   const abrirEstudio = ({ id, datos, tab = 'contribuyente', ajeno = null }) => {
+    /* DIAGNÓSTICO TEMPORAL — quitar junto con el resto (2026-09-14). */
+    console.log('[App][abrirEstudio]', id,
+      'comparables=', (datos && datos.comparables || []).length,
+      'cribadoIQ=', !!(datos && datos.cribadoIQ),
+      'criteriosScreening=', (datos && datos.criteriosScreening || []).length,
+      'actividad_especifica=', datos && datos.actividad_especifica);
     /* Abrir un estudio no es modificarlo: el autoguardado se salta el primer disparo. */
     cargando.current = true;
     setEstudioAjeno(ajeno);
