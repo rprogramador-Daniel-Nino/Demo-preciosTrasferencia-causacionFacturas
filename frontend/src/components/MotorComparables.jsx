@@ -1574,6 +1574,20 @@ export default function MotorComparables({ study, updateStudy, estudioId, usuari
         }
       }
 
+      /* Las que entraron sin que la curación llegara a juzgarlas. Es un aviso distinto del de
+         la ampliación: aquella entró por una decisión metodológica que se sustenta en el
+         informe; estas entraron porque la verificación de actividad no se pudo completar —un
+         lote de la curación que falló, casi siempre—, y su comparabilidad no la respalda
+         ningún dictamen. Se dice con el remedio delante, porque volver a ejecutar el paso 3
+         suele resolverlo entero y es mejor que revisarlas a mano una por una. */
+      const sinCurarIncluidas = result.sinCurarIncluidas || 0;
+      if (sinCurarIncluidas) {
+        anotar(`${sinCurarIncluidas} de las seleccionadas entraron SIN que la verificación de `
+          + `actividad por IA llegara a juzgarlas (quedaron ${result.sinCurarDisponibles || 0} sin `
+          + 'juzgar en total, normalmente por un lote que falló). Vuelva a ejecutar el paso 3 '
+          + 'para curarlas; si no, revise su actividad a mano antes de radicar.', 'aviso');
+      }
+
       /* La continuidad que la cuota obligó a retirar. Va en su propio aviso y con los
          nombres: retirar una comparable aceptada el año anterior se justifica en el informe, y
          antes desaparecían sin que nada lo dijera. */

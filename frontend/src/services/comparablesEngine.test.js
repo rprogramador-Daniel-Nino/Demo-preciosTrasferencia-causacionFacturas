@@ -11,7 +11,7 @@ import {
   elegirHoja, encontrarFilaEncabezados, COLUMNAS_IQ, importCapitalIQExcel,
   regionDe, perfilDe, tokensSignificativos, coincidenciaActividad, extraerJSON,
   parsearCriteriosScreening, leerCriteriosScreeningDeArchivo, CURACION_LOTE, enriquecerUniverso,
-  MINIMO_COMPARABLES, gradoDeActividad, consultarGemini, claveDeCruce,
+  MINIMO_COMPARABLES, gradoDeActividad, consultarGemini, claveDeCruce, VERSION_PROMPT_CURACION,
 } from './comparablesEngine.js';
 import { num } from '../utils/calculations.js';
 
@@ -1856,8 +1856,11 @@ test('un veredicto guardado sin grados no se reutiliza: se vuelve a curar', asyn
       { id: 'A', name: 'A SA', desc: 'software development services' },
       { id: 'B', name: 'B SA', desc: 'game publishing' },
     ];
+    /* Con la versión de prompt AL DÍA a propósito: así lo que se prueba sigue siendo que un
+       dictamen sin `grado` se recura, y no el versionado —que tiene sus propios tests—. */
     const viejo = {
       actividadUsada: 'desarrollo de software',
+      versionPrompt: VERSION_PROMPT_CURACION,
       porId: { A: { coincide: true }, B: { coincide: false } },
     };
     const v = await curateCandidatesWithGemini(candidatas, 'desarrollo de software',
@@ -1872,7 +1875,7 @@ test('un veredicto guardado sin grados no se reutiliza: se vuelve a curar', asyn
   }
 });
 
-test('un veredicto que ya trae grados sí se reutiliza', async () => {
+test('un veredicto que ya trae grados y la versión al día sí se reutiliza', async () => {
   /* La contrapartida del anterior: volver a curar cuesta dinero, así que solo se rehace lo que
      de verdad no sirve. */
   const { restore, llamadas } = mockGemini(() => true, { grado: () => 'MISMA' });
@@ -1883,6 +1886,7 @@ test('un veredicto que ya trae grados sí se reutiliza', async () => {
     ];
     const previo = {
       actividadUsada: 'desarrollo de software',
+      versionPrompt: VERSION_PROMPT_CURACION,
       porId: { A: { grado: 'MISMA', coincide: true }, B: { grado: 'RELACIONADA', coincide: false } },
     };
     const v = await curateCandidatesWithGemini(candidatas, 'desarrollo de software',
@@ -3477,4 +3481,189 @@ test('el cruce de la inyección usa la clave de cruce, no el nombre literal', ()
     [{ name: 'Bolak Co. Ltd' }], { ventasParteExaminada: 10000 });
   assert.strictEqual(r.continuidadInyectadas, 0, 'ya estaba: no se inyecta');
   assert.strictEqual(r.seleccionadas.filter((c) => /Bolak/.test(c.name)).length, 1);
+});
+
+/* ══════ El grado de actividad se decide por la ACTIVIDAD, no por el margen ══════
+   Reportado el 2026-09-16 sobre Contenur 2025: «trae muy poquitas de la misma actividad». El
+   prompt de curación pedía al modelo priorizar como MISMA a las de margen bajo y mandar a
+   DISTINTA a las de margen alto (introducido el 2026-08-31 en `a601abc`), de modo que el grado
+   de comparabilidad se decidía en parte por la rentabilidad buscada. Eso descarta compañías de
+   la actividad correcta por tener margen alto —que es justo lo que vacía la fila de idénticas—
+   y ante un revisor es selección por resultado: el margen que se quiere demostrar no puede ser
+   insumo del juicio de comparabilidad (Art. 260-4 E.T.).
+
+   La cercanía de margen sigue pesando donde está declarada y es auditable: el factor `fRent`
+   del puntaje y el orden de la cuota de negativas. */
+
+test('el prompt de curación no menciona el margen ni la rentabilidad de nadie', async () => {
+  const { restore, llamadas } = mockGemini(() => true);
+  try {
+    await curateCandidatesWithGemini(
+      [{ id: 'A', name: 'Alfa SA', desc: 'fabricación de contenedores de residuos', s: 100, op: 40 }],
+      'fabricación de contenedores de plástico',
+      { targetProfitability: '5.268', pli: 'MO' },
+    );
+    const enviado = llamadas[0].contents[0].parts[0].text;
+    const asomo = enviado.match(/.{0,60}(margen|margin|rentabilidad).{0,60}/i);
+    assert.ok(!asomo, 'el grado de actividad no puede decidirse por el margen: ' + (asomo ? asomo[0] : ''));
+    assert.ok(!enviado.includes('5,268') && !enviado.includes('5.268'),
+      'el margen objetivo del contribuyente tampoco viaja en el prompt');
+  } finally {
+    restore();
+  }
+});
+
+test('el prompt sí manda la descripción del negocio, que es contra lo que se gradúa', async () => {
+  const { restore, llamadas } = mockGemini(() => true);
+  try {
+    await curateCandidatesWithGemini(
+      [{ id: 'A', name: 'Alfa SA', desc: 'fabricación de contenedores de residuos', s: 100, op: 40 }],
+      'fabricación de contenedores de plástico',
+    );
+    const enviado = llamadas[0].contents[0].parts[0].text;
+    assert.ok(enviado.includes('fabricación de contenedores de residuos'), 'la descripción es el insumo');
+    assert.ok(enviado.includes('fabricación de contenedores de plástico'), 'y la actividad, la vara');
+  } finally {
+    restore();
+  }
+});
+
+/* ══════ Versionado del prompt de curación ══════
+   Los dictámenes guardados con el prompt sesgado por margen traen grados contaminados, y la
+   reutilización los daba por buenos mientras la actividad no cambiara. Un estudio ya curado
+   —Contenur, entre otros— se quedaría con ellos para siempre. El veredicto guarda con qué
+   versión del prompt se produjo y solo se reutiliza si coincide, igual que ya se exige que la
+   actividad sea la misma. */
+
+test('el veredicto declara con qué versión del prompt se curó', async () => {
+  const { restore } = mockGemini(() => true);
+  try {
+    const v = await curateCandidatesWithGemini(
+      [{ id: 'A', name: 'A SA', desc: 'software development services' }], 'desarrollo de software');
+    assert.strictEqual(v.versionPrompt, VERSION_PROMPT_CURACION);
+  } finally {
+    restore();
+  }
+});
+
+test('un veredicto curado con una versión anterior del prompt no se reutiliza', async () => {
+  const { restore, llamadas } = mockGemini(() => true, { grado: () => 'MISMA' });
+  try {
+    const candidatas = [{ id: 'A', name: 'A SA', desc: 'software development services' }];
+    const primero = await curateCandidatesWithGemini(candidatas, 'desarrollo de software');
+    const viejo = { ...primero, versionPrompt: VERSION_PROMPT_CURACION - 1 };
+    const segundo = await curateCandidatesWithGemini(candidatas, 'desarrollo de software',
+      { veredictoPrevio: viejo });
+    assert.strictEqual(llamadas.length, 2, 'un grado emitido por otro prompt hay que volver a pedirlo');
+    assert.strictEqual(segundo.reutilizadas, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('un veredicto guardado antes del versionado tampoco se reutiliza', async () => {
+  /* Los estudios ya curados —Contenur incluido— no traen `versionPrompt`: son exactamente los
+     que se curaron con el prompt que miraba el margen. */
+  const { restore, llamadas } = mockGemini(() => true, { grado: () => 'MISMA' });
+  try {
+    const candidatas = [{ id: 'A', name: 'A SA', desc: 'software development services' }];
+    const primero = await curateCandidatesWithGemini(candidatas, 'desarrollo de software');
+    const sinVersion = { ...primero };
+    delete sinVersion.versionPrompt;
+    const segundo = await curateCandidatesWithGemini(candidatas, 'desarrollo de software',
+      { veredictoPrevio: sinVersion });
+    assert.strictEqual(llamadas.length, 2);
+    assert.strictEqual(segundo.reutilizadas, 0);
+  } finally {
+    restore();
+  }
+});
+
+/* ══════ Una candidata sin dictamen no es una candidata de misma actividad ══════
+   `gradoDeActividad(null)` devuelve null y `esRelacionada` quedaba en false, así que una
+   candidata que la IA nunca llegó a juzgar —su lote de curación falló, o el modelo omitió su
+   ID de la respuesta— caía en la fila de las idénticas y llenaba el cupo antes que una
+   compañía verificada. No se descarta —perder candidatas por un fallo de red sería peor— pero
+   va detrás de las afines: el cupo lo llena primero lo que sí se comprobó. */
+
+/** Dictamen para unas cuantas y silencio para el resto, que es como se ve un lote caído. */
+const veredictoParcial = (candidatas, sinDictamen) => ({
+  porId: Object.fromEntries(candidatas
+    .filter(c => !sinDictamen.includes(c.id))
+    .map(c => [c.id, { grado: c.grado, motivo: '', perfil: 'SERVICIO' }])),
+});
+
+test('la candidata sin dictamen llena el cupo después de las de actividad afín', () => {
+  const mismas = conGrado(2, 'MISMA', 'M');
+  const afines = conGrado(3, 'RELACIONADA', 'R');
+  const mudas = conGrado(4, 'MISMA', 'S');
+  const candidatas = [...mismas, ...afines, ...mudas];
+  const r = scoreCandidates(candidatas, { nTarget: 6, minimo: 0 }, '', [],
+    { iaMatch: veredictoParcial(candidatas, mudas.map(c => c.id)) });
+
+  assert.strictEqual(r.seleccionadas.length, 6);
+  assert.strictEqual(r.seleccionadas.filter(c => c.esSinCurar).length, 1,
+    'solo la plaza que sobraba tras las idénticas y las afines');
+  assert.ok(r.seleccionadas[5].esSinCurar, 'y es la última en entrar');
+  assert.strictEqual(r.seleccionadas.filter(c => !c.esRelacionada && !c.esSinCurar).length, 2);
+  assert.strictEqual(r.seleccionadas.filter(c => c.esRelacionada).length, 3);
+});
+
+test('con idénticas de sobra, ninguna sin curar entra en la muestra', () => {
+  const mismas = conGrado(10, 'MISMA', 'M');
+  const mudas = conGrado(5, 'MISMA', 'S');
+  const candidatas = [...mismas, ...mudas];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [],
+    { iaMatch: veredictoParcial(candidatas, mudas.map(c => c.id)) });
+
+  assert.strictEqual(r.seleccionadas.length, 10);
+  assert.strictEqual(r.seleccionadas.filter(c => c.esSinCurar).length, 0,
+    'una candidata verificada nunca cede el sitio a una que no se pudo verificar');
+});
+
+test('las que no se pudieron curar quedan en reserva y el Excel dice por qué', () => {
+  const mismas = conGrado(10, 'MISMA', 'M');
+  const mudas = conGrado(3, 'MISMA', 'S');
+  const candidatas = [...mismas, ...mudas];
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [],
+    { iaMatch: veredictoParcial(candidatas, mudas.map(c => c.id)) });
+
+  assert.strictEqual(r.rechazadas.length, 0, 'no se descarta a nadie por un lote caído');
+  const enReserva = r.reserva.filter(c => c.esSinCurar);
+  assert.strictEqual(enReserva.length, 3);
+  enReserva.forEach(c => assert.match(c.motivoRechazo, /no se pudo verificar la actividad/i,
+    'el motivo tiene que decir el hecho real, no inventar un dictamen'));
+  /* Y detrás de todo lo demás: si el analista sube el N, primero lo verificado. */
+  assert.ok(r.reserva[r.reserva.length - 1].esSinCurar);
+});
+
+test('sin curación en marcha, nadie queda marcado como sin curar', () => {
+  /* Las cargadas a mano o desde un estado financiero no pasan por la IA y no deben caer en la
+     tercera fila por omisión: sin `iaMatch` el motor no está graduando a nadie. */
+  const candidatas = conGrado(3, 'MISMA', 'M');
+  const r = scoreCandidates(candidatas, { nTarget: 3, minimo: 0 }, '', [], {});
+  assert.strictEqual(r.seleccionadas.length, 3);
+  r.seleccionadas.forEach(c => assert.ok(!c.esSinCurar));
+});
+
+test('el resultado dice cuántas entraron sin verificar y cuántas quedaron sin verificar', () => {
+  /* Si una comparable no verificada acaba en la muestra, el analista tiene que poder verlo: es
+     la única de la muestra cuya comparabilidad nadie comprobó, y el informe la firma igual. Sin
+     estas dos cifras la pantalla no puede decirlo y entraría en silencio. */
+  const mismas = conGrado(2, 'MISMA', 'M');
+  const mudas = conGrado(4, 'MISMA', 'S');
+  const candidatas = [...mismas, ...mudas];
+  const r = scoreCandidates(candidatas, { nTarget: 5, minimo: 0 }, '', [],
+    { iaMatch: veredictoParcial(candidatas, mudas.map(c => c.id)) });
+
+  assert.strictEqual(r.seleccionadas.length, 5);
+  assert.strictEqual(r.sinCurarIncluidas, 3, 'las 3 que hizo falta usar para llegar a 5');
+  assert.strictEqual(r.sinCurarDisponibles, 4, 'y había 4 en total sin juzgar');
+});
+
+test('sin candidatas mudas los dos contadores quedan en cero', () => {
+  const candidatas = conGrado(10, 'MISMA', 'M');
+  const r = scoreCandidates(candidatas, { nTarget: 10 }, '', [], { iaMatch: veredictoDe(candidatas) });
+  assert.strictEqual(r.sinCurarIncluidas, 0);
+  assert.strictEqual(r.sinCurarDisponibles, 0);
 });

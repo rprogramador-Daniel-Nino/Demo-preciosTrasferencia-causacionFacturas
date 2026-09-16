@@ -737,6 +737,14 @@ export const CLAVE_RESERVA = 'actividadDistinta';
 export const MOTIVO_RESERVA = 'Supera los filtros objetivos pero no integra la muestra: '
   + 'menor grado de comparabilidad funcional frente a la parte examinada (Art. 260-4 E.T.).';
 
+/* El motivo dice el HECHO —no se pudo verificar—, no un dictamen que nadie emitió. Escribir
+   aquí «actividad distinta» dejaría el Excel de soporte afirmando algo que la curación nunca
+   dijo, y quien audite el libro no tendría cómo distinguir una comparable descartada por su
+   negocio de una que simplemente se quedó sin consultar. */
+export const MOTIVO_SIN_CURAR = 'No se pudo verificar la actividad de esta compañía: la curación '
+  + 'por IA no llegó a juzgarla (su lote falló o el modelo omitió su identificador). No integra '
+  + 'la muestra mientras haya candidatas verificadas; vuelva a ejecutar el paso 3 para juzgarla.';
+
 /* ── INTENSIDAD DE CAPITAL DE TRABAJO ──
    Cuanto capital de trabajo mueve una compañia por peso de venta:
    (CxC + Inventario − CxP) / ventas.
@@ -950,6 +958,23 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        anterior y no necesitan la ampliación del criterio para entrar. */
     const esRelacionada = grado === 'RELACIONADA' && !esContinuidad;
 
+    /* ── TERCERA FILA: la que la curación nunca llegó a juzgar ──
+       `gradoDeActividad(null)` devuelve null, y con solo dos filas eso la dejaba en la de las
+       idénticas: una candidata sin dictamen llenaba el cupo ANTES que una compañía que la IA
+       sí verificó. Pasa de verdad —un lote de curación que falla (`veredicto.fallidas`), o un
+       ID que el modelo omite de su respuesta— y en un universo como el de Contenur, de más de
+       mil candidatas repartidas en muchos lotes, basta uno caído.
+
+       No es motivo de descarte: perder candidatas por un fallo de red sería peor que
+       conservarlas, y el analista puede verificarlas a mano. Pero tampoco puede entrar por la
+       puerta de las idénticas, porque nadie comprobó que lo sea. Va detrás de las afines.
+
+       Solo cuando la curación está en marcha (`iaPorId`): sin ella el motor no gradúa a nadie
+       y las candidatas cargadas a mano o desde un estado financiero no deben caer aquí por
+       omisión. Y nunca las de continuidad, que no dependen del dictamen para entrar. */
+    const esSinCurar = !!iaPorId && !!idIQ && !ia && !esContinuidad &&
+      !!String(cand.desc || '').trim();
+
     /* ── perfil funcional ──
        El dictamen de la IA manda cuando afirma algo: lee la Business Description
        entera, mientras que la heurística solo mira frases sueltas. Antes el perfil por
@@ -1069,6 +1094,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
          identificador, o curación no corrida. */
       motivoActividad: (ia && ia.motivo) || '',
       esRelacionada,
+      esSinCurar,
       descartada,
       motivoRechazo,
       categoriaRechazo,
@@ -1099,8 +1125,10 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      actividad, y las de actividad afín después. Es la ampliación del criterio de búsqueda que
      el informe tiene que justificar, así que se hace de forma mínima y queda marcada por
      candidata (`entroPorAmpliacion`) en vez de diluirse en el orden por puntaje. */
-  const mismas = otrasValidas.filter(c => !c.esRelacionada);
+  const mismas = otrasValidas.filter(c => !c.esRelacionada && !c.esSinCurar);
   const afines = otrasValidas.filter(c => c.esRelacionada);
+  /* Y detrás de las dos, las que nadie llegó a juzgar: ver `esSinCurar` arriba. */
+  const sinCurar = otrasValidas.filter(c => c.esSinCurar);
 
   /* ── Cuota de comparables en pérdida ──
      El objetivo se reserva ANTES de llenar con positivas, porque si no las positivas —que
@@ -1394,6 +1422,15 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
   const afinesPositivas = afines.filter((c) => !enPerdida(c));
   const deAmpliacion = afinesPositivas.slice(0, faltan).map(c => ({ ...c, entroPorAmpliacion: true }));
 
+  /* Y si ni con las afines se llena el cupo, las que la curación no alcanzó a juzgar. Es el
+     último recurso, después de todo lo verificado: entran con la muestra ya corta, y el
+     analista las ve marcadas para confirmarlas a mano. No llevan `entroPorAmpliacion` —no se
+     amplió ningún criterio de búsqueda por ellas, que es otro hecho y otra justificación—:
+     las nombra su propio `esSinCurar`. */
+  const faltanTrasAfines = Math.max(0, cupoParaPositivas - deMisma.length - deAmpliacion.length);
+  const sinCurarPositivas = sinCurar.filter((c) => !enPerdida(c));
+  const deSinCurar = sinCurarPositivas.slice(0, faltanTrasAfines);
+
   /* ── POR QUE AQUI NO SE INYECTAN LAS DEL ANIO ANTERIOR QUE EL CRIBADO NO TRAE ──
      Se construyo el 2026-09-02 a pedido explicito —«necesito que salgan las comparables del
      anio pasado cuando le doy al boton sin importar que»— y se retiro el mismo dia, tambien a
@@ -1416,7 +1453,7 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
      comercial —«IFF» en vez de «International Flavors & Fragrances Inc.»— el camino es el
      screening del paso 1, que la trae CON cifras. Una fila vacia no sustituye eso. */
   const seleccionadas = [
-    ...continuidadIncluidas, ...deNegativas, ...deMisma, ...deAmpliacion,
+    ...continuidadIncluidas, ...deNegativas, ...deMisma, ...deAmpliacion, ...deSinCurar,
   ];
 
   /* MOTIVO ESCRITO PARA LA RESERVA (2026-08-20, a pedido del usuario).
@@ -1477,6 +1514,20 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        cuota completándose desde esta lista, incluirlas enteras las contaría dos veces y el
        embudo dejaría de cuadrar contra el universo. */
     ...afinesNegativas.slice(negativasAfines.length).map(enReserva),
+    /* Al final de todo: si el analista sube el N objetivo, se echa mano primero de lo que sí se
+       verificó. Con su propio motivo, no el genérico de la reserva — ver `MOTIVO_SIN_CURAR`. */
+    ...sinCurarPositivas.slice(deSinCurar.length).map((c) => ({
+      ...c,
+      motivoClave: c.motivoClave || CLAVE_RESERVA,
+      motivoRechazo: c.motivoRechazo || MOTIVO_SIN_CURAR,
+      categoriaRechazo: c.categoriaRechazo || 'rigor',
+    })),
+    ...sinCurar.filter(enPerdida).map((c) => ({
+      ...c,
+      motivoClave: c.motivoClave || CLAVE_RESERVA,
+      motivoRechazo: c.motivoRechazo || MOTIVO_SIN_CURAR,
+      categoriaRechazo: c.categoriaRechazo || 'rigor',
+    })),
   ];
 
   return {
@@ -1563,6 +1614,16 @@ export function scoreCandidates(candidates, config, companyActivity = '', priorC
        sustento. El desglose va aparte, en `negativasPorAmpliacion`. */
     ampliadas: deAmpliacion.length + negativasAfines.length,
     relacionadasDisponibles: afines.length,
+
+    /* ── Las que entraron sin que nadie verificara su actividad ──
+       Una comparable no verificada dentro de la muestra es la única cuya comparabilidad no
+       respalda ningún dictamen, y el informe la firma igual que a las demás. Tiene que poder
+       decirse en pantalla, así que el motor la cuenta en lugar de dejarla pasar en silencio:
+       `sinCurarIncluidas` es lo que hay que revisar a mano, y `sinCurarDisponibles` dice el
+       tamaño del agujero que dejó la curación —normalmente, un lote que falló—. Si la segunda
+       es alta, lo que corresponde es volver a ejecutar el paso 3, no revisar una por una. */
+    sinCurarIncluidas: deSinCurar.length,
+    sinCurarDisponibles: sinCurar.length,
 
     /* ── La cuota de negativas, en tres cifras ──
        Las tres hacen falta para poder decir la verdad en pantalla y en el informe:
@@ -1856,6 +1917,19 @@ export const MINIMO_COMPARABLES = 10;
    dejar dicho cuáles entraron así para justificarlo en el informe. */
 export const GRADOS_ACTIVIDAD = new Set(['MISMA', 'RELACIONADA', 'DISTINTA']);
 
+/* ── CON QUÉ PROMPT SE EMITIÓ UN GRADO ──
+   Un dictamen guardado no dice nada por sí solo sobre bajo qué criterio se emitió, y la
+   reutilización lo daba por bueno mientras la actividad del contribuyente no cambiara. Eso
+   bastaba mientras el prompt fuera estable; dejó de bastar el 2026-09-16, al retirar del prompt
+   la instrucción que graduaba la actividad según el margen de la candidata (introducida el
+   2026-08-31): los grados emitidos con ella están sesgados, y sin este sello un estudio ya
+   curado —Contenur, entre otros— se quedaría con ellos para siempre sin que nadie lo note.
+
+   SUBIRLA CUESTA UNA CORRIDA DE IA por cada estudio que se reabra, así que se sube solo cuando
+   cambia el CRITERIO con que se juzga —qué cuenta como MISMA o RELACIONADA—, no cuando se
+   corrige una coma. Un dictamen de otra versión no es reutilizable: se vuelve a consultar. */
+export const VERSION_PROMPT_CURACION = 2;
+
 /* El grado de un dictamen, tolerando los veredictos guardados antes de que existiera: ahí solo
    hay `coincide`, y un `false` de entonces significaba «no es la misma actividad específica»,
    que es exactamente DISTINTA bajo el criterio viejo. Se reevalúan al volver a curar. */
@@ -1990,8 +2064,9 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
     onProgress, priorComps = [], fuente = '', veredictoPrevio = null,
     /* parametrizados para que las pruebas no tengan que esperar los backoffs reales */
     reintentos = CURACION_REINTENTOS, pausaBaseMs = CURACION_PAUSA_BASE_MS,
-    targetProfitability = '4.716',
-    pli = 'MO',
+    /* `targetProfitability` y `pli` se siguen aceptando —el llamador los pasa— y se IGNORAN a
+       propósito desde el 2026-09-16: alimentaban la rentabilidad del contribuyente y el margen
+       de cada candidata al prompt que gradúa la actividad. Ver `VERSION_PROMPT_CURACION`. */
   } = opciones;
   const avisar = (info) => {
     if (typeof onProgress === 'function') {
@@ -2004,6 +2079,10 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
     porId: {},
     fecha: new Date().toISOString(),
     actividadUsada: actividad,
+    /* Con qué criterio se emitieron estos grados. Viaja con el veredicto —que se persiste
+       junto al cribado— porque es lo único que permite saber, al reabrir un estudio, si sus
+       dictámenes siguen valiendo. */
+    versionPrompt: VERSION_PROMPT_CURACION,
     fuente,
     total: 0,
     evaluadas: 0,
@@ -2039,10 +2118,21 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
      actividad es la misma —es el criterio contra el que se evaluó cada candidata— y
      solo para los identificadores ya presentes: relajar un filtro admite candidatas
      nuevas, y esas sí hay que curarlas. */
-  const previoCrudo = veredictoPrevio && veredictoPrevio.porId &&
+  /* Y solo si el criterio con el que se juzgó sigue siendo el de hoy. Un veredicto guardado
+     antes del versionado no trae `versionPrompt` —son justo los que se curaron con el prompt
+     que graduaba por margen—, así que `undefined !== VERSION_PROMPT_CURACION` los manda a
+     recurar, que es lo que se quiere. */
+  const mismaVersion = veredictoPrevio &&
+    veredictoPrevio.versionPrompt === VERSION_PROMPT_CURACION;
+  const previoCrudo = veredictoPrevio && veredictoPrevio.porId && mismaVersion &&
     String(veredictoPrevio.actividadUsada || '').trim() === actividad
     ? veredictoPrevio.porId
     : null;
+  if (veredictoPrevio && veredictoPrevio.porId && !mismaVersion) {
+    console.warn('[curación IA] el veredicto guardado se emitió con la versión ' +
+      `${veredictoPrevio.versionPrompt ?? 'anterior al versionado'} del prompt de curación ` +
+      `(hoy es la ${VERSION_PROMPT_CURACION}): sus grados se vuelven a consultar.`);
+  }
 
   /* Y solo los dictámenes que traen el grado. Los guardados antes de que existiera únicamente
      dicen sí/no bajo el criterio estricto de entonces —«la misma actividad específica»—, así
@@ -2099,42 +2189,36 @@ export async function curateCandidatesWithGemini(candidates, companyActivity, op
   });
 
   await conConcurrencia(lotes, async (lote, indice) => {
-    const candidatos = lote.map(c => {
-      const pliVal = pliOf({
-        s: num(c.s),
-        c: num(c.c),
-        op: num(c.op),
-        ar: num(c.ar),
-        inv: num(c.inv),
-        ap: num(c.ap),
-      }, pli);
-      const marginPct = pliVal !== null ? (pliVal * 100).toFixed(3) + ' %' : 'N/A';
-      return {
-        id: String(c.id).trim(),
-        name: c.name || '',
-        desc: String(c.desc || '').slice(0, 300),
-        country: c.country || '',
-        margin: marginPct,
-      };
-    });
+    /* SIN EL MARGEN, y esa ausencia es el cambio. Iba un campo `margin` por candidata junto a
+       la rentabilidad del contribuyente, y el prompt pedía graduar con ellos. Un dato que no
+       viaja no puede sesgar el dictamen. */
+    const candidatos = lote.map(c => ({
+      id: String(c.id).trim(),
+      name: c.name || '',
+      desc: String(c.desc || '').slice(0, 300),
+      country: c.country || '',
+    }));
 
         const prompt =
       'Eres un experto en precios de transferencia que revisa comparables de una base de datos financiera.\n\n' +
       'La empresa examinada tiene esta actividad económica real:\n"' + actividad + '"\n\n' +
       referencia +
-      'La empresa examinada tiene un indicador de rentabilidad de ' + String(targetProfitability).replace('.', ',') + ' %. ' +
-      'Prioriza como "MISMA" a las candidatas cuyo margen esté cerca de ese valor ' +
-      'o sea bajo, y clasifica como "DISTINTA" a las que tengan márgenes altos sin omitir las la actividad economica .\n\n' +
-      'A continuación hay una lista de empresas candidatas con su descripción de negocio y su margen financiero ("margin"). ' +
+      'A continuación hay una lista de empresas candidatas con su descripción de negocio. ' +
       'Para cada una, gradúa cuánto se parece su actividad real a la de la empresa examinada, sin importar el idioma ' +
       'en que esté escrita la descripción:\n' +
       '- "MISMA": el mismo tipo de negocio, los mismos productos o servicios, o una función equivalente.\n' +
       '- "RELACIONADA": actividad afín dentro de la misma cadena de valor o del mismo nicho —otro eslabón, un ' +
-      'producto o servicio vecino, o la misma función sobre un mercado contiguo—, de modo que sus márgenes son ' +
-      'razonablemente comparables aunque no sea idéntica. Pertenecer al mismo sector amplio NO basta.\n' +
+      'producto o servicio vecino, o la misma función sobre un mercado contiguo—, razonablemente comparable ' +
+      'aunque no sea idéntica. Pertenecer al mismo sector amplio NO basta.\n' +
       '- "DISTINTA": otro negocio. Úsalo también cuando el único parecido sea el sector amplio.\n\n' +
+      'JUZGA SOLO LA ACTIVIDAD. No sabes ni te importa qué tan grande es cada candidata, en qué país opera, ' +
+      'cuánto gana ni si es rentable: nada de eso cambia a qué se dedica, y el motor ya lo pondera aparte. ' +
+      'Decidir el grado por algo que no sea la actividad invalida el estudio ante la autoridad tributaria.\n\n' +
       'Sé estricto con "MISMA" y honesto con "RELACIONADA": no fuerces a "MISMA" lo que solo es afín, ni mandes a ' +
-      '"DISTINTA" lo que de verdad comparte cadena de valor o nicho.\n\n' +
+      '"DISTINTA" lo que de verdad comparte cadena de valor o nicho. Estricto quiere decir que el NEGOCIO sea el ' +
+      'mismo, no que la compañía se parezca en todo lo demás: una candidata es "MISMA" aunque sea mucho mayor o ' +
+      'menor que la examinada, opere en otro país, fabrique una gama más amplia de productos del mismo tipo, o ' +
+      'combine esa actividad con otras, siempre que el negocio que describe sea el mismo.\n\n' +
       'Clasifica también el perfil funcional de cada candidata, según las funciones y los riesgos que asume:\n' +
       '- "SERVICIO": presta servicios, fabrica o desarrolla por encargo de terceros; no explota propiedad ' +
       'intelectual propia ni asume el riesgo de mercado del producto final.\n' +
